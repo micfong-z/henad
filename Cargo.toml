@@ -1,16 +1,17 @@
-[package]
-name = "henad"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 authors = ["Micfong <micfong2@outlook.com>"]
 edition = "2024"
-include = ["LICENSE", "**/*.rs", "Cargo.toml"]
 rust-version = "1.88"
 
-[package.metadata.docs.rs]
-all-features = true
-targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
-
-[dependencies]
+[workspace.dependencies]
+henad-core = { path = "crates/henad-core" }
+henad-compute = { path = "crates/henad-compute" }
+henad-models = { path = "crates/henad-models" }
 egui = "0.33.0"
 eframe = { version = "0.33.0", default-features = false, features = [
     "glow",
@@ -18,16 +19,11 @@ eframe = { version = "0.33.0", default-features = false, features = [
     "wayland",
     "x11",
 ] }
-log = "0.4.27"
-
+egui_plot = "0.34"
 serde = { version = "1.0.219", features = ["derive"] }
-
-# native:
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+log = "0.4.27"
+rayon = "1.10"
 env_logger = "0.11.8"
-
-# web:
-[target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4.50"
 web-sys = "0.3.70"
 
@@ -40,9 +36,6 @@ opt-level = 2
 
 # ----------------------------------------------------------------------------------------
 # Lints:
-
-[lints]
-workspace = true
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -116,7 +109,7 @@ implied_bounds_in_impls = "warn"
 imprecise_flops = "warn"
 inconsistent_struct_constructor = "warn"
 index_refutable_slice = "warn"
-indexing_slicing = "warn"
+indexing_slicing = "allow"
 inefficient_to_string = "warn"
 infinite_loop = "warn"
 into_iter_without_iter = "warn"

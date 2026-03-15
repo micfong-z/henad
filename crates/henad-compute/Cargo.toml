@@ -1,0 +1,12 @@
+[package]
+name = "henad-compute"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+henad-core = { workspace = true }
+
+[lints]
+workspace = true

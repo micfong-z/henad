@@ -1,27 +1,40 @@
 use eframe::egui::{
-    self,
+    self, Color32, CornerRadius, Margin, Stroke, Style, Vec2, Visuals,
     epaint::Shadow,
-    style::{Interaction, ScrollStyle, Selection, Spacing, TextCursorStyle, WidgetVisuals, Widgets},
-    Color32, Margin, CornerRadius, Stroke, Style, Vec2, Visuals,
+    style::{
+        Interaction, ScrollStyle, Selection, Spacing, TextCursorStyle, WidgetVisuals, Widgets,
+    },
 };
 pub fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
     fonts.font_data.insert(
         "ibm_plex_sans_font".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/IBM Plex Sans Regular.ttf")).into(),
+        egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/IBM Plex Sans Regular.ttf"
+        ))
+        .into(),
     );
     fonts.font_data.insert(
         "ibm_plex_mono_font".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/IBM Plex Mono Regular.ttf")).into(),
+        egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/IBM Plex Mono Regular.ttf"
+        ))
+        .into(),
     );
     fonts.font_data.insert(
         "material_design_icons_font".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/Material Design Icons.ttf")).into(),
+        egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/Material Design Icons.ttf"
+        ))
+        .into(),
     );
     fonts.font_data.insert(
         "material_symbols_font".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/Material Symbols Outlined.ttf")).into(),
+        egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/Material Symbols Outlined.ttf"
+        ))
+        .into(),
     );
     fonts
         .families

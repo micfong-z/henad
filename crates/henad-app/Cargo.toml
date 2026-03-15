@@ -1,0 +1,29 @@
+[package]
+name = "henad-app"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+henad-core = { workspace = true }
+henad-compute = { workspace = true }
+henad-models = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true }
+egui_plot = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }
+
+# native:
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = { workspace = true }
+rayon = { workspace = true }
+
+# web:
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true }
+
+[lints]
+workspace = true

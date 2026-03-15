@@ -1,8 +1,10 @@
+#[expect(dead_code, reason = "icon library — not all icons are used")]
 /// An icon set created by the community, from [Pictogrammers](https://pictogrammers.com/library/mdi/).
 ///
 /// Last updated on 2023-03-20.
 pub mod material_design_icons;
 
+#[expect(dead_code, reason = "icon library — not all icons are used")]
 /// An icon set officially created by Google, from [Google Fonts](https://fonts.google.com/icons).
 ///
 /// Last updated on 2023-07-14.
