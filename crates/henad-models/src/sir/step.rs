@@ -31,6 +31,8 @@ fn process_row(
     let mut count_i: u64 = 0;
     let mut count_r: u64 = 0;
 
+    // * Assume toroidal grid, so neighbors wrap around edges
+
     let ws = p.w as usize;
     let ym = ((p.y + p.h - 1) % p.h) as usize;
     let yc = p.y as usize;

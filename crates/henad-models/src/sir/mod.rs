@@ -1,9 +1,11 @@
 mod state;
 mod step;
 
-use henad_core::model::Model;
-use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
-use henad_core::topology::TopologyHint;
+use henad_core::{
+    model::Model,
+    params::{ParamDescriptor, ParamKind, ParamValue},
+    topology::TopologyHint,
+};
 
 pub use state::SirState;
 

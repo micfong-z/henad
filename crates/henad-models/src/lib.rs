@@ -2,3 +2,4 @@
 
 pub mod registry;
 pub mod sir;
+pub mod boids;

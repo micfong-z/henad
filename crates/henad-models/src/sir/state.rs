@@ -10,9 +10,9 @@ pub const RECOVERED: u8 = 2;
 
 /// RGBA palette: S=blue, I=red, R=gray.
 pub const PALETTE: [[u8; 4]; 3] = [
-    [70, 130, 230, 255],  // S - blue
-    [230, 60, 60, 255],   // I - red
-    [128, 128, 128, 255], // R - gray
+    [0x00, 0x7A, 0xF5, 0xFF],  // S - blue
+    [0xE4, 0x37, 0x48, 0xFF],   // I - red
+    [0x80, 0x80, 0x80, 0xFF], // R - gray
 ];
 
 const STATS_HISTORY_CAPACITY: usize = 10_000;

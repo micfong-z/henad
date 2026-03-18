@@ -8,6 +8,14 @@ pub struct GridView<'a> {
     pub palette: &'a [[u8; 4]],
 }
 
+pub struct PointView<'a> {
+    pub pos_x: &'a [f32],
+    pub pos_y: &'a [f32],
+    pub world_w: f32,
+    pub world_h: f32,
+    pub palette: &'a [u8; 4],
+}
+
 /// A single statistic entry for display.
 #[derive(Debug, Clone)]
 pub struct StatEntry {

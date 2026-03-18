@@ -6,7 +6,7 @@ pub mod ui;
 
 use egui::TextureHandle;
 use henad_compute::runner::SimRunner;
-use henad_core::params::ParamValue;
+use henad_core::{params::ParamValue, topology::TopologyHint};
 use henad_models::registry::{ModelEntry, model_registry};
 
 use crate::init::{setup_custom_fonts, setup_custom_styles};
@@ -48,6 +48,7 @@ pub struct HenadApp {
     runner: Option<SimRunner>,
     grid_texture: Option<TextureHandle>,
     pixel_buf: Vec<u8>,
+    density_max: f32,
     /// Tick at which we last uploaded the grid texture. Used to skip
     /// the expensive pixel conversion + texture upload when nothing changed.
     last_rendered_tick: Option<u64>,
@@ -83,6 +84,7 @@ impl HenadApp {
             runner: None,
             grid_texture: None,
             pixel_buf: Vec::new(),
+            density_max: 4.0,
             last_rendered_tick: None,
             rendering_enabled: true,
             target_tps: 30.0,
@@ -101,6 +103,7 @@ impl HenadApp {
             runner.state_mut().resize_history(self.history_capacity);
             self.runner = Some(runner);
             self.grid_texture = None;
+            self.density_max = 4.0;
             self.pixel_buf.clear();
             self.last_rendered_tick = None;
         }
@@ -111,6 +114,12 @@ impl HenadApp {
         self.grid_texture = None;
         self.pixel_buf = Vec::new();
         self.last_rendered_tick = None;
+    }
+
+    pub(crate) fn selected_topology_hint(&self) -> Option<TopologyHint> {
+        self.registry
+            .get(self.selected_model)
+            .map(|entry| entry.topology_hint)
     }
 }
 

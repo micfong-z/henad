@@ -1,6 +1,6 @@
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::topology::TopologyHint;
-use crate::view::{GridView, StatEntry, StatsHistory};
+use crate::view::{GridView, PointView, StatEntry, StatsHistory};
 
 /// Describes a simulation model and can create new simulation states.
 pub trait Model: Send + Sync + 'static {
@@ -18,7 +18,12 @@ pub trait Model: Send + Sync + 'static {
 pub trait SimState: Send + 'static {
     fn step(&mut self);
     fn tick(&self) -> u64;
-    fn grid_view(&self) -> Option<GridView<'_>>;
+    fn grid_view(&self) -> Option<GridView<'_>> {
+        None
+    }
+    fn point_view(&self) -> Option<PointView<'_>> {
+        None
+    }
     fn stats(&self) -> Vec<StatEntry>;
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool;
     fn get_param(&self, index: usize) -> ParamValue;
