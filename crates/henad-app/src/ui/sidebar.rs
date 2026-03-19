@@ -326,14 +326,73 @@ mod stats {
                 }
             });
 
-        // Render histogram bar charts for any Histogram stats in the latest snapshot
+        // Render vector arrow plots and histogram bar charts for the latest snapshot
         if let Some(snap) = &app.snapshot {
             for stat in &snap.stats {
-                if let StatValue::Histogram { edges, counts } = &stat.value {
-                    histogram_chart(ui, stat.label, edges, counts, stat.color);
+                match &stat.value {
+                    StatValue::Vector2D { x, y } => {
+                        vector_arrow_chart(ui, stat.label, *x, *y, stat.color);
+                    }
+                    StatValue::Histogram { edges, counts } => {
+                        histogram_chart(ui, stat.label, edges, counts, stat.color);
+                    }
+                    StatValue::Scalar(_) => {}
                 }
             }
         }
+    }
+
+    fn vector_arrow_chart(
+        ui: &mut egui::Ui,
+        label: &str,
+        x: f64,
+        y: f64,
+        color: [u8; 4],
+    ) {
+        let [r, g, b, _] = color;
+        let arrow_color = egui::Color32::from_rgb(r, g, b);
+        let mag = x.hypot(y);
+
+        ui.separator();
+        ui.label(format!("{label}: ({x:.2}, {y:.2})  |{mag:.2}|"));
+
+        egui_plot::Plot::new(format!("vec_{label}"))
+            .height(ui.available_width())
+            .data_aspect(1.0)
+            .invert_y(true)
+            .show_axes(true)
+            .show_grid(true)
+            .allow_zoom(false)
+            .allow_drag(false)
+            .allow_scroll(false)
+            .allow_boxed_zoom(false)
+            .show(ui, |plot_ui| {
+                // Arrow from origin to (x, y); y-axis is inverted by the plot
+                plot_ui.arrows(
+                    egui_plot::Arrows::new(
+                        label,
+                        vec![[0.0, 0.0]],
+                        vec![[x, y]],
+                    )
+                    .color(arrow_color)
+                    .tip_length(8.0),
+                );
+                // Reference circle at current magnitude
+                if mag > 1e-6 {
+                    let n = 64;
+                    let circle: Vec<[f64; 2]> = (0..=n)
+                        .map(|i| {
+                            let angle = std::f64::consts::TAU * i as f64 / n as f64;
+                            [mag * angle.cos(), mag * angle.sin()]
+                        })
+                        .collect();
+                    plot_ui.line(
+                        egui_plot::Line::new(format!("{label} Magnitude"), circle)
+                            .color(egui::Color32::from_gray(60))
+                            .width(0.5),
+                    );
+                }
+            });
     }
 
     fn histogram_chart(
