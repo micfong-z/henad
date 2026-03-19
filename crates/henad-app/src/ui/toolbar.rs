@@ -28,10 +28,20 @@ fn padded_num_label(ui: &mut egui::Ui, prefix: &str, value: f64, digits: usize) 
     job.append(
         prefix,
         0.0,
-        egui::TextFormat { color: normal, ..font.clone() },
+        egui::TextFormat {
+            color: normal,
+            ..font.clone()
+        },
     );
     if !zeros.is_empty() {
-        job.append(zeros, 0.0, egui::TextFormat { color: faded, ..font.clone() });
+        job.append(
+            zeros,
+            0.0,
+            egui::TextFormat {
+                color: faded,
+                ..font.clone()
+            },
+        );
     }
     job.append(sig, 0.0, egui::TextFormat { color: normal, ..font });
     ui.label(job);
@@ -40,18 +50,11 @@ fn padded_num_label(ui: &mut egui::Ui, prefix: &str, value: f64, digits: usize) 
 pub fn toolbar_panel(ctx: &egui::Context, app: &mut HenadApp) {
     egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
         ui.horizontal(|ui| {
-            if let Some(runner) = &app.runner {
-                // Tick counter
-                ui.label(format!("Tick: {}", runner.state().tick()));
-
-                // TPS
-                padded_num_label(ui, "TPS: ", runner.actual_tps(), 3);
-
-                // Population
-                ui.label(format!("Pop: {}", runner.state().population()));
-
-                // Sim memory
-                let sim_bytes = runner.state().heap_bytes() + app.pixel_buf.len();
+            if let Some(snap) = &app.snapshot {
+                ui.label(format!("Tick: {}", snap.tick));
+                padded_num_label(ui, "TPS: ", snap.actual_tps, 3);
+                ui.label(format!("Pop: {}", snap.population));
+                let sim_bytes = snap.heap_bytes + app.pixel_buf.len();
                 ui.label(format!("Sim mem: {}", fmt_bytes(sim_bytes)));
             } else {
                 ui.label("No simulation loaded");
@@ -68,8 +71,8 @@ pub fn toolbar_panel(ctx: &egui::Context, app: &mut HenadApp) {
                     ui.separator();
                     let t = &app.timings;
                     ui.label(format!(
-                        "Sim: {:.1}ms  Render: {:.1}ms  UI: {:.1}ms",
-                        t.sim_ms, t.render_ms, t.ui_ms,
+                        "Render: {:.1}ms  UI: {:.1}ms",
+                        t.render_ms, t.ui_ms,
                     ));
                 }
             });

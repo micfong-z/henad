@@ -5,8 +5,10 @@ mod init;
 pub mod ui;
 
 use egui::TextureHandle;
-use henad_compute::runner::SimRunner;
-use henad_core::{params::ParamValue, topology::TopologyHint};
+use henad_compute::sim_thread::{SimCommand, SimThread};
+use henad_compute::snapshot::Snapshot;
+use henad_core::params::ParamValue;
+use henad_core::view::StatsHistory;
 use henad_models::registry::{ModelEntry, model_registry};
 
 use crate::init::{setup_custom_fonts, setup_custom_styles};
@@ -18,7 +20,6 @@ const EMA_ALPHA: f64 = 0.1;
 /// Per-frame timing breakdown, smoothed with EMA.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct FrameTimings {
-    pub sim_ms: f64,
     pub render_ms: f64,
     pub ui_ms: f64,
 }
@@ -27,7 +28,6 @@ pub struct FrameTimings {
 impl Default for FrameTimings {
     fn default() -> Self {
         Self {
-            sim_ms: 0.0,
             render_ms: 0.0,
             ui_ms: 0.0,
         }
@@ -45,17 +45,17 @@ pub struct HenadApp {
     registry: Vec<ModelEntry>,
     selected_model: usize,
     param_values: Vec<ParamValue>,
-    runner: Option<SimRunner>,
+    sim_thread: Option<SimThread>,
+    snapshot: Option<Snapshot>,
+    sim_running: bool,
     grid_texture: Option<TextureHandle>,
     pixel_buf: Vec<u8>,
     density_max: f32,
-    /// Tick at which we last uploaded the grid texture. Used to skip
-    /// the expensive pixel conversion + texture upload when nothing changed.
     last_rendered_tick: Option<u64>,
-    /// When false, skip pixel conversion and texture upload entirely.
     pub rendering_enabled: bool,
     pub target_tps: f64,
     pub uncapped: bool,
+    stats_history: Option<StatsHistory>,
     pub history_capacity: usize,
     #[cfg(not(target_arch = "wasm32"))]
     pub timings: FrameTimings,
@@ -81,7 +81,9 @@ impl HenadApp {
             registry,
             selected_model: 0,
             param_values,
-            runner: None,
+            sim_thread: None,
+            snapshot: None,
+            sim_running: false,
             grid_texture: None,
             pixel_buf: Vec::new(),
             density_max: 4.0,
@@ -89,6 +91,7 @@ impl HenadApp {
             rendering_enabled: true,
             target_tps: 30.0,
             uncapped: false,
+            stats_history: None,
             history_capacity: 10_000,
             #[cfg(not(target_arch = "wasm32"))]
             timings: FrameTimings::default(),
@@ -96,49 +99,62 @@ impl HenadApp {
     }
 
     fn reset_simulation(&mut self) {
+        // Drop existing sim thread (sends Shutdown, joins thread)
+        self.sim_thread = None;
+        self.snapshot = None;
+        self.last_rendered_tick = None;
+        self.grid_texture = None;
+        self.pixel_buf.clear();
+        self.density_max = 4.0;
+
         if let Some(entry) = self.registry.get(self.selected_model) {
             let state = (entry.create)(&self.param_values);
-            let mut runner = SimRunner::new(state, self.target_tps);
-            runner.set_uncapped(self.uncapped);
-            runner.state_mut().resize_history(self.history_capacity);
-            self.runner = Some(runner);
-            self.grid_texture = None;
-            self.density_max = 4.0;
-            self.pixel_buf.clear();
-            self.last_rendered_tick = None;
+            self.stats_history = Some(StatsHistory::new(
+                entry.stat_descriptors.clone(),
+                self.history_capacity,
+            ));
+            let mut thread = SimThread::new(state, self.target_tps);
+            if self.uncapped {
+                thread.send(SimCommand::SetUncapped(true));
+            }
+            self.sim_thread = Some(thread);
+            self.sim_running = false;
         }
     }
 
     fn offload_simulation(&mut self) {
-        self.runner = None;
+        self.sim_thread = None;
+        self.snapshot = None;
+        self.sim_running = false;
         self.grid_texture = None;
         self.pixel_buf = Vec::new();
         self.last_rendered_tick = None;
+        self.stats_history = None;
     }
 
-    pub(crate) fn selected_topology_hint(&self) -> Option<TopologyHint> {
-        self.registry
-            .get(self.selected_model)
-            .map(|entry| entry.topology_hint)
-    }
 }
 
 impl eframe::App for HenadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // --- Simulation ---
-        #[cfg(not(target_arch = "wasm32"))]
-        let sim_start = std::time::Instant::now();
-
-        let dt = ctx.input(|i| i.unstable_dt as f64);
-        if let Some(runner) = &mut self.runner {
-            runner.update(dt);
+        // --- On WASM: drive simulation synchronously ---
+        #[cfg(target_arch = "wasm32")]
+        {
+            let dt = ctx.input(|i| i.unstable_dt as f64);
+            if let Some(thread) = &mut self.sim_thread {
+                thread.update(dt);
+            }
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        FrameTimings::update_ema(
-            &mut self.timings.sim_ms,
-            sim_start.elapsed().as_secs_f64() * 1000.0,
-        );
+        // --- Poll snapshot from sim thread ---
+        if let Some(thread) = &mut self.sim_thread {
+            if let Some(snap) = thread.take_snapshot() {
+                if let Some(history) = &mut self.stats_history {
+                    let values: Vec<f64> = snap.stats.iter().map(|s| s.value.scalar()).collect();
+                    history.push(&values);
+                }
+                self.snapshot = Some(snap);
+            }
+        }
 
         // --- UI ---
         #[cfg(not(target_arch = "wasm32"))]
@@ -166,8 +182,7 @@ impl eframe::App for HenadApp {
         );
 
         // Request continuous repaint while running.
-        // Checked after UI panels so toolbar Play/Pause toggle is reflected immediately.
-        if self.runner.as_ref().is_some_and(SimRunner::is_running) {
+        if self.sim_running {
             ctx.request_repaint_after(std::time::Duration::ZERO);
         }
     }

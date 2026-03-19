@@ -1,11 +1,10 @@
 use std::mem::swap;
 
-use henad_core::{
-    model::SimState,
-    params::ParamValue,
-    spatial_hash::SpatialHash,
-    view::{PointView, StatDescriptor, StatEntry, StatsHistory},
-};
+use henad_core::helpers::{extract_f32, extract_u32, xorshift64};
+use henad_core::model::SimState;
+use henad_core::params::ParamValue;
+use henad_core::spatial_hash::SpatialHash;
+use henad_core::view::{PointView, StatEntry, StatValue};
 
 pub const PALETTE: [[u8; 4]; 3] = [
     [0xE4, 0x37, 0x48, 0xFF], // Max speed - red
@@ -27,7 +26,6 @@ pub struct BoidsState {
     pub(crate) world_h: f32,
     pub(crate) num_boids: u32,
     pub(crate) num_boids_inv: f32,
-    // Hot params (set_param indices 3-9 → return true)
     pub(crate) visual_range: f32,
     pub(crate) protected_range: f32,
     pub(crate) separation_factor: f32,
@@ -37,83 +35,37 @@ pub struct BoidsState {
     pub(crate) min_speed: f32,
     pub(crate) tick: u64,
     pub(crate) avg_speed: f32,
-    pub(crate) history: StatsHistory,
+    pub(crate) avg_vel_x: f32,
+    pub(crate) avg_vel_y: f32,
     pub(crate) rng_state: u64,
 }
 
-const STATS_HISTORY_CAPACITY: usize = 10_000;
-
 impl BoidsState {
     pub fn from_params(params: &[ParamValue]) -> Self {
-        let num_boids = match params.first() {
-            Some(ParamValue::U32(v)) => *v,
-            _ => 50_000,
-        };
-        let world_w = match params.get(1) {
-            Some(ParamValue::F32(v)) => *v,
-            _ => 1_000.0,
-        };
-        let world_h = match params.get(2) {
-            Some(ParamValue::F32(v)) => *v,
-            _ => 1_000.0,
-        };
-        let visual_range = match params.get(3) {
-            Some(ParamValue::F32(v)) => *v,
-            _ => 50.0,
-        };
-        let protected_range = match params.get(4) {
-            Some(ParamValue::F32(v)) => *v,
-            _ => 8.0,
-        };
-        let separation_factor = match params.get(5) {
-            Some(ParamValue::F32(v)) => *v,
-            _ => 0.05,
-        };
-        let alignment_factor = match params.get(6) {
-            Some(ParamValue::F32(v)) => *v,
-            _ => 0.05,
-        };
-        let cohesion_factor = match params.get(7) {
-            Some(ParamValue::F32(v)) => *v,
-            _ => 0.0005,
-        };
-        let max_speed = match params.get(8) {
-            Some(ParamValue::F32(v)) => *v,
-            _ => 15.0,
-        };
-        let min_speed = match params.get(9) {
-            Some(ParamValue::F32(v)) => *v,
-            _ => 3.0,
-        };
+        let num_boids = extract_u32(params, 0, 50_000);
+        let world_w = extract_f32(params, 1, 1_000.0);
+        let world_h = extract_f32(params, 2, 1_000.0);
+        let visual_range = extract_f32(params, 3, 50.0);
+        let protected_range = extract_f32(params, 4, 8.0);
+        let separation_factor = extract_f32(params, 5, 0.05);
+        let alignment_factor = extract_f32(params, 6, 0.05);
+        let cohesion_factor = extract_f32(params, 7, 0.0005);
+        let max_speed = extract_f32(params, 8, 15.0);
+        let min_speed = extract_f32(params, 9, 3.0);
 
-        let pos_x = vec![0.0; num_boids as usize];
-        let pos_y = vec![0.0; num_boids as usize];
-        let vel_x = vec![0.0; num_boids as usize];
-        let vel_y = vec![0.0; num_boids as usize];
-        let next_pos_x = vec![0.0; num_boids as usize];
-        let next_pos_y = vec![0.0; num_boids as usize];
-        let next_vel_x = vec![0.0; num_boids as usize];
-        let next_vel_y = vec![0.0; num_boids as usize];
-
+        let n = num_boids as usize;
         let hash = SpatialHash::new(visual_range, world_w, world_h);
-        let history = StatsHistory::new(
-            vec![StatDescriptor {
-                label: "Average Speed",
-                color: PALETTE[1],
-            }],
-            STATS_HISTORY_CAPACITY,
-        );
         let num_boids_inv = 1.0 / num_boids as f32;
 
         let mut state = Self {
-            pos_x,
-            pos_y,
-            vel_x,
-            vel_y,
-            next_pos_x,
-            next_pos_y,
-            next_vel_x,
-            next_vel_y,
+            pos_x: vec![0.0; n],
+            pos_y: vec![0.0; n],
+            vel_x: vec![0.0; n],
+            vel_y: vec![0.0; n],
+            next_pos_x: vec![0.0; n],
+            next_pos_y: vec![0.0; n],
+            next_vel_x: vec![0.0; n],
+            next_vel_y: vec![0.0; n],
             hash,
             world_w,
             world_h,
@@ -127,14 +79,13 @@ impl BoidsState {
             min_speed,
             tick: 0,
             avg_speed: 0.0,
-            history,
+            avg_vel_x: 0.0,
+            avg_vel_y: 0.0,
             rng_state: 0xDEAD_BEEF_CAFE_1234,
             num_boids_inv,
         };
 
         state.initialize();
-        state.record_history();
-
         state
     }
 
@@ -162,25 +113,12 @@ impl BoidsState {
         self.rng_state = rng;
     }
 
-    pub(crate) fn record_history(&mut self) {
-        self.history.push(&[self.avg_speed as f64]);
-    }
-
     pub fn swap_buffers(&mut self) {
         swap(&mut self.pos_x, &mut self.next_pos_x);
         swap(&mut self.pos_y, &mut self.next_pos_y);
         swap(&mut self.vel_x, &mut self.next_vel_x);
         swap(&mut self.vel_y, &mut self.next_vel_y);
     }
-}
-
-/// Fast xorshift64 RNG.
-#[inline]
-pub fn xorshift64(mut state: u64) -> u64 {
-    state ^= state << 13;
-    state ^= state >> 7;
-    state ^= state << 17;
-    state
 }
 
 impl SimState for BoidsState {
@@ -202,19 +140,30 @@ impl SimState for BoidsState {
         })
     }
 
-    fn stats(&self) -> Vec<henad_core::view::StatEntry> {
-        vec![StatEntry {
-            label: "Average Speed",
-            value: self.avg_speed as f64,
-            color: PALETTE[1],
-        }]
+    fn stats(&self) -> Vec<StatEntry> {
+        vec![
+            StatEntry {
+                label: "Average Speed",
+                value: StatValue::Scalar(self.avg_speed as f64),
+                color: PALETTE[1],
+            },
+            StatEntry {
+                label: "Average Velocity",
+                value: StatValue::Vector2D {
+                    x: self.avg_vel_x as f64,
+                    y: self.avg_vel_y as f64,
+                },
+                color: PALETTE[2],
+            },
+        ]
     }
 
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
         match (index, value) {
             (3, ParamValue::F32(v)) => {
                 self.visual_range = *v;
-                self.hash.rebuild_with_cell_size(self.visual_range, &self.pos_x, &self.pos_y);
+                self.hash
+                    .rebuild_with_cell_size(self.visual_range, &self.pos_x, &self.pos_y);
                 true
             }
             (4, ParamValue::F32(v)) => {
@@ -245,35 +194,11 @@ impl SimState for BoidsState {
         }
     }
 
-    fn get_param(&self, index: usize) -> ParamValue {
-        match index {
-            0 => ParamValue::U32(self.num_boids),
-            1 => ParamValue::F32(self.world_w),
-            2 => ParamValue::F32(self.world_h),
-            3 => ParamValue::F32(self.visual_range),
-            4 => ParamValue::F32(self.protected_range),
-            5 => ParamValue::F32(self.separation_factor),
-            6 => ParamValue::F32(self.alignment_factor),
-            7 => ParamValue::F32(self.cohesion_factor),
-            8 => ParamValue::F32(self.max_speed),
-            9 => ParamValue::F32(self.min_speed),
-            _ => ParamValue::U32(0),
-        }
-    }
-
     fn population(&self) -> u64 {
         self.num_boids as u64
     }
 
-    fn stats_history(&self) -> &StatsHistory {
-        &self.history
-    }
-
-    fn resize_history(&mut self, capacity: usize) {
-        self.history.resize(capacity);
-    }
-
     fn heap_bytes(&self) -> usize {
-        8 * 4 * self.pos_x.capacity() + self.hash.heap_bytes() + self.history.heap_bytes()
+        8 * 4 * self.pos_x.capacity() + self.hash.heap_bytes()
     }
 }

@@ -1,16 +1,22 @@
-mod state;
+pub(crate) mod state;
 mod step;
 
-use henad_core::{
-    model::Model,
-    params::{ParamDescriptor, ParamKind, ParamValue},
-    topology::TopologyHint,
-};
+use henad_core::helpers::{f32_param, u32_param};
+use henad_core::model::Model;
+use henad_core::params::{ParamDescriptor, ParamValue};
+use henad_core::topology::TopologyHint;
+use henad_core::view::StatDescriptor;
 
 use crate::boids::state::BoidsState;
 
 /// Boids flocking model in 2D continuous space.
 pub struct BoidsModel;
+
+impl Default for BoidsModel {
+    fn default() -> Self {
+        Self
+    }
+}
 
 impl Model for BoidsModel {
     type State = BoidsState;
@@ -27,107 +33,30 @@ impl Model for BoidsModel {
         "A simulation of flocking behavior in a group of boids."
     }
 
-    #[expect(clippy::too_many_lines, reason = "Parameter definitions are verbose by nature")]
     fn param_descriptors(&self) -> Vec<ParamDescriptor> {
         vec![
-            ParamDescriptor {
-                id: "num_boids",
-                label: "Number of Boids",
-                kind: ParamKind::U32 {
-                    min: 1_000,
-                    max: 1_000_000,
-                    default: 50_000,
-                },
+            u32_param("num_boids", "Number of Boids", 50_000, 1_000, 1_000_000),
+            f32_param("world_width", "World Width", 1_000.0, 100.0, 10_000.0, Some(50.0)),
+            f32_param("world_height", "World Height", 1_000.0, 100.0, 10_000.0, Some(50.0)),
+            f32_param("visual_range", "Visual Range", 50.0, 1.0, 200.0, Some(1.0)),
+            f32_param("protected_range", "Protected Range", 8.0, 0.5, 50.0, Some(0.5)),
+            f32_param("separation", "Separation", 0.05, 0.0, 2.0, Some(0.01)),
+            f32_param("alignment", "Alignment", 0.05, 0.0, 2.0, Some(0.01)),
+            f32_param("cohesion", "Cohesion", 0.0005, 0.0, 0.01, Some(0.0001)),
+            f32_param("max_speed", "Max Speed", 15.0, 1.0, 50.0, Some(0.5)),
+            f32_param("min_speed", "Min Speed", 3.0, 0.5, 20.0, Some(0.5)),
+        ]
+    }
+
+    fn stat_descriptors(&self) -> Vec<StatDescriptor> {
+        vec![
+            StatDescriptor {
+                label: "Average Speed",
+                color: state::PALETTE[1],
             },
-            ParamDescriptor {
-                id: "world_width",
-                label: "World Width",
-                kind: ParamKind::F32 {
-                    min: 100.0,
-                    max: 10_000.0,
-                    default: 1_000.0,
-                    step: Some(50.0),
-                },
-            },
-            ParamDescriptor {
-                id: "world_height",
-                label: "World Height",
-                kind: ParamKind::F32 {
-                    min: 100.0,
-                    max: 10_000.0,
-                    default: 1_000.0,
-                    step: Some(50.0),
-                },
-            },
-            ParamDescriptor {
-                id: "visual_range",
-                label: "Visual Range",
-                kind: ParamKind::F32 {
-                    min: 1.0,
-                    max: 200.0,
-                    default: 50.0,
-                    step: Some(1.0),
-                },
-            },
-            ParamDescriptor {
-                id: "protected_range",
-                label: "Protected Range",
-                kind: ParamKind::F32 {
-                    min: 0.5,
-                    max: 50.0,
-                    default: 8.0,
-                    step: Some(0.5),
-                },
-            },
-            ParamDescriptor {
-                id: "separation",
-                label: "Separation",
-                kind: ParamKind::F32 {
-                    min: 0.0,
-                    max: 2.0,
-                    default: 0.05,
-                    step: Some(0.01),
-                },
-            },
-            ParamDescriptor {
-                id: "alignment",
-                label: "Alignment",
-                kind: ParamKind::F32 {
-                    min: 0.0,
-                    max: 2.0,
-                    default: 0.05,
-                    step: Some(0.01),
-                },
-            },
-            ParamDescriptor {
-                id: "cohesion",
-                label: "Cohesion",
-                kind: ParamKind::F32 {
-                    min: 0.0,
-                    max: 0.01,
-                    default: 0.0005,
-                    step: Some(0.0001),
-                },
-            },
-            ParamDescriptor {
-                id: "max_speed",
-                label: "Max Speed",
-                kind: ParamKind::F32 {
-                    min: 1.0,
-                    max: 50.0,
-                    default: 15.0,
-                    step: Some(0.5),
-                },
-            },
-            ParamDescriptor {
-                id: "min_speed",
-                label: "Min Speed",
-                kind: ParamKind::F32 {
-                    min: 0.5,
-                    max: 20.0,
-                    default: 3.0,
-                    step: Some(0.5),
-                },
+            StatDescriptor {
+                label: "Average Velocity",
+                color: state::PALETTE[2],
             },
         ]
     }

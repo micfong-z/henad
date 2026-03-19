@@ -1,12 +1,17 @@
 use crate::{
     HenadApp,
-    icons::material_design_icons::{MDI_PAUSE, MDI_PLAY, MDI_SKIP_NEXT},
+    icons::material_design_icons::{
+        MDI_ARROW_TOP_RIGHT_THIN, MDI_CHART_HISTOGRAM, MDI_CIRCLE_SMALL, MDI_PAUSE, MDI_PLAY,
+        MDI_SKIP_NEXT,
+    },
 };
+use henad_compute::sim_thread::SimCommand;
 use henad_core::params::{ParamKind, ParamValue};
+use henad_core::view::StatValue;
 
 #[expect(
     clippy::too_many_lines,
-    reason = "UI function with auto-generated controls"
+    reason = "UI function"
 )]
 pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
     // Statistics on the right
@@ -14,22 +19,38 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
         .min_width(200.0)
         .show(ctx, |ui| {
             ui.heading("Statistics");
-            if let Some(runner) = &app.runner {
+            if let Some(snap) = &app.snapshot {
                 egui::Grid::new("stats_grid")
                     .num_columns(2)
                     .striped(true)
                     .spacing([16.0, 4.0])
                     .show(ui, |ui| {
-                        for stat in runner.state().stats() {
+                        for stat in &snap.stats {
                             let [r, g, b, _] = stat.color;
                             let color = egui::Color32::from_rgb(r, g, b);
                             ui.colored_label(color, stat.label);
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.colored_label(color, format!("{:.0}", stat.value));
-                                },
-                            );
+                            ui.horizontal(|ui| {
+                                let (text, data_type) = match &stat.value {
+                                    StatValue::Scalar(v) => (format!("{v:.0}"), "Scalar"),
+                                    StatValue::Vector2D { x, y } => {
+                                        let mag = x.hypot(*y);
+                                        (format!("({x:.1}, {y:.1}) |{mag:.1}|"), "Vector2D")
+                                    }
+                                    StatValue::Histogram { counts, .. } => {
+                                        let total: u64 = counts.iter().sum();
+                                        (format!("n={total}"), "Histogram")
+                                    }
+                                };
+
+                                let icon = match &stat.value {
+                                    StatValue::Scalar(_) => MDI_CIRCLE_SMALL,
+                                    StatValue::Vector2D { .. } => MDI_ARROW_TOP_RIGHT_THIN,
+                                    StatValue::Histogram { .. } => MDI_CHART_HISTOGRAM,
+                                };
+                                ui.colored_label(egui::Color32::GRAY, icon)
+                                    .on_hover_text(data_type);
+                                ui.colored_label(color, text);
+                            });
                             ui.end_row();
                         }
                     });
@@ -46,26 +67,30 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
             let mut do_reset = false;
             let mut do_offload = false;
             ui.horizontal(|ui| {
-                let has_runner = app.runner.is_some();
-                let is_running = app.runner.as_ref().is_some_and(|r| r.is_running());
-                let icon = if is_running { MDI_PAUSE } else { MDI_PLAY };
+                let has_thread = app.sim_thread.is_some();
+                let icon = if app.sim_running { MDI_PAUSE } else { MDI_PLAY };
 
                 if ui
-                    .add_enabled(has_runner, egui::Button::new(icon))
+                    .add_enabled(has_thread, egui::Button::new(icon))
                     .on_hover_text("Play / Pause")
                     .clicked()
                 {
-                    if let Some(runner) = &mut app.runner {
-                        runner.toggle();
+                    if let Some(thread) = &mut app.sim_thread {
+                        if app.sim_running {
+                            thread.pause();
+                        } else {
+                            thread.play();
+                        }
+                        app.sim_running = !app.sim_running;
                     }
                 }
                 if ui
-                    .add_enabled(has_runner, egui::Button::new(MDI_SKIP_NEXT))
+                    .add_enabled(has_thread, egui::Button::new(MDI_SKIP_NEXT))
                     .on_hover_text("Step")
                     .clicked()
                 {
-                    if let Some(runner) = &mut app.runner {
-                        runner.step_once();
+                    if let Some(thread) = &mut app.sim_thread {
+                        thread.step_once();
                     }
                 }
                 ui.separator();
@@ -79,7 +104,7 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
                     app.reset_simulation();
                 }
                 if ui
-                    .add_enabled(has_runner, egui::Button::new("Offload"))
+                    .add_enabled(has_thread, egui::Button::new("Offload"))
                     .on_hover_text("Free simulation memory")
                     .clicked()
                 {
@@ -108,26 +133,33 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
                         )
                         .changed();
                     if tps_changed {
-                        if let Some(runner) = &mut app.runner {
-                            runner.set_target_tps(app.target_tps);
+                        if let Some(thread) = &mut app.sim_thread {
+                            thread.send(SimCommand::SetTargetTps(app.target_tps));
                         }
                     }
                 }
 
                 if uncapped_changed {
-                    if let Some(runner) = &mut app.runner {
-                        runner.set_uncapped(app.uncapped);
+                    if let Some(thread) = &mut app.sim_thread {
+                        thread.send(SimCommand::SetUncapped(app.uncapped));
                     }
                 }
             }
 
-            if let Some(runner) = &mut app.runner {
-                let mut max = runner.max_steps_per_frame() as i32;
+            // Max steps per frame
+            {
+                let mut max = 1i32;
                 if ui
-                    .add(egui::Slider::new(&mut max, 1..=1000).logarithmic(true).text("Max steps/frame"))
+                    .add(
+                        egui::Slider::new(&mut max, 1..=1000)
+                            .logarithmic(true)
+                            .text("Max steps/frame"),
+                    )
                     .changed()
                 {
-                    runner.set_max_steps_per_frame(max as u32);
+                    if let Some(thread) = &mut app.sim_thread {
+                        thread.send(SimCommand::SetMaxStepsPerFrame(max as u32));
+                    }
                 }
             }
 
@@ -142,8 +174,8 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
                     .changed()
                 {
                     app.history_capacity = cap;
-                    if let Some(runner) = &mut app.runner {
-                        runner.state_mut().resize_history(cap);
+                    if let Some(history) = &mut app.stats_history {
+                        history.resize(cap);
                     }
                 }
             }
@@ -241,10 +273,13 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
                 }
             }
 
-            // Apply live parameter changes to running state
+            // Apply live parameter changes
             for (idx, val) in &param_changed {
-                if let Some(runner) = &mut app.runner {
-                    runner.state_mut().set_param(*idx, val);
+                if let Some(thread) = &mut app.sim_thread {
+                    thread.send(SimCommand::SetParam {
+                        index: *idx,
+                        value: val.clone(),
+                    });
                 }
             }
         });
@@ -252,13 +287,13 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
 
 mod stats {
     use crate::HenadApp;
+    use henad_core::view::StatValue;
 
     pub fn stats_chart(ui: &mut egui::Ui, app: &HenadApp) {
-        let Some(runner) = &app.runner else {
+        let Some(history) = &app.stats_history else {
             return;
         };
 
-        let history = runner.state().stats_history();
         if history.is_empty() {
             return;
         }
@@ -288,6 +323,49 @@ mod stats {
                             .width(1.5),
                     );
                 }
+            });
+
+        // Render histogram bar charts for any Histogram stats in the latest snapshot
+        if let Some(snap) = &app.snapshot {
+            for stat in &snap.stats {
+                if let StatValue::Histogram { edges, counts } = &stat.value {
+                    histogram_chart(ui, stat.label, edges, counts, stat.color);
+                }
+            }
+        }
+    }
+
+    fn histogram_chart(
+        ui: &mut egui::Ui,
+        label: &str,
+        edges: &[f64],
+        counts: &[u64],
+        color: [u8; 4],
+    ) {
+        if edges.len() < 2 || counts.is_empty() {
+            return;
+        }
+        let [r, g, b, _] = color;
+        let bar_color = egui::Color32::from_rgb(r, g, b);
+
+        ui.separator();
+        ui.label(label);
+
+        egui_plot::Plot::new(format!("hist_{label}"))
+            .height(120.0)
+            .show_axes(true)
+            .show(ui, |plot_ui| {
+                let bars: Vec<egui_plot::Bar> = edges
+                    .windows(2)
+                    .zip(counts.iter())
+                    .map(|(edge_pair, &count)| {
+                        let center = (edge_pair[0] + edge_pair[1]) * 0.5;
+                        let width = edge_pair[1] - edge_pair[0];
+                        egui_plot::Bar::new(center, count as f64).width(width)
+                    })
+                    .collect();
+
+                plot_ui.bar_chart(egui_plot::BarChart::new(label, bars).color(bar_color));
             });
     }
 }

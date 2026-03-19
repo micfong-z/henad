@@ -1,81 +1,82 @@
 use crate::{HenadApp, icons::material_design_icons::MDI_CUBE_OFF_OUTLINE};
 use egui::{ColorImage, RichText, TextureOptions};
-use henad_core::topology::TopologyHint;
+use henad_compute::snapshot::SnapshotView;
 
 pub fn viewport_panel(ctx: &egui::Context, app: &mut HenadApp) {
     egui::CentralPanel::default().show(ctx, |ui| {
-        let Some(runner) = &app.runner else {
+        if app.snapshot.is_none() {
             ui.centered_and_justified(|ui| {
                 ui.heading("Load a model to start simulation");
             });
             return;
-        };
+        }
 
-        let current_tick = runner.state().tick();
+        let current_tick = app.snapshot.as_ref().map_or(0, |s| s.tick);
         let needs_update = app.rendering_enabled && app.last_rendered_tick != Some(current_tick);
 
         if needs_update {
-            if let Some(view) = runner.state().grid_view() {
-                let w = view.width as usize;
-                let h = view.height as usize;
-                let total = w * h;
+            // Take snapshot temporarily to avoid borrow conflicts with app
+            let snap = app.snapshot.take();
+            if let Some(snapshot) = snap {
+                match &snapshot.view {
+                    SnapshotView::Grid(grid) => {
+                        let w = grid.width as usize;
+                        let h = grid.height as usize;
+                        let total = w * h;
 
-                // Resize pixel buffer if needed
-                let needed = total * 4;
-                if app.pixel_buf.len() != needed {
-                    app.pixel_buf.resize(needed, 255);
-                }
+                        let needed = total * 4;
+                        if app.pixel_buf.len() != needed {
+                            app.pixel_buf.resize(needed, 255);
+                        }
 
-                // Convert cell states to RGBA via palette lookup
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    use rayon::prelude::*;
-                    app.pixel_buf
-                        .par_chunks_mut(4)
-                        .zip(view.cells.par_iter())
-                        .for_each(|(px, &cell)| {
-                            let rgba = view.palette[cell as usize];
-                            px.copy_from_slice(&rgba);
-                        });
-                }
-                #[cfg(target_arch = "wasm32")]
-                for (chunk, &cell) in app.pixel_buf.chunks_exact_mut(4).zip(view.cells.iter()) {
-                    chunk.copy_from_slice(&view.palette[cell as usize]);
-                }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            use rayon::prelude::*;
+                            app.pixel_buf
+                                .par_chunks_mut(4)
+                                .zip(grid.cells.par_iter())
+                                .for_each(|(px, &cell)| {
+                                    let rgba = grid.palette[cell as usize];
+                                    px.copy_from_slice(&rgba);
+                                });
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        for (chunk, &cell) in
+                            app.pixel_buf.chunks_exact_mut(4).zip(grid.cells.iter())
+                        {
+                            chunk.copy_from_slice(&grid.palette[cell as usize]);
+                        }
 
-                let image = ColorImage::from_rgba_unmultiplied([w, h], &app.pixel_buf);
+                        let image = ColorImage::from_rgba_unmultiplied([w, h], &app.pixel_buf);
 
-                // Create or update texture
-                match &mut app.grid_texture {
-                    Some(tex) => {
-                        tex.set(image, TextureOptions::NEAREST);
+                        match &mut app.grid_texture {
+                            Some(tex) => {
+                                tex.set(image, TextureOptions::NEAREST);
+                            }
+                            None => {
+                                app.grid_texture =
+                                    Some(ctx.load_texture("grid", image, TextureOptions::NEAREST));
+                            }
+                        }
                     }
-                    None => {
-                        app.grid_texture =
-                            Some(ctx.load_texture("grid", image, TextureOptions::NEAREST));
+                    SnapshotView::Points(points) => {
+                        render_density_heatmap(
+                            ctx,
+                            app,
+                            &points.pos_x,
+                            &points.pos_y,
+                            points.world_w,
+                            points.world_h,
+                        );
+                    }
+                    SnapshotView::None => {
+                        app.snapshot = Some(snapshot);
+                        ui.label("No view available");
+                        return;
                     }
                 }
-
                 app.last_rendered_tick = Some(current_tick);
-            } else if app
-                .selected_topology_hint()
-                .is_some_and(|h| h == TopologyHint::PointCloud)
-            {
-                let copied = runner.state().point_view().map(|view| {
-                    (
-                        view.pos_x.to_vec(),
-                        view.pos_y.to_vec(),
-                        view.world_w,
-                        view.world_h,
-                    )
-                });
-                if let Some((pos_x, pos_y, world_w, world_h)) = copied {
-                    render_density_heatmap(ctx, app, &pos_x, &pos_y, world_w, world_h);
-                }
-                app.last_rendered_tick = Some(current_tick);
-            } else {
-                ui.label("No grid view available");
-                return;
+                app.snapshot = Some(snapshot);
             }
         }
 
@@ -187,11 +188,6 @@ fn render_density_heatmap(
         }
         density
     };
-
-    // let frame_max = density.iter().copied().max().unwrap_or(1).max(1) as f32;
-    // if frame_max > app.density_max {
-    //     app.density_max = frame_max;
-    // }
 
     let max_density = app.density_max;
 

@@ -1,6 +1,6 @@
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::topology::TopologyHint;
-use crate::view::{GridView, PointView, StatEntry, StatsHistory};
+use crate::view::{GridView, PointView, StatDescriptor, StatEntry};
 
 /// Describes a simulation model and can create new simulation states.
 pub trait Model: Send + Sync + 'static {
@@ -10,6 +10,7 @@ pub trait Model: Send + Sync + 'static {
     fn id(&self) -> &'static str;
     fn description(&self) -> &'static str;
     fn param_descriptors(&self) -> Vec<ParamDescriptor>;
+    fn stat_descriptors(&self) -> Vec<StatDescriptor>;
     fn topology_hint(&self) -> TopologyHint;
     fn create_state(&self, params: &[ParamValue]) -> Self::State;
 }
@@ -26,11 +27,7 @@ pub trait SimState: Send + 'static {
     }
     fn stats(&self) -> Vec<StatEntry>;
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool;
-    fn get_param(&self, index: usize) -> ParamValue;
     fn population(&self) -> u64;
-    fn stats_history(&self) -> &StatsHistory;
-    /// Change the stats ring-buffer capacity, keeping the most recent entries.
-    fn resize_history(&mut self, capacity: usize);
-    /// Approximate heap bytes owned by this state (grid buffers, history, etc.).
+    /// Approximate heap bytes owned by this state (grid buffers, etc.).
     fn heap_bytes(&self) -> usize;
 }

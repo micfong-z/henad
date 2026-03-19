@@ -18,8 +18,9 @@ pub(crate) fn step(state: &mut BoidsState) {
         .map(|(vx, vy)| vx.hypot(*vy))
         .sum::<f32>()
         * state.num_boids_inv;
+    state.avg_vel_x = state.vel_x.iter().sum::<f32>() * state.num_boids_inv;
+    state.avg_vel_y = state.vel_y.iter().sum::<f32>() * state.num_boids_inv;
     state.tick += 1;
-    state.record_history();
 }
 
 struct BoidParams {

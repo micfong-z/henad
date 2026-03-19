@@ -5,7 +5,7 @@ pub struct GridView<'a> {
     pub width: u32,
     pub height: u32,
     pub cells: &'a [u8],
-    pub palette: &'a [[u8; 4]],
+    pub palette: &'static [[u8; 4]],
 }
 
 pub struct PointView<'a> {
@@ -13,14 +13,34 @@ pub struct PointView<'a> {
     pub pos_y: &'a [f32],
     pub world_w: f32,
     pub world_h: f32,
-    pub palette: &'a [u8; 4],
+    pub palette: &'static [u8; 4],
+}
+
+/// The value of a statistic entry.
+#[derive(Debug, Clone)]
+pub enum StatValue {
+    Scalar(f64),
+    Vector2D { x: f64, y: f64 },
+    Histogram { edges: Vec<f64>, counts: Vec<u64> },
+}
+
+impl StatValue {
+    /// Extract a single representative f64 for charting.
+    /// Scalar → value, `Vector2D` → magnitude, Histogram → total count.
+    pub fn scalar(&self) -> f64 {
+        match self {
+            Self::Scalar(v) => *v,
+            Self::Vector2D { x, y } => x.hypot(*y),
+            Self::Histogram { counts, .. } => counts.iter().sum::<u64>() as f64,
+        }
+    }
 }
 
 /// A single statistic entry for display.
 #[derive(Debug, Clone)]
 pub struct StatEntry {
     pub label: &'static str,
-    pub value: f64,
+    pub value: StatValue,
     pub color: [u8; 4],
 }
 
