@@ -70,8 +70,9 @@ pub fn toolbar_panel(ctx: &egui::Context, app: &mut HenadApp) {
                 {
                     ui.separator();
                     let t = &app.timings;
+                    let engine = app.snapshot.as_ref().map_or(0.0, |s| s.engine_ms);
                     ui.label(format!(
-                        "Render: {:.1}ms  UI: {:.1}ms",
+                        "Engine: {engine:.1}ms  Render: {:.1}ms  UI: {:.1}ms",
                         t.render_ms, t.ui_ms,
                     ));
                 }

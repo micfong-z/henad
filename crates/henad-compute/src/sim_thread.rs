@@ -10,7 +10,7 @@ pub enum SimCommand {
     StepOnce,
     SetTargetTps(f64),
     SetUncapped(bool),
-    SetMaxStepsPerFrame(u32),
+    SetTicksPerSnapshot(u32),
     SetParam { index: usize, value: ParamValue },
     Shutdown,
 }
@@ -41,11 +41,15 @@ mod native {
         running: bool,
         target_tps: f64,
         uncapped: bool,
-        max_steps_per_frame: u32,
+        ticks_per_snapshot: u32,
         step_count: u64,
         tps_timer: Instant,
         actual_tps: f64,
         last_publish: Instant,
+        /// Smoothed engine time per tick (EMA).
+        engine_ms: f64,
+        /// When the next capped step should fire.
+        next_step_at: Instant,
     }
 
     impl SimLoop {
@@ -64,9 +68,8 @@ mod native {
 
                 if self.uncapped {
                     // Run a batch of steps, then check for commands
-                    for _ in 0..self.max_steps_per_frame {
-                        self.state.step();
-                        self.step_count += 1;
+                    for _ in 0..self.ticks_per_snapshot {
+                        self.timed_step();
                     }
                     self.update_tps();
                     self.maybe_publish_snapshot();
@@ -77,21 +80,34 @@ mod native {
                         }
                     }
                 } else {
-                    // Capped: wait for step interval or command
-                    let step_interval =
-                        std::time::Duration::from_secs_f64(1.0 / self.target_tps);
-                    match self.cmd_rx.recv_timeout(step_interval) {
-                        Ok(cmd) => {
-                            if self.handle_command(cmd) {
-                                return;
+                    // Capped: wait until next deadline or command
+                    let now = Instant::now();
+                    if now < self.next_step_at {
+                        let wait = self.next_step_at - now;
+                        match self.cmd_rx.recv_timeout(wait) {
+                            Ok(cmd) => {
+                                if self.handle_command(cmd) {
+                                    return;
+                                }
+                                continue;
                             }
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(mpsc::RecvTimeoutError::Disconnected) => return,
                         }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                    // Drain any pending commands before stepping
+                    while let Ok(cmd) = self.cmd_rx.try_recv() {
+                        if self.handle_command(cmd) {
+                            return;
+                        }
                     }
                     if self.running {
-                        self.state.step();
-                        self.step_count += 1;
+                        let step_interval =
+                            std::time::Duration::from_secs_f64(1.0 / self.target_tps);
+                        self.next_step_at = Instant::now() + step_interval;
+                        for _ in 0..self.ticks_per_snapshot {
+                            self.timed_step();
+                        }
                         self.update_tps();
                         self.maybe_publish_snapshot();
                     }
@@ -106,6 +122,7 @@ mod native {
                     self.running = true;
                     self.tps_timer = Instant::now();
                     self.step_count = 0;
+                    self.next_step_at = Instant::now();
                 }
                 SimCommand::Pause => {
                     self.running = false;
@@ -113,8 +130,7 @@ mod native {
                     self.force_publish_snapshot();
                 }
                 SimCommand::StepOnce => {
-                    self.state.step();
-                    self.step_count += 1;
+                    self.timed_step();
                     self.update_tps();
                     self.force_publish_snapshot();
                 }
@@ -124,8 +140,8 @@ mod native {
                 SimCommand::SetUncapped(v) => {
                     self.uncapped = v;
                 }
-                SimCommand::SetMaxStepsPerFrame(v) => {
-                    self.max_steps_per_frame = v.max(1);
+                SimCommand::SetTicksPerSnapshot(v) => {
+                    self.ticks_per_snapshot = v.max(1);
                 }
                 SimCommand::SetParam { index, value } => {
                     self.state.set_param(index, &value);
@@ -133,6 +149,16 @@ mod native {
                 SimCommand::Shutdown => return true,
             }
             false
+        }
+
+        /// Step + measure engine time (EMA-smoothed).
+        fn timed_step(&mut self) {
+            let t0 = Instant::now();
+            self.state.step();
+            self.step_count += 1;
+            let sample = t0.elapsed().as_secs_f64() * 1000.0;
+            // EMA with α = 0.1
+            self.engine_ms += 0.1 * (sample - self.engine_ms);
         }
 
         fn update_tps(&mut self) {
@@ -159,7 +185,7 @@ mod native {
         }
 
         fn publish_snapshot(&self) {
-            let snap = build_snapshot(&*self.state, self.actual_tps);
+            let snap = build_snapshot(&*self.state, self.actual_tps, self.engine_ms);
             if let Ok(mut slot) = self.snapshot.lock() {
                 *slot = Some(snap);
             }
@@ -171,7 +197,7 @@ mod native {
         pub fn new(state: Box<dyn SimState>, target_tps: f64) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel();
             // Publish initial snapshot so UI has data before play is pressed.
-            let initial = build_snapshot(&*state, 0.0);
+            let initial = build_snapshot(&*state, 0.0, 0.0);
             let snapshot: Arc<Mutex<Option<Snapshot>>> = Arc::new(Mutex::new(Some(initial)));
             let snapshot_clone = Arc::clone(&snapshot);
 
@@ -182,11 +208,13 @@ mod native {
                 running: false,
                 target_tps,
                 uncapped: false,
-                max_steps_per_frame: 1,
+                ticks_per_snapshot: 1,
                 step_count: 0,
                 tps_timer: Instant::now(),
                 actual_tps: 0.0,
                 last_publish: Instant::now(),
+                engine_ms: 0.0,
+                next_step_at: Instant::now(),
             };
 
             let handle = std::thread::spawn(move || sim_loop.run());
@@ -244,7 +272,7 @@ mod wasm {
         running: bool,
         target_tps: f64,
         uncapped: bool,
-        max_steps_per_frame: u32,
+        ticks_per_snapshot: u32,
         accumulated_time: f64,
         actual_tps: f64,
         snapshot: Option<Snapshot>,
@@ -253,13 +281,13 @@ mod wasm {
     impl SimThread {
         pub fn new(state: Box<dyn SimState>, target_tps: f64) -> Self {
             // Publish initial snapshot so UI has data before play is pressed.
-            let initial = Some(build_snapshot(&*state, 0.0));
+            let initial = Some(build_snapshot(&*state, 0.0, 0.0));
             Self {
                 state,
                 running: false,
                 target_tps,
                 uncapped: false,
-                max_steps_per_frame: 1,
+                ticks_per_snapshot: 1,
                 accumulated_time: 0.0,
                 actual_tps: 0.0,
                 snapshot: initial,
@@ -272,11 +300,11 @@ mod wasm {
                 SimCommand::Pause => {
                     self.running = false;
                     self.accumulated_time = 0.0;
-                    self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps));
+                    self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps, 0.0));
                 }
                 SimCommand::StepOnce => {
                     self.state.step();
-                    self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps));
+                    self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps, 0.0));
                 }
                 SimCommand::SetTargetTps(tps) => self.target_tps = tps,
                 SimCommand::SetUncapped(v) => {
@@ -285,7 +313,7 @@ mod wasm {
                         self.accumulated_time = 0.0;
                     }
                 }
-                SimCommand::SetMaxStepsPerFrame(v) => self.max_steps_per_frame = v.max(1),
+                SimCommand::SetTicksPerSnapshot(v) => self.ticks_per_snapshot = v.max(1),
                 SimCommand::SetParam { index, value } => {
                     self.state.set_param(index, &value);
                 }
@@ -316,7 +344,7 @@ mod wasm {
             }
 
             if self.uncapped {
-                for _ in 0..self.max_steps_per_frame {
+                for _ in 0..self.ticks_per_snapshot {
                     self.state.step();
                 }
             } else {
@@ -327,19 +355,19 @@ mod wasm {
                     self.state.step();
                     self.accumulated_time -= step_interval;
                     steps += 1;
-                    if steps >= self.max_steps_per_frame {
+                    if steps >= self.ticks_per_snapshot {
                         self.accumulated_time = 0.0;
                         break;
                     }
                 }
             }
 
-            self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps));
+            self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps, 0.0));
         }
     }
 }
 
-fn build_snapshot(state: &dyn SimState, actual_tps: f64) -> Snapshot {
+fn build_snapshot(state: &dyn SimState, actual_tps: f64, engine_ms: f64) -> Snapshot {
     let view = if let Some(gv) = state.grid_view() {
         SnapshotView::Grid(GridSnapshot {
             width: gv.width,
@@ -364,6 +392,7 @@ fn build_snapshot(state: &dyn SimState, actual_tps: f64) -> Snapshot {
         population: state.population(),
         heap_bytes: state.heap_bytes(),
         actual_tps,
+        engine_ms,
         view,
         stats: state.stats(),
     }

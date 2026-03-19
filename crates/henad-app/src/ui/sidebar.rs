@@ -148,17 +148,18 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
 
             // Max steps per frame
             {
-                let mut max = 1i32;
+                let mut max = app.ticks_per_snapshot as i32;
                 if ui
                     .add(
                         egui::Slider::new(&mut max, 1..=1000)
                             .logarithmic(true)
-                            .text("Max steps/frame"),
+                            .text("Ticks/snapshot"),
                     )
                     .changed()
                 {
+                    app.ticks_per_snapshot = max as u32;
                     if let Some(thread) = &mut app.sim_thread {
-                        thread.send(SimCommand::SetMaxStepsPerFrame(max as u32));
+                        thread.send(SimCommand::SetTicksPerSnapshot(app.ticks_per_snapshot));
                     }
                 }
             }

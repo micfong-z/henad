@@ -6,6 +6,8 @@ pub struct Snapshot {
     pub population: u64,
     pub heap_bytes: usize,
     pub actual_tps: f64,
+    /// Smoothed engine time per tick in milliseconds.
+    pub engine_ms: f64,
     /// Mutually exclusive: either grid data or point data.
     pub view: SnapshotView,
     /// Current stat values (one per stat series).

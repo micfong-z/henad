@@ -55,6 +55,7 @@ pub struct HenadApp {
     pub rendering_enabled: bool,
     pub target_tps: f64,
     pub uncapped: bool,
+    pub ticks_per_snapshot: u32,
     stats_history: Option<StatsHistory>,
     pub history_capacity: usize,
     #[cfg(not(target_arch = "wasm32"))]
@@ -91,6 +92,7 @@ impl HenadApp {
             rendering_enabled: true,
             target_tps: 30.0,
             uncapped: false,
+            ticks_per_snapshot: 1,
             stats_history: None,
             history_capacity: 10_000,
             #[cfg(not(target_arch = "wasm32"))]
