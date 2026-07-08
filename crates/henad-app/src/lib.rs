@@ -108,6 +108,7 @@ impl HenadApp {
         self.grid_texture = None;
         self.pixel_buf.clear();
         self.density_max = 4.0;
+        self.ticks_per_snapshot = 1;
 
         if let Some(entry) = self.registry.get(self.selected_model) {
             let state = (entry.create)(&self.param_values);
