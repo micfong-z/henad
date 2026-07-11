@@ -1,9 +1,12 @@
 //! Henad Engine — GUI application.
 
+#[cfg(not(target_arch = "wasm32"))]
+mod gpu_gol;
 mod icons;
 mod init;
 pub mod ui;
 
+use eframe::egui_wgpu;
 use egui::TextureHandle;
 use henad_compute::sim_thread::{SimCommand, SimThread};
 use henad_compute::snapshot::Snapshot;
@@ -64,6 +67,33 @@ pub struct HenadApp {
 
 impl HenadApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let render_state = &cc
+            .wgpu_render_state
+            .as_ref()
+            .expect("wgpu_render_state must exist for wgpu backend");
+
+        let adapter_info = render_state.adapter.get_info();
+        log::info!("{}", egui_wgpu::adapter_info_summary(&adapter_info));
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let initial_cells =
+                gpu_gol::seed_patterns(gpu_gol::DEFAULT_WIDTH, gpu_gol::DEFAULT_HEIGHT);
+            let gol_resources = gpu_gol::GpuGolResources::new(
+                &render_state.device,
+                &render_state.queue,
+                render_state.target_format,
+                gpu_gol::DEFAULT_WIDTH,
+                gpu_gol::DEFAULT_HEIGHT,
+                &initial_cells,
+            );
+            render_state
+                .renderer
+                .write()
+                .callback_resources
+                .insert(gol_resources);
+        }
+
         setup_custom_fonts(&cc.egui_ctx);
         setup_custom_styles(&cc.egui_ctx);
 
@@ -134,7 +164,6 @@ impl HenadApp {
         self.last_rendered_tick = None;
         self.stats_history = None;
     }
-
 }
 
 impl eframe::App for HenadApp {
@@ -165,6 +194,9 @@ impl eframe::App for HenadApp {
 
         ui::toolbar::toolbar_panel(ctx, self);
         ui::sidebar::sidebar_panel(ctx, self);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        gpu_gol::gpu_gol_panel(ctx);
 
         #[cfg(not(target_arch = "wasm32"))]
         FrameTimings::update_ema(

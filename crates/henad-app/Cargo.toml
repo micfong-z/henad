@@ -14,6 +14,10 @@ eframe = { workspace = true }
 egui_plot = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }
+flume = { workspace = true }
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
