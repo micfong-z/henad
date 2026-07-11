@@ -63,6 +63,8 @@ pub struct HenadApp {
     pub history_capacity: usize,
     #[cfg(not(target_arch = "wasm32"))]
     pub timings: FrameTimings,
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_gol: Option<gpu_gol::GpuGolHandle>,
 }
 
 impl HenadApp {
@@ -76,10 +78,10 @@ impl HenadApp {
         log::info!("{}", egui_wgpu::adapter_info_summary(&adapter_info));
 
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        let gpu_gol = {
             let initial_cells =
                 gpu_gol::seed_patterns(gpu_gol::DEFAULT_WIDTH, gpu_gol::DEFAULT_HEIGHT);
-            let gol_resources = gpu_gol::GpuGolResources::new(
+            let (compute, render) = gpu_gol::build(
                 &render_state.device,
                 &render_state.queue,
                 render_state.target_format,
@@ -91,8 +93,14 @@ impl HenadApp {
                 .renderer
                 .write()
                 .callback_resources
-                .insert(gol_resources);
-        }
+                .insert(render);
+            gpu_gol::GpuGolHandle::spawn(
+                render_state.device.clone(),
+                render_state.queue.clone(),
+                compute,
+                gpu_gol::sim_thread::DEFAULT_BATCH_SIZE,
+            )
+        };
 
         setup_custom_fonts(&cc.egui_ctx);
         setup_custom_styles(&cc.egui_ctx);
@@ -127,6 +135,8 @@ impl HenadApp {
             history_capacity: 10_000,
             #[cfg(not(target_arch = "wasm32"))]
             timings: FrameTimings::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_gol: Some(gpu_gol),
         }
     }
 
@@ -196,7 +206,9 @@ impl eframe::App for HenadApp {
         ui::sidebar::sidebar_panel(ctx, self);
 
         #[cfg(not(target_arch = "wasm32"))]
-        gpu_gol::gpu_gol_panel(ctx);
+        if let Some(handle) = &self.gpu_gol {
+            gpu_gol::gpu_gol_panel(ctx, handle);
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         FrameTimings::update_ema(

@@ -4,10 +4,28 @@
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
+    use eframe::egui_wgpu;
+
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
 
     let native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: egui_wgpu::WgpuConfiguration {
+            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
+                device_descriptor: std::sync::Arc::new(|adapter| {
+                    let base = egui_wgpu::WgpuSetupCreateNew::default();
+                    let mut descriptor = (base.device_descriptor)(adapter);
+                    // Enables GPU per-step timing in the GPU Game of Life window, when the
+                    // adapter supports it; falls back to reporting "N/A" otherwise.
+                    if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+                        descriptor.required_features |= wgpu::Features::TIMESTAMP_QUERY;
+                    }
+                    descriptor
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([400.0, 300.0])
             .with_min_inner_size([300.0, 220.0])
