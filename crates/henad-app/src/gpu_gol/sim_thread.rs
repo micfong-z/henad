@@ -21,7 +21,23 @@
 //! between dispatches within one pass, and the ping-pong buffers need that). The display compute
 //! pass (state → texture) only runs when at least ~16ms have elapsed since the last one, so
 //! "steps per snapshot" is emergent from how fast the batches run, exactly like the CPU sim
-//! thread's `ticks_per_snapshot`.
+//! thread's `ticks_per_snapshot`. This snapshot cadence (`SNAPSHOT_INTERVAL`) is independent of
+//! batch size and unaffected by anything below.
+//!
+//! `batch_size` itself is either a fixed, UI-set value, or adaptively controlled — see
+//! `GpuGolCommand::SetAdaptive`/`SetTargetMs`/`SetBatchSize` and the `adaptive`/`fixed_batch_size`/
+//! `target_ms` fields on `GpuGolSimLoop`. The problem adaptive mode solves: on a shared queue with
+//! no preemption, a large fixed batch (e.g. 256 steps on a 4096x4096 grid) can take on the order
+//! of 100ms+ of GPU execution time in one submission, and because egui's own render-pass
+//! submissions share that queue, a big batch blocks egui's rendering behind it — visible as UI
+//! stutter, even though the display texture is already decoupled from batch size (see above).
+//!
+//! Adaptive mode measures the wall-clock time to encode and submit each batch (a proxy for GPU
+//! cost — see `step_batch`'s doc comment for the caveats on why this proxy was chosen and what
+//! could make it unreliable), maintains an EMA of `time_per_step`, and picks the next batch size
+//! so that `batch_size * time_per_step` tracks a user-set `target_ms` budget. This deliberately
+//! does not use `TimestampQuery`, which stays diagnostic-only (surfaced as `gpu_us_per_step`) —
+//! GPU timestamp correctness is a separate, already-tracked concern.
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -30,8 +46,33 @@ use std::time::{Duration, Instant};
 
 use super::{GpuGolCompute, ReseedKind, seed_patterns, seed_random};
 
-/// Default steps-per-submission, tunable at runtime from the UI.
+/// Default steps-per-submission in fixed mode, tunable at runtime from the UI.
 pub const DEFAULT_BATCH_SIZE: u32 = 64;
+
+/// Default per-batch wall-clock budget in adaptive mode, in milliseconds. ~8ms leaves roughly
+/// half of a 60fps (16.6ms) frame free, so a single batch submission is unlikely to be the thing
+/// that makes egui miss a frame even when it lands right before an egui submission on the same
+/// queue.
+pub const DEFAULT_TARGET_MS: f64 = 8.0;
+
+/// Smoothing factor for the adaptive controller's exponential moving average of `time_per_step`.
+/// 0.25 was chosen to react within a handful of batches to a real change in per-step cost (e.g.
+/// after a reseed to a denser pattern, or a grid resize), while still averaging out per-batch
+/// noise from OS scheduling jitter on the sim thread — a pure single-sample estimate was found
+/// to make the controller's output jump around too much batch-to-batch.
+const ADAPTIVE_EMA_ALPHA: f64 = 0.25;
+
+/// Hard upper bound on the adaptive controller's output, independent of the budget/cost
+/// division. Without this, a very cheap grid (tiny grid, or a GPU idling with headroom) could
+/// drive `target_ms / time_per_step` into tens of thousands of steps per batch; besides being
+/// unnecessary (the point is just to stay under budget), an oversized batch also means the
+/// controller reacts slowly to a subsequent slowdown (e.g. resizing to a much bigger grid),
+/// since that oversized batch is already committed and won't be measured until it completes.
+/// 4096 is comfortably above `DEFAULT_BATCH_SIZE` (64) and the old fixed-mode slider's max
+/// (2000) so it rarely binds in practice, while still bounding worst-case encode/submit latency.
+/// `pub` so the UI's read-only "live batch size" slider can use the same bound as its range,
+/// rather than risk silently clamping (and thus misreporting) a controller output above it.
+pub const MAX_BATCH_SIZE: u32 = 4096;
 
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(16);
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
@@ -41,6 +82,8 @@ enum GpuGolCommand {
     Pause,
     Resume,
     SetBatchSize(u32),
+    SetAdaptive(bool),
+    SetTargetMs(f64),
     Reseed(ReseedKind),
     Shutdown,
 }
@@ -50,8 +93,11 @@ enum GpuGolCommand {
 pub struct GpuGolStats {
     pub wall_tps: f64,
     pub gpu_us_per_step: Option<f64>,
+    /// Live batch size — the fixed value in `Fixed` mode, or the controller's current output in
+    /// `Adaptive` mode.
     pub batch_size: u32,
     pub paused: bool,
+    pub adaptive: bool,
 }
 
 impl Default for GpuGolStats {
@@ -61,6 +107,7 @@ impl Default for GpuGolStats {
             gpu_us_per_step: None,
             batch_size: DEFAULT_BATCH_SIZE,
             paused: false,
+            adaptive: false,
         }
     }
 }
@@ -176,7 +223,22 @@ struct GpuGolSimLoop {
     cmd_rx: mpsc::Receiver<GpuGolCommand>,
     stats: Arc<Mutex<GpuGolStats>>,
     running: bool,
+    /// Whether the controller is currently in adaptive mode. Kept as a separate bool (rather
+    /// than folding `fixed_batch_size`/`target_ms` into a `BatchMode` enum) so each mode's state
+    /// survives toggling — the manual fixed size is remembered while adaptive is active, and the
+    /// adaptive controller's target/EMA survive switching back to fixed.
+    adaptive: bool,
+    /// Manual batch size, used verbatim when `adaptive` is false.
+    fixed_batch_size: u32,
+    /// Per-batch wall-clock budget in milliseconds, used by the controller when `adaptive` is
+    /// true.
+    target_ms: f64,
+    /// Live batch size to use for the next batch: `fixed_batch_size` when not adaptive, or the
+    /// controller's last output when adaptive.
     batch_size: u32,
+    /// Exponential moving average of measured wall-clock time per step, in milliseconds. `None`
+    /// until the first batch has been measured. Only used/updated in adaptive mode.
+    ema_time_per_step_ms: Option<f64>,
     step_count: u64,
     tps_timer: Instant,
     last_display_publish: Instant,
@@ -224,7 +286,23 @@ impl GpuGolSimLoop {
                 self.step_count = 0;
             }
             GpuGolCommand::SetBatchSize(n) => {
-                self.batch_size = n.max(1);
+                self.fixed_batch_size = n.max(1);
+                if !self.adaptive {
+                    self.batch_size = self.fixed_batch_size;
+                }
+            }
+            GpuGolCommand::SetAdaptive(enabled) => {
+                self.adaptive = enabled;
+                if enabled {
+                    // Reset the estimator so a stale EMA from a previous adaptive session (e.g.
+                    // measured on a different grid size) doesn't bias the first few batches.
+                    self.ema_time_per_step_ms = None;
+                } else {
+                    self.batch_size = self.fixed_batch_size;
+                }
+            }
+            GpuGolCommand::SetTargetMs(target_ms) => {
+                self.target_ms = target_ms.max(0.1);
             }
             GpuGolCommand::Reseed(kind) => {
                 let cells = match kind {
@@ -255,6 +333,26 @@ impl GpuGolSimLoop {
     ///
     /// The timestamp-query resolve is deliberately *not* recorded into the same command buffer
     /// as the writes — see `TimestampQuery::resolve_after` for why.
+    ///
+    /// Also times the encode+submit portion (`now` to `batch_wall_elapsed` below) as the
+    /// adaptive controller's cost signal. This is deliberately wall-clock CPU time, not a GPU
+    /// timestamp query: `queue.submit()` isn't required to block for GPU completion, so this is
+    /// not a direct measure of GPU execution time. The assumption underpinning this choice —
+    /// that on a queue kept continuously busy by back-to-back batches from this thread, with no
+    /// other CPU work in between, the *rate* at which `submit()` calls can be issued ends up
+    /// backpressured by how fast the GPU drains the queue — is plausible but has **not** been
+    /// empirically verified in this environment (no way to drive the GUI here and watch it
+    /// react to a deliberately slow vs. fast grid). If it doesn't hold on some backend/platform
+    /// (e.g. `submit()` returns immediately regardless of queue depth), this call instead mostly
+    /// measures CPU-side dispatch-recording cost, which scales close to linearly with
+    /// `batch_size` — so `time_per_step` would stay roughly constant regardless of true GPU
+    /// load, and the controller would regulate encode cost rather than the GPU-stutter problem
+    /// it's meant to solve. Flagging this as the main open risk of this design rather than
+    /// asserting it works. It's cheap either way (no readback stall) and unaffected by the
+    /// `TimestampQuery` correctness issue tracked separately. Occasionally this call also
+    /// includes the display pass (`SNAPSHOT_INTERVAL` cadence) or the timestamp resolve/copy
+    /// (`STATS_INTERVAL` cadence); both are infrequent and cheap next to a multi-step batch, so
+    /// they're accepted as minor noise on the EMA rather than measured separately.
     fn step_batch(&mut self) {
         let now = Instant::now();
         let want_timing = self.timestamp_query.is_some()
@@ -279,8 +377,10 @@ impl GpuGolSimLoop {
             self.last_display_publish = now;
         }
 
+        let batch_size_submitted = self.batch_size;
         let write_submission = self.queue.submit(Some(encoder.finish()));
-        self.step_count += u64::from(self.batch_size);
+        let batch_wall_elapsed = Instant::now().duration_since(now);
+        self.step_count += u64::from(batch_size_submitted);
 
         if want_timing {
             let tq = self
@@ -290,12 +390,16 @@ impl GpuGolSimLoop {
             tq.resolve_after(&self.device, &self.queue, write_submission);
         }
 
+        if self.adaptive {
+            self.update_adaptive_batch_size(batch_wall_elapsed, batch_size_submitted);
+        }
+
         if want_timing {
             let gpu_us_per_step = self
                 .timestamp_query
                 .as_ref()
                 .expect("want_timing implies timestamp_query is Some")
-                .read_gpu_us_per_step(&self.device, self.batch_size);
+                .read_gpu_us_per_step(&self.device, batch_size_submitted);
             let wall_tps = self.step_count as f64
                 / now
                     .duration_since(self.tps_timer)
@@ -327,8 +431,49 @@ impl GpuGolSimLoop {
             stats.gpu_us_per_step = gpu_us_per_step;
             stats.batch_size = self.batch_size;
             stats.paused = !self.running;
+            stats.adaptive = self.adaptive;
         }
     }
+
+    /// Updates the EMA of wall-clock time per step from the just-measured batch, then recomputes
+    /// `self.batch_size` (the size the *next* batch will use). Thin wrapper around the pure
+    /// `ema_update`/`next_batch_size` functions below, which carry the actual controller math
+    /// and are unit-tested directly since this method itself needs a live `wgpu::Device` to
+    /// reach (it's only ever called from `step_batch`).
+    fn update_adaptive_batch_size(&mut self, elapsed: Duration, batch_size_submitted: u32) {
+        let time_per_step_ms =
+            elapsed.as_secs_f64() * 1000.0 / f64::from(batch_size_submitted.max(1));
+        let ema = ema_update(
+            self.ema_time_per_step_ms,
+            time_per_step_ms,
+            ADAPTIVE_EMA_ALPHA,
+        );
+        self.ema_time_per_step_ms = Some(ema);
+        self.batch_size = next_batch_size(ema, self.target_ms);
+    }
+}
+
+/// Exponential moving average update: `prev` is `None` on the very first sample (in which case
+/// the sample seeds the EMA directly, rather than blending against an arbitrary starting value),
+/// `Some` on every subsequent call.
+fn ema_update(prev: Option<f64>, sample: f64, alpha: f64) -> f64 {
+    match prev {
+        Some(prev) => alpha.mul_add(sample, (1.0 - alpha) * prev),
+        None => sample,
+    }
+}
+
+/// Proportional controller: picks the batch size that would make `batch_size * ema_ms` land on
+/// `target_ms`, clamped to `[1, MAX_BATCH_SIZE]`. `ema_ms` is clamped away from zero so a
+/// (theoretically impossible, but not `f64`-impossible) zero or negative EMA can't produce a
+/// division blow-up.
+fn next_batch_size(ema_ms: f64, target_ms: f64) -> u32 {
+    let raw = target_ms / ema_ms.max(f64::EPSILON);
+    // `raw` is always finite and non-negative here (both operands are non-negative, and the
+    // denominator is bounded away from zero above), so the `as u32` cast — which saturates
+    // rather than wraps for float-to-int in Rust — just needs the follow-up `.clamp()` to land
+    // it in range.
+    (raw as u32).clamp(1, MAX_BATCH_SIZE)
 }
 
 /// Handle to the GPU sim thread: send commands, poll the latest stats. Dropping it shuts the
@@ -364,7 +509,11 @@ impl GpuGolHandle {
             cmd_rx,
             stats: stats_clone,
             running: true,
+            adaptive: false,
+            fixed_batch_size: batch_size,
+            target_ms: DEFAULT_TARGET_MS,
             batch_size,
+            ema_time_per_step_ms: None,
             step_count: 0,
             tps_timer: Instant::now(),
             last_display_publish: Instant::now(),
@@ -389,8 +538,24 @@ impl GpuGolHandle {
         self.send(GpuGolCommand::Resume);
     }
 
+    /// Sets the manual batch size used in fixed mode. Has no visible effect while adaptive mode
+    /// is on (the controller drives `batch_size` instead), but is remembered for when it's
+    /// turned back off.
     pub fn set_batch_size(&self, batch_size: u32) {
         self.send(GpuGolCommand::SetBatchSize(batch_size));
+    }
+
+    /// Turns adaptive batching on or off. Fixed mode's manual batch size and adaptive mode's
+    /// target/EMA are each preserved independently across toggles.
+    pub fn set_adaptive(&self, enabled: bool) {
+        self.send(GpuGolCommand::SetAdaptive(enabled));
+    }
+
+    /// Sets the per-batch wall-clock time budget (milliseconds) used by the adaptive controller.
+    /// Has no effect while fixed mode is active, but is remembered for when adaptive is turned
+    /// on.
+    pub fn set_target_ms(&self, target_ms: f64) {
+        self.send(GpuGolCommand::SetTargetMs(target_ms));
     }
 
     pub(crate) fn reseed(&self, kind: ReseedKind) {
@@ -500,5 +665,67 @@ mod tests {
             "readback returned 0 (end timestamp <= start timestamp) on \
              {zero_count}/{iterations} back-to-back batches"
         );
+    }
+}
+
+#[cfg(test)]
+mod adaptive_controller_tests {
+    use super::{MAX_BATCH_SIZE, ema_update, next_batch_size};
+
+    #[test]
+    fn ema_first_sample_seeds_directly() {
+        assert!((ema_update(None, 3.7, 0.25) - 3.7).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ema_blends_subsequent_samples() {
+        // alpha * sample + (1 - alpha) * prev, with alpha = 0.25.
+        let ema = ema_update(Some(4.0), 8.0, 0.25);
+        assert!((ema - 5.0).abs() < 1e-9, "expected 5.0, got {ema}");
+    }
+
+    #[test]
+    fn ema_alpha_zero_ignores_new_samples() {
+        let ema = ema_update(Some(4.0), 100.0, 0.0);
+        assert!((ema - 4.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ema_alpha_one_tracks_new_sample_exactly() {
+        let ema = ema_update(Some(4.0), 100.0, 1.0);
+        assert!((ema - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn controller_known_ratio_produces_expected_batch_size() {
+        // 8ms budget / 0.1ms-per-step ema = 80 steps.
+        assert_eq!(next_batch_size(0.1, 8.0), 80);
+    }
+
+    #[test]
+    fn controller_very_cheap_step_clamps_to_max() {
+        // A near-zero per-step cost would naively imply a huge batch size; the hard cap must win.
+        assert_eq!(next_batch_size(0.000_001, 8.0), MAX_BATCH_SIZE);
+    }
+
+    #[test]
+    fn controller_very_expensive_step_clamps_to_one() {
+        // A per-step cost far above the budget must not produce a batch size of 0.
+        assert_eq!(next_batch_size(1_000.0, 8.0), 1);
+    }
+
+    #[test]
+    fn controller_exact_budget_match_rounds_down_not_up() {
+        // 8.0 / 3.0 = 2.667 steps; truncating (not rounding) keeps the batch under budget rather
+        // than over it, which matches the "stay under the frame budget" intent.
+        assert_eq!(next_batch_size(3.0, 8.0), 2);
+    }
+
+    #[test]
+    fn controller_never_returns_zero_even_at_zero_ema() {
+        // Defensive: a degenerate zero EMA (shouldn't occur given `.max(f64::EPSILON)` clamping
+        // inside `next_batch_size`, but worth pinning as a regression guard) must not divide by
+        // zero into NaN/inf and must still clamp to a valid, non-zero batch size.
+        assert_eq!(next_batch_size(0.0, 8.0), MAX_BATCH_SIZE);
     }
 }

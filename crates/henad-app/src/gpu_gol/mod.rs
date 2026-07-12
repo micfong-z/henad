@@ -522,8 +522,8 @@ impl CallbackTrait for GpuGolPaint {
     }
 }
 
-/// Opens a window showing the live GPU Game of Life, with pause, batch-size, and reseed controls,
-/// plus wall-clock TPS and GPU per-step time readouts from the sim thread.
+/// Opens a window showing the live GPU Game of Life, with pause, batch-size (fixed or adaptive),
+/// and reseed controls, plus wall-clock TPS and GPU per-step time readouts from the sim thread.
 pub fn gpu_gol_panel(ctx: &egui::Context, handle: &GpuGolHandle) {
     let paused_id = egui::Id::new("gpu_gol_paused");
     let mut paused = ctx.data(|d| d.get_temp::<bool>(paused_id)).unwrap_or(false);
@@ -531,6 +531,14 @@ pub fn gpu_gol_panel(ctx: &egui::Context, handle: &GpuGolHandle) {
     let mut batch_size = ctx
         .data(|d| d.get_temp::<u32>(batch_id))
         .unwrap_or(sim_thread::DEFAULT_BATCH_SIZE);
+    let adaptive_id = egui::Id::new("gpu_gol_adaptive");
+    let mut adaptive = ctx
+        .data(|d| d.get_temp::<bool>(adaptive_id))
+        .unwrap_or(false);
+    let target_ms_id = egui::Id::new("gpu_gol_target_ms");
+    let mut target_ms = ctx
+        .data(|d| d.get_temp::<f64>(target_ms_id))
+        .unwrap_or(sim_thread::DEFAULT_TARGET_MS);
 
     egui::Window::new("GPU Game of Life").show(ctx, |ui| {
         let stats = handle.stats();
@@ -549,7 +557,39 @@ pub fn gpu_gol_panel(ctx: &egui::Context, handle: &GpuGolHandle) {
         }
 
         if ui
-            .add(egui::Slider::new(&mut batch_size, 1..=2000).text("Steps per batch (M)"))
+            .checkbox(&mut adaptive, "Adaptive batching")
+            .on_hover_text(
+                "Automatically pick steps-per-batch to keep each GPU submission under the \
+                 target time below, instead of a fixed batch size, so large batches don't \
+                 block egui's own rendering on the shared queue.",
+            )
+            .changed()
+        {
+            handle.set_adaptive(adaptive);
+        }
+
+        if adaptive {
+            // Live batch size is the controller's output, not the (disabled) local slider value
+            // — read it from stats every frame so it visibly tracks GPU cost.
+            let mut live_batch_size = stats.batch_size;
+            ui.add_enabled(
+                false,
+                egui::Slider::new(&mut live_batch_size, 1..=sim_thread::MAX_BATCH_SIZE)
+                    .text("Steps per batch (live)"),
+            );
+
+            if ui
+                .add(
+                    egui::Slider::new(&mut target_ms, 1.0..=16.0)
+                        .text("Target ms/batch")
+                        .fixed_decimals(1),
+                )
+                .changed()
+            {
+                handle.set_target_ms(target_ms);
+            }
+        } else if ui
+            .add(egui::Slider::new(&mut batch_size, 1..=2000).text("Steps per batch"))
             .changed()
         {
             handle.set_batch_size(batch_size);
@@ -578,6 +618,8 @@ pub fn gpu_gol_panel(ctx: &egui::Context, handle: &GpuGolHandle) {
     ctx.data_mut(|d| {
         d.insert_temp(paused_id, paused);
         d.insert_temp(batch_id, batch_size);
+        d.insert_temp(adaptive_id, adaptive);
+        d.insert_temp(target_ms_id, target_ms);
     });
 }
 
