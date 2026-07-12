@@ -106,6 +106,46 @@ impl TimestampQuery {
         })
     }
 
+    /// Resolves the timestamps written by `write_submission` into `readback_buffer`, in a
+    /// *separate* command buffer submitted only after `write_submission` has fully completed on
+    /// the GPU.
+    ///
+    /// This split is required, not cosmetic: recording `resolve_query_set` into the *same*
+    /// command buffer as the timestamp writes (the original implementation) is accepted by wgpu
+    /// but is unreliable in practice — at least on the Metal backend, the driver's counter
+    /// sample buffer is only guaranteed populated after the writing command buffer's completion
+    /// handler has run, so a resolve issued earlier in the same command buffer can read back
+    /// whatever value happened to be resident from an *earlier* submission. Confirmed empirically
+    /// (see `tests::gpu_timing_readback_is_stable_over_many_batches`, which failed 197/200 times
+    /// with the single-submission version — reading a bit-for-bit stale `end` timestamp from one
+    /// submission prior, which is frequently *less than* the fresh `start` timestamp and so
+    /// saturates to a reported 0). Waiting for the writing submission before resolving in a
+    /// follow-up submission eliminates the staleness entirely.
+    fn resolve_after(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        write_submission: wgpu::SubmissionIndex,
+    ) {
+        drop(device.poll(wgpu::PollType::Wait {
+            submission_index: Some(write_submission),
+            timeout: None,
+        }));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("gpu_gol_timestamp_resolve_encoder"),
+        });
+        encoder.resolve_query_set(&self.query_set, 0..2, &self.resolve_buffer, 0);
+        encoder.copy_buffer_to_buffer(
+            &self.resolve_buffer,
+            0,
+            &self.readback_buffer,
+            0,
+            Self::BUFFER_SIZE,
+        );
+        queue.submit(Some(encoder.finish()));
+    }
+
     /// Blocking readback of the two timestamps written by the last stamped batch, called at most
     /// once per `STATS_INTERVAL` — the stall this introduces is negligible next to a sim running
     /// at thousands of TPS.
@@ -212,6 +252,9 @@ impl GpuGolSimLoop {
 
     /// Records and submits one batch of steps (plus, at snapshot/stats cadence, the display pass
     /// and/or a timestamped-query resolve), then updates the published stats when due.
+    ///
+    /// The timestamp-query resolve is deliberately *not* recorded into the same command buffer
+    /// as the writes — see `TimestampQuery::resolve_after` for why.
     fn step_batch(&mut self) {
         let now = Instant::now();
         let want_timing = self.timestamp_query.is_some()
@@ -236,23 +279,16 @@ impl GpuGolSimLoop {
             self.last_display_publish = now;
         }
 
+        let write_submission = self.queue.submit(Some(encoder.finish()));
+        self.step_count += u64::from(self.batch_size);
+
         if want_timing {
             let tq = self
                 .timestamp_query
                 .as_ref()
                 .expect("want_timing implies timestamp_query is Some");
-            encoder.resolve_query_set(&tq.query_set, 0..2, &tq.resolve_buffer, 0);
-            encoder.copy_buffer_to_buffer(
-                &tq.resolve_buffer,
-                0,
-                &tq.readback_buffer,
-                0,
-                TimestampQuery::BUFFER_SIZE,
-            );
+            tq.resolve_after(&self.device, &self.queue, write_submission);
         }
-
-        self.queue.submit(Some(encoder.finish()));
-        self.step_count += u64::from(self.batch_size);
 
         if want_timing {
             let gpu_us_per_step = self
@@ -379,5 +415,90 @@ impl Drop for GpuGolHandle {
         if let Some(h) = self.handle.take() {
             drop(h.join());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu_gol::{build, seed_random};
+
+    /// Like `gpu_gol::tests::headless_device`, but requests `TIMESTAMP_QUERY` explicitly (mirrors
+    /// what `main.rs` does when the adapter supports it), since the default test device requests
+    /// no features at all.
+    fn headless_timing_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .ok()?;
+        if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            return None;
+        }
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("gpu_gol_timing_test_device"),
+            required_features: wgpu::Features::TIMESTAMP_QUERY,
+            ..Default::default()
+        }))
+        .ok()?;
+        Some((device, queue))
+    }
+
+    /// Regression test for "GPU time/step flickers to 0/None during a sustained run": runs many
+    /// batches back to back exactly like `GpuGolSimLoop::step_batch` records/resolves/reads a
+    /// timestamped batch, but takes a reading on *every* iteration instead of once/second, to
+    /// shake out an intermittent zero or failed readback far more aggressively than the real
+    /// once-per-second cadence would in a short-lived interactive session.
+    #[test]
+    fn gpu_timing_readback_is_stable_over_many_batches() {
+        let Some((device, queue)) = headless_timing_device() else {
+            log::warn!(
+                "skipping gpu_timing_readback_is_stable_over_many_batches: \
+                 no adapter with TIMESTAMP_QUERY available"
+            );
+            return;
+        };
+
+        let width = 256;
+        let height = 256;
+        let initial = seed_random(width, height, 0.3, 7);
+        let (mut compute, _render) = build(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            width,
+            height,
+            &initial,
+        );
+
+        let tq = TimestampQuery::new(&device, &queue).expect("device has TIMESTAMP_QUERY");
+        let batch_size = 64;
+        let iterations = 200;
+        let mut zero_count = 0usize;
+        let mut none_count = 0usize;
+
+        for _ in 0..iterations {
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            compute.dispatch_step_batch(&mut encoder, batch_size, Some(&tq.query_set));
+            let write_submission = queue.submit(Some(encoder.finish()));
+
+            tq.resolve_after(&device, &queue, write_submission);
+
+            match tq.read_gpu_us_per_step(&device, batch_size) {
+                Some(us) if us <= 0.0 => zero_count += 1,
+                Some(_) => {}
+                None => none_count += 1,
+            }
+        }
+
+        assert_eq!(
+            none_count, 0,
+            "readback failed (returned None) on {none_count}/{iterations} back-to-back batches"
+        );
+        assert_eq!(
+            zero_count, 0,
+            "readback returned 0 (end timestamp <= start timestamp) on \
+             {zero_count}/{iterations} back-to-back batches"
+        );
     }
 }
