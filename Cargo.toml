@@ -21,7 +21,20 @@ eframe = { version = "0.33.0", default-features = false, features = [
 ] }
 bytemuck = "1.25.0"
 pollster = "0.4.0"
-wgpu = { version = "27.0.1", features = ["metal", "dx12", "vulkan", "gles", "webgpu"] }
+# `fragile-send-sync-non-atomic-wasm` makes wgpu's handles `Send + Sync` on wasm32. GPU models
+# are native-only for now, but `SimState: Send`, so without this the GPU model's `SimState` impl
+# would not typecheck for `wasm32-unknown-unknown` (which CI checks) and would have to be
+# `#[cfg]`-ed out of existence instead. The feature is a no-op on native, and on wasm the handles
+# are never actually sent across threads (there are none), which is exactly the condition under
+# which it is sound.
+wgpu = { version = "27.0.1", features = [
+    "metal",
+    "dx12",
+    "vulkan",
+    "gles",
+    "webgpu",
+    "fragile-send-sync-non-atomic-wasm",
+] }
 flume = "0.12"
 egui_plot = "0.34"
 serde = { version = "1.0.219", features = ["derive"] }

@@ -1,6 +1,63 @@
+use std::sync::Arc;
+
 use crate::{HenadApp, icons::material_design_icons::MDI_CUBE_OFF_OUTLINE};
+use eframe::egui_wgpu;
 use egui::{ColorImage, RichText, TextureOptions};
+use egui_wgpu::{CallbackResources, CallbackTrait};
+use henad_compute::gpu::GpuDisplay;
 use henad_compute::snapshot::SnapshotView;
+
+/// Paints a GPU model's display texture straight into the viewport.
+///
+/// A GPU model's cells never reach the CPU, so there is no `ColorImage` to upload — the sim
+/// thread has already rendered the grid into a texture, and all that is left is to sample it.
+/// The callback carries its own `Arc<GpuDisplay>` rather than looking resources up in egui's
+/// type-keyed `CallbackResources`, which is what makes model teardown safe: if the user switches
+/// models while this frame is still in flight, this `Arc` keeps the pipeline and texture alive
+/// until the render pass is done with them.
+struct GpuViewportPaint {
+    display: Arc<GpuDisplay>,
+}
+
+impl CallbackTrait for GpuViewportPaint {
+    fn paint(
+        &self,
+        _info: egui::PaintCallbackInfo,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        _callback_resources: &CallbackResources,
+    ) {
+        render_pass.set_pipeline(&self.display.render_pipeline);
+        render_pass.set_bind_group(0, &self.display.render_bind_group, &[]);
+        render_pass.draw(0..3, 0..1);
+    }
+}
+
+/// Allocates an aspect-fitted rect and hands it to the GPU paint callback.
+fn paint_gpu_view(ui: &mut egui::Ui, display: Arc<GpuDisplay>) {
+    let size = fit_aspect(
+        ui.available_size(),
+        display.width as f32,
+        display.height as f32,
+    );
+    ui.centered_and_justified(|ui| {
+        let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
+        ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+            rect,
+            GpuViewportPaint { display },
+        ));
+    });
+}
+
+/// Fits `size` inside `available` while preserving aspect ratio.
+fn fit_aspect(available: egui::Vec2, width: f32, height: f32) -> egui::Vec2 {
+    let tex_aspect = width / height;
+    let panel_aspect = available.x / available.y;
+    if tex_aspect > panel_aspect {
+        egui::Vec2::new(available.x, available.x / tex_aspect)
+    } else {
+        egui::Vec2::new(available.y * tex_aspect, available.y)
+    }
+}
 
 pub fn viewport_panel(ctx: &egui::Context, app: &mut HenadApp) {
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -11,8 +68,24 @@ pub fn viewport_panel(ctx: &egui::Context, app: &mut HenadApp) {
             return;
         }
 
+        if !app.rendering_enabled {
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new(MDI_CUBE_OFF_OUTLINE).size(64.0));
+                ui.heading("Rendering disabled");
+            });
+            return;
+        }
+
+        // --- GPU path: nothing to convert or upload, just sample the texture the sim thread
+        // already wrote. Branches on the snapshot *variant*, not on the topology hint — a GPU
+        // Game of Life is still `TopologyHint::Grid2D`, it just gets its pixels differently.
+        if let Some(SnapshotView::Gpu(gpu)) = app.snapshot.as_ref().map(|s| &s.view) {
+            paint_gpu_view(ui, Arc::clone(&gpu.display));
+            return;
+        }
+
         let current_tick = app.snapshot.as_ref().map_or(0, |s| s.tick);
-        let needs_update = app.rendering_enabled && app.last_rendered_tick != Some(current_tick);
+        let needs_update = app.last_rendered_tick != Some(current_tick);
 
         if needs_update {
             // Take snapshot temporarily to avoid borrow conflicts with app
@@ -69,6 +142,8 @@ pub fn viewport_panel(ctx: &egui::Context, app: &mut HenadApp) {
                             points.world_h,
                         );
                     }
+                    // Handled above, before any CPU-side pixel work.
+                    SnapshotView::Gpu(_) => {}
                     SnapshotView::None => {
                         app.snapshot = Some(snapshot);
                         ui.label("No view available");
@@ -80,25 +155,9 @@ pub fn viewport_panel(ctx: &egui::Context, app: &mut HenadApp) {
             }
         }
 
-        if !app.rendering_enabled {
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new(MDI_CUBE_OFF_OUTLINE).size(64.0));
-                ui.heading("Rendering disabled");
-            });
-            return;
-        }
-
         if let Some(tex) = &app.grid_texture {
             let size = tex.size_vec2();
-            let available = ui.available_size();
-            let tex_aspect = size.x / size.y;
-            let panel_aspect = available.x / available.y;
-
-            let display_size = if tex_aspect > panel_aspect {
-                egui::Vec2::new(available.x, available.x / tex_aspect)
-            } else {
-                egui::Vec2::new(available.y * tex_aspect, available.y)
-            };
+            let display_size = fit_aspect(ui.available_size(), size.x, size.y);
 
             ui.centered_and_justified(|ui| {
                 ui.image(egui::load::SizedTexture::new(tex.id(), display_size));

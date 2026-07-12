@@ -15,7 +15,7 @@ fn main() -> eframe::Result {
                 device_descriptor: std::sync::Arc::new(|adapter| {
                     let base = egui_wgpu::WgpuSetupCreateNew::default();
                     let mut descriptor = (base.device_descriptor)(adapter);
-                    // Enables GPU per-step timing in the GPU Game of Life window, when the
+                    // Enables the GPU per-step timing readout for GPU-backed models, when the
                     // adapter supports it; falls back to reporting "N/A" otherwise.
                     if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
                         descriptor.required_features |= wgpu::Features::TIMESTAMP_QUERY;
