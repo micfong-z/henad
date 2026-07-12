@@ -8,6 +8,13 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{GridView, StatEntry};
 
+/// Seed every `GridModel`'s `init` starts from.
+///
+/// Exported (rather than being a literal inside `from_params`) so a GPU re-implementation of a
+/// CPU model can seed its grid bit-identically and therefore be checked against the CPU model as
+/// an oracle. If this and the model's `init` agree, the two backends start from the same grid.
+pub const GRID_INIT_SEED: u64 = 0xDEAD_BEEF_CAFE_1234;
+
 /// Engine wrapper that implements `SimState` for any `GridModel`.
 pub struct GridModelState<M: GridModel> {
     grid: Grid2D<u8>,
@@ -23,7 +30,7 @@ impl<M: GridModel> GridModelState<M> {
         let width = extract_u32(params, 0, 1024);
         let height = extract_u32(params, 1, 1024);
         let mut grid = Grid2D::new(width, height);
-        let mut rng_state: u64 = 0xDEAD_BEEF_CAFE_1234;
+        let mut rng_state: u64 = GRID_INIT_SEED;
         M::init(&mut grid, params, &mut rng_state);
         let cached_stats = M::stats(&grid);
         Self {
@@ -91,12 +98,7 @@ impl<M: GridModel> SimState for GridModelState<M> {
     }
 }
 
-fn step_grid<M: GridModel>(
-    grid: &mut Grid2D<u8>,
-    hot: &M::Params,
-    rng_state: &mut u64,
-    tick: u64,
-) {
+fn step_grid<M: GridModel>(grid: &mut Grid2D<u8>, hot: &M::Params, rng_state: &mut u64, tick: u64) {
     let w = grid.width();
     let h = grid.height();
     let ws = w as usize;

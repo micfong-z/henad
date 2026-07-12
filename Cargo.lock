@@ -1114,8 +1114,13 @@ dependencies = [
 name = "henad-compute"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "flume",
  "henad-core",
+ "log",
+ "pollster",
  "rayon",
+ "wgpu",
 ]
 
 [[package]]
@@ -1126,9 +1131,14 @@ version = "0.1.0"
 name = "henad-models"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "flume",
  "henad-compute",
  "henad-core",
+ "log",
+ "pollster",
  "rayon",
+ "wgpu",
 ]
 
 [[package]]

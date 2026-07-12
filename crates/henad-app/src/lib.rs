@@ -1,9 +1,8 @@
 //! Henad Engine — GUI application.
 
-#[cfg(not(target_arch = "wasm32"))]
-mod gpu_gol;
 mod icons;
 mod init;
+mod sim_runner;
 pub mod ui;
 
 use eframe::egui_wgpu;
@@ -12,9 +11,17 @@ use henad_compute::sim_thread::{SimCommand, SimThread};
 use henad_compute::snapshot::Snapshot;
 use henad_core::params::ParamValue;
 use henad_core::view::StatsHistory;
-use henad_models::registry::{ModelEntry, model_registry};
+use henad_models::registry::{ModelEntry, ModelState, model_registry};
 
 use crate::init::{setup_custom_fonts, setup_custom_styles};
+use crate::sim_runner::SimRunner;
+
+#[cfg(not(target_arch = "wasm32"))]
+use henad_compute::gpu::GpuContext;
+#[cfg(not(target_arch = "wasm32"))]
+use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
+#[cfg(not(target_arch = "wasm32"))]
+use henad_compute::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
 
 /// Exponential moving average smoothing factor (0..1, higher = more responsive).
 #[cfg(not(target_arch = "wasm32"))]
@@ -48,7 +55,7 @@ pub struct HenadApp {
     registry: Vec<ModelEntry>,
     selected_model: usize,
     param_values: Vec<ParamValue>,
-    sim_thread: Option<SimThread>,
+    sim_thread: Option<SimRunner>,
     snapshot: Option<Snapshot>,
     sim_running: bool,
     grid_texture: Option<TextureHandle>,
@@ -63,8 +70,20 @@ pub struct HenadApp {
     pub history_capacity: usize,
     #[cfg(not(target_arch = "wasm32"))]
     pub timings: FrameTimings,
+    /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
+    /// switch. `None` on the web build, which is exactly why no GPU model appears in the
+    /// dropdown there.
     #[cfg(not(target_arch = "wasm32"))]
-    gpu_gol: Option<gpu_gol::GpuGolHandle>,
+    gpu_ctx: Option<GpuContext>,
+    /// GPU batching controls. Real fields (not `ctx.data()` temp storage) like every other panel's
+    /// state, and the source of truth handed to a freshly spawned GPU thread so its settings
+    /// survive a Reset.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub gpu_adaptive: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub gpu_target_ms: f64,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub gpu_batch_size: u32,
 }
 
 impl HenadApp {
@@ -77,35 +96,22 @@ impl HenadApp {
         let adapter_info = render_state.adapter.get_info();
         log::info!("{}", egui_wgpu::adapter_info_summary(&adapter_info));
 
+        // egui's `RenderState` is the sole authority on device acquisition; `henad-compute` never
+        // creates a device, it only ever receives cloned handles. On wasm we hand the registry no
+        // context at all, so GPU models are simply absent from the web build.
         #[cfg(not(target_arch = "wasm32"))]
-        let gpu_gol = {
-            let initial_cells =
-                gpu_gol::seed_patterns(gpu_gol::DEFAULT_WIDTH, gpu_gol::DEFAULT_HEIGHT);
-            let (compute, render) = gpu_gol::build(
-                &render_state.device,
-                &render_state.queue,
-                render_state.target_format,
-                gpu_gol::DEFAULT_WIDTH,
-                gpu_gol::DEFAULT_HEIGHT,
-                &initial_cells,
-            );
-            render_state
-                .renderer
-                .write()
-                .callback_resources
-                .insert(render);
-            gpu_gol::GpuGolHandle::spawn(
-                render_state.device.clone(),
-                render_state.queue.clone(),
-                compute,
-                gpu_gol::sim_thread::DEFAULT_BATCH_SIZE,
-            )
-        };
+        let gpu_ctx = Some(GpuContext::new(
+            render_state.device.clone(),
+            render_state.queue.clone(),
+            render_state.target_format,
+        ));
+        #[cfg(target_arch = "wasm32")]
+        let gpu_ctx: Option<henad_compute::gpu::GpuContext> = None;
 
         setup_custom_fonts(&cc.egui_ctx);
         setup_custom_styles(&cc.egui_ctx);
 
-        let registry = model_registry();
+        let registry = model_registry(gpu_ctx.clone());
         let param_values: Vec<ParamValue> = registry
             .first()
             .map(|m| {
@@ -136,12 +142,21 @@ impl HenadApp {
             #[cfg(not(target_arch = "wasm32"))]
             timings: FrameTimings::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            gpu_gol: Some(gpu_gol),
+            gpu_ctx,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_adaptive: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_target_ms: DEFAULT_TARGET_MS,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_batch_size: DEFAULT_BATCH_SIZE,
         }
     }
 
     fn reset_simulation(&mut self) {
-        // Drop existing sim thread (sends Shutdown, joins thread)
+        // Drop existing sim thread (sends Shutdown, joins thread). For a GPU model this also
+        // releases its buffers/pipelines — but any paint callback still in flight this frame holds
+        // its own `Arc` to the display, so tearing down mid-frame cannot pull the texture out from
+        // under the renderer.
         self.sim_thread = None;
         self.snapshot = None;
         self.last_rendered_tick = None;
@@ -150,19 +165,45 @@ impl HenadApp {
         self.density_max = 4.0;
         self.ticks_per_snapshot = 1;
 
-        if let Some(entry) = self.registry.get(self.selected_model) {
-            let state = (entry.create)(&self.param_values);
-            self.stats_history = Some(StatsHistory::new(
-                entry.stat_descriptors.clone(),
-                self.history_capacity,
-            ));
-            let mut thread = SimThread::new(state, self.target_tps);
-            if self.uncapped {
-                thread.send(SimCommand::SetUncapped(true));
+        let Some(entry) = self.registry.get(self.selected_model) else {
+            return;
+        };
+
+        let stats_history =
+            StatsHistory::new(entry.stat_descriptors.clone(), self.history_capacity);
+
+        match (entry.create)(&self.param_values) {
+            ModelState::Cpu(state) => {
+                let mut thread = SimThread::new(state, self.target_tps);
+                if self.uncapped {
+                    thread.send(SimCommand::SetUncapped(true));
+                }
+                self.sim_thread = Some(SimRunner::Cpu(thread));
             }
-            self.sim_thread = Some(thread);
-            self.sim_running = false;
+            #[cfg(not(target_arch = "wasm32"))]
+            ModelState::Gpu(state) => {
+                let Some(ctx) = self.gpu_ctx.clone() else {
+                    // Unreachable in practice: without a context the registry never offers a GPU
+                    // entry to select in the first place.
+                    log::error!("a GPU model was selected but no GPU context is available");
+                    return;
+                };
+                let settings = GpuBatchSettings {
+                    adaptive: self.gpu_adaptive,
+                    batch_size: self.gpu_batch_size,
+                    target_ms: self.gpu_target_ms,
+                };
+                self.sim_thread = Some(SimRunner::Gpu(GpuSimThread::new(ctx, state, settings)));
+            }
+            #[cfg(target_arch = "wasm32")]
+            ModelState::Gpu(_) => {
+                log::error!("GPU models are not available on the web build");
+                return;
+            }
         }
+
+        self.stats_history = Some(stats_history);
+        self.sim_running = false;
     }
 
     fn offload_simulation(&mut self) {
@@ -204,11 +245,6 @@ impl eframe::App for HenadApp {
 
         ui::toolbar::toolbar_panel(ctx, self);
         ui::sidebar::sidebar_panel(ctx, self);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(handle) = &self.gpu_gol {
-            gpu_gol::gpu_gol_panel(ctx, handle);
-        }
 
         #[cfg(not(target_arch = "wasm32"))]
         FrameTimings::update_ema(
