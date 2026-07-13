@@ -97,14 +97,7 @@ impl GridModel for SirGridModel {
     }
 
     fn stats(grid: &Grid2D<u8>) -> Vec<StatEntry> {
-        let (mut s, mut i, mut r) = (0u64, 0u64, 0u64);
-        for &cell in grid.current() {
-            match cell {
-                0 => s += 1,
-                1 => i += 1,
-                _ => r += 1,
-            }
-        }
+        let (s, i, r) = count_sir(grid.current());
         vec![
             stat("Susceptible", s as f64, PALETTE[0]),
             stat("Infected", i as f64, PALETTE[1]),
@@ -127,6 +120,40 @@ impl GridModel for SirGridModel {
                 color: PALETTE[2],
             },
         ]
+    }
+}
+
+/// Cells per rayon chunk in the stats reduction. See `game_of_life::STATS_CHUNK`.
+#[cfg(not(target_arch = "wasm32"))]
+const STATS_CHUNK: usize = 8192;
+
+/// Count S/I/R in a single pass over a contiguous slice.
+fn count_sir_seq(cells: &[u8]) -> (u64, u64, u64) {
+    let (mut s, mut i, mut r) = (0u64, 0u64, 0u64);
+    for &cell in cells {
+        match cell {
+            S => s += 1,
+            I => i += 1,
+            _ => r += 1,
+        }
+    }
+    (s, i, r)
+}
+
+/// Count the S/I/R compartments.
+fn count_sir(cells: &[u8]) -> (u64, u64, u64) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        cells
+            .par_chunks(STATS_CHUNK)
+            .map(count_sir_seq)
+            .reduce(|| (0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        count_sir_seq(cells)
     }
 }
 

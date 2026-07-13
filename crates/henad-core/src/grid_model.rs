@@ -41,7 +41,8 @@ pub trait GridModel: Send + Sync + 'static {
     fn step_cell(cell: u8, neighbors: &[u8], params: &Self::Params, rng: &mut u64) -> u8;
 
     /// Compute current statistics from the grid state.
-    /// Called once per tick after all cells are updated.
+    ///
+    /// Called on demand when a snapshot is published. Implementations should parallelize this if the computation is expensive.
     fn stats(grid: &Grid2D<u8>) -> Vec<StatEntry>;
 
     /// Declare stat series for the history chart.

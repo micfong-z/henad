@@ -63,7 +63,7 @@ impl GridModel for GameOfLifeModel {
     }
 
     fn stats(grid: &Grid2D<u8>) -> Vec<StatEntry> {
-        let alive = grid.current().iter().filter(|&&c| c == ALIVE).count() as f64;
+        let alive = count_alive(grid.current()) as f64;
         vec![stat("Alive", alive, PALETTE[1])]
     }
 
@@ -72,6 +72,25 @@ impl GridModel for GameOfLifeModel {
             label: "Alive",
             color: PALETTE[1],
         }]
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const STATS_CHUNK: usize = 8192;
+
+fn count_alive(cells: &[u8]) -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        cells
+            .par_chunks(STATS_CHUNK)
+            .map(|chunk| chunk.iter().filter(|&&c| c == ALIVE).count() as u64)
+            .sum()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        cells.iter().filter(|&&c| c == ALIVE).count() as u64
     }
 }
 

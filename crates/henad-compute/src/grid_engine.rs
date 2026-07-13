@@ -21,7 +21,6 @@ pub struct GridModelState<M: GridModel> {
     tick: u64,
     params: Vec<ParamValue>,
     rng_state: u64,
-    cached_stats: Vec<StatEntry>,
     _marker: PhantomData<M>,
 }
 
@@ -32,13 +31,11 @@ impl<M: GridModel> GridModelState<M> {
         let mut grid = Grid2D::new(width, height);
         let mut rng_state: u64 = GRID_INIT_SEED;
         M::init(&mut grid, params, &mut rng_state);
-        let cached_stats = M::stats(&grid);
         Self {
             grid,
             tick: 0,
             params: params.to_vec(),
             rng_state,
-            cached_stats,
             _marker: PhantomData,
         }
     }
@@ -60,7 +57,6 @@ impl<M: GridModel> SimState for GridModelState<M> {
         step_grid::<M>(&mut self.grid, &hot, &mut self.rng_state, self.tick);
         self.grid.swap();
         self.tick += 1;
-        self.cached_stats = M::stats(&self.grid);
     }
 
     fn tick(&self) -> u64 {
@@ -75,9 +71,9 @@ impl<M: GridModel> SimState for GridModelState<M> {
             palette: M::PALETTE,
         })
     }
-
+    
     fn stats(&self) -> Vec<StatEntry> {
-        self.cached_stats.clone()
+        M::stats(&self.grid)
     }
 
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
