@@ -119,7 +119,9 @@ impl SpatialHash {
     }
 
     pub fn heap_bytes(&self) -> usize {
-        self.agent_cells.capacity() * 4 + self.sorted_agents.capacity() * 4 + self.cell_start.capacity() * 4
+        self.agent_cells.capacity() * 4
+            + self.sorted_agents.capacity() * 4
+            + self.cell_start.capacity() * 4
     }
 }
 

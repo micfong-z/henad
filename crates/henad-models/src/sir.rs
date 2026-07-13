@@ -33,7 +33,14 @@ impl GridModel for SirGridModel {
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
         vec![
-            f32_param("infection_rate", "Infection Rate", 0.3, 0.0, 1.0, Some(0.01)),
+            f32_param(
+                "infection_rate",
+                "Infection Rate",
+                0.3,
+                0.0,
+                1.0,
+                Some(0.01),
+            ),
             f32_param("recovery_rate", "Recovery Rate", 0.05, 0.0, 1.0, Some(0.01)),
             f32_param(
                 "initial_infected_pct",
@@ -74,11 +81,7 @@ impl GridModel for SirGridModel {
                     let prob_safe = (1.0 - params.infection_rate).powi(infected_count as i32);
                     *rng = xorshift64(*rng);
                     let rand_val = (*rng >> 33) as f32 / (u32::MAX >> 1) as f32;
-                    if rand_val > prob_safe {
-                        I
-                    } else {
-                        S
-                    }
+                    if rand_val > prob_safe { I } else { S }
                 } else {
                     S
                 }

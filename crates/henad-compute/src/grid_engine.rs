@@ -71,7 +71,7 @@ impl<M: GridModel> SimState for GridModelState<M> {
             palette: M::PALETTE,
         })
     }
-    
+
     fn stats(&self) -> Vec<StatEntry> {
         M::stats(&self.grid)
     }
