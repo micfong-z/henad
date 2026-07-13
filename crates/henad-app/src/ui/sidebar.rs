@@ -64,8 +64,6 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
     egui::SidePanel::left("sidebar")
         .min_width(200.0)
         .show(ctx, |ui| {
-            let mut do_reset = false;
-            let mut do_offload = false;
             ui.horizontal(|ui| {
                 let has_thread = app.sim_thread.is_some();
                 let icon = if app.sim_running { MDI_PAUSE } else { MDI_PLAY };
@@ -94,13 +92,8 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
                     }
                 }
                 ui.separator();
-                if ui.button("Reset").clicked() {
-                    do_reset = true;
-                }
 
-                ui.separator();
-
-                if ui.button("Load Model").clicked() {
+                if ui.button("Load Model / Reset").clicked() {
                     app.reset_simulation();
                 }
                 if ui
@@ -108,15 +101,9 @@ pub fn sidebar_panel(ctx: &egui::Context, app: &mut HenadApp) {
                     .on_hover_text("Free simulation memory")
                     .clicked()
                 {
-                    do_offload = true;
+                    app.offload_simulation();
                 }
             });
-            if do_reset {
-                app.reset_simulation();
-            }
-            if do_offload {
-                app.offload_simulation();
-            }
 
             ui.checkbox(&mut app.rendering_enabled, "Rendering");
 
