@@ -260,7 +260,9 @@ mod native {
                     self.snapshot_now();
                 }
                 Command::Sim(SimCommand::SetParam { index, value }) => {
-                    self.state.set_param(index, &value);
+                    if !self.state.set_param(index, &value) {
+                        log::warn!("Failed to set param index {index} to {value:?}");
+                    }
                 }
                 // No GPU analogue: this thread runs flat-out and paces itself with the batch-size
                 // controller instead of a TPS cap, and its snapshot cadence is wall-clock-driven

@@ -144,7 +144,9 @@ mod native {
                     self.ticks_per_snapshot = v.max(1);
                 }
                 SimCommand::SetParam { index, value } => {
-                    self.state.set_param(index, &value);
+                    if !self.state.set_param(index, &value) {
+                        log::warn!("Failed to set param index {index} to {value:?}");
+                    }
                 }
                 SimCommand::Shutdown => return true,
             }
