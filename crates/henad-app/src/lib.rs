@@ -233,7 +233,7 @@ impl eframe::App for HenadApp {
             if let Some(snap) = thread.take_snapshot() {
                 if let Some(history) = &mut self.stats_history {
                     let values: Vec<f64> = snap.stats.iter().map(|s| s.value.scalar()).collect();
-                    history.push(&values);
+                    history.push(&values, snap.tick);
                 }
                 self.snapshot = Some(snap);
             }

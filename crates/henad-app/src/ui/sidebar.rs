@@ -392,7 +392,6 @@ mod stats {
             .legend(egui_plot::Legend::default())
             .show(ui, |plot_ui| {
                 let filled = history.len();
-                let oldest_tick = history.oldest_tick();
 
                 for (col, desc) in history.descriptors().iter().enumerate() {
                     let [r, g, b, _] = desc.color;
@@ -400,8 +399,8 @@ mod stats {
 
                     let points: Vec<[f64; 2]> = (0..filled)
                         .filter_map(|j| {
-                            let val = history.get(col, j)?;
-                            Some([(oldest_tick + j) as f64, val])
+                            let (val, tick) = history.get(col, j)?;
+                            Some([(tick) as f64, val])
                         })
                         .collect();
 

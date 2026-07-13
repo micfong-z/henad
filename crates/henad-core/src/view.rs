@@ -51,10 +51,12 @@ pub struct StatDescriptor {
     pub color: [u8; 4],
 }
 
-/// Ring-buffer history of stat values, recorded every tick by the model.
+/// Ring-buffer history of stat values, polled every snapshot.
 pub struct StatsHistory {
     /// One column per stat series, each holding `capacity` entries.
     columns: Vec<Vec<f64>>,
+    /// Ticks corresponding to each entry in the columns. Same length as each column.
+    ticks: Vec<u64>,
     descriptors: Vec<StatDescriptor>,
     /// Total number of entries written (may exceed capacity).
     write_count: usize,
@@ -65,27 +67,31 @@ impl StatsHistory {
     /// Create a new history with the given stat descriptors and ring buffer capacity.
     pub fn new(descriptors: Vec<StatDescriptor>, capacity: usize) -> Self {
         let columns = vec![Vec::with_capacity(capacity); descriptors.len()];
+        let ticks = Vec::with_capacity(capacity);
         Self {
             columns,
+            ticks,
             descriptors,
             write_count: 0,
             capacity,
         }
     }
 
-    /// Record one snapshot of stats. Called once per tick by the model.
-    pub fn push(&mut self, values: &[f64]) {
+    /// Record one snapshot of stats. Called once per snapshot.
+    pub fn push(&mut self, values: &[f64], tick: u64) {
         if self.write_count < self.capacity {
             // Still filling up — just append
             for (col, val) in self.columns.iter_mut().zip(values) {
                 col.push(*val);
             }
+            self.ticks.push(tick);
         } else {
             // Ring buffer full — overwrite oldest
             let idx = self.write_count % self.capacity;
             for (col, val) in self.columns.iter_mut().zip(values) {
                 col[idx] = *val;
             }
+            self.ticks[idx] = tick;
         }
         self.write_count += 1;
     }
@@ -113,8 +119,8 @@ impl StatsHistory {
     }
 
     /// Get the value at logical index `j` (0 = oldest visible entry) for column `col`.
-    /// Returns `None` if out of bounds.
-    pub fn get(&self, col: usize, j: usize) -> Option<f64> {
+    /// Returns `None` if out of bounds or no tick is available for that entry (shouldn't happen in practice).
+    pub fn get(&self, col: usize, j: usize) -> Option<(f64, u64)> {
         let filled = self.len();
         if j >= filled {
             return None;
@@ -122,17 +128,25 @@ impl StatsHistory {
         let column = self.columns.get(col)?;
         let start = self.write_count.saturating_sub(self.capacity);
         let buf_idx = (start + j) % self.capacity;
-        column.get(buf_idx).copied()
+        let value = column.get(buf_idx).copied();
+        let tick = self.ticks.get(buf_idx).copied()?;
+        value.map(|v| (v, tick))
     }
 
-    /// The tick number of the oldest visible entry.
-    pub fn oldest_tick(&self) -> usize {
-        self.write_count.saturating_sub(self.capacity)
+    /// Get the tick value at logical index `j` (0 = oldest visible entry). Returns `None` if out of bounds.
+    pub fn get_tick(&self, j: usize) -> Option<u64> {
+        let filled = self.len();
+        if j >= filled {
+            return None;
+        }
+        let start = self.write_count.saturating_sub(self.capacity);
+        let buf_idx = (start + j) % self.capacity;
+        self.ticks.get(buf_idx).copied()
     }
 
     /// Heap bytes used by all column buffers.
     pub fn heap_bytes(&self) -> usize {
-        self.columns.iter().map(|c| c.capacity() * 8).sum()
+        self.columns.iter().map(|c| c.capacity() * 8).sum::<usize>() + self.ticks.capacity() * 8
     }
 
     /// Change the ring-buffer capacity, keeping the most recent entries.
@@ -142,10 +156,17 @@ impl StatsHistory {
         let skip = filled - keep;
 
         let new_columns: Vec<Vec<f64>> = (0..self.columns.len())
-            .map(|col| (skip..filled).filter_map(|j| self.get(col, j)).collect())
+            .map(|col| {
+                (skip..filled)
+                    .filter_map(|j| self.get(col, j).map(|(v, _)| v))
+                    .collect()
+            })
             .collect();
 
+        let new_ticks: Vec<u64> = (skip..filled).filter_map(|j| self.get_tick(j)).collect();
+
         self.columns = new_columns;
+        self.ticks = new_ticks;
         self.capacity = new_capacity;
         self.write_count = keep;
     }
