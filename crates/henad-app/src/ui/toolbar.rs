@@ -43,14 +43,7 @@ fn padded_num_label(ui: &mut egui::Ui, prefix: &str, value: f64, digits: usize) 
             },
         );
     }
-    job.append(
-        sig,
-        0.0,
-        egui::TextFormat {
-            color: normal,
-            ..font
-        },
-    );
+    job.append(sig, 0.0, egui::TextFormat { color: normal, ..font });
     ui.label(job);
 }
 

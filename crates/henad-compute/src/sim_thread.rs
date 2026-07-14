@@ -102,8 +102,7 @@ mod native {
                         }
                     }
                     if self.running {
-                        let step_interval =
-                            std::time::Duration::from_secs_f64(1.0 / self.target_tps);
+                        let step_interval = std::time::Duration::from_secs_f64(1.0 / self.target_tps);
                         self.next_step_at = Instant::now() + step_interval;
                         for _ in 0..self.ticks_per_snapshot {
                             self.timed_step();

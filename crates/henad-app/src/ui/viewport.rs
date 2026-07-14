@@ -34,11 +34,7 @@ impl CallbackTrait for GpuViewportPaint {
 
 /// Allocates an aspect-fitted rect and hands it to the GPU paint callback.
 fn paint_gpu_view(ui: &mut egui::Ui, display: Arc<GpuDisplay>) {
-    let size = fit_aspect(
-        ui.available_size(),
-        display.width as f32,
-        display.height as f32,
-    );
+    let size = fit_aspect(ui.available_size(), display.width as f32, display.height as f32);
     ui.centered_and_justified(|ui| {
         let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
@@ -114,9 +110,7 @@ pub fn viewport_panel(ctx: &egui::Context, app: &mut HenadApp) {
                                 });
                         }
                         #[cfg(target_arch = "wasm32")]
-                        for (chunk, &cell) in
-                            app.pixel_buf.chunks_exact_mut(4).zip(grid.cells.iter())
-                        {
+                        for (chunk, &cell) in app.pixel_buf.chunks_exact_mut(4).zip(grid.cells.iter()) {
                             chunk.copy_from_slice(&grid.palette[cell as usize]);
                         }
 
@@ -127,20 +121,12 @@ pub fn viewport_panel(ctx: &egui::Context, app: &mut HenadApp) {
                                 tex.set(image, TextureOptions::NEAREST);
                             }
                             None => {
-                                app.grid_texture =
-                                    Some(ctx.load_texture("grid", image, TextureOptions::NEAREST));
+                                app.grid_texture = Some(ctx.load_texture("grid", image, TextureOptions::NEAREST));
                             }
                         }
                     }
                     SnapshotView::Points(points) => {
-                        render_density_heatmap(
-                            ctx,
-                            app,
-                            &points.pos_x,
-                            &points.pos_y,
-                            points.world_w,
-                            points.world_h,
-                        );
+                        render_density_heatmap(ctx, app, &points.pos_x, &points.pos_y, points.world_w, points.world_h);
                     }
                     // Handled above, before any CPU-side pixel work.
                     SnapshotView::Gpu(_) => {}
@@ -172,13 +158,7 @@ const DENSITY_H: usize = 512;
 /// 5-stop piecewise linear approximation of the Inferno colormap.
 #[inline]
 fn inferno(t: f32) -> [u8; 4] {
-    const STOPS: [[u8; 3]; 5] = [
-        [0, 0, 4],
-        [64, 4, 104],
-        [183, 55, 121],
-        [251, 136, 97],
-        [252, 255, 164],
-    ];
+    const STOPS: [[u8; 3]; 5] = [[0, 0, 4], [64, 4, 104], [183, 55, 121], [251, 136, 97], [252, 255, 164]];
 
     let t = t.clamp(0.0, 1.0);
     let scaled = t * 4.0;
@@ -266,8 +246,7 @@ fn render_density_heatmap(
             tex.set(image, TextureOptions::LINEAR);
         }
         None => {
-            app.grid_texture =
-                Some(ctx.load_texture("density_heatmap", image, TextureOptions::LINEAR));
+            app.grid_texture = Some(ctx.load_texture("density_heatmap", image, TextureOptions::LINEAR));
         }
     }
 }

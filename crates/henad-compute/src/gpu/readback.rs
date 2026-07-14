@@ -38,9 +38,7 @@ impl U32Readback {
         let storage = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("{label}_storage")),
             size: Self::SIZE,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
@@ -91,11 +89,9 @@ impl U32Readback {
         }
         self.copied = false;
         let (tx, rx) = flume::bounded(1);
-        self.staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                drop(tx.send(result));
-            });
+        self.staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            drop(tx.send(result));
+        });
         self.pending = Some(rx);
     }
 

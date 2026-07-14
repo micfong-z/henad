@@ -39,10 +39,7 @@ struct BoidParams {
 }
 
 #[inline]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Boid behavior depends on many parameters"
-)]
+#[expect(clippy::too_many_arguments, reason = "Boid behavior depends on many parameters")]
 fn process_agent(
     i: usize,
     pos_x: &[f32],
@@ -173,8 +170,7 @@ fn step_parallel(state: &mut BoidsState) {
         .for_each(|(i, (((new_px, new_py), new_vx), new_vy))| {
             BUF.with(|buf_cell| {
                 let mut buf = buf_cell.borrow_mut();
-                let (px, py, vx, vy) =
-                    process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
+                let (px, py, vx, vy) = process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
                 *new_px = px;
                 *new_py = py;
                 *new_vx = vx;
@@ -208,8 +204,7 @@ fn step_sequential(state: &mut BoidsState) {
     let mut buf = Vec::with_capacity(64);
 
     for i in 0..state.num_boids as usize {
-        let (new_px, new_py, new_vx, new_vy) =
-            process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
+        let (new_px, new_py, new_vx, new_vy) = process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
         state.next_pos_x[i] = new_px;
         state.next_pos_y[i] = new_py;
         state.next_vel_x[i] = new_vx;

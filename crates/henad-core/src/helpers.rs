@@ -32,13 +32,7 @@ pub fn f32_param(
     }
 }
 
-pub fn u32_param(
-    id: &'static str,
-    label: &'static str,
-    default: u32,
-    min: u32,
-    max: u32,
-) -> ParamDescriptor {
+pub fn u32_param(id: &'static str, label: &'static str, default: u32, min: u32, max: u32) -> ParamDescriptor {
     ParamDescriptor {
         id,
         label,
@@ -80,12 +74,7 @@ pub fn stat_vec2(label: &'static str, x: f64, y: f64, color: [u8; 4]) -> StatEnt
     }
 }
 
-pub fn stat_histogram(
-    label: &'static str,
-    edges: Vec<f64>,
-    counts: Vec<u64>,
-    color: [u8; 4],
-) -> StatEntry {
+pub fn stat_histogram(label: &'static str, edges: Vec<f64>, counts: Vec<u64>, color: [u8; 4]) -> StatEntry {
     StatEntry {
         label,
         value: StatValue::Histogram { edges, counts },

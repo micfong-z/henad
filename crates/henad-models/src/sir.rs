@@ -25,22 +25,14 @@ pub struct SirParams {
 impl GridModel for SirGridModel {
     const NAME: &'static str = "SIR Epidemic";
     const ID: &'static str = "sir";
-    const DESCRIPTION: &'static str =
-        "Classic SIR compartmental model on a 2D grid with Moore neighborhood";
+    const DESCRIPTION: &'static str = "Classic SIR compartmental model on a 2D grid with Moore neighborhood";
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
     const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
     type Params = SirParams;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
         vec![
-            f32_param(
-                "infection_rate",
-                "Infection Rate",
-                0.3,
-                0.0,
-                1.0,
-                Some(0.01),
-            ),
+            f32_param("infection_rate", "Infection Rate", 0.3, 0.0, 1.0, Some(0.01)),
             f32_param("recovery_rate", "Recovery Rate", 0.05, 0.0, 1.0, Some(0.01)),
             f32_param(
                 "initial_infected_pct",
@@ -65,11 +57,7 @@ impl GridModel for SirGridModel {
         let threshold = (initial_pct * u32::MAX as f32) as u32;
         for cell in grid.current_mut().iter_mut() {
             *rng = xorshift64(*rng);
-            *cell = if ((*rng >> 32) as u32) < threshold {
-                I
-            } else {
-                S
-            };
+            *cell = if ((*rng >> 32) as u32) < threshold { I } else { S };
         }
     }
 
@@ -89,11 +77,7 @@ impl GridModel for SirGridModel {
             I => {
                 *rng = xorshift64(*rng);
                 let rand_val = (*rng >> 33) as f32 / (u32::MAX >> 1) as f32;
-                if rand_val < params.recovery_rate {
-                    R
-                } else {
-                    I
-                }
+                if rand_val < params.recovery_rate { R } else { I }
             }
             _ => cell,
         }
@@ -182,11 +166,7 @@ mod tests {
         for _ in 0..100 {
             state.step();
         }
-        assert_eq!(
-            state.population(),
-            pop,
-            "S+I+R must remain constant over 100 steps"
-        );
+        assert_eq!(state.population(), pop, "S+I+R must remain constant over 100 steps");
     }
 
     #[test]

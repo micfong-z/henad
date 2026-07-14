@@ -73,15 +73,7 @@ impl SpatialHash {
         }
     }
 
-    pub fn query_radius(
-        &self,
-        x: f32,
-        y: f32,
-        r: f32,
-        pos_x: &[f32],
-        pos_y: &[f32],
-        result: &mut Vec<u32>,
-    ) {
+    pub fn query_radius(&self, x: f32, y: f32, r: f32, pos_x: &[f32], pos_y: &[f32], result: &mut Vec<u32>) {
         result.clear();
         let r2 = r * r;
         let cell_radius = (r * self.cell_size_inv).ceil() as i32;
@@ -119,9 +111,7 @@ impl SpatialHash {
     }
 
     pub fn heap_bytes(&self) -> usize {
-        self.agent_cells.capacity() * 4
-            + self.sorted_agents.capacity() * 4
-            + self.cell_start.capacity() * 4
+        self.agent_cells.capacity() * 4 + self.sorted_agents.capacity() * 4 + self.cell_start.capacity() * 4
     }
 }
 

@@ -47,9 +47,7 @@ fn register_grid_model<M: GridModel>() -> ModelEntry {
         param_descriptors: grid_model_param_descriptors::<M>(),
         stat_descriptors: M::stat_descriptors(),
         topology_hint: TopologyHint::Grid2D,
-        create: Box::new(|params| {
-            ModelState::Cpu(Box::new(GridModelState::<M>::from_params(params)))
-        }),
+        create: Box::new(|params| ModelState::Cpu(Box::new(GridModelState::<M>::from_params(params)))),
     }
 }
 

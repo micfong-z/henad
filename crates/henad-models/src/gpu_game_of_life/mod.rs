@@ -62,10 +62,7 @@ struct GridDims {
 }
 
 fn workgroup_counts(width: u32, height: u32) -> (u32, u32) {
-    (
-        width.div_ceil(WORKGROUP_SIZE),
-        height.div_ceil(WORKGROUP_SIZE),
-    )
+    (width.div_ceil(WORKGROUP_SIZE), height.div_ceil(WORKGROUP_SIZE))
 }
 
 /// CPU-seeded random fill at the given density.
@@ -113,14 +110,7 @@ impl Model for GpuGameOfLifeModel {
         vec![
             u32_param("grid_width", "Grid Width", DEFAULT_DIM, 1, 16_384),
             u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384),
-            f32_param(
-                "density",
-                "Initial Density",
-                DEFAULT_DENSITY,
-                0.0,
-                1.0,
-                Some(0.01),
-            ),
+            f32_param("density", "Initial Density", DEFAULT_DENSITY, 0.0, 1.0, Some(0.01)),
         ]
     }
 
@@ -198,9 +188,7 @@ impl GpuGameOfLifeState {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: buffer_size,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
         };
@@ -214,11 +202,7 @@ impl GpuGameOfLifeState {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(
-            &dims_buffer,
-            0,
-            bytemuck::bytes_of(&GridDims { width, height }),
-        );
+        queue.write_buffer(&dims_buffer, 0, bytemuck::bytes_of(&GridDims { width, height }));
 
         let DisplayTarget {
             view: display_view,
@@ -252,11 +236,7 @@ impl GpuGameOfLifeState {
         let step_shader = device.create_shader_module(wgpu::include_wgsl!("step.wgsl"));
         let step_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gpu_gol_step_bind_group_layout"),
-            entries: &[
-                storage_entry(0, true),
-                storage_entry(1, false),
-                uniform_entry(2),
-            ],
+            entries: &[storage_entry(0, true), storage_entry(1, false), uniform_entry(2)],
         });
         let make_step_bind_group = |label: &str, current: &wgpu::Buffer, next: &wgpu::Buffer| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -335,12 +315,11 @@ impl GpuGameOfLifeState {
         };
         let display_bind_a = make_display_bind_group("gpu_gol_display_bind_a", &buffer_a);
         let display_bind_b = make_display_bind_group("gpu_gol_display_bind_b", &buffer_b);
-        let display_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("gpu_gol_display_pipeline_layout"),
-                bind_group_layouts: &[&display_layout],
-                push_constant_ranges: &[],
-            });
+        let display_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("gpu_gol_display_pipeline_layout"),
+            bind_group_layouts: &[&display_layout],
+            push_constant_ranges: &[],
+        });
         let display_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("gpu_gol_display_pipeline"),
             layout: Some(&display_pipeline_layout),
@@ -354,11 +333,7 @@ impl GpuGameOfLifeState {
         let reduce_shader = device.create_shader_module(wgpu::include_wgsl!("reduce.wgsl"));
         let reduce_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gpu_gol_reduce_bind_group_layout"),
-            entries: &[
-                storage_entry(0, true),
-                storage_entry(1, false),
-                uniform_entry(2),
-            ],
+            entries: &[storage_entry(0, true), storage_entry(1, false), uniform_entry(2)],
         });
         let make_reduce_bind_group = |label: &str, state: &wgpu::Buffer| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -382,12 +357,11 @@ impl GpuGameOfLifeState {
         };
         let reduce_bind_a = make_reduce_bind_group("gpu_gol_reduce_bind_a", &buffer_a);
         let reduce_bind_b = make_reduce_bind_group("gpu_gol_reduce_bind_b", &buffer_b);
-        let reduce_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("gpu_gol_reduce_pipeline_layout"),
-                bind_group_layouts: &[&reduce_layout],
-                push_constant_ranges: &[],
-            });
+        let reduce_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("gpu_gol_reduce_pipeline_layout"),
+            bind_group_layouts: &[&reduce_layout],
+            push_constant_ranges: &[],
+        });
         let reduce_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("gpu_gol_reduce_pipeline"),
             layout: Some(&reduce_pipeline_layout),
@@ -456,11 +430,9 @@ impl SimState for GpuGameOfLifeState {
     /// [`GpuSimState::encode_steps`], which is the entire point of the GPU backend. Stepping one
     /// tick per submission like this is correct but slow, so it exists mainly to honour the trait.
     fn step(&mut self) {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("gpu_gol_single_step"),
-            });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("gpu_gol_single_step"),
+        });
         self.encode_steps(&mut encoder, 1, None);
         self.queue.submit(Some(encoder.finish()));
     }
@@ -474,11 +446,7 @@ impl SimState for GpuGameOfLifeState {
     // `SnapshotView::Gpu` instead — see `henad_compute::snapshot`.
 
     fn stats(&self) -> Vec<StatEntry> {
-        vec![stat(
-            "Alive",
-            f64::from(self.alive_readback.value()),
-            PALETTE[1],
-        )]
+        vec![stat("Alive", f64::from(self.alive_readback.value()), PALETTE[1])]
     }
 
     /// Every parameter this model exposes (width, height, density) is construction-time: they
@@ -519,12 +487,7 @@ impl GpuSimState for GpuGameOfLifeState {
     ///
     /// If `timestamps` is `Some`, the first pass's beginning and the last pass's end are stamped
     /// into query indices 0 and 1 so the caller can measure GPU time for the whole batch.
-    fn encode_steps(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        count: u32,
-        timestamps: Option<&wgpu::QuerySet>,
-    ) {
+    fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>) {
         if count == 0 {
             return;
         }
@@ -540,13 +503,14 @@ impl GpuSimState for GpuGameOfLifeState {
             // A `ComputePassTimestampWrites` requires at least one of the two indices to be
             // `Some`, so only the first and last passes of the batch get one — everything in
             // between gets `None`.
-            let timestamp_writes = timestamps.filter(|_| is_first || is_last).map(|query_set| {
-                wgpu::ComputePassTimestampWrites {
-                    query_set,
-                    beginning_of_pass_write_index: is_first.then_some(0),
-                    end_of_pass_write_index: is_last.then_some(1),
-                }
-            });
+            let timestamp_writes =
+                timestamps
+                    .filter(|_| is_first || is_last)
+                    .map(|query_set| wgpu::ComputePassTimestampWrites {
+                        query_set,
+                        beginning_of_pass_write_index: is_first.then_some(0),
+                        end_of_pass_write_index: is_last.then_some(1),
+                    });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("gpu_gol_step_pass"),
                 timestamp_writes,
@@ -616,19 +580,13 @@ mod tests {
 
     pub(super) fn headless_context() -> Option<GpuContext> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("gpu_gol_test_device"),
             ..Default::default()
         }))
         .ok()?;
-        Some(GpuContext::new(
-            device,
-            queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-        ))
+        Some(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm))
     }
 
     fn read_buffer(ctx: &GpuContext, buffer: &wgpu::Buffer, len: usize) -> Vec<u32> {
@@ -718,8 +676,7 @@ mod tests {
                     .map(|&(nx, ny)| cells[ny * w + nx] as u8)
                     .collect();
                 let cell = cells[y * w + x] as u8;
-                next[y * w + x] =
-                    u32::from(GameOfLifeModel::step_cell(cell, &neighbors, &(), &mut rng) == 1);
+                next[y * w + x] = u32::from(GameOfLifeModel::step_cell(cell, &neighbors, &(), &mut rng) == 1);
             }
         }
         next
@@ -750,11 +707,7 @@ mod tests {
             cpu_state = cpu_reference_step(&cpu_state, width, height);
         }
 
-        let gpu_state = read_buffer(
-            &ctx,
-            state.current_buffer(),
-            (width as usize) * (height as usize),
-        );
+        let gpu_state = read_buffer(&ctx, state.current_buffer(), (width as usize) * (height as usize));
 
         assert_eq!(
             gpu_state, cpu_state,
@@ -792,11 +745,7 @@ mod tests {
         state.encode_steps(&mut encoder, 2, None);
         ctx.queue.submit(Some(encoder.finish()));
 
-        let gpu_state = read_buffer(
-            &ctx,
-            state.current_buffer(),
-            (width as usize) * (height as usize),
-        );
+        let gpu_state = read_buffer(&ctx, state.current_buffer(), (width as usize) * (height as usize));
 
         assert_eq!(
             gpu_state, initial,
@@ -891,9 +840,7 @@ mod tests {
     /// does when the adapter supports it), since the default test device requests no features.
     fn headless_timing_context() -> Option<GpuContext> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
@@ -903,11 +850,7 @@ mod tests {
             ..Default::default()
         }))
         .ok()?;
-        Some(GpuContext::new(
-            device,
-            queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-        ))
+        Some(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm))
     }
 
     /// Regression test for "GPU time/step flickers to 0/None during a sustained run": runs many
@@ -1010,11 +953,7 @@ mod runner_tests {
     /// Spins until the thread publishes a snapshot satisfying `pred`, or the deadline passes.
     /// The GPU thread publishes on a ~16ms wall-clock cadence, so polling is the honest way to
     /// wait for one — a fixed sleep would be flakier.
-    fn wait_for(
-        thread: &mut GpuSimThread,
-        timeout: Duration,
-        pred: impl Fn(&Snapshot) -> bool,
-    ) -> Option<Snapshot> {
+    fn wait_for(thread: &mut GpuSimThread, timeout: Duration, pred: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if let Some(snap) = thread.take_snapshot() {
@@ -1093,8 +1032,7 @@ mod runner_tests {
 
         for round in 0..3 {
             let state = GpuGameOfLifeState::new(&ctx, &params(64, 64, 0.3));
-            let mut thread =
-                GpuSimThread::new(ctx.clone(), Box::new(state), GpuBatchSettings::default());
+            let mut thread = GpuSimThread::new(ctx.clone(), Box::new(state), GpuBatchSettings::default());
             thread.play();
             let snap = wait_for(&mut thread, Duration::from_secs(5), |s| s.tick > 0)
                 .unwrap_or_else(|| panic!("round {round}: a respawned GPU thread must step"));
@@ -1125,13 +1063,11 @@ mod runner_tests {
         for x in 6..9 {
             cells[8 * width as usize + x] = 1;
         }
-        ctx.queue
-            .write_buffer(&state.buffer_a, 0, bytemuck::cast_slice(&cells));
+        ctx.queue.write_buffer(&state.buffer_a, 0, bytemuck::cast_slice(&cells));
 
         let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default());
 
-        let initial =
-            wait_for(&mut thread, Duration::from_secs(5), |_| true).expect("initial snapshot");
+        let initial = wait_for(&mut thread, Duration::from_secs(5), |_| true).expect("initial snapshot");
         assert_eq!(alive(&initial), 3, "a blinker starts with 3 alive cells");
 
         for step in 1..=4u64 {
@@ -1153,9 +1089,7 @@ mod runner_tests {
     #[test]
     fn registry_with_gpu_context_offers_a_drivable_gpu_model() {
         let Some(ctx) = headless_context() else {
-            log::warn!(
-                "skipping registry_with_gpu_context_offers_a_drivable_gpu_model: no adapter"
-            );
+            log::warn!("skipping registry_with_gpu_context_offers_a_drivable_gpu_model: no adapter");
             return;
         };
 
@@ -1175,10 +1109,6 @@ mod runner_tests {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         state.encode_steps(&mut encoder, 4, None);
         ctx.queue.submit(Some(encoder.finish()));
-        assert_eq!(
-            state.tick(),
-            4,
-            "the registry-built state must be steppable"
-        );
+        assert_eq!(state.tick(), 4, "the registry-built state must be steppable");
     }
 }

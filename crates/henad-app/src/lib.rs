@@ -114,12 +114,7 @@ impl HenadApp {
         let registry = model_registry(gpu_ctx.clone());
         let param_values: Vec<ParamValue> = registry
             .first()
-            .map(|m| {
-                m.param_descriptors
-                    .iter()
-                    .map(|p| p.kind.default_value())
-                    .collect()
-            })
+            .map(|m| m.param_descriptors.iter().map(|p| p.kind.default_value()).collect())
             .unwrap_or_default();
 
         Self {
@@ -169,8 +164,7 @@ impl HenadApp {
             return;
         };
 
-        let stats_history =
-            StatsHistory::new(entry.stat_descriptors.clone(), self.history_capacity);
+        let stats_history = StatsHistory::new(entry.stat_descriptors.clone(), self.history_capacity);
 
         match (entry.create)(&self.param_values) {
             ModelState::Cpu(state) => {
@@ -247,10 +241,7 @@ impl eframe::App for HenadApp {
         ui::sidebar::sidebar_panel(ctx, self);
 
         #[cfg(not(target_arch = "wasm32"))]
-        FrameTimings::update_ema(
-            &mut self.timings.ui_ms,
-            ui_start.elapsed().as_secs_f64() * 1000.0,
-        );
+        FrameTimings::update_ema(&mut self.timings.ui_ms, ui_start.elapsed().as_secs_f64() * 1000.0);
 
         // --- Rendering (pixel conversion + texture upload) ---
         #[cfg(not(target_arch = "wasm32"))]

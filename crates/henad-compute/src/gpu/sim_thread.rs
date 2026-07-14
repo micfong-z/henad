@@ -78,12 +78,7 @@ pub trait GpuSimState: SimState {
     ///
     /// If `timestamps` is `Some`, stamp the beginning of the first step and the end of the last
     /// into query indices 0 and 1, so the caller can measure GPU time for the whole batch.
-    fn encode_steps(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        count: u32,
-        timestamps: Option<&wgpu::QuerySet>,
-    );
+    fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>);
 
     /// Record the display pass (state -> display texture) and the stats-reduction pass
     /// (state -> a handful of numbers), at the snapshot cadence rather than every step.
@@ -164,9 +159,7 @@ mod native {
 
     use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats};
     use crate::gpu::GpuContext;
-    use crate::gpu::timing::{
-        ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms,
-    };
+    use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms};
     use crate::sim_thread::SimCommand;
     use crate::snapshot::{GpuSnapshot, Snapshot, SnapshotView};
 
@@ -269,9 +262,7 @@ mod native {
                 // rather than a tick count. Accepted (rather than an error) so `HenadApp` can send
                 // the same `SimCommand` stream to either backend without special-casing.
                 Command::Sim(
-                    SimCommand::SetTargetTps(_)
-                    | SimCommand::SetUncapped(_)
-                    | SimCommand::SetTicksPerSnapshot(_),
+                    SimCommand::SetTargetTps(_) | SimCommand::SetUncapped(_) | SimCommand::SetTicksPerSnapshot(_),
                 ) => {}
                 Command::Sim(SimCommand::Shutdown) => return true,
                 Command::Gpu(GpuCommand::SetBatchSize(n)) => {
@@ -341,8 +332,8 @@ mod native {
         /// stall) and unaffected by the `TimestampQuery` correctness issue tracked separately.
         fn step_batch(&mut self) {
             let now = Instant::now();
-            let want_timing = self.timestamp_query.is_some()
-                && now.duration_since(self.last_stats_publish) >= STATS_INTERVAL;
+            let want_timing =
+                self.timestamp_query.is_some() && now.duration_since(self.last_stats_publish) >= STATS_INTERVAL;
             let want_snapshot = now.duration_since(self.last_snapshot_publish) >= SNAPSHOT_INTERVAL;
 
             let mut encoder = self.encoder("henad_gpu_sim_encoder");
@@ -352,8 +343,7 @@ mod native {
             } else {
                 None
             };
-            self.state
-                .encode_steps(&mut encoder, self.batch_size, query_set);
+            self.state.encode_steps(&mut encoder, self.batch_size, query_set);
 
             if want_snapshot {
                 self.state.encode_snapshot_passes(&mut encoder);
@@ -386,14 +376,11 @@ mod native {
 
             if want_timing {
                 if let Some(tq) = self.timestamp_query.as_ref() {
-                    self.gpu_us_per_step =
-                        tq.read_gpu_us_per_step(&self.ctx.device, batch_size_submitted);
+                    self.gpu_us_per_step = tq.read_gpu_us_per_step(&self.ctx.device, batch_size_submitted);
                 }
                 self.refresh_tps(now);
                 self.last_stats_publish = now;
-            } else if self.timestamp_query.is_none()
-                && now.duration_since(self.tps_timer) >= STATS_INTERVAL
-            {
+            } else if self.timestamp_query.is_none() && now.duration_since(self.tps_timer) >= STATS_INTERVAL {
                 // No GPU timing support on this device/backend — still refresh wall-clock TPS on
                 // the same cadence so the UI keeps updating.
                 self.refresh_tps(now);
@@ -407,10 +394,7 @@ mod native {
         }
 
         fn refresh_tps(&mut self, now: Instant) {
-            let elapsed = now
-                .duration_since(self.tps_timer)
-                .as_secs_f64()
-                .max(f64::EPSILON);
+            let elapsed = now.duration_since(self.tps_timer).as_secs_f64().max(f64::EPSILON);
             self.actual_tps = self.step_count as f64 / elapsed;
             self.step_count = 0;
             self.tps_timer = now;
@@ -462,11 +446,7 @@ mod native {
     impl GpuSimThread {
         /// Spawns the GPU sim thread, taking ownership of `state` and a cloned [`GpuContext`].
         /// Starts paused, like [`crate::sim_thread::SimThread`].
-        pub fn new(
-            ctx: GpuContext,
-            state: Box<dyn GpuSimState>,
-            settings: GpuBatchSettings,
-        ) -> Self {
+        pub fn new(ctx: GpuContext, state: Box<dyn GpuSimState>, settings: GpuBatchSettings) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel();
             let batch_size = settings.batch_size.max(1);
 
@@ -536,35 +516,24 @@ mod native {
         /// mode is on (the controller drives `batch_size` instead), but is remembered for when it
         /// is turned back off.
         pub fn set_batch_size(&mut self, batch_size: u32) {
-            drop(
-                self.cmd_tx
-                    .send(Command::Gpu(GpuCommand::SetBatchSize(batch_size))),
-            );
+            drop(self.cmd_tx.send(Command::Gpu(GpuCommand::SetBatchSize(batch_size))));
         }
 
         /// Turns adaptive batching on or off. Fixed mode's manual batch size and adaptive mode's
         /// target/EMA are each preserved independently across toggles.
         pub fn set_adaptive(&mut self, enabled: bool) {
-            drop(
-                self.cmd_tx
-                    .send(Command::Gpu(GpuCommand::SetAdaptive(enabled))),
-            );
+            drop(self.cmd_tx.send(Command::Gpu(GpuCommand::SetAdaptive(enabled))));
         }
 
         /// Sets the per-batch wall-clock budget (ms) used by the adaptive controller. Has no
         /// effect while fixed mode is active, but is remembered for when adaptive is turned on.
         pub fn set_target_ms(&mut self, target_ms: f64) {
-            drop(
-                self.cmd_tx
-                    .send(Command::Gpu(GpuCommand::SetTargetMs(target_ms))),
-            );
+            drop(self.cmd_tx.send(Command::Gpu(GpuCommand::SetTargetMs(target_ms))));
         }
 
         /// Latest published GPU-runner stats. Cheap: a single mutex lock and copy.
         pub fn gpu_stats(&self) -> GpuStats {
-            self.gpu_stats
-                .lock()
-                .map_or_else(|_| GpuStats::default(), |s| *s)
+            self.gpu_stats.lock().map_or_else(|_| GpuStats::default(), |s| *s)
         }
     }
 

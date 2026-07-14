@@ -31,11 +31,7 @@ pub fn stats_chart(ui: &mut egui::Ui, app: &HenadApp) {
                     })
                     .collect();
 
-                plot_ui.line(
-                    egui_plot::Line::new(desc.label, points)
-                        .color(color)
-                        .width(1.5),
-                );
+                plot_ui.line(egui_plot::Line::new(desc.label, points).color(color).width(1.5));
             }
         });
 

@@ -102,12 +102,7 @@ impl TimestampQuery {
     /// submission prior, which is frequently *less than* the fresh `start` timestamp and so
     /// saturates to a reported 0). Waiting for the writing submission before resolving in a
     /// follow-up submission eliminates the staleness entirely.
-    pub fn resolve_after(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        write_submission: wgpu::SubmissionIndex,
-    ) {
+    pub fn resolve_after(&self, device: &wgpu::Device, queue: &wgpu::Queue, write_submission: wgpu::SubmissionIndex) {
         drop(device.poll(wgpu::PollType::Wait {
             submission_index: Some(write_submission),
             timeout: None,
@@ -117,13 +112,7 @@ impl TimestampQuery {
             label: Some("henad_gpu_timestamp_resolve_encoder"),
         });
         encoder.resolve_query_set(&self.query_set, 0..2, &self.resolve_buffer, 0);
-        encoder.copy_buffer_to_buffer(
-            &self.resolve_buffer,
-            0,
-            &self.readback_buffer,
-            0,
-            Self::BUFFER_SIZE,
-        );
+        encoder.copy_buffer_to_buffer(&self.resolve_buffer, 0, &self.readback_buffer, 0, Self::BUFFER_SIZE);
         queue.submit(Some(encoder.finish()));
     }
 

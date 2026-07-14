@@ -125,30 +125,28 @@ fn step_rows_moore<M: GridModel>(
     {
         use rayon::prelude::*;
         let global_seed = *rng_state;
-        next.par_chunks_mut(ws)
-            .enumerate()
-            .for_each(|(y, next_row)| {
-                let row_seed = global_seed ^ tick ^ (y as u64);
-                let mut rng = xorshift64(row_seed.max(1));
-                let ym = ((y as u32 + h - 1) % h) as usize;
-                let yp = ((y as u32 + 1) % h) as usize;
-                for x in 0..w {
-                    let xs = x as usize;
-                    let xm = ((x + w - 1) % w) as usize;
-                    let xp = ((x + 1) % w) as usize;
-                    let neighbors = [
-                        current[ym * ws + xm],
-                        current[ym * ws + xs],
-                        current[ym * ws + xp],
-                        current[y * ws + xm],
-                        current[y * ws + xp],
-                        current[yp * ws + xm],
-                        current[yp * ws + xs],
-                        current[yp * ws + xp],
-                    ];
-                    next_row[xs] = M::step_cell(current[y * ws + xs], &neighbors, hot, &mut rng);
-                }
-            });
+        next.par_chunks_mut(ws).enumerate().for_each(|(y, next_row)| {
+            let row_seed = global_seed ^ tick ^ (y as u64);
+            let mut rng = xorshift64(row_seed.max(1));
+            let ym = ((y as u32 + h - 1) % h) as usize;
+            let yp = ((y as u32 + 1) % h) as usize;
+            for x in 0..w {
+                let xs = x as usize;
+                let xm = ((x + w - 1) % w) as usize;
+                let xp = ((x + 1) % w) as usize;
+                let neighbors = [
+                    current[ym * ws + xm],
+                    current[ym * ws + xs],
+                    current[ym * ws + xp],
+                    current[y * ws + xm],
+                    current[y * ws + xp],
+                    current[yp * ws + xm],
+                    current[yp * ws + xs],
+                    current[yp * ws + xp],
+                ];
+                next_row[xs] = M::step_cell(current[y * ws + xs], &neighbors, hot, &mut rng);
+            }
+        });
         *rng_state = xorshift64(global_seed ^ tick);
     }
 
@@ -194,26 +192,24 @@ fn step_rows_vn<M: GridModel>(
     {
         use rayon::prelude::*;
         let global_seed = *rng_state;
-        next.par_chunks_mut(ws)
-            .enumerate()
-            .for_each(|(y, next_row)| {
-                let row_seed = global_seed ^ tick ^ (y as u64);
-                let mut rng = xorshift64(row_seed.max(1));
-                let ym = ((y as u32 + h - 1) % h) as usize;
-                let yp = ((y as u32 + 1) % h) as usize;
-                for x in 0..w {
-                    let xs = x as usize;
-                    let xm = ((x + w - 1) % w) as usize;
-                    let xp = ((x + 1) % w) as usize;
-                    let neighbors = [
-                        current[ym * ws + xs],
-                        current[y * ws + xm],
-                        current[y * ws + xp],
-                        current[yp * ws + xs],
-                    ];
-                    next_row[xs] = M::step_cell(current[y * ws + xs], &neighbors, hot, &mut rng);
-                }
-            });
+        next.par_chunks_mut(ws).enumerate().for_each(|(y, next_row)| {
+            let row_seed = global_seed ^ tick ^ (y as u64);
+            let mut rng = xorshift64(row_seed.max(1));
+            let ym = ((y as u32 + h - 1) % h) as usize;
+            let yp = ((y as u32 + 1) % h) as usize;
+            for x in 0..w {
+                let xs = x as usize;
+                let xm = ((x + w - 1) % w) as usize;
+                let xp = ((x + 1) % w) as usize;
+                let neighbors = [
+                    current[ym * ws + xs],
+                    current[y * ws + xm],
+                    current[y * ws + xp],
+                    current[yp * ws + xs],
+                ];
+                next_row[xs] = M::step_cell(current[y * ws + xs], &neighbors, hot, &mut rng);
+            }
+        });
         *rng_state = xorshift64(global_seed ^ tick);
     }
 

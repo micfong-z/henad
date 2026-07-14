@@ -43,11 +43,7 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    pub fn new(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        target_format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: wgpu::Device, queue: wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
         Self {
             device,
             queue,
