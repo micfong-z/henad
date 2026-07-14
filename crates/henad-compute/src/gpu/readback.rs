@@ -1,26 +1,22 @@
-//! Async readback of a single `u32` reduced on the GPU.
+//! Async readback of `N` `u32` counters reduced on the GPU.
 //!
-//! This exists so a GPU model can answer `SimState::stats()` (e.g. "how many cells are alive?")
-//! without ever copying the grid back to the CPU. A full grid readback would defeat the entire
-//! point of keeping state GPU-resident, and costs real bandwidth at the grid sizes this engine
-//! targets; reducing on-GPU and reading back 4 bytes costs nothing measurable.
+//! This exists so a GPU model can answer `SimState::stats()` without ever copying the grid back
+//! to the CPU — reducing on-GPU and reading back a few bytes costs nothing measurable next to a
+//! full grid readback.
 //!
 //! # Why the map is asynchronous
 //!
-//! The obvious implementation — submit, then block on `map_async` until the GPU drains — would
-//! stall the sim thread at the display cadence (~60x/second). That thread's whole job is to keep
-//! the GPU queue saturated, so a stall that waits for the queue to empty is exactly the wrong
-//! thing: it would cap throughput at roughly one in-flight batch per frame.
-//!
-//! Instead the map is *started* right after submission and *completed* on some later loop
-//! iteration, whenever the GPU gets around to it ([`U32Readback::poll`] never blocks). The value
-//! the model reports is therefore a few milliseconds stale, which is invisible in a stats panel
-//! and is the same staleness the display texture already accepts.
+//! Blocking on `map_async` right after submission would stall the sim thread at the display
+//! cadence, capping throughput at roughly one in-flight batch per frame. Instead the map is
+//! *started* right after submission and *completed* on some later loop iteration, whenever the
+//! GPU gets around to it ([`CounterReadback::poll`] never blocks). The value a model reports is
+//! therefore a few milliseconds stale, same as the display texture already accepts.
 
 use std::mem::size_of;
 
-/// A GPU-side `u32` accumulator plus the staging buffer used to read it back without blocking.
-pub struct U32Readback {
+/// A GPU-side `[u32; N]` accumulator plus the staging buffer used to read it back without
+/// blocking.
+pub struct CounterReadback<const N: usize> {
     /// The reduce shader's output. Cleared to 0 each time, accumulated into, then copied out.
     storage: wgpu::Buffer,
     staging: wgpu::Buffer,
@@ -28,11 +24,11 @@ pub struct U32Readback {
     pending: Option<flume::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     /// Whether a fresh value has been copied into `staging` and is waiting to be mapped.
     copied: bool,
-    value: u32,
+    values: [u32; N],
 }
 
-impl U32Readback {
-    const SIZE: u64 = size_of::<u32>() as u64;
+impl<const N: usize> CounterReadback<N> {
+    const SIZE: u64 = (N * size_of::<u32>()) as u64;
 
     pub fn new(device: &wgpu::Device, label: &str) -> Self {
         let storage = device.create_buffer(&wgpu::BufferDescriptor {
@@ -52,7 +48,7 @@ impl U32Readback {
             staging,
             pending: None,
             copied: false,
-            value: 0,
+            values: [0; N],
         }
     }
 
@@ -66,7 +62,7 @@ impl U32Readback {
         encoder.clear_buffer(&self.storage, 0, None);
     }
 
-    /// Copy the accumulated total into the staging buffer. Must be recorded *after* the model's
+    /// Copy the accumulated totals into the staging buffer. Must be recorded *after* the model's
     /// reduce pass, in the same encoder (wgpu inserts the pass/copy barrier for us).
     ///
     /// Skipped while a previous map is still in flight — writing into a buffer that is mapped or
@@ -95,15 +91,13 @@ impl U32Readback {
         self.pending = Some(rx);
     }
 
-    /// Non-blocking. If the in-flight map has completed, consume it and update [`Self::value`].
-    /// Returns the new value if one arrived this call.
+    /// Non-blocking. If the in-flight map has completed, consume it and update [`Self::values`].
     ///
     /// `device.poll` is what actually runs wgpu's map callbacks on native, so this must be called
     /// on every loop iteration, not only when a value is expected.
-    pub fn poll(&mut self, device: &wgpu::Device) -> Option<u32> {
+    pub fn poll(&mut self, device: &wgpu::Device) -> Option<[u32; N]> {
         let rx = self.pending.as_ref()?;
 
-        // Non-blocking maintain: drives pending callbacks without waiting on the GPU.
         drop(device.poll(wgpu::PollType::Poll));
 
         let Ok(result) = rx.try_recv() else {
@@ -115,10 +109,9 @@ impl U32Readback {
 
     /// Blocking counterpart to [`Self::poll`]: waits for the GPU to drain, then consumes the map.
     ///
-    /// Only for one-shot snapshots (initial load, pause, step-once), where a correct stats panel
-    /// matters more than latency and there is no subsequent loop iteration to pick the value up.
-    /// Never call this from the hot batching loop.
-    pub fn poll_blocking(&mut self, device: &wgpu::Device) -> Option<u32> {
+    /// Only for one-shot snapshots (initial load, pause, step-once). Never call from the hot
+    /// batching loop.
+    pub fn poll_blocking(&mut self, device: &wgpu::Device) -> Option<[u32; N]> {
         let rx = self.pending.take()?;
         device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
         let result = rx.recv().ok()?;
@@ -126,26 +119,26 @@ impl U32Readback {
     }
 
     /// Reads and unmaps the staging buffer after a completed `map_async`.
-    fn finish_map(&mut self, result: Result<(), wgpu::BufferAsyncError>) -> Option<u32> {
+    fn finish_map(&mut self, result: Result<(), wgpu::BufferAsyncError>) -> Option<[u32; N]> {
         if let Err(err) = result {
             log::warn!("GPU stat readback failed: {err}");
-            // The buffer was never mapped, so there is nothing to unmap.
             return None;
         }
 
         let slice = self.staging.slice(..);
         let data = slice.get_mapped_range();
         let words: &[u32] = bytemuck::cast_slice(&data);
-        let value = words.first().copied().unwrap_or(0);
+        let mut values = [0u32; N];
+        values.copy_from_slice(&words[..N]);
         drop(data);
         self.staging.unmap();
 
-        self.value = value;
-        Some(value)
+        self.values = values;
+        Some(values)
     }
 
-    /// The most recently read-back value. Zero until the first readback completes.
-    pub fn value(&self) -> u32 {
-        self.value
+    /// The most recently read-back values. Zero until the first readback completes.
+    pub fn values(&self) -> [u32; N] {
+        self.values
     }
 }

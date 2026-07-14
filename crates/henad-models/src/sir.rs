@@ -9,7 +9,7 @@ const S: u8 = 0;
 const I: u8 = 1;
 const R: u8 = 2;
 
-const PALETTE: [[u8; 4]; 3] = [
+pub const PALETTE: [[u8; 4]; 3] = [
     [0x00, 0x7A, 0xF5, 0xFF], // S - blue
     [0xE4, 0x37, 0x48, 0xFF], // I - red
     [0x80, 0x80, 0x80, 0xFF], // R - gray

@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::display::{DisplayTarget, GpuDisplay, build_display_target};
-use henad_compute::gpu::readback::U32Readback;
+use henad_compute::gpu::readback::CounterReadback;
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::grid_engine::GRID_INIT_SEED;
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, stat, u32_param, xorshift64};
@@ -161,7 +161,7 @@ pub struct GpuGameOfLifeState {
     reduce_pipeline: wgpu::ComputePipeline,
     reduce_bind_a: wgpu::BindGroup,
     reduce_bind_b: wgpu::BindGroup,
-    alive_readback: U32Readback,
+    alive_readback: CounterReadback<1>,
 
     /// `true` when `buffer_a` holds the current (latest) state.
     current_is_a: bool,
@@ -209,7 +209,7 @@ impl GpuGameOfLifeState {
             display,
         } = build_display_target(device, ctx.target_format, width, height);
 
-        let alive_readback = U32Readback::new(device, "gpu_gol_alive");
+        let alive_readback = CounterReadback::new(device, "gpu_gol_alive");
 
         // --- Step pipeline ---
         let storage_entry = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
@@ -441,32 +441,19 @@ impl SimState for GpuGameOfLifeState {
         self.tick
     }
 
-    // `grid_view` is deliberately left as the default `None`: the cells are on the GPU and would
-    // have to be copied back to produce one. The display texture reaches the UI through
-    // `SnapshotView::Gpu` instead — see `henad_compute::snapshot`.
-
     fn stats(&self) -> Vec<StatEntry> {
-        vec![stat("Alive", f64::from(self.alive_readback.value()), PALETTE[1])]
+        vec![stat("Alive", f64::from(self.alive_readback.values()[0]), PALETTE[1])]
     }
 
-    /// Every parameter this model exposes (width, height, density) is construction-time: they
-    /// determine buffer sizes and the initial seeding. Resizing GPU buffers underneath a live
-    /// state is out of scope, so changes go through the app's normal drop-and-recreate path
-    /// (Reset), exactly as the grid dimensions of CPU grid models already do.
+    /// Resizing or reseeding live is currently unsupported.
     fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
         false
     }
 
-    /// Total cells, matching `GridModelState::population()` (which reports `grid.len()`, not the
-    /// alive count) so that "Pop" means the same thing for the CPU and GPU Game of Life. The
-    /// alive count is a *stat*, and is what the GPU reduction actually produces.
     fn population(&self) -> u64 {
         u64::from(self.width) * u64::from(self.height)
     }
 
-    /// Device memory, strictly speaking, not heap: the two ping-ponged state buffers plus the
-    /// RGBA display texture. Reported through the same channel so the UI's memory readout stays
-    /// meaningful for GPU models.
     fn heap_bytes(&self) -> usize {
         let cells = (self.width as usize) * (self.height as usize);
         let state_buffers = cells * std::mem::size_of::<u32>() * 2;
@@ -630,8 +617,6 @@ mod tests {
         ]
     }
 
-    /// The alive count the model reports must come from the GPU reduction — never from a CPU-side
-    /// count of the grid.
     fn reported_alive(state: &GpuGameOfLifeState) -> u64 {
         match state.stats().first().map(|s| s.value.clone()) {
             Some(StatValue::Scalar(v)) => v as u64,

@@ -88,6 +88,23 @@ fn register_gpu_game_of_life(ctx: &GpuContext) -> ModelEntry {
     }
 }
 
+/// Create a `ModelEntry` for the GPU SIR model, capturing the injected device/queue.
+fn register_gpu_sir(ctx: &GpuContext) -> ModelEntry {
+    let model = crate::gpu_sir::GpuSirModel::new(ctx.clone());
+    let factory_ctx = ctx.clone();
+    ModelEntry {
+        name: model.name().to_owned(),
+        id: model.id().to_owned(),
+        description: model.description().to_owned(),
+        param_descriptors: model.param_descriptors(),
+        stat_descriptors: model.stat_descriptors(),
+        topology_hint: model.topology_hint(),
+        create: Box::new(move |params| {
+            ModelState::Gpu(Box::new(crate::gpu_sir::GpuSirState::new(&factory_ctx, params)))
+        }),
+    }
+}
+
 /// Returns all available models.
 ///
 /// GPU-backed models are included only when a [`GpuContext`] is supplied. When it is `None` (no
@@ -103,6 +120,7 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
 
     if let Some(ctx) = gpu {
         entries.push(register_gpu_game_of_life(&ctx));
+        entries.push(register_gpu_sir(&ctx));
     }
 
     entries
@@ -116,7 +134,7 @@ mod tests {
     fn registry_without_gpu_context_offers_no_gpu_models() {
         let entries = model_registry(None);
         assert!(
-            !entries.iter().any(|e| e.id == "gpu_game_of_life"),
+            !entries.iter().any(|e| e.id == "gpu_game_of_life" || e.id == "gpu_sir"),
             "a GPU model must not appear in the dropdown when there is no device to run it on"
         );
         assert!(
