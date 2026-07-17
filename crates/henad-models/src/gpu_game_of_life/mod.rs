@@ -333,6 +333,54 @@ mod tests {
         );
     }
 
+    /// `step.wgsl` evaluates the rule SWAR-style: a hand-built carry-save adder produces the
+    /// neighbour count bit-sliced across sb0/sb1/sb2, and the rule collapses to the identity
+    /// `alive = ~sb2 & sb1 & (sb0 | cells)`. Two steps of that are derived by hand and worth
+    /// pinning directly:
+    ///
+    /// - the identity itself (that 2-survives/3-births really is that expression), and
+    /// - dropping the weight-8 carry, which is only sound because n == 8 has sb1 == 0.
+    ///
+    /// `gpu_alive_count_matches_cpu_model` compares reduced *alive counts*, not grids, so a rule
+    /// error that preserved population would pass it. This checks all 256 neighbourhoods against
+    /// Conway's rule stated plainly, including n == 8.
+    ///
+    /// Mirrors the shader's ops rather than invoking them — every op is bitwise and the 32 lanes
+    /// are independent, so exercising lane 0 suffices.
+    #[test]
+    fn swar_rule_matches_conway_for_every_neighbourhood() {
+        fn full_add(a: u32, b: u32, c: u32) -> (u32, u32) {
+            let t = a ^ b;
+            (t ^ c, (a & b) | (c & t))
+        }
+        fn half_add(a: u32, b: u32) -> (u32, u32) {
+            (a ^ b, a & b)
+        }
+
+        for mask in 0u32..256 {
+            let nb: [u32; 8] = std::array::from_fn(|i| (mask >> i) & 1);
+            for cell in 0u32..2 {
+                let (a_sum, a_carry) = full_add(nb[0], nb[1], nb[2]);
+                let (b_sum, b_carry) = full_add(nb[3], nb[4], nb[5]);
+                let (c_sum, c_carry) = half_add(nb[6], nb[7]);
+
+                let (sb0, d_carry) = full_add(a_sum, b_sum, c_sum);
+                let (e_sum, e_carry) = full_add(a_carry, b_carry, c_carry);
+                let (sb1, f_carry) = half_add(e_sum, d_carry);
+                let sb2 = e_carry ^ f_carry;
+
+                let alive = !sb2 & sb1 & (sb0 | cell) & 1;
+
+                let n = mask.count_ones();
+                let expected = u32::from(n == 3 || (n == 2 && cell == 1));
+                assert_eq!(
+                    alive, expected,
+                    "SWAR rule disagrees with Conway at neighbours={n} (mask {mask:#010b}), cell={cell}"
+                );
+            }
+        }
+    }
+
     /// `population()` reports total cells (like `GridModelState`), *not* the alive count — the
     /// alive count is a stat. Pinned because it is an easy thing to conflate.
     #[test]

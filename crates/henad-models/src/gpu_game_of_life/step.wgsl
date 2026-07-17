@@ -1,4 +1,9 @@
 // Bit-packed Game of Life step: 32 cells per u32, one invocation per word.
+//
+// The rule is evaluated SWAR-style: a u32 is 32 independent 1-bit lanes, and the neighbour count
+// is kept bit-sliced — sb0/sb1/sb2 each hold one bit position of all 32 counts, rather than one
+// 4-bit count per lane. Summing is then a carry-save adder made of plain XOR/AND, so all 32 cells
+// resolve at once with no loop.
 
 @group(0) @binding(0) var<storage, read> current: array<u32>;
 @group(0) @binding(1) var<storage, read_write> next: array<u32>;
@@ -9,6 +14,21 @@ struct Row {
     cells: u32, // bit j = cell (word*32 + j)
     west: u32,  // bit j = its west neighbour
     east: u32,  // bit j = its east neighbour
+}
+
+// One column of the adder tree: `sum` is the weight-w result, `carry` feeds weight 2w.
+struct Adder {
+    sum: u32,
+    carry: u32,
+}
+
+fn full_add(a: u32, b: u32, c: u32) -> Adder {
+    let t = a ^ b;
+    return Adder(t ^ c, (a & b) | (c & t));
+}
+
+fn half_add(a: u32, b: u32) -> Adder {
+    return Adder(a ^ b, a & b);
 }
 
 fn load_row(row: u32, word: u32, stride: u32, width: u32) -> Row {
@@ -55,23 +75,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let r_mid = load_row(y, word, stride, width);
     let r_down = load_row(down, word, stride, width);
 
-    var out_word: u32 = 0u;
-    for (var i: u32 = 0; i < 32; i++) {
-        // Trailing bits of the last word are padding when width % 32 != 0: no cell lives there, so
-        // leave them zero. Nothing ever reads them back — display and reduce are bounded by width.
-        if word * 32u + i >= width {
-            break;
-        }
+    // Compress the 8 neighbours into weight-1 sums and weight-2 carries.
+    let a = full_add(r_up.west, r_up.cells, r_up.east);
+    let b = full_add(r_down.west, r_down.cells, r_down.east);
+    let c = half_add(r_mid.west, r_mid.east);
 
-        var n = ((r_up.west >> i) & 1u)   + ((r_up.cells >> i) & 1u)   + ((r_up.east >> i) & 1u)
-                        + ((r_mid.west >> i) & 1u)                               + ((r_mid.east >> i) & 1u)
-                        + ((r_down.west >> i) & 1u) + ((r_down.cells >> i) & 1u) + ((r_down.east >> i) & 1u);
+    // Weight 1: three sums left, one bit out.
+    let d = full_add(a.sum, b.sum, c.sum);
+    let sb0 = d.sum;
 
-        let cell = (r_mid.cells >> i) & 1u;
-        let alive = (cell == 1u && (n == 2u || n == 3u))
-            || (cell == 0u && n == 3u);
-        out_word |= u32(alive) << u32(i);
+    // Weight 2: four terms — the three stage-1 carries, plus d's.
+    let e = full_add(a.carry, b.carry, c.carry);
+    let f = half_add(e.sum, d.carry);
+    let sb1 = f.sum;
+
+    // Weight 4: two terms. The weight-8 carry is dropped — only n == 8 sets it, and n == 8 has
+    // sb1 == 0, so the rule below already excludes it.
+    let sb2 = e.carry ^ f.carry;
+
+    // Survive on 2, born on 3. Bit-sliced, 3 is 011 and 2 is 010: both need sb2 == 0 and sb1 == 1
+    // and differ only in sb0, which folds into (sb0 | cells).
+    let alive = ~sb2 & sb1 & (sb0 | r_mid.cells);
+
+    // Trailing bits of a ragged last word hold no cell. Nothing reads them — load_row's patches
+    // keep real cells off them, and display/reduce are bounded by width — but the layout invariant
+    // is that they stay zero, and there is no `break` to leave them so now.
+    let cells_here = min(width - word * 32u, 32u);
+    var mask = 0xFFFFFFFFu;
+    if cells_here < 32u {
+        mask = (1u << cells_here) - 1u;
     }
 
-    next[y * stride + word] = out_word;
+    next[y * stride + word] = alive & mask;
 }
