@@ -15,7 +15,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let cell = state[global_id.y * width + global_id.x];
+    // One invocation per cell (not per word, unlike the step pass): read the containing word and
+    // extract this cell's bit. Rows are padded to whole words, so the row stride is words_per_row.
+    let words_per_row = (width + 31u) / 32u;
+    let word = state[global_id.y * words_per_row + (global_id.x / 32u)];
+    let cell = (word >> (global_id.x % 32u)) & 1u;
     let colour = select(DEAD_COLOUR, ALIVE_COLOUR, cell == 1u);
     textureStore(output, vec2<i32>(global_id.xy), colour);
 }

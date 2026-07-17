@@ -27,6 +27,19 @@
 //! **`DISPLAY_SHADER`** and **`REDUCE_SHADER`** see only buffer 0 — the *primary* state buffer.
 //! Auxiliary buffers (a per-cell RNG, say) are step-private:
 //!
+//! # Buffer length and dispatch domain
+//!
+//! The engine takes no view on how a model maps cells onto `u32`s. A model declares how long each
+//! buffer is ([`GpuGridModel::buffer_lens`]) and how many invocations its step needs
+//! ([`GpuGridModel::step_dims`]); both default to one `u32` and one invocation per cell, which is
+//! what an unpacked model wants. A bit-packed model overrides them to work in words instead —
+//! e.g. 32 cells per `u32` with rows padded to whole words, so that a single invocation owns a
+//! whole word and no two invocations ever write the same one.
+//!
+//! Display and reduce always dispatch one invocation per *cell* regardless, since they produce one
+//! texel and count one cell respectively. A packed model's display/reduce shaders therefore read a
+//! word and extract their own bit.
+//!
 //! ```wgsl
 //! // display.wgsl
 //! @group(0) @binding(0) var<storage, read> state: array<u32>;
@@ -47,7 +60,8 @@
 //! - [`Self::WORKGROUP_SIZE`] must equal the `@workgroup_size(N, N)` all three shaders declare,
 //! - [`Self::STAT_COUNT`] must equal the reduce shader's `atomic<u32>` array length and the number
 //!   of entries [`Self::stats`] and [`Self::stat_descriptors`] return,
-//! - [`Self::seed_buffers`] must return exactly [`Self::BUFFER_COUNT`] vectors of `width * height` elements each.
+//! - [`Self::buffer_lens`] must return exactly [`Self::BUFFER_COUNT`] lengths, and
+//!   [`Self::seed_buffers`] exactly that many vectors, of exactly those lengths.
 
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::view::{StatDescriptor, StatEntry};
@@ -87,10 +101,27 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// Grid dimensions for these params. The engine clamps both to at least 1.
     fn dims(params: &[ParamValue]) -> (u32, u32);
 
+    /// Length in `u32` elements of each ping-ponged buffer, in binding order.
+    ///
+    /// Defaults to one element per cell. A bit-packed model overrides this to return its word
+    /// count — and must override [`Self::step_dims`] to match, so that one invocation owns one
+    /// word.
+    fn buffer_lens(width: u32, height: u32) -> Vec<usize> {
+        vec![(width as usize) * (height as usize); Self::BUFFER_COUNT]
+    }
+
+    /// Dispatch domain of the step pass, in invocations.
+    ///
+    /// Defaults to one invocation per cell. Display and reduce always dispatch `(width, height)`
+    /// and are unaffected by this.
+    fn step_dims(width: u32, height: u32) -> (u32, u32) {
+        (width, height)
+    }
+
     /// Initial contents of each ping-ponged buffer, CPU-seeded and uploaded once at construction.
     ///
-    /// Returns [`Self::BUFFER_COUNT`] vectors, each of `width * height` elements, in binding
-    /// order — index 0 is the primary state buffer that display and reduce read.
+    /// Returns [`Self::BUFFER_COUNT`] vectors, whose lengths match [`Self::buffer_lens`], in
+    /// binding order — index 0 is the primary state buffer that display and reduce read.
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue]) -> Vec<Vec<u32>>;
 
     /// The step shader's uniform block, as raw bytes.

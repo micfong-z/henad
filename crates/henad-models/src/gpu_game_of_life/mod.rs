@@ -8,8 +8,21 @@
 //!
 //! # State layout
 //!
-//! One `array<u32>` storage buffer (one cell per element, no bit packing), ping-ponged: each step
-//! reads one side and writes the other. The grid never leaves the GPU. What the CPU sees is only:
+//! One `array<u32>` storage buffer, ping-ponged: each step reads one side and writes the other.
+//!
+//! Cells are bit-packed, 32 per `u32`: cell `x` of row `y` is bit `x % 32` of word
+//! `y * words_per_row + x / 32`, where rows are padded out to `words_per_row = ceil(width / 32)`
+//! whole words.
+//!
+//! Packing is what puts the 100M-cell target in reach: at 1 bit per cell a 100M grid is 12.5 MB
+//! per side, against 400 MB unpacked — which would blow the 128 MB storage-binding limit outright.
+//!
+//! The step pass therefore dispatches **one invocation per word**, not per cell. This is not an
+//! optimisation but a correctness requirement: 32 cells share an output word, so 32 invocations
+//! would each have to read-modify-write it and race. One owner per word means one plain store.
+//! Display and reduce still dispatch per cell and extract their own bit.
+//!
+//! The grid never leaves the GPU. What the CPU sees is only:
 //! an RGBA display texture (written by `display.wgsl` at the display cadence, sampled by the
 //! viewport) and a single `u32` alive-count (produced by `reduce.wgsl`, read back asynchronously).
 //!
@@ -37,18 +50,34 @@ const PARAM_DENSITY: usize = 2;
 const DEFAULT_DIM: u32 = 1024;
 const DEFAULT_DENSITY: f32 = 0.3;
 
-/// CPU-seeded random fill at the given density.
+/// Words per padded row: 32 cells to a `u32`, rounded up. See the module docs on state layout.
+pub fn words_per_row(width: u32) -> usize {
+    (width as usize).div_ceil(32)
+}
+
+/// CPU-seeded random fill at the given density, bit-packed into the layout the shaders read.
 ///
-/// Deliberately identical to `GameOfLifeModel::init`: same PRNG, same traversal order, same
-/// threshold. See the module docs — this is what makes the CPU model a usable oracle.
+/// The PRNG is drawn per cell in row-major order — the same PRNG, same traversal order and same
+/// threshold as `GameOfLifeModel::init` — so the two backends still start from an identical grid
+/// even though this one stores it 32 cells to a word. Only the *storage* differs; the bit sequence
+/// does not. See the module docs — this is what makes the CPU model a usable oracle.
+///
+/// Padding bits (present when `width % 32 != 0`) are left zero and never read: the step pass
+/// writes them from cells that don't exist and nothing extracts them, since display and reduce are
+/// both bounded by `width`.
 pub fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u32> {
     let threshold = (density * u32::MAX as f32) as u32;
-    let mut cells = vec![0u32; (width as usize) * (height as usize)];
-    for cell in &mut cells {
-        rng = xorshift64(rng);
-        *cell = u32::from(((rng >> 32) as u32) < threshold);
+    let stride = words_per_row(width);
+    let mut words = vec![0u32; stride * (height as usize)];
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            rng = xorshift64(rng);
+            if ((rng >> 32) as u32) < threshold {
+                words[y * stride + (x / 32)] |= 1u32 << (x % 32);
+            }
+        }
     }
-    cells
+    words
 }
 
 pub struct GpuGameOfLife;
@@ -77,6 +106,15 @@ impl GpuGridModel for GpuGameOfLife {
             extract_u32(params, PARAM_WIDTH, DEFAULT_DIM),
             extract_u32(params, PARAM_HEIGHT, DEFAULT_DIM),
         )
+    }
+
+    fn buffer_lens(width: u32, height: u32) -> Vec<usize> {
+        vec![words_per_row(width) * (height as usize)]
+    }
+
+    /// One invocation per word
+    fn step_dims(width: u32, height: u32) -> (u32, u32) {
+        (words_per_row(width) as u32, height)
     }
 
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue]) -> Vec<Vec<u32>> {
@@ -162,8 +200,31 @@ mod tests {
             log::warn!("skipping gpu_alive_count_matches_cpu_model: no wgpu adapter available");
             return;
         };
+        check_agreement_over_ticks(&ctx, 64, 64);
+    }
 
-        let (width, height) = (64u32, 64u32);
+    /// The same oracle at a width that is neither a multiple of 32 nor a power of two, which is
+    /// what actually exercises bit-packing's two distinct x-wrap boundaries:
+    ///
+    /// - **ragged last word** (50 % 32 = 18): the last word holds cells 32..=49 in bits 0..=17, so
+    ///   cell 49's right neighbour must wrap to cell 0 from a bit that is *not* 31.
+    /// - **non-power-of-two width**: the x=0 column's left neighbour is computed by a `% width`,
+    ///   which silently gives the right answer for any width dividing 2^32 even when the
+    ///   arithmetic feeding it is wrong.
+    ///
+    /// Every other size in this file (16/32/64/128/256) is a power of two, so this is the only
+    /// test that can see either mistake.
+    #[test]
+    fn gpu_alive_count_matches_cpu_model_at_ragged_width() {
+        let Some(ctx) = headless_context() else {
+            log::warn!("skipping gpu_alive_count_matches_cpu_model_at_ragged_width: no adapter");
+            return;
+        };
+        check_agreement_over_ticks(&ctx, 50, 30);
+    }
+
+    fn check_agreement_over_ticks(ctx: &GpuContext, width: u32, height: u32) {
+        let ctx = ctx.clone();
         let p = params(width, height, 0.3);
 
         let mut gpu = State::new(&ctx, &p);
@@ -181,7 +242,7 @@ mod tests {
             assert_eq!(
                 reported_alive(&gpu),
                 cpu_alive(&cpu),
-                "GPU-reduced alive count must match the CPU model's at tick {tick}"
+                "GPU-reduced alive count must match the CPU model's at tick {tick} ({width}x{height})"
             );
             assert_eq!(gpu.tick(), cpu.tick(), "tick counters must stay in step");
 
@@ -193,11 +254,11 @@ mod tests {
             cpu.step();
         }
 
-        // Sanity: the fixtures above would also pass if both counts were stuck at zero.
+        // Sanity: the assertions above would also pass if both counts were stuck at zero.
         refresh_stats(&ctx, &mut gpu);
         assert!(
             reported_alive(&gpu) > 0,
-            "a 64x64 grid seeded at density 0.3 must have live cells after 10 ticks"
+            "a {width}x{height} grid seeded at density 0.3 must have live cells after 10 ticks"
         );
     }
 

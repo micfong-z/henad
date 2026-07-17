@@ -163,10 +163,19 @@ impl<M: GpuGridModel> GpuGridState<M> {
 
         let (width, height) = M::dims(params);
         let (width, height) = (width.max(1), height.max(1));
-        let cell_count = (width as usize) * (height as usize);
-        let buffer_size = (cell_count * std::mem::size_of::<u32>()) as u64;
 
         // --- Ping-ponged storage buffers, seeded from the model ---
+        // Buffer lengths come from the model, not from the cell count: a bit-packed model holds
+        // many cells per u32, so only it knows how long its buffers are.
+        let buffer_lens = M::buffer_lens(width, height);
+        assert_eq!(
+            buffer_lens.len(),
+            M::BUFFER_COUNT,
+            "{}: buffer_lens must return BUFFER_COUNT ({}) lengths, got {}",
+            M::ID,
+            M::BUFFER_COUNT,
+            buffer_lens.len()
+        );
         let seeds = M::seed_buffers(width, height, params);
         assert_eq!(
             seeds.len(),
@@ -179,15 +188,17 @@ impl<M: GpuGridModel> GpuGridState<M> {
 
         let buffers: Vec<BufferPair> = seeds
             .iter()
+            .zip(&buffer_lens)
             .enumerate()
-            .map(|(k, seed)| {
+            .map(|(k, (seed, &len))| {
                 assert_eq!(
                     seed.len(),
-                    cell_count,
-                    "{}: seed buffer {k} must have width * height ({cell_count}) elements, got {}",
+                    len,
+                    "{}: seed buffer {k} must match buffer_lens[{k}] ({len}) elements, got {}",
                     M::ID,
                     seed.len()
                 );
+                let buffer_size = (len * std::mem::size_of::<u32>()) as u64;
                 let make = |side: char| {
                     device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some(&format!("{}_buffer{k}_{side}", M::ID)),
@@ -383,7 +394,14 @@ impl<M: GpuGridModel> GpuGridState<M> {
         }
     }
 
-    fn workgroup_counts(&self) -> (u32, u32) {
+    /// Workgroups covering the step pass's domain, which a packed model measures in words.
+    fn step_workgroups(&self) -> (u32, u32) {
+        let (x, y) = M::step_dims(self.width, self.height);
+        (x.div_ceil(M::WORKGROUP_SIZE), y.div_ceil(M::WORKGROUP_SIZE))
+    }
+
+    /// Workgroups covering one invocation per cell, which is what display and reduce always want.
+    fn cell_workgroups(&self) -> (u32, u32) {
         (
             self.width.div_ceil(M::WORKGROUP_SIZE),
             self.height.div_ceil(M::WORKGROUP_SIZE),
@@ -435,10 +453,13 @@ impl<M: GpuGridModel> SimState for GpuGridState<M> {
     }
 
     fn heap_bytes(&self) -> usize {
-        let cells = (self.width as usize) * (self.height as usize);
-        // Two ping-ponged sides per buffer, plus the RGBA display texture.
-        let buffers = cells * std::mem::size_of::<u32>() * 2 * M::BUFFER_COUNT;
-        let display_texture = cells * 4;
+        // Two ping-ponged sides per buffer, plus the RGBA display texture. The display texture is
+        // one texel per cell regardless of how densely the buffers pack them.
+        let buffers: usize = M::buffer_lens(self.width, self.height)
+            .iter()
+            .map(|len| len * std::mem::size_of::<u32>() * 2)
+            .sum();
+        let display_texture = (self.width as usize) * (self.height as usize) * 4;
         buffers + display_texture
     }
 }
@@ -459,7 +480,7 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
         if count == 0 {
             return;
         }
-        let (wg_x, wg_y) = self.workgroup_counts();
+        let (wg_x, wg_y) = self.step_workgroups();
         for i in 0..count {
             let bind_group = if self.current_is_a {
                 &self.bind_a2b
@@ -493,7 +514,7 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
     }
 
     fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        let (wg_x, wg_y) = self.workgroup_counts();
+        let (wg_x, wg_y) = self.cell_workgroups();
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
