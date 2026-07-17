@@ -1,28 +1,16 @@
 //! Dedicated OS thread that owns a GPU-resident sim state and steps it in batched submissions,
-//! decoupled from the UI frame rate — the GPU sibling of [`crate::sim_thread`]'s CPU sim thread.
-//!
-//! # Why this is a separate thread type at all
-//!
-//! [`crate::sim_thread::SimThread`] calls `SimState::step()` once per loop iteration. A GPU model
-//! fundamentally wants N steps encoded into *one* submission: submission overhead is the dominant
-//! cost at small grid sizes, and the whole adaptive-batching controller below exists to pick that
-//! N. Retrofitting batch-awareness into the generic CPU thread would be a second redesign, so
-//! instead this mirrors the existing native-vs-wasm precedent inside `SimThread`: same outward
-//! command/snapshot API, different backend. `henad-app` holds a thin enum over the two.
+//! decoupled from the UI frame rate. This is the GPU version of [`crate::sim_thread`]'s CPU sim thread.
 //!
 //! # [`GpuSimState`] is a runner interface, not a model-authoring shortcut
 //!
 //! `GridModel` is a *model-authoring* abstraction: implement some consts and pure functions, and
 //! the engine derives everything. [`GpuSimState`] is not that. It is the interface this thread
 //! drives, exactly as `SimState` is the interface the CPU thread drives — the minimum needed to
-//! record work into an encoder that this crate then submits and paces. A GPU model still writes
-//! its own `Model` + `SimState` impls by hand.
+//! record work into an encoder that this crate then submits and paces.
 //!
-//! It exists because the crate split requires it: the machinery lives here, concrete GPU models
-//! live in `henad-models`, and `henad-compute` cannot name a type from a crate that depends on
-//! it. The deliberate *non*-goal is a `GpuGridModel` trait that generates models from shader
-//! fragments — that gets extracted once a second GPU model exists to inform its shape, per the
-//! project's "extract traits from >=2 real examples" rule.
+//! The model-authoring counterpart is `henad_core::gpu_grid_model::GpuGridModel`, implemented by
+//! [`crate::gpu::gpu_grid_engine::GpuGridState`]. A GPU model that does not fit
+//! the grid mould could still implement this trait by hand.
 //!
 //! # Synchronization
 //!

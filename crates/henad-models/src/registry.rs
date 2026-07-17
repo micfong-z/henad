@@ -1,6 +1,8 @@
 use henad_compute::gpu::GpuContext;
+use henad_compute::gpu::gpu_grid_engine::{GpuGridModelDescriptor, GpuGridState};
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::grid_engine::{GridModelState, grid_model_param_descriptors};
+use henad_core::gpu_grid_model::GpuGridModel;
 use henad_core::grid_model::GridModel;
 use henad_core::model::{Model, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -68,9 +70,13 @@ where
     }
 }
 
-/// Create a `ModelEntry` for the GPU Game of Life, capturing the injected device/queue.
-fn register_gpu_game_of_life(ctx: &GpuContext) -> ModelEntry {
-    let model = crate::gpu_game_of_life::GpuGameOfLifeModel::new(ctx.clone());
+/// Create a `ModelEntry` from a `GpuGridModel` implementation, capturing the injected
+/// device/queue.
+///
+/// The GPU counterpart of [`register_grid_model`]: the factory closure captures its own
+/// [`GpuContext`] clone, so callers never thread a device through at creation time.
+fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
+    let model = GpuGridModelDescriptor::<M>::new(ctx.clone());
     let factory_ctx = ctx.clone();
     ModelEntry {
         name: model.name().to_owned(),
@@ -79,29 +85,7 @@ fn register_gpu_game_of_life(ctx: &GpuContext) -> ModelEntry {
         param_descriptors: model.param_descriptors(),
         stat_descriptors: model.stat_descriptors(),
         topology_hint: model.topology_hint(),
-        create: Box::new(move |params| {
-            ModelState::Gpu(Box::new(crate::gpu_game_of_life::GpuGameOfLifeState::new(
-                &factory_ctx,
-                params,
-            )))
-        }),
-    }
-}
-
-/// Create a `ModelEntry` for the GPU SIR model, capturing the injected device/queue.
-fn register_gpu_sir(ctx: &GpuContext) -> ModelEntry {
-    let model = crate::gpu_sir::GpuSirModel::new(ctx.clone());
-    let factory_ctx = ctx.clone();
-    ModelEntry {
-        name: model.name().to_owned(),
-        id: model.id().to_owned(),
-        description: model.description().to_owned(),
-        param_descriptors: model.param_descriptors(),
-        stat_descriptors: model.stat_descriptors(),
-        topology_hint: model.topology_hint(),
-        create: Box::new(move |params| {
-            ModelState::Gpu(Box::new(crate::gpu_sir::GpuSirState::new(&factory_ctx, params)))
-        }),
+        create: Box::new(move |params| ModelState::Gpu(Box::new(GpuGridState::<M>::new(&factory_ctx, params)))),
     }
 }
 
@@ -119,8 +103,8 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
     ];
 
     if let Some(ctx) = gpu {
-        entries.push(register_gpu_game_of_life(&ctx));
-        entries.push(register_gpu_sir(&ctx));
+        entries.push(register_gpu_grid_model::<crate::gpu_game_of_life::GpuGameOfLife>(&ctx));
+        entries.push(register_gpu_grid_model::<crate::gpu_sir::GpuSir>(&ctx));
     }
 
     entries

@@ -12,18 +12,22 @@
 //!
 //! This module holds the *reusable* half: the injected context, the fullscreen-triangle display
 //! target that turns a GPU texture into something the UI can sample ([`display`]), the async
-//! single-`u32` readback used for on-GPU stat reduction ([`readback`]), GPU timing plus the
-//! adaptive-batching controller ([`timing`]), and the batching sim thread ([`sim_thread`]).
+//! counter readback used for on-GPU stat reduction ([`readback`]), GPU timing plus the
+//! adaptive-batching controller ([`timing`]), the batching sim thread ([`sim_thread`]), and the
+//! generic engine that builds a runnable state out of a `GpuGridModel` ([`gpu_grid_engine`]).
 //!
-//! Concrete GPU models (shaders, pipelines, bind groups, what a "cell" means) live in
-//! `henad-models`, exactly as CPU models live there and lean on [`crate::grid_engine`].
+//! Concrete GPU models live in `henad-models`, exactly as CPU models live there and lean on
+//! [`crate::grid_engine`]. The split follows the CPU one: a model contributes shaders, seed data,
+//! and metadata; every wgpu object — buffers, layouts, pipelines, bind groups — is built here.
 
 pub mod display;
+pub mod gpu_grid_engine;
 pub mod readback;
 pub mod sim_thread;
 pub mod timing;
 
 pub use display::{DisplayTarget, GpuDisplay};
+pub use gpu_grid_engine::{GpuGridModelDescriptor, GpuGridState};
 pub use sim_thread::{GpuSimState, GpuStats};
 
 #[cfg(not(target_arch = "wasm32"))]

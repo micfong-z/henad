@@ -1,4 +1,4 @@
-//! Async readback of `N` `u32` counters reduced on the GPU.
+//! Async readback of some `u32` counters reduced on the GPU.
 //!
 //! This exists so a GPU model can answer `SimState::stats()` without ever copying the grid back
 //! to the CPU — reducing on-GPU and reading back a few bytes costs nothing measurable next to a
@@ -14,9 +14,9 @@
 
 use std::mem::size_of;
 
-/// A GPU-side `[u32; N]` accumulator plus the staging buffer used to read it back without
-/// blocking.
-pub struct CounterReadback<const N: usize> {
+/// A GPU-side `u32` accumulator of `count` counters, plus the staging buffer used to read it back
+/// without blocking.
+pub struct CounterReadback {
     /// The reduce shader's output. Cleared to 0 each time, accumulated into, then copied out.
     storage: wgpu::Buffer,
     staging: wgpu::Buffer,
@@ -24,22 +24,22 @@ pub struct CounterReadback<const N: usize> {
     pending: Option<flume::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     /// Whether a fresh value has been copied into `staging` and is waiting to be mapped.
     copied: bool,
-    values: [u32; N],
+    values: Vec<u32>,
 }
 
-impl<const N: usize> CounterReadback<N> {
-    const SIZE: u64 = (N * size_of::<u32>()) as u64;
-
-    pub fn new(device: &wgpu::Device, label: &str) -> Self {
+impl CounterReadback {
+    /// `count` must match the length of the `atomic<u32>` array the reduce shader declares.
+    pub fn new(device: &wgpu::Device, label: &str, count: usize) -> Self {
+        let size = (count * size_of::<u32>()) as u64;
         let storage = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("{label}_storage")),
-            size: Self::SIZE,
+            size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("{label}_staging")),
-            size: Self::SIZE,
+            size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -48,8 +48,12 @@ impl<const N: usize> CounterReadback<N> {
             staging,
             pending: None,
             copied: false,
-            values: [0; N],
+            values: vec![0; count],
         }
+    }
+
+    fn size(&self) -> u64 {
+        (self.values.len() * size_of::<u32>()) as u64
     }
 
     /// Bind this as the reduce shader's `read_write` storage target.
@@ -72,7 +76,7 @@ impl<const N: usize> CounterReadback<N> {
         if self.pending.is_some() {
             return;
         }
-        encoder.copy_buffer_to_buffer(&self.storage, 0, &self.staging, 0, Self::SIZE);
+        encoder.copy_buffer_to_buffer(&self.storage, 0, &self.staging, 0, self.size());
         self.copied = true;
     }
 
@@ -95,13 +99,16 @@ impl<const N: usize> CounterReadback<N> {
     ///
     /// `device.poll` is what actually runs wgpu's map callbacks on native, so this must be called
     /// on every loop iteration, not only when a value is expected.
-    pub fn poll(&mut self, device: &wgpu::Device) -> Option<[u32; N]> {
-        let rx = self.pending.as_ref()?;
+    /// Returns whether a fresh value landed in [`Self::values`].
+    pub fn poll(&mut self, device: &wgpu::Device) -> bool {
+        let Some(rx) = self.pending.as_ref() else {
+            return false;
+        };
 
         drop(device.poll(wgpu::PollType::Poll));
 
         let Ok(result) = rx.try_recv() else {
-            return None;
+            return false;
         };
         self.pending = None;
         self.finish_map(result)
@@ -111,34 +118,40 @@ impl<const N: usize> CounterReadback<N> {
     ///
     /// Only for one-shot snapshots (initial load, pause, step-once). Never call from the hot
     /// batching loop.
-    pub fn poll_blocking(&mut self, device: &wgpu::Device) -> Option<[u32; N]> {
-        let rx = self.pending.take()?;
-        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-        let result = rx.recv().ok()?;
+    /// Returns whether a fresh value landed in [`Self::values`].
+    pub fn poll_blocking(&mut self, device: &wgpu::Device) -> bool {
+        let Some(rx) = self.pending.take() else {
+            return false;
+        };
+        if device.poll(wgpu::PollType::wait_indefinitely()).is_err() {
+            return false;
+        }
+        let Ok(result) = rx.recv() else {
+            return false;
+        };
         self.finish_map(result)
     }
 
     /// Reads and unmaps the staging buffer after a completed `map_async`.
-    fn finish_map(&mut self, result: Result<(), wgpu::BufferAsyncError>) -> Option<[u32; N]> {
+    fn finish_map(&mut self, result: Result<(), wgpu::BufferAsyncError>) -> bool {
         if let Err(err) = result {
             log::warn!("GPU stat readback failed: {err}");
-            return None;
+            return false;
         }
 
         let slice = self.staging.slice(..);
         let data = slice.get_mapped_range();
         let words: &[u32] = bytemuck::cast_slice(&data);
-        let mut values = [0u32; N];
-        values.copy_from_slice(&words[..N]);
+        let n = self.values.len();
+        self.values.copy_from_slice(&words[..n]);
         drop(data);
         self.staging.unmap();
 
-        self.values = values;
-        Some(values)
+        true
     }
 
-    /// The most recently read-back values. Zero until the first readback completes.
-    pub fn values(&self) -> [u32; N] {
-        self.values
+    /// The most recently read-back values. All zero until the first readback completes.
+    pub fn values(&self) -> &[u32] {
+        &self.values
     }
 }

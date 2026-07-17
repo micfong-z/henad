@@ -1,30 +1,25 @@
 //! GPU-accelerated SIR epidemic model
 //!
-//! This is similar to`gpu_game_of_life` but with 3 differences: three cell states instead of
+//! This is similar to `gpu_game_of_life` but with 3 differences: three cell states instead of
 //! two, a probabilistic transition rule, and therefore a per-cell RNG.
 //!
 //! The CPU model consumes a single RNG stream sequentially across a row, which has no GPU
 //! equivalent. Instead each cell owns its own RNG state, stored in a ping-ponged `array<u32>`
 //! buffer alongside the SIR state. Every step, a cell reads its own hash state, advances it
 //! one round, and uses the result for its transition. This makes the GPU stream different from
-//! CPU stream. See `tests` for further details.
+//! the CPU stream. See `tests` for further details.
+//!
+//! That RNG buffer is why this model sets `BUFFER_COUNT = 2`: the engine ping-pongs the state and
+//! RNG buffers together, in lockstep. Only the state buffer (index 0) is visible to the display
+//! and reduce shaders.
 
-use std::sync::Arc;
-
-use henad_compute::gpu::GpuContext;
-use henad_compute::gpu::display::{DisplayTarget, GpuDisplay, build_display_target};
-use henad_compute::gpu::readback::CounterReadback;
-use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::grid_engine::GRID_INIT_SEED;
+use henad_core::gpu_grid_model::GpuGridModel;
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, stat, u32_param, xorshift64};
-use henad_core::model::{Model, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::topology::TopologyHint;
 use henad_core::view::{StatDescriptor, StatEntry};
 
 use crate::sir::PALETTE;
-
-const WORKGROUP_SIZE: u32 = 16;
 
 /// A domain-separated seed for the per-cell RNG buffer, so its stream doesn't start correlated
 /// with the state-seeding stream (which reuses `GRID_INIT_SEED` directly).
@@ -43,13 +38,11 @@ const DEFAULT_INFECTION_RATE: f32 = 0.3;
 const DEFAULT_RECOVERY_RATE: f32 = 0.05;
 const DEFAULT_INITIAL_INFECTED_PCT: f32 = 0.01;
 
-const CELL_S: u32 = 0;
-const CELL_I: u32 = 1;
-const CELL_R: u32 = 2;
+const CELL_S: usize = 0;
+const CELL_I: usize = 1;
+const CELL_R: usize = 2;
 
-/// Matches `Params` in `step.wgsl` / `dims` in `reduce.wgsl`+`display.wgsl` (those only use the
-/// leading `vec2<u32>`, which is why this struct's first 8 bytes alone are also valid as a
-/// `vec2<u32>` uniform).
+/// Matches `Params` in `step.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct StepParams {
@@ -57,10 +50,6 @@ struct StepParams {
     height: u32,
     infection_rate: f32,
     recovery_rate: f32,
-}
-
-fn workgroup_counts(width: u32, height: u32) -> (u32, u32) {
-    (width.div_ceil(WORKGROUP_SIZE), height.div_ceil(WORKGROUP_SIZE))
 }
 
 /// CPU-seeded initial S/I state, identical to `SirGridModel::init`: same PRNG, same traversal
@@ -90,32 +79,23 @@ fn seed_rng_states(width: u32, height: u32, seed: u64) -> Vec<u32> {
         .collect()
 }
 
-pub struct GpuSirModel {
-    ctx: GpuContext,
-}
+pub struct GpuSir;
 
-impl GpuSirModel {
-    pub fn new(ctx: GpuContext) -> Self {
-        Self { ctx }
-    }
-}
+impl GpuGridModel for GpuSir {
+    const NAME: &'static str = "SIR Epidemic (GPU)";
+    const ID: &'static str = "gpu_sir";
+    const DESCRIPTION: &'static str =
+        "Classic SIR compartmental model on a toroidal grid with Moore neighborhood, stepped entirely on the GPU";
+    const PALETTE: &'static [[u8; 4]] = &PALETTE;
+    /// State buffer plus the per-cell RNG buffer. See the module docs.
+    const BUFFER_COUNT: usize = 2;
+    const STAT_COUNT: usize = 3;
 
-impl Model for GpuSirModel {
-    type State = GpuSirState;
+    const STEP_SHADER: &'static str = include_str!("step.wgsl");
+    const DISPLAY_SHADER: &'static str = include_str!("display.wgsl");
+    const REDUCE_SHADER: &'static str = include_str!("reduce.wgsl");
 
-    fn name(&self) -> &'static str {
-        "SIR Epidemic (GPU)"
-    }
-
-    fn id(&self) -> &'static str {
-        "gpu_sir"
-    }
-
-    fn description(&self) -> &'static str {
-        "Classic SIR compartmental model on a toroidal grid with Moore neighborhood, stepped entirely on the GPU"
-    }
-
-    fn param_descriptors(&self) -> Vec<ParamDescriptor> {
+    fn param_descriptors() -> Vec<ParamDescriptor> {
         vec![
             u32_param("grid_width", "Grid Width", DEFAULT_DIM, 1, 16_384),
             u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384),
@@ -146,7 +126,32 @@ impl Model for GpuSirModel {
         ]
     }
 
-    fn stat_descriptors(&self) -> Vec<StatDescriptor> {
+    fn dims(params: &[ParamValue]) -> (u32, u32) {
+        (
+            extract_u32(params, PARAM_WIDTH, DEFAULT_DIM),
+            extract_u32(params, PARAM_HEIGHT, DEFAULT_DIM),
+        )
+    }
+
+    fn seed_buffers(width: u32, height: u32, params: &[ParamValue]) -> Vec<Vec<u32>> {
+        let initial_infected_pct = extract_f32(params, PARAM_INITIAL_INFECTED_PCT, DEFAULT_INITIAL_INFECTED_PCT);
+        vec![
+            seed_cells(width, height, initial_infected_pct, GRID_INIT_SEED),
+            seed_rng_states(width, height, RNG_INIT_SEED),
+        ]
+    }
+
+    fn step_params_bytes(width: u32, height: u32, params: &[ParamValue]) -> Vec<u8> {
+        bytemuck::bytes_of(&StepParams {
+            width,
+            height,
+            infection_rate: extract_f32(params, PARAM_INFECTION_RATE, DEFAULT_INFECTION_RATE),
+            recovery_rate: extract_f32(params, PARAM_RECOVERY_RATE, DEFAULT_RECOVERY_RATE),
+        })
+        .to_vec()
+    }
+
+    fn stat_descriptors() -> Vec<StatDescriptor> {
         vec![
             StatDescriptor {
                 label: "Susceptible",
@@ -163,450 +168,28 @@ impl Model for GpuSirModel {
         ]
     }
 
-    fn topology_hint(&self) -> TopologyHint {
-        TopologyHint::Grid2D
-    }
-
-    fn create_state(&self, params: &[ParamValue]) -> Self::State {
-        GpuSirState::new(&self.ctx, params)
-    }
-}
-
-pub struct GpuSirState {
-    width: u32,
-    height: u32,
-    tick: u64,
-
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-
-    step_pipeline: wgpu::ComputePipeline,
-    bind_a2b: wgpu::BindGroup,
-    bind_b2a: wgpu::BindGroup,
-
-    display_pipeline: wgpu::ComputePipeline,
-    display_bind_a: wgpu::BindGroup,
-    display_bind_b: wgpu::BindGroup,
-    display: Arc<GpuDisplay>,
-
-    reduce_pipeline: wgpu::ComputePipeline,
-    reduce_bind_a: wgpu::BindGroup,
-    reduce_bind_b: wgpu::BindGroup,
-    sir_readback: CounterReadback<3>,
-
-    /// `true` when `state_a` holds the current (latest) state.
-    current_is_a: bool,
-}
-
-impl GpuSirState {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "this will be simplified soon after some GPU model abstraction"
-    )]
-    pub fn new(ctx: &GpuContext, params: &[ParamValue]) -> Self {
-        let device = &ctx.device;
-        let queue = &ctx.queue;
-
-        let width = extract_u32(params, PARAM_WIDTH, DEFAULT_DIM).max(1);
-        let height = extract_u32(params, PARAM_HEIGHT, DEFAULT_DIM).max(1);
-        let infection_rate = extract_f32(params, PARAM_INFECTION_RATE, DEFAULT_INFECTION_RATE);
-        let recovery_rate = extract_f32(params, PARAM_RECOVERY_RATE, DEFAULT_RECOVERY_RATE);
-        let initial_infected_pct = extract_f32(params, PARAM_INITIAL_INFECTED_PCT, DEFAULT_INITIAL_INFECTED_PCT);
-
-        let initial_cells = seed_cells(width, height, initial_infected_pct, GRID_INIT_SEED);
-        let initial_rng = seed_rng_states(width, height, RNG_INIT_SEED);
-        let cell_count = (width as usize) * (height as usize);
-        let state_size = (cell_count * std::mem::size_of::<u32>()) as u64;
-
-        let make_buffer = |label: &str, size: u64| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        };
-        let state_a = make_buffer("gpu_sir_state_a", state_size);
-        let state_b = make_buffer("gpu_sir_state_b", state_size);
-        queue.write_buffer(&state_a, 0, bytemuck::cast_slice(&initial_cells));
-
-        let rng_a = make_buffer("gpu_sir_rng_a", state_size);
-        let rng_b = make_buffer("gpu_sir_rng_b", state_size);
-        queue.write_buffer(&rng_a, 0, bytemuck::cast_slice(&initial_rng));
-
-        let step_params = StepParams {
-            width,
-            height,
-            infection_rate,
-            recovery_rate,
-        };
-        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("gpu_sir_params_buffer"),
-            size: std::mem::size_of::<StepParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&step_params));
-
-        // Display/reduce shaders only read `vec2<u32> dims`, i.e. the leading 8 bytes of
-        // `StepParams`, so using a separate, smaller uniform buffer for them here.
-        let dims_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("gpu_sir_dims_buffer"),
-            size: (2 * std::mem::size_of::<u32>()) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&dims_buffer, 0, bytemuck::cast_slice(&[width, height]));
-
-        let DisplayTarget {
-            view: display_view,
-            display,
-        } = build_display_target(device, ctx.target_format, width, height);
-
-        let sir_readback = CounterReadback::new(device, "gpu_sir_counts");
-
-        // --- Step pipeline ---
-        let storage_entry = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-
-        let step_shader = device.create_shader_module(wgpu::include_wgsl!("step.wgsl"));
-        let step_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("gpu_sir_step_bind_group_layout"),
-            entries: &[
-                storage_entry(0, true),
-                storage_entry(1, false),
-                storage_entry(2, true),
-                storage_entry(3, false),
-                uniform_entry(4),
-            ],
-        });
-        let make_step_bind_group = |label: &str,
-                                    state_in: &wgpu::Buffer,
-                                    state_out: &wgpu::Buffer,
-                                    rng_in: &wgpu::Buffer,
-                                    rng_out: &wgpu::Buffer| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &step_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: state_in.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: state_out.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: rng_in.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: rng_out.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: params_buffer.as_entire_binding(),
-                    },
-                ],
-            })
-        };
-        let bind_a2b = make_step_bind_group("gpu_sir_bind_a2b", &state_a, &state_b, &rng_a, &rng_b);
-        let bind_b2a = make_step_bind_group("gpu_sir_bind_b2a", &state_b, &state_a, &rng_b, &rng_a);
-        let step_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("gpu_sir_step_pipeline_layout"),
-            bind_group_layouts: &[&step_layout],
-            push_constant_ranges: &[],
-        });
-        let step_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("gpu_sir_step_pipeline"),
-            layout: Some(&step_pipeline_layout),
-            module: &step_shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        // --- Display pipeline ---
-        let display_shader = device.create_shader_module(wgpu::include_wgsl!("display.wgsl"));
-        let display_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("gpu_sir_display_bind_group_layout"),
-            entries: &[
-                storage_entry(0, true),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                uniform_entry(2),
-            ],
-        });
-        let make_display_bind_group = |label: &str, state: &wgpu::Buffer| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &display_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: state.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&display_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: dims_buffer.as_entire_binding(),
-                    },
-                ],
-            })
-        };
-        let display_bind_a = make_display_bind_group("gpu_sir_display_bind_a", &state_a);
-        let display_bind_b = make_display_bind_group("gpu_sir_display_bind_b", &state_b);
-        let display_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("gpu_sir_display_pipeline_layout"),
-            bind_group_layouts: &[&display_layout],
-            push_constant_ranges: &[],
-        });
-        let display_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("gpu_sir_display_pipeline"),
-            layout: Some(&display_pipeline_layout),
-            module: &display_shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        // --- Reduce pipeline ---
-        let reduce_shader = device.create_shader_module(wgpu::include_wgsl!("reduce.wgsl"));
-        let reduce_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("gpu_sir_reduce_bind_group_layout"),
-            entries: &[storage_entry(0, true), storage_entry(1, false), uniform_entry(2)],
-        });
-        let make_reduce_bind_group = |label: &str, state: &wgpu::Buffer| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &reduce_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: state.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: sir_readback.binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: dims_buffer.as_entire_binding(),
-                    },
-                ],
-            })
-        };
-        let reduce_bind_a = make_reduce_bind_group("gpu_sir_reduce_bind_a", &state_a);
-        let reduce_bind_b = make_reduce_bind_group("gpu_sir_reduce_bind_b", &state_b);
-        let reduce_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("gpu_sir_reduce_pipeline_layout"),
-            bind_group_layouts: &[&reduce_layout],
-            push_constant_ranges: &[],
-        });
-        let reduce_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("gpu_sir_reduce_pipeline"),
-            layout: Some(&reduce_pipeline_layout),
-            module: &reduce_shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        Self {
-            width,
-            height,
-            tick: 0,
-            device: device.clone(),
-            queue: queue.clone(),
-            step_pipeline,
-            bind_a2b,
-            bind_b2a,
-            display_pipeline,
-            display_bind_a,
-            display_bind_b,
-            display,
-            reduce_pipeline,
-            reduce_bind_a,
-            reduce_bind_b,
-            sir_readback,
-            current_is_a: true,
-        }
-    }
-
-    fn current_display_bind_group(&self) -> &wgpu::BindGroup {
-        if self.current_is_a {
-            &self.display_bind_a
-        } else {
-            &self.display_bind_b
-        }
-    }
-
-    fn current_reduce_bind_group(&self) -> &wgpu::BindGroup {
-        if self.current_is_a {
-            &self.reduce_bind_a
-        } else {
-            &self.reduce_bind_b
-        }
-    }
-}
-
-impl SimState for GpuSirState {
-    /// This should technically never be called.
-    fn step(&mut self) {
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("gpu_sir_single_step"),
-        });
-        self.encode_steps(&mut encoder, 1, None);
-        self.queue.submit(Some(encoder.finish()));
-    }
-
-    fn tick(&self) -> u64 {
-        self.tick
-    }
-
-    fn stats(&self) -> Vec<StatEntry> {
-        let counts = self.sir_readback.values();
+    fn stats(counts: &[u32]) -> Vec<StatEntry> {
         vec![
-            stat("Susceptible", f64::from(counts[CELL_S as usize]), PALETTE[0]),
-            stat("Infected", f64::from(counts[CELL_I as usize]), PALETTE[1]),
-            stat("Recovered", f64::from(counts[CELL_R as usize]), PALETTE[2]),
+            stat("Susceptible", f64::from(counts[CELL_S]), PALETTE[0]),
+            stat("Infected", f64::from(counts[CELL_I]), PALETTE[1]),
+            stat("Recovered", f64::from(counts[CELL_R]), PALETTE[2]),
         ]
-    }
-
-    /// Resizing or reseeding live is currently unsupported.
-    fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-        false
-    }
-
-    fn population(&self) -> u64 {
-        u64::from(self.width) * u64::from(self.height)
-    }
-
-    fn heap_bytes(&self) -> usize {
-        let cells = (self.width as usize) * (self.height as usize);
-        // Two ping-ponged state buffers, two ping-ponged RNG buffers, plus the display texture.
-        let buffers = cells * std::mem::size_of::<u32>() * 4;
-        let display_texture = cells * 4;
-        buffers + display_texture
-    }
-}
-
-impl GpuSimState for GpuSirState {
-    fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>) {
-        if count == 0 {
-            return;
-        }
-        let (wg_x, wg_y) = workgroup_counts(self.width, self.height);
-        for i in 0..count {
-            let bind_group = if self.current_is_a {
-                &self.bind_a2b
-            } else {
-                &self.bind_b2a
-            };
-            let is_first = i == 0;
-            let is_last = i == count - 1;
-            let timestamp_writes =
-                timestamps
-                    .filter(|_| is_first || is_last)
-                    .map(|query_set| wgpu::ComputePassTimestampWrites {
-                        query_set,
-                        beginning_of_pass_write_index: is_first.then_some(0),
-                        end_of_pass_write_index: is_last.then_some(1),
-                    });
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("gpu_sir_step_pass"),
-                timestamp_writes,
-            });
-            pass.set_pipeline(&self.step_pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.dispatch_workgroups(wg_x, wg_y, 1);
-            drop(pass);
-            self.current_is_a = !self.current_is_a;
-        }
-        self.tick += u64::from(count);
-    }
-
-    fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        let (wg_x, wg_y) = workgroup_counts(self.width, self.height);
-
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("gpu_sir_display_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.display_pipeline);
-            pass.set_bind_group(0, self.current_display_bind_group(), &[]);
-            pass.dispatch_workgroups(wg_x, wg_y, 1);
-        }
-
-        self.sir_readback.encode_clear(encoder);
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("gpu_sir_reduce_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.reduce_pipeline);
-            pass.set_bind_group(0, self.current_reduce_bind_group(), &[]);
-            pass.dispatch_workgroups(wg_x, wg_y, 1);
-        }
-        self.sir_readback.encode_copy(encoder);
-    }
-
-    fn begin_stats_readback(&mut self) {
-        self.sir_readback.begin_map();
-    }
-
-    fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) {
-        if block {
-            self.sir_readback.poll_blocking(device);
-        } else {
-            self.sir_readback.poll(device);
-        }
-    }
-
-    fn display(&self) -> Arc<GpuDisplay> {
-        Arc::clone(&self.display)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use henad_compute::gpu::GpuContext;
+    use henad_compute::gpu::gpu_grid_engine::GpuGridState;
+    use henad_compute::gpu::sim_thread::GpuSimState as _;
     use henad_compute::grid_engine::GridModelState;
+    use henad_core::model::SimState as _;
     use henad_core::view::StatValue;
 
     use crate::sir::SirGridModel;
+
+    type State = GpuGridState<GpuSir>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -635,7 +218,7 @@ mod tests {
         ]
     }
 
-    fn sir_counts(state: &GpuSirState) -> (u64, u64, u64) {
+    fn sir_counts(state: &State) -> (u64, u64, u64) {
         let stats = state.stats();
         let scalar = |entry: &StatEntry| match &entry.value {
             StatValue::Scalar(v) => *v as u64,
@@ -645,7 +228,7 @@ mod tests {
     }
 
     /// Drives display + reduce + readback exactly as the sim thread's one-shot snapshot path does.
-    fn refresh_stats(ctx: &GpuContext, state: &mut GpuSirState) {
+    fn refresh_stats(ctx: &GpuContext, state: &mut State) {
         let mut encoder = ctx
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -655,7 +238,7 @@ mod tests {
         state.poll_stats_readback(&ctx.device, true);
     }
 
-    fn step_once(ctx: &GpuContext, state: &mut GpuSirState) {
+    fn step_once(ctx: &GpuContext, state: &mut State) {
         let mut encoder = ctx
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -672,7 +255,7 @@ mod tests {
         };
 
         let (width, height) = (64u32, 64u32);
-        let mut state = GpuSirState::new(&ctx, &params(width, height, 0.3, 0.05, 0.1));
+        let mut state = State::new(&ctx, &params(width, height, 0.3, 0.05, 0.1));
         let total = u64::from(width) * u64::from(height);
 
         for tick in 0..50 {
@@ -692,7 +275,7 @@ mod tests {
         };
 
         let (width, height) = (64u32, 64u32);
-        let mut state = GpuSirState::new(&ctx, &params(width, height, 0.0, 0.05, 0.2));
+        let mut state = State::new(&ctx, &params(width, height, 0.0, 0.05, 0.2));
 
         refresh_stats(&ctx, &mut state);
         let (initial_s, _, _) = sir_counts(&state);
@@ -718,7 +301,7 @@ mod tests {
         };
 
         let (width, height) = (64u32, 64u32);
-        let mut state = GpuSirState::new(&ctx, &params(width, height, 0.5, 0.0, 0.1));
+        let mut state = State::new(&ctx, &params(width, height, 0.5, 0.0, 0.1));
 
         refresh_stats(&ctx, &mut state);
         let (_, mut prev_i, _) = sir_counts(&state);
@@ -748,7 +331,7 @@ mod tests {
         let (width, height) = (64u32, 64u32);
         let p = params(width, height, 0.3, 0.05, 0.2);
 
-        let mut gpu = GpuSirState::new(&ctx, &p);
+        let mut gpu = State::new(&ctx, &p);
         let cpu = GridModelState::<SirGridModel>::from_params(&p);
 
         refresh_stats(&ctx, &mut gpu);
@@ -784,7 +367,7 @@ mod tests {
         };
 
         let (width, height) = (32u32, 16u32);
-        let state = GpuSirState::new(&ctx, &params(width, height, 0.3, 0.05, 0.1));
+        let state = State::new(&ctx, &params(width, height, 0.3, 0.05, 0.1));
         assert_eq!(state.population(), u64::from(width) * u64::from(height));
     }
 }
@@ -796,11 +379,12 @@ mod tests {
 mod runner_tests {
     use std::time::{Duration, Instant};
 
+    use henad_compute::gpu::gpu_grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
     use henad_compute::snapshot::{Snapshot, SnapshotView};
     use henad_core::view::StatValue;
 
-    use super::GpuSirState;
+    use super::GpuSir;
     use super::tests::{headless_context, params};
     use crate::registry::{ModelState, model_registry};
 
@@ -833,7 +417,7 @@ mod runner_tests {
         };
 
         let (width, height) = (128u32, 128u32);
-        let state = GpuSirState::new(&ctx, &params(width, height, 0.3, 0.05, 0.1));
+        let state = GpuGridState::<GpuSir>::new(&ctx, &params(width, height, 0.3, 0.05, 0.1));
         let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default());
 
         let initial = wait_for(&mut thread, Duration::from_secs(5), |_| true)

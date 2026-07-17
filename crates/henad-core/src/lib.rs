@@ -1,5 +1,6 @@
 //! Core traits and types for the Henad simulation engine.
 
+pub mod gpu_grid_model;
 pub mod grid;
 pub mod grid_model;
 pub mod helpers;
