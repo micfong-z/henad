@@ -36,6 +36,8 @@ STEPS_GPU_ONLY: list[int] = [100000]
 # Model ids carrying this prefix are GPU-backed (matches the registry convention).
 GPU_PREFIX = "gpu_"
 
+DEFAULT_EXCLUDED_MODELS: list[str] = ["boids"]
+
 _DURATION_UNITS = {
     "s": 1.0,
     "ms": 1e-3,
@@ -382,6 +384,12 @@ def main() -> int:
     parser.add_argument("--reps", type=int, default=3, help="timed reps per configuration")
     parser.add_argument("--timeout", type=float, default=900.0, help="per-run timeout in seconds")
     parser.add_argument("--models", nargs="*", help="only these model ids (default: all)")
+    parser.add_argument(
+        "--exclude",
+        nargs="*",
+        default=list(DEFAULT_EXCLUDED_MODELS),
+        help="model ids to skip; ignored when --models is given. Pass --exclude with no values to run everything",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the matrix and exit")
     parser.add_argument("--resume", action="store_true", help="skip configs already in the output CSV")
     args = parser.parse_args()
@@ -399,7 +407,17 @@ def main() -> int:
         if unknown:
             print(f"error: unknown model(s): {', '.join(unknown)}\navailable: {', '.join(models)}", file=sys.stderr)
             return 1
+        # An explicit --models list wins over --exclude, so `--models boids` still works.
         models = [m for m in models if m in args.models]
+    elif args.exclude:
+        skipped = [m for m in models if m in args.exclude]
+        models = [m for m in models if m not in args.exclude]
+        if skipped:
+            print(f"skipping {', '.join(skipped)} (--exclude)", file=sys.stderr)
+
+    if not models:
+        print("error: every discovered model was excluded", file=sys.stderr)
+        return 1
 
     print(f"models: {', '.join(models)}", file=sys.stderr)
     grid_capable = {m: model_supports_grid(args.binary, m, args.timeout) for m in models}
