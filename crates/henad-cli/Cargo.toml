@@ -1,0 +1,27 @@
+[package]
+name = "henad-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "henad-cli"
+path = "src/main.rs"
+
+[dependencies]
+# We drive states directly (CPU via `SimState::step`, GPU via `GpuSimState::encode_steps`) rather
+# than through `SimThread`/`GpuSimThread`. henad-compute is needed for the GPU path: `GpuContext`,
+# the `GpuSimState` runner trait, plus wgpu + pollster for headless device acquisition.
+henad-core = { workspace = true }
+henad-compute = { workspace = true }
+henad-models = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+numfmt = { workspace = true }
+wgpu = { workspace = true }
+pollster = { workspace = true }
+
+[lints]
+workspace = true
