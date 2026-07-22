@@ -2,5 +2,6 @@
 
 pub mod gpu;
 pub mod grid_engine;
+pub mod runtime_info;
 pub mod sim_thread;
 pub mod snapshot;

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{HenadApp, icons::material_design_icons::MDI_CUBE_OFF_OUTLINE};
+use crate::{icons::material_design_icons::MDI_CUBE_OFF_OUTLINE, state::AppState};
 use eframe::egui_wgpu;
 use egui::{ColorImage, RichText, TextureOptions};
 use egui_wgpu::{CallbackResources, CallbackTrait};
@@ -55,101 +55,116 @@ fn fit_aspect(available: egui::Vec2, width: f32, height: f32) -> egui::Vec2 {
     }
 }
 
-pub fn viewport_panel(ctx: &egui::Context, app: &mut HenadApp) {
-    egui::CentralPanel::default().show(ctx, |ui| {
-        if app.snapshot.is_none() {
-            ui.centered_and_justified(|ui| {
-                ui.heading("Load a model to start simulation");
-            });
-            return;
-        }
+/// Draws the view and records its cost
+pub fn viewport_ui(ui: &mut egui::Ui, app: &mut AppState) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let render_start = std::time::Instant::now();
 
-        if !app.rendering_enabled {
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new(MDI_CUBE_OFF_OUTLINE).size(64.0));
-                ui.heading("Rendering disabled");
-            });
-            return;
-        }
+    ui.checkbox(&mut app.rendering_enabled, "Rendering");
 
-        // --- GPU path: nothing to convert or upload, just sample the texture the sim thread
-        // already wrote. Branches on the snapshot *variant*, not on the topology hint — a GPU
-        // Game of Life is still `TopologyHint::Grid2D`, it just gets its pixels differently.
-        if let Some(SnapshotView::Gpu(gpu)) = app.snapshot.as_ref().map(|s| &s.view) {
-            paint_gpu_view(ui, Arc::clone(&gpu.display));
-            return;
-        }
+    draw_view(ui, app);
 
-        let current_tick = app.snapshot.as_ref().map_or(0, |s| s.tick);
-        let needs_update = app.last_rendered_tick != Some(current_tick);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        app.timings.frame_render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+    }
+}
 
-        if needs_update {
-            // Take snapshot temporarily to avoid borrow conflicts with app
-            let snap = app.snapshot.take();
-            if let Some(snapshot) = snap {
-                match &snapshot.view {
-                    SnapshotView::Grid(grid) => {
-                        let w = grid.width as usize;
-                        let h = grid.height as usize;
-                        let total = w * h;
+fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
+    let ctx = ui.ctx().clone();
 
-                        let needed = total * 4;
-                        if app.pixel_buf.len() != needed {
-                            app.pixel_buf.resize(needed, 255);
-                        }
+    if app.snapshot.is_none() {
+        ui.centered_and_justified(|ui| {
+            ui.heading("Load a model to start simulation");
+        });
+        return;
+    }
 
-                        #[cfg(not(target_arch = "wasm32"))]
-                        {
-                            use rayon::prelude::*;
-                            app.pixel_buf
-                                .par_chunks_mut(4)
-                                .zip(grid.cells.par_iter())
-                                .for_each(|(px, &cell)| {
-                                    let rgba = grid.palette[cell as usize];
-                                    px.copy_from_slice(&rgba);
-                                });
-                        }
-                        #[cfg(target_arch = "wasm32")]
-                        for (chunk, &cell) in app.pixel_buf.chunks_exact_mut(4).zip(grid.cells.iter()) {
-                            chunk.copy_from_slice(&grid.palette[cell as usize]);
-                        }
+    if !app.rendering_enabled {
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new(MDI_CUBE_OFF_OUTLINE).size(64.0));
+            ui.heading("Rendering disabled");
+        });
+        return;
+    }
 
-                        let image = ColorImage::from_rgba_unmultiplied([w, h], &app.pixel_buf);
+    // --- GPU path: nothing to convert or upload, just sample the texture the sim thread
+    // already wrote. Branches on the snapshot *variant*, not on the topology hint — a GPU
+    // Game of Life is still `TopologyHint::Grid2D`, it just gets its pixels differently.
+    if let Some(SnapshotView::Gpu(gpu)) = app.snapshot.as_ref().map(|s| &s.view) {
+        paint_gpu_view(ui, Arc::clone(&gpu.display));
+        return;
+    }
 
-                        match &mut app.grid_texture {
-                            Some(tex) => {
-                                tex.set(image, TextureOptions::NEAREST);
-                            }
-                            None => {
-                                app.grid_texture = Some(ctx.load_texture("grid", image, TextureOptions::NEAREST));
-                            }
-                        }
+    let current_tick = app.snapshot.as_ref().map_or(0, |s| s.tick);
+    let needs_update = app.last_rendered_tick != Some(current_tick);
+
+    if needs_update {
+        // Take snapshot temporarily to avoid borrow conflicts with app
+        let snap = app.snapshot.take();
+        if let Some(snapshot) = snap {
+            match &snapshot.view {
+                SnapshotView::Grid(grid) => {
+                    let w = grid.width as usize;
+                    let h = grid.height as usize;
+                    let total = w * h;
+
+                    let needed = total * 4;
+                    if app.pixel_buf.len() != needed {
+                        app.pixel_buf.resize(needed, 255);
                     }
-                    SnapshotView::Points(points) => {
-                        render_density_heatmap(ctx, app, &points.pos_x, &points.pos_y, points.world_w, points.world_h);
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        use rayon::prelude::*;
+                        app.pixel_buf
+                            .par_chunks_mut(4)
+                            .zip(grid.cells.par_iter())
+                            .for_each(|(px, &cell)| {
+                                let rgba = grid.palette[cell as usize];
+                                px.copy_from_slice(&rgba);
+                            });
                     }
-                    // Handled above, before any CPU-side pixel work.
-                    SnapshotView::Gpu(_) => {}
-                    SnapshotView::None => {
-                        app.snapshot = Some(snapshot);
-                        ui.label("No view available");
-                        return;
+                    #[cfg(target_arch = "wasm32")]
+                    for (chunk, &cell) in app.pixel_buf.chunks_exact_mut(4).zip(grid.cells.iter()) {
+                        chunk.copy_from_slice(&grid.palette[cell as usize]);
+                    }
+
+                    let image = ColorImage::from_rgba_unmultiplied([w, h], &app.pixel_buf);
+
+                    match &mut app.grid_texture {
+                        Some(tex) => {
+                            tex.set(image, TextureOptions::NEAREST);
+                        }
+                        None => {
+                            app.grid_texture = Some(ctx.load_texture("grid", image, TextureOptions::NEAREST));
+                        }
                     }
                 }
-                app.last_rendered_tick = Some(current_tick);
-                app.snapshot = Some(snapshot);
+                SnapshotView::Points(points) => {
+                    render_density_heatmap(&ctx, app, &points.pos_x, &points.pos_y, points.world_w, points.world_h);
+                }
+                // Handled above, before any CPU-side pixel work.
+                SnapshotView::Gpu(_) => {}
+                SnapshotView::None => {
+                    app.snapshot = Some(snapshot);
+                    ui.label("No view available");
+                    return;
+                }
             }
+            app.last_rendered_tick = Some(current_tick);
+            app.snapshot = Some(snapshot);
         }
+    }
 
-        if let Some(tex) = &app.grid_texture {
-            let size = tex.size_vec2();
-            let display_size = fit_aspect(ui.available_size(), size.x, size.y);
+    if let Some(tex) = &app.grid_texture {
+        let size = tex.size_vec2();
+        let display_size = fit_aspect(ui.available_size(), size.x, size.y);
 
-            ui.centered_and_justified(|ui| {
-                ui.image(egui::load::SizedTexture::new(tex.id(), display_size));
-            });
-        }
-    });
+        ui.centered_and_justified(|ui| {
+            ui.image(egui::load::SizedTexture::new(tex.id(), display_size));
+        });
+    }
 }
 
 const DENSITY_W: usize = 512;
@@ -177,7 +192,7 @@ fn inferno(t: f32) -> [u8; 4] {
 
 fn render_density_heatmap(
     ctx: &egui::Context,
-    app: &mut HenadApp,
+    app: &mut AppState,
     pos_x: &[f32],
     pos_y: &[f32],
     world_w: f32,

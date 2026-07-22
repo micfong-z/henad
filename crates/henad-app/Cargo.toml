@@ -11,6 +11,7 @@ henad-core = { workspace = true }
 henad-compute = { workspace = true }
 henad-models = { workspace = true }
 egui = { workspace = true }
+egui_dock = { workspace = true }
 eframe = { workspace = true }
 egui_plot = { workspace = true }
 serde = { workspace = true }

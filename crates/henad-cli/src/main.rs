@@ -35,6 +35,7 @@ use anyhow::{Context as _, Result, bail};
 use clap::Parser;
 
 use henad_compute::gpu::{GpuContext, GpuSimState};
+use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
@@ -45,7 +46,7 @@ use numfmt::{Formatter, Scales};
 #[command(name = "henad-cli", version, about)]
 struct Args {
     /// Model id to benchmark (see `--list`).
-    #[arg(required_unless_present = "list")]
+    #[arg(required_unless_present_any = ["list", "info"])]
     model: Option<String>,
 
     /// Steps to run (and time) per rep.
@@ -76,6 +77,11 @@ struct Args {
     /// List available models and exit.
     #[arg(long)]
     list: bool,
+
+    /// Print host and GPU information. With no model given, prints and exits; with one, prints as a
+    /// provenance header before the benchmark.
+    #[arg(long)]
+    info: bool,
 }
 
 fn main() -> Result<()> {
@@ -83,13 +89,30 @@ fn main() -> Result<()> {
 
     // Best-effort headless GPU: acquire a device so GPU models can be listed and run. If none is
     // available (e.g. CI with no GPU), fall back to a CPU-only registry rather than failing.
-    let gpu_ctx = match acquire_gpu() {
-        Ok(ctx) => Some(ctx),
+    let (gpu_ctx, runtime) = match acquire_gpu() {
+        Ok((ctx, runtime)) => (Some(ctx), Some(runtime)),
         Err(err) => {
             eprintln!("note: no GPU available ({err}); GPU models disabled");
-            None
+            (None, None)
         }
     };
+
+    // `force_fallback_adapter: false` does not stop a software rasteriser (lavapipe, WARP) being
+    // returned when it is the only adapter present.
+    if let Some(runtime) = &runtime {
+        if classify_adapter(&runtime.adapter) == GpuVerdict::Absent {
+            eprintln!(
+                "!!! warning: adapter '{}' is a software rasteriser, not a GPU; \
+                 GPU-model results from this machine are not GPU results !!!",
+                runtime.adapter.name
+            );
+        }
+    }
+
+    if args.info {
+        print_runtime_info(runtime.as_ref());
+    }
+
     let registry = model_registry(gpu_ctx.clone());
 
     if args.list {
@@ -97,7 +120,12 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let model_id = args.model.as_deref().context("a model id is required (try --list)")?;
+    let Some(model_id) = args.model.as_deref() else {
+        if args.info {
+            return Ok(());
+        }
+        bail!("a model id is required (try --list)");
+    };
     let entry = registry
         .iter()
         .find(|e| e.id == model_id)
@@ -111,6 +139,44 @@ fn main() -> Result<()> {
     }
 
     run_benchmark(entry, &params, &args, gpu_ctx.as_ref())
+}
+
+/// Benchmark provenance. Goes to stdout with the results, not the progress log.
+fn print_runtime_info(runtime: Option<&RuntimeInfo>) {
+    let collected;
+    let host = if let Some(runtime) = runtime {
+        &runtime.host
+    } else {
+        collected = HostInfo::collect();
+        &collected
+    };
+
+    let fmt_opt = |value: Option<usize>| value.map_or_else(|| "unknown".to_owned(), |n| n.to_string());
+
+    println!("runtime info:");
+    println!("  host:");
+    println!("    platform:        {} ({})", host.os, host.arch);
+    println!("    logical cpus:    {}", fmt_opt(host.logical_cpus));
+    println!("    worker threads:  {}", fmt_opt(host.worker_threads));
+
+    match runtime {
+        None => println!("  gpu:               none (GPU models disabled)"),
+        Some(runtime) => {
+            let adapter = &runtime.adapter;
+            println!("  gpu:");
+            println!("    adapter:         {}", adapter.name);
+            println!("    type:            {:?}", adapter.device_type);
+            println!("    backend:         {}", adapter.backend);
+            if !adapter.driver_info.is_empty() {
+                println!("    driver:          {}", adapter.driver_info);
+            }
+            println!(
+                "    max storage binding: {} bytes ({} u32 cells)",
+                runtime.max_storage_binding_bytes,
+                runtime.max_storage_binding_bytes / 4
+            );
+        }
+    }
 }
 
 /// Print every registered model's id and human name.
@@ -357,7 +423,9 @@ fn grid_dims_from_params(descriptors: &[ParamDescriptor], params: &[ParamValue])
 
 /// Acquire a headless GPU device — the same thing eframe does for henad-app, minus any window or
 /// surface. `henad-compute` deliberately never creates a device, so a non-GUI runner must.
-fn acquire_gpu() -> Result<GpuContext> {
+///
+/// The adapter is dropped here, so `RuntimeInfo` has to be captured.
+fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -374,9 +442,10 @@ fn acquire_gpu() -> Result<GpuContext> {
         trace: wgpu::Trace::Off,
     }))
     .context("failed to create GPU device")?;
+    let runtime = RuntimeInfo::collect(&adapter, &device);
     // No surface exists, so `target_format` is arbitrary: the models' display texture is an
     // offscreen Rgba8Unorm target, never a swapchain, and the benchmark never reads it back.
-    Ok(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm))
+    Ok((GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm), runtime))
 }
 
 /// Run once (warmup + steps) and write the final state to `path`.

@@ -1,0 +1,50 @@
+use crate::icons::material_design_icons::{MDI_PAUSE, MDI_PLAY, MDI_SKIP_NEXT};
+use crate::state::AppState;
+
+pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
+    let has_thread = app.sim_thread.is_some();
+
+    ui.horizontal(|ui| {
+        let icon = if app.sim_running { MDI_PAUSE } else { MDI_PLAY };
+
+        if ui
+            .add_enabled(has_thread, egui::Button::new(icon))
+            .on_hover_text("Play / Pause")
+            .clicked()
+        {
+            if let Some(thread) = &mut app.sim_thread {
+                if app.sim_running {
+                    thread.pause();
+                } else {
+                    thread.play();
+                }
+                app.sim_running = !app.sim_running;
+            }
+        }
+
+        if ui
+            .add_enabled(has_thread, egui::Button::new(MDI_SKIP_NEXT))
+            .on_hover_text("Step")
+            .clicked()
+        {
+            if let Some(thread) = &mut app.sim_thread {
+                thread.step_once();
+            }
+        }
+    });
+
+    ui.separator();
+
+    ui.horizontal(|ui| {
+        if ui.button("Load Model / Reset").clicked() {
+            app.reset_simulation();
+        }
+        if ui
+            .add_enabled(has_thread, egui::Button::new("Offload"))
+            .on_hover_text("Free simulation memory")
+            .clicked()
+        {
+            app.offload_simulation();
+        }
+    });
+}
