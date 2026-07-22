@@ -11,25 +11,23 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
             .add_enabled(has_thread, egui::Button::new(icon))
             .on_hover_text("Play / Pause")
             .clicked()
+            && let Some(thread) = &mut app.sim_thread
         {
-            if let Some(thread) = &mut app.sim_thread {
-                if app.sim_running {
-                    thread.pause();
-                } else {
-                    thread.play();
-                }
-                app.sim_running = !app.sim_running;
+            if app.sim_running {
+                thread.pause();
+            } else {
+                thread.play();
             }
+            app.sim_running = !app.sim_running;
         }
 
         if ui
             .add_enabled(has_thread, egui::Button::new(MDI_SKIP_NEXT))
             .on_hover_text("Step")
             .clicked()
+            && let Some(thread) = &mut app.sim_thread
         {
-            if let Some(thread) = &mut app.sim_thread {
-                thread.step_once();
-            }
+            thread.step_once();
         }
     });
 

@@ -13,7 +13,7 @@ fn main() -> eframe::Result {
         wgpu_options: egui_wgpu::WgpuConfiguration {
             wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
                 device_descriptor: std::sync::Arc::new(|adapter| {
-                    let base = egui_wgpu::WgpuSetupCreateNew::default();
+                    let base = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
                     let mut descriptor = (base.device_descriptor)(adapter);
                     // Enables the GPU per-step timing readout for GPU-backed models, when the
                     // adapter supports it; falls back to reporting "N/A" otherwise.
@@ -22,7 +22,7 @@ fn main() -> eframe::Result {
                     }
                     descriptor
                 }),
-                ..Default::default()
+                ..egui_wgpu::WgpuSetupCreateNew::without_display_handle()
             }),
             ..Default::default()
         },

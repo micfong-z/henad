@@ -192,7 +192,7 @@ mod tests {
     type State = GpuGridState<GpuSir>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("gpu_sir_test_device"),
@@ -391,10 +391,10 @@ mod runner_tests {
     fn wait_for(thread: &mut GpuSimThread, timeout: Duration, pred: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if let Some(snap) = thread.take_snapshot() {
-                if pred(&snap) {
-                    return Some(snap);
-                }
+            if let Some(snap) = thread.take_snapshot()
+                && pred(&snap)
+            {
+                return Some(snap);
             }
             std::thread::sleep(Duration::from_millis(2));
         }

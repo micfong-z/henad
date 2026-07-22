@@ -31,7 +31,7 @@ pub struct RuntimeInfo {
     pub host: HostInfo,
     pub adapter: wgpu::AdapterInfo,
     /// Ceiling on one storage binding — bounds how many cells a GPU model can hold.
-    pub max_storage_binding_bytes: u32,
+    pub max_storage_binding_bytes: u64,
     /// Whether the device granted `TIMESTAMP_QUERY`.
     pub timestamp_query: bool,
 }

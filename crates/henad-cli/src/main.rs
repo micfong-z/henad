@@ -99,14 +99,14 @@ fn main() -> Result<()> {
 
     // `force_fallback_adapter: false` does not stop a software rasteriser (lavapipe, WARP) being
     // returned when it is the only adapter present.
-    if let Some(runtime) = &runtime {
-        if classify_adapter(&runtime.adapter) == GpuVerdict::Absent {
-            eprintln!(
-                "!!! warning: adapter '{}' is a software rasteriser, not a GPU; \
+    if let Some(runtime) = &runtime
+        && classify_adapter(&runtime.adapter) == GpuVerdict::Absent
+    {
+        eprintln!(
+            "!!! warning: adapter '{}' is a software rasteriser, not a GPU; \
                  GPU-model results from this machine are not GPU results !!!",
-                runtime.adapter.name
-            );
-        }
+            runtime.adapter.name
+        );
     }
 
     if args.info {
@@ -426,7 +426,7 @@ fn grid_dims_from_params(descriptors: &[ParamDescriptor], params: &[ParamValue])
 ///
 /// The adapter is dropped here, so `RuntimeInfo` has to be captured.
 fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,

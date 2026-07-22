@@ -272,5 +272,8 @@ pub fn style() -> Style {
 }
 
 pub fn setup_custom_styles(ctx: &egui::Context) {
-    ctx.set_style(style());
+    // egui 0.35 keeps a style per theme. Henad has one look, so both slots get it.
+    let style = std::sync::Arc::new(style());
+    ctx.set_style_of(egui::Theme::Dark, style.clone());
+    ctx.set_style_of(egui::Theme::Light, style);
 }

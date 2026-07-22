@@ -58,7 +58,7 @@ impl HenadApp {
 }
 
 impl eframe::App for HenadApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // --- On WASM: drive simulation synchronously ---
         #[cfg(target_arch = "wasm32")]
         {
@@ -69,17 +69,23 @@ impl eframe::App for HenadApp {
         }
 
         // --- Poll snapshot from sim thread ---
-        if let Some(thread) = &mut self.state.sim_thread {
-            if let Some(snap) = thread.take_snapshot() {
-                if let Some(history) = &mut self.state.stats_history {
-                    let values: Vec<f64> = snap.stats.iter().map(|s| s.value.scalar()).collect();
-                    history.push(&values, snap.tick);
-                }
-                self.state.snapshot = Some(snap);
+        if let Some(thread) = &mut self.state.sim_thread
+            && let Some(snap) = thread.take_snapshot()
+        {
+            if let Some(history) = &mut self.state.stats_history {
+                let values: Vec<f64> = snap.stats.iter().map(|s| s.value.scalar()).collect();
+                history.push(&values, snap.tick);
             }
+            self.state.snapshot = Some(snap);
         }
 
-        // --- UI ---
+        // Request continuous repaint while running.
+        if self.state.sim_running {
+            ctx.request_repaint_after(std::time::Duration::ZERO);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         #[cfg(not(target_arch = "wasm32"))]
         let frame_start = std::time::Instant::now();
         #[cfg(not(target_arch = "wasm32"))]
@@ -87,26 +93,22 @@ impl eframe::App for HenadApp {
             self.state.timings.frame_render_ms = 0.0;
         }
 
-        ui::menu_bar::menu_bar_panel(ctx, &mut self.dock);
+        ui::menu_bar::menu_bar_panel(ui, &mut self.dock);
 
+        let dock_style = Style::from_egui(ui.style());
         DockArea::new(&mut self.dock)
-            .style(Style::from_egui(ctx.style().as_ref()))
+            .style(dock_style)
             .show_close_buttons(true)
             .show_leaf_close_all_buttons(true)
-            .show(ctx, &mut self.state);
+            .show_inside(ui, &mut self.state);
 
-        // The viewport tab times itself; the rest of the frame is UI.
+        // The viewport tab times itself. Whatever is left over is UI.
         #[cfg(not(target_arch = "wasm32"))]
         {
             let total_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
             let render_ms = self.state.timings.frame_render_ms;
             FrameTimings::update_ema(&mut self.state.timings.render_ms, render_ms);
             FrameTimings::update_ema(&mut self.state.timings.ui_ms, (total_ms - render_ms).max(0.0));
-        }
-
-        // Request continuous repaint while running.
-        if self.state.sim_running {
-            ctx.request_repaint_after(std::time::Duration::ZERO);
         }
     }
 }

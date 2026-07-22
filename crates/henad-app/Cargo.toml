@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Lets an external inspector (egui_mcp) drive the app. Off unless asked for, and inert at runtime
+# until EGUI_INSPECTION is set.
+inspection = ["eframe/inspection"]
+
 [dependencies]
 henad-core = { workspace = true }
 henad-compute = { workspace = true }

@@ -29,17 +29,13 @@ fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
                     .text("Target TPS"),
             )
             .changed();
-        if tps_changed {
-            if let Some(thread) = &mut app.sim_thread {
-                thread.send(SimCommand::SetTargetTps(app.target_tps));
-            }
+        if tps_changed && let Some(thread) = &mut app.sim_thread {
+            thread.send(SimCommand::SetTargetTps(app.target_tps));
         }
     }
 
-    if uncapped_changed {
-        if let Some(thread) = &mut app.sim_thread {
-            thread.send(SimCommand::SetUncapped(app.uncapped));
-        }
+    if uncapped_changed && let Some(thread) = &mut app.sim_thread {
+        thread.send(SimCommand::SetUncapped(app.uncapped));
     }
 
     let mut max = app.ticks_per_snapshot as i32;

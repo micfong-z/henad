@@ -155,7 +155,7 @@ mod tests {
     type State = GpuGridState<GpuGameOfLife>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("gpu_gol_test_device"),
@@ -265,7 +265,7 @@ mod tests {
     /// Like `headless_context`, but requests `TIMESTAMP_QUERY` explicitly (mirroring what the app
     /// does when the adapter supports it), since the default test device requests no features.
     fn headless_timing_context() -> Option<GpuContext> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
@@ -431,10 +431,10 @@ mod runner_tests {
     fn wait_for(thread: &mut GpuSimThread, timeout: Duration, pred: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if let Some(snap) = thread.take_snapshot() {
-                if pred(&snap) {
-                    return Some(snap);
-                }
+            if let Some(snap) = thread.take_snapshot()
+                && pred(&snap)
+            {
+                return Some(snap);
             }
             std::thread::sleep(Duration::from_millis(2));
         }

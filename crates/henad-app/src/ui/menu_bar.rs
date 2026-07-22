@@ -4,8 +4,8 @@ use crate::icons::material_design_icons::{MDI_RESTART, MDI_VIEW_DASHBOARD_OUTLIN
 use crate::ui::dock::{Tab, default_dock_state, toggle_tab};
 use egui_dock::DockState;
 
-pub fn menu_bar_panel(ctx: &egui::Context, dock: &mut DockState<Tab>) {
-    egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+pub fn menu_bar_panel(ui: &mut egui::Ui, dock: &mut DockState<Tab>) {
+    egui::Panel::top("menu_bar").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             view_menu(ui, dock);
         });

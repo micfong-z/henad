@@ -108,7 +108,7 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
             // The binding cap, not VRAM, is what bounds a GPU model's grid.
             ui.label("Max storage binding");
-            ui.label(fmt_bytes(u64::from(info.max_storage_binding_bytes)))
+            ui.label(fmt_bytes(info.max_storage_binding_bytes))
                 .on_hover_text(format!("{} u32 cells per binding", info.max_storage_binding_bytes / 4));
             ui.end_row();
 

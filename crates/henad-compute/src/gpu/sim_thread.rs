@@ -349,10 +349,8 @@ mod native {
             // caught up with it by now. Never stalls this thread.
             self.state.poll_stats_readback(&self.ctx.device, false);
 
-            if want_timing {
-                if let Some(tq) = self.timestamp_query.as_ref() {
-                    tq.resolve_after(&self.ctx.device, &self.ctx.queue, write_submission);
-                }
+            if want_timing && let Some(tq) = self.timestamp_query.as_ref() {
+                tq.resolve_after(&self.ctx.device, &self.ctx.queue, write_submission);
             }
 
             if self.adaptive {

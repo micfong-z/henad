@@ -16,10 +16,8 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
             }
         });
 
-    if changed_model {
-        if let Some(entry) = app.registry.get(app.selected_model) {
-            app.param_values = entry.param_descriptors.iter().map(|p| p.kind.default_value()).collect();
-        }
+    if changed_model && let Some(entry) = app.registry.get(app.selected_model) {
+        app.param_values = entry.param_descriptors.iter().map(|p| p.kind.default_value()).collect();
     }
 
     if let Some(entry) = app.registry.get(app.selected_model) {

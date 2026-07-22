@@ -6,21 +6,21 @@ resolver = "3"
 version = "0.1.0"
 authors = ["Micfong <micfong2@outlook.com>"]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.92"
 license = "MIT"
 
 [workspace.dependencies]
 henad-core = { path = "crates/henad-core" }
 henad-compute = { path = "crates/henad-compute" }
 henad-models = { path = "crates/henad-models" }
-egui = "0.33.0"
-eframe = { version = "0.33.0", default-features = false, features = [
+egui = "0.35.0"
+eframe = { version = "0.35.0", default-features = false, features = [
     "wgpu",
     "persistence",
     "wayland",
     "x11",
 ] }
-egui_dock = "0.18.0"
+egui_dock = "0.20.1"
 bytemuck = "1.25.0"
 pollster = "0.4.0"
 # `fragile-send-sync-non-atomic-wasm` makes wgpu's handles `Send + Sync` on wasm32. GPU models
@@ -29,7 +29,7 @@ pollster = "0.4.0"
 # `#[cfg]`-ed out of existence instead. The feature is a no-op on native, and on wasm the handles
 # are never actually sent across threads (there are none), which is exactly the condition under
 # which it is sound.
-wgpu = { version = "27.0.1", features = [
+wgpu = { version = "29.0", features = [
     "metal",
     "dx12",
     "vulkan",
@@ -38,7 +38,7 @@ wgpu = { version = "27.0.1", features = [
     "fragile-send-sync-non-atomic-wasm",
 ] }
 flume = "0.12"
-egui_plot = "0.34"
+egui_plot = "0.36"
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 numfmt = "1.2.0"
@@ -220,7 +220,6 @@ string_add = "warn"
 string_add_assign = "warn"
 string_lit_as_bytes = "warn"
 string_lit_chars_any = "warn"
-string_to_string = "warn"
 suspicious_command_arg_space = "warn"
 suspicious_xor_used_as_pow = "warn"
 todo = "warn"
@@ -230,7 +229,7 @@ trailing_empty_array = "warn"
 trait_duplication_in_bounds = "warn"
 transmute_ptr_to_ptr = "warn"
 tuple_array_conversions = "warn"
-unchecked_duration_subtraction = "warn"
+unchecked_time_subtraction = "warn"
 undocumented_unsafe_blocks = "warn"
 unimplemented = "warn"
 uninhabited_references = "warn"
