@@ -1,4 +1,4 @@
-use crate::icons::material_design_icons::{MDI_PAUSE, MDI_PLAY, MDI_SKIP_NEXT};
+use crate::icons::material_design_icons::{MDI_PAUSE, MDI_PLAY, MDI_RESTART, MDI_SKIP_NEXT, MDI_TRAY_REMOVE};
 use crate::state::AppState;
 
 pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
@@ -34,11 +34,15 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     ui.separator();
 
     ui.horizontal(|ui| {
-        if ui.button("Load Model / Reset").clicked() {
+        if ui
+            .button(format!("{MDI_RESTART} Build"))
+            .on_hover_text("Build the selected model from given parameters, replacing any running simulation")
+            .clicked()
+        {
             app.reset_simulation();
         }
         if ui
-            .add_enabled(has_thread, egui::Button::new("Offload"))
+            .add_enabled(has_thread, egui::Button::new(format!("{MDI_TRAY_REMOVE} Offload")))
             .on_hover_text("Free simulation memory")
             .clicked()
         {

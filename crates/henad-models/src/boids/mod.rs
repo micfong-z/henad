@@ -35,9 +35,9 @@ impl Model for BoidsModel {
 
     fn param_descriptors(&self) -> Vec<ParamDescriptor> {
         vec![
-            u32_param("num_boids", "Number of Boids", 50_000, 1_000, 1_000_000),
-            f32_param("world_width", "World Width", 1_000.0, 100.0, 10_000.0, Some(50.0)),
-            f32_param("world_height", "World Height", 1_000.0, 100.0, 10_000.0, Some(50.0)),
+            u32_param("num_boids", "Number of Boids", 50_000, 1_000, 1_000_000).on_reload(),
+            f32_param("world_width", "World Width", 1_000.0, 100.0, 10_000.0, Some(50.0)).on_reload(),
+            f32_param("world_height", "World Height", 1_000.0, 100.0, 10_000.0, Some(50.0)).on_reload(),
             f32_param("visual_range", "Visual Range", 50.0, 1.0, 200.0, Some(1.0)),
             f32_param("protected_range", "Protected Range", 8.0, 0.5, 50.0, Some(0.5)),
             f32_param("separation", "Separation", 0.05, 0.0, 2.0, Some(0.01)),

@@ -55,8 +55,12 @@ impl<M: GpuGridModel> Model for GpuGridModelDescriptor<M> {
         M::DESCRIPTION
     }
 
+    /// Everything is reload-only here, because `GpuGridState::set_param` rejects the lot.
     fn param_descriptors(&self) -> Vec<ParamDescriptor> {
         M::param_descriptors()
+            .into_iter()
+            .map(ParamDescriptor::on_reload)
+            .collect()
     }
 
     fn stat_descriptors(&self) -> Vec<StatDescriptor> {

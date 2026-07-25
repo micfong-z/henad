@@ -20,6 +20,9 @@ pub struct GridModelState<M: GridModel> {
     grid: Grid2D<u8>,
     tick: u64,
     params: Vec<ParamValue>,
+    /// Cached from the descriptors so `set_param` can reject reload-only indices without
+    /// rebuilding the list every time a slider moves.
+    live_params: Vec<bool>,
     rng_state: u64,
     _marker: PhantomData<M>,
 }
@@ -35,6 +38,10 @@ impl<M: GridModel> GridModelState<M> {
             grid,
             tick: 0,
             params: params.to_vec(),
+            live_params: grid_model_param_descriptors::<M>()
+                .iter()
+                .map(ParamDescriptor::is_live)
+                .collect(),
             rng_state,
             _marker: PhantomData,
         }
@@ -44,8 +51,8 @@ impl<M: GridModel> GridModelState<M> {
 /// Returns the full parameter descriptors list with grid width/height prepended.
 pub fn grid_model_param_descriptors<M: GridModel>() -> Vec<ParamDescriptor> {
     let mut descs = vec![
-        u32_param("grid_width", "Grid Width", 1024, 1, 10_000),
-        u32_param("grid_height", "Grid Height", 1024, 1, 10_000),
+        u32_param("grid_width", "Grid Width", 1024, 1, 10_000).on_reload(),
+        u32_param("grid_height", "Grid Height", 1024, 1, 10_000).on_reload(),
     ];
     descs.extend(M::param_descriptors());
     descs
@@ -77,7 +84,7 @@ impl<M: GridModel> SimState for GridModelState<M> {
     }
 
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
-        if index >= 2 && index < self.params.len() {
+        if self.live_params.get(index) == Some(&true) && index < self.params.len() {
             self.params[index] = value.clone();
             true
         } else {

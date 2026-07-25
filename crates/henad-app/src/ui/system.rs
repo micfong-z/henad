@@ -1,8 +1,8 @@
 //! Host and GPU information.
 
-use crate::icons::material_design_icons::{MDI_ALERT_OUTLINE, MDI_INFORMATION_OUTLINE};
+use crate::icons::material_design_icons::{MDI_ALERT, MDI_INFORMATION};
 use crate::state::AppState;
-use crate::ui::{fmt_bytes, kv_grid};
+use crate::ui::{banner, fmt_bytes, kv_grid};
 use henad_compute::runtime_info::{GpuVerdict, RuntimeInfo, classify_adapter};
 
 fn device_type_name(device_type: wgpu::DeviceType) -> &'static str {
@@ -15,38 +15,20 @@ fn device_type_name(device_type: wgpu::DeviceType) -> &'static str {
     }
 }
 
-fn info_banner(ui: &mut egui::Ui, color: egui::Color32, title: &str, detail: &str) {
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.colored_label(color, MDI_INFORMATION_OUTLINE);
-            ui.colored_label(color, title);
-        });
-        ui.label(detail);
-    });
-}
-
-fn warning_banner(ui: &mut egui::Ui, color: egui::Color32, title: &str, detail: &str) {
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.colored_label(color, MDI_ALERT_OUTLINE);
-            ui.colored_label(color, title);
-        });
-        ui.label(detail);
-    });
-}
-
 fn gpu_warnings(ui: &mut egui::Ui, info: &RuntimeInfo) {
     match classify_adapter(&info.adapter) {
         GpuVerdict::Capable => {}
-        GpuVerdict::Uncertain => info_banner(
+        GpuVerdict::Uncertain => banner(
             ui,
+            MDI_INFORMATION,
             ui.visuals().text_color(),
             "GPU performance uncertain",
             "No discrete GPU was directly detected. This may be a basic integrated GPU, a virtual GPU, or a SoC. \
             If you believe you have a discrete GPU, check that your OS is configured to use it for Henad.",
         ),
-        GpuVerdict::Absent => warning_banner(
+        GpuVerdict::Absent => banner(
             ui,
+            MDI_ALERT,
             ui.visuals().error_fg_color,
             "No GPU detected",
             "Rendering is going through a software rasteriser. GPU-backed models will likely be \

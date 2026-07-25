@@ -29,7 +29,7 @@ impl GridModel for GameOfLifeModel {
     type Params = ();
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01))]
+        vec![f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)).on_reload()]
     }
 
     fn from_params(_params: &[ParamValue]) {}

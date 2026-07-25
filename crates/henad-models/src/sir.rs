@@ -41,7 +41,8 @@ impl GridModel for SirGridModel {
                 0.0,
                 1.0,
                 Some(0.001),
-            ),
+            )
+            .on_reload(),
         ]
     }
 

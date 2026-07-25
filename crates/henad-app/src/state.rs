@@ -42,6 +42,8 @@ pub struct AppState {
     pub registry: Vec<ModelEntry>,
     pub selected_model: usize,
     pub param_values: Vec<ParamValue>,
+    pub loaded_model: Option<usize>,
+    pub pending_reload: Vec<bool>,
     pub sim_thread: Option<SimRunner>,
     pub snapshot: Option<Snapshot>,
     pub sim_running: bool,
@@ -82,9 +84,11 @@ impl AppState {
             .unwrap_or_default();
 
         Self {
+            pending_reload: vec![false; param_values.len()],
             registry,
             selected_model: 0,
             param_values,
+            loaded_model: None,
             sim_thread: None,
             snapshot: None,
             sim_running: false,
@@ -123,6 +127,7 @@ impl AppState {
         self.pixel_buf.clear();
         self.density_max = 4.0;
         self.ticks_per_snapshot = 1;
+        self.loaded_model = None;
 
         let Some(entry) = self.registry.get(self.selected_model) else {
             return;
@@ -162,6 +167,8 @@ impl AppState {
 
         self.stats_history = Some(stats_history);
         self.sim_running = false;
+        self.loaded_model = Some(self.selected_model);
+        self.pending_reload = vec![false; self.param_values.len()];
     }
 
     pub fn offload_simulation(&mut self) {
@@ -172,6 +179,19 @@ impl AppState {
         self.pixel_buf = Vec::new();
         self.last_rendered_tick = None;
         self.stats_history = None;
+        self.loaded_model = None;
+    }
+
+    pub fn load_default_params(&mut self) {
+        let Some(entry) = self.registry.get(self.selected_model) else {
+            return;
+        };
+        self.param_values = entry.param_descriptors.iter().map(|p| p.kind.default_value()).collect();
+        self.pending_reload = vec![false; self.param_values.len()];
+    }
+
+    pub fn selection_is_loaded(&self) -> bool {
+        self.loaded_model == Some(self.selected_model)
     }
 
     pub fn is_gpu(&self) -> bool {

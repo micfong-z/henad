@@ -22,6 +22,15 @@ pub fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
+pub fn banner(ui: &mut egui::Ui, icon: &str, color: egui::Color32, title: &str, detail: &str) {
+    ui.horizontal_wrapped(|ui| {
+        ui.colored_label(color, icon);
+        ui.colored_label(color, title);
+    });
+    ui.label(detail);
+    ui.separator();
+}
+
 const KV_GRID_SPACING: [f32; 2] = [16.0, 4.0];
 
 /// Two-column key/value grid, full panel width.

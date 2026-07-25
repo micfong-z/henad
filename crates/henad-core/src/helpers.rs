@@ -1,4 +1,4 @@
-use crate::params::{ParamDescriptor, ParamKind, ParamValue};
+use crate::params::{ParamApply, ParamDescriptor, ParamKind, ParamValue};
 use crate::view::{StatEntry, StatValue};
 
 /// Fast xorshift64 PRNG. The state must never be 0.
@@ -29,6 +29,7 @@ pub fn f32_param(
             default,
             step,
         },
+        apply: ParamApply::Live,
     }
 }
 
@@ -37,6 +38,7 @@ pub fn u32_param(id: &'static str, label: &'static str, default: u32, min: u32, 
         id,
         label,
         kind: ParamKind::U32 { min, max, default },
+        apply: ParamApply::Live,
     }
 }
 

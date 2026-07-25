@@ -4,6 +4,32 @@ pub struct ParamDescriptor {
     pub id: &'static str,
     pub label: &'static str,
     pub kind: ParamKind,
+    pub apply: ParamApply,
+}
+
+/// When an edit to a parameter reaches the simulation.
+///
+/// This is the single source of truth. A state's `set_param` must reject what is declared
+/// `OnReload` here, and the UI reads the same flag to say so before anything is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParamApply {
+    /// The running state picks the new value up on its next tick.
+    #[default]
+    Live,
+    /// Only read while the state is built, so it needs a rebuild.
+    OnReload,
+}
+
+impl ParamDescriptor {
+    /// Builder form, since most parameters are live and only a few are not.
+    pub fn on_reload(mut self) -> Self {
+        self.apply = ParamApply::OnReload;
+        self
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.apply == ParamApply::Live
+    }
 }
 
 /// The kind and constraints of a parameter.

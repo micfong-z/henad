@@ -114,6 +114,33 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
 mod tests {
     use super::*;
 
+    /// The UI labels parameters from the descriptor and the state decides what it accepts, so the
+    /// two disagreeing means the panel lies about what an edit does.
+    #[test]
+    fn declared_apply_mode_matches_what_the_state_accepts() {
+        for entry in model_registry(None) {
+            let values: Vec<ParamValue> = entry
+                .param_descriptors
+                .iter()
+                .map(|desc| desc.kind.default_value())
+                .collect();
+            let ModelState::Cpu(mut state) = (entry.create)(&values) else {
+                continue;
+            };
+
+            for (i, desc) in entry.param_descriptors.iter().enumerate() {
+                assert_eq!(
+                    state.set_param(i, &values[i]),
+                    desc.is_live(),
+                    "{}: parameter '{}' is declared {:?} but set_param disagrees",
+                    entry.id,
+                    desc.id,
+                    desc.apply
+                );
+            }
+        }
+    }
+
     #[test]
     fn registry_without_gpu_context_offers_no_gpu_models() {
         let entries = model_registry(None);
