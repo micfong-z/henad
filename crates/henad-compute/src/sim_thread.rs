@@ -3,6 +3,40 @@ use henad_core::params::ParamValue;
 
 use crate::snapshot::{GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
 
+/// Wall-clock seconds between capped batches.
+fn capped_batch_interval_secs(target_tps: f64, ticks_per_snapshot: u32) -> f64 {
+    let tps = if target_tps.is_finite() && target_tps > 0.0 {
+        target_tps
+    } else {
+        1.0
+    };
+    f64::from(ticks_per_snapshot.max(1)) / tps
+}
+
+/// Whole batches owed by `accumulated` seconds, and the debt to carry forward.
+///
+/// Past `max_batches` the carried debt is clamped to one interval and the rest dropped, so a stall
+/// can't bank debt that gets repaid as a burst. Same tolerance as the native resync.
+#[cfg(any(target_arch = "wasm32", test))]
+fn batches_owed(accumulated: f64, batch_interval: f64, max_batches: u32) -> (u32, f64) {
+    let accumulated = if accumulated.is_finite() {
+        accumulated.max(0.0)
+    } else {
+        0.0
+    };
+    if accumulated < batch_interval {
+        return (0, accumulated);
+    }
+    let owed_exact = (accumulated / batch_interval).floor();
+    let owed = owed_exact.min(f64::from(max_batches)) as u32;
+    let carry = accumulated - f64::from(owed) * batch_interval;
+    if owed_exact > f64::from(max_batches) {
+        (owed, carry.min(batch_interval))
+    } else {
+        (owed, carry)
+    }
+}
+
 /// Commands sent from the UI thread to the simulation thread.
 pub enum SimCommand {
     Play,
@@ -102,8 +136,14 @@ mod native {
                         }
                     }
                     if self.running {
-                        let step_interval = std::time::Duration::from_secs_f64(1.0 / self.target_tps);
-                        self.next_step_at = Instant::now() + step_interval;
+                        let interval = self.batch_interval();
+                        // Advance from the previous deadline, so the batch's own
+                        // execution time doesn't stretch every period. Resync if sim is running behind.
+                        self.next_step_at += interval;
+                        let now = Instant::now();
+                        if self.next_step_at + interval < now {
+                            self.next_step_at = now + interval;
+                        }
                         for _ in 0..self.ticks_per_snapshot {
                             self.timed_step();
                         }
@@ -135,12 +175,14 @@ mod native {
                 }
                 SimCommand::SetTargetTps(tps) => {
                     self.target_tps = tps;
+                    self.reclamp_deadline();
                 }
                 SimCommand::SetUncapped(v) => {
                     self.uncapped = v;
                 }
                 SimCommand::SetTicksPerSnapshot(v) => {
                     self.ticks_per_snapshot = v.max(1);
+                    self.reclamp_deadline();
                 }
                 SimCommand::SetParam { index, value } => {
                     if !self.state.set_param(index, &value) {
@@ -150,6 +192,22 @@ mod native {
                 SimCommand::Shutdown => return true,
             }
             false
+        }
+
+        fn batch_interval(&self) -> std::time::Duration {
+            std::time::Duration::from_secs_f64(super::capped_batch_interval_secs(
+                self.target_tps,
+                self.ticks_per_snapshot,
+            ))
+        }
+
+        /// Only ever moves the deadline earlier. Re-anchoring it to now would let a slider drag
+        /// fire a batch per event and outrun the cap.
+        fn reclamp_deadline(&mut self) {
+            let limit = Instant::now() + self.batch_interval();
+            if self.next_step_at > limit {
+                self.next_step_at = limit;
+            }
         }
 
         /// Step + measure engine time (EMA-smoothed).
@@ -268,6 +326,10 @@ mod wasm {
     use super::{SimCommand, Snapshot, build_snapshot};
     use henad_core::model::SimState;
 
+    /// Ceiling on catch-up batches per `update()`, so a backgrounded tab handing back a
+    /// multi-second `dt` can't dump all of it into one frame. 1000 TPS at 60 fps owes ~17.
+    const MAX_BATCHES_PER_FRAME: u32 = 64;
+
     pub struct SimThread {
         state: Box<dyn SimState>,
         running: bool,
@@ -349,18 +411,17 @@ mod wasm {
                     self.state.step();
                 }
             } else {
+                // Same batch cadence as the native loop, so both backends run at `target_tps`.
+                let batch_interval = super::capped_batch_interval_secs(self.target_tps, self.ticks_per_snapshot);
                 self.accumulated_time += dt;
-                let step_interval = 1.0 / self.target_tps;
-                let mut steps = 0u32;
-                while self.accumulated_time >= step_interval {
-                    self.state.step();
-                    self.accumulated_time -= step_interval;
-                    steps += 1;
-                    if steps >= self.ticks_per_snapshot {
-                        self.accumulated_time = 0.0;
-                        break;
+                let (batches, carry) =
+                    super::batches_owed(self.accumulated_time, batch_interval, MAX_BATCHES_PER_FRAME);
+                for _ in 0..batches {
+                    for _ in 0..self.ticks_per_snapshot {
+                        self.state.step();
                     }
                 }
+                self.accumulated_time = carry;
             }
 
             self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps, 0.0));
@@ -403,3 +464,129 @@ fn build_snapshot(state: &dyn SimState, actual_tps: f64, engine_ms: f64) -> Snap
 pub use native::SimThread;
 #[cfg(target_arch = "wasm32")]
 pub use wasm::SimThread;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod pacing_timing_tests {
+    use super::{SimCommand, SimThread};
+    use henad_core::model::SimState;
+    use henad_core::params::ParamValue;
+    use henad_core::view::StatEntry;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct Counter(Arc<AtomicU64>);
+
+    impl SimState for Counter {
+        fn step(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+        fn tick(&self) -> u64 {
+            self.0.load(Ordering::Relaxed)
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    #[test]
+    fn capped_batching_holds_the_target_rate() {
+        let ticks = Arc::new(AtomicU64::new(0));
+        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 50.0);
+        thread.send(SimCommand::SetTicksPerSnapshot(10));
+        thread.play();
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        thread.pause();
+
+        let n = ticks.load(Ordering::Relaxed);
+        assert!((20..=150).contains(&n), "ran {n} ticks in 1s at 50 TPS");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{batches_owed, capped_batch_interval_secs};
+
+    /// The regression. Batching used to multiply the tick rate by the batch size.
+    #[test]
+    fn batching_does_not_change_effective_tick_rate() {
+        for &tps in &[1.0, 30.0, 250.0, 1000.0] {
+            for &batch in &[1, 2, 10, 137, 1000] {
+                let interval = capped_batch_interval_secs(tps, batch);
+                let effective = f64::from(batch) / interval;
+                assert!(
+                    (effective - tps).abs() < 1e-9,
+                    "tps {tps}, batch {batch}: effective {effective}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn interval_is_batch_size_over_tps() {
+        assert!((capped_batch_interval_secs(30.0, 10) - 1.0 / 3.0).abs() < 1e-12);
+        assert!((capped_batch_interval_secs(60.0, 1) - 1.0 / 60.0).abs() < 1e-12);
+    }
+
+    /// Guards against a `Duration::from_secs_f64` panic on a degenerate target rate.
+    #[test]
+    fn non_positive_tps_yields_a_finite_interval() {
+        for &tps in &[0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let secs = capped_batch_interval_secs(tps, 4);
+            assert!(secs.is_finite() && secs > 0.0, "tps {tps} gave {secs}");
+            assert!(std::time::Duration::from_secs_f64(secs) > std::time::Duration::ZERO);
+        }
+    }
+
+    #[test]
+    fn backlog_below_one_interval_runs_nothing_and_is_carried() {
+        let (n, carry) = batches_owed(0.007, 0.01, 64);
+        assert_eq!(n, 0);
+        assert!((carry - 0.007).abs() < 1e-12);
+    }
+
+    #[test]
+    fn backlog_runs_whole_batches_and_carries_the_remainder() {
+        let (n, carry) = batches_owed(0.035, 0.01, 64);
+        assert_eq!(n, 3);
+        assert!((carry - 0.005).abs() < 1e-9);
+    }
+
+    /// A backgrounded tab resumes rather than replaying its whole absence.
+    #[test]
+    fn backlog_past_the_ceiling_is_dropped_to_one_interval() {
+        let (n, carry) = batches_owed(30.0, 0.01, 64);
+        assert_eq!(n, 64);
+        assert!((carry - 0.01).abs() < 1e-12, "carry {carry}");
+    }
+
+    /// Hitting the ceiling exactly is not behind, so nothing is discarded.
+    #[test]
+    fn backlog_exactly_at_the_ceiling_keeps_its_remainder() {
+        let (n, carry) = batches_owed(0.645, 0.01, 64);
+        assert_eq!(n, 64);
+        assert!((carry - 0.005).abs() < 1e-9, "carry {carry}");
+    }
+
+    #[test]
+    fn backlog_ignores_degenerate_accumulated_time() {
+        for &acc in &[f64::NAN, f64::INFINITY, -1.0] {
+            let (n, carry) = batches_owed(acc, 0.01, 64);
+            assert_eq!(n, 0, "acc {acc}");
+            assert!(carry.is_finite() && carry >= 0.0, "acc {acc} -> {carry}");
+        }
+    }
+
+    #[test]
+    fn zero_ticks_per_snapshot_is_treated_as_one() {
+        assert!((capped_batch_interval_secs(50.0, 0) - capped_batch_interval_secs(50.0, 1)).abs() < 1e-12);
+    }
+}
