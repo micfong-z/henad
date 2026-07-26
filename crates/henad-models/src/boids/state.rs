@@ -25,7 +25,6 @@ pub struct BoidsState {
     pub(crate) world_w: f32,
     pub(crate) world_h: f32,
     pub(crate) num_boids: u32,
-    pub(crate) num_boids_inv: f32,
     pub(crate) visual_range: f32,
     pub(crate) protected_range: f32,
     pub(crate) separation_factor: f32,
@@ -34,9 +33,6 @@ pub struct BoidsState {
     pub(crate) max_speed: f32,
     pub(crate) min_speed: f32,
     pub(crate) tick: u64,
-    pub(crate) avg_speed: f32,
-    pub(crate) avg_vel_x: f32,
-    pub(crate) avg_vel_y: f32,
     pub(crate) rng_state: u64,
 }
 
@@ -55,7 +51,6 @@ impl BoidsState {
 
         let n = num_boids as usize;
         let hash = SpatialHash::new(visual_range, world_w, world_h);
-        let num_boids_inv = 1.0 / num_boids as f32;
 
         let mut state = Self {
             pos_x: vec![0.0; n],
@@ -78,11 +73,7 @@ impl BoidsState {
             max_speed,
             min_speed,
             tick: 0,
-            avg_speed: 0.0,
-            avg_vel_x: 0.0,
-            avg_vel_y: 0.0,
             rng_state: 0xDEAD_BEEF_CAFE_1234,
-            num_boids_inv,
         };
 
         state.initialize();
@@ -121,6 +112,76 @@ impl BoidsState {
     }
 }
 
+/// Boids per rayon chunk in the stats reduction. See `crate::sir::STATS_CHUNK`.
+const STATS_CHUNK: usize = 8192;
+
+#[derive(Clone, Copy)]
+struct VelSums {
+    speed: f64,
+    vx: f64,
+    vy: f64,
+}
+
+impl VelSums {
+    const ZERO: Self = Self {
+        speed: 0.0,
+        vx: 0.0,
+        vy: 0.0,
+    };
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            speed: self.speed + other.speed,
+            vx: self.vx + other.vx,
+            vy: self.vy + other.vy,
+        }
+    }
+}
+
+fn chunk_sums(vel_x: &[f32], vel_y: &[f32]) -> VelSums {
+    let mut speed_sum = 0.0;
+    let mut vx_sum = 0.0;
+    let mut vy_sum = 0.0;
+    for (&vx, &vy) in vel_x.iter().zip(vel_y.iter()) {
+        #[expect(
+            clippy::imprecise_flops,
+            reason = "this won't overflow and we want to avoid extra casts"
+        )]
+        let speed = (vx * vx + vy * vy).sqrt();
+        speed_sum += speed;
+        vx_sum += f64::from(vx);
+        vy_sum += f64::from(vy);
+    }
+    VelSums {
+        speed: speed_sum as f64,
+        vx: vx_sum,
+        vy: vy_sum,
+    }
+}
+
+/// Totals over every boid, summed chunk-by-chunk in index order so the result does not depend on
+/// how rayon schedules the work, and is identical on the wasm path.
+fn velocity_sums(vel_x: &[f32], vel_y: &[f32]) -> VelSums {
+    #[cfg(not(target_arch = "wasm32"))]
+    let partials: Vec<VelSums> = {
+        use rayon::prelude::*;
+        vel_x
+            .par_chunks(STATS_CHUNK)
+            .zip(vel_y.par_chunks(STATS_CHUNK))
+            .map(|(xs, ys)| chunk_sums(xs, ys))
+            .collect()
+    };
+
+    #[cfg(target_arch = "wasm32")]
+    let partials: Vec<VelSums> = vel_x
+        .chunks(STATS_CHUNK)
+        .zip(vel_y.chunks(STATS_CHUNK))
+        .map(|(xs, ys)| chunk_sums(xs, ys))
+        .collect();
+
+    partials.into_iter().fold(VelSums::ZERO, VelSums::add)
+}
+
 impl SimState for BoidsState {
     fn step(&mut self) {
         super::step::step(self);
@@ -141,17 +202,19 @@ impl SimState for BoidsState {
     }
 
     fn stats(&self) -> Vec<StatEntry> {
+        let sums = velocity_sums(&self.vel_x, &self.vel_y);
+        let inv = 1.0 / f64::from(self.num_boids.max(1));
         vec![
             StatEntry {
                 label: "Average Speed",
-                value: StatValue::Scalar(self.avg_speed as f64),
+                value: StatValue::Scalar(sums.speed * inv),
                 color: PALETTE[1],
             },
             StatEntry {
                 label: "Average Velocity",
                 value: StatValue::Vector2D {
-                    x: self.avg_vel_x as f64,
-                    y: self.avg_vel_y as f64,
+                    x: sums.vx * inv,
+                    y: sums.vy * inv,
                 },
                 color: PALETTE[2],
             },
@@ -200,5 +263,77 @@ impl SimState for BoidsState {
 
     fn heap_bytes(&self) -> usize {
         8 * 4 * self.pos_x.capacity() + self.hash.heap_bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BoidsState, STATS_CHUNK};
+    use henad_core::model::SimState as _;
+    use henad_core::params::ParamValue;
+    use henad_core::view::StatValue;
+
+    /// The plain sequential `hypot` form the chunked reduction replaced.
+    fn reference(vel_x: &[f32], vel_y: &[f32]) -> (f64, f64, f64) {
+        let (mut speed, mut vx, mut vy) = (0.0, 0.0, 0.0);
+        for (&x, &y) in vel_x.iter().zip(vel_y.iter()) {
+            speed += f64::from(x.hypot(y));
+            vx += f64::from(x);
+            vy += f64::from(y);
+        }
+        (speed, vx, vy)
+    }
+
+    /// Deliberately not a multiple of `STATS_CHUNK`, so the ragged final chunk is covered.
+    fn state_spanning_several_chunks() -> BoidsState {
+        let n = STATS_CHUNK as u32 * 2 + 37;
+        let params = vec![ParamValue::U32(n), ParamValue::F32(4_000.0), ParamValue::F32(4_000.0)];
+        let mut state = BoidsState::from_params(&params);
+        for _ in 0..5 {
+            state.step();
+        }
+        state
+    }
+
+    #[test]
+    fn stats_match_the_sequential_reference() {
+        let state = state_spanning_several_chunks();
+        let (speed, vx, vy) = reference(&state.vel_x, &state.vel_y);
+        let inv = 1.0 / f64::from(state.num_boids);
+        let stats = state.stats();
+
+        let StatValue::Scalar(avg_speed) = stats[0].value else {
+            panic!("average speed is a scalar");
+        };
+        let StatValue::Vector2D { x, y } = stats[1].value else {
+            panic!("average velocity is a vector");
+        };
+
+        // f32 speed accumulation within a chunk is the loosest term here.
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-4 * b.abs().max(1.0);
+        assert!(close(avg_speed, speed * inv), "speed {avg_speed} vs {}", speed * inv);
+        assert!(close(x, vx * inv), "vx {x} vs {}", vx * inv);
+        assert!(close(y, vy * inv), "vy {y} vs {}", vy * inv);
+    }
+
+    /// Boids move, so a stale cached average would show up as stats that never change.
+    #[test]
+    fn stats_track_the_current_velocities() {
+        let mut state = state_spanning_several_chunks();
+        let before = state.stats();
+        for _ in 0..20 {
+            state.step();
+        }
+        let after = state.stats();
+
+        let (StatValue::Vector2D { x: bx, .. }, StatValue::Vector2D { x: ax, .. }) =
+            (&before[1].value, &after[1].value)
+        else {
+            panic!("average velocity is a vector");
+        };
+        assert!(
+            (ax - bx).abs() > f64::EPSILON,
+            "average velocity never moved: {bx} then {ax}"
+        );
     }
 }

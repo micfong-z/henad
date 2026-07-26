@@ -11,15 +11,6 @@ pub(crate) fn step(state: &mut BoidsState) {
     step_sequential(state);
 
     state.swap_buffers();
-    state.avg_speed = state
-        .vel_x
-        .iter()
-        .zip(state.vel_y.iter())
-        .map(|(vx, vy)| vx.hypot(*vy))
-        .sum::<f32>()
-        * state.num_boids_inv;
-    state.avg_vel_x = state.vel_x.iter().sum::<f32>() * state.num_boids_inv;
-    state.avg_vel_y = state.vel_y.iter().sum::<f32>() * state.num_boids_inv;
     state.tick += 1;
 }
 
