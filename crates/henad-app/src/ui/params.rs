@@ -28,8 +28,9 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let sim_matches = app.selection_is_loaded();
     let mut param_changed = Vec::new();
 
-    let reload_hint =
-        format!("This parameter is only read when the model is built. Press {MDI_RESTART}\u{a0}Build to apply after change.");
+    let reload_hint = format!(
+        "This parameter is only read when the model is built. Press {MDI_RESTART}\u{a0}Build to apply after change."
+    );
     let pending_hint =
         format!("This parameter has been changed but not applied. Press {MDI_RESTART}\u{a0}Build to apply.");
 
