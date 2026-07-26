@@ -48,7 +48,6 @@ pub struct AppState {
     pub snapshot: Option<Snapshot>,
     pub sim_running: bool,
     pub grid_texture: Option<TextureHandle>,
-    pub pixel_buf: Vec<u8>,
     pub density_max: f32,
     pub last_rendered_tick: Option<u64>,
     pub rendering_enabled: bool,
@@ -93,7 +92,6 @@ impl AppState {
             snapshot: None,
             sim_running: false,
             grid_texture: None,
-            pixel_buf: Vec::new(),
             density_max: 4.0,
             last_rendered_tick: None,
             rendering_enabled: true,
@@ -124,7 +122,6 @@ impl AppState {
         self.snapshot = None;
         self.last_rendered_tick = None;
         self.grid_texture = None;
-        self.pixel_buf.clear();
         self.density_max = 4.0;
         self.ticks_per_snapshot = 1;
         self.loaded_model = None;
@@ -176,7 +173,6 @@ impl AppState {
         self.snapshot = None;
         self.sim_running = false;
         self.grid_texture = None;
-        self.pixel_buf = Vec::new();
         self.last_rendered_tick = None;
         self.stats_history = None;
         self.loaded_model = None;

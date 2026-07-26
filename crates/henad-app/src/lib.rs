@@ -76,7 +76,10 @@ impl eframe::App for HenadApp {
                 let values: Vec<f64> = snap.stats.iter().map(|s| s.value.scalar()).collect();
                 history.push(&values, snap.tick);
             }
-            self.state.snapshot = Some(snap);
+            // Handing the outgoing one back lets the sim thread refill it instead of allocating.
+            if let Some(previous) = self.state.snapshot.replace(snap) {
+                thread.recycle(previous);
+            }
         }
 
         // Request continuous repaint while running.

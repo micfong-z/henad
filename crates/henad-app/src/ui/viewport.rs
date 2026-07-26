@@ -105,32 +105,24 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
         if let Some(snapshot) = snap {
             match &snapshot.view {
                 SnapshotView::Grid(grid) => {
-                    let w = grid.width as usize;
-                    let h = grid.height as usize;
-                    let total = w * h;
-
-                    let needed = total * 4;
-                    if app.pixel_buf.len() != needed {
-                        app.pixel_buf.resize(needed, 255);
-                    }
+                    let size = [grid.width as usize, grid.height as usize];
 
                     #[cfg(not(target_arch = "wasm32"))]
-                    {
+                    let pixels: Vec<egui::Color32> = {
                         use rayon::prelude::*;
-                        app.pixel_buf
-                            .par_chunks_mut(4)
-                            .zip(grid.cells.par_iter())
-                            .for_each(|(px, &cell)| {
-                                let rgba = grid.palette[cell as usize];
-                                px.copy_from_slice(&rgba);
-                            });
-                    }
+                        grid.cells
+                            .par_iter()
+                            .map(|&cell| palette_color(grid.palette, cell))
+                            .collect()
+                    };
                     #[cfg(target_arch = "wasm32")]
-                    for (chunk, &cell) in app.pixel_buf.chunks_exact_mut(4).zip(grid.cells.iter()) {
-                        chunk.copy_from_slice(&grid.palette[cell as usize]);
-                    }
+                    let pixels: Vec<egui::Color32> = grid
+                        .cells
+                        .iter()
+                        .map(|&cell| palette_color(grid.palette, cell))
+                        .collect();
 
-                    let image = ColorImage::from_rgba_unmultiplied([w, h], &app.pixel_buf);
+                    let image = ColorImage::new(size, pixels);
 
                     match &mut app.grid_texture {
                         Some(tex) => {
@@ -170,9 +162,15 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
 const DENSITY_W: usize = 512;
 const DENSITY_H: usize = 512;
 
+#[inline]
+fn palette_color(palette: &[[u8; 4]], cell: u8) -> egui::Color32 {
+    let [r, g, b, a] = palette[cell as usize];
+    egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
 /// 5-stop piecewise linear approximation of the Inferno colormap.
 #[inline]
-fn inferno(t: f32) -> [u8; 4] {
+fn inferno(t: f32) -> egui::Color32 {
     const STOPS: [[u8; 3]; 5] = [[0, 0, 4], [64, 4, 104], [183, 55, 121], [251, 136, 97], [252, 255, 164]];
 
     let t = t.clamp(0.0, 1.0);
@@ -187,7 +185,7 @@ fn inferno(t: f32) -> [u8; 4] {
     let g = a[1] as f32 + (b[1] as f32 - a[1] as f32) * frac;
     let bl = a[2] as f32 + (b[2] as f32 - a[2] as f32) * frac;
 
-    [r as u8, g as u8, bl as u8, 255]
+    egui::Color32::from_rgb(r as u8, g as u8, bl as u8)
 }
 
 fn render_density_heatmap(
@@ -244,17 +242,8 @@ fn render_density_heatmap(
     };
 
     let max_density = app.density_max;
-
-    app.pixel_buf.resize(num_pixels * 4, 255);
-    for (chunk, &d) in app.pixel_buf.chunks_exact_mut(4).zip(density.iter()) {
-        let color = inferno(d as f32 / max_density);
-        chunk[0] = color[0];
-        chunk[1] = color[1];
-        chunk[2] = color[2];
-        chunk[3] = color[3];
-    }
-
-    let image = egui::ColorImage::from_rgba_unmultiplied([DENSITY_W, DENSITY_H], &app.pixel_buf);
+    let pixels: Vec<egui::Color32> = density.iter().map(|&d| inferno(d as f32 / max_density)).collect();
+    let image = ColorImage::new([DENSITY_W, DENSITY_H], pixels);
 
     match &mut app.grid_texture {
         Some(tex) => {

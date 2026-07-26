@@ -54,11 +54,7 @@ pub fn performance_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 padded_row(ui, "Tick", &format!("{:09}", snap.tick));
                 padded_row(ui, "TPS", &format!("{:09.0}", snap.actual_tps));
                 row(ui, "Population", format!("{}", snap.population));
-                row(
-                    ui,
-                    "Sim memory",
-                    fmt_bytes((snap.heap_bytes + app.pixel_buf.len()) as u64),
-                );
+                row(ui, "Sim memory", fmt_bytes(snap.heap_bytes as u64));
             }
             None => row(ui, "Simulation", "Not loaded"),
         }

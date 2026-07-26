@@ -62,16 +62,24 @@ mod native {
     use super::{SimCommand, Snapshot, build_snapshot};
     use henad_core::model::SimState;
 
+    /// The handoff point between the two threads. `fresh` is the newest publish waiting to be
+    /// picked up, `spare` is a consumed one the UI handed back for its buffers.
+    #[derive(Default)]
+    struct SnapshotSlot {
+        fresh: Option<Snapshot>,
+        spare: Option<Snapshot>,
+    }
+
     pub struct SimThread {
         cmd_tx: mpsc::Sender<SimCommand>,
-        snapshot: Arc<Mutex<Option<Snapshot>>>,
+        snapshot: Arc<Mutex<SnapshotSlot>>,
         handle: Option<JoinHandle<()>>,
     }
 
     struct SimLoop {
         state: Box<dyn SimState>,
         cmd_rx: mpsc::Receiver<SimCommand>,
-        snapshot: Arc<Mutex<Option<Snapshot>>>,
+        snapshot: Arc<Mutex<SnapshotSlot>>,
         running: bool,
         target_tps: f64,
         uncapped: bool,
@@ -243,10 +251,14 @@ mod native {
             self.publish_snapshot();
         }
 
+        /// Building outside the lock matters: the UI thread would otherwise block on
+        /// `take_snapshot` for the whole grid copy.
         fn publish_snapshot(&self) {
-            let snap = build_snapshot(&*self.state, self.actual_tps, self.engine_ms);
+            let spare = self.snapshot.lock().ok().and_then(|mut slot| slot.spare.take());
+            let snap = build_snapshot(spare, &*self.state, self.actual_tps, self.engine_ms);
             if let Ok(mut slot) = self.snapshot.lock() {
-                *slot = Some(snap);
+                // A `fresh` the UI never picked up is stale, so it becomes the next spare.
+                slot.spare = slot.fresh.replace(snap);
             }
         }
     }
@@ -256,8 +268,10 @@ mod native {
         pub fn new(state: Box<dyn SimState>, target_tps: f64) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel();
             // Publish initial snapshot so UI has data before play is pressed.
-            let initial = build_snapshot(&*state, 0.0, 0.0);
-            let snapshot: Arc<Mutex<Option<Snapshot>>> = Arc::new(Mutex::new(Some(initial)));
+            let snapshot = Arc::new(Mutex::new(SnapshotSlot {
+                fresh: Some(build_snapshot(None, &*state, 0.0, 0.0)),
+                spare: None,
+            }));
             let snapshot_clone = Arc::clone(&snapshot);
 
             let sim_loop = SimLoop {
@@ -292,7 +306,14 @@ mod native {
 
         /// Take the latest snapshot (returns None if no new snapshot since last take).
         pub fn take_snapshot(&mut self) -> Option<Snapshot> {
-            self.snapshot.lock().ok()?.take()
+            self.snapshot.lock().ok()?.fresh.take()
+        }
+
+        /// Purely an optimisation, dropping it instead just means the next publish allocates.
+        pub fn recycle(&mut self, snap: Snapshot) {
+            if let Ok(mut slot) = self.snapshot.lock() {
+                slot.spare = Some(snap);
+            }
         }
 
         pub fn play(&mut self) {
@@ -339,12 +360,14 @@ mod wasm {
         accumulated_time: f64,
         actual_tps: f64,
         snapshot: Option<Snapshot>,
+        /// Handed back by the UI so a republish refills its buffers instead of allocating.
+        spare: Option<Snapshot>,
     }
 
     impl SimThread {
         pub fn new(state: Box<dyn SimState>, target_tps: f64) -> Self {
             // Publish initial snapshot so UI has data before play is pressed.
-            let initial = Some(build_snapshot(&*state, 0.0, 0.0));
+            let initial = Some(build_snapshot(None, &*state, 0.0, 0.0));
             Self {
                 state,
                 running: false,
@@ -354,7 +377,14 @@ mod wasm {
                 accumulated_time: 0.0,
                 actual_tps: 0.0,
                 snapshot: initial,
+                spare: None,
             }
+        }
+
+        /// An unclaimed `snapshot` is stale by definition, so it is the first buffer to reuse.
+        fn republish(&mut self) {
+            let reuse = self.snapshot.take().or_else(|| self.spare.take());
+            self.snapshot = Some(build_snapshot(reuse, &*self.state, self.actual_tps, 0.0));
         }
 
         pub fn send(&mut self, cmd: SimCommand) {
@@ -363,11 +393,11 @@ mod wasm {
                 SimCommand::Pause => {
                     self.running = false;
                     self.accumulated_time = 0.0;
-                    self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps, 0.0));
+                    self.republish();
                 }
                 SimCommand::StepOnce => {
                     self.state.step();
-                    self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps, 0.0));
+                    self.republish();
                 }
                 SimCommand::SetTargetTps(tps) => self.target_tps = tps,
                 SimCommand::SetUncapped(v) => {
@@ -388,6 +418,11 @@ mod wasm {
             self.snapshot.take()
         }
 
+        /// Hands a consumed snapshot back for the next republish to refill.
+        pub fn recycle(&mut self, snap: Snapshot) {
+            self.spare = Some(snap);
+        }
+
         pub fn play(&mut self) {
             self.send(SimCommand::Play);
         }
@@ -406,41 +441,65 @@ mod wasm {
                 return;
             }
 
-            if self.uncapped {
-                for _ in 0..self.ticks_per_snapshot {
-                    self.state.step();
-                }
+            let batches = if self.uncapped {
+                1
             } else {
                 // Same batch cadence as the native loop, so both backends run at `target_tps`.
                 let batch_interval = super::capped_batch_interval_secs(self.target_tps, self.ticks_per_snapshot);
                 self.accumulated_time += dt;
                 let (batches, carry) =
                     super::batches_owed(self.accumulated_time, batch_interval, MAX_BATCHES_PER_FRAME);
-                for _ in 0..batches {
-                    for _ in 0..self.ticks_per_snapshot {
-                        self.state.step();
-                    }
-                }
                 self.accumulated_time = carry;
+                batches
+            };
+
+            for _ in 0..batches {
+                for _ in 0..self.ticks_per_snapshot {
+                    self.state.step();
+                }
             }
 
-            self.snapshot = Some(build_snapshot(&*self.state, self.actual_tps, 0.0));
+            // Nothing advanced, so the last publish is still current. Rebuilding it would re-copy
+            // the grid and re-run `stats()` for no new data.
+            if batches > 0 {
+                self.republish();
+            }
         }
     }
 }
 
-fn build_snapshot(state: &dyn SimState, actual_tps: f64, engine_ms: f64) -> Snapshot {
+/// Overwrites `dst` with `src`, keeping `dst`'s allocation when it is already large enough.
+fn refill<T: Copy>(dst: &mut Vec<T>, src: &[T]) {
+    dst.clear();
+    dst.extend_from_slice(src);
+}
+
+/// Refills `reuse`'s buffers when its view is the same kind, so a publish is a copy and not also
+/// a fresh multi-megabyte allocation. `reuse` comes back from the UI thread via `recycle`.
+fn build_snapshot(reuse: Option<Snapshot>, state: &dyn SimState, actual_tps: f64, engine_ms: f64) -> Snapshot {
+    let recycled = reuse.map(|s| s.view);
     let view = if let Some(gv) = state.grid_view() {
+        let mut cells = match recycled {
+            Some(SnapshotView::Grid(g)) => g.cells,
+            _ => Vec::new(),
+        };
+        refill(&mut cells, gv.cells);
         SnapshotView::Grid(GridSnapshot {
             width: gv.width,
             height: gv.height,
-            cells: gv.cells.to_vec(),
+            cells,
             palette: gv.palette,
         })
     } else if let Some(pv) = state.point_view() {
+        let (mut pos_x, mut pos_y) = match recycled {
+            Some(SnapshotView::Points(p)) => (p.pos_x, p.pos_y),
+            _ => (Vec::new(), Vec::new()),
+        };
+        refill(&mut pos_x, pv.pos_x);
+        refill(&mut pos_y, pv.pos_y);
         SnapshotView::Points(PointSnapshot {
-            pos_x: pv.pos_x.to_vec(),
-            pos_y: pv.pos_y.to_vec(),
+            pos_x,
+            pos_y,
             world_w: pv.world_w,
             world_h: pv.world_h,
             palette: pv.palette,

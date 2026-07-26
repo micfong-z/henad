@@ -67,6 +67,16 @@ impl SimRunner {
         }
     }
 
+    /// Hands a consumed snapshot back for its buffers. A GPU snapshot owns no cell data, so there
+    /// is nothing to reuse.
+    pub fn recycle(&mut self, snap: Snapshot) {
+        match self {
+            Self::Cpu(t) => t.recycle(snap),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Gpu(_) => drop(snap),
+        }
+    }
+
     /// `Some` only for a GPU-backed model — the app uses this to decide whether to show the
     /// GPU-only batching controls.
     #[cfg(not(target_arch = "wasm32"))]
