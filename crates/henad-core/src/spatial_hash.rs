@@ -1,7 +1,12 @@
 /// Spatial hash for efficient neighbor queries in 2D space.
 pub struct SpatialHash {
+    /// Requested cell size, only kept to detect changes
     cell_size: f32,
-    cell_size_inv: f32,
+    /// Actual cell extents, which tile the world exactly
+    cell_w: f32,
+    cell_h: f32,
+    cell_w_inv: f32,
+    cell_h_inv: f32,
     grid_w: u32,
     grid_h: u32,
     world_w: f32,
@@ -16,13 +21,21 @@ pub struct SpatialHash {
 
 impl SpatialHash {
     pub fn new(cell_size: f32, world_w: f32, world_h: f32) -> Self {
-        let grid_w = (world_w / cell_size).ceil().max(1.0) as u32;
-        let grid_h = (world_h / cell_size).ceil().max(1.0) as u32;
+        // `query_radius` walks a neighborhood in cell index space, so every cell has to span the
+        // same world distance, otherwise the wrap seam gets under-covered. Fit the cells to the
+        // world instead of using `cell_size` directly, rounding the count down so they only grow.
+        let grid_w = (world_w / cell_size).floor().max(1.0) as u32;
+        let grid_h = (world_h / cell_size).floor().max(1.0) as u32;
+        let cell_w = world_w / grid_w as f32;
+        let cell_h = world_h / grid_h as f32;
         let num_cells = grid_w * grid_h;
 
         Self {
             cell_size,
-            cell_size_inv: 1.0 / cell_size,
+            cell_w,
+            cell_h,
+            cell_w_inv: 1.0 / cell_w,
+            cell_h_inv: 1.0 / cell_h,
             grid_w,
             grid_h,
             world_w,
@@ -36,8 +49,8 @@ impl SpatialHash {
     /// Returns the flat cell index for a given position (x, y) safely.
     #[inline]
     pub fn cell_index(&self, x: f32, y: f32) -> u32 {
-        let cx = ((x * self.cell_size_inv).floor() as i32).rem_euclid(self.grid_w as i32) as u32;
-        let cy = ((y * self.cell_size_inv).floor() as i32).rem_euclid(self.grid_h as i32) as u32;
+        let cx = ((x * self.cell_w_inv).floor() as i32).rem_euclid(self.grid_w as i32) as u32;
+        let cy = ((y * self.cell_h_inv).floor() as i32).rem_euclid(self.grid_h as i32) as u32;
         cy * self.grid_w + cx
     }
 
@@ -76,15 +89,28 @@ impl SpatialHash {
     pub fn query_radius(&self, x: f32, y: f32, r: f32, pos_x: &[f32], pos_y: &[f32], result: &mut Vec<u32>) {
         result.clear();
         let r2 = r * r;
-        let cell_radius = (r * self.cell_size_inv).ceil() as i32;
-        let cell_x = ((x * self.cell_size_inv).floor() as i32).rem_euclid(self.grid_w as i32);
-        let cell_y = ((y * self.cell_size_inv).floor() as i32).rem_euclid(self.grid_h as i32);
+        let cell_radius_x = (r / self.cell_w).ceil() as i32;
+        let cell_radius_y = (r / self.cell_h).ceil() as i32;
+        let cell_x = ((x * self.cell_w_inv).floor() as i32).rem_euclid(self.grid_w as i32);
+        let cell_y = ((y * self.cell_h_inv).floor() as i32).rem_euclid(self.grid_h as i32);
         let half_w = self.world_w * 0.5;
         let half_h = self.world_h * 0.5;
 
-        for grid_y in (cell_y - cell_radius)..=(cell_y + cell_radius) {
+        // In case the radius is larger than the world, avoid repeatedly wrapping the grid.
+        let (y_lo, y_hi) = if 2 * cell_radius_y + 1 > self.grid_h as i32 {
+            (0, self.grid_h as i32 - 1)
+        } else {
+            (cell_y - cell_radius_y, cell_y + cell_radius_y)
+        };
+        let (x_lo, x_hi) = if 2 * cell_radius_x + 1 > self.grid_w as i32 {
+            (0, self.grid_w as i32 - 1)
+        } else {
+            (cell_x - cell_radius_x, cell_x + cell_radius_x)
+        };
+
+        for grid_y in y_lo..=y_hi {
             let wrapped_y = grid_y.rem_euclid(self.grid_h as i32) as u32;
-            for grid_x in (cell_x - cell_radius)..=(cell_x + cell_radius) {
+            for grid_x in x_lo..=x_hi {
                 let wrapped_x = grid_x.rem_euclid(self.grid_w as i32) as u32;
                 let cell_index = wrapped_y * self.grid_w + wrapped_x;
                 let start = self.cell_start[cell_index as usize];
@@ -118,6 +144,7 @@ impl SpatialHash {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helpers::xorshift64;
 
     #[test]
     fn build_and_query_finds_all_close_agents() {
@@ -147,5 +174,79 @@ mod tests {
 
         result.sort();
         assert_eq!(result, vec![0, 1]);
+    }
+
+    /// Toroidal distance on one axis
+    fn axis_delta(a: f32, b: f32, world: f32) -> f32 {
+        let d = (a - b).abs();
+        d.min(world - d)
+    }
+
+    #[test]
+    fn matches_brute_force_with_non_divisor_cell_size() {
+        // 47 divides neither world axis, so the hash has to pick its own cell extents
+        let (world_w, world_h, r) = (1_000.0_f32, 730.0_f32, 47.0_f32);
+        let mut seed = 0x1234_5678_9ABC_DEF0_u64;
+        let mut unit = || {
+            seed = xorshift64(seed);
+            (seed >> 40) as f32 / 16_777_216.0
+        };
+
+        let mut pos_x = Vec::new();
+        let mut pos_y = Vec::new();
+        for _ in 0..500 {
+            pos_x.push(unit() * world_w);
+            pos_y.push(unit() * world_h);
+        }
+
+        let mut sh = SpatialHash::new(r, world_w, world_h);
+        sh.build(&pos_x, &pos_y);
+
+        let mut result = Vec::new();
+        for i in 0..pos_x.len() {
+            sh.query_radius(pos_x[i], pos_y[i], r, &pos_x, &pos_y, &mut result);
+            result.sort();
+
+            let mut expected: Vec<u32> = (0..pos_x.len() as u32)
+                .filter(|&j| {
+                    let dx = axis_delta(pos_x[j as usize], pos_x[i], world_w);
+                    let dy = axis_delta(pos_y[j as usize], pos_y[i], world_h);
+                    dx * dx + dy * dy <= r * r
+                })
+                .collect();
+            expected.sort();
+
+            assert_eq!(result, expected, "neighbors of agent {i} disagree with brute force");
+        }
+    }
+
+    #[test]
+    fn query_wider_than_grid_returns_each_agent_once() {
+        // Radius 100 into a 300 wide world leaves 3 cells per axis, so the walk spans the grid
+        let pos_x = vec![0.0, 60.0, 150.0];
+        let pos_y = vec![0.0, 0.0, 0.0];
+        let mut sh = SpatialHash::new(100.0, 300.0, 300.0);
+        sh.build(&pos_x, &pos_y);
+
+        let mut result = Vec::new();
+        sh.query_radius(0.0, 0.0, 100.0, &pos_x, &pos_y, &mut result);
+
+        result.sort();
+        assert_eq!(result, vec![0, 1], "agent 2 is 150 away, and nothing may repeat");
+    }
+
+    #[test]
+    fn single_cell_grid_returns_each_agent_once() {
+        // Radius past half the world collapses the grid to one cell
+        let pos_x = vec![10.0, 20.0, 60.0];
+        let pos_y = vec![10.0, 20.0, 60.0];
+        let mut sh = SpatialHash::new(200.0, 100.0, 100.0);
+        sh.build(&pos_x, &pos_y);
+
+        let mut result = Vec::new();
+        sh.query_radius(10.0, 10.0, 200.0, &pos_x, &pos_y, &mut result);
+
+        result.sort();
+        assert_eq!(result, vec![0, 1, 2], "one cell means one visit per agent");
     }
 }
