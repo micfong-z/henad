@@ -29,7 +29,7 @@ Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run desktop app: `cargo run -p henad-app`
 Run web version locally: `trunk serve` (from repo root, uses `Trunk.toml` + `index.html`)
 
-Toolchain is pinned via `rust-toolchain` (1.88, with rustfmt/clippy/wasm32-unknown-unknown target).
+Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).
 
 ### Lints
 
