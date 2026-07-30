@@ -579,26 +579,41 @@ fn stats_gpu(
 }
 
 /// Serialize a CPU model's view to a simple text format: a grid as comma-separated cell indices
-/// per row, a point cloud as `x,y` CSV.
+/// per row, a point cloud as `x,y` CSV with a `color` column when the model carries the lane.
+///
+/// Both sections are written, so a composite model exports its field and its agents.
 fn write_state(state: &dyn SimState, path: &Path) -> Result<()> {
+    let grid = state.grid_view();
+    let points = state.point_view();
+    if grid.is_none() && points.is_none() {
+        bail!("model exposes no CPU-side view to export");
+    }
+
     let file = File::create(path).with_context(|| format!("could not create '{}'", path.display()))?;
     let mut out = BufWriter::new(file);
 
-    if let Some(grid) = state.grid_view() {
+    if let Some(grid) = grid {
         writeln!(out, "# grid {}x{}", grid.width, grid.height)?;
         for row in grid.cells.chunks(grid.width as usize) {
             let line = row.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",");
             writeln!(out, "{line}")?;
         }
-    } else if let Some(points) = state.point_view() {
+    }
+
+    if let Some(points) = points {
         let n = points.pos_x.len();
         writeln!(out, "# points {n}")?;
-        writeln!(out, "x,y")?;
-        for (x, y) in points.pos_x.iter().zip(points.pos_y) {
-            writeln!(out, "{x},{y}")?;
+        if let Some(color) = points.color {
+            writeln!(out, "x,y,color")?;
+            for ((x, y), c) in points.pos_x.iter().zip(points.pos_y).zip(color) {
+                writeln!(out, "{x},{y},{c}")?;
+            }
+        } else {
+            writeln!(out, "x,y")?;
+            for (x, y) in points.pos_x.iter().zip(points.pos_y) {
+                writeln!(out, "{x},{y}")?;
+            }
         }
-    } else {
-        bail!("model exposes no CPU-side view to export");
     }
 
     Ok(())

@@ -12,19 +12,30 @@ pub struct Snapshot {
     pub actual_tps: f64,
     /// Smoothed engine time per tick in milliseconds.
     pub engine_ms: f64,
-    /// Mutually exclusive: either grid data or point data.
     pub view: SnapshotView,
     /// Current stat values (one per stat series).
     pub stats: Vec<StatEntry>,
 }
 
 pub enum SnapshotView {
-    Grid(GridSnapshot),
-    Points(PointSnapshot),
+    Cpu(CpuLayers),
     /// The model's state never left the GPU — there are no cells to copy, only a texture to
     /// sample. See [`GpuSnapshot`].
     Gpu(GpuSnapshot),
-    None,
+}
+
+/// A CPU model's owned layers, drawn field first and agents over the top. Both optional, so a
+/// composite model can publish both.
+#[derive(Default)]
+pub struct CpuLayers {
+    pub grid: Option<GridSnapshot>,
+    pub points: Option<PointSnapshot>,
+}
+
+impl CpuLayers {
+    pub fn is_empty(&self) -> bool {
+        self.grid.is_none() && self.points.is_none()
+    }
 }
 
 /// A GPU model's view: no owned pixel data at all, just a handle to the already-rendered display
@@ -56,5 +67,7 @@ pub struct PointSnapshot {
     pub pos_y: Vec<f32>,
     pub world_w: f32,
     pub world_h: f32,
-    pub palette: &'static [u8; 4],
+    /// One palette index per agent. Empty means uniform, so `refill` can recycle it like the rest.
+    pub color: Vec<u8>,
+    pub palette: &'static [[u8; 4]],
 }

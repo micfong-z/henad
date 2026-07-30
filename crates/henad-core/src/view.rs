@@ -8,12 +8,18 @@ pub struct GridView<'a> {
     pub palette: &'static [[u8; 4]],
 }
 
+/// A view of an agent population for rendering.
+///
+/// Both layers are stretched to the same rect, so a composite model wants
+/// `world_w = width as f32`. Nothing checks this across the crate boundary.
 pub struct PointView<'a> {
     pub pos_x: &'a [f32],
     pub pos_y: &'a [f32],
     pub world_w: f32,
     pub world_h: f32,
-    pub palette: &'static [u8; 4],
+    /// One palette index per agent. `None` colours the whole population `palette[0]`.
+    pub color: Option<&'a [u8]>,
+    pub palette: &'static [[u8; 4]],
 }
 
 /// The value of a statistic entry.

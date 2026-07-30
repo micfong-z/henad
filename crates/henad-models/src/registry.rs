@@ -48,7 +48,7 @@ fn register_grid_model<M: GridModel>() -> ModelEntry {
         description: M::DESCRIPTION.to_owned(),
         param_descriptors: grid_model_param_descriptors::<M>(),
         stat_descriptors: M::stat_descriptors(),
-        topology_hint: TopologyHint::Grid2D,
+        topology_hint: TopologyHint::GRID,
         create: Box::new(|params| ModelState::Cpu(Box::new(GridModelState::<M>::from_params(params)))),
     }
 }
@@ -138,6 +138,36 @@ mod tests {
                     desc.apply
                 );
             }
+        }
+    }
+
+    /// Nothing else reads `topology_hint`, so without this it drifts from what the state returns.
+    #[test]
+    fn declared_topology_matches_the_views_the_state_returns() {
+        for entry in model_registry(None) {
+            let values: Vec<ParamValue> = entry
+                .param_descriptors
+                .iter()
+                .map(|desc| desc.kind.default_value())
+                .collect();
+            let ModelState::Cpu(state) = (entry.create)(&values) else {
+                continue;
+            };
+
+            assert_eq!(
+                state.grid_view().is_some(),
+                entry.topology_hint.grid,
+                "{}: declares grid={} but grid_view() disagrees",
+                entry.id,
+                entry.topology_hint.grid
+            );
+            assert_eq!(
+                state.point_view().is_some(),
+                entry.topology_hint.agents,
+                "{}: declares agents={} but point_view() disagrees",
+                entry.id,
+                entry.topology_hint.agents
+            );
         }
     }
 

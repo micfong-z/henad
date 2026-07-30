@@ -70,7 +70,7 @@ impl<M: GpuGridModel> Model for GpuGridModelDescriptor<M> {
     /// Still a 2D grid — it just gets its pixels from a texture instead of a cell buffer. The UI
     /// branches on the *snapshot* variant, not on this hint.
     fn topology_hint(&self) -> TopologyHint {
-        TopologyHint::Grid2D
+        TopologyHint::GRID
     }
 
     fn create_state(&self, params: &[ParamValue]) -> Self::State {

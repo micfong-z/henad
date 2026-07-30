@@ -9,6 +9,7 @@ use henad_core::view::StatsHistory;
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
 
 use crate::sim_runner::SimRunner;
+use crate::ui::agent_layer::AgentLayer;
 use henad_compute::runtime_info::RuntimeInfo;
 
 use henad_compute::gpu::GpuContext;
@@ -48,7 +49,12 @@ pub struct AppState {
     pub snapshot: Option<Snapshot>,
     pub sim_running: bool,
     pub grid_texture: Option<TextureHandle>,
+    /// Separate from `grid_texture`, so density mode does not overwrite a composite model's field.
+    pub density_texture: Option<TextureHandle>,
     pub density_max: f32,
+    pub point_render_mode: PointRenderMode,
+    /// Built on first use and kept across model switches, the pipeline is not tied to a model.
+    pub agent_layer: Option<AgentLayer>,
     pub last_rendered_tick: Option<u64>,
     pub rendering_enabled: bool,
     pub target_tps: f64,
@@ -58,6 +64,9 @@ pub struct AppState {
     pub history_capacity: usize,
     /// Fixed for the life of the process; collected once at startup.
     pub runtime: RuntimeInfo,
+    /// Device and queue for rendering, so present on every target. Not `gpu_ctx` below, which
+    /// gates GPU models and stays native-only.
+    pub render_ctx: GpuContext,
     #[cfg(not(target_arch = "wasm32"))]
     pub timings: FrameTimings,
     /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
@@ -73,9 +82,19 @@ pub struct AppState {
     pub gpu_batch_size: u32,
 }
 
+/// How an agent population is drawn in the viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PointRenderMode {
+    #[default]
+    Agents,
+    /// Cheaper past roughly a million agents, and readable where sprites would overlap into a mass.
+    Density,
+}
+
 impl AppState {
-    /// `gpu_ctx` is `None` on web, which keeps GPU models out of the registry.
-    pub fn new(gpu_ctx: Option<GpuContext>, runtime: RuntimeInfo) -> Self {
+    /// `render_ctx` always exists, eframe is wgpu-only here. `gpu_ctx` is `None` on web, which
+    /// keeps GPU models out of the registry without affecting rendering.
+    pub fn new(render_ctx: GpuContext, gpu_ctx: Option<GpuContext>, runtime: RuntimeInfo) -> Self {
         let registry = model_registry(gpu_ctx.clone());
         let param_values: Vec<ParamValue> = registry
             .first()
@@ -92,7 +111,10 @@ impl AppState {
             snapshot: None,
             sim_running: false,
             grid_texture: None,
+            density_texture: None,
             density_max: 4.0,
+            point_render_mode: PointRenderMode::default(),
+            agent_layer: None,
             last_rendered_tick: None,
             rendering_enabled: true,
             target_tps: 30.0,
@@ -101,6 +123,7 @@ impl AppState {
             stats_history: None,
             history_capacity: 10_000,
             runtime,
+            render_ctx,
             #[cfg(not(target_arch = "wasm32"))]
             timings: FrameTimings::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -122,9 +145,14 @@ impl AppState {
         self.snapshot = None;
         self.last_rendered_tick = None;
         self.grid_texture = None;
+        self.density_texture = None;
         self.density_max = 4.0;
         self.ticks_per_snapshot = 1;
         self.loaded_model = None;
+        // The next model may have no agents at all.
+        if let Some(layer) = &mut self.agent_layer {
+            layer.clear();
+        }
 
         let Some(entry) = self.registry.get(self.selected_model) else {
             return;
@@ -173,9 +201,13 @@ impl AppState {
         self.snapshot = None;
         self.sim_running = false;
         self.grid_texture = None;
+        self.density_texture = None;
         self.last_rendered_tick = None;
         self.stats_history = None;
         self.loaded_model = None;
+        if let Some(layer) = &mut self.agent_layer {
+            layer.clear();
+        }
     }
 
     pub fn load_default_params(&mut self) {

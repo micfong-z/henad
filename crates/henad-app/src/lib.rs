@@ -33,14 +33,17 @@ impl HenadApp {
         log::info!("{}", egui_wgpu::adapter_info_summary(&adapter_info));
 
         // egui's `RenderState` is the sole authority on device acquisition; `henad-compute` never
-        // creates a device, it only ever receives cloned handles. On wasm we hand the registry no
-        // context at all, so GPU models are simply absent from the web build.
-        #[cfg(not(target_arch = "wasm32"))]
-        let gpu_ctx = Some(henad_compute::gpu::GpuContext::new(
+        // creates a device, it only ever receives cloned handles.
+        let render_ctx = henad_compute::gpu::GpuContext::new(
             render_state.device.clone(),
             render_state.queue.clone(),
             render_state.target_format,
-        ));
+        );
+
+        // Rendering always has a device, but GPU models stay native-only. On wasm we hand the
+        // registry no context, so they are simply absent from the web build.
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu_ctx = Some(render_ctx.clone());
         #[cfg(target_arch = "wasm32")]
         let gpu_ctx: Option<henad_compute::gpu::GpuContext> = None;
 
@@ -50,6 +53,7 @@ impl HenadApp {
         Self {
             dock: default_dock_state(),
             state: AppState::new(
+                render_ctx,
                 gpu_ctx,
                 RuntimeInfo::collect(&render_state.adapter, &render_state.device),
             ),

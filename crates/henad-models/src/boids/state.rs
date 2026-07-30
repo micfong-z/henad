@@ -12,6 +12,19 @@ pub const PALETTE: [[u8; 4]; 3] = [
     [0x00, 0x7A, 0xF5, 0xFF], // Min speed - blue
 ];
 
+/// Agent colours by heading octant. Not by speed, which collapses to one colour once the flock
+/// settles at `min_speed`. Cyclic, so a turning flock shifts hue instead of jumping.
+pub const HEADING_PALETTE: [[u8; 4]; 8] = [
+    [0xE4, 0x37, 0x48, 0xFF], // [0, 45)    E -> SE
+    [0xF0, 0x7A, 0x28, 0xFF], // [45, 90)   SE -> S
+    [0xFF, 0xC1, 0x07, 0xFF], // [90, 135)  S -> SW
+    [0x8B, 0xC3, 0x4A, 0xFF], // [135, 180) SW -> W
+    [0x1E, 0xA8, 0x7C, 0xFF], // [180, 225) W -> NW
+    [0x00, 0x9E, 0xC8, 0xFF], // [225, 270) NW -> N
+    [0x00, 0x7A, 0xF5, 0xFF], // [270, 315) N -> NE
+    [0x8E, 0x54, 0xD8, 0xFF], // [315, 360) NE -> E
+];
+
 pub struct BoidsState {
     pub(crate) pos_x: Vec<f32>,
     pub(crate) pos_y: Vec<f32>,
@@ -21,6 +34,9 @@ pub struct BoidsState {
     pub(crate) next_pos_y: Vec<f32>,
     pub(crate) next_vel_x: Vec<f32>,
     pub(crate) next_vel_y: Vec<f32>,
+    /// Heading octant per boid, indexing [`HEADING_PALETTE`]. Written in the same pass as `next_*`
+    /// so it costs no extra pass. Not double-buffered, each boid only writes its own slot.
+    pub(crate) color: Vec<u8>,
     pub(crate) hash: SpatialHash,
     pub(crate) world_w: f32,
     pub(crate) world_h: f32,
@@ -61,6 +77,7 @@ impl BoidsState {
             next_pos_y: vec![0.0; n],
             next_vel_x: vec![0.0; n],
             next_vel_y: vec![0.0; n],
+            color: vec![0; n],
             hash,
             world_w,
             world_h,
@@ -100,6 +117,8 @@ impl BoidsState {
             let angle = ra * std::f32::consts::TAU;
             self.vel_x[i] = angle.cos() * speed;
             self.vel_y[i] = angle.sin() * speed;
+            // The initial snapshot is published before any tick, so seed the lane here too.
+            self.color[i] = super::step::heading_octant(self.vel_x[i], self.vel_y[i]);
         }
         self.rng_state = rng;
     }
@@ -197,7 +216,8 @@ impl SimState for BoidsState {
             pos_y: &self.pos_y,
             world_w: self.world_w,
             world_h: self.world_h,
-            palette: &[0xFF, 0xA0, 0x00, 0xFF],
+            color: Some(&self.color),
+            palette: &HEADING_PALETTE,
         })
     }
 
@@ -262,7 +282,7 @@ impl SimState for BoidsState {
     }
 
     fn heap_bytes(&self) -> usize {
-        8 * 4 * self.pos_x.capacity() + self.hash.heap_bytes()
+        8 * 4 * self.pos_x.capacity() + self.color.capacity() + self.hash.heap_bytes()
     }
 }
 

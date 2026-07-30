@@ -62,7 +62,7 @@ impl Model for BoidsModel {
     }
 
     fn topology_hint(&self) -> TopologyHint {
-        TopologyHint::PointCloud
+        TopologyHint::AGENTS
     }
 
     fn create_state(&self, params: &[ParamValue]) -> Self::State {

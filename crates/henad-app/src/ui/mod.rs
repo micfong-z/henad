@@ -1,3 +1,4 @@
+pub mod agent_layer;
 pub mod charts;
 pub mod dock;
 pub mod menu_bar;

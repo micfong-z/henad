@@ -2,6 +2,15 @@ use henad_core::spatial_hash::SpatialHash;
 
 use crate::boids::state::BoidsState;
 
+/// One boid's next-tick state.
+struct BoidUpdate {
+    pos_x: f32,
+    pos_y: f32,
+    vel_x: f32,
+    vel_y: f32,
+    color: u8,
+}
+
 pub(crate) fn step(state: &mut BoidsState) {
     state.hash.build(&state.pos_x, &state.pos_y);
 
@@ -40,7 +49,7 @@ fn process_agent(
     hash: &SpatialHash,
     params: &BoidParams,
     buf: &mut Vec<u32>,
-) -> (f32, f32, f32, f32) {
+) -> BoidUpdate {
     hash.query_radius(pos_x[i], pos_y[i], params.visual_range, pos_x, pos_y, buf);
 
     let mut close_dx = 0.0;
@@ -112,12 +121,34 @@ fn process_agent(
         new_vy = 0.0;
     }
 
-    (
-        (pos_x[i] + new_vx).rem_euclid(params.world_w),
-        (pos_y[i] + new_vy).rem_euclid(params.world_h),
-        new_vx,
-        new_vy,
-    )
+    BoidUpdate {
+        pos_x: (pos_x[i] + new_vx).rem_euclid(params.world_w),
+        pos_y: (pos_y[i] + new_vy).rem_euclid(params.world_h),
+        vel_x: new_vx,
+        vel_y: new_vy,
+        color: heading_octant(new_vx, new_vy),
+    }
+}
+
+/// Heading to one of eight octants, indexing `HEADING_PALETTE`.
+///
+/// Comparisons rather than `atan2`, too much to pay per agent per tick for something only looked
+/// at. Spans are half-open and run clockwise from east, since the display's y axis points down.
+#[inline]
+pub(crate) fn heading_octant(vel_x: f32, vel_y: f32) -> u8 {
+    let east = vel_x >= 0.0;
+    let south = vel_y >= 0.0;
+    let steep = vel_y.abs() > vel_x.abs();
+    match (east, south, steep) {
+        (true, true, false) => 0,
+        (true, true, true) => 1,
+        (false, true, true) => 2,
+        (false, true, false) => 3,
+        (false, false, false) => 4,
+        (false, false, true) => 5,
+        (true, false, true) => 6,
+        (true, false, false) => 7,
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -157,15 +188,17 @@ fn step_parallel(state: &mut BoidsState) {
         .zip(state.next_pos_y.par_iter_mut())
         .zip(state.next_vel_x.par_iter_mut())
         .zip(state.next_vel_y.par_iter_mut())
+        .zip(state.color.par_iter_mut())
         .enumerate()
-        .for_each(|(i, (((new_px, new_py), new_vx), new_vy))| {
+        .for_each(|(i, ((((new_px, new_py), new_vx), new_vy), new_color))| {
             BUF.with(|buf_cell| {
                 let mut buf = buf_cell.borrow_mut();
-                let (px, py, vx, vy) = process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
-                *new_px = px;
-                *new_py = py;
-                *new_vx = vx;
-                *new_vy = vy;
+                let out = process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
+                *new_px = out.pos_x;
+                *new_py = out.pos_y;
+                *new_vx = out.vel_x;
+                *new_vy = out.vel_y;
+                *new_color = out.color;
             });
         });
 }
@@ -195,10 +228,52 @@ fn step_sequential(state: &mut BoidsState) {
     let mut buf = Vec::with_capacity(64);
 
     for i in 0..state.num_boids as usize {
-        let (new_px, new_py, new_vx, new_vy) = process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
-        state.next_pos_x[i] = new_px;
-        state.next_pos_y[i] = new_py;
-        state.next_vel_x[i] = new_vx;
-        state.next_vel_y[i] = new_vy;
+        let out = process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
+        state.next_pos_x[i] = out.pos_x;
+        state.next_pos_y[i] = out.pos_y;
+        state.next_vel_x[i] = out.vel_x;
+        state.next_vel_y[i] = out.vel_y;
+        state.color[i] = out.color;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::heading_octant;
+    use crate::boids::state::HEADING_PALETTE;
+
+    /// A flipped sign still looks colourful on screen, so the mapping is pinned rather than
+    /// eyeballed. Sampled at octant centres, since the cardinals land on boundaries.
+    #[test]
+    fn octants_run_clockwise_from_east_with_y_pointing_down() {
+        for expected in 0..8u8 {
+            // +y is down, so increasing angle sweeps east to south to west.
+            let centre = (f32::from(expected) + 0.5) * std::f32::consts::TAU / 8.0;
+            let (vx, vy) = (centre.cos(), centre.sin());
+            assert_eq!(
+                heading_octant(vx, vy),
+                expected,
+                "octant {expected} centre ({vx}, {vy})"
+            );
+        }
+    }
+
+    /// The one cardinal that is unambiguously octant 0.
+    #[test]
+    fn due_east_starts_the_sweep() {
+        assert_eq!(heading_octant(1.0, 0.0), 0);
+    }
+
+    /// Every octant must land inside the palette, or the renderer silently falls back to entry 0.
+    #[test]
+    fn every_heading_indexes_the_palette() {
+        for step in 0..64u8 {
+            let angle = f32::from(step) * std::f32::consts::TAU / 64.0;
+            let octant = heading_octant(angle.cos(), angle.sin());
+            assert!(
+                (octant as usize) < HEADING_PALETTE.len(),
+                "angle {angle} gave octant {octant}"
+            );
+        }
     }
 }

@@ -1,7 +1,7 @@
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 
-use crate::snapshot::{GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
+use crate::snapshot::{CpuLayers, GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
 
 /// Wall-clock seconds between capped batches.
 fn capped_batch_interval_secs(target_tps: f64, ticks_per_snapshot: u32) -> f64 {
@@ -474,39 +474,47 @@ fn refill<T: Copy>(dst: &mut Vec<T>, src: &[T]) {
     dst.extend_from_slice(src);
 }
 
-/// Refills `reuse`'s buffers when its view is the same kind, so a publish is a copy and not also
-/// a fresh multi-megabyte allocation. `reuse` comes back from the UI thread via `recycle`.
+/// Refills `reuse`'s buffers, so a publish is a copy and not also a fresh multi-megabyte
+/// allocation. `reuse` comes back from the UI thread via `recycle`.
+///
+/// Both views are consulted, so a composite model publishes its field and its agents.
 fn build_snapshot(reuse: Option<Snapshot>, state: &dyn SimState, actual_tps: f64, engine_ms: f64) -> Snapshot {
-    let recycled = reuse.map(|s| s.view);
-    let view = if let Some(gv) = state.grid_view() {
-        let mut cells = match recycled {
-            Some(SnapshotView::Grid(g)) => g.cells,
-            _ => Vec::new(),
-        };
+    // Destructured up front so both layers can claim buffers without moving `recycled` twice.
+    let recycled = match reuse.map(|s| s.view) {
+        Some(SnapshotView::Cpu(layers)) => layers,
+        _ => CpuLayers::default(),
+    };
+    let mut cells = recycled.grid.map(|g| g.cells).unwrap_or_default();
+    let (mut pos_x, mut pos_y, mut color) = match recycled.points {
+        Some(p) => (p.pos_x, p.pos_y, p.color),
+        None => (Vec::new(), Vec::new(), Vec::new()),
+    };
+
+    let grid = state.grid_view().map(|gv| {
         refill(&mut cells, gv.cells);
-        SnapshotView::Grid(GridSnapshot {
+        GridSnapshot {
             width: gv.width,
             height: gv.height,
-            cells,
+            cells: std::mem::take(&mut cells),
             palette: gv.palette,
-        })
-    } else if let Some(pv) = state.point_view() {
-        let (mut pos_x, mut pos_y) = match recycled {
-            Some(SnapshotView::Points(p)) => (p.pos_x, p.pos_y),
-            _ => (Vec::new(), Vec::new()),
-        };
+        }
+    });
+
+    let points = state.point_view().map(|pv| {
         refill(&mut pos_x, pv.pos_x);
         refill(&mut pos_y, pv.pos_y);
-        SnapshotView::Points(PointSnapshot {
-            pos_x,
-            pos_y,
+        refill(&mut color, pv.color.unwrap_or(&[]));
+        PointSnapshot {
+            pos_x: std::mem::take(&mut pos_x),
+            pos_y: std::mem::take(&mut pos_y),
             world_w: pv.world_w,
             world_h: pv.world_h,
+            color: std::mem::take(&mut color),
             palette: pv.palette,
-        })
-    } else {
-        SnapshotView::None
-    };
+        }
+    });
+
+    let view = SnapshotView::Cpu(CpuLayers { grid, points });
 
     Snapshot {
         tick: state.tick(),
@@ -647,5 +655,129 @@ mod tests {
     #[test]
     fn zero_ticks_per_snapshot_is_treated_as_one() {
         assert!((capped_batch_interval_secs(50.0, 0) - capped_batch_interval_secs(50.0, 1)).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::build_snapshot;
+    use crate::snapshot::SnapshotView;
+    use henad_core::model::SimState;
+    use henad_core::params::ParamValue;
+    use henad_core::view::{GridView, PointView, StatEntry};
+
+    const PALETTE: &[[u8; 4]] = &[[1, 2, 3, 4], [5, 6, 7, 8]];
+
+    /// A model with a field and agents, the shape `build_snapshot` used to collapse.
+    struct Composite {
+        cells: Vec<u8>,
+        pos_x: Vec<f32>,
+        pos_y: Vec<f32>,
+        color: Vec<u8>,
+        with_color: bool,
+    }
+
+    impl Composite {
+        fn new(agents: usize, with_color: bool) -> Self {
+            Self {
+                cells: vec![1; 12],
+                pos_x: (0..agents).map(|i| i as f32).collect(),
+                pos_y: (0..agents).map(|i| i as f32 * 2.0).collect(),
+                color: (0..agents).map(|i| (i % 2) as u8).collect(),
+                with_color,
+            }
+        }
+    }
+
+    impl SimState for Composite {
+        fn step(&mut self) {}
+        fn tick(&self) -> u64 {
+            0
+        }
+        fn grid_view(&self) -> Option<GridView<'_>> {
+            Some(GridView {
+                width: 4,
+                height: 3,
+                cells: &self.cells,
+                palette: PALETTE,
+            })
+        }
+        fn point_view(&self) -> Option<PointView<'_>> {
+            Some(PointView {
+                pos_x: &self.pos_x,
+                pos_y: &self.pos_y,
+                world_w: 4.0,
+                world_h: 3.0,
+                color: self.with_color.then_some(&self.color),
+                palette: PALETTE,
+            })
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            self.pos_x.len() as u64
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    fn layers(view: &SnapshotView) -> &crate::snapshot::CpuLayers {
+        match view {
+            SnapshotView::Cpu(l) => l,
+            SnapshotView::Gpu(_) => panic!("expected a CPU snapshot"),
+        }
+    }
+
+    /// The regression. Publishing used to reach `point_view` only when there was no grid, so a
+    /// composite model silently dropped every agent.
+    #[test]
+    fn a_composite_model_publishes_both_layers() {
+        let state = Composite::new(3, true);
+        let snap = build_snapshot(None, &state, 0.0, 0.0);
+        let layers = layers(&snap.view);
+
+        let grid = layers.grid.as_ref().expect("field layer was dropped");
+        assert_eq!((grid.width, grid.height), (4, 3));
+        assert_eq!(grid.cells.len(), 12);
+
+        let points = layers.points.as_ref().expect("agent layer was dropped");
+        assert_eq!(points.pos_x, vec![0.0, 1.0, 2.0]);
+        assert_eq!(points.pos_y, vec![0.0, 2.0, 4.0]);
+        assert_eq!(points.color, vec![0, 1, 0]);
+    }
+
+    /// An absent lane must arrive empty, which is what the renderer reads as uniform.
+    #[test]
+    fn a_model_without_a_color_lane_publishes_an_empty_one() {
+        let state = Composite::new(2, false);
+        let snap = build_snapshot(None, &state, 0.0, 0.0);
+        let points = layers(&snap.view).points.as_ref().expect("agent layer was dropped");
+        assert!(points.color.is_empty());
+        assert_eq!(points.pos_x.len(), 2);
+    }
+
+    /// The colour lane has to recycle alongside the position lanes.
+    #[test]
+    fn recycling_reuses_the_color_lane_across_a_length_change() {
+        let big = Composite::new(64, true);
+        let first = build_snapshot(None, &big, 0.0, 0.0);
+        let capacity = layers(&first.view)
+            .points
+            .as_ref()
+            .map(|p| p.color.capacity())
+            .unwrap_or_default();
+        assert!(capacity >= 64);
+
+        let small = Composite::new(5, true);
+        let second = build_snapshot(Some(first), &small, 0.0, 0.0);
+        let points = layers(&second.view).points.as_ref().expect("agent layer was dropped");
+        assert_eq!(points.color, vec![0, 1, 0, 1, 0]);
+        assert_eq!(points.color.capacity(), capacity, "the colour lane reallocated");
+        assert_eq!(points.pos_x.len(), 5);
     }
 }

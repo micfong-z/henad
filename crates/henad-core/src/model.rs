@@ -19,6 +19,7 @@ pub trait Model: Send + Sync + 'static {
 pub trait SimState: Send + 'static {
     fn step(&mut self);
     fn tick(&self) -> u64;
+    /// Not exclusive with [`SimState::point_view`]. Return both to get agents drawn over a field.
     fn grid_view(&self) -> Option<GridView<'_>> {
         None
     }

@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
+use crate::state::PointRenderMode;
+use crate::ui::agent_layer::AgentLayer;
 use crate::{icons::material_design_icons::MDI_CUBE_OFF_OUTLINE, state::AppState};
 use eframe::egui_wgpu;
 use egui::{ColorImage, RichText, TextureOptions};
 use egui_wgpu::{CallbackResources, CallbackTrait};
 use henad_compute::gpu::GpuDisplay;
-use henad_compute::snapshot::SnapshotView;
+use henad_compute::snapshot::{CpuLayers, GridSnapshot, PointSnapshot, SnapshotView};
 
 /// Paints a GPU model's display texture straight into the viewport.
 ///
@@ -60,7 +62,21 @@ pub fn viewport_ui(ui: &mut egui::Ui, app: &mut AppState) {
     #[cfg(not(target_arch = "wasm32"))]
     let render_start = std::time::Instant::now();
 
-    ui.checkbox(&mut app.rendering_enabled, "Rendering");
+    let mode_before = app.point_render_mode;
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut app.rendering_enabled, "Rendering");
+
+        if app.rendering_enabled && has_points(app) {
+            ui.separator();
+            ui.label("Agents:");
+            ui.selectable_value(&mut app.point_render_mode, PointRenderMode::Agents, "Sprites");
+            ui.selectable_value(&mut app.point_render_mode, PointRenderMode::Density, "Density");
+        }
+    });
+    if app.point_render_mode != mode_before {
+        // The tick has not moved, but what we draw from it has.
+        app.last_rendered_tick = None;
+    }
 
     draw_view(ui, app);
 
@@ -89,8 +105,8 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
     }
 
     // --- GPU path: nothing to convert or upload, just sample the texture the sim thread
-    // already wrote. Branches on the snapshot *variant*, not on the topology hint — a GPU
-    // Game of Life is still `TopologyHint::Grid2D`, it just gets its pixels differently.
+    // already wrote. Branches on the snapshot variant, not on the topology hint — a GPU
+    // Game of Life is still `TopologyHint::GRID`, it just gets its pixels differently.
     if let Some(SnapshotView::Gpu(gpu)) = app.snapshot.as_ref().map(|s| &s.view) {
         paint_gpu_view(ui, Arc::clone(&gpu.display));
         return;
@@ -99,63 +115,128 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
     let current_tick = app.snapshot.as_ref().map_or(0, |s| s.tick);
     let needs_update = app.last_rendered_tick != Some(current_tick);
 
-    if needs_update {
-        // Take snapshot temporarily to avoid borrow conflicts with app
-        let snap = app.snapshot.take();
-        if let Some(snapshot) = snap {
-            match &snapshot.view {
-                SnapshotView::Grid(grid) => {
-                    let size = [grid.width as usize, grid.height as usize];
+    // Taken out for the duration to avoid borrow conflicts with the rest of `app`.
+    let Some(snapshot) = app.snapshot.take() else {
+        return;
+    };
+    // The GPU arm returned above, before any CPU-side pixel work.
+    let SnapshotView::Cpu(layers) = &snapshot.view else {
+        app.snapshot = Some(snapshot);
+        return;
+    };
 
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let pixels: Vec<egui::Color32> = {
-                        use rayon::prelude::*;
-                        grid.cells
-                            .par_iter()
-                            .map(|&cell| palette_color(grid.palette, cell))
-                            .collect()
-                    };
-                    #[cfg(target_arch = "wasm32")]
-                    let pixels: Vec<egui::Color32> = grid
-                        .cells
-                        .iter()
-                        .map(|&cell| palette_color(grid.palette, cell))
-                        .collect();
-
-                    let image = ColorImage::new(size, pixels);
-
-                    match &mut app.grid_texture {
-                        Some(tex) => {
-                            tex.set(image, TextureOptions::NEAREST);
-                        }
-                        None => {
-                            app.grid_texture = Some(ctx.load_texture("grid", image, TextureOptions::NEAREST));
-                        }
-                    }
-                }
-                SnapshotView::Points(points) => {
-                    render_density_heatmap(&ctx, app, &points.pos_x, &points.pos_y, points.world_w, points.world_h);
-                }
-                // Handled above, before any CPU-side pixel work.
-                SnapshotView::Gpu(_) => {}
-                SnapshotView::None => {
-                    app.snapshot = Some(snapshot);
-                    ui.label("No view available");
-                    return;
-                }
-            }
-            app.last_rendered_tick = Some(current_tick);
-            app.snapshot = Some(snapshot);
-        }
+    if layers.is_empty() {
+        app.snapshot = Some(snapshot);
+        ui.label("No view available");
+        return;
     }
 
-    if let Some(tex) = &app.grid_texture {
-        let size = tex.size_vec2();
-        let display_size = fit_aspect(ui.available_size(), size.x, size.y);
+    if needs_update {
+        if let Some(grid) = &layers.grid {
+            upload_grid(&ctx, app, grid);
+        }
+        if let Some(points) = &layers.points {
+            match app.point_render_mode {
+                PointRenderMode::Agents => upload_agents(app, points),
+                PointRenderMode::Density => {
+                    render_density_heatmap(&ctx, app, &points.pos_x, &points.pos_y, points.world_w, points.world_h);
+                }
+            }
+        }
+        app.last_rendered_tick = Some(current_tick);
+    }
 
-        ui.centered_and_justified(|ui| {
-            ui.image(egui::load::SizedTexture::new(tex.id(), display_size));
-        });
+    // Both layers share one rect so they stay registered. See `PointView`'s docs.
+    let Some((world_w, world_h)) = layer_extent(layers) else {
+        app.snapshot = Some(snapshot);
+        return;
+    };
+    let display_size = fit_aspect(ui.available_size(), world_w, world_h);
+
+    ui.centered_and_justified(|ui| {
+        let (rect, _response) = ui.allocate_exact_size(display_size, egui::Sense::hover());
+
+        // Painter order is the compositing order, field first and agents over the top.
+        if let Some(tex) = &app.grid_texture {
+            ui.painter().image(tex.id(), rect, UV_FULL, egui::Color32::WHITE);
+        }
+        if layers.points.is_some() {
+            match app.point_render_mode {
+                PointRenderMode::Agents => {
+                    if let Some(layer) = &app.agent_layer {
+                        layer.paint(ui, rect, world_w, world_h);
+                    }
+                }
+                PointRenderMode::Density => {
+                    if let Some(tex) = &app.density_texture {
+                        ui.painter().image(tex.id(), rect, UV_FULL, egui::Color32::WHITE);
+                    }
+                }
+            }
+        }
+    });
+
+    app.snapshot = Some(snapshot);
+}
+
+const UV_FULL: egui::Rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+
+/// Extent the shared rect is fitted to, and the world size handed to the agent shader.
+///
+/// The field wins when there is one, since it is the layer with a fixed pixel shape.
+fn layer_extent(layers: &CpuLayers) -> Option<(f32, f32)> {
+    if let Some(grid) = &layers.grid {
+        return Some((grid.width as f32, grid.height as f32));
+    }
+    let points = layers.points.as_ref()?;
+    Some((points.world_w, points.world_h))
+}
+
+/// Whether the mode selector applies at all.
+fn has_points(app: &AppState) -> bool {
+    matches!(
+        app.snapshot.as_ref().map(|s| &s.view),
+        Some(SnapshotView::Cpu(layers)) if layers.points.is_some()
+    )
+}
+
+fn upload_grid(ctx: &egui::Context, app: &mut AppState, grid: &GridSnapshot) {
+    let size = [grid.width as usize, grid.height as usize];
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let pixels: Vec<egui::Color32> = {
+        use rayon::prelude::*;
+        grid.cells
+            .par_iter()
+            .map(|&cell| palette_color(grid.palette, cell))
+            .collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let pixels: Vec<egui::Color32> = grid
+        .cells
+        .iter()
+        .map(|&cell| palette_color(grid.palette, cell))
+        .collect();
+
+    let image = ColorImage::new(size, pixels);
+
+    match &mut app.grid_texture {
+        Some(tex) => tex.set(image, TextureOptions::NEAREST),
+        None => app.grid_texture = Some(ctx.load_texture("grid", image, TextureOptions::NEAREST)),
+    }
+}
+
+/// Builds the pipeline on first use.
+fn upload_agents(app: &mut AppState, points: &PointSnapshot) {
+    if app.agent_layer.is_none() {
+        app.agent_layer = Some(AgentLayer::new(
+            &app.render_ctx.device,
+            &app.render_ctx.queue,
+            app.render_ctx.target_format,
+        ));
+    }
+    if let Some(layer) = &mut app.agent_layer {
+        layer.upload(points);
     }
 }
 
@@ -242,15 +323,25 @@ fn render_density_heatmap(
     };
 
     let max_density = app.density_max;
-    let pixels: Vec<egui::Color32> = density.iter().map(|&d| inferno(d as f32 / max_density)).collect();
+    // Transparent rather than black where empty, so a field underneath still shows through.
+    let pixels: Vec<egui::Color32> = density
+        .iter()
+        .map(|&d| {
+            if d == 0 {
+                egui::Color32::TRANSPARENT
+            } else {
+                inferno(d as f32 / max_density)
+            }
+        })
+        .collect();
     let image = ColorImage::new([DENSITY_W, DENSITY_H], pixels);
 
-    match &mut app.grid_texture {
+    match &mut app.density_texture {
         Some(tex) => {
             tex.set(image, TextureOptions::LINEAR);
         }
         None => {
-            app.grid_texture = Some(ctx.load_texture("density_heatmap", image, TextureOptions::LINEAR));
+            app.density_texture = Some(ctx.load_texture("density_heatmap", image, TextureOptions::LINEAR));
         }
     }
 }
