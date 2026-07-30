@@ -17,8 +17,13 @@
 //! henad-cli --list
 //! henad-cli game_of_life --steps 10000 --reps 5
 //! henad-cli sir --set grid_width=512 --steps 2000 --export final.txt
+//! henad-cli sir --steps 2000 --export-stats sir.csv --stats-every 10
 //! henad-cli gpu_game_of_life --set grid_width=4096 --set grid_height=4096 --steps 10000
 //! ```
+//!
+//! Two export paths, deliberately separate: `--export` writes the *final state* (the grid or point
+//! cloud at the end of the run), `--export-stats` writes the *time series* (one row per sampled
+//! tick). See [`stats_export`].
 
 #![expect(
     clippy::print_stdout,
@@ -40,6 +45,10 @@ use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
 use numfmt::{Formatter, Scales};
+
+mod stats_export;
+
+use stats_export::StatsWriter;
 
 /// Headless benchmark runner for Henad models.
 #[derive(Parser)]
@@ -73,6 +82,15 @@ struct Args {
     /// Write the final state (after warmup + steps) to this path, then exit.
     #[arg(long, value_name = "PATH")]
     export: Option<PathBuf>,
+
+    /// Write the per-tick stat time series to this path as CSV, then exit. Runs one configuration
+    /// for `warmup + steps` steps, sampling every `--stats-every` ticks.
+    #[arg(long = "export-stats", value_name = "PATH")]
+    export_stats: Option<PathBuf>,
+
+    /// Sample stats every N ticks when using `--export-stats`. 1 records every tick.
+    #[arg(long = "stats-every", default_value_t = 1, value_name = "N")]
+    stats_every: u64,
 
     /// List available models and exit.
     #[arg(long)]
@@ -133,6 +151,10 @@ fn main() -> Result<()> {
 
     let overrides = parse_overrides(&args.set)?;
     let params = resolve_params(&entry.param_descriptors, &overrides)?;
+
+    if let Some(path) = &args.export_stats {
+        return export_stats(entry, &params, &args, path, gpu_ctx.as_ref());
+    }
 
     if let Some(path) = &args.export {
         return export_final(entry, &params, &args, path);
@@ -457,6 +479,103 @@ fn export_final(entry: &ModelEntry, params: &[ParamValue], args: &Args, path: &P
     write_state(&*state, path)?;
     eprintln!("exported final state (tick {}) to {}", state.tick(), path.display());
     Ok(())
+}
+
+/// Run one configuration and write the per-tick stat series to `path` as CSV.
+///
+/// Unlike [`run_benchmark`] this is not a timed path: sampling stats every tick is itself
+/// significant work (a full reduction over the grid for a `GridModel`), so numbers from a run with
+/// `--export-stats` are not comparable to a benchmark run. Reps are deliberately ignored — a time
+/// series is one trajectory, and N reps would be N different trajectories in one file.
+fn export_stats(
+    entry: &ModelEntry,
+    params: &[ParamValue],
+    args: &Args,
+    path: &Path,
+    gpu_ctx: Option<&GpuContext>,
+) -> Result<()> {
+    if args.stats_every == 0 {
+        bail!("--stats-every must be at least 1");
+    }
+    if args.reps > 1 {
+        eprintln!("note: --reps is ignored by --export-stats");
+    }
+
+    let total = args.warmup + args.steps;
+    let file = File::create(path).with_context(|| format!("could not create '{}'", path.display()))?;
+    let writer = StatsWriter::new(BufWriter::new(file));
+
+    eprintln!(
+        "exporting stats for {} ({}): {} steps, sampling every {}",
+        entry.name, entry.id, total, args.stats_every
+    );
+
+    let rows = match (entry.create)(params) {
+        ModelState::Cpu(state) => stats_cpu(state, args, total, writer)?,
+        ModelState::Gpu(state) => {
+            let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
+            stats_gpu(state, ctx, args, total, writer)?
+        }
+    };
+
+    eprintln!("wrote {rows} rows to {}", path.display());
+    Ok(())
+}
+
+/// CPU stat sampling: step and sample in one loop. Tick 0 (the initial state, before any step) is
+/// recorded so the series starts from the model's initial conditions.
+fn stats_cpu(
+    mut state: Box<dyn SimState>,
+    args: &Args,
+    total: u64,
+    mut writer: StatsWriter<BufWriter<File>>,
+) -> Result<u64> {
+    writer.push(state.tick(), &state.stats())?;
+    for i in 0..total {
+        state.step();
+        if (i + 1).is_multiple_of(args.stats_every) {
+            writer.push(state.tick(), &state.stats())?;
+        }
+    }
+    // The final tick always lands in the file even if it isn't on a sampling boundary — the end
+    // state of a run is the one value a reader is most likely to want.
+    if !total.is_multiple_of(args.stats_every) {
+        writer.push(state.tick(), &state.stats())?;
+    }
+    writer.finish()
+}
+
+/// GPU stat sampling. `SimState::stats()` on a GPU state returns whatever the last completed
+/// readback produced, so each sample needs the full encode-reduce-readback round trip and a
+/// blocking poll — otherwise every row would repeat a stale value. That makes the sampling interval
+/// the dominant cost here; `--stats-every` is how you buy it back.
+fn stats_gpu(
+    mut state: Box<dyn GpuSimState>,
+    ctx: &GpuContext,
+    args: &Args,
+    total: u64,
+    mut writer: StatsWriter<BufWriter<File>>,
+) -> Result<u64> {
+    let sample = |state: &mut dyn GpuSimState, writer: &mut StatsWriter<BufWriter<File>>| -> Result<()> {
+        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("cli_stats_snapshot"),
+        });
+        state.encode_snapshot_passes(&mut encoder);
+        ctx.queue.submit(Some(encoder.finish()));
+        state.begin_stats_readback();
+        state.poll_stats_readback(&ctx.device, true);
+        writer.push(state.tick(), &state.stats())
+    };
+
+    sample(&mut *state, &mut writer)?;
+    let mut done = 0;
+    while done < total {
+        let chunk = args.stats_every.min(total - done);
+        run_gpu_steps(&mut *state, ctx, chunk)?;
+        done += chunk;
+        sample(&mut *state, &mut writer)?;
+    }
+    writer.finish()
 }
 
 /// Serialize a CPU model's view to a simple text format: a grid as comma-separated cell indices
