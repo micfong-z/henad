@@ -17,3 +17,10 @@ TODO.md
 
 # benchmark
 results
+.temporary
+
+# development documentation (may or may not contain sensitive info >:( )
+docs
+
+# IDE stuff
+.vscode
