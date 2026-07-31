@@ -37,6 +37,12 @@ fn batches_owed(accumulated: f64, batch_interval: f64, max_batches: u32) -> (u32
     }
 }
 
+/// Called on every publish, so an idle UI knows to come and collect the snapshot.
+///
+/// Without it a publish while the UI is idle, like a single step or the final one after pause,
+/// sits unread until some unrelated input event wakes the event loop. Must not block.
+pub type WakeFn = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// Commands sent from the UI thread to the simulation thread.
 pub enum SimCommand {
     Play,
@@ -59,7 +65,7 @@ mod native {
     use std::thread::JoinHandle;
     use std::time::Instant;
 
-    use super::{SimCommand, Snapshot, build_snapshot};
+    use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
     use henad_core::model::SimState;
 
     /// The handoff point between the two threads. `fresh` is the newest publish waiting to be
@@ -80,6 +86,7 @@ mod native {
         state: Box<dyn SimState>,
         cmd_rx: mpsc::Receiver<SimCommand>,
         snapshot: Arc<Mutex<SnapshotSlot>>,
+        wake: Option<WakeFn>,
         running: bool,
         target_tps: f64,
         uncapped: bool,
@@ -260,12 +267,16 @@ mod native {
                 // A `fresh` the UI never picked up is stale, so it becomes the next spare.
                 slot.spare = slot.fresh.replace(snap);
             }
+            // After the lock, so waking the UI can never make it block on us.
+            if let Some(wake) = &self.wake {
+                wake();
+            }
         }
     }
 
     impl SimThread {
-        /// Spawn a new sim thread with the given initial state and target TPS.
-        pub fn new(state: Box<dyn SimState>, target_tps: f64) -> Self {
+        /// `wake` is `None` only for a headless caller that polls on its own schedule.
+        pub fn new(state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel();
             // Publish initial snapshot so UI has data before play is pressed.
             let snapshot = Arc::new(Mutex::new(SnapshotSlot {
@@ -278,6 +289,7 @@ mod native {
                 state,
                 cmd_rx,
                 snapshot: snapshot_clone,
+                wake,
                 running: false,
                 target_tps,
                 uncapped: false,
@@ -344,7 +356,7 @@ mod native {
 // =====================================================================
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use super::{SimCommand, Snapshot, build_snapshot};
+    use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
     use henad_core::model::SimState;
 
     /// Ceiling on catch-up batches per `update()`, so a backgrounded tab handing back a
@@ -362,10 +374,13 @@ mod wasm {
         snapshot: Option<Snapshot>,
         /// Handed back by the UI so a republish refills its buffers instead of allocating.
         spare: Option<Snapshot>,
+        wake: Option<WakeFn>,
     }
 
     impl SimThread {
-        pub fn new(state: Box<dyn SimState>, target_tps: f64) -> Self {
+        /// `wake` still matters with no thread to wake from, since `send` runs inside `ui()`, after
+        /// the frame's snapshot poll in `logic()`.
+        pub fn new(state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
             // Publish initial snapshot so UI has data before play is pressed.
             let initial = Some(build_snapshot(None, &*state, 0.0, 0.0));
             Self {
@@ -378,6 +393,7 @@ mod wasm {
                 actual_tps: 0.0,
                 snapshot: initial,
                 spare: None,
+                wake,
             }
         }
 
@@ -385,6 +401,9 @@ mod wasm {
         fn republish(&mut self) {
             let reuse = self.snapshot.take().or_else(|| self.spare.take());
             self.snapshot = Some(build_snapshot(reuse, &*self.state, self.actual_tps, 0.0));
+            if let Some(wake) = &self.wake {
+                wake();
+            }
         }
 
         pub fn send(&mut self, cmd: SimCommand) {
@@ -567,7 +586,7 @@ mod pacing_timing_tests {
     #[test]
     fn capped_batching_holds_the_target_rate() {
         let ticks = Arc::new(AtomicU64::new(0));
-        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 50.0);
+        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 50.0, None);
         thread.send(SimCommand::SetTicksPerSnapshot(10));
         thread.play();
         std::thread::sleep(std::time::Duration::from_millis(1000));
@@ -575,6 +594,49 @@ mod pacing_timing_tests {
 
         let n = ticks.load(Ordering::Relaxed);
         assert!((20..=150).contains(&n), "ran {n} ticks in 1s at 50 TPS");
+    }
+
+    /// Blocks until `wakes` reaches `want`, or gives up.
+    fn wait_for_wakes(wakes: &Arc<AtomicU64>, want: u64) -> u64 {
+        for _ in 0..200 {
+            let seen = wakes.load(Ordering::Relaxed);
+            if seen >= want {
+                return seen;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        wakes.load(Ordering::Relaxed)
+    }
+
+    /// A snapshot nobody is told about is a snapshot nobody draws. Stepping used to only refresh
+    /// the viewport once you moved the mouse.
+    #[test]
+    fn a_publish_while_paused_wakes_the_ui() {
+        let ticks = Arc::new(AtomicU64::new(0));
+        let wakes = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&wakes);
+
+        let mut thread = SimThread::new(
+            Box::new(Counter(Arc::clone(&ticks))),
+            50.0,
+            Some(Arc::new(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            })),
+        );
+
+        thread.step_once();
+        assert!(
+            wait_for_wakes(&wakes, 1) >= 1,
+            "a single step published without waking the UI"
+        );
+
+        // Pause force-publishes a final snapshot too.
+        let before = wakes.load(Ordering::Relaxed);
+        thread.pause();
+        assert!(
+            wait_for_wakes(&wakes, before + 1) > before,
+            "pausing published a final snapshot without waking the UI"
+        );
     }
 }
 

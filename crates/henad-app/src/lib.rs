@@ -53,6 +53,7 @@ impl HenadApp {
         Self {
             dock: default_dock_state(),
             state: AppState::new(
+                cc.egui_ctx.clone(),
                 render_ctx,
                 gpu_ctx,
                 RuntimeInfo::collect(&render_state.adapter, &render_state.device),

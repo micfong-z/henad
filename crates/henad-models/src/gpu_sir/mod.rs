@@ -418,7 +418,7 @@ mod runner_tests {
 
         let (width, height) = (128u32, 128u32);
         let state = GpuGridState::<GpuSir>::new(&ctx, &params(width, height, 0.3, 0.05, 0.1));
-        let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default());
+        let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default(), None);
 
         let initial = wait_for(&mut thread, Duration::from_secs(5), |_| true)
             .expect("the GPU thread must publish an initial snapshot before Play");

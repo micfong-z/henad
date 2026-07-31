@@ -1,8 +1,10 @@
 //! Panel state, split from `HenadApp` so `DockArea::show` can borrow the dock and the
 //! `TabViewer` at once.
 
+use std::sync::Arc;
+
 use egui::TextureHandle;
-use henad_compute::sim_thread::{SimCommand, SimThread};
+use henad_compute::sim_thread::{SimCommand, SimThread, WakeFn};
 use henad_compute::snapshot::Snapshot;
 use henad_core::params::ParamValue;
 use henad_core::view::StatsHistory;
@@ -40,6 +42,8 @@ impl FrameTimings {
 }
 
 pub struct AppState {
+    /// Kept so a freshly built sim thread can be handed a repaint waker.
+    egui_ctx: egui::Context,
     pub registry: Vec<ModelEntry>,
     pub selected_model: usize,
     pub param_values: Vec<ParamValue>,
@@ -94,7 +98,12 @@ pub enum PointRenderMode {
 impl AppState {
     /// `render_ctx` always exists, eframe is wgpu-only here. `gpu_ctx` is `None` on web, which
     /// keeps GPU models out of the registry without affecting rendering.
-    pub fn new(render_ctx: GpuContext, gpu_ctx: Option<GpuContext>, runtime: RuntimeInfo) -> Self {
+    pub fn new(
+        egui_ctx: egui::Context,
+        render_ctx: GpuContext,
+        gpu_ctx: Option<GpuContext>,
+        runtime: RuntimeInfo,
+    ) -> Self {
         let registry = model_registry(gpu_ctx.clone());
         let param_values: Vec<ParamValue> = registry
             .first()
@@ -102,6 +111,7 @@ impl AppState {
             .unwrap_or_default();
 
         Self {
+            egui_ctx,
             pending_reload: vec![false; param_values.len()],
             registry,
             selected_model: 0,
@@ -160,9 +170,16 @@ impl AppState {
 
         let stats_history = StatsHistory::new(entry.stat_descriptors.clone(), self.history_capacity);
 
+        // Nudges the event loop, so a snapshot produced while idle is picked up next frame instead
+        // of waiting for whatever input event happens to arrive.
+        let wake: WakeFn = {
+            let ctx = self.egui_ctx.clone();
+            Arc::new(move || ctx.request_repaint())
+        };
+
         match (entry.create)(&self.param_values) {
             ModelState::Cpu(state) => {
-                let mut thread = SimThread::new(state, self.target_tps);
+                let mut thread = SimThread::new(state, self.target_tps, Some(wake));
                 if self.uncapped {
                     thread.send(SimCommand::SetUncapped(true));
                 }
@@ -181,7 +198,7 @@ impl AppState {
                     batch_size: self.gpu_batch_size,
                     target_ms: self.gpu_target_ms,
                 };
-                self.sim_thread = Some(SimRunner::Gpu(GpuSimThread::new(ctx, state, settings)));
+                self.sim_thread = Some(SimRunner::Gpu(GpuSimThread::new(ctx, state, settings, Some(wake))));
             }
             #[cfg(target_arch = "wasm32")]
             ModelState::Gpu(_) => {

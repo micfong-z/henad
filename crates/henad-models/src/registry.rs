@@ -100,6 +100,7 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
         register_grid_model::<crate::sir::SirGridModel>(),
         register_full_model::<crate::boids::BoidsModel>(),
         register_grid_model::<crate::game_of_life::GameOfLifeModel>(),
+        register_full_model::<crate::ants::AntsModel>(),
     ];
 
     if let Some(ctx) = gpu {

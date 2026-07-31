@@ -41,6 +41,9 @@ flume = "0.12"
 egui_plot = "0.36"
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
+# Benchmarks only. Default features off: the plotting/html/csv extras pull a large tree and the
+# scatter bench reports through the terminal.
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 numfmt = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
 log = "0.4.27"

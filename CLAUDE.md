@@ -26,6 +26,7 @@ trunk build                   # builds the WASM/web target
 ```
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
+Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
 Run desktop app: `cargo run -p henad-app`
 Run web version locally: `trunk serve` (from repo root, uses `Trunk.toml` + `index.html`)
 
@@ -60,9 +61,9 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
   per-frame stepper on WASM — same command API, different backend, gated by
   `#[cfg(target_arch = "wasm32")]`), `snapshot.rs` (owned, UI-thread-safe copies of sim state).
 - **henad-models**: concrete simulations — `sir.rs` (grid), `game_of_life.rs` (grid),
-  `boids/` (continuous-space flocking, split into `state.rs` + `step.rs`). `registry.rs`
-  type-erases every model behind `ModelEntry` so the UI can list/instantiate models without
-  knowing their concrete type.
+  `boids/` (continuous-space flocking, split into `state.rs` + `step.rs`), `ants/` (stigmergy:
+  agents over a pheromone field, the one composite model). `registry.rs` type-erases every model
+  behind `ModelEntry` so the UI can list/instantiate models without knowing their concrete type.
 - **henad-app**: eframe/egui desktop+web GUI. `HenadApp` (`lib.rs`) owns the `SimThread` and
   polls snapshots each frame; `ui/` has one file per panel (`toolbar.rs`, `sidebar.rs`,
   `viewport.rs`, `stats.rs`).
@@ -96,6 +97,13 @@ type-erased into a `ModelEntry` and shows up in the UI.
   tick from agent positions — this replaced a naive neighbor search and was the biggest lever in
   getting boids to scale. All neighbor queries (including toroidal wraparound) go through
   `query_radius`; don't reintroduce O(n²) neighbor search.
+- `henad-compute/src/scatter.rs` (`ScatterGrid`) handles the one write pattern the rest of the
+  engine can't: many agents depositing into the same cell. Read its module docs before changing
+  it — the strategy choice is measured (`benches/scatter.rs`), not assumed, and **atomics are not
+  an option**: `fetch_max` scales negatively under contention (7.1 ms at one thread, 99.2 ms at
+  four). Its two arms must stay bit-identical, because the arm is picked from the worker count, so
+  any divergence would make a model's results depend on the machine. Re-run the bench rather than
+  reasoning about it.
 - Data layout is Struct-of-Arrays throughout (`pos_x: Vec<f32>`, `pos_y: Vec<f32>`, ... rather
   than `Vec<Agent>`) specifically for cache locality and rayon-friendliness — preserve this when
   adding fields to a model's state.

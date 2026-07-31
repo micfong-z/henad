@@ -148,7 +148,7 @@ mod native {
     use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats};
     use crate::gpu::GpuContext;
     use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms};
-    use crate::sim_thread::SimCommand;
+    use crate::sim_thread::{SimCommand, WakeFn};
     use crate::snapshot::{GpuSnapshot, Snapshot, SnapshotView};
 
     /// How often the display texture is refreshed and a `Snapshot` published. Independent of
@@ -168,6 +168,7 @@ mod native {
         cmd_rx: mpsc::Receiver<Command>,
         snapshot: Arc<Mutex<Option<Snapshot>>>,
         gpu_stats: Arc<Mutex<GpuStats>>,
+        wake: Option<WakeFn>,
         running: bool,
         /// Whether the controller is currently in adaptive mode. Kept as a separate bool (rather
         /// than folding `fixed_batch_size`/`target_ms` into a `BatchMode` enum) so each mode's
@@ -403,6 +404,10 @@ mod native {
             if let Ok(mut slot) = self.snapshot.lock() {
                 *slot = Some(snap);
             }
+            // After the lock, so waking the UI can never make it block on us.
+            if let Some(wake) = &self.wake {
+                wake();
+            }
         }
 
         fn publish_gpu_stats(&self) {
@@ -432,7 +437,12 @@ mod native {
     impl GpuSimThread {
         /// Spawns the GPU sim thread, taking ownership of `state` and a cloned [`GpuContext`].
         /// Starts paused, like [`crate::sim_thread::SimThread`].
-        pub fn new(ctx: GpuContext, state: Box<dyn GpuSimState>, settings: GpuBatchSettings) -> Self {
+        pub fn new(
+            ctx: GpuContext,
+            state: Box<dyn GpuSimState>,
+            settings: GpuBatchSettings,
+            wake: Option<WakeFn>,
+        ) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel();
             let batch_size = settings.batch_size.max(1);
 
@@ -451,6 +461,7 @@ mod native {
                 cmd_rx,
                 snapshot: Arc::clone(&snapshot),
                 gpu_stats: Arc::clone(&gpu_stats),
+                wake,
                 running: false,
                 adaptive: settings.adaptive,
                 fixed_batch_size: batch_size,
