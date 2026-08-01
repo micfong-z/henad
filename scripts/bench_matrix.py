@@ -42,8 +42,22 @@ GRID_SIZES: list[tuple[int, int]] = [
 GRID_SIZES_GPU_ONLY: list[tuple[int, int]] = [(8192, 8192)]
 
 # The scaling axis for agent models, standing in for GRID_SIZES. Counts above a model's declared
-# num_agents maximum are dropped per model.
+# num_agents maximum are dropped.
 AGENT_COUNTS: list[int] = [1, 1_000, 10_000, 100_000, 1_000_000, 10_000_000]
+
+# Per-model ladders, where the shared one is the wrong shape. An entry here is taken verbatim:
+# it is an explicit statement of what to measure, so it overrides the declared-maximum filtering
+# the default ladder gets.
+#
+# boids stops at 50k because its cost is neighbour scans, not agents — at this density each agent
+# scans ~390 others, so 1M would cost ~1.7 h for that one point. 50k also keeps the top of the
+# curve directly comparable with the pre-agent-axis CSVs, which all ran at that default.
+#
+# ants needs no entry: the default ladder's 10M is already dropped by its declared 5M maximum,
+# leaving 1M at the top, which is where we want it — 10M costs ~1.6 h and 5.3 GB for one point.
+AGENT_COUNTS_BY_MODEL: dict[str, list[int]] = {
+    "boids": [1, 1_000, 10_000, 50_000],
+}
 
 GLOBAL_WARMUPS: list[int] = [0, 1000]
 GLOBAL_WARMUPS_GPU_ONLY: list[int] = [10000]
@@ -397,17 +411,45 @@ def scale_points(info: ModelInfo, is_gpu: bool) -> list[tuple[tuple[int, int] | 
         grids = list(GRID_SIZES) + (GRID_SIZES_GPU_ONLY if is_gpu else [])
         return [(grid, None) for grid in grids]
     if info.is_agent:
-        # A model declares its own population ceiling; asking for more would only measure how it
-        # fails. The world scales with the count, so cap it against `world_width`'s max too.
-        max_agents = info.by_id["num_agents"].max_number(float("inf"))
-        max_side = info.by_id["world_width"].max_number(float("inf"))
-        counts = [
+        explicit = AGENT_COUNTS_BY_MODEL.get(info.model)
+        counts = explicit if explicit is not None else [
+            # A model declares its own population ceiling, and the world scales with the count, so
+            # the default ladder is trimmed to what the descriptors say the model admits. Both are
+            # UI-facing bounds the CLI does not itself enforce, which is why an explicit ladder is
+            # allowed straight past them — with a warning, below.
             n
             for n in AGENT_COUNTS
-            if n <= max_agents and world_for_agents(info, n)[0] <= max_side
+            if n <= info.by_id["num_agents"].max_number(float("inf"))
+            and world_for_agents(info, n)[0] <= info.by_id["world_width"].max_number(float("inf"))
         ]
+        if explicit is not None:
+            warn_beyond_declared(info, explicit)
         return [(None, n) for n in counts]
     return [(None, None)]
+
+
+def warn_beyond_declared(info: ModelInfo, counts: list[int]) -> None:
+    """Note any explicit count the model's own descriptors say it cannot reach.
+
+    Not an error: the CLI applies `--set` without range-checking, so these runs are real. But a
+    population or world the UI cannot select is worth saying out loud rather than discovering in
+    a results file.
+    """
+    max_agents = info.by_id["num_agents"].max_number(float("inf"))
+    max_side = info.by_id["world_width"].max_number(float("inf"))
+    for n in counts:
+        side = world_for_agents(info, n)[0]
+        if n > max_agents:
+            print(
+                f"  note: {info.model} at {n:,} agents exceeds its declared max of {max_agents:,.0f}",
+                file=sys.stderr,
+            )
+        if side > max_side:
+            print(
+                f"  note: {info.model} at {n:,} agents needs a world of {side:,.0f},"
+                f" past the declared max of {max_side:,.0f}",
+                file=sys.stderr,
+            )
 
 
 def build_configs(models: list[str], infos: dict[str, ModelInfo], reps: int) -> list[Config]:

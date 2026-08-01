@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import re
 import subprocess
 import sys
@@ -37,9 +38,11 @@ DEFAULT_RESULTS = REPO_ROOT / "results"
 
 _FILENAME_RE = re.compile(r"^(?P<order>\d+)_bench_matrix_(?P<host>.+)_(?P<sha>[0-9a-f]{7,40})\.csv$")
 
-# Categorical slots 1-3, validated all-pairs for CVD separation.
-COMMIT_COLORS = ["#2a78d6", "#eb6834", "#1baf7a"]
-COMMIT_MARKERS = ["o", "s", "^"]
+# Categorical slots 1-3, validated all-pairs for CVD separation. Slot 4 (purple) was added when a
+# fourth commit made the list wrap and repeat slot 1 in both colour and marker; it has NOT been
+# through the same all-pairs check, so re-validate before relying on it in a figure for the paper.
+COMMIT_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#8b5cc7"]
+COMMIT_MARKERS = ["o", "s", "^", "D"]
 
 # Kept next to the figures it captions; see select_representative_run for the rationale.
 POLICY_NOTE = "each point is that model's longest, most-warmed config (CPU 1k steps, GPU 100k)"
@@ -142,6 +145,38 @@ def _int_or_none(text: str) -> int | None:
     return int(text) if text.strip() else None
 
 
+def _agents(row: dict[str, str]) -> int | None:
+    """Population for an agent-model row, recovered for CSVs written before the agent axis.
+
+    Those ran every agent model once at its default population and recorded no count. It is
+    exactly recoverable anyway: ``updates_per_sec`` is population × ``steps_per_sec``, so the
+    ratio is the population the run actually used — no assumption about what the default was at
+    that commit. Recovering it puts those runs on the same axis as the swept ones, which is what
+    makes figure 04 a comparison across commits rather than one line.
+    """
+    recorded = _int_or_none(row.get("num_agents", ""))
+    if recorded is not None:
+        return recorded
+    if row["grid_w"].strip():
+        return None  # a grid model; population there means cells, already read as `cells`
+    try:
+        steps_per_sec = float(row["steps_per_sec"])
+        agents = float(row["updates_per_sec"]) / steps_per_sec
+    except (KeyError, ValueError, ZeroDivisionError):
+        return None
+    # Both rates are reported rounded, so the ratio lands near the count rather than on it —
+    # 50k reads as 50000.5 to 50001.0 across four rows, which would scatter one population over
+    # several x positions. The residual is ~1e-5 relative, so 4 significant figures absorbs it
+    # while staying far finer than the gap between any two points on the ladder.
+    return _round_sig(agents, 4) if agents >= 1 else None
+
+
+def _round_sig(value: float, digits: int) -> int:
+    exponent = math.floor(math.log10(value))
+    factor = 10 ** (exponent - digits + 1)
+    return int(round(value / factor) * factor) if factor > 1 else int(round(value))
+
+
 def load_results(results_dir: Path) -> tuple[list[Commit], dict[str, list[Run]]]:
     """Load every benchmark CSV, oldest commit first."""
     commits: list[Commit] = []
@@ -175,8 +210,7 @@ def load_results(results_dir: Path) -> tuple[list[Commit], dict[str, list[Run]]]
                         is_gpu=row["is_gpu"].strip().lower() == "true",
                         cells=_int_or_none(row["requested_cells"]),
                         grid_w=_int_or_none(row["grid_w"]),
-                        # Absent from CSVs written before the agent axis existed.
-                        agents=_int_or_none(row.get("num_agents", "")),
+                        agents=_agents(row),
                         steps=int(row["steps"]),
                         warmup=int(row["warmup"]),
                         global_warmup=int(row["global_warmup"]),
