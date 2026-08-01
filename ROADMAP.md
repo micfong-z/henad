@@ -1,0 +1,4 @@
+- [ ] Consistency check with other ABMs
+- [ ] GPU model authoring simplification
+- [ ] Extract common methods (e.g. find neighbors)
+- [ ] Documentation
