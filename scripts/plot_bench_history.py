@@ -11,7 +11,7 @@ Reads every ``results/<n>_bench_matrix_<host>_<sha>.csv`` produced by
   01  absolute throughput scaling, one panel per model, one line per commit
   02  throughput relative to the oldest commit
   03  how sensitive the numbers are to the benchmark config (GPU)
-  04  boids, the continuous-space model
+  04  the same scaling question for the agent models, whose axis is agent count not grid size
 
 Run with uv (no venv needed):  uv run scripts/plot_bench_history.py
 """
@@ -50,12 +50,15 @@ SURFACE = "#fcfcfb"
 
 # Panel order for the per-model figures: CPU row first, then GPU row.
 GRID_MODELS = ["game_of_life", "sir", "gpu_game_of_life", "gpu_sir"]
+# Agent models scale along agent count, not grid size, so they get their own figure.
+AGENT_MODELS = ["boids", "ants"]
 MODEL_TITLES = {
     "game_of_life": "game_of_life (CPU)",
     "sir": "sir (CPU)",
     "gpu_game_of_life": "gpu_game_of_life (GPU)",
     "gpu_sir": "gpu_sir (GPU)",
     "boids": "boids (CPU, continuous space)",
+    "ants": "ants (CPU, agents over a scalar field)",
 }
 
 
@@ -90,6 +93,7 @@ class Run:
     is_gpu: bool
     cells: int | None
     grid_w: int | None
+    agents: int | None
     steps: int
     warmup: int
     global_warmup: int
@@ -98,6 +102,15 @@ class Run:
     max_s: float
     updates_per_sec: float
     steps_per_sec: float
+
+    @property
+    def scale(self) -> int | None:
+        """Where this run sits on its model's scaling axis: cells for a grid, agents otherwise.
+
+        One accessor so the scaling figures work for both, since `updates_per_sec` already means
+        "cell updates" or "agent updates" to match.
+        """
+        return self.cells if self.cells is not None else self.agents
 
     @property
     def config(self) -> tuple[int, int, int]:
@@ -162,6 +175,8 @@ def load_results(results_dir: Path) -> tuple[list[Commit], dict[str, list[Run]]]
                         is_gpu=row["is_gpu"].strip().lower() == "true",
                         cells=_int_or_none(row["requested_cells"]),
                         grid_w=_int_or_none(row["grid_w"]),
+                        # Absent from CSVs written before the agent axis existed.
+                        agents=_int_or_none(row.get("num_agents", "")),
                         steps=int(row["steps"]),
                         warmup=int(row["warmup"]),
                         global_warmup=int(row["global_warmup"]),
@@ -210,13 +225,13 @@ def by_model(runs: list[Run], model: str) -> list[Run]:
     return [r for r in runs if r.model == model]
 
 
-def cell_sizes(runs_by_commit: dict[str, list[Run]], model: str) -> list[int]:
-    """Every grid size (in cells) this model was successfully measured at, ascending."""
+def scale_points(runs_by_commit: dict[str, list[Run]], model: str) -> list[int]:
+    """Every point on this model's scaling axis that was successfully measured, ascending."""
     sizes = {
-        r.cells
+        r.scale
         for rows in runs_by_commit.values()
         for r in by_model(rows, model)
-        if r.cells is not None and r.cells >= 1
+        if r.scale is not None and r.scale >= 1
     }
     return sorted(sizes)
 
@@ -226,14 +241,14 @@ def series_for_model(
     runs_by_commit: dict[str, list[Run]],
     model: str,
 ) -> tuple[list[int], dict[str, dict[int, Run]]]:
-    """Representative run per (commit, grid size), plus the shared x axis."""
-    sizes = cell_sizes(runs_by_commit, model)
+    """Representative run per (commit, scale point), plus the shared x axis."""
+    sizes = scale_points(runs_by_commit, model)
     picked: dict[str, dict[int, Run]] = {}
     for commit in commits:
         rows = by_model(runs_by_commit[commit.sha], model)
         per_size: dict[int, Run] = {}
         for size in sizes:
-            chosen = select_representative_run([r for r in rows if r.cells == size])
+            chosen = select_representative_run([r for r in rows if r.scale == size])
             if chosen is not None:
                 per_size[size] = chosen
         picked[commit.sha] = per_size
@@ -470,59 +485,58 @@ def fig_config_sensitivity(commits, runs_by_commit, out: Path, cells: int) -> No
     plt.close(fig)
 
 
-def fig_boids(commits, runs_by_commit, out: Path) -> None:
-    """04 — boids: agent updates/sec per config. Skipped when no commit measured it."""
-    configs = sorted({r.config for rows in runs_by_commit.values() for r in by_model(rows, "boids")})
-    if not configs:
-        print("no boids rows in any CSV — skipping figure 04", file=sys.stderr)
+def fig_agents(commits, runs_by_commit, out: Path) -> None:
+    """04 — agent models: throughput vs agent count. Skipped when no commit measured any.
+
+    The counterpart of figure 01 for the agent axis. The population is swept at the model's own
+    default density (`bench_matrix.world_for_agents`), so the world grows with the count and a
+    flat line means per-agent cost held constant as the population scaled.
+    """
+    present = [m for m in AGENT_MODELS if scale_points(runs_by_commit, m)]
+    if not present:
+        print("no agent-model rows in any CSV — skipping figure 04", file=sys.stderr)
         return
 
-    fig, ax = plt.subplots(figsize=(8, 4.6))
-    width = 0.8 / len(commits)
+    fig, axes = plt.subplots(1, len(present), figsize=(5.2 * len(present), 4.4), squeeze=False)
     missing: list[str] = []
-    reference: dict[tuple[int, int, int], float] = {}
-    for i, commit in enumerate(commits):
-        lookup = {r.config: r for r in by_model(runs_by_commit[commit.sha], "boids")}
-        if not lookup:
-            missing.append(f"{commit.order}. {commit.short}")
-            continue
-        values = [lookup[c].updates_per_sec if c in lookup else 0.0 for c in configs]
-        bands = [lookup[c].throughput_band if c in lookup else (0.0, 0.0) for c in configs]
-        offsets = [p - 0.4 + width * (i + 0.5) for p in range(len(configs))]
-        ax.bar(
-            offsets,
-            values,
-            width=width * 0.9,
-            color=COMMIT_COLORS[i % len(COMMIT_COLORS)],
-            linewidth=0,
-            yerr=error_bars(values, bands),
-            error_kw=ERROR_KW,
-        )
-        for config, x, value, (_, high) in zip(configs, offsets, values, bands):
-            if not value:
+    for ax, model in zip(axes.flat, present):
+        sizes, picked = series_for_model(commits, runs_by_commit, model)
+        for i, commit in enumerate(commits):
+            per_size = picked[commit.sha]
+            xs = [s for s in sizes if s in per_size]
+            if not xs:
+                label = f"{commit.order}. {commit.short}"
+                if label not in missing:
+                    missing.append(label)
                 continue
-            # First commit that measured boids is the reference the rest are read against.
-            base = reference.setdefault(config, value)
-            delta = "" if value == base else f"\n{(value / base - 1) * 100:+.1f}%"
-            ax.text(x, high, si(value) + delta, ha="center", va="bottom", fontsize=7, color=TEXT_SECONDARY)
+            ys = [per_size[s].updates_per_sec for s in xs]
+            bands = [per_size[s].throughput_band for s in xs]
+            ax.errorbar(
+                xs,
+                ys,
+                yerr=error_bars(ys, bands),
+                color=COMMIT_COLORS[i % len(COMMIT_COLORS)],
+                marker=COMMIT_MARKERS[i % len(COMMIT_MARKERS)],
+                markersize=4.5,
+                linewidth=1.8,
+                **ERROR_KW,
+            )
+        ax.set(xscale="log", yscale="log", title=MODEL_TITLES[model])
+        ax.set_xticks(sizes, minor=False)
+        ax.set_xticks([], minor=True)
+        ax.set_xticklabels([si(s) for s in sizes], rotation=45, ha="right")
+        ax.yaxis.set_major_formatter(FuncFormatter(si))
+        ax.set(xlabel="agents", ylabel="agent updates / sec")
 
-    ax.set(ylabel="agent updates / sec")
-    fig.suptitle("boids — agent updates / sec", fontsize=13, color=TEXT_PRIMARY)
-    ax.yaxis.set_major_formatter(FuncFormatter(si))
-    ax.set_ylim(0, ax.get_ylim()[1] * 1.2)
-    ax.set_xticks(range(len(configs)))
-    ax.set_xticklabels([f"{s} steps\nglobal {gw}\nwarmup {w}" for s, gw, w in configs], fontsize=7)
+    fig.suptitle("Throughput vs agent count, per agent model", fontsize=13, color=TEXT_PRIMARY, y=0.985)
+    subtitle = "population swept at each model's default density, so the world grows with it · " + POLICY_NOTE
     if missing:
-        fig.text(
-            0.5,
-            0.915,
-            "not benchmarked at " + ", ".join(missing) + " — boids is excluded by default in bench_matrix.py",
-            ha="center",
-            fontsize=8,
-            color=TEXT_SECONDARY,
-        )
+        subtitle += "\nnot benchmarked at " + ", ".join(missing)
+    fig.text(0.5, 0.895, subtitle, ha="center", fontsize=8, va="top", color=TEXT_SECONDARY)
     commit_legend(fig, commits, ncol=2)
-    fig.tight_layout(rect=(0, 0.14, 1, 0.9))
+    # Top margin leaves room for the second subtitle line, which only appears when a commit is
+    # missing agent rows.
+    fig.tight_layout(rect=(0, 0.12, 1, 0.86 if missing else 0.89))
     fig.savefig(out)
     plt.close(fig)
 
@@ -531,8 +545,10 @@ def print_summary(commits, runs_by_commit) -> None:
     """Text version of figure 02, so the numbers are greppable without opening a PNG."""
     baseline = commits[0]
     print(f"\nbaseline: {baseline.order}. {baseline.label}")
-    for model in GRID_MODELS:
+    for model in GRID_MODELS + AGENT_MODELS:
         sizes, picked = series_for_model(commits, runs_by_commit, model)
+        if not sizes:
+            continue
         base = picked[baseline.sha]
         any_run = next((r for r in picked[baseline.sha].values()), None)
         config = (
@@ -541,11 +557,12 @@ def print_summary(commits, runs_by_commit) -> None:
             if any_run
             else ""
         )
+        is_agent = model in AGENT_MODELS
         print(f"\n{MODEL_TITLES[model]}{config}")
-        header = "  grid".ljust(12) + "".join(f"{c.short:>14}" for c in commits)
+        header = ("  agents" if is_agent else "  grid").ljust(12) + "".join(f"{c.short:>14}" for c in commits)
         print(header)
         for size in sizes:
-            cells = f"  {grid_label(size)}".ljust(12)
+            cells = f"  {si(size) if is_agent else grid_label(size)}".ljust(12)
             parts = []
             for commit in commits:
                 run = picked[commit.sha].get(size)
@@ -587,7 +604,7 @@ def main() -> int:
     if len(commits) > 1:
         fig_change_vs_baseline(commits, runs_by_commit, args.out / "02_change_vs_baseline.png")
     fig_config_sensitivity(commits, runs_by_commit, args.out / "03_config_sensitivity.png", args.sensitivity_cells)
-    fig_boids(commits, runs_by_commit, args.out / "04_boids.png")
+    fig_agents(commits, runs_by_commit, args.out / "04_agent_scaling.png")
 
     if not args.no_summary:
         print_summary(commits, runs_by_commit)

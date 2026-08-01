@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""Benchmark every registered model across a configuration matrix, into a CSV.
+
+Each model is swept along whichever scaling axis it actually has, read from its own
+``henad-cli <model> --params`` output:
+
+  grid models (``grid_width``)   grid size, from 0 cells up to 4096² (8192² on GPU)
+  agent models (``num_agents``)  agent count, at the model's default density
+
+Orthogonal to that axis, every point is run at each combination of steps, per-rep warmup and
+global warmup — those knobs move the numbers a lot (see figure 03 of ``plot_bench_history.py``),
+so the matrix measures them rather than picking one.
+
+Every row records the full resolved parameter set in ``params_json``, so a measurement stays
+interpretable after a model's defaults change.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -25,6 +41,10 @@ GRID_SIZES: list[tuple[int, int]] = [
 ]
 GRID_SIZES_GPU_ONLY: list[tuple[int, int]] = [(8192, 8192)]
 
+# The scaling axis for agent models, standing in for GRID_SIZES. Counts above a model's declared
+# num_agents maximum are dropped per model.
+AGENT_COUNTS: list[int] = [1, 1_000, 10_000, 100_000, 1_000_000, 10_000_000]
+
 GLOBAL_WARMUPS: list[int] = [0, 1000]
 GLOBAL_WARMUPS_GPU_ONLY: list[int] = [10000]
 
@@ -36,7 +56,7 @@ STEPS_GPU_ONLY: list[int] = [100000]
 # Model ids carrying this prefix are GPU-backed (matches the registry convention).
 GPU_PREFIX = "gpu_"
 
-DEFAULT_EXCLUDED_MODELS: list[str] = ["boids"]
+DEFAULT_EXCLUDED_MODELS: list[str] = []
 
 _DURATION_UNITS = {
     "s": 1.0,
@@ -57,6 +77,8 @@ _UPDATES_PER_SEC_RE = re.compile(r"^\s*>\s*mean updates/sec:\s*(.+?)\s*$")
 _GRID_SIZE_RE = re.compile(r"^\s*>\s*grid size:\s*(.+?)\s*$")
 _REP_RE = re.compile(r"^\s*#\s*(\d+):\s*(\S+)\s*(.*)$")
 _LIST_RE = re.compile(r"^\s{2,}(\S+)\s+(.+?)\s*$")
+# `--params` emits `key=value` fields, with only `label` quoted.
+_PARAM_FIELD_RE = re.compile(r'(\w+)=("[^"]*"|\S+)')
 
 
 def parse_duration(text: str) -> float | None:
@@ -147,14 +169,33 @@ def parse_rep_times(stderr: str) -> tuple[float | None, list[float]]:
 
 @dataclass(frozen=True)
 class Config:
-    """One point in the sweep."""
+    """One point in the sweep.
+
+    Exactly one of `grid` and `agents` is set — a model is swept along a grid-size axis or an
+    agent-count axis, never both. `world` accompanies `agents` (see :func:`world_for_agents`).
+    """
 
     model: str
     is_gpu: bool
     grid: tuple[int, int] | None
+    agents: int | None
+    world: tuple[float, float] | None
     steps: int
     warmup: int
     global_warmup: int
+
+    def overrides(self) -> dict[str, str]:
+        """The `--set` values this config applies on top of the model's defaults."""
+        if self.grid is not None:
+            width, height = self.grid
+            return {"grid_width": str(width), "grid_height": str(height)}
+        if self.agents is not None and self.world is not None:
+            return {
+                "num_agents": str(self.agents),
+                "world_width": f"{self.world[0]:.6g}",
+                "world_height": f"{self.world[1]:.6g}",
+            }
+        return {}
 
     def cli_args(self, reps: int) -> list[str]:
         args = [
@@ -168,24 +209,40 @@ class Config:
             "--global-warmup",
             str(self.global_warmup),
         ]
-        if self.grid is not None:
-            width, height = self.grid
-            args += ["--set", f"grid_width={width}", "--set", f"grid_height={height}"]
+        for param_id, value in self.overrides().items():
+            args += ["--set", f"{param_id}={value}"]
         return args
+
+    def label(self) -> str:
+        if self.grid is not None:
+            return f"grid={self.grid[0]}x{self.grid[1]}"
+        if self.agents is not None:
+            return f"agents={self.agents}"
+        return "grid=n/a"
 
     def key(self) -> tuple:
         """Identity used for --resume de-duplication."""
         width, height = self.grid if self.grid is not None else (-1, -1)
-        return (self.model, width, height, self.steps, self.warmup, self.global_warmup)
+        return (
+            self.model,
+            width,
+            height,
+            self.agents if self.agents is not None else -1,
+            self.steps,
+            self.warmup,
+            self.global_warmup,
+        )
 
     def estimated_cost(self, reps: int) -> int:
-        """Rough work estimate (cell-steps), used to order cheap runs first."""
+        """Rough work estimate (element-steps), used to order cheap runs first."""
         if self.grid is not None:
-            cells = max(self.grid[0] * self.grid[1], 1)
+            elements = max(self.grid[0] * self.grid[1], 1)
+        elif self.agents is not None:
+            elements = max(self.agents, 1)
         else:
-            cells = 1_000_000  # unknown (continuous model); assume mid-sized
+            elements = 1_000_000  # no scaling axis; assume mid-sized
         total_steps = (self.steps + self.warmup) * reps + self.global_warmup
-        return total_steps * cells
+        return total_steps * elements
 
 
 def run_cli(binary: Path, args: list[str], timeout: float) -> tuple[int, str, str, float]:
@@ -224,34 +281,147 @@ def discover_models(binary: Path, timeout: float) -> list[str]:
     return models
 
 
-def model_supports_grid(binary: Path, model: str, timeout: float) -> bool:
-    """Probe whether a model accepts grid_width/grid_height (grid vs continuous)."""
-    code, _, _, _ = run_cli(
-        binary,
-        [model, "--steps", "1", "--reps", "1", "--set", "grid_width=64", "--set", "grid_height=64"],
-        timeout,
-    )
-    return code == 0
+@dataclass(frozen=True)
+class Param:
+    """One row of ``henad-cli <model> --params``."""
+
+    index: int
+    id: str
+    kind: str
+    default: str
+    minimum: str | None
+    maximum: str | None
+
+    def default_number(self) -> float:
+        return float(self.default)
+
+    def max_number(self, fallback: float) -> float:
+        return float(self.maximum) if self.maximum is not None else fallback
 
 
-def build_configs(models: list[str], grid_capable: dict[str, bool], reps: int) -> list[Config]:
+class ModelInfo:
+    """A model's parameter surface, which is what decides its sweep axis.
+
+    Read from ``--params`` rather than probed by trial runs: a model exposing ``grid_width`` is
+    swept over grid sizes, one exposing ``num_agents`` over agent counts. Also carries the
+    defaults, so a row's full parameter set can be recorded even for values the sweep never
+    overrode.
+    """
+
+    def __init__(self, model: str, params: list[Param]) -> None:
+        self.model = model
+        self.params = params
+        self.by_id = {p.id: p for p in params}
+
+    def has(self, param_id: str) -> bool:
+        return param_id in self.by_id
+
+    @property
+    def is_grid(self) -> bool:
+        return self.has("grid_width") and self.has("grid_height")
+
+    @property
+    def is_agent(self) -> bool:
+        return self.has("num_agents") and self.has("world_width")
+
+    @property
+    def axis(self) -> str:
+        if self.is_grid:
+            return "grid"
+        if self.is_agent:
+            return "agents"
+        return "none"
+
+    @property
+    def agent_density(self) -> float:
+        """Agents per unit of world area, at the model's own defaults.
+
+        The agent sweep holds this constant (see :func:`world_for_agents`), so it is the model
+        author's chosen density that gets scaled up, not an arbitrary one.
+        """
+        agents = self.by_id["num_agents"].default_number()
+        area = self.by_id["world_width"].default_number() * self.by_id["world_height"].default_number()
+        return agents / area if area > 0 else 0.0
+
+    def resolved(self, overrides: dict[str, str]) -> dict[str, str]:
+        """Every parameter's value for a run: defaults with the sweep's overrides applied."""
+        values = {p.id: p.default for p in self.params}
+        values.update(overrides)
+        return values
+
+
+def discover_params(binary: Path, model: str, timeout: float) -> ModelInfo:
+    """Read one model's parameter descriptors via ``--params``."""
+    code, stdout, stderr, _ = run_cli(binary, [model, "--params"], timeout)
+    if code != 0:
+        raise SystemExit(f"`henad-cli {model} --params` failed ({code}):\n{stderr}")
+    params: list[Param] = []
+    for line in stdout.splitlines():
+        fields = {k: v.strip('"') for k, v in _PARAM_FIELD_RE.findall(line)}
+        if "index" not in fields or "id" not in fields:
+            continue
+        params.append(
+            Param(
+                index=int(fields["index"]),
+                id=fields["id"],
+                kind=fields.get("kind", ""),
+                default=fields.get("default", ""),
+                minimum=fields.get("min"),
+                maximum=fields.get("max"),
+            )
+        )
+    if not params:
+        raise SystemExit(f"could not parse any parameters from `{model} --params`:\n{stdout}")
+    return ModelInfo(model, params)
+
+
+def world_for_agents(info: ModelInfo, agents: int) -> tuple[float, float]:
+    """Square world holding `agents` at the model's default density.
+
+    Constant density, not a constant world, because both agent models' costs are density-driven:
+    boids' neighbour count per agent is set by how many agents share a `SpatialHash` cell, and
+    ants' scatter contention by how many deposit into one field cell. Growing the population in a
+    fixed world would therefore measure more agents *and* more work per agent at once, and the
+    resulting updates/sec would not be comparable across the sweep.
+    """
+    density = info.agent_density
+    if density <= 0:
+        return (0.0, 0.0)
+    side = (agents / density) ** 0.5
+    return (side, side)
+
+
+def scale_points(info: ModelInfo, is_gpu: bool) -> list[tuple[tuple[int, int] | None, int | None]]:
+    """The model's scaling axis as `(grid, agents)` pairs, one of which is always None."""
+    if info.is_grid:
+        grids = list(GRID_SIZES) + (GRID_SIZES_GPU_ONLY if is_gpu else [])
+        return [(grid, None) for grid in grids]
+    if info.is_agent:
+        # A model declares its own population ceiling; asking for more would only measure how it
+        # fails. The world scales with the count, so cap it against `world_width`'s max too.
+        max_agents = info.by_id["num_agents"].max_number(float("inf"))
+        max_side = info.by_id["world_width"].max_number(float("inf"))
+        counts = [
+            n
+            for n in AGENT_COUNTS
+            if n <= max_agents and world_for_agents(info, n)[0] <= max_side
+        ]
+        return [(None, n) for n in counts]
+    return [(None, None)]
+
+
+def build_configs(models: list[str], infos: dict[str, ModelInfo], reps: int) -> list[Config]:
     """Expand the matrix into concrete configurations, cheapest first."""
     configs: list[Config] = []
     for model in models:
         is_gpu = model.startswith(GPU_PREFIX)
-
-        grids: list[tuple[int, int] | None]
-        if grid_capable[model]:
-            grids = list(GRID_SIZES)
-            if is_gpu:
-                grids += GRID_SIZES_GPU_ONLY
-        else:
-            grids = [None]
+        info = infos[model]
 
         global_warmups = list(GLOBAL_WARMUPS) + (GLOBAL_WARMUPS_GPU_ONLY if is_gpu else [])
         step_counts = list(STEPS) + (STEPS_GPU_ONLY if is_gpu else [])
 
-        for grid in grids:
+        for grid, agents in scale_points(info, is_gpu):
+            world = world_for_agents(info, agents) if agents is not None else None
             for steps in step_counts:
                 for fraction in WARMUP_FRACTIONS:
                     for global_warmup in global_warmups:
@@ -260,6 +430,8 @@ def build_configs(models: list[str], grid_capable: dict[str, bool], reps: int) -
                                 model=model,
                                 is_gpu=is_gpu,
                                 grid=grid,
+                                agents=agents,
+                                world=world,
                                 steps=steps,
                                 warmup=int(steps * fraction),
                                 global_warmup=global_warmup,
@@ -272,9 +444,14 @@ def build_configs(models: list[str], grid_capable: dict[str, bool], reps: int) -
 CSV_FIELDS = [
     "model",
     "is_gpu",
+    "axis",
     "grid_w",
     "grid_h",
     "requested_cells",
+    "num_agents",
+    "world_w",
+    "world_h",
+    "params_json",
     "steps",
     "warmup",
     "global_warmup",
@@ -313,16 +490,23 @@ def extract_error(stderr: str, code: int) -> str:
     return (lines[-1] if lines else f"exit {code}")[:300]
 
 
-def run_config(binary: Path, cfg: Config, reps: int, timeout: float) -> dict:
+def run_config(binary: Path, cfg: Config, info: ModelInfo, reps: int, timeout: float) -> dict:
     """Execute one configuration and flatten it into a CSV row."""
     code, stdout, stderr, wall = run_cli(binary, cfg.cli_args(reps), timeout)
 
     row: dict = {
         "model": cfg.model,
         "is_gpu": cfg.is_gpu,
+        "axis": info.axis,
         "grid_w": cfg.grid[0] if cfg.grid else "",
         "grid_h": cfg.grid[1] if cfg.grid else "",
         "requested_cells": (cfg.grid[0] * cfg.grid[1]) if cfg.grid else "",
+        "num_agents": cfg.agents if cfg.agents is not None else "",
+        "world_w": f"{cfg.world[0]:.6g}" if cfg.world else "",
+        "world_h": f"{cfg.world[1]:.6g}" if cfg.world else "",
+        # Every parameter the model ran with, defaults included — so a row stays interpretable
+        # after a model's defaults change, and reproducing it needs nothing but this cell.
+        "params_json": json.dumps(info.resolved(cfg.overrides()), sort_keys=True),
         "steps": cfg.steps,
         "warmup": cfg.warmup,
         "global_warmup": cfg.global_warmup,
@@ -359,11 +543,15 @@ def load_done_keys(path: Path) -> set[tuple]:
             try:
                 grid_w = int(row["grid_w"]) if row["grid_w"] else -1
                 grid_h = int(row["grid_h"]) if row["grid_h"] else -1
+                # `.get`, not `[...]`: a CSV written before the agent axis existed has no such
+                # column, and its rows should still count as done.
+                agents = int(row.get("num_agents") or -1)
                 done.add(
                     (
                         row["model"],
                         grid_w,
                         grid_h,
+                        agents,
                         int(row["steps"]),
                         int(row["warmup"]),
                         int(row["global_warmup"]),
@@ -420,11 +608,17 @@ def main() -> int:
         return 1
 
     print(f"models: {', '.join(models)}", file=sys.stderr)
-    grid_capable = {m: model_supports_grid(args.binary, m, args.timeout) for m in models}
-    for model, capable in grid_capable.items():
-        print(f"  {model:<20} {'grid' if capable else 'continuous (no grid axis)'}", file=sys.stderr)
+    infos = {m: discover_params(args.binary, m, args.timeout) for m in models}
+    for model, info in infos.items():
+        if info.axis == "agents":
+            axis = f"agent count (density {info.agent_density:g} agents/unit²)"
+        elif info.axis == "grid":
+            axis = "grid size"
+        else:
+            axis = "none (single configuration)"
+        print(f"  {model:<20} swept over {axis}", file=sys.stderr)
 
-    configs = build_configs(models, grid_capable, args.reps)
+    configs = build_configs(models, infos, args.reps)
 
     done = load_done_keys(args.out) if args.resume else set()
     if done:
@@ -435,9 +629,8 @@ def main() -> int:
     print(f"\n{len(configs)} configurations x {args.reps} reps", file=sys.stderr)
     if args.dry_run:
         for cfg in configs:
-            grid = f"{cfg.grid[0]}x{cfg.grid[1]}" if cfg.grid else "n/a"
             print(
-                f"  {cfg.model:<20} grid={grid:<12} steps={cfg.steps:<7}"
+                f"  {cfg.model:<20} {cfg.label():<20} steps={cfg.steps:<7}"
                 f" warmup={cfg.warmup:<6} global={cfg.global_warmup}",
                 file=sys.stderr,
             )
@@ -454,14 +647,13 @@ def main() -> int:
             writer.writeheader()
 
         for index, cfg in enumerate(configs, start=1):
-            grid = f"{cfg.grid[0]}x{cfg.grid[1]}" if cfg.grid else "n/a"
             label = (
-                f"[{index}/{len(configs)}] {cfg.model} grid={grid} steps={cfg.steps}"
+                f"[{index}/{len(configs)}] {cfg.model} {cfg.label()} steps={cfg.steps}"
                 f" warmup={cfg.warmup} global={cfg.global_warmup}"
             )
             print(label, file=sys.stderr, flush=True)
 
-            row = run_config(args.binary, cfg, args.reps, args.timeout)
+            row = run_config(args.binary, cfg, infos[cfg.model], args.reps, args.timeout)
             writer.writerow(row)
             handle.flush()
             rows.append(row)

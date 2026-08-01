@@ -30,7 +30,10 @@ Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatte
 Run desktop app: `cargo run -p henad-app`
 Run web version locally: `trunk serve` (from repo root, uses `Trunk.toml` + `index.html`)
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
-(`--list` for ids, `--set id=value` to override a param, `--export-stats` for the time series)
+(`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
+one, `--export-stats` for the time series)
+Sweep every model across the config matrix: `python3 scripts/bench_matrix.py` (grid models scale
+over grid size, agent models over agent count at constant density; `--dry-run` to see the matrix)
 
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).
 

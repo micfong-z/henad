@@ -15,6 +15,7 @@
 //!
 //! ```text
 //! henad-cli --list
+//! henad-cli ants --params
 //! henad-cli game_of_life --steps 10000 --reps 5
 //! henad-cli sir --set grid_width=512 --steps 2000 --export final.txt
 //! henad-cli sir --steps 2000 --export-stats sir.csv --stats-every 10
@@ -96,6 +97,10 @@ struct Args {
     #[arg(long)]
     list: bool,
 
+    /// Print the model's parameters (the ids `--set` takes, with kinds and defaults) and exit.
+    #[arg(long)]
+    params: bool,
+
     /// Print host and GPU information. With no model given, prints and exits; with one, prints as a
     /// provenance header before the benchmark.
     #[arg(long)]
@@ -148,6 +153,11 @@ fn main() -> Result<()> {
         .iter()
         .find(|e| e.id == model_id)
         .with_context(|| format!("unknown model '{model_id}' (try --list)"))?;
+
+    if args.params {
+        print_params(entry);
+        return Ok(());
+    }
 
     let overrides = parse_overrides(&args.set)?;
     let params = resolve_params(&entry.param_descriptors, &overrides)?;
@@ -207,6 +217,29 @@ fn print_models(registry: &[ModelEntry]) {
     for entry in registry {
         let (id, name) = (&entry.id, &entry.name);
         println!("  {id:<18} {name}");
+    }
+}
+
+/// Print one model's parameter descriptors: the ids `--set` accepts, with kinds, defaults and
+/// bounds.
+///
+/// Emitted as `key=value` fields rather than a formatted table so `scripts/bench_matrix.py` can
+/// read a model's axes (does it have `grid_width`? `num_agents`? at what default?) instead of
+/// hard-coding per-model knowledge or probing with throwaway runs.
+fn print_params(entry: &ModelEntry) {
+    println!("parameters for {} ({}):", entry.id, entry.name);
+    for (index, desc) in entry.param_descriptors.iter().enumerate() {
+        let (id, label) = (desc.id, desc.label);
+        let apply = if desc.is_live() { "live" } else { "reload" };
+        let kind = match &desc.kind {
+            ParamKind::F32 { min, max, default, .. } => format!("kind=f32 default={default} min={min} max={max}"),
+            ParamKind::U32 { min, max, default } => format!("kind=u32 default={default} min={min} max={max}"),
+            ParamKind::Bool { default } => format!("kind=bool default={default}"),
+            ParamKind::Choice { options, default } => {
+                format!("kind=choice default={default} options={}", options.join("|"))
+            }
+        };
+        println!("  index={index} id={id} {kind} apply={apply} label=\"{label}\"");
     }
 }
 
