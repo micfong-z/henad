@@ -1,10 +1,12 @@
+use henad_compute::agent_engine::{AgentModelState, agent_model_param_descriptors};
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::gpu_grid_engine::{GpuGridModelDescriptor, GpuGridState};
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::grid_engine::{GridModelState, grid_model_param_descriptors};
+use henad_core::agent_model::AgentModel;
 use henad_core::gpu_grid_model::GpuGridModel;
 use henad_core::grid_model::GridModel;
-use henad_core::model::{Model, SimState};
+use henad_core::model::{Model as _, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;
 use henad_core::view::StatDescriptor;
@@ -47,26 +49,25 @@ fn register_grid_model<M: GridModel>() -> ModelEntry {
         id: M::ID.to_owned(),
         description: M::DESCRIPTION.to_owned(),
         param_descriptors: grid_model_param_descriptors::<M>(),
-        stat_descriptors: M::stat_descriptors(),
+        stat_descriptors: M::STATS.to_vec(),
         topology_hint: TopologyHint::GRID,
         create: Box::new(|params| ModelState::Cpu(Box::new(GridModelState::<M>::from_params(params)))),
     }
 }
 
-/// Create a `ModelEntry` from a full `Model` implementation.
-fn register_full_model<M: Model + Default>() -> ModelEntry
-where
-    M::State: SimState,
-{
-    let m = M::default();
+/// Create a `ModelEntry` from an `AgentModel` implementation.
+fn register_agent_model<A: AgentModel>() -> ModelEntry {
     ModelEntry {
-        name: m.name().to_owned(),
-        id: m.id().to_owned(),
-        description: m.description().to_owned(),
-        param_descriptors: m.param_descriptors(),
-        stat_descriptors: m.stat_descriptors(),
-        topology_hint: m.topology_hint(),
-        create: Box::new(|params| ModelState::Cpu(Box::new(M::default().create_state(params)))),
+        name: A::NAME.to_owned(),
+        id: A::ID.to_owned(),
+        description: A::DESCRIPTION.to_owned(),
+        param_descriptors: agent_model_param_descriptors::<A>(),
+        stat_descriptors: A::STATS.to_vec(),
+        topology_hint: TopologyHint {
+            grid: <A::Field as henad_core::field::FieldLayer>::HAS_GRID,
+            agents: true,
+        },
+        create: Box::new(|params| ModelState::Cpu(Box::new(AgentModelState::<A>::from_params(params)))),
     }
 }
 
@@ -98,9 +99,9 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
 pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
     let mut entries = vec![
         register_grid_model::<crate::sir::SirGridModel>(),
-        register_full_model::<crate::boids::BoidsModel>(),
+        register_agent_model::<crate::boids::BoidsModel>(),
         register_grid_model::<crate::game_of_life::GameOfLifeModel>(),
-        register_full_model::<crate::ants::AntsModel>(),
+        register_agent_model::<crate::ants::AntsModel>(),
     ];
 
     if let Some(ctx) = gpu {
@@ -168,6 +169,31 @@ mod tests {
                 "{}: declares agents={} but point_view() disagrees",
                 entry.id,
                 entry.topology_hint.agents
+            );
+        }
+    }
+
+    /// Labels and colours are declared once and paired with values positionally, so a model that
+    /// returns too few values loses its trailing series rather than mislabelling anything. Silent
+    /// either way, hence this.
+    #[test]
+    fn every_declared_stat_series_gets_a_value() {
+        for entry in model_registry(None) {
+            let values: Vec<ParamValue> = entry
+                .param_descriptors
+                .iter()
+                .map(|desc| desc.kind.default_value())
+                .collect();
+            let ModelState::Cpu(state) = (entry.create)(&values) else {
+                continue;
+            };
+            assert_eq!(
+                state.stats().len(),
+                entry.stat_descriptors.len(),
+                "{}: declares {} stat series but produced {} values",
+                entry.id,
+                entry.stat_descriptors.len(),
+                state.stats().len()
             );
         }
     }

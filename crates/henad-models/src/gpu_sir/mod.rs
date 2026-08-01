@@ -15,9 +15,9 @@
 
 use henad_compute::grid_engine::GRID_INIT_SEED;
 use henad_core::gpu_grid_model::GpuGridModel;
-use henad_core::helpers::{extract_f32, extract_u32, f32_param, stat, u32_param, xorshift64};
+use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::view::{StatDescriptor, StatEntry};
+use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::sir::PALETTE;
 
@@ -89,7 +89,11 @@ impl GpuGridModel for GpuSir {
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
     /// State buffer plus the per-cell RNG buffer. See the module docs.
     const BUFFER_COUNT: usize = 2;
-    const STAT_COUNT: usize = 3;
+    const STATS: &'static [StatDescriptor] = &[
+        StatDescriptor::new("Susceptible", PALETTE[0]),
+        StatDescriptor::new("Infected", PALETTE[1]),
+        StatDescriptor::new("Recovered", PALETTE[2]),
+    ];
 
     const STEP_SHADER: &'static str = include_str!("step.wgsl");
     const DISPLAY_SHADER: &'static str = include_str!("display.wgsl");
@@ -151,28 +155,11 @@ impl GpuGridModel for GpuSir {
         .to_vec()
     }
 
-    fn stat_descriptors() -> Vec<StatDescriptor> {
+    fn stats(counts: &[u32]) -> Vec<StatValue> {
         vec![
-            StatDescriptor {
-                label: "Susceptible",
-                color: PALETTE[0],
-            },
-            StatDescriptor {
-                label: "Infected",
-                color: PALETTE[1],
-            },
-            StatDescriptor {
-                label: "Recovered",
-                color: PALETTE[2],
-            },
-        ]
-    }
-
-    fn stats(counts: &[u32]) -> Vec<StatEntry> {
-        vec![
-            stat("Susceptible", f64::from(counts[CELL_S]), PALETTE[0]),
-            stat("Infected", f64::from(counts[CELL_I]), PALETTE[1]),
-            stat("Recovered", f64::from(counts[CELL_R]), PALETTE[2]),
+            StatValue::Scalar(f64::from(counts[CELL_S])),
+            StatValue::Scalar(f64::from(counts[CELL_I])),
+            StatValue::Scalar(f64::from(counts[CELL_R])),
         ]
     }
 }
@@ -185,7 +172,7 @@ mod tests {
     use henad_compute::gpu::sim_thread::GpuSimState as _;
     use henad_compute::grid_engine::GridModelState;
     use henad_core::model::SimState as _;
-    use henad_core::view::StatValue;
+    use henad_core::view::StatEntry;
 
     use crate::sir::SirGridModel;
 
@@ -382,11 +369,11 @@ mod runner_tests {
     use henad_compute::gpu::gpu_grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
     use henad_compute::snapshot::{Snapshot, SnapshotView};
-    use henad_core::view::StatValue;
 
     use super::GpuSir;
     use super::tests::{headless_context, params};
     use crate::registry::{ModelState, model_registry};
+    use henad_core::view::StatValue;
 
     fn wait_for(thread: &mut GpuSimThread, timeout: Duration, pred: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
         let deadline = Instant::now() + timeout;

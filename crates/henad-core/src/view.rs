@@ -57,6 +57,28 @@ pub struct StatDescriptor {
     pub color: [u8; 4],
 }
 
+impl StatDescriptor {
+    pub const fn new(label: &'static str, color: [u8; 4]) -> Self {
+        Self { label, color }
+    }
+}
+
+/// Pairs a model's declared series with the values it just produced.
+///
+/// A model declares labels and colours once as a const and returns bare values, so the two cannot
+/// drift. A short `values` leaves the trailing series out rather than mislabelling anything.
+pub fn stat_entries(descriptors: &'static [StatDescriptor], values: Vec<StatValue>) -> Vec<StatEntry> {
+    descriptors
+        .iter()
+        .zip(values)
+        .map(|(d, value)| StatEntry {
+            label: d.label,
+            value,
+            color: d.color,
+        })
+        .collect()
+}
+
 /// Ring-buffer history of stat values, polled every snapshot.
 pub struct StatsHistory {
     /// One column per stat series, each holding `capacity` entries.

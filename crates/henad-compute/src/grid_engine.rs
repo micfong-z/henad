@@ -1,51 +1,31 @@
-use std::marker::PhantomData;
-
-use henad_core::grid::Grid2D;
+use henad_core::field::{Extent, FieldLayer as _};
 use henad_core::grid_model::GridModel;
-#[cfg(not(target_arch = "wasm32"))]
-use henad_core::helpers::xorshift64;
 use henad_core::helpers::{extract_u32, u32_param};
 use henad_core::model::SimState;
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::topology::NeighborhoodKind;
-use henad_core::view::{GridView, StatEntry};
+use henad_core::params::{ParamDescriptor, ParamStore, ParamValue};
+use henad_core::view::{GridView, StatEntry, stat_entries};
 
-/// Seed every `GridModel`'s `init` starts from.
-///
-/// Exported (rather than being a literal inside `from_params`) so a GPU re-implementation of a
-/// CPU model can seed its grid bit-identically and therefore be checked against the CPU model as
-/// an oracle. If this and the model's `init` agree, the two backends start from the same grid.
-pub const GRID_INIT_SEED: u64 = 0xDEAD_BEEF_CAFE_1234;
+use crate::field::CaField;
+
+pub use crate::field::GRID_INIT_SEED;
 
 /// Engine wrapper that implements `SimState` for any `GridModel`.
 pub struct GridModelState<M: GridModel> {
-    grid: Grid2D<u8>,
+    field: CaField<M>,
+    params: ParamStore,
     tick: u64,
-    params: Vec<ParamValue>,
-    /// Cached from the descriptors so `set_param` can reject reload-only indices without
-    /// rebuilding the list every time a slider moves.
-    live_params: Vec<bool>,
-    rng_state: u64,
-    _marker: PhantomData<M>,
 }
 
 impl<M: GridModel> GridModelState<M> {
     pub fn from_params(params: &[ParamValue]) -> Self {
-        let width = extract_u32(params, 0, 1024);
-        let height = extract_u32(params, 1, 1024);
-        let mut grid = Grid2D::new(width, height);
-        let mut rng_state: u64 = GRID_INIT_SEED;
-        M::init(&mut grid, params, &mut rng_state);
+        let extent = Extent {
+            w: extract_u32(params, 0, 1024) as f32,
+            h: extract_u32(params, 1, 1024) as f32,
+        };
         Self {
-            grid,
+            field: CaField::new(extent, params),
+            params: ParamStore::new(&grid_model_param_descriptors::<M>(), params),
             tick: 0,
-            params: params.to_vec(),
-            live_params: grid_model_param_descriptors::<M>()
-                .iter()
-                .map(ParamDescriptor::is_live)
-                .collect(),
-            rng_state,
-            _marker: PhantomData,
         }
     }
 }
@@ -62,9 +42,8 @@ pub fn grid_model_param_descriptors<M: GridModel>() -> Vec<ParamDescriptor> {
 
 impl<M: GridModel> SimState for GridModelState<M> {
     fn step(&mut self) {
-        let hot = M::from_params(&self.params);
-        step_grid::<M>(&mut self.grid, &hot, &mut self.rng_state, self.tick);
-        self.grid.swap();
+        let hot = M::from_params(self.params.values());
+        self.field.update(&(), &hot, self.tick);
         self.tick += 1;
     }
 
@@ -73,194 +52,23 @@ impl<M: GridModel> SimState for GridModelState<M> {
     }
 
     fn grid_view(&self) -> Option<GridView<'_>> {
-        Some(GridView {
-            width: self.grid.width(),
-            height: self.grid.height(),
-            cells: self.grid.current(),
-            palette: M::PALETTE,
-        })
+        self.field.grid_view()
     }
 
     fn stats(&self) -> Vec<StatEntry> {
-        M::stats(&self.grid)
+        stat_entries(M::STATS, M::stats(self.field.grid()))
     }
 
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
-        if self.live_params.get(index) == Some(&true) && index < self.params.len() {
-            self.params[index] = value.clone();
-            true
-        } else {
-            false
-        }
+        self.params.set(index, value)
     }
 
     fn population(&self) -> u64 {
-        self.grid.len() as u64
+        self.field.cell_count() as u64
     }
 
     fn heap_bytes(&self) -> usize {
-        self.grid.heap_bytes()
-    }
-}
-
-fn step_grid<M: GridModel>(grid: &mut Grid2D<u8>, hot: &M::Params, rng_state: &mut u64, tick: u64) {
-    let h = grid.height();
-    let ws = grid.width() as usize;
-    let (current, next) = grid.current_and_next_mut();
-
-    match M::NEIGHBORHOOD {
-        NeighborhoodKind::Moore => {
-            step_rows_moore::<M>(current, next, ws, h, hot, rng_state, tick);
-        }
-        NeighborhoodKind::VonNeumann => {
-            step_rows_vn::<M>(current, next, ws, h, hot, rng_state, tick);
-        }
-    }
-}
-
-/// The rows above, at, and below `y`, wrapped vertically. Sliced to exactly one row wide so a
-/// neighbour access is a single index rather than a `row * stride + x` multiply-add.
-#[inline]
-fn neighbor_rows(current: &[u8], ws: usize, y: usize, h: u32) -> [&[u8]; 3] {
-    let hs = h as usize;
-    let ym = if y == 0 { hs - 1 } else { y - 1 };
-    let yp = if y + 1 == hs { 0 } else { y + 1 };
-    [
-        &current[ym * ws..ym * ws + ws],
-        &current[y * ws..y * ws + ws],
-        &current[yp * ws..yp * ws + ws],
-    ]
-}
-
-/// Derived per row rather than shared, so results don't depend on how rayon chunks the rows.
-#[cfg(not(target_arch = "wasm32"))]
-#[inline]
-fn row_rng(global_seed: u64, tick: u64, y: usize) -> u64 {
-    xorshift64((global_seed ^ tick ^ (y as u64)).max(1))
-}
-
-#[inline(always)]
-fn moore_cell<M: GridModel>(rows: [&[u8]; 3], xm: usize, x: usize, xp: usize, hot: &M::Params, rng: &mut u64) -> u8 {
-    let [up, mid, down] = rows;
-    let neighbors = [up[xm], up[x], up[xp], mid[xm], mid[xp], down[xm], down[x], down[xp]];
-    M::step_cell(mid[x], &neighbors, hot, rng)
-}
-
-#[inline(always)]
-fn vn_cell<M: GridModel>(rows: [&[u8]; 3], xm: usize, x: usize, xp: usize, hot: &M::Params, rng: &mut u64) -> u8 {
-    let [up, mid, down] = rows;
-    let neighbors = [up[x], mid[xm], mid[xp], down[x]];
-    M::step_cell(mid[x], &neighbors, hot, rng)
-}
-
-/// Only the first and last column wrap in x, so both are peeled off and the interior runs without
-/// the per-cell modulo. `last.min(1)` covers a one-column grid, where both wraps land on x 0.
-#[inline(always)]
-fn step_row_moore<M: GridModel>(rows: [&[u8]; 3], next_row: &mut [u8], hot: &M::Params, rng: &mut u64) {
-    let Some(last) = next_row.len().checked_sub(1) else {
-        return;
-    };
-    next_row[0] = moore_cell::<M>(rows, last, 0, last.min(1), hot, rng);
-    if let Some(interior) = next_row.get_mut(1..last) {
-        for (i, out) in interior.iter_mut().enumerate() {
-            let x = i + 1;
-            *out = moore_cell::<M>(rows, x - 1, x, x + 1, hot, rng);
-        }
-    }
-    if last > 0 {
-        next_row[last] = moore_cell::<M>(rows, last - 1, last, 0, hot, rng);
-    }
-}
-
-/// Von Neumann counterpart of [`step_row_moore`].
-#[inline(always)]
-fn step_row_vn<M: GridModel>(rows: [&[u8]; 3], next_row: &mut [u8], hot: &M::Params, rng: &mut u64) {
-    let Some(last) = next_row.len().checked_sub(1) else {
-        return;
-    };
-    next_row[0] = vn_cell::<M>(rows, last, 0, last.min(1), hot, rng);
-    if let Some(interior) = next_row.get_mut(1..last) {
-        for (i, out) in interior.iter_mut().enumerate() {
-            let x = i + 1;
-            *out = vn_cell::<M>(rows, x - 1, x, x + 1, hot, rng);
-        }
-    }
-    if last > 0 {
-        next_row[last] = vn_cell::<M>(rows, last - 1, last, 0, hot, rng);
-    }
-}
-
-#[cfg_attr(
-    target_arch = "wasm32",
-    expect(
-        unused_variables,
-        reason = "wasm threads one rng across rows, so it needs no per-tick seed"
-    )
-)]
-fn step_rows_moore<M: GridModel>(
-    current: &[u8],
-    next: &mut [u8],
-    ws: usize,
-    h: u32,
-    hot: &M::Params,
-    rng_state: &mut u64,
-    tick: u64,
-) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        let global_seed = *rng_state;
-        next.par_chunks_mut(ws).enumerate().for_each(|(y, next_row)| {
-            let mut rng = row_rng(global_seed, tick, y);
-            step_row_moore::<M>(neighbor_rows(current, ws, y, h), next_row, hot, &mut rng);
-        });
-        *rng_state = xorshift64(global_seed ^ tick);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let mut rng = *rng_state;
-        for (y, next_row) in next.chunks_mut(ws).enumerate() {
-            step_row_moore::<M>(neighbor_rows(current, ws, y, h), next_row, hot, &mut rng);
-        }
-        *rng_state = rng;
-    }
-}
-
-#[cfg_attr(
-    target_arch = "wasm32",
-    expect(
-        unused_variables,
-        reason = "wasm threads one rng across rows, so it needs no per-tick seed"
-    )
-)]
-fn step_rows_vn<M: GridModel>(
-    current: &[u8],
-    next: &mut [u8],
-    ws: usize,
-    h: u32,
-    hot: &M::Params,
-    rng_state: &mut u64,
-    tick: u64,
-) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        let global_seed = *rng_state;
-        next.par_chunks_mut(ws).enumerate().for_each(|(y, next_row)| {
-            let mut rng = row_rng(global_seed, tick, y);
-            step_row_vn::<M>(neighbor_rows(current, ws, y, h), next_row, hot, &mut rng);
-        });
-        *rng_state = xorshift64(global_seed ^ tick);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let mut rng = *rng_state;
-        for (y, next_row) in next.chunks_mut(ws).enumerate() {
-            step_row_vn::<M>(neighbor_rows(current, ws, y, h), next_row, hot, &mut rng);
-        }
-        *rng_state = rng;
+        self.field.heap_bytes()
     }
 }
 
@@ -273,7 +81,7 @@ mod tests {
     use henad_core::model::SimState as _;
     use henad_core::params::{ParamDescriptor, ParamValue};
     use henad_core::topology::NeighborhoodKind;
-    use henad_core::view::{StatDescriptor, StatEntry};
+    use henad_core::view::{StatDescriptor, StatValue};
 
     fn live_neighbors(neighbors: &[u8]) -> u8 {
         neighbors.iter().filter(|&&n| n != 0).count() as u8
@@ -291,6 +99,7 @@ mod tests {
                 const DESCRIPTION: &'static str = $id;
                 const PALETTE: &'static [[u8; 4]] = &[[0, 0, 0, 255]; 9];
                 const NEIGHBORHOOD: NeighborhoodKind = $kind;
+                const STATS: &'static [StatDescriptor] = &[];
                 type Params = ();
 
                 fn param_descriptors() -> Vec<ParamDescriptor> {
@@ -310,11 +119,7 @@ mod tests {
                     live_neighbors(neighbors)
                 }
 
-                fn stats(_grid: &Grid2D<u8>) -> Vec<StatEntry> {
-                    Vec::new()
-                }
-
-                fn stat_descriptors() -> Vec<StatDescriptor> {
+                fn stats(_grid: &Grid2D<u8>) -> Vec<StatValue> {
                     Vec::new()
                 }
             }
@@ -395,5 +200,27 @@ mod tests {
                 "{w}x{h}"
             );
         }
+    }
+
+    /// The row seed comes from the row index, so a grid stepped in one thread and the same grid
+    /// stepped across many must agree bit for bit.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn results_do_not_depend_on_the_thread_count() {
+        let params = vec![ParamValue::U32(64), ParamValue::U32(64)];
+        let run = |threads: usize| -> Vec<u8> {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("rayon pool");
+            pool.install(|| {
+                let mut state = GridModelState::<MooreCount>::from_params(&params);
+                for _ in 0..20 {
+                    state.step();
+                }
+                cells(&state)
+            })
+        };
+        assert_eq!(run(1), run(7), "grid contents depend on the thread count");
     }
 }

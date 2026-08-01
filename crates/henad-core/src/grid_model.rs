@@ -1,7 +1,7 @@
 use crate::grid::Grid2D;
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::topology::NeighborhoodKind;
-use crate::view::{StatDescriptor, StatEntry};
+use crate::view::{StatDescriptor, StatValue};
 
 /// Simple API for grid-based cellular automata.
 ///
@@ -16,6 +16,8 @@ pub trait GridModel: Send + Sync + 'static {
     const DESCRIPTION: &'static str;
     const PALETTE: &'static [[u8; 4]];
     const NEIGHBORHOOD: NeighborhoodKind;
+    /// Stat series for the history chart. Declared once, so `stats` returns bare values.
+    const STATS: &'static [StatDescriptor];
 
     /// Pre-extracted hot parameters. Constructed once per tick via `from_params`,
     /// then passed by reference to every `step_cell` call. This guarantees zero
@@ -40,11 +42,9 @@ pub trait GridModel: Send + Sync + 'static {
     /// across rows on native, sequentially on WASM.
     fn step_cell(cell: u8, neighbors: &[u8], params: &Self::Params, rng: &mut u64) -> u8;
 
-    /// Compute current statistics from the grid state.
+    /// Current statistics, in [`Self::STATS`] order.
     ///
-    /// Called on demand when a snapshot is published. Implementations should parallelize this if the computation is expensive.
-    fn stats(grid: &Grid2D<u8>) -> Vec<StatEntry>;
-
-    /// Declare stat series for the history chart.
-    fn stat_descriptors() -> Vec<StatDescriptor>;
+    /// Called on demand when a snapshot is published. Implementations should parallelize this if
+    /// the computation is expensive.
+    fn stats(grid: &Grid2D<u8>) -> Vec<StatValue>;
 }

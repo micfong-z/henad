@@ -1,55 +1,37 @@
-use henad_core::spatial_hash::SpatialHash;
+use std::cell::RefCell;
 
-use crate::boids::state::BoidsState;
+use henad_core::agent_model::{AgentModel as _, StepCtx};
 
-/// One boid's next-tick state.
-struct BoidUpdate {
-    pos_x: f32,
-    pos_y: f32,
-    vel_x: f32,
-    vel_y: f32,
-    color: u8,
+use crate::boids::lanes::{BoidChunk, BoidLanes, BoidRead};
+use crate::boids::{BoidParams, BoidsModel};
+
+thread_local! {
+    /// Neighbour ids from the last `query_radius`, reused so a query does not allocate.
+    static BUF: RefCell<Vec<u32>> = RefCell::new(Vec::with_capacity(64));
 }
 
-pub(crate) fn step(state: &mut BoidsState) {
-    state.hash.build(&state.pos_x, &state.pos_y);
-
-    #[cfg(not(target_arch = "wasm32"))]
-    step_parallel(state);
-    #[cfg(target_arch = "wasm32")]
-    step_sequential(state);
-
-    state.swap_buffers();
-    state.tick += 1;
-}
-
-struct BoidParams {
-    visual_sq: f32,
-    visual_range: f32,
-    protected_sq: f32,
-    separation_factor: f32,
-    alignment_factor: f32,
-    cohesion_factor: f32,
-    max_speed: f32,
-    min_speed: f32,
-    half_w: f32,
-    half_h: f32,
-    world_w: f32,
-    world_h: f32,
+pub(crate) fn run(lanes: &mut BoidLanes, ctx: &StepCtx<'_, BoidsModel>, seed: u64, tick: u64) {
+    let hash = ctx.index;
+    let params = ctx.params;
+    lanes.run_pass(BoidsModel::CHUNK, seed, tick, |i, k, read, chunk, _rng| {
+        BUF.with(|cell| {
+            let mut buf = cell.borrow_mut();
+            step_agent(i, k, read, chunk, hash, params, &mut buf);
+        });
+    });
 }
 
 #[inline]
-#[expect(clippy::too_many_arguments, reason = "Boid behavior depends on many parameters")]
-fn process_agent(
+fn step_agent(
     i: usize,
-    pos_x: &[f32],
-    pos_y: &[f32],
-    vel_x: &[f32],
-    vel_y: &[f32],
-    hash: &SpatialHash,
+    k: usize,
+    read: BoidRead<'_>,
+    out: &mut BoidChunk<'_>,
+    hash: &henad_core::spatial_hash::SpatialHash,
     params: &BoidParams,
     buf: &mut Vec<u32>,
-) -> BoidUpdate {
+) {
+    let (pos_x, pos_y, vel_x, vel_y) = (read.pos_x, read.pos_y, read.vel_x, read.vel_y);
     hash.query_radius(pos_x[i], pos_y[i], params.visual_range, pos_x, pos_y, buf);
 
     let mut close_dx = 0.0;
@@ -121,13 +103,11 @@ fn process_agent(
         new_vy = 0.0;
     }
 
-    BoidUpdate {
-        pos_x: (pos_x[i] + new_vx).rem_euclid(params.world_w),
-        pos_y: (pos_y[i] + new_vy).rem_euclid(params.world_h),
-        vel_x: new_vx,
-        vel_y: new_vy,
-        color: heading_octant(new_vx, new_vy),
-    }
+    out.pos_x[k] = (pos_x[i] + new_vx).rem_euclid(params.world_w);
+    out.pos_y[k] = (pos_y[i] + new_vy).rem_euclid(params.world_h);
+    out.vel_x[k] = new_vx;
+    out.vel_y[k] = new_vy;
+    out.color[k] = heading_octant(new_vx, new_vy);
 }
 
 /// Heading to one of eight octants, indexing `HEADING_PALETTE`.
@@ -151,96 +131,10 @@ pub(crate) fn heading_octant(vel_x: f32, vel_y: f32) -> u8 {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn step_parallel(state: &mut BoidsState) {
-    use std::cell::RefCell;
-
-    use rayon::prelude::*;
-
-    let params = BoidParams {
-        visual_sq: state.visual_range * state.visual_range,
-        visual_range: state.visual_range,
-        protected_sq: state.protected_range * state.protected_range,
-        separation_factor: state.separation_factor,
-        alignment_factor: state.alignment_factor,
-        cohesion_factor: state.cohesion_factor,
-        max_speed: state.max_speed,
-        min_speed: state.min_speed,
-        half_w: 0.5 * state.world_w,
-        half_h: 0.5 * state.world_h,
-        world_w: state.world_w,
-        world_h: state.world_h,
-    };
-
-    let pos_x = &state.pos_x;
-    let pos_y = &state.pos_y;
-    let vel_x = &state.vel_x;
-    let vel_y = &state.vel_y;
-    let hash = &state.hash;
-
-    thread_local! {
-        static BUF: RefCell<Vec<u32>> = RefCell::new(Vec::with_capacity(64));
-    }
-
-    state
-        .next_pos_x
-        .par_iter_mut()
-        .zip(state.next_pos_y.par_iter_mut())
-        .zip(state.next_vel_x.par_iter_mut())
-        .zip(state.next_vel_y.par_iter_mut())
-        .zip(state.color.par_iter_mut())
-        .enumerate()
-        .for_each(|(i, ((((new_px, new_py), new_vx), new_vy), new_color))| {
-            BUF.with(|buf_cell| {
-                let mut buf = buf_cell.borrow_mut();
-                let out = process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
-                *new_px = out.pos_x;
-                *new_py = out.pos_y;
-                *new_vx = out.vel_x;
-                *new_vy = out.vel_y;
-                *new_color = out.color;
-            });
-        });
-}
-
-#[cfg(target_arch = "wasm32")]
-fn step_sequential(state: &mut BoidsState) {
-    let params = BoidParams {
-        visual_sq: state.visual_range * state.visual_range,
-        visual_range: state.visual_range,
-        protected_sq: state.protected_range * state.protected_range,
-        separation_factor: state.separation_factor,
-        alignment_factor: state.alignment_factor,
-        cohesion_factor: state.cohesion_factor,
-        max_speed: state.max_speed,
-        min_speed: state.min_speed,
-        half_w: 0.5 * state.world_w,
-        half_h: 0.5 * state.world_h,
-        world_w: state.world_w,
-        world_h: state.world_h,
-    };
-
-    let pos_x = &state.pos_x;
-    let pos_y = &state.pos_y;
-    let vel_x = &state.vel_x;
-    let vel_y = &state.vel_y;
-    let hash = &state.hash;
-    let mut buf = Vec::with_capacity(64);
-
-    for i in 0..state.num_boids as usize {
-        let out = process_agent(i, pos_x, pos_y, vel_x, vel_y, hash, &params, &mut buf);
-        state.next_pos_x[i] = out.pos_x;
-        state.next_pos_y[i] = out.pos_y;
-        state.next_vel_x[i] = out.vel_x;
-        state.next_vel_y[i] = out.vel_y;
-        state.color[i] = out.color;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::heading_octant;
-    use crate::boids::state::HEADING_PALETTE;
+    use crate::boids::HEADING_PALETTE;
 
     /// A flipped sign still looks colourful on screen, so the mapping is pinned rather than
     /// eyeballed. Sampled at octant centres, since the cardinals land on boundaries.

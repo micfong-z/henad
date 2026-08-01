@@ -58,13 +58,13 @@
 //! mismatch surfaces as a wgpu validation error at model construction. The following must be true for
 //! a model to be valid:
 //! - [`Self::WORKGROUP_SIZE`] must equal the `@workgroup_size(N, N)` all three shaders declare,
-//! - [`Self::STAT_COUNT`] must equal the reduce shader's `atomic<u32>` array length and the number
-//!   of entries [`Self::stats`] and [`Self::stat_descriptors`] return,
+//! - [`Self::STATS`] length must equal the reduce shader's `atomic<u32>` array length and the
+//!   number of entries [`Self::stats`] returns,
 //! - [`Self::buffer_lens`] must return exactly [`Self::BUFFER_COUNT`] lengths, and
 //!   [`Self::seed_buffers`] exactly that many vectors, of exactly those lengths.
 
 use crate::params::{ParamDescriptor, ParamValue};
-use crate::view::{StatDescriptor, StatEntry};
+use crate::view::{StatDescriptor, StatValue};
 
 /// A grid model stepped by a compute shader, with its state resident in GPU storage buffers.
 ///
@@ -85,8 +85,9 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// for a model that also carries per-cell RNG state.
     const BUFFER_COUNT: usize = 1;
 
-    /// How many `u32` counters the reduce shader accumulates.
-    const STAT_COUNT: usize;
+    /// Stat series for the history chart. Its length is how many `u32` counters the reduce shader
+    /// accumulates.
+    const STATS: &'static [StatDescriptor];
 
     /// WGSL source for the compute shaders.
     const STEP_SHADER: &'static str;
@@ -131,12 +132,8 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// whose step needs nothing but the dimensions can return the dims themselves.
     fn step_params_bytes(width: u32, height: u32, params: &[ParamValue]) -> Vec<u8>;
 
-    /// Declare stat series for the history chart. Must have [`Self::STAT_COUNT`] entries.
-    fn stat_descriptors() -> Vec<StatDescriptor>;
-
-    /// Turn the counters read back from the reduce shader into displayable stats.
+    /// Turn the counters read back from the reduce shader into values, in [`Self::STATS`] order.
     ///
-    /// `counts` has [`Self::STAT_COUNT`] entries, and is all-zero until the first readback
-    /// completes.
-    fn stats(counts: &[u32]) -> Vec<StatEntry>;
+    /// `counts` has `STATS.len()` entries, and is all-zero until the first readback completes.
+    fn stats(counts: &[u32]) -> Vec<StatValue>;
 }

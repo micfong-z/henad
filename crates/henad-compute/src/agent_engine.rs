@@ -1,0 +1,159 @@
+use henad_core::agent_model::{AgentLanes as _, AgentModel, ChunkTally as _, NeighborIndex as _, StepCtx};
+use henad_core::field::{Extent, FieldLayer};
+use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
+use henad_core::model::SimState;
+use henad_core::params::{ParamDescriptor, ParamStore, ParamValue};
+use henad_core::view::{GridView, PointView, StatEntry, stat_entries};
+
+/// Seed every `AgentModel`'s `init` starts from.
+pub const AGENT_INIT_SEED: u64 = 0xA175_F01A_6ED5_0001;
+
+/// Engine wrapper that implements `SimState` for any `AgentModel`.
+pub struct AgentModelState<A: AgentModel> {
+    lanes: A::Lanes,
+    field: A::Field,
+    index: A::Index,
+    deposits: <A::Field as FieldLayer>::DepositLanes,
+    params: ParamStore,
+    extent: Extent,
+    tally: A::Tally,
+    seed: u64,
+    tick: u64,
+}
+
+impl<A: AgentModel> AgentModelState<A> {
+    pub fn from_params(params: &[ParamValue]) -> Self {
+        let n = extract_u32(params, 0, 10_000) as usize;
+        let extent = Extent {
+            w: extract_f32(params, 1, 1_000.0),
+            h: extract_f32(params, 2, 1_000.0),
+        };
+
+        let mut lanes = A::Lanes::alloc(n);
+        let mut seed = AGENT_INIT_SEED;
+        A::init(&mut lanes, extent, params, &mut seed);
+
+        let field = A::Field::new(extent, params);
+        let deposits = field.alloc_deposits(n);
+        let hot = A::from_params(params);
+        let (pos_x, pos_y) = lanes.positions();
+        let mut index = A::Index::new(extent, A::index_cell_size(&hot));
+        index.rebuild(pos_x, pos_y, A::index_cell_size(&hot));
+
+        Self {
+            lanes,
+            field,
+            index,
+            deposits,
+            params: ParamStore::new(&agent_model_param_descriptors::<A>(), params),
+            extent,
+            tally: A::Tally::default(),
+            seed,
+            tick: 0,
+        }
+    }
+
+    pub fn lanes(&self) -> &A::Lanes {
+        &self.lanes
+    }
+
+    pub fn field(&self) -> &A::Field {
+        &self.field
+    }
+
+    pub fn tally(&self) -> &A::Tally {
+        &self.tally
+    }
+}
+
+/// The full descriptor list, with population and world extent prepended.
+///
+/// The extent is the engine's, not either layer's, so an agent layer and a field layer cannot
+/// disagree about how big the world is.
+pub fn agent_model_param_descriptors<A: AgentModel>() -> Vec<ParamDescriptor> {
+    let extent = A::DEFAULT_EXTENT;
+    let mut descs = vec![
+        u32_param("num_agents", "Number of Agents", A::DEFAULT_AGENTS, 1, A::MAX_AGENTS).on_reload(),
+        f32_param("world_width", "World Width", extent.w, 1.0, 10_000.0, Some(50.0)).on_reload(),
+        f32_param("world_height", "World Height", extent.h, 1.0, 10_000.0, Some(50.0)).on_reload(),
+    ];
+    descs.extend(A::param_descriptors());
+    descs.extend(<A::Field as FieldLayer>::param_descriptors());
+    descs
+}
+
+impl<A: AgentModel> SimState for AgentModelState<A> {
+    fn step(&mut self) {
+        let hot = A::from_params(self.params.values());
+        let field_params = <A::Field as FieldLayer>::from_params(self.params.values());
+
+        let (pos_x, pos_y) = self.lanes.positions();
+        self.index.rebuild(pos_x, pos_y, A::index_cell_size(&hot));
+
+        {
+            let ctx = StepCtx::<A> {
+                field: self.field.read(),
+                index: &self.index,
+                params: &hot,
+                extent: self.extent,
+            };
+            A::run_deposit_pass(&self.lanes, &mut self.deposits, &ctx);
+        }
+
+        let tallied = {
+            let ctx = StepCtx::<A> {
+                field: self.field.read(),
+                index: &self.index,
+                params: &hot,
+                extent: self.extent,
+            };
+            A::run_step_pass(&mut self.lanes, &ctx, self.seed, self.tick)
+        };
+        self.tally = std::mem::take(&mut self.tally).merge(tallied);
+
+        self.field.update(&self.deposits, &field_params, self.tick);
+        self.lanes.swap();
+        self.seed = crate::chunked::advance_tick_seed(self.seed, self.tick);
+        self.tick += 1;
+    }
+
+    fn tick(&self) -> u64 {
+        self.tick
+    }
+
+    fn grid_view(&self) -> Option<GridView<'_>> {
+        self.field.grid_view()
+    }
+
+    fn point_view(&self) -> Option<PointView<'_>> {
+        let (pos_x, pos_y) = self.lanes.positions();
+        Some(PointView {
+            pos_x,
+            pos_y,
+            world_w: self.extent.w,
+            world_h: self.extent.h,
+            color: self.lanes.colors(),
+            palette: A::PALETTE,
+        })
+    }
+
+    fn prepare_view(&mut self) {
+        self.field.prepare_view();
+    }
+
+    fn stats(&self) -> Vec<StatEntry> {
+        stat_entries(A::STATS, A::stats(&self.lanes, &self.field, &self.tally))
+    }
+
+    fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
+        self.params.set(index, value)
+    }
+
+    fn population(&self) -> u64 {
+        self.lanes.len() as u64
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.lanes.heap_bytes() + self.field.heap_bytes() + self.index.heap_bytes()
+    }
+}

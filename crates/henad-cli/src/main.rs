@@ -476,7 +476,7 @@ fn export_final(entry: &ModelEntry, params: &[ParamValue], args: &Args, path: &P
     for _ in 0..(args.warmup + args.steps) {
         state.step();
     }
-    write_state(&*state, path)?;
+    write_state(&mut *state, path)?;
     eprintln!("exported final state (tick {}) to {}", state.tick(), path.display());
     Ok(())
 }
@@ -582,7 +582,9 @@ fn stats_gpu(
 /// per row, a point cloud as `x,y` CSV with a `color` column when the model carries the lane.
 ///
 /// Both sections are written, so a composite model exports its field and its agents.
-fn write_state(state: &dyn SimState, path: &Path) -> Result<()> {
+fn write_state(state: &mut dyn SimState, path: &Path) -> Result<()> {
+    // The display layer is only refreshed on publish, and an export is a publish.
+    state.prepare_view();
     let grid = state.grid_view();
     let points = state.point_view();
     if grid.is_none() && points.is_none() {

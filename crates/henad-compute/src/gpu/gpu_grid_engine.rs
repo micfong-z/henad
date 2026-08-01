@@ -9,7 +9,7 @@ use henad_core::gpu_grid_model::GpuGridModel;
 use henad_core::model::{Model, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;
-use henad_core::view::{StatDescriptor, StatEntry};
+use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
 use crate::gpu::display::{DisplayTarget, GpuDisplay, build_display_target};
@@ -64,7 +64,7 @@ impl<M: GpuGridModel> Model for GpuGridModelDescriptor<M> {
     }
 
     fn stat_descriptors(&self) -> Vec<StatDescriptor> {
-        M::stat_descriptors()
+        M::STATS.to_vec()
     }
 
     /// Still a 2D grid — it just gets its pixels from a texture instead of a cell buffer. The UI
@@ -249,7 +249,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
             display,
         } = build_display_target(device, ctx.target_format, width, height);
 
-        let readback = CounterReadback::new(device, &format!("{}_counters", M::ID), M::STAT_COUNT);
+        let readback = CounterReadback::new(device, &format!("{}_counters", M::ID), M::STATS.len());
 
         // --- Step pipeline ---
         // Bindings 0..2K are interleaved (current, next) pairs; binding 2K is the step uniform.
@@ -444,7 +444,7 @@ impl<M: GpuGridModel> SimState for GpuGridState<M> {
     }
 
     fn stats(&self) -> Vec<StatEntry> {
-        M::stats(self.readback.values())
+        stat_entries(M::STATS, M::stats(self.readback.values()))
     }
 
     /// Resizing or reseeding live is currently unsupported.

@@ -1,9 +1,10 @@
+use henad_compute::chunked::{STATS_CHUNK, reduce_chunks};
 use henad_core::grid::Grid2D;
 use henad_core::grid_model::GridModel;
-use henad_core::helpers::{extract_f32, f32_param, stat, xorshift64};
+use henad_core::helpers::{extract_f32, f32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
-use henad_core::view::{StatDescriptor, StatEntry};
+use henad_core::view::{StatDescriptor, StatValue};
 
 const DEAD: u8 = 0;
 const ALIVE: u8 = 1;
@@ -26,6 +27,7 @@ impl GridModel for GameOfLifeModel {
     const DESCRIPTION: &'static str = "Conway's Game of Life on a toroidal grid";
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
     const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
+    const STATS: &'static [StatDescriptor] = &[StatDescriptor::new("Alive", PALETTE[1])];
     type Params = ();
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
@@ -51,36 +53,19 @@ impl GridModel for GameOfLifeModel {
         }
     }
 
-    fn stats(grid: &Grid2D<u8>) -> Vec<StatEntry> {
-        let alive = count_alive(grid.current()) as f64;
-        vec![stat("Alive", alive, PALETTE[1])]
-    }
-
-    fn stat_descriptors() -> Vec<StatDescriptor> {
-        vec![StatDescriptor {
-            label: "Alive",
-            color: PALETTE[1],
-        }]
+    fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
+        vec![StatValue::Scalar(count_alive(grid.current()) as f64)]
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-const STATS_CHUNK: usize = 8192;
-
 fn count_alive(cells: &[u8]) -> u64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        cells
-            .par_chunks(STATS_CHUNK)
-            .map(|chunk| chunk.iter().filter(|&&c| c == ALIVE).count() as u64)
-            .sum()
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        cells.iter().filter(|&&c| c == ALIVE).count() as u64
-    }
+    reduce_chunks(
+        cells.len(),
+        STATS_CHUNK,
+        |r| cells[r].iter().filter(|&&c| c == ALIVE).count() as u64,
+        |a, b| a + b,
+        0,
+    )
 }
 
 #[cfg(test)]

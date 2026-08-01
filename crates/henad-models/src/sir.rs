@@ -1,9 +1,10 @@
+use henad_compute::chunked::{STATS_CHUNK, reduce_chunks};
 use henad_core::grid::Grid2D;
 use henad_core::grid_model::GridModel;
-use henad_core::helpers::{extract_f32, f32_param, stat, xorshift64};
+use henad_core::helpers::{extract_f32, f32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
-use henad_core::view::{StatDescriptor, StatEntry};
+use henad_core::view::{StatDescriptor, StatValue};
 
 const S: u8 = 0;
 const I: u8 = 1;
@@ -28,6 +29,11 @@ impl GridModel for SirGridModel {
     const DESCRIPTION: &'static str = "Classic SIR compartmental model on a 2D grid with Moore neighborhood";
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
     const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
+    const STATS: &'static [StatDescriptor] = &[
+        StatDescriptor::new("Susceptible", PALETTE[0]),
+        StatDescriptor::new("Infected", PALETTE[1]),
+        StatDescriptor::new("Recovered", PALETTE[2]),
+    ];
     type Params = SirParams;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
@@ -84,36 +90,15 @@ impl GridModel for SirGridModel {
         }
     }
 
-    fn stats(grid: &Grid2D<u8>) -> Vec<StatEntry> {
+    fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
         let (s, i, r) = count_sir(grid.current());
         vec![
-            stat("Susceptible", s as f64, PALETTE[0]),
-            stat("Infected", i as f64, PALETTE[1]),
-            stat("Recovered", r as f64, PALETTE[2]),
-        ]
-    }
-
-    fn stat_descriptors() -> Vec<StatDescriptor> {
-        vec![
-            StatDescriptor {
-                label: "Susceptible",
-                color: PALETTE[0],
-            },
-            StatDescriptor {
-                label: "Infected",
-                color: PALETTE[1],
-            },
-            StatDescriptor {
-                label: "Recovered",
-                color: PALETTE[2],
-            },
+            StatValue::Scalar(s as f64),
+            StatValue::Scalar(i as f64),
+            StatValue::Scalar(r as f64),
         ]
     }
 }
-
-/// Cells per rayon chunk in the stats reduction. See `game_of_life::STATS_CHUNK`.
-#[cfg(not(target_arch = "wasm32"))]
-const STATS_CHUNK: usize = 8192;
 
 /// Count S/I/R in a single pass over a contiguous slice.
 fn count_sir_seq(cells: &[u8]) -> (u64, u64, u64) {
@@ -130,19 +115,13 @@ fn count_sir_seq(cells: &[u8]) -> (u64, u64, u64) {
 
 /// Count the S/I/R compartments.
 fn count_sir(cells: &[u8]) -> (u64, u64, u64) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        cells
-            .par_chunks(STATS_CHUNK)
-            .map(count_sir_seq)
-            .reduce(|| (0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        count_sir_seq(cells)
-    }
+    reduce_chunks(
+        cells.len(),
+        STATS_CHUNK,
+        |r| count_sir_seq(&cells[r]),
+        |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2),
+        (0, 0, 0),
+    )
 }
 
 #[cfg(test)]

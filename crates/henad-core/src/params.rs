@@ -76,9 +76,81 @@ impl ParamKind {
     }
 }
 
+/// The values a running state holds, with the live/reload decision cached from the descriptors.
+///
+/// Cached so `set_param` can reject a reload-only index without rebuilding the descriptor list
+/// every time a slider moves.
+pub struct ParamStore {
+    values: Vec<ParamValue>,
+    live: Vec<bool>,
+}
+
+impl ParamStore {
+    pub fn new(descriptors: &[ParamDescriptor], values: &[ParamValue]) -> Self {
+        Self {
+            values: values.to_vec(),
+            live: descriptors.iter().map(ParamDescriptor::is_live).collect(),
+        }
+    }
+
+    pub fn values(&self) -> &[ParamValue] {
+        &self.values
+    }
+
+    /// Returns whether the edit was accepted.
+    pub fn set(&mut self, index: usize, value: &ParamValue) -> bool {
+        if self.live.get(index) == Some(&true) && index < self.values.len() {
+            self.values[index] = value.clone();
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn descriptors() -> Vec<ParamDescriptor> {
+        vec![
+            ParamDescriptor {
+                id: "live",
+                label: "Live",
+                kind: ParamKind::F32 {
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                    step: None,
+                },
+                apply: ParamApply::Live,
+            },
+            ParamDescriptor {
+                id: "reload",
+                label: "Reload",
+                kind: ParamKind::U32 {
+                    min: 0,
+                    max: 10,
+                    default: 1,
+                },
+                apply: ParamApply::OnReload,
+            },
+        ]
+    }
+
+    #[test]
+    fn store_accepts_live_edits_and_rejects_reload_ones() {
+        let descs = descriptors();
+        let mut store = ParamStore::new(&descs, &[ParamValue::F32(0.5), ParamValue::U32(1)]);
+
+        assert!(store.set(0, &ParamValue::F32(0.9)));
+        assert_eq!(store.values()[0], ParamValue::F32(0.9));
+
+        assert!(!store.set(1, &ParamValue::U32(7)));
+        assert_eq!(store.values()[1], ParamValue::U32(1), "a rejected edit must not land");
+
+        assert!(!store.set(9, &ParamValue::F32(0.0)), "out of range index");
+    }
 
     #[test]
     fn param_kind_defaults() {

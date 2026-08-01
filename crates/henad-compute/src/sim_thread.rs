@@ -260,9 +260,9 @@ mod native {
 
         /// Building outside the lock matters: the UI thread would otherwise block on
         /// `take_snapshot` for the whole grid copy.
-        fn publish_snapshot(&self) {
+        fn publish_snapshot(&mut self) {
             let spare = self.snapshot.lock().ok().and_then(|mut slot| slot.spare.take());
-            let snap = build_snapshot(spare, &*self.state, self.actual_tps, self.engine_ms);
+            let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, self.engine_ms);
             if let Ok(mut slot) = self.snapshot.lock() {
                 // A `fresh` the UI never picked up is stale, so it becomes the next spare.
                 slot.spare = slot.fresh.replace(snap);
@@ -276,11 +276,11 @@ mod native {
 
     impl SimThread {
         /// `wake` is `None` only for a headless caller that polls on its own schedule.
-        pub fn new(state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
+        pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel();
             // Publish initial snapshot so UI has data before play is pressed.
             let snapshot = Arc::new(Mutex::new(SnapshotSlot {
-                fresh: Some(build_snapshot(None, &*state, 0.0, 0.0)),
+                fresh: Some(build_snapshot(None, &mut *state, 0.0, 0.0)),
                 spare: None,
             }));
             let snapshot_clone = Arc::clone(&snapshot);
@@ -380,9 +380,9 @@ mod wasm {
     impl SimThread {
         /// `wake` still matters with no thread to wake from, since `send` runs inside `ui()`, after
         /// the frame's snapshot poll in `logic()`.
-        pub fn new(state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
+        pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
             // Publish initial snapshot so UI has data before play is pressed.
-            let initial = Some(build_snapshot(None, &*state, 0.0, 0.0));
+            let initial = Some(build_snapshot(None, &mut *state, 0.0, 0.0));
             Self {
                 state,
                 running: false,
@@ -400,7 +400,7 @@ mod wasm {
         /// An unclaimed `snapshot` is stale by definition, so it is the first buffer to reuse.
         fn republish(&mut self) {
             let reuse = self.snapshot.take().or_else(|| self.spare.take());
-            self.snapshot = Some(build_snapshot(reuse, &*self.state, self.actual_tps, 0.0));
+            self.snapshot = Some(build_snapshot(reuse, &mut *self.state, self.actual_tps, 0.0));
             if let Some(wake) = &self.wake {
                 wake();
             }
@@ -497,7 +497,9 @@ fn refill<T: Copy>(dst: &mut Vec<T>, src: &[T]) {
 /// allocation. `reuse` comes back from the UI thread via `recycle`.
 ///
 /// Both views are consulted, so a composite model publishes its field and its agents.
-fn build_snapshot(reuse: Option<Snapshot>, state: &dyn SimState, actual_tps: f64, engine_ms: f64) -> Snapshot {
+fn build_snapshot(reuse: Option<Snapshot>, state: &mut dyn SimState, actual_tps: f64, engine_ms: f64) -> Snapshot {
+    // The model turns its state into something drawable here rather than every tick.
+    state.prepare_view();
     // Destructured up front so both layers can claim buffers without moving `recycled` twice.
     let recycled = match reuse.map(|s| s.view) {
         Some(SnapshotView::Cpu(layers)) => layers,
@@ -799,8 +801,8 @@ mod snapshot_tests {
     /// composite model silently dropped every agent.
     #[test]
     fn a_composite_model_publishes_both_layers() {
-        let state = Composite::new(3, true);
-        let snap = build_snapshot(None, &state, 0.0, 0.0);
+        let mut state = Composite::new(3, true);
+        let snap = build_snapshot(None, &mut state, 0.0, 0.0);
         let layers = layers(&snap.view);
 
         let grid = layers.grid.as_ref().expect("field layer was dropped");
@@ -816,8 +818,8 @@ mod snapshot_tests {
     /// An absent lane must arrive empty, which is what the renderer reads as uniform.
     #[test]
     fn a_model_without_a_color_lane_publishes_an_empty_one() {
-        let state = Composite::new(2, false);
-        let snap = build_snapshot(None, &state, 0.0, 0.0);
+        let mut state = Composite::new(2, false);
+        let snap = build_snapshot(None, &mut state, 0.0, 0.0);
         let points = layers(&snap.view).points.as_ref().expect("agent layer was dropped");
         assert!(points.color.is_empty());
         assert_eq!(points.pos_x.len(), 2);
@@ -826,8 +828,8 @@ mod snapshot_tests {
     /// The colour lane has to recycle alongside the position lanes.
     #[test]
     fn recycling_reuses_the_color_lane_across_a_length_change() {
-        let big = Composite::new(64, true);
-        let first = build_snapshot(None, &big, 0.0, 0.0);
+        let mut big = Composite::new(64, true);
+        let first = build_snapshot(None, &mut big, 0.0, 0.0);
         let capacity = layers(&first.view)
             .points
             .as_ref()
@@ -835,8 +837,8 @@ mod snapshot_tests {
             .unwrap_or_default();
         assert!(capacity >= 64);
 
-        let small = Composite::new(5, true);
-        let second = build_snapshot(Some(first), &small, 0.0, 0.0);
+        let mut small = Composite::new(5, true);
+        let second = build_snapshot(Some(first), &mut small, 0.0, 0.0);
         let points = layers(&second.view).points.as_ref().expect("agent layer was dropped");
         assert_eq!(points.color, vec![0, 1, 0, 1, 0]);
         assert_eq!(points.color.capacity(), capacity, "the colour lane reallocated");

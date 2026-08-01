@@ -26,6 +26,9 @@ pub trait SimState: Send + 'static {
     fn point_view(&self) -> Option<PointView<'_>> {
         None
     }
+    /// Called before a snapshot is built, so a model can turn its state into something drawable
+    /// without paying for it every tick.
+    fn prepare_view(&mut self) {}
     fn stats(&self) -> Vec<StatEntry>;
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool;
     fn population(&self) -> u64;

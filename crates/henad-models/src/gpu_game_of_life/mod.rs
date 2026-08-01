@@ -35,9 +35,9 @@
 
 use henad_compute::grid_engine::GRID_INIT_SEED;
 use henad_core::gpu_grid_model::GpuGridModel;
-use henad_core::helpers::{extract_f32, extract_u32, f32_param, stat, u32_param, xorshift64};
+use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::view::{StatDescriptor, StatEntry};
+use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::game_of_life::PALETTE;
 
@@ -87,7 +87,7 @@ impl GpuGridModel for GpuGameOfLife {
     const ID: &'static str = "gpu_game_of_life";
     const DESCRIPTION: &'static str = "Conway's Game of Life on a toroidal grid, stepped entirely on the GPU";
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
-    const STAT_COUNT: usize = 1;
+    const STATS: &'static [StatDescriptor] = &[StatDescriptor::new("Alive", PALETTE[1])];
 
     const STEP_SHADER: &'static str = include_str!("step.wgsl");
     const DISPLAY_SHADER: &'static str = include_str!("display.wgsl");
@@ -127,15 +127,8 @@ impl GpuGridModel for GpuGameOfLife {
         bytemuck::cast_slice(&[width, height]).to_vec()
     }
 
-    fn stat_descriptors() -> Vec<StatDescriptor> {
-        vec![StatDescriptor {
-            label: "Alive",
-            color: PALETTE[1],
-        }]
-    }
-
-    fn stats(counts: &[u32]) -> Vec<StatEntry> {
-        vec![stat("Alive", f64::from(counts[0]), PALETTE[1])]
+    fn stats(counts: &[u32]) -> Vec<StatValue> {
+        vec![StatValue::Scalar(f64::from(counts[0]))]
     }
 }
 
@@ -148,7 +141,6 @@ mod tests {
     use henad_compute::gpu::timing::TimestampQuery;
     use henad_compute::grid_engine::GridModelState;
     use henad_core::model::SimState as _;
-    use henad_core::view::StatValue;
 
     use crate::game_of_life::GameOfLifeModel;
 
@@ -419,11 +411,11 @@ mod runner_tests {
     use henad_compute::gpu::gpu_grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
     use henad_compute::snapshot::{Snapshot, SnapshotView};
-    use henad_core::view::StatValue;
 
     use super::GpuGameOfLife;
     use super::tests::{headless_context, params};
     use crate::registry::{ModelState, model_registry};
+    use henad_core::view::StatValue;
 
     /// Spins until the thread publishes a snapshot satisfying `pred`, or the deadline passes.
     /// The GPU thread publishes on a ~16ms wall-clock cadence, so polling is the honest way to
