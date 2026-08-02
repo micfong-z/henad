@@ -12,8 +12,8 @@ target_wasm
 # https://github.com/lycheeverse/lychee
 .lycheecache
 
-# temporary development stuff
-TODO.md
+# AI context
+CLAUDE.md
 
 # benchmark
 results
