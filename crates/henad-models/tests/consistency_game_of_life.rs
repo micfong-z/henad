@@ -19,6 +19,24 @@ use henad_models::game_of_life::GameOfLifeModel;
 /// ```
 const GLIDER: &[(u32, u32)] = &[(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)];
 
+/// R-pentomino, in the same coordinates.
+///
+/// ```text
+/// .XX
+/// XX.
+/// .X.
+/// ```
+const R_PENTOMINO: &[(u32, u32)] = &[(1, 0), (2, 0), (0, 1), (1, 1), (1, 2)];
+
+/// Resolves a fixture's `scenario` header to the pattern it started from.
+fn pattern(scenario: &str) -> &'static [(u32, u32)] {
+    match scenario.split_whitespace().next().unwrap_or_default() {
+        "glider" => GLIDER,
+        "r-pentomino" => R_PENTOMINO,
+        other => panic!("fixture declares unknown scenario `{other}`"),
+    }
+}
+
 fn params(width: u32, height: u32) -> Vec<ParamValue> {
     vec![ParamValue::U32(width), ParamValue::U32(height), ParamValue::F32(0.0)]
 }
@@ -107,7 +125,7 @@ fn header_u32(f: &Fixture, key: &str) -> u32 {
 
 /// A glider on a square torus translates by (1,1) every 4 ticks, so on a W-wide world it is back
 /// exactly where it started after 4W ticks.
-/// 
+///
 /// This is a self-consistency check.
 #[test]
 fn glider_returns_to_origin_after_full_wrap() {
@@ -123,35 +141,49 @@ fn glider_returns_to_origin_after_full_wrap() {
     );
 }
 
-/// Henad's final grid against NetLogo's grid.
+/// Henad's final grid against every reference engine's.
 #[test]
-fn gol_matches_netlogo_glider() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gol_glider_64x64.txt");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let fixture = parse_fixture(&text);
+fn matches_every_reference_fixture() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut checked = Vec::new();
 
-    let width = header_u32(&fixture, "width");
-    let height = header_u32(&fixture, "height");
-    let steps = header_u32(&fixture, "steps");
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("readable directory entry").path();
+        if path.extension().is_none_or(|e| e != "txt") {
+            continue;
+        }
 
-    assert_eq!(
-        fixture.cells.len(),
-        (width * height) as usize,
-        "fixture has {} cells, header declares {width}x{height}",
-        fixture.cells.len()
-    );
-    assert_eq!(fixture.width, width, "row length disagrees with the declared width");
+        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {name}: {e}"));
+        let fixture = parse_fixture(&text);
 
-    let start = grid_with(width, height, GLIDER, (0, 0));
-    let ours = run(width, height, &start, steps);
+        let width = header_u32(&fixture, "width");
+        let height = header_u32(&fixture, "height");
+        let steps = header_u32(&fixture, "steps");
+        let engine = fixture.header.get("engine").map_or("?", String::as_str);
+        let scenario = fixture.header.get("scenario").map_or("?", String::as_str);
 
-    assert_eq!(
-        render(&ours, width),
-        render(&fixture.cells, width),
-        "Henad and {} disagree after {steps} ticks",
-        fixture
-            .header
-            .get("engine")
-            .map_or("the reference engine", String::as_str)
-    );
+        // Truncated file guard
+        assert_eq!(
+            fixture.cells.len(),
+            (width * height) as usize,
+            "{name} has {} cells, header declares {width}x{height}",
+            fixture.cells.len()
+        );
+        assert_eq!(fixture.width, width, "{name}: row length disagrees with declared width");
+
+        let start = grid_with(width, height, pattern(scenario), (0, 0));
+        let ours = run(width, height, &start, steps);
+
+        assert_eq!(
+            render(&ours, width),
+            render(&fixture.cells, width),
+            "Henad and {engine} disagree on {scenario} after {steps} ticks ({name})"
+        );
+        checked.push(format!("{engine} / {scenario}"));
+    }
+
+    // In case some unexpected renaming or deletion happen.
+    assert!(!checked.is_empty(), "no fixtures found in {}", dir.display());
 }

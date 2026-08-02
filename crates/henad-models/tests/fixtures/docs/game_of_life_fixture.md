@@ -69,12 +69,12 @@ to setup-glider
   ]
 end
 
-to export-grid [ filename steps ]
+to export-grid [ filename scenario steps ]
   if file-exists? filename [ file-delete filename ]
   file-open filename
   file-print (word "# engine: NetLogo " netlogo-version)
   file-print "# model: Life (Wilensky 1998), Models Library, unmodified"
-  file-print "# scenario: glider at (0,0)"
+  file-print (word "# scenario: " scenario)
   file-print (word "# width: " (max-pxcor - min-pxcor + 1))
   file-print (word "# height: " (max-pycor - min-pycor + 1))
   file-print (word "# steps: " steps)
@@ -101,7 +101,7 @@ Then in the Command Center:
 ```netlogo
 setup-glider
 repeat 101 [ go ]
-export-grid "gol_glider_64x64.txt" 101
+export-grid "gol_glider_64x64.txt" "glider" 101
 ```
 
 This would usually appear in the same directory as the NetLogo model file. Move the result to `crates/henad-models/tests/fixtures/`.
@@ -109,6 +109,36 @@ This would usually appear in the same directory as the NetLogo model file. Move 
 Since the glider has a period of 4, 101 steps ensures that it will be in a different shape than the initial configuration.
 
 ## R-pentomino
+
+The R-pentomino is a chaotic pattern that takes 1103 steps to stabilize.
+
+### Procedure
+
+With `export-grid` from the glider section, append the following into the Code tab:
+
+```netlogo
+to setup-r-pentomino
+  setup-blank
+  ;; R-pentomino at Henad origin (0,0), matching R_PENTOMINO in
+  ;; consistency_game_of_life.rs:
+  ;;   .XX
+  ;;   XX.
+  ;;   .X.
+  foreach [[1 0] [2 0] [0 1] [1 1] [1 2]] [ c ->
+    ask patch (item 0 c) (item 1 c) [ cell-birth ]
+  ]
+end
+```
+
+Then in the Command Center:
+
+```netlogo
+setup-r-pentomino
+repeat 500 [ go ]
+export-grid "gol_r_pentomino_64x64.txt" "r-pentomino" 500
+```
+
+Move the result to `crates/henad-models/tests/fixtures/` alongside the glider fixture.
 
 ---
 
