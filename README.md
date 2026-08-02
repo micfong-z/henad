@@ -65,10 +65,10 @@ Henad is licensed under the MIT License.
 
 Contributing is very welcome! However Henad is in very early stages so expect everything to change. It would be best if you could create an issue first to discuss what you want to contribute before making a PR.
 
-_AI Usage Disclaimer_
+_AI Usage Disclaimer and Policy_
 
-This project is assisted by AI (Claude Code on Opus 4.6 and Opus 5), though every line of code generated has been reviewed (and more often than not, edited) by a human.
+This project is assisted by AI (Claude Code on Opus 4.6 and Opus 5), though every line of code generated has been reviewed (and almost always, edited) by a human.
 
-Please make sure that issues and discussions always have a human in the loop, and when contributing to the project, please ensure that you are not relying solely on AI-generated code and judgement.
+We recognise that LLM-assisted coding is evolving increasingly rapidly, but the quality of the code generated is not always guaranteed. In general, we support the [LLVM AI Tool Use Policy](https://llvm.org/docs/AIToolPolicy.html) for coding, but discourage the use of AI for communication (except for translation purposes).
 
 And yes, this README was written entirely by a human with the help of the good-old **spellchecker** only.
