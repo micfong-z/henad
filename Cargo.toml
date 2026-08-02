@@ -7,7 +7,7 @@ version = "0.1.0"
 authors = ["Micfong <micfong2@outlook.com>"]
 edition = "2024"
 rust-version = "1.92"
-license = "MIT"
+license = "MIT or Apache-2.0"
 
 [workspace.dependencies]
 henad-core = { path = "crates/henad-core" }
