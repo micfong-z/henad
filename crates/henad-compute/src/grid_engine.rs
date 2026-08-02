@@ -28,6 +28,21 @@ impl<M: GridModel> GridModelState<M> {
             tick: 0,
         }
     }
+
+    /// Build a state with specified `cells`.
+    ///
+    /// Returns `Some` if the `cells` slice is the right length for the grid dimensions in `params`, or `None` if not.
+    pub fn from_cells(params: &[ParamValue], cells: &[u8]) -> Option<Self> {
+        let extent = Extent {
+            w: extract_u32(params, 0, 1024) as f32,
+            h: extract_u32(params, 1, 1024) as f32,
+        };
+        Some(Self {
+            field: CaField::from_cells(extent, cells)?,
+            params: ParamStore::new(&grid_model_param_descriptors::<M>(), params),
+            tick: 0,
+        })
+    }
 }
 
 /// Returns the full parameter descriptors list with grid width/height prepended.

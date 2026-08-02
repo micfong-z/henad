@@ -20,7 +20,7 @@ results
 .temporary
 
 # development documentation (may or may not contain sensitive info >:( )
-docs
+/docs
 
 # IDE stuff
 .vscode

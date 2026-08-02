@@ -31,6 +31,23 @@ impl<M: GridModel> CaField<M> {
     pub fn grid(&self) -> &Grid2D<u8> {
         &self.grid
     }
+
+    /// Build a field with specified `cells`.
+    ///
+    /// Returns `Some` if the `cells` slice is the right length for the grid dimensions in `extent`, or `None` if not.
+    pub fn from_cells(extent: Extent, cells: &[u8]) -> Option<Self> {
+        let (width, height) = extent.cells();
+        if cells.len() != width as usize * height as usize {
+            return None;
+        }
+        let mut grid = Grid2D::new(width, height);
+        grid.current_mut().copy_from_slice(cells);
+        Some(Self {
+            grid,
+            seed: GRID_INIT_SEED,
+            _marker: PhantomData,
+        })
+    }
 }
 
 impl<M: GridModel> FieldLayer for CaField<M> {
