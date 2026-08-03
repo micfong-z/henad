@@ -1,14 +1,13 @@
 # Generating the Game of Life consistency fixture
 
-Produces `crates/henad-models/tests/fixtures/gol_glider_64x64.txt`, the reference grid that `consistency_game_of_life.rs::matches_every_reference_fixture` compares against.
+Produces `crates/henad-models/tests/fixtures/gol_glider_64x64.txt` and `crates/henad-models/tests/fixtures/gol_r_pentomino_64x64.txt`, the reference grids that `consistency_game_of_life.rs::matches_every_reference_fixture` compares against.
 
 
 ## Reference model
 
 Wilensky, U. (1998). NetLogo Life model. http://ccl.northwestern.edu/netlogo/models/Life. Center for Connected Learning and Computer-Based Modeling, Northwestern University, Evanston, IL.
 
-This model by Wilensky is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 3.0 license, so it isn't
-redistributed here. We'll walk through the steps to generate the reference grid from the original model.
+This model by Wilensky is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 3.0 license, so it isn't redistributedhere. We'll walk through the steps to generate the reference grid from the original model.
 
 ## Model equivalence
 
@@ -44,7 +43,7 @@ Paste into the Code tab:
 ```netlogo
 to setup-glider
   setup-blank
-  ;; Glider at Henad origin (0,0), matching GLIDER in consistency_gol.rs:
+  ;; Glider at Henad origin (0,0), matching GLIDER in consistency_game_of_life.rs:
   ;;   .X.
   ;;   ..X
   ;;   XXX
