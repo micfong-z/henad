@@ -1,34 +1,18 @@
 # Generating the Game of Life consistency fixture
 
-Produces `crates/henad-models/tests/fixtures/gol_glider_64x64.txt`, the reference grid that `consistency_game_of_life.rs::gol_matches_netlogo_glider` compares against.
+Produces `crates/henad-models/tests/fixtures/gol_glider_64x64.txt`, the reference grid that `consistency_game_of_life.rs::matches_every_reference_fixture` compares against.
+
 
 ## Reference model
 
 Wilensky, U. (1998). NetLogo Life model. http://ccl.northwestern.edu/netlogo/models/Life. Center for Connected Learning and Computer-Based Modeling, Northwestern University, Evanston, IL.
 
+This model by Wilensky is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 3.0 license, so it isn't
+redistributed here. We'll walk through the steps to generate the reference grid from the original model.
+
 ## Model equivalence
 
-Life's `go` is:
-
-```netlogo
-to go
-  ask patches
-    [ set live-neighbors count neighbors with [living?] ]
-  ;; Starting a new "ask patches" here ensures that all the patches
-  ;; finish executing the first ask before any of them start executing
-  ;; the second ask.  This keeps all the patches in synch with each other,
-  ;; so the births and deaths at each generation all happen in lockstep.
-  ask patches
-    [ ifelse live-neighbors = 3
-      [ cell-birth ]
-      [ if live-neighbors != 2
-        [ cell-death ] ] ]
-  tick
-end
-
-```
-
-Which matches Henad on all four aspects:
+Life's `go` matches Henad on all four aspects:
 
 |               | NetLogo Life                            | Henad `GameOfLifeModel`                |
 | ------------- | --------------------------------------- | -------------------------------------- |

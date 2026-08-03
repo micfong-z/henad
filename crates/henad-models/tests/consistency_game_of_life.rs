@@ -141,7 +141,7 @@ fn glider_returns_to_origin_after_full_wrap() {
     );
 }
 
-/// Henad's final grid against every reference engine's.
+/// Henad's final grid against every reference.
 #[test]
 fn matches_every_reference_fixture() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
