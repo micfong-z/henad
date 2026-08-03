@@ -113,23 +113,39 @@ mod tests {
 
     #[test]
     fn gol_blinker_period_2() {
-        // 5x5 grid with a horizontal blinker at center
-        let params = vec![
-            ParamValue::U32(5),
-            ParamValue::U32(5),
-            ParamValue::F32(0.0), // density 0 = all dead
-        ];
-        let mut state = GridModelState::<GameOfLifeModel>::from_params(&params);
+        // Horizontal blinker across the middle row of a 5x5 grid.
+        let params = vec![ParamValue::U32(5), ParamValue::U32(5), ParamValue::F32(0.0)];
+        let horizontal = {
+            let mut cells = vec![DEAD; 25];
+            cells[11] = ALIVE;
+            cells[12] = ALIVE;
+            cells[13] = ALIVE;
+            cells
+        };
+        let vertical = {
+            let mut cells = vec![DEAD; 25];
+            cells[7] = ALIVE;
+            cells[12] = ALIVE;
+            cells[17] = ALIVE;
+            cells
+        };
 
-        // Manually set blinker: row 2, cols 1-3
-        if let Some(gv) = state.grid_view() {
-            assert_eq!(gv.width, 5);
-        }
+        let mut state = GridModelState::<GameOfLifeModel>::from_cells(&params, &horizontal)
+            .expect("cell buffer matches the declared grid size");
 
-        // We need to step the internal grid, so let's create a fresh state
-        // and manually init instead. Just verify tick advancement.
-        let tick0 = state.tick();
         state.step();
-        assert_eq!(state.tick(), tick0 + 1);
+        assert_eq!(
+            state.grid_view().expect("grid view").cells,
+            &vertical[..],
+            "blinker did not rotate on the first tick"
+        );
+
+        state.step();
+        assert_eq!(
+            state.grid_view().expect("grid view").cells,
+            &horizontal[..],
+            "blinker did not return on the second tick"
+        );
+        assert_eq!(state.tick(), 2);
     }
 }
