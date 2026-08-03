@@ -7,7 +7,7 @@ Produces `crates/henad-models/tests/fixtures/gol_glider_64x64.txt` and `crates/h
 
 Wilensky, U. (1998). NetLogo Life model. http://ccl.northwestern.edu/netlogo/models/Life. Center for Connected Learning and Computer-Based Modeling, Northwestern University, Evanston, IL.
 
-This model by Wilensky is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 3.0 license, so it isn't redistributedhere. We'll walk through the steps to generate the reference grid from the original model.
+This model by Wilensky is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 3.0 license, so it isn't redistributed here. We'll walk through the steps to generate the reference grid from the original model.
 
 ## Model equivalence
 
