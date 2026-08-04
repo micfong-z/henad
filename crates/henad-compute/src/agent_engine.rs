@@ -65,6 +65,11 @@ impl<A: AgentModel> AgentModelState<A> {
         };
 
         let mut lanes = A::Lanes::alloc(n);
+        let mut seed = AGENT_INIT_SEED;
+
+        // Init is still needed to ensure that seed is advanced to the right value for the first step.
+        A::init(&mut lanes, extent, params, &mut seed);
+
         seed_lanes(&mut lanes, extent);
 
         let field = A::Field::new(extent, params);
@@ -82,7 +87,7 @@ impl<A: AgentModel> AgentModelState<A> {
             params: ParamStore::new(&agent_model_param_descriptors::<A>(), params),
             extent,
             tally: A::Tally::default(),
-            seed: AGENT_INIT_SEED,
+            seed,
             tick: 0,
         }
     }
