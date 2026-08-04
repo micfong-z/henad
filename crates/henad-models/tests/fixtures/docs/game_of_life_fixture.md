@@ -1,6 +1,6 @@
 # Generating the Game of Life consistency fixture
 
-Produces `crates/henad-models/tests/fixtures/gol_glider_64x64.txt` and `crates/henad-models/tests/fixtures/gol_r_pentomino_64x64.txt`, the reference grids that `consistency_game_of_life.rs::matches_every_reference_fixture` compares against.
+Produces `crates/henad-models/tests/fixtures/*.txt`, the reference grids that `consistency_game_of_life.rs::matches_every_reference_fixture` compares against.
 
 
 ## Reference model

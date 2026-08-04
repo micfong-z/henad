@@ -1,6 +1,6 @@
 # Generating the boids consistency fixture
 
-Produces `crates/henad-models/tests/fixtures/boids/boids_netlogo.txt`, the reference agent state that `consistency_boids.rs::matches_every_reference_fixture` compares against.
+Produces `crates/henad-models/tests/fixtures/boids/*.txt`, the reference agent state that `consistency_boids.rs::matches_every_reference_fixture` compares against.
 
 ## Reference model
 
@@ -64,7 +64,7 @@ Parameters: `visual_range` 20, `protected_range` 5, `separation` 0.5, `alignment
 
 ## Scenario 2: `sine-42`
 
-42 boids along two sine periods, each seeing 2 to 8 others. This aims to test an non-uniform distribution of agents.
+42 boids along two sine periods, each seeing 2 to 8 others. This aims to test a non-uniform distribution of agents.
 
 Since `sin` in `f32` and `f64` differ in the last bits, so as to make sure that both engines begin with bit-identical values, values below are the curve already evaluated and snapped to a 1/8 lattice.
 
