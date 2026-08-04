@@ -144,7 +144,7 @@ fn glider_returns_to_origin_after_full_wrap() {
 /// Henad's final grid against every reference.
 #[test]
 fn matches_every_reference_fixture() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/game_of_life");
     let mut checked = Vec::new();
 
     let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));

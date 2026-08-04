@@ -53,6 +53,45 @@ impl<A: AgentModel> AgentModelState<A> {
         }
     }
 
+    /// Build a state whose agents come from `seed_lanes`.
+    ///
+    /// This can be used to construct a state with a specific initial agent configuration, e.g.
+    /// to reproduce a particular simulation run.
+    pub fn from_agents(params: &[ParamValue], seed_lanes: impl FnOnce(&mut A::Lanes, Extent)) -> Self {
+        let n = extract_u32(params, 0, 10_000) as usize;
+        let extent = Extent {
+            w: extract_f32(params, 1, 1_000.0),
+            h: extract_f32(params, 2, 1_000.0),
+        };
+
+        let mut lanes = A::Lanes::alloc(n);
+        let mut seed = AGENT_INIT_SEED;
+
+        // Init is still needed to ensure that seed is advanced to the right value for the first step.
+        A::init(&mut lanes, extent, params, &mut seed);
+
+        seed_lanes(&mut lanes, extent);
+
+        let field = A::Field::new(extent, params);
+        let deposits = field.alloc_deposits(n);
+        let hot = A::from_params(params);
+        let (pos_x, pos_y) = lanes.positions();
+        let mut index = A::Index::new(extent, A::index_cell_size(&hot));
+        index.rebuild(pos_x, pos_y, A::index_cell_size(&hot));
+
+        Self {
+            lanes,
+            field,
+            index,
+            deposits,
+            params: ParamStore::new(&agent_model_param_descriptors::<A>(), params),
+            extent,
+            tally: A::Tally::default(),
+            seed,
+            tick: 0,
+        }
+    }
+
     pub fn lanes(&self) -> &A::Lanes {
         &self.lanes
     }
