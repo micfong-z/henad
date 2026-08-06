@@ -15,7 +15,7 @@
 
 use henad_compute::grid_engine::GRID_INIT_SEED;
 use henad_core::gpu_grid_model::GpuGridModel;
-use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param, xorshift64};
+use henad_core::helpers::{extract_f32, extract_u32, f32_param, mix_seed, u32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
@@ -140,7 +140,7 @@ impl GpuGridModel for GpuSir {
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let initial_infected_pct = extract_f32(params, PARAM_INITIAL_INFECTED_PCT, DEFAULT_INITIAL_INFECTED_PCT);
         let (cells, rng) = match seed {
-            Some(s) => (s, s ^ RNG_INIT_SEED),
+            Some(s) => (mix_seed(s), mix_seed(s ^ RNG_INIT_SEED)),
             None => (GRID_INIT_SEED, RNG_INIT_SEED),
         };
         vec![

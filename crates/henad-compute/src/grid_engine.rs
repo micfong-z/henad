@@ -94,7 +94,7 @@ impl<M: GridModel> SimState for GridModelState<M> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GRID_INIT_SEED, GridModelState};
+    use super::GridModelState;
     use henad_core::grid::Grid2D;
     use henad_core::grid_model::GridModel;
     use henad_core::helpers::xorshift64;
@@ -232,13 +232,17 @@ mod tests {
             cells(&state)
         };
 
-        assert_eq!(
-            run(None),
-            run(Some(GRID_INIT_SEED)),
-            "`None` must mean the default seed"
-        );
+        assert_eq!(run(None), run(None), "the default must be reproducible");
         assert_ne!(run(Some(1)), run(Some(2)), "different seeds must give different runs");
         assert_eq!(run(Some(7)), run(Some(7)), "a seed must still be reproducible");
+        assert_ne!(run(None), run(Some(1)), "a user seed must not land on the default");
+
+        // `xorshift64(0) == 0` is absorbing, so if the engine's RNG state is stuck it will produce a uniform grid.
+        let zero = run(Some(0));
+        assert!(
+            zero.iter().any(|&c| c != zero[0]),
+            "seed 0 produced a uniform grid, so its RNG state was stuck"
+        );
     }
 
     /// The row seed comes from the row index, so a grid stepped in one thread and the same grid
