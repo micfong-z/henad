@@ -160,8 +160,15 @@ fn compute_pipeline(
 }
 
 impl<M: GpuGridModel> GpuGridState<M> {
-    #[expect(clippy::too_many_lines)]
     pub fn new(ctx: &GpuContext, params: &[ParamValue]) -> Self {
+        Self::new_seeded(ctx, params, None)
+    }
+
+    /// Similar to [`Self::new`], with `seed` controlling the RNG used.
+    /// 
+    /// If `None`, the model's fixed default seed is used.
+    #[expect(clippy::too_many_lines)]
+    pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;
         let queue = &ctx.queue;
 
@@ -180,7 +187,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
             M::BUFFER_COUNT,
             buffer_lens.len()
         );
-        let seeds = M::seed_buffers(width, height, params);
+        let seeds = M::seed_buffers(width, height, params, seed);
         assert_eq!(
             seeds.len(),
             M::BUFFER_COUNT,

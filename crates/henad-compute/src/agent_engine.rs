@@ -5,7 +5,7 @@ use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamStore, ParamValue};
 use henad_core::view::{GridView, PointView, StatEntry, stat_entries};
 
-/// Seed every `AgentModel`'s `init` starts from.
+/// Default RNG seed.
 pub const AGENT_INIT_SEED: u64 = 0xA175_F01A_6ED5_0001;
 
 /// Engine wrapper that implements `SimState` for any `AgentModel`.
@@ -23,6 +23,11 @@ pub struct AgentModelState<A: AgentModel> {
 
 impl<A: AgentModel> AgentModelState<A> {
     pub fn from_params(params: &[ParamValue]) -> Self {
+        Self::from_params_seeded(params, None)
+    }
+
+    /// Build a state whose RNG starts from `seed`, or [`AGENT_INIT_SEED`] when it is `None`.
+    pub fn from_params_seeded(params: &[ParamValue], seed: Option<u64>) -> Self {
         let n = extract_u32(params, 0, 10_000) as usize;
         let extent = Extent {
             w: extract_f32(params, 1, 1_000.0),
@@ -30,7 +35,7 @@ impl<A: AgentModel> AgentModelState<A> {
         };
 
         let mut lanes = A::Lanes::alloc(n);
-        let mut seed = AGENT_INIT_SEED;
+        let mut seed = seed.unwrap_or(AGENT_INIT_SEED);
         A::init(&mut lanes, extent, params, &mut seed);
 
         let field = A::Field::new(extent, params);

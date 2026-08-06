@@ -32,6 +32,19 @@ impl<M: GridModel> CaField<M> {
         &self.grid
     }
 
+    /// Build a field seeded from `seed`, or from [`GRID_INIT_SEED`] when it is `None`.
+    pub fn with_seed(extent: Extent, params: &[ParamValue], seed: Option<u64>) -> Self {
+        let (width, height) = extent.cells();
+        let mut grid = Grid2D::new(width, height);
+        let mut seed = seed.unwrap_or(GRID_INIT_SEED);
+        M::init(&mut grid, params, &mut seed);
+        Self {
+            grid,
+            seed,
+            _marker: PhantomData,
+        }
+    }
+
     /// Build a field with specified `cells`.
     ///
     /// Returns `Some` if the `cells` slice is the right length for the grid dimensions in `extent`, or `None` if not.
@@ -64,15 +77,7 @@ impl<M: GridModel> FieldLayer for CaField<M> {
     }
 
     fn new(extent: Extent, params: &[ParamValue]) -> Self {
-        let (width, height) = extent.cells();
-        let mut grid = Grid2D::new(width, height);
-        let mut seed = GRID_INIT_SEED;
-        M::init(&mut grid, params, &mut seed);
-        Self {
-            grid,
-            seed,
-            _marker: PhantomData,
-        }
+        Self::with_seed(extent, params, None)
     }
 
     fn read(&self) -> &[u8] {

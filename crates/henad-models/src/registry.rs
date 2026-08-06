@@ -29,7 +29,9 @@ pub enum ModelState {
 /// *capture* a cloned [`GpuContext`]. That keeps the factory's shape identical for every model —
 /// nobody has to thread a context object through the app at call time — while still letting GPU
 /// models reach a device.
-pub type ModelFactory = Box<dyn Fn(&[ParamValue]) -> ModelState + Send + Sync>;
+///
+/// The `Option<u64>` is the RNG seed, which defaults to the model's fixed default when `None`.
+pub type ModelFactory = Box<dyn Fn(&[ParamValue], Option<u64>) -> ModelState + Send + Sync>;
 
 /// An entry in the model registry.
 pub struct ModelEntry {
@@ -51,7 +53,9 @@ fn register_grid_model<M: GridModel>() -> ModelEntry {
         param_descriptors: grid_model_param_descriptors::<M>(),
         stat_descriptors: M::STATS.to_vec(),
         topology_hint: TopologyHint::GRID,
-        create: Box::new(|params| ModelState::Cpu(Box::new(GridModelState::<M>::from_params(params)))),
+        create: Box::new(|params, seed| {
+            ModelState::Cpu(Box::new(GridModelState::<M>::from_params_seeded(params, seed)))
+        }),
     }
 }
 
@@ -67,7 +71,9 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
             grid: <A::Field as henad_core::field::FieldLayer>::HAS_GRID,
             agents: true,
         },
-        create: Box::new(|params| ModelState::Cpu(Box::new(AgentModelState::<A>::from_params(params)))),
+        create: Box::new(|params, seed| {
+            ModelState::Cpu(Box::new(AgentModelState::<A>::from_params_seeded(params, seed)))
+        }),
     }
 }
 
@@ -86,7 +92,9 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
         param_descriptors: model.param_descriptors(),
         stat_descriptors: model.stat_descriptors(),
         topology_hint: model.topology_hint(),
-        create: Box::new(move |params| ModelState::Gpu(Box::new(GpuGridState::<M>::new(&factory_ctx, params)))),
+        create: Box::new(move |params, seed| {
+            ModelState::Gpu(Box::new(GpuGridState::<M>::new_seeded(&factory_ctx, params, seed)))
+        }),
     }
 }
 
@@ -126,7 +134,7 @@ mod tests {
                 .iter()
                 .map(|desc| desc.kind.default_value())
                 .collect();
-            let ModelState::Cpu(mut state) = (entry.create)(&values) else {
+            let ModelState::Cpu(mut state) = (entry.create)(&values, None) else {
                 continue;
             };
 
@@ -152,7 +160,7 @@ mod tests {
                 .iter()
                 .map(|desc| desc.kind.default_value())
                 .collect();
-            let ModelState::Cpu(state) = (entry.create)(&values) else {
+            let ModelState::Cpu(state) = (entry.create)(&values, None) else {
                 continue;
             };
 
@@ -184,7 +192,7 @@ mod tests {
                 .iter()
                 .map(|desc| desc.kind.default_value())
                 .collect();
-            let ModelState::Cpu(state) = (entry.create)(&values) else {
+            let ModelState::Cpu(state) = (entry.create)(&values, None) else {
                 continue;
             };
             assert_eq!(

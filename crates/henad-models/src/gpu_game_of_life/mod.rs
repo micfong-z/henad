@@ -117,9 +117,9 @@ impl GpuGridModel for GpuGameOfLife {
         (words_per_row(width) as u32, height)
     }
 
-    fn seed_buffers(width: u32, height: u32, params: &[ParamValue]) -> Vec<Vec<u32>> {
+    fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let density = extract_f32(params, PARAM_DENSITY, DEFAULT_DENSITY);
-        vec![seed_random(width, height, density, GRID_INIT_SEED)]
+        vec![seed_random(width, height, density, seed.unwrap_or(GRID_INIT_SEED))]
     }
 
     /// `step.wgsl` reads nothing but `dims: vec2<u32>`.
@@ -527,7 +527,7 @@ mod runner_tests {
             .expect("a GPU context must make the GPU model selectable");
 
         // Note there is no context argument here: the registry closure captured its own clone.
-        let ModelState::Gpu(mut state) = (entry.create)(&params(32, 32, 0.3)) else {
+        let ModelState::Gpu(mut state) = (entry.create)(&params(32, 32, 0.3), None) else {
             panic!("the GPU entry's factory must yield ModelState::Gpu, not ModelState::Cpu");
         };
 

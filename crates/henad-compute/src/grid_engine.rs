@@ -18,12 +18,17 @@ pub struct GridModelState<M: GridModel> {
 
 impl<M: GridModel> GridModelState<M> {
     pub fn from_params(params: &[ParamValue]) -> Self {
+        Self::from_params_seeded(params, None)
+    }
+
+    /// Build a state whose RNG starts from `seed`, or [`GRID_INIT_SEED`] when it is `None`.
+    pub fn from_params_seeded(params: &[ParamValue], seed: Option<u64>) -> Self {
         let extent = Extent {
             w: extract_u32(params, 0, 1024) as f32,
             h: extract_u32(params, 1, 1024) as f32,
         };
         Self {
-            field: CaField::new(extent, params),
+            field: CaField::with_seed(extent, params, seed),
             params: ParamStore::new(&grid_model_param_descriptors::<M>(), params),
             tick: 0,
         }
@@ -89,7 +94,7 @@ impl<M: GridModel> SimState for GridModelState<M> {
 
 #[cfg(test)]
 mod tests {
-    use super::GridModelState;
+    use super::{GRID_INIT_SEED, GridModelState};
     use henad_core::grid::Grid2D;
     use henad_core::grid_model::GridModel;
     use henad_core::helpers::xorshift64;
@@ -215,6 +220,25 @@ mod tests {
                 "{w}x{h}"
             );
         }
+    }
+
+    /// Two seeds must give different runs, and `None` must reproduce the fixed default exactly.
+    #[test]
+    fn seeds_produce_independent_replicates() {
+        let params = vec![ParamValue::U32(64), ParamValue::U32(64)];
+        let run = |seed: Option<u64>| -> Vec<u8> {
+            let mut state = GridModelState::<MooreCount>::from_params_seeded(&params, seed);
+            state.step();
+            cells(&state)
+        };
+
+        assert_eq!(
+            run(None),
+            run(Some(GRID_INIT_SEED)),
+            "`None` must mean the default seed"
+        );
+        assert_ne!(run(Some(1)), run(Some(2)), "different seeds must give different runs");
+        assert_eq!(run(Some(7)), run(Some(7)), "a seed must still be reproducible");
     }
 
     /// The row seed comes from the row index, so a grid stepped in one thread and the same grid
