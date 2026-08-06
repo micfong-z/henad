@@ -14,7 +14,7 @@ For each agent `i`, against every other agent `j`, with all offsets taken the sh
 2. if `|d|² < protected_range²`, accumulate `close -= d`
 3. if `|d|² < visual_range²`, accumulate `avg_v += vel_j`, `sum_d += d`, `n += 1`
 
-Then:
+Then,
 
 ```
 new_v = vel_i + close * separation
@@ -22,8 +22,7 @@ if n > 0:
     new_v += (avg_v / n - vel_i) * alignment + (sum_d / n) * cohesion
 ```
 
-Then clamp the magnitude of `new_v` into `[min_speed, max_speed]`, preserving direction; if it is
-exactly zero, set it to `(min_speed, 0)`. Finally `pos_i = (pos_i + new_v) mod world`.
+Then clamp the magnitude of `new_v` into `[min_speed, max_speed]`, preserving direction; if it is exactly zero, set it to `(min_speed, 0)`. Finally `pos_i = (pos_i + new_v) mod world`.
 
 ## World setup
 
@@ -38,8 +37,7 @@ the port relies on the world folding positions for it.
 
 ## Coordinates
 
-Positions live in `xcor`/`ycor`, so NetLogo's own spatial primitives apply. NetLogo's continuous coordinates are patch-centred, i.e. `max-pxcor` 99 spans `[-0.5, 99.5)` while Henad's world is `[0, 100)`. Patches are unit squares centred on integer coordinates, so the world reaches half a patch past the extreme centres. Hence, `export-agents` applies `mod world-size` to bring coordinates back into Henad's
-range.
+Positions live in `xcor`/`ycor`, so NetLogo's own spatial primitives apply. NetLogo's continuous coordinates are patch-centred, i.e. `max-pxcor` 99 spans `[-0.5, 99.5)` while Henad's world is `[0, 100)`. Patches are unit squares centred on integer coordinates, so the world reaches half a patch past the extreme centres. Hence, `export-agents` applies `mod world-size` to bring coordinates back into Henad's range.
 
 `in-radius` is inclusive (`<= r`) where Henad's visual test is strict (`< r`), so it is used as a candidate set that the loop then filters exactly, in order to use the same shape as the spatial hash query it is checking.
 
