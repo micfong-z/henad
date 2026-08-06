@@ -165,7 +165,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
     }
 
     /// Similar to [`Self::new`], with `seed` controlling the RNG used.
-    /// 
+    ///
     /// If `None`, the model's fixed default seed is used.
     #[expect(clippy::too_many_lines)]
     pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {

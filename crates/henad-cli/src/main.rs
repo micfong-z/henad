@@ -75,7 +75,7 @@ struct Args {
     /// RNG seed used.
     #[arg(long)]
     seed: Option<u64>,
-    
+
     /// How many independent timed runs to collect (each on a freshly created state).
     #[arg(long, default_value_t = 1)]
     reps: usize,
