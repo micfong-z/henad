@@ -1,6 +1,6 @@
-//! Cross-engine and self consistency check for SIR.
+//! Self consistency check for SIR.
 //!
-//! See `tests/fixtures/docs/sir_fixture.md` for how a fixture is produced.
+//! See `tests/fixtures/docs/sir_fixture.md` for info on cross-engine consistency checks.
 
 use henad_compute::grid_engine::GridModelState;
 use henad_core::model::SimState as _;
