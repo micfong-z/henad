@@ -152,14 +152,7 @@ mod tests {
     type State = GpuGridState<GpuGameOfLife>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("gpu_gol_test_device"),
-            ..Default::default()
-        }))
-        .ok()?;
-        Some(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm))
+        crate::gpu_test_support::headless_context("gpu_gol_test_device", wgpu::Features::empty())
     }
 
     pub(super) fn params(width: u32, height: u32, density: f32) -> Vec<ParamValue> {
@@ -262,18 +255,7 @@ mod tests {
     /// Like `headless_context`, but requests `TIMESTAMP_QUERY` explicitly (mirroring what the app
     /// does when the adapter supports it), since the default test device requests no features.
     fn headless_timing_context() -> Option<GpuContext> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-        if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-            return None;
-        }
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("gpu_gol_timing_test_device"),
-            required_features: wgpu::Features::TIMESTAMP_QUERY,
-            ..Default::default()
-        }))
-        .ok()?;
-        Some(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm))
+        crate::gpu_test_support::headless_context("gpu_gol_timing_test_device", wgpu::Features::TIMESTAMP_QUERY)
     }
 
     /// Regression test for "GPU time/step flickers to 0/None during a sustained run": runs many

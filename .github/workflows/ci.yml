@@ -1,0 +1,107 @@
+name: CI
+
+# Manual only until the runners are known good. Add `pull_request` (and `push: branches: [master]`
+# to catch direct pushes) once a dispatched run passes on all three.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: fmt + clippy + wasm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # `--all-targets` links henad-app, which needs eframe's X11/xkb libs.
+      - name: Install eframe build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      # Subsumes `cargo check --all-targets`, which check.sh runs first only for the faster failure.
+      - name: clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -W clippy::all
+
+      - name: wasm typecheck
+        run: cargo check --locked --workspace --all-features --lib --target wasm32-unknown-unknown
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            require_gpu: "1"
+          - os: macos-15
+            require_gpu: "1"
+          # Unknown whether in-box WARP shows up as a DX12 adapter without the Agility SDK, so the
+          # GPU tests are left free to skip. The runtime info step reports what was found.
+          - os: windows-2025
+            require_gpu: ""
+    env:
+      HENAD_REQUIRE_GPU: ${{ matrix.require_gpu }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # mesa-vulkan-drivers is where lavapipe lives, the CPU Vulkan driver the GPU tests run on.
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev \
+            mesa-vulkan-drivers vulkan-tools
+
+      # Pin the loader to lavapipe so a second ICD appearing in the image cannot quietly take over.
+      - name: Select lavapipe
+        if: runner.os == 'Linux'
+        run: |
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd.*.json | head -n1)
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          VK_DRIVER_FILES=$icd vulkaninfo --summary
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Prints the adapter this runner actually got, which is the only way to tell a real skip from
+      # a lost driver on the runners where HENAD_REQUIRE_GPU is off.
+      - name: Runtime info
+        run: cargo run --locked -p henad-cli -- --info
+
+      - name: Test
+        run: cargo test --locked --workspace --all-targets --all-features
+
+      - name: Doc tests
+        run: cargo test --locked --workspace --doc
+
+  web:
+    name: trunk build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install trunk
+        run: |
+          curl -sSfL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xzf - -C "$HOME/.cargo/bin"
+
+      - name: Build
+        run: trunk build
