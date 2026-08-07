@@ -32,8 +32,7 @@ In _Settings_:
 - `max-pxcor` **99**, `max-pycor` **99**. The dialog should read `Torus: 100 x 100`.
 - both **wrap** boxes checked
 
-Wrapping is required, not cosmetic: `setxy` errors on out-of-range coordinates when it is off, and
-the port relies on the world folding positions for it.
+Wrapping is required, since `setxy` errors on out-of-range coordinates when it is off, and the port relies on the world folding positions for it.
 
 ## Coordinates
 
