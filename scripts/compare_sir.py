@@ -102,8 +102,8 @@ def read_run(path: Path) -> Run:
 
 def read_dir(directory: Path) -> list[Run]:
     paths = sorted(directory.glob("*.csv"))
-    if not paths:
-        raise SystemExit(f"{directory}: no .csv replicates found")
+    if len(paths) < 2:
+        raise SystemExit(f"{directory}: need >= 2 .csv replicates to compute variance")
     return [read_run(p) for p in paths]
 
 
