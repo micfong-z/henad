@@ -23,8 +23,8 @@ pub const HOME: u8 = 3;
 pub const TO_FOOD: usize = 0;
 pub const TO_HOME: usize = 1;
 
-/// Param indices after the engine's `num_agents`, `world_width`, `world_height` and the model's own.
-const EVAPORATION: usize = 8;
+/// Param index after the engine's `num_agents`, `world_width`, `world_height` and the model's own four.
+const EVAPORATION: usize = 7;
 
 /// Background, two trail ramps, then the site markers. The ramps differ by hue so route home and
 /// route to food stay apart at a glance.
