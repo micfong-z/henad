@@ -356,7 +356,11 @@ fn bench_sum(c: &mut Criterion) {
 /// `t1` is the control. With one worker there is no contention to avoid and shadow holds a single
 /// grid, so a lead that survives it means less work rather than less waiting.
 fn bench_threads(c: &mut Criterion) {
-    let all = rayon::current_num_threads();
+    // On a 4-core machine `all` is 4, and criterion rejects a duplicate id.
+    let mut thread_counts = vec![1, 4, rayon::current_num_threads()];
+    thread_counts.sort_unstable();
+    thread_counts.dedup();
+
     let mut group = c.benchmark_group("scatter_threads");
     group.sample_size(20);
 
@@ -367,7 +371,7 @@ fn bench_threads(c: &mut Criterion) {
         let mut out = vec![0.0f32; n_cells];
         group.throughput(Throughput::Elements(n_agents as u64));
 
-        for threads in [1, 4, all] {
+        for threads in thread_counts.iter().copied() {
             let Ok(pool) = rayon::ThreadPoolBuilder::new().num_threads(threads).build() else {
                 continue;
             };
