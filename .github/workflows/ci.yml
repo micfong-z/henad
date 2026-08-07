@@ -1,8 +1,9 @@
 name: CI
 
-# Manual only until the runners are known good. Add `pull_request` (and `push: branches: [master]`
-# to catch direct pushes) once a dispatched run passes on all three.
 on:
+  push:
+    branches: [master]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
