@@ -72,6 +72,10 @@ struct Args {
     #[arg(long = "global-warmup", default_value_t = 0)]
     global_warmup: u64,
 
+    /// RNG seed used.
+    #[arg(long)]
+    seed: Option<u64>,
+
     /// How many independent timed runs to collect (each on a freshly created state).
     #[arg(long, default_value_t = 1)]
     reps: usize,
@@ -247,8 +251,8 @@ fn print_params(entry: &ModelEntry) {
 /// handle GPU use [`new_gpu_state`] instead; the dispatcher in [`run_benchmark`] routes correctly,
 /// so this only fires for a CPU-only path handed a GPU model (e.g. `--export`, which has no GPU
 /// readback).
-fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue]) -> Result<Box<dyn SimState>> {
-    match (entry.create)(params) {
+fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -> Result<Box<dyn SimState>> {
+    match (entry.create)(params, seed) {
         ModelState::Cpu(state) => Ok(state),
         ModelState::Gpu(_) => bail!("model '{}' is GPU-backed; this path is CPU-only", entry.id),
     }
@@ -257,7 +261,7 @@ fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue]) -> Result<Box<dyn Si
 /// Dispatch to the CPU or GPU benchmark depending on which backend the registry entry produces.
 /// The probe state created here is thrown away; each per-rep loop builds its own fresh state.
 fn run_benchmark(entry: &ModelEntry, params: &[ParamValue], args: &Args, gpu_ctx: Option<&GpuContext>) -> Result<()> {
-    match (entry.create)(params) {
+    match (entry.create)(params, args.seed) {
         ModelState::Cpu(_) => bench_cpu(entry, params, args),
         ModelState::Gpu(_) => {
             let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
@@ -281,7 +285,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
     // Rep 0: optional one-time warm-up (CPU turbo / caches) before the timed reps. See
     // `--global-warmup`; a no-op at 0.
     if args.global_warmup > 0 {
-        let mut warm = new_cpu_state(entry, params)?;
+        let mut warm = new_cpu_state(entry, params, args.seed)?;
         eprint!("  #{: >4}: ", 0);
         let start = Instant::now();
         for _ in 0..args.global_warmup {
@@ -298,7 +302,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
     let mut grid_dims: Option<(u32, u32)> = None;
 
     for rep in 0..args.reps {
-        let mut state = new_cpu_state(entry, params)?;
+        let mut state = new_cpu_state(entry, params, args.seed)?;
         for _ in 0..args.warmup {
             state.step();
         }
@@ -390,7 +394,7 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
     // idle clocks (DVFS) and pay first-use shader compilation before any timed rep — so rep 1 isn't
     // cold. Off by default because its cost scales with the workload; opt in with `--global-warmup`.
     if args.global_warmup > 0 {
-        let mut warm = new_gpu_state(entry, params)?;
+        let mut warm = new_gpu_state(entry, params, args.seed)?;
         eprint!("  #{: >4}: ", 0);
         let start = Instant::now();
         run_gpu_steps(&mut *warm, ctx, args.global_warmup)?;
@@ -402,7 +406,7 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
     let mut population: u64 = 0;
 
     for rep in 0..args.reps {
-        let mut state = new_gpu_state(entry, params)?;
+        let mut state = new_gpu_state(entry, params, args.seed)?;
         // Per-rep sim warm-up (untimed), matching the CPU path.
         run_gpu_steps(&mut *state, ctx, args.warmup)?;
         population = state.population();
@@ -423,8 +427,8 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
 }
 
 /// Create a fresh GPU state from a registry entry. Errors on a CPU-backed model.
-fn new_gpu_state(entry: &ModelEntry, params: &[ParamValue]) -> Result<Box<dyn GpuSimState>> {
-    match (entry.create)(params) {
+fn new_gpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -> Result<Box<dyn GpuSimState>> {
+    match (entry.create)(params, seed) {
         ModelState::Gpu(state) => Ok(state),
         ModelState::Cpu(_) => bail!("expected a GPU model but '{}' is CPU-backed", entry.id),
     }
@@ -505,7 +509,7 @@ fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
 
 /// Run once (warmup + steps) and write the final state to `path`.
 fn export_final(entry: &ModelEntry, params: &[ParamValue], args: &Args, path: &Path) -> Result<()> {
-    let mut state = new_cpu_state(entry, params)?;
+    let mut state = new_cpu_state(entry, params, args.seed)?;
     for _ in 0..(args.warmup + args.steps) {
         state.step();
     }
@@ -543,7 +547,7 @@ fn export_stats(
         entry.name, entry.id, total, args.stats_every
     );
 
-    let rows = match (entry.create)(params) {
+    let rows = match (entry.create)(params, args.seed) {
         ModelState::Cpu(state) => stats_cpu(state, args, total, writer)?,
         ModelState::Gpu(state) => {
             let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;

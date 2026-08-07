@@ -177,7 +177,7 @@ impl AppState {
             Arc::new(move || ctx.request_repaint())
         };
 
-        match (entry.create)(&self.param_values) {
+        match (entry.create)(&self.param_values, None) {
             ModelState::Cpu(state) => {
                 let mut thread = SimThread::new(state, self.target_tps, Some(wake));
                 if self.uncapped {

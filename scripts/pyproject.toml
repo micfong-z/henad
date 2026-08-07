@@ -1,0 +1,10 @@
+[project]
+name = "henad-scripts"
+version = "0.1.0"
+description = "Analysis scripts for Henad: benchmarking and cross-engine comparison"
+requires-python = ">=3.13"
+dependencies = [
+    "matplotlib>=3.11.1",
+    "numpy>=2.5.1",
+    "scipy>=1.18.0",
+]

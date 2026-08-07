@@ -15,7 +15,7 @@
 
 use henad_compute::grid_engine::GRID_INIT_SEED;
 use henad_core::gpu_grid_model::GpuGridModel;
-use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param, xorshift64};
+use henad_core::helpers::{extract_f32, extract_u32, f32_param, mix_seed, u32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
@@ -137,11 +137,15 @@ impl GpuGridModel for GpuSir {
         )
     }
 
-    fn seed_buffers(width: u32, height: u32, params: &[ParamValue]) -> Vec<Vec<u32>> {
+    fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let initial_infected_pct = extract_f32(params, PARAM_INITIAL_INFECTED_PCT, DEFAULT_INITIAL_INFECTED_PCT);
+        let (cells, rng) = match seed {
+            Some(s) => (mix_seed(s), mix_seed(s ^ RNG_INIT_SEED)),
+            None => (GRID_INIT_SEED, RNG_INIT_SEED),
+        };
         vec![
-            seed_cells(width, height, initial_infected_pct, GRID_INIT_SEED),
-            seed_rng_states(width, height, RNG_INIT_SEED),
+            seed_cells(width, height, initial_infected_pct, cells),
+            seed_rng_states(width, height, rng),
         ]
     }
 
@@ -438,7 +442,7 @@ mod runner_tests {
             .find(|e| e.id == "gpu_sir")
             .expect("a GPU context must make the GPU SIR model selectable");
 
-        let ModelState::Gpu(mut state) = (entry.create)(&params(32, 32, 0.3, 0.05, 0.1)) else {
+        let ModelState::Gpu(mut state) = (entry.create)(&params(32, 32, 0.3, 0.05, 0.1), None) else {
             panic!("the GPU SIR entry's factory must yield ModelState::Gpu, not ModelState::Cpu");
         };
 

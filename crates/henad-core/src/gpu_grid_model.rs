@@ -123,7 +123,7 @@ pub trait GpuGridModel: Send + Sync + 'static {
     ///
     /// Returns [`Self::BUFFER_COUNT`] vectors, whose lengths match [`Self::buffer_lens`], in
     /// binding order — index 0 is the primary state buffer that display and reduce read.
-    fn seed_buffers(width: u32, height: u32, params: &[ParamValue]) -> Vec<Vec<u32>>;
+    fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>>;
 
     /// The step shader's uniform block, as raw bytes.
     ///
