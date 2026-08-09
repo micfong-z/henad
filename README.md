@@ -59,7 +59,7 @@ cargo run --release --bin henad-cli
 
 ## License
 
-Henad is licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Bevy has an [excellent explanation](https://github.com/bevyengine/bevy/issues/2373) of what this means.
+Henad is licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Bevy has an [excellent explanation](https://github.com/bevyengine/bevy/issues/2373) of what this means. Compiled distributions can additionally include third-party dependencies under their own terms; see [license.html](license.html) for more information.
 
 ## Contributing
 
