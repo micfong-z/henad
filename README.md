@@ -4,6 +4,8 @@
 
 ## WIP Screen Recording (2026-08-01)
 
+<img width="800" height="450" alt="GIF screen recording" src="https://github.com/user-attachments/assets/a64ffa6d-2d96-4fe7-9351-ee9e7810b751" />
+
 https://github.com/user-attachments/assets/7ee3fadb-a8fa-4b79-84fa-7b4cd4099f23
 
 ## Benchmarks
