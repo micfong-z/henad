@@ -142,7 +142,7 @@ impl SpatialHash {
     }
 
     /// `(cell_start, sorted_agents)`.
-    /// 
+    ///
     /// Note that cell `c` owns `sorted_agents[cell_start[c]..cell_start[c + 1]]`.
     #[must_use]
     pub fn buckets(&self) -> (&[u32], &[u32]) {

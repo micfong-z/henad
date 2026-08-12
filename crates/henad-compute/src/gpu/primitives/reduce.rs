@@ -3,9 +3,11 @@
 //! The model supplies the leaf, this owns the levels above it and the readback. Fixed pairwise
 //! order throughout, so the sum is reproducible.
 
-use crate::gpu::dispatch::{WORKGROUP, linear_dispatch};
-use crate::gpu::pipeline::{compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry};
-use crate::gpu::readback::CounterReadback;
+use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
+use crate::gpu::primitives::pipeline::{
+    compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
+};
+use crate::gpu::primitives::readback::CounterReadback;
 
 /// Matches `ReduceParams` in `reduce.wgsl`.
 #[repr(C)]
@@ -184,7 +186,9 @@ mod tests {
     use super::{GpuLaneReduce, WORKGROUP, level_sizes};
     use crate::gpu::GpuContext;
     use crate::gpu::headless_context;
-    use crate::gpu::pipeline::{compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry};
+    use crate::gpu::primitives::pipeline::{
+        compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
+    };
 
     /// Stands in for a model's leaf shader.
     const LEAF: &str = r"

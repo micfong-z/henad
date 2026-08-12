@@ -2,14 +2,14 @@
 
 use std::marker::PhantomData;
 
-use henad_core::field::{Extent, FieldLayer};
+use henad_core::authoring::field::{Extent, FieldLayer};
+use henad_core::authoring::grid_model::GridModel;
 use henad_core::grid::Grid2D;
-use henad_core::grid_model::GridModel;
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::GridView;
 
-use crate::chunked::{advance_tick_seed, chunk_seed};
+use crate::cpu::primitives::chunked::{advance_tick_seed, chunk_seed};
 use crate::for_each_chunk_mut;
 
 /// Seed every `GridModel`'s `init` starts from.

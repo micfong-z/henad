@@ -1,13 +1,13 @@
-use henad_core::field::{Extent, FieldLayer as _};
-use henad_core::grid_model::GridModel;
+use henad_core::authoring::field::{Extent, FieldLayer as _};
+use henad_core::authoring::grid_model::GridModel;
 use henad_core::helpers::{extract_u32, u32_param};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamStore, ParamValue};
 use henad_core::view::{GridView, StatEntry, stat_entries};
 
-use crate::field::CaField;
+use crate::cpu::field::CaField;
 
-pub use crate::field::GRID_INIT_SEED;
+pub use crate::cpu::field::GRID_INIT_SEED;
 
 /// Engine wrapper that implements `SimState` for any `GridModel`.
 pub struct GridModelState<M: GridModel> {
@@ -95,8 +95,8 @@ impl<M: GridModel> SimState for GridModelState<M> {
 #[cfg(test)]
 mod tests {
     use super::GridModelState;
+    use henad_core::authoring::grid_model::GridModel;
     use henad_core::grid::Grid2D;
-    use henad_core::grid_model::GridModel;
     use henad_core::helpers::xorshift64;
     use henad_core::model::SimState as _;
     use henad_core::params::{ParamDescriptor, ParamValue};

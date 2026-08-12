@@ -1,7 +1,7 @@
 //! How fast the sim is allowed to run, and how often it hands back a snapshot.
 
 use crate::state::AppState;
-use henad_compute::sim_thread::SimCommand;
+use henad_compute::cpu::sim_thread::SimCommand;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::sim_runner::SimRunner;

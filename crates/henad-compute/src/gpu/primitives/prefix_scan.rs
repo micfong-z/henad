@@ -3,8 +3,10 @@
 //! Each workgroup scans [`WORKGROUP`] elements, the level above scans their totals, and the
 //! results are added back down the chain. Levels are built once at construction.
 
-use crate::gpu::dispatch::{WORKGROUP, linear_dispatch};
-use crate::gpu::pipeline::{compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry};
+use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
+use crate::gpu::primitives::pipeline::{
+    compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
+};
 
 /// Matches `ScanParams` in `scan.wgsl` and `scan_add.wgsl`.
 #[repr(C)]

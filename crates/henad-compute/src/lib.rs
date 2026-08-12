@@ -1,13 +1,12 @@
-//! Simulation runner and timing for the Henad engine.
+//! Engine machinery that turns an authoring impl into something runnable.
+//!
+//! [`cpu`] and [`gpu`] are siblings, not a base and a specialisation. Each holds its own runner,
+//! its own engines, and its own primitives. [`snapshot`] and [`runtime_info`] are shared, since
+//! both backends publish through them.
 
-pub mod agent_engine;
-pub mod chunked;
-pub mod field;
+pub mod cpu;
 pub mod gpu;
-pub mod grid_engine;
-pub mod lanes_macro;
-pub use lanes_macro::__lanes;
 pub mod runtime_info;
-pub mod scatter;
-pub mod sim_thread;
 pub mod snapshot;
+
+pub use cpu::primitives::lanes_macro::__lanes;

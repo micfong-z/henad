@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use egui::TextureHandle;
-use henad_compute::sim_thread::{SimCommand, SimThread, WakeFn};
+use henad_compute::cpu::sim_thread::{SimCommand, SimThread, WakeFn};
 use henad_compute::snapshot::Snapshot;
 use henad_core::params::ParamValue;
 use henad_core::view::StatsHistory;

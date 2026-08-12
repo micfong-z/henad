@@ -9,7 +9,7 @@
 //! The GPU arm does not exist on wasm: there is no OS thread to run it on, and the registry hands
 //! out no GPU models there anyway (it is given no `GpuContext`).
 
-use henad_compute::sim_thread::{SimCommand, SimThread};
+use henad_compute::cpu::sim_thread::{SimCommand, SimThread};
 use henad_compute::snapshot::Snapshot;
 
 #[cfg(not(target_arch = "wasm32"))]

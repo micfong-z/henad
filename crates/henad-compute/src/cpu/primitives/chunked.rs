@@ -29,7 +29,7 @@ macro_rules! for_each_chunk_mut {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use $crate::chunked::__rayon::prelude::*;
+            use $crate::cpu::primitives::chunked::__rayon::prelude::*;
             $items.par_chunks_mut(chunk).enumerate().for_each(|($c, $slice)| {
                 let $base = $c * chunk;
                 $body
@@ -51,7 +51,7 @@ macro_rules! for_each_chunk_mut {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use $crate::chunked::__rayon::prelude::*;
+            use $crate::cpu::primitives::chunked::__rayon::prelude::*;
             $a.par_chunks_mut(chunk)
                 .zip($b.par_chunks_mut(chunk))
                 .zip($d.par_chunks_mut(chunk))

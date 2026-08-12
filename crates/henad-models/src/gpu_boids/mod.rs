@@ -5,17 +5,19 @@
 
 use std::sync::Arc;
 
-use henad_compute::agent_engine::{AGENT_INIT_SEED, agent_model_param_descriptors};
+use henad_compute::cpu::agent_engine::{AGENT_INIT_SEED, agent_model_param_descriptors};
 use henad_compute::gpu::GpuContext;
-use henad_compute::gpu::agent_display::GpuAgents;
-use henad_compute::gpu::dispatch::linear_dispatch;
-use henad_compute::gpu::pipeline::{compute_pipeline, lane_buffer, storage_entry, uniform_buffer, uniform_entry};
-use henad_compute::gpu::reduce::GpuLaneReduce;
+use henad_compute::gpu::primitives::dispatch::linear_dispatch;
+use henad_compute::gpu::primitives::pipeline::{
+    compute_pipeline, lane_buffer, storage_entry, uniform_buffer, uniform_entry,
+};
+use henad_compute::gpu::primitives::reduce::GpuLaneReduce;
+use henad_compute::gpu::primitives::spatial_hash::GpuSpatialHash;
 use henad_compute::gpu::sim_thread::GpuSimState;
-use henad_compute::gpu::spatial_hash::GpuSpatialHash;
+use henad_compute::gpu::view::agents::GpuAgents;
 use henad_compute::snapshot::GpuSnapshot;
-use henad_core::agent_model::{AgentLanes as _, AgentModel as _};
-use henad_core::field::Extent;
+use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
+use henad_core::authoring::field::Extent;
 use henad_core::helpers::{extract_f32, extract_u32, mix_seed};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -544,7 +546,7 @@ impl GpuSimState for GpuBoidsState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::agent_engine::AgentModelState;
+    use henad_compute::cpu::agent_engine::AgentModelState;
     use henad_compute::gpu::GpuContext;
 
     fn headless_context() -> Option<GpuContext> {

@@ -2,10 +2,10 @@ pub mod field;
 mod lanes;
 mod step;
 
-use henad_compute::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_compute::field::scalar::{Deposits, ScalarField};
-use henad_core::agent_model::{AgentModel, StepCtx};
-use henad_core::field::Extent;
+use henad_compute::cpu::field::scalar::{Deposits, ScalarField};
+use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_core::authoring::agent_model::{AgentModel, StepCtx};
+use henad_core::authoring::field::Extent;
 use henad_core::grid::Grid2D;
 use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -69,7 +69,7 @@ impl AgentModel for AntsModel {
 
     type Lanes = AntLanes;
     type Field = ScalarField<PheromoneField>;
-    type Index = henad_core::agent_model::NoIndex;
+    type Index = henad_core::authoring::agent_model::NoIndex;
     type Params = AntParams;
     type Tally = u64;
 
@@ -146,7 +146,7 @@ fn field_sum(cells: &[f32]) -> f64 {
 mod tests {
     use super::*;
     use crate::ants::field::{CELL_PALETTE, OBSTACLE};
-    use henad_compute::agent_engine::AgentModelState;
+    use henad_compute::cpu::agent_engine::AgentModelState;
     use henad_core::model::SimState as _;
 
     type State = AgentModelState<AntsModel>;

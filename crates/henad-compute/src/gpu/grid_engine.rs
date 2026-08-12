@@ -1,21 +1,21 @@
 //! Generic engine turning any [`GpuGridModel`] into a runnable [`GpuSimState`].
 //!
-//! Compare with [`crate::grid_engine`].
+//! Compare with [`crate::cpu::grid_engine`].
 
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use henad_core::gpu_grid_model::GpuGridModel;
+use henad_core::authoring::gpu_grid_model::GpuGridModel;
 use henad_core::model::{Model, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;
 use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
-use crate::gpu::display::{DisplayTarget, GpuDisplay, build_display_target};
-use crate::gpu::pipeline::{compute_pipeline, storage_entry, uniform_entry};
-use crate::gpu::readback::CounterReadback;
+use crate::gpu::primitives::pipeline::{compute_pipeline, storage_entry, uniform_entry};
+use crate::gpu::primitives::readback::CounterReadback;
 use crate::gpu::sim_thread::GpuSimState;
+use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
 use crate::snapshot::GpuSnapshot;
 
 /// One ping-ponged pair of storage buffers.

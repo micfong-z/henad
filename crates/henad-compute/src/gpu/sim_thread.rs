@@ -1,5 +1,5 @@
 //! Dedicated OS thread that owns a GPU-resident sim state and steps it in batched submissions,
-//! decoupled from the UI frame rate. This is the GPU version of [`crate::sim_thread`]'s CPU sim thread.
+//! decoupled from the UI frame rate. This is the GPU version of [`crate::cpu::sim_thread`]'s CPU sim thread.
 //!
 //! # [`GpuSimState`] is a runner interface, not a model-authoring shortcut
 //!
@@ -8,8 +8,8 @@
 //! drives, exactly as `SimState` is the interface the CPU thread drives — the minimum needed to
 //! record work into an encoder that this crate then submits and paces.
 //!
-//! The model-authoring counterpart is `henad_core::gpu_grid_model::GpuGridModel`, implemented by
-//! [`crate::gpu::gpu_grid_engine::GpuGridState`]. A GPU model that does not fit
+//! The model-authoring counterpart is `henad_core::authoring::gpu_grid_model::GpuGridModel`, implemented by
+//! [`crate::gpu::grid_engine::GpuGridState`]. A GPU model that does not fit
 //! the grid mould could still implement this trait by hand.
 //!
 //! # Synchronization
@@ -111,7 +111,7 @@ impl Default for GpuStats {
     }
 }
 
-/// GPU-runner-specific commands, on top of the shared [`crate::sim_thread::SimCommand`].
+/// GPU-runner-specific commands, on top of the shared [`crate::cpu::sim_thread::SimCommand`].
 pub enum GpuCommand {
     SetBatchSize(u32),
     SetAdaptive(bool),
@@ -145,9 +145,9 @@ mod native {
     use std::time::{Duration, Instant};
 
     use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats};
+    use crate::cpu::sim_thread::{SimCommand, WakeFn};
     use crate::gpu::GpuContext;
     use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms};
-    use crate::sim_thread::{SimCommand, WakeFn};
     use crate::snapshot::{Snapshot, SnapshotView};
 
     /// How often the display texture is refreshed and a `Snapshot` published. Independent of
@@ -421,7 +421,7 @@ mod native {
     /// Handle to the GPU sim thread.
     ///
     /// Deliberately shaped like
-    /// [`crate::sim_thread::SimThread`] — `send`/`play`/`pause`/`step_once`/`take_snapshot` — so
+    /// [`crate::cpu::sim_thread::SimThread`] — `send`/`play`/`pause`/`step_once`/`take_snapshot` — so
     /// `henad-app` can hold a thin enum over the two backends instead of special-casing GPU
     /// everywhere. Dropping it shuts the thread down and joins it.
     pub struct GpuSimThread {
@@ -433,7 +433,7 @@ mod native {
 
     impl GpuSimThread {
         /// Spawns the GPU sim thread, taking ownership of `state` and a cloned [`GpuContext`].
-        /// Starts paused, like [`crate::sim_thread::SimThread`].
+        /// Starts paused, like [`crate::cpu::sim_thread::SimThread`].
         pub fn new(
             ctx: GpuContext,
             state: Box<dyn GpuSimState>,

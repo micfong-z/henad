@@ -1,9 +1,9 @@
 mod lanes;
 mod step;
 
-use henad_compute::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_core::agent_model::{AgentModel, StepCtx};
-use henad_core::field::{Extent, NoField};
+use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_core::authoring::agent_model::{AgentModel, StepCtx};
+use henad_core::authoring::field::{Extent, NoField};
 use henad_core::helpers::{extract_f32, f32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::spatial_hash::SpatialHash;
@@ -154,7 +154,7 @@ impl AgentModel for BoidsModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::agent_engine::AgentModelState;
+    use henad_compute::cpu::agent_engine::AgentModelState;
     use henad_core::model::SimState as _;
     use henad_core::view::StatValue;
 

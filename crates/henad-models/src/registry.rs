@@ -1,11 +1,11 @@
-use henad_compute::agent_engine::{AgentModelState, agent_model_param_descriptors};
+use henad_compute::cpu::agent_engine::{AgentModelState, agent_model_param_descriptors};
+use henad_compute::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
 use henad_compute::gpu::GpuContext;
-use henad_compute::gpu::gpu_grid_engine::{GpuGridModelDescriptor, GpuGridState};
+use henad_compute::gpu::grid_engine::{GpuGridModelDescriptor, GpuGridState};
 use henad_compute::gpu::sim_thread::GpuSimState;
-use henad_compute::grid_engine::{GridModelState, grid_model_param_descriptors};
-use henad_core::agent_model::AgentModel;
-use henad_core::gpu_grid_model::GpuGridModel;
-use henad_core::grid_model::GridModel;
+use henad_core::authoring::agent_model::AgentModel;
+use henad_core::authoring::gpu_grid_model::GpuGridModel;
+use henad_core::authoring::grid_model::GridModel;
 use henad_core::model::{Model as _, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;
@@ -14,7 +14,7 @@ use henad_core::view::StatDescriptor;
 /// A freshly created simulation state, tagged with which runner can drive it.
 ///
 /// The two arms are not interchangeable: a CPU state is stepped one tick per call by
-/// `henad_compute::sim_thread::SimThread`, while a GPU state has many steps *encoded into one
+/// `henad_compute::cpu::sim_thread::SimThread`, while a GPU state has many steps *encoded into one
 /// submission* by `henad_compute::gpu::GpuSimThread`. The factory returns this enum (rather than
 /// a bare `Box<dyn SimState>`) so the caller can pick the right runner without downcasting, and
 /// so it is impossible to hand a GPU state to the CPU thread by mistake.
@@ -68,7 +68,7 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
         param_descriptors: agent_model_param_descriptors::<A>(),
         stat_descriptors: A::STATS.to_vec(),
         topology_hint: TopologyHint {
-            grid: <A::Field as henad_core::field::FieldLayer>::HAS_GRID,
+            grid: <A::Field as henad_core::authoring::field::FieldLayer>::HAS_GRID,
             agents: true,
         },
         create: Box::new(|params, seed| {

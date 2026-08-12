@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use henad_core::view::StatEntry;
 
-use crate::gpu::agent_display::GpuAgents;
-use crate::gpu::display::GpuDisplay;
+use crate::gpu::view::agents::GpuAgents;
+use crate::gpu::view::display::GpuDisplay;
 
 /// Owned data snapshot produced by the sim thread for the UI to consume.
 pub struct Snapshot {

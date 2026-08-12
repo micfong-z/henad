@@ -36,7 +36,7 @@ pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits) -> wgpu::Limits {
 mod tests {
     use super::{STORAGE_BUFFERS_PER_STAGE, raise};
     use crate::gpu::headless_context;
-    use crate::gpu::pipeline::storage_entry;
+    use crate::gpu::primitives::pipeline::storage_entry;
 
     /// A layout with more than the baseline 8 storage buffers must build.
     #[test]

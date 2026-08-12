@@ -4,11 +4,13 @@
 //! Not stable, unlike the CPU sort. Membership is the same, but a cell's slice comes out in
 //! whatever order the atomics resolve in, so a kernel summing floats over one will not replay.
 
-use henad_core::field::Extent;
+use henad_core::authoring::field::Extent;
 
-use crate::gpu::dispatch::linear_dispatch;
-use crate::gpu::pipeline::{compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry};
-use crate::gpu::prefix_scan::PrefixScan;
+use crate::gpu::primitives::dispatch::linear_dispatch;
+use crate::gpu::primitives::pipeline::{
+    compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
+};
+use crate::gpu::primitives::prefix_scan::PrefixScan;
 
 /// Matches `HashParams` in `hash_count.wgsl` and `hash_scatter.wgsl`.
 #[repr(C)]
@@ -310,10 +312,10 @@ impl GpuSpatialHash {
 #[cfg(test)]
 mod tests {
     use super::{GpuSpatialHash, HashGrid};
-    use crate::gpu::dispatch::WORKGROUP;
     use crate::gpu::headless_context;
-    use crate::gpu::pipeline::storage_buffer;
-    use henad_core::field::Extent;
+    use crate::gpu::primitives::dispatch::WORKGROUP;
+    use crate::gpu::primitives::pipeline::storage_buffer;
+    use henad_core::authoring::field::Extent;
     use henad_core::helpers::xorshift64;
     use henad_core::spatial_hash::SpatialHash;
 
