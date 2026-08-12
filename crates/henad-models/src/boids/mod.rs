@@ -9,9 +9,7 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::spatial_hash::SpatialHash;
 use henad_core::view::{StatDescriptor, StatValue};
 
-use crate::boids::lanes::BoidLanes;
-
-pub use crate::boids::lanes::{BoidChunk, BoidRead};
+pub use crate::boids::lanes::{BoidChunk, BoidLanes, BoidRead};
 
 pub const PALETTE: [[u8; 4]; 3] = [
     [0xE4, 0x37, 0x48, 0xFF], // Max speed - red

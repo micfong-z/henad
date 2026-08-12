@@ -48,12 +48,10 @@
 //! so that `batch_size * time_per_step` tracks a user-set `target_ms` budget. This deliberately
 //! does not use `TimestampQuery`, which stays diagnostic-only (surfaced as `gpu_us_per_step`).
 
-use std::sync::Arc;
-
 use henad_core::model::SimState;
 
-use crate::gpu::display::GpuDisplay;
 use crate::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
+use crate::snapshot::GpuSnapshot;
 
 /// The interface [`GpuSimThread`] drives. See the module docs: this is a *runner* interface (the
 /// GPU analogue of how `SimState` is consumed by the CPU thread), not a model-authoring trait.
@@ -84,8 +82,9 @@ pub trait GpuSimState: SimState {
     /// where the stats panel showing a real value matters more than a few ms of latency.
     fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool);
 
-    /// The display target the UI samples. Cloned into each snapshot.
-    fn display(&self) -> Arc<GpuDisplay>;
+    /// The layers the UI draws. Cloned into every snapshot, so keep it to `Arc` clones of things
+    /// built once at construction.
+    fn view(&self) -> GpuSnapshot;
 }
 
 /// Live GPU-runner numbers that have no CPU counterpart, polled by the UI once per frame.
@@ -149,7 +148,7 @@ mod native {
     use crate::gpu::GpuContext;
     use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms};
     use crate::sim_thread::{SimCommand, WakeFn};
-    use crate::snapshot::{GpuSnapshot, Snapshot, SnapshotView};
+    use crate::snapshot::{Snapshot, SnapshotView};
 
     /// How often the display texture is refreshed and a `Snapshot` published. Independent of
     /// batch size and of how fast the sim is actually running.
@@ -396,9 +395,7 @@ mod native {
                 // Report true GPU cost per step where the toolbar shows CPU engine time. Falls
                 // back to 0 when the adapter has no timestamp support, same as "unknown".
                 engine_ms: self.gpu_us_per_step.unwrap_or(0.0) / 1000.0,
-                view: SnapshotView::Gpu(GpuSnapshot {
-                    display: self.state.display(),
-                }),
+                view: SnapshotView::Gpu(self.state.view()),
                 stats: self.state.stats(),
             };
             if let Ok(mut slot) = self.snapshot.lock() {

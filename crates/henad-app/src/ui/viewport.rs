@@ -7,7 +7,7 @@ use eframe::egui_wgpu;
 use egui::{ColorImage, RichText, TextureOptions};
 use egui_wgpu::{CallbackResources, CallbackTrait};
 use henad_compute::gpu::GpuDisplay;
-use henad_compute::snapshot::{CpuLayers, GridSnapshot, PointSnapshot, SnapshotView};
+use henad_compute::snapshot::{CpuLayers, GpuSnapshot, GridSnapshot, PointSnapshot, SnapshotView};
 
 /// Paints a GPU model's display texture straight into the viewport.
 ///
@@ -34,15 +34,38 @@ impl CallbackTrait for GpuViewportPaint {
     }
 }
 
-/// Allocates an aspect-fitted rect and hands it to the GPU paint callback.
-fn paint_gpu_view(ui: &mut egui::Ui, display: Arc<GpuDisplay>) {
-    let size = fit_aspect(ui.available_size(), display.width as f32, display.height as f32);
+/// Composites whichever GPU layers the model published into one rect, field first and agents over
+/// the top, same order as the CPU path.
+///
+/// Takes `app` because the agent pipeline is built lazily on first use.
+fn paint_gpu_view(ui: &mut egui::Ui, app: &mut AppState, gpu: &GpuSnapshot) {
+    // The field fixes the pixel shape when there is one, as `layer_extent` does for CPU models.
+    let extent = gpu.display.as_ref().map_or_else(
+        || gpu.agents.as_ref().map(|a| (a.world_w, a.world_h)),
+        |d| Some((d.width as f32, d.height as f32)),
+    );
+    let Some((world_w, world_h)) = extent else {
+        return;
+    };
+    if gpu.agents.is_some() {
+        ensure_agent_layer(app);
+    }
+
+    let size = fit_aspect(ui.available_size(), world_w, world_h);
     ui.centered_and_justified(|ui| {
         let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
-        ui.painter().add(egui_wgpu::Callback::new_paint_callback(
-            rect,
-            GpuViewportPaint { display },
-        ));
+
+        if let Some(display) = &gpu.display {
+            ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+                rect,
+                GpuViewportPaint {
+                    display: Arc::clone(display),
+                },
+            ));
+        }
+        if let (Some(agents), Some(layer)) = (&gpu.agents, &app.agent_layer) {
+            layer.paint_gpu(ui, rect, agents);
+        }
     });
 }
 
@@ -104,11 +127,18 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
         return;
     }
 
-    // --- GPU path: nothing to convert or upload, just sample the texture the sim thread
-    // already wrote. Branches on the snapshot variant, not on the topology hint — a GPU
-    // Game of Life is still `TopologyHint::GRID`, it just gets its pixels differently.
-    if let Some(SnapshotView::Gpu(gpu)) = app.snapshot.as_ref().map(|s| &s.view) {
-        paint_gpu_view(ui, Arc::clone(&gpu.display));
+    // GPU path, nothing to convert or upload. Branches on the snapshot variant rather than the
+    // topology hint, since a GPU Game of Life is still `TopologyHint::GRID`.
+    //
+    // Taken out for the duration because `paint_gpu_view` needs `app` for the agent pipeline.
+    if matches!(app.snapshot.as_ref().map(|s| &s.view), Some(SnapshotView::Gpu(_))) {
+        let Some(snapshot) = app.snapshot.take() else {
+            return;
+        };
+        if let SnapshotView::Gpu(gpu) = &snapshot.view {
+            paint_gpu_view(ui, app, gpu);
+        }
+        app.snapshot = Some(snapshot);
         return;
     }
 
@@ -226,8 +256,8 @@ fn upload_grid(ctx: &egui::Context, app: &mut AppState, grid: &GridSnapshot) {
     }
 }
 
-/// Builds the pipeline on first use.
-fn upload_agents(app: &mut AppState, points: &PointSnapshot) {
+/// Built on first use, and shared by both backends.
+fn ensure_agent_layer(app: &mut AppState) {
     if app.agent_layer.is_none() {
         app.agent_layer = Some(AgentLayer::new(
             &app.render_ctx.device,
@@ -235,6 +265,10 @@ fn upload_agents(app: &mut AppState, points: &PointSnapshot) {
             app.render_ctx.target_format,
         ));
     }
+}
+
+fn upload_agents(app: &mut AppState, points: &PointSnapshot) {
+    ensure_agent_layer(app);
     if let Some(layer) = &mut app.agent_layer {
         layer.upload(points);
     }

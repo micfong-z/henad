@@ -20,15 +20,30 @@
 //! [`crate::grid_engine`]. The split follows the CPU one: a model contributes shaders, seed data,
 //! and metadata; every wgpu object — buffers, layouts, pipelines, bind groups — is built here.
 
+pub mod agent_display;
+pub mod dispatch;
 pub mod display;
 pub mod gpu_grid_engine;
+pub mod limits;
+pub mod pipeline;
+pub mod prefix_scan;
 pub mod readback;
+pub mod reduce;
 pub mod sim_thread;
+pub mod spatial_hash;
 pub mod timing;
 
+#[cfg(test)]
+mod test_support;
+
+pub use agent_display::GpuAgents;
 pub use display::{DisplayTarget, GpuDisplay};
 pub use gpu_grid_engine::{GpuGridModelDescriptor, GpuGridState};
 pub use sim_thread::{GpuSimState, GpuStats};
+pub use spatial_hash::{GpuSpatialHash, HashGrid};
+
+#[cfg(test)]
+use test_support::headless_context;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use sim_thread::GpuSimThread;

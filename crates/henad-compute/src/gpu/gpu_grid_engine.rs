@@ -13,8 +13,10 @@ use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
 use crate::gpu::display::{DisplayTarget, GpuDisplay, build_display_target};
+use crate::gpu::pipeline::{compute_pipeline, storage_entry, uniform_entry};
 use crate::gpu::readback::CounterReadback;
 use crate::gpu::sim_thread::GpuSimState;
+use crate::snapshot::GpuSnapshot;
 
 /// One ping-ponged pair of storage buffers.
 struct BufferPair {
@@ -106,57 +108,6 @@ pub struct GpuGridState<M: GpuGridModel> {
     current_is_a: bool,
 
     _marker: PhantomData<M>,
-}
-
-fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }
-}
-
-fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }
-}
-
-fn compute_pipeline(
-    device: &wgpu::Device,
-    label: &str,
-    source: &'static str,
-    layout: &wgpu::BindGroupLayout,
-) -> wgpu::ComputePipeline {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(&format!("{label}_shader")),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
-    });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some(&format!("{label}_pipeline_layout")),
-        bind_group_layouts: &[Some(layout)],
-        immediate_size: 0,
-    });
-    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some(&format!("{label}_pipeline")),
-        layout: Some(&pipeline_layout),
-        module: &module,
-        entry_point: Some("main"),
-        compilation_options: wgpu::PipelineCompilationOptions::default(),
-        cache: None,
-    })
 }
 
 impl<M: GpuGridModel> GpuGridState<M> {
@@ -564,7 +515,11 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
         }
     }
 
-    fn display(&self) -> Arc<GpuDisplay> {
-        Arc::clone(&self.display)
+    /// Grid only, a `GpuGridModel` has no agent layer.
+    fn view(&self) -> GpuSnapshot {
+        GpuSnapshot {
+            display: Some(Arc::clone(&self.display)),
+            agents: None,
+        }
     }
 }

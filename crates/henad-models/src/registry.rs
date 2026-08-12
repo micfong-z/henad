@@ -98,6 +98,29 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
     }
 }
 
+/// Create a `ModelEntry` for a the GPU boids model.
+fn register_gpu_boids(ctx: &GpuContext) -> ModelEntry {
+    let factory_ctx = ctx.clone();
+    ModelEntry {
+        name: crate::gpu_boids::NAME.to_owned(),
+        id: crate::gpu_boids::ID.to_owned(),
+        description: crate::gpu_boids::DESCRIPTION.to_owned(),
+        param_descriptors: crate::gpu_boids::param_descriptors(),
+        stat_descriptors: crate::gpu_boids::stat_descriptors(),
+        topology_hint: TopologyHint {
+            grid: false,
+            agents: true,
+        },
+        create: Box::new(move |params, seed| {
+            ModelState::Gpu(Box::new(crate::gpu_boids::GpuBoidsState::new_seeded(
+                &factory_ctx,
+                params,
+                seed,
+            )))
+        }),
+    }
+}
+
 /// Returns all available models.
 ///
 /// GPU-backed models are included only when a [`GpuContext`] is supplied. When it is `None` (no
@@ -115,6 +138,7 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
     if let Some(ctx) = gpu {
         entries.push(register_gpu_grid_model::<crate::gpu_game_of_life::GpuGameOfLife>(&ctx));
         entries.push(register_gpu_grid_model::<crate::gpu_sir::GpuSir>(&ctx));
+        entries.push(register_gpu_boids(&ctx));
     }
 
     entries

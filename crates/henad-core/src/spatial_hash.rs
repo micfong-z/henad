@@ -129,6 +129,26 @@ impl SpatialHash {
         }
     }
 
+    /// Cells along each axis. Fitted to the world, not derived from `cell_size` directly.
+    #[must_use]
+    pub fn grid_dims(&self) -> (u32, u32) {
+        (self.grid_w, self.grid_h)
+    }
+
+    /// World distance one cell spans on each axis.
+    #[must_use]
+    pub fn cell_extents(&self) -> (f32, f32) {
+        (self.cell_w, self.cell_h)
+    }
+
+    /// `(cell_start, sorted_agents)`.
+    /// 
+    /// Note that cell `c` owns `sorted_agents[cell_start[c]..cell_start[c + 1]]`.
+    #[must_use]
+    pub fn buckets(&self) -> (&[u32], &[u32]) {
+        (&self.cell_start, &self.sorted_agents)
+    }
+
     pub fn rebuild_with_cell_size(&mut self, new_cell_size: f32, pos_x: &[f32], pos_y: &[f32]) {
         if (new_cell_size - self.cell_size).abs() > f32::EPSILON {
             *self = Self::new(new_cell_size, self.world_w, self.world_h);
