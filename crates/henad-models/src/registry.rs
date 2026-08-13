@@ -98,6 +98,29 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
     }
 }
 
+/// Create a `ModelEntry` for the GPU ants model.
+fn register_gpu_ants(ctx: &GpuContext) -> ModelEntry {
+    let factory_ctx = ctx.clone();
+    ModelEntry {
+        name: crate::gpu_ants::NAME.to_owned(),
+        id: crate::gpu_ants::ID.to_owned(),
+        description: crate::gpu_ants::DESCRIPTION.to_owned(),
+        param_descriptors: crate::gpu_ants::param_descriptors(),
+        stat_descriptors: crate::gpu_ants::stat_descriptors(),
+        topology_hint: TopologyHint {
+            grid: true,
+            agents: true,
+        },
+        create: Box::new(move |params, seed| {
+            ModelState::Gpu(Box::new(crate::gpu_ants::GpuAntsState::new_seeded(
+                &factory_ctx,
+                params,
+                seed,
+            )))
+        }),
+    }
+}
+
 /// Create a `ModelEntry` for a the GPU boids model.
 fn register_gpu_boids(ctx: &GpuContext) -> ModelEntry {
     let factory_ctx = ctx.clone();
@@ -139,6 +162,7 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
         entries.push(register_gpu_grid_model::<crate::gpu_game_of_life::GpuGameOfLife>(&ctx));
         entries.push(register_gpu_grid_model::<crate::gpu_sir::GpuSir>(&ctx));
         entries.push(register_gpu_boids(&ctx));
+        entries.push(register_gpu_ants(&ctx));
     }
 
     entries

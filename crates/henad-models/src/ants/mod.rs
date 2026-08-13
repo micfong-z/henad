@@ -2,6 +2,8 @@ pub mod field;
 mod lanes;
 mod step;
 
+pub use crate::ants::lanes::{AntLanes, NO_STEP};
+
 use henad_compute::cpu::field::scalar::{Deposits, ScalarField};
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
 use henad_core::authoring::agent_model::{AgentModel, StepCtx};
@@ -12,7 +14,6 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::ants::field::{PheromoneField, TO_FOOD, TO_HOME, nest_cell};
-use crate::ants::lanes::AntLanes;
 
 /// Indexed by `has_food` itself, not by a copy of it.
 pub const ANT_PALETTE: [[u8; 4]; 2] = [
@@ -38,6 +39,9 @@ const RANDOM_ACTION: usize = 6;
 /// Three semantic divergences a comparison has to state. Deposits combine with `max` rather than
 /// last-writer-wins. The pheromone field is all read old, all write new. The RNG is seeded per
 /// chunk per tick rather than drawn per call.
+///
+/// The reference's biased neighbour tie-break is reproduced rather than corrected, see
+/// [`step::advect_agent`].
 pub struct AntsModel;
 
 pub struct AntParams {
