@@ -12,6 +12,33 @@ architectural decision (SoA layout, trait-based plugin system, topology abstract
 service of that scaling target, so when reviewing or writing code, cache-friendliness and
 parallelism are not micro-optimizations — they are the point.
 
+## Coding sessions
+
+Previous coding sessions or context can be read and referenced from documents in `docs/agent-record`.
+
+After each coding session, write a hand-off document under `docs/agent-record/YYYYMMDD-session-title.md`.
+It should include:
+
+- A frontmatter block; see existing documents for more examples.
+- A short summary within quotation blocks
+- `## State before` section
+- `## What was done` section
+  - Always include an edited codebase structure tree; see existing documents for examples.
+- `## State after` section
+- `## Issues found & future directions` section
+
+After all the above, add a final section for human comments, as
+
+```md
+<!-- ─────────────────────────────────────────────────────────────────────────
+     EVERYTHING BELOW THIS LINE IS WRITTEN BY THE HUMAN MAINTAINER.
+     Agents: do not edit, summarise, reformat, or regenerate this section.
+     If you update this document, stop at the line above.
+     ───────────────────────────────────────────────────────────────────── -->
+
+## Manual notes (human)
+```
+
 ## Commands
 
 ```bash
@@ -60,7 +87,7 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
   for cellular automata, `AgentModel` (`authoring/agent_model.rs`) for agent populations,
   `GpuGridModel` (`authoring/gpu_grid_model.rs`) for shader-resident grids, and `FieldLayer`
   (`authoring/field.rs`),
-  the grid slot an `AgentModel` sits over. `Model`/`SimState` (`model.rs`) are the *runner*
+  the grid slot an `AgentModel` sits over. `Model`/`SimState` (`model.rs`) are the _runner_
   interface the sim thread drives, not an authoring API — that split is why the traits live under
   `authoring/` and this one does not. Also the `Grid2D<T>` double-buffered SoA grid (`grid.rs`),
   the counting-sort `SpatialHash` (`spatial_hash.rs`), param descriptors and `ParamStore`
@@ -85,9 +112,9 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
     place). `gpu/primitives/` holds the GPU counterparts of henad-core's data structures —
     `spatial_hash.rs`, `prefix_scan.rs`, `reduce.rs`, `readback.rs` — plus `dispatch.rs` and
     `pipeline.rs`. `gpu/limits.rs` is what raises the device past the WebGPU baseline.
-A shared file name always means *counterpart*, never coincidence: `cpu/sim_thread.rs` and
-`gpu/sim_thread.rs`, `ants/step.rs` and `boids/step.rs`, `henad-core/src/spatial_hash.rs` and its
-GPU twin. Two unrelated things must not share a basename.
+    A shared file name always means _counterpart_, never coincidence: `cpu/sim_thread.rs` and
+    `gpu/sim_thread.rs`, `ants/step.rs` and `boids/step.rs`, `henad-core/src/spatial_hash.rs` and its
+    GPU twin. Two unrelated things must not share a basename.
 
 - **henad-models**: concrete simulations — `sir.rs` and `game_of_life.rs` (`GridModel`), `boids/`
   (`AgentModel` over `NoField`), `ants/` (`AgentModel` over `ScalarField`, the one composite

@@ -23,7 +23,8 @@ results
 .temporary
 
 # development documentation (may or may not contain sensitive info >:( )
-/docs
+/docs/*
+!/docs/agent-record/
 
 # python tooling
 .venv
