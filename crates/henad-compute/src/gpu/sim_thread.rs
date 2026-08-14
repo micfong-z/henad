@@ -147,7 +147,9 @@ mod native {
     use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats};
     use crate::cpu::sim_thread::{SimCommand, WakeFn};
     use crate::gpu::GpuContext;
-    use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms};
+    use crate::gpu::timing::{
+        ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms, tps_over,
+    };
     use crate::snapshot::{Snapshot, SnapshotView};
 
     /// How often the display texture is refreshed and a `Snapshot` published. Independent of
@@ -226,8 +228,7 @@ mod native {
             match cmd {
                 Command::Sim(SimCommand::Play) => {
                     self.running = true;
-                    self.tps_timer = Instant::now();
-                    self.step_count = 0;
+                    self.reset_tps_window(Instant::now());
                 }
                 Command::Sim(SimCommand::Pause) => {
                     self.running = false;
@@ -379,9 +380,22 @@ mod native {
             }
         }
 
+        /// Both clocks together. `want_timing` is gated on `last_stats_publish` but divides by
+        /// `tps_timer`, so resetting one without the other makes the next refresh divide a whole
+        /// batch by whatever tiny gap is between them.
+        fn reset_tps_window(&mut self, now: Instant) {
+            self.tps_timer = now;
+            self.last_stats_publish = now;
+            self.step_count = 0;
+        }
+
         fn refresh_tps(&mut self, now: Instant) {
-            let elapsed = now.duration_since(self.tps_timer).as_secs_f64().max(f64::EPSILON);
-            self.actual_tps = self.step_count as f64 / elapsed;
+            let Some(tps) = tps_over(self.step_count, now.duration_since(self.tps_timer)) else {
+                // Leave the window open rather than reporting a rate over nothing. `step_count`
+                // keeps accumulating, so the next refresh covers both.
+                return;
+            };
+            self.actual_tps = tps;
             self.step_count = 0;
             self.tps_timer = now;
         }

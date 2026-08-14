@@ -135,6 +135,30 @@ It gained a sibling, `declared_topology_matches_the_layers_a_gpu_state_publishes
 `every_gpu_model_builds_on_a_baseline_device` builds all four GPU entries on a `Limits::default()` device.
 Since the engine asserts each pass against that device's own limit of 8, this is a direct test of "every model runs on a stock WebGPU device" — the invariant part 2 suggested making explicit.
 
+### The first TPS sample after Play, fixed
+
+Carried over from part 2's issue 1, and fixed here since the extraction touched the same runner.
+
+The GPU loop keeps **two** clocks: `tps_timer`, which `refresh_tps` divides by, and `last_stats_publish`, which gates whether a refresh happens at all.
+`Play` reset only the first.
+So after a pause longer than `STATS_INTERVAL`, the very first `step_batch` saw `want_timing == true` against the stale `last_stats_publish`, counted a whole batch, and divided it by the microseconds since `tps_timer` was reset.
+The CPU runner cannot have this bug because it has one clock, which is what made the shape of it obvious.
+
+Two changes, guarding different things:
+
+- `reset_tps_window(now)` sets both clocks and `step_count` together, so the invariant lives in one method rather than in whoever remembers to reset both.
+- `tps_over(step_count, elapsed)` returns `None` below `MIN_TPS_WINDOW` (100 ms, an order of magnitude under the interval any real refresh covers), and `refresh_tps` leaves the window open rather than reporting a rate over nothing. `step_count` keeps accumulating, so the next refresh covers both.
+
+Reproduced and re-checked in the live app on the same click sequence — Build, sit paused past the interval, Play — with the fix stashed and restored:
+
+| | first sample after Play | after one full window |
+| --- | --- | --- |
+| before | **261 208 778 387 488 768** | recovers |
+| after | 0, no reading yet | 3 540 |
+
+`tps_over` is unit tested in `timing.rs`, alongside the adaptive controller's other pure helpers.
+The reset invariant is not — it needs a device, a model (which `henad-compute` cannot reach, since `henad-models` depends on it) and a multi-second sleep, so it is expressed by construction instead.
+
 ### Verification
 
 - **`gpu_ants` reproduces bit-identically.** Buffer hashes (FNV-1a over `pos`, `state` and the whole `field`) recorded on `52384d4` at ticks 0, 100 and 300, then compared after the rewrite:
@@ -221,7 +245,6 @@ It is currently only mentioned in the trait's module docs. It is the thing that 
 
 ### 4. Follow-ups not taken, carried forward from parts 1 and 2
 
-- **The first TPS sample after Play is garbage for every GPU model** (`gpu/sim_thread.rs` does not reset `last_stats_publish` on `Play`). Still unfixed — shared runner code, not this change's bug.
 - **`SpatialHash::new` still duplicates `HashGrid::new`'s fitting math.** The type moved into `henad-core` next to it this session, so rewiring one to use the other is now a local change. Deliberately not bundled, since it touches the CPU hot path.
 - **Three copies of headless device acquisition** still exist, and `henad-models`'s copy still omits the `limits::raise` that `henad-compute`'s applies. That difference is now load-bearing in a good way — it is what makes the baseline test a baseline test — so it should be documented rather than consolidated away.
 - **`world_width` still defaults to 201 in the GUI and 200 from the CLI**, so a GUI-vs-CLI comparison is not over the same field size.
