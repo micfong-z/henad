@@ -1,6 +1,6 @@
-use henad_compute::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_core::authoring::grid_model::GridModel;
 use henad_core::grid::Grid2D;
-use henad_core::grid_model::GridModel;
 use henad_core::helpers::{extract_f32, f32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
@@ -71,7 +71,7 @@ fn count_alive(cells: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::grid_engine::GridModelState;
+    use henad_compute::cpu::grid_engine::GridModelState;
     use henad_core::model::SimState as _;
 
     #[test]

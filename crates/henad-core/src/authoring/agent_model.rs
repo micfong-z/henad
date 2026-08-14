@@ -1,6 +1,6 @@
 //! Authoring API for models whose state is a population of agents.
 
-use crate::field::{Extent, FieldLayer};
+use crate::authoring::field::{Extent, FieldLayer};
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::spatial_hash::SpatialHash;
 use crate::view::{StatDescriptor, StatValue};

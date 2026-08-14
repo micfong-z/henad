@@ -3,7 +3,7 @@
 use crate::icons::material_design_icons::{MDI_ALERT, MDI_INFORMATION, MDI_RESTART};
 use crate::state::AppState;
 use crate::ui::banner;
-use henad_compute::sim_thread::SimCommand;
+use henad_compute::cpu::sim_thread::SimCommand;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 
 pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {

@@ -1,5 +1,5 @@
 //! Dedicated OS thread that owns a GPU-resident sim state and steps it in batched submissions,
-//! decoupled from the UI frame rate. This is the GPU version of [`crate::sim_thread`]'s CPU sim thread.
+//! decoupled from the UI frame rate. This is the GPU version of [`crate::cpu::sim_thread`]'s CPU sim thread.
 //!
 //! # [`GpuSimState`] is a runner interface, not a model-authoring shortcut
 //!
@@ -8,8 +8,8 @@
 //! drives, exactly as `SimState` is the interface the CPU thread drives — the minimum needed to
 //! record work into an encoder that this crate then submits and paces.
 //!
-//! The model-authoring counterpart is `henad_core::gpu_grid_model::GpuGridModel`, implemented by
-//! [`crate::gpu::gpu_grid_engine::GpuGridState`]. A GPU model that does not fit
+//! The model-authoring counterpart is `henad_core::authoring::gpu_grid_model::GpuGridModel`, implemented by
+//! [`crate::gpu::grid_engine::GpuGridState`]. A GPU model that does not fit
 //! the grid mould could still implement this trait by hand.
 //!
 //! # Synchronization
@@ -48,12 +48,10 @@
 //! so that `batch_size * time_per_step` tracks a user-set `target_ms` budget. This deliberately
 //! does not use `TimestampQuery`, which stays diagnostic-only (surfaced as `gpu_us_per_step`).
 
-use std::sync::Arc;
-
 use henad_core::model::SimState;
 
-use crate::gpu::display::GpuDisplay;
 use crate::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
+use crate::snapshot::GpuSnapshot;
 
 /// The interface [`GpuSimThread`] drives. See the module docs: this is a *runner* interface (the
 /// GPU analogue of how `SimState` is consumed by the CPU thread), not a model-authoring trait.
@@ -84,8 +82,9 @@ pub trait GpuSimState: SimState {
     /// where the stats panel showing a real value matters more than a few ms of latency.
     fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool);
 
-    /// The display target the UI samples. Cloned into each snapshot.
-    fn display(&self) -> Arc<GpuDisplay>;
+    /// The layers the UI draws. Cloned into every snapshot, so keep it to `Arc` clones of things
+    /// built once at construction.
+    fn view(&self) -> GpuSnapshot;
 }
 
 /// Live GPU-runner numbers that have no CPU counterpart, polled by the UI once per frame.
@@ -112,7 +111,7 @@ impl Default for GpuStats {
     }
 }
 
-/// GPU-runner-specific commands, on top of the shared [`crate::sim_thread::SimCommand`].
+/// GPU-runner-specific commands, on top of the shared [`crate::cpu::sim_thread::SimCommand`].
 pub enum GpuCommand {
     SetBatchSize(u32),
     SetAdaptive(bool),
@@ -146,10 +145,12 @@ mod native {
     use std::time::{Duration, Instant};
 
     use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats};
+    use crate::cpu::sim_thread::{SimCommand, WakeFn};
     use crate::gpu::GpuContext;
-    use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms};
-    use crate::sim_thread::{SimCommand, WakeFn};
-    use crate::snapshot::{GpuSnapshot, Snapshot, SnapshotView};
+    use crate::gpu::timing::{
+        ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms, tps_over,
+    };
+    use crate::snapshot::{Snapshot, SnapshotView};
 
     /// How often the display texture is refreshed and a `Snapshot` published. Independent of
     /// batch size and of how fast the sim is actually running.
@@ -227,8 +228,7 @@ mod native {
             match cmd {
                 Command::Sim(SimCommand::Play) => {
                     self.running = true;
-                    self.tps_timer = Instant::now();
-                    self.step_count = 0;
+                    self.reset_tps_window(Instant::now());
                 }
                 Command::Sim(SimCommand::Pause) => {
                     self.running = false;
@@ -380,9 +380,22 @@ mod native {
             }
         }
 
+        /// Both clocks together. `want_timing` is gated on `last_stats_publish` but divides by
+        /// `tps_timer`, so resetting one without the other makes the next refresh divide a whole
+        /// batch by whatever tiny gap is between them.
+        fn reset_tps_window(&mut self, now: Instant) {
+            self.tps_timer = now;
+            self.last_stats_publish = now;
+            self.step_count = 0;
+        }
+
         fn refresh_tps(&mut self, now: Instant) {
-            let elapsed = now.duration_since(self.tps_timer).as_secs_f64().max(f64::EPSILON);
-            self.actual_tps = self.step_count as f64 / elapsed;
+            let Some(tps) = tps_over(self.step_count, now.duration_since(self.tps_timer)) else {
+                // Leave the window open rather than reporting a rate over nothing. `step_count`
+                // keeps accumulating, so the next refresh covers both.
+                return;
+            };
+            self.actual_tps = tps;
             self.step_count = 0;
             self.tps_timer = now;
         }
@@ -396,9 +409,7 @@ mod native {
                 // Report true GPU cost per step where the toolbar shows CPU engine time. Falls
                 // back to 0 when the adapter has no timestamp support, same as "unknown".
                 engine_ms: self.gpu_us_per_step.unwrap_or(0.0) / 1000.0,
-                view: SnapshotView::Gpu(GpuSnapshot {
-                    display: self.state.display(),
-                }),
+                view: SnapshotView::Gpu(self.state.view()),
                 stats: self.state.stats(),
             };
             if let Ok(mut slot) = self.snapshot.lock() {
@@ -424,7 +435,7 @@ mod native {
     /// Handle to the GPU sim thread.
     ///
     /// Deliberately shaped like
-    /// [`crate::sim_thread::SimThread`] — `send`/`play`/`pause`/`step_once`/`take_snapshot` — so
+    /// [`crate::cpu::sim_thread::SimThread`] — `send`/`play`/`pause`/`step_once`/`take_snapshot` — so
     /// `henad-app` can hold a thin enum over the two backends instead of special-casing GPU
     /// everywhere. Dropping it shuts the thread down and joins it.
     pub struct GpuSimThread {
@@ -436,7 +447,7 @@ mod native {
 
     impl GpuSimThread {
         /// Spawns the GPU sim thread, taking ownership of `state` and a cloned [`GpuContext`].
-        /// Starts paused, like [`crate::sim_thread::SimThread`].
+        /// Starts paused, like [`crate::cpu::sim_thread::SimThread`].
         pub fn new(
             ctx: GpuContext,
             state: Box<dyn GpuSimState>,

@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use henad_core::view::StatEntry;
 
-use crate::gpu::display::GpuDisplay;
+use crate::gpu::view::agents::GpuAgents;
+use crate::gpu::view::display::GpuDisplay;
 
 /// Owned data snapshot produced by the sim thread for the UI to consume.
 pub struct Snapshot {
@@ -38,8 +39,7 @@ impl CpuLayers {
     }
 }
 
-/// A GPU model's view: no owned pixel data at all, just a handle to the already-rendered display
-/// texture and the pipeline that samples it.
+/// A GPU model's view. No owned pixel data, just handles to what is already on the GPU.
 ///
 /// This is the reason the GPU display path goes through `Snapshot` rather than through
 /// `SimState::grid_view()` / `View`: those live in `henad-core`, which must never see a `wgpu`
@@ -47,10 +47,23 @@ impl CpuLayers {
 /// natural seam. CPU models keep producing the owned [`GridSnapshot`]/[`PointSnapshot`] exactly
 /// as before; a GPU model skips `grid_view()` entirely.
 ///
-/// Held by `Arc` so an in-flight egui paint callback keeps the pipeline and texture alive even if
-/// the sim thread is torn down mid-frame (e.g. the user switches models).
+/// The two layers mirror [`CpuLayers`] and composite the same way, field first and agents over
+/// the top.
+///
+/// Held by `Arc` so an in-flight egui paint callback keeps the pipeline, texture and lane buffers
+/// alive even if the sim thread is torn down mid-frame.
+#[derive(Default)]
 pub struct GpuSnapshot {
-    pub display: Arc<GpuDisplay>,
+    /// A texture the model's display pass has already written.
+    pub display: Option<Arc<GpuDisplay>>,
+    /// The model's own lane buffers, drawn in place.
+    pub agents: Option<Arc<GpuAgents>>,
+}
+
+impl GpuSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.display.is_none() && self.agents.is_none()
+    }
 }
 
 /// Owned grid data — cells are cloned from the sim state.

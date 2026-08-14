@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use henad_compute::grid_engine::GridModelState;
+use henad_compute::cpu::grid_engine::GridModelState;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_models::game_of_life::GameOfLifeModel;

@@ -13,8 +13,8 @@
 //! RNG buffers together, in lockstep. Only the state buffer (index 0) is visible to the display
 //! and reduce shaders.
 
-use henad_compute::grid_engine::GRID_INIT_SEED;
-use henad_core::gpu_grid_model::GpuGridModel;
+use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_core::authoring::gpu_grid_model::GpuGridModel;
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, mix_seed, u32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -171,10 +171,10 @@ impl GpuGridModel for GpuSir {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use henad_compute::cpu::grid_engine::GridModelState;
     use henad_compute::gpu::GpuContext;
-    use henad_compute::gpu::gpu_grid_engine::GpuGridState;
+    use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::GpuSimState as _;
-    use henad_compute::grid_engine::GridModelState;
     use henad_core::model::SimState as _;
     use henad_core::view::StatEntry;
 
@@ -363,7 +363,7 @@ mod tests {
 mod runner_tests {
     use std::time::{Duration, Instant};
 
-    use henad_compute::gpu::gpu_grid_engine::GpuGridState;
+    use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
     use henad_compute::snapshot::{Snapshot, SnapshotView};
 

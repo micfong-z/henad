@@ -171,6 +171,44 @@ pub fn time_per_step_ms(elapsed: Duration, batch_size_submitted: u32) -> f64 {
     elapsed.as_secs_f64() * 1000.0 / f64::from(batch_size_submitted.max(1))
 }
 
+/// Shortest window worth dividing by. A refresh is meant to cover a whole stats interval, so a
+/// window an order of magnitude under one is two clocks having fallen out of step.
+pub const MIN_TPS_WINDOW: Duration = Duration::from_millis(100);
+
+/// Steps per second over `elapsed`, or `None` when the window is too short to mean anything.
+///
+/// A whole batch divided by a near-zero window reads as a plausible-looking billion, not as an
+/// obvious error, so this refuses rather than reporting it.
+pub fn tps_over(step_count: u64, elapsed: Duration) -> Option<f64> {
+    (elapsed >= MIN_TPS_WINDOW).then(|| step_count as f64 / elapsed.as_secs_f64())
+}
+
+#[cfg(test)]
+mod tps_window_tests {
+    use super::{MIN_TPS_WINDOW, tps_over};
+    use std::time::Duration;
+
+    #[test]
+    fn a_normal_window_reports_the_rate() {
+        let tps = tps_over(320, Duration::from_secs(1)).expect("a one second window is usable");
+        assert!((tps - 320.0).abs() < 1e-9, "expected 320, got {tps}");
+    }
+
+    /// The failure this exists for: a whole batch against the gap between two clocks reads as
+    /// 1.5e9 TPS, which looks like a number rather than like an error.
+    #[test]
+    fn a_near_zero_window_reports_nothing() {
+        assert_eq!(tps_over(64, Duration::from_nanos(42)), None);
+        assert_eq!(tps_over(64, Duration::ZERO), None);
+    }
+
+    #[test]
+    fn the_cutoff_itself_is_usable() {
+        assert!(tps_over(10, MIN_TPS_WINDOW).is_some());
+        assert_eq!(tps_over(10, MIN_TPS_WINDOW / 2), None);
+    }
+}
+
 #[cfg(test)]
 mod adaptive_controller_tests {
     use super::{MAX_BATCH_SIZE, ema_update, next_batch_size};

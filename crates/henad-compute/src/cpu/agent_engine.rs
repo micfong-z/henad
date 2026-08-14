@@ -1,5 +1,5 @@
-use henad_core::agent_model::{AgentLanes as _, AgentModel, ChunkTally as _, NeighborIndex as _, StepCtx};
-use henad_core::field::{Extent, FieldLayer};
+use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel, ChunkTally as _, NeighborIndex as _, StepCtx};
+use henad_core::authoring::field::{Extent, FieldLayer};
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamStore, ParamValue};
@@ -157,7 +157,7 @@ impl<A: AgentModel> SimState for AgentModelState<A> {
 
         self.field.update(&self.deposits, &field_params, self.tick);
         self.lanes.swap();
-        self.seed = crate::chunked::advance_tick_seed(self.seed, self.tick);
+        self.seed = crate::cpu::primitives::chunked::advance_tick_seed(self.seed, self.tick);
         self.tick += 1;
     }
 

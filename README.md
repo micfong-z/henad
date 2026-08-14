@@ -73,4 +73,6 @@ This project is assisted by AI (Claude Code on Opus 4.6 and Opus 5), though ever
 
 We recognise that LLM-assisted coding is evolving increasingly rapidly, but the quality of the code generated is not always guaranteed. In general, we support the [LLVM AI Tool Use Policy](https://llvm.org/docs/AIToolPolicy.html) for coding, but discourage the use of AI for communication (except for translation purposes).
 
+All agent coding sessions since 2026-08-12 are auto-documented in `docs/agent-record`, along with human comments.
+
 And yes, this README was written entirely by a human with the help of the good-old **spellchecker** only.

@@ -1,17 +1,15 @@
 mod lanes;
 mod step;
 
-use henad_compute::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_core::agent_model::{AgentModel, StepCtx};
-use henad_core::field::{Extent, NoField};
+use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_core::authoring::agent_model::{AgentModel, StepCtx};
+use henad_core::authoring::field::{Extent, NoField};
 use henad_core::helpers::{extract_f32, f32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::spatial_hash::SpatialHash;
 use henad_core::view::{StatDescriptor, StatValue};
 
-use crate::boids::lanes::BoidLanes;
-
-pub use crate::boids::lanes::{BoidChunk, BoidRead};
+pub use crate::boids::lanes::{BoidChunk, BoidLanes, BoidRead};
 
 pub const PALETTE: [[u8; 4]; 3] = [
     [0xE4, 0x37, 0x48, 0xFF], // Max speed - red
@@ -156,7 +154,7 @@ impl AgentModel for BoidsModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::agent_engine::AgentModelState;
+    use henad_compute::cpu::agent_engine::AgentModelState;
     use henad_core::model::SimState as _;
     use henad_core::view::StatValue;
 

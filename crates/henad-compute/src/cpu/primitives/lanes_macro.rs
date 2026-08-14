@@ -86,7 +86,7 @@ macro_rules! agent_lanes {
 
                 let run = |c: usize, view: &mut $chunk<'_>| {
                     let base = c * chunk_size;
-                    let mut rng = $crate::chunked::chunk_seed(seed, tick, c);
+                    let mut rng = $crate::cpu::primitives::chunked::chunk_seed(seed, tick, c);
                     let mut acc = T::default();
                     for k in 0..view.pos_x.len() {
                         acc = <T as $crate::__lanes::ChunkTally>::merge(
@@ -99,7 +99,7 @@ macro_rules! agent_lanes {
 
                 #[cfg(not(target_arch = "wasm32"))]
                 let per_chunk: Vec<T> = {
-                    use $crate::chunked::__rayon::prelude::*;
+                    use $crate::cpu::primitives::chunked::__rayon::prelude::*;
                     views.par_iter_mut().enumerate().map(|(c, v)| run(c, v)).collect()
                 };
 
@@ -147,5 +147,5 @@ macro_rules! agent_lanes {
 /// Re-exported so the macro can name these without the caller importing them.
 #[doc(hidden)]
 pub mod __lanes {
-    pub use henad_core::agent_model::{AgentLanes, ChunkTally};
+    pub use henad_core::authoring::agent_model::{AgentLanes, ChunkTally};
 }

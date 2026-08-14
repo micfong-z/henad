@@ -1,7 +1,7 @@
 //! The pheromone field: two scalar layers plus the static site markers.
 
-use henad_compute::field::scalar::ScalarFieldSpec;
-use henad_compute::scatter::Combine;
+use henad_compute::cpu::field::scalar::ScalarFieldSpec;
+use henad_compute::cpu::primitives::scatter::Combine;
 use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 

@@ -1,8 +1,8 @@
 //! Authoring API for grid models whose state lives entirely in GPU buffers.
 //!
-//! This is the GPU sibling of [`crate::grid_model::GridModel`], and it plays the same role: a
+//! This is the GPU sibling of [`crate::authoring::grid_model::GridModel`], and it plays the same role: a
 //! model declares const metadata plus a few pure functions, and the engine
-//! (`henad_compute::gpu::gpu_grid_engine`) derives every buffer, layout, pipeline, bind group, and
+//! (`henad_compute::gpu::grid_engine`) derives every buffer, layout, pipeline, bind group, and
 //! the whole `SimState`/`GpuSimState` impl from them.
 //!
 //! # Binding conventions
@@ -94,7 +94,7 @@ pub trait GpuGridModel: Send + Sync + 'static {
     const DISPLAY_SHADER: &'static str;
     const REDUCE_SHADER: &'static str;
 
-    /// Declare parameters for the UI. Unlike [`crate::grid_model::GridModel`], width and height
+    /// Declare parameters for the UI. Unlike [`crate::authoring::grid_model::GridModel`], width and height
     /// are *not* auto-prepended — a GPU model spells out its full list, so that it can mirror the
     /// exact parameter order of the CPU model it is compared against.
     fn param_descriptors() -> Vec<ParamDescriptor>;

@@ -1,8 +1,13 @@
 //! Instanced renderer for a model's agent population, drawn over the grid layer.
+//!
+//! Serves both backends. A CPU model uploads into the buffers owned here, a GPU model's already
+//! live on the device so [`AgentLayer::paint_gpu`] binds those instead. Pipeline, uniform and
+//! sprite size are shared, which keeps the two visually comparable.
 
 use std::sync::Arc;
 
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait};
+use henad_compute::gpu::GpuAgents;
 use henad_compute::snapshot::PointSnapshot;
 
 /// Sprite diameter in logical points.
@@ -12,10 +17,17 @@ const POS_X_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Fl
 const POS_Y_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![1 => Float32];
 const COLOR_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![2 => Unorm8x4];
 
+/// Both position attributes out of one `vec2` lane. Still two `Float32` attributes rather than a
+/// `Float32x2`, so the shader is shared verbatim with the layout above.
+const POS_XY_ATTRS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32, 1 => Float32];
+
 /// Pipeline and uniform binding, fixed for the life of the app. `Arc` because a paint callback
 /// can still be in flight when the model is switched.
+///
+/// One pipeline per vertex layout, since a GPU model holds position as one interleaved lane.
 struct AgentPipeline {
     pipeline: wgpu::RenderPipeline,
+    interleaved_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
 }
 
@@ -26,9 +38,20 @@ struct AgentBuffers {
     color: wgpu::Buffer,
 }
 
+/// Also picks the vertex layout. Held directly rather than through an `Arc<AgentBuffers>` so one
+/// callback serves both backends, and the handles are refcounted so the lanes survive a sim thread
+/// torn down mid-frame.
+enum PositionSource {
+    /// As a CPU snapshot uploads them.
+    Split { pos_x: wgpu::Buffer, pos_y: wgpu::Buffer },
+    /// As a GPU model stores it.
+    Interleaved(wgpu::Buffer),
+}
+
 struct AgentPaint {
     pipeline: Arc<AgentPipeline>,
-    buffers: Arc<AgentBuffers>,
+    positions: PositionSource,
+    color: wgpu::Buffer,
     count: u32,
 }
 
@@ -39,11 +62,21 @@ impl CallbackTrait for AgentPaint {
         render_pass: &mut wgpu::RenderPass<'static>,
         _callback_resources: &CallbackResources,
     ) {
-        render_pass.set_pipeline(&self.pipeline.pipeline);
+        let color_slot = match &self.positions {
+            PositionSource::Split { pos_x, pos_y } => {
+                render_pass.set_pipeline(&self.pipeline.pipeline);
+                render_pass.set_vertex_buffer(0, pos_x.slice(..));
+                render_pass.set_vertex_buffer(1, pos_y.slice(..));
+                2
+            }
+            PositionSource::Interleaved(pos) => {
+                render_pass.set_pipeline(&self.pipeline.interleaved_pipeline);
+                render_pass.set_vertex_buffer(0, pos.slice(..));
+                1
+            }
+        };
         render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.buffers.pos_x.slice(..));
-        render_pass.set_vertex_buffer(1, self.buffers.pos_y.slice(..));
-        render_pass.set_vertex_buffer(2, self.buffers.color.slice(..));
+        render_pass.set_vertex_buffer(color_slot, self.color.slice(..));
         render_pass.draw(0..4, 0..self.count);
     }
 }
@@ -95,53 +128,7 @@ impl AgentLayer {
             immediate_size: 0,
         });
 
-        // One vertex buffer per SoA lane, so positions upload straight from the snapshot.
-        let lanes = [
-            wgpu::VertexBufferLayout {
-                array_stride: 4,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &POS_X_ATTRS,
-            },
-            wgpu::VertexBufferLayout {
-                array_stride: 4,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &POS_Y_ATTRS,
-            },
-            wgpu::VertexBufferLayout {
-                array_stride: 4,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &COLOR_ATTRS,
-            },
-        ];
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("henad_agent_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &lanes,
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let (pipeline, interleaved_pipeline) = build_pipelines(device, &shader, &pipeline_layout, target_format);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("henad_agent_bind_group"),
@@ -153,7 +140,11 @@ impl AgentLayer {
         });
 
         Self {
-            pipeline: Arc::new(AgentPipeline { pipeline, bind_group }),
+            pipeline: Arc::new(AgentPipeline {
+                pipeline,
+                interleaved_pipeline,
+                bind_group,
+            }),
             buffers: Arc::new(AgentBuffers {
                 pos_x: instance_buffer(device, "pos_x", 0),
                 pos_y: instance_buffer(device, "pos_y", 0),
@@ -254,7 +245,44 @@ impl AgentLayer {
     /// The uniform is written here rather than in `CallbackTrait::prepare`, which only sees the
     /// whole window. Writes queued while building UI land before egui submits, so this is safe.
     pub fn paint(&self, ui: &egui::Ui, rect: egui::Rect, world_w: f32, world_h: f32) {
-        if self.count == 0 || world_w <= 0.0 || world_h <= 0.0 {
+        self.paint_lanes(
+            ui,
+            rect,
+            (world_w, world_h),
+            PositionSource::Split {
+                pos_x: self.buffers.pos_x.clone(),
+                pos_y: self.buffers.pos_y.clone(),
+            },
+            &self.buffers.color,
+            self.count,
+        );
+    }
+
+    /// Draws a GPU model's lanes without uploading anything.
+    ///
+    /// Nothing is cached here, so it is safe on a frame where the snapshot did not advance.
+    pub fn paint_gpu(&self, ui: &egui::Ui, rect: egui::Rect, agents: &GpuAgents) {
+        self.paint_lanes(
+            ui,
+            rect,
+            (agents.world_w, agents.world_h),
+            PositionSource::Interleaved(agents.pos.clone()),
+            &agents.color,
+            agents.count,
+        );
+    }
+
+    fn paint_lanes(
+        &self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        world: (f32, f32),
+        positions: PositionSource,
+        color: &wgpu::Buffer,
+        count: u32,
+    ) {
+        let (world_w, world_h) = world;
+        if count == 0 || world_w <= 0.0 || world_h <= 0.0 {
             return;
         }
         // Clip space spans 2.0 across the rect, so half-extent is size over rect. Both sides are
@@ -272,8 +300,9 @@ impl AgentLayer {
             rect,
             AgentPaint {
                 pipeline: Arc::clone(&self.pipeline),
-                buffers: Arc::clone(&self.buffers),
-                count: self.count,
+                positions,
+                color: color.clone(),
+                count,
             },
         ));
     }
@@ -283,6 +312,83 @@ impl AgentLayer {
         self.count = 0;
         self.uniform_color = None;
     }
+}
+
+/// `(split, interleaved)`. They differ only in how the position attributes are fetched.
+fn build_pipelines(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    pipeline_layout: &wgpu::PipelineLayout,
+    target_format: wgpu::TextureFormat,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    // One vertex buffer per lane, so a CPU model's positions upload straight from the snapshot.
+    let split = [
+        wgpu::VertexBufferLayout {
+            array_stride: 4,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &POS_X_ATTRS,
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 4,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &POS_Y_ATTRS,
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 4,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &COLOR_ATTRS,
+        },
+    ];
+
+    // A GPU model's position lane is `vec2`, so both attributes come out of one buffer.
+    let interleaved = [
+        wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &POS_XY_ATTRS,
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 4,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &COLOR_ATTRS,
+        },
+    ];
+
+    let make = |label: &str, buffers: &[wgpu::VertexBufferLayout<'_>]| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+
+    (
+        make("henad_agent_pipeline", &split),
+        make("henad_agent_pipeline_interleaved", &interleaved),
+    )
 }
 
 fn instance_buffer(device: &wgpu::Device, lane: &str, bytes: u64) -> wgpu::Buffer {

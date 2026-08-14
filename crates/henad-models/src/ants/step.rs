@@ -1,6 +1,6 @@
-use henad_compute::field::scalar::{Deposits, ScalarRead};
+use henad_compute::cpu::field::scalar::{Deposits, ScalarRead};
 use henad_compute::for_each_chunk_mut;
-use henad_core::agent_model::{AgentModel as _, StepCtx};
+use henad_core::authoring::agent_model::{AgentModel as _, StepCtx};
 use henad_core::helpers::xorshift64;
 
 use crate::ants::field::{FOOD, HOME, OBSTACLE, TO_FOOD, TO_HOME};
@@ -134,6 +134,8 @@ fn advect_agent(
     // An impossible pheromone, so the first passable neighbour always wins.
     let mut best = -1.0f32;
     let (mut bx, mut by) = (x, y);
+    // 2 not 1 is the reference's off-by-one, giving the first neighbour visited 2/(k+1) against
+    // 1/(k+1) for the rest, which drifts ants up-left. Kept deliberately, see the gap report.
     let mut count = 2u32;
 
     for dx in -1..=1 {

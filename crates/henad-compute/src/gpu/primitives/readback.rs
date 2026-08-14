@@ -154,4 +154,11 @@ impl CounterReadback {
     pub fn values(&self) -> &[u32] {
         &self.values
     }
+
+    /// The most recently read-back values as floats, for [`crate::gpu::primitives::reduce`].
+    /// The staging path only moves 4-byte words, so it is shared rather than duplicated
+    /// per element type.
+    pub fn values_f32(&self) -> impl Iterator<Item = f32> + '_ {
+        self.values.iter().copied().map(f32::from_bits)
+    }
 }

@@ -3,6 +3,8 @@
 pub mod ants;
 pub mod boids;
 pub mod game_of_life;
+pub mod gpu_ants;
+pub mod gpu_boids;
 pub mod gpu_game_of_life;
 pub mod gpu_sir;
 #[cfg(test)]

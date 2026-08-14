@@ -2,7 +2,7 @@
 //! resident in GPU storage buffers.
 //!
 //! Everything structural — buffers, ping-ponging, pipelines, bind groups, batched step encoding,
-//! the `SimState`/`GpuSimState` impls — comes from `henad_compute::gpu::gpu_grid_engine` via the
+//! the `SimState`/`GpuSimState` impls — comes from `henad_compute::gpu::grid_engine` via the
 //! [`GpuGridModel`] trait. What is left here is what actually makes this Game of Life: the
 //! shaders, the seeding, and the metadata.
 //!
@@ -33,8 +33,8 @@
 //! backends therefore start from a **bit-identical** grid and must agree forever after — which is
 //! what `tests::gpu_alive_count_matches_cpu_model` checks.
 
-use henad_compute::grid_engine::GRID_INIT_SEED;
-use henad_core::gpu_grid_model::GpuGridModel;
+use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_core::authoring::gpu_grid_model::GpuGridModel;
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, mix_seed, u32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -140,11 +140,11 @@ impl GpuGridModel for GpuGameOfLife {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use henad_compute::cpu::grid_engine::GridModelState;
     use henad_compute::gpu::GpuContext;
-    use henad_compute::gpu::gpu_grid_engine::GpuGridState;
+    use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::GpuSimState as _;
     use henad_compute::gpu::timing::TimestampQuery;
-    use henad_compute::grid_engine::GridModelState;
     use henad_core::model::SimState as _;
 
     use crate::game_of_life::GameOfLifeModel;
@@ -395,7 +395,7 @@ mod tests {
 mod runner_tests {
     use std::time::{Duration, Instant};
 
-    use henad_compute::gpu::gpu_grid_engine::GpuGridState;
+    use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
     use henad_compute::snapshot::{Snapshot, SnapshotView};
 

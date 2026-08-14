@@ -495,7 +495,7 @@ fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("henad-cli"),
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
+        required_limits: henad_compute::gpu::limits::raise(&adapter, &wgpu::Limits::default()),
         memory_hints: wgpu::MemoryHints::Performance,
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         trace: wgpu::Trace::Off,

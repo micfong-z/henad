@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use henad_compute::agent_engine::AgentModelState;
+use henad_compute::cpu::agent_engine::AgentModelState;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_models::boids::BoidsModel;

@@ -2,17 +2,18 @@ pub mod field;
 mod lanes;
 mod step;
 
-use henad_compute::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_compute::field::scalar::{Deposits, ScalarField};
-use henad_core::agent_model::{AgentModel, StepCtx};
-use henad_core::field::Extent;
+pub use crate::ants::lanes::{AntLanes, NO_STEP};
+
+use henad_compute::cpu::field::scalar::{Deposits, ScalarField};
+use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_core::authoring::agent_model::{AgentModel, StepCtx};
+use henad_core::authoring::field::Extent;
 use henad_core::grid::Grid2D;
 use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::ants::field::{PheromoneField, TO_FOOD, TO_HOME, nest_cell};
-use crate::ants::lanes::AntLanes;
 
 /// Indexed by `has_food` itself, not by a copy of it.
 pub const ANT_PALETTE: [[u8; 4]; 2] = [
@@ -38,6 +39,9 @@ const RANDOM_ACTION: usize = 6;
 /// Three semantic divergences a comparison has to state. Deposits combine with `max` rather than
 /// last-writer-wins. The pheromone field is all read old, all write new. The RNG is seeded per
 /// chunk per tick rather than drawn per call.
+///
+/// The reference's biased neighbour tie-break is reproduced rather than corrected, see
+/// [`step::advect_agent`].
 pub struct AntsModel;
 
 pub struct AntParams {
@@ -69,7 +73,7 @@ impl AgentModel for AntsModel {
 
     type Lanes = AntLanes;
     type Field = ScalarField<PheromoneField>;
-    type Index = henad_core::agent_model::NoIndex;
+    type Index = henad_core::authoring::agent_model::NoIndex;
     type Params = AntParams;
     type Tally = u64;
 
@@ -146,7 +150,7 @@ fn field_sum(cells: &[f32]) -> f64 {
 mod tests {
     use super::*;
     use crate::ants::field::{CELL_PALETTE, OBSTACLE};
-    use henad_compute::agent_engine::AgentModelState;
+    use henad_compute::cpu::agent_engine::AgentModelState;
     use henad_core::model::SimState as _;
 
     type State = AgentModelState<AntsModel>;

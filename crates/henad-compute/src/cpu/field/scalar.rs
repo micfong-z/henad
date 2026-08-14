@@ -2,14 +2,14 @@
 
 use std::marker::PhantomData;
 
-use henad_core::field::{Extent, FieldLayer};
+use henad_core::authoring::field::{Extent, FieldLayer};
 use henad_core::grid::Grid2D;
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::GridView;
 
-use crate::chunked::STATS_CHUNK;
+use crate::cpu::primitives::chunked::STATS_CHUNK;
+use crate::cpu::primitives::scatter::{Combine, ScatterGrid};
 use crate::for_each_chunk_mut;
-use crate::scatter::{Combine, ScatterGrid};
 
 /// The rules a scalar field needs that the mechanics cannot supply.
 pub trait ScalarFieldSpec: Send + Sync + 'static {
