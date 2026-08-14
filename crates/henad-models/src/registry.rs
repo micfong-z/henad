@@ -1,9 +1,11 @@
 use henad_compute::cpu::agent_engine::{AgentModelState, agent_model_param_descriptors};
 use henad_compute::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
 use henad_compute::gpu::GpuContext;
+use henad_compute::gpu::agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
 use henad_compute::gpu::grid_engine::{GpuGridModelDescriptor, GpuGridState};
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_core::authoring::agent_model::AgentModel;
+use henad_core::authoring::gpu_agent_model::GpuAgentModel;
 use henad_core::authoring::gpu_grid_model::GpuGridModel;
 use henad_core::authoring::grid_model::GridModel;
 use henad_core::model::{Model as _, SimState};
@@ -79,9 +81,6 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
 
 /// Create a `ModelEntry` from a `GpuGridModel` implementation, capturing the injected
 /// device/queue.
-///
-/// The GPU counterpart of [`register_grid_model`]: the factory closure captures its own
-/// [`GpuContext`] clone, so callers never thread a device through at creation time.
 fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
     let model = GpuGridModelDescriptor::<M>::new(ctx.clone());
     let factory_ctx = ctx.clone();
@@ -98,48 +97,20 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
     }
 }
 
-/// Create a `ModelEntry` for the GPU ants model.
-fn register_gpu_ants(ctx: &GpuContext) -> ModelEntry {
+/// Create a `ModelEntry` from a `GpuAgentModel` implementation, capturing the injected
+/// device/queue.
+fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
+    let model = GpuAgentModelDescriptor::<M>::new(ctx.clone());
     let factory_ctx = ctx.clone();
     ModelEntry {
-        name: crate::gpu_ants::NAME.to_owned(),
-        id: crate::gpu_ants::ID.to_owned(),
-        description: crate::gpu_ants::DESCRIPTION.to_owned(),
-        param_descriptors: crate::gpu_ants::param_descriptors(),
-        stat_descriptors: crate::gpu_ants::stat_descriptors(),
-        topology_hint: TopologyHint {
-            grid: true,
-            agents: true,
-        },
+        name: model.name().to_owned(),
+        id: model.id().to_owned(),
+        description: model.description().to_owned(),
+        param_descriptors: model.param_descriptors(),
+        stat_descriptors: model.stat_descriptors(),
+        topology_hint: model.topology_hint(),
         create: Box::new(move |params, seed| {
-            ModelState::Gpu(Box::new(crate::gpu_ants::GpuAntsState::new_seeded(
-                &factory_ctx,
-                params,
-                seed,
-            )))
-        }),
-    }
-}
-
-/// Create a `ModelEntry` for a the GPU boids model.
-fn register_gpu_boids(ctx: &GpuContext) -> ModelEntry {
-    let factory_ctx = ctx.clone();
-    ModelEntry {
-        name: crate::gpu_boids::NAME.to_owned(),
-        id: crate::gpu_boids::ID.to_owned(),
-        description: crate::gpu_boids::DESCRIPTION.to_owned(),
-        param_descriptors: crate::gpu_boids::param_descriptors(),
-        stat_descriptors: crate::gpu_boids::stat_descriptors(),
-        topology_hint: TopologyHint {
-            grid: false,
-            agents: true,
-        },
-        create: Box::new(move |params, seed| {
-            ModelState::Gpu(Box::new(crate::gpu_boids::GpuBoidsState::new_seeded(
-                &factory_ctx,
-                params,
-                seed,
-            )))
+            ModelState::Gpu(Box::new(GpuAgentState::<M>::new_seeded(&factory_ctx, params, seed)))
         }),
     }
 }
@@ -161,8 +132,8 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
     if let Some(ctx) = gpu {
         entries.push(register_gpu_grid_model::<crate::gpu_game_of_life::GpuGameOfLife>(&ctx));
         entries.push(register_gpu_grid_model::<crate::gpu_sir::GpuSir>(&ctx));
-        entries.push(register_gpu_boids(&ctx));
-        entries.push(register_gpu_ants(&ctx));
+        entries.push(register_gpu_agent_model::<crate::gpu_boids::GpuBoids>(&ctx));
+        entries.push(register_gpu_agent_model::<crate::gpu_ants::GpuAnts>(&ctx));
     }
 
     entries
@@ -172,19 +143,41 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
 mod tests {
     use super::*;
 
+    /// Every entry, GPU ones included when this machine can give a device.
+    ///
+    /// The device asks for `Limits::default()`, so a GPU model that only fits a raised limit fails
+    /// to build here. That is deliberate: every model is meant to run on a stock WebGPU device.
+    fn all_entries() -> Vec<ModelEntry> {
+        model_registry(crate::gpu_test_support::headless_context(
+            "registry_test_device",
+            wgpu::Features::empty(),
+        ))
+    }
+
+    fn defaults(entry: &ModelEntry) -> Vec<ParamValue> {
+        entry
+            .param_descriptors
+            .iter()
+            .map(|desc| desc.kind.default_value())
+            .collect()
+    }
+
+    /// Both arms are a `SimState`, which is where the contracts below live.
+    fn sim_state(state: &mut ModelState) -> &mut dyn SimState {
+        match state {
+            ModelState::Cpu(state) => state.as_mut(),
+            ModelState::Gpu(state) => state.as_mut(),
+        }
+    }
+
     /// The UI labels parameters from the descriptor and the state decides what it accepts, so the
     /// two disagreeing means the panel lies about what an edit does.
     #[test]
     fn declared_apply_mode_matches_what_the_state_accepts() {
-        for entry in model_registry(None) {
-            let values: Vec<ParamValue> = entry
-                .param_descriptors
-                .iter()
-                .map(|desc| desc.kind.default_value())
-                .collect();
-            let ModelState::Cpu(mut state) = (entry.create)(&values, None) else {
-                continue;
-            };
+        for entry in all_entries() {
+            let values = defaults(&entry);
+            let mut created = (entry.create)(&values, None);
+            let state = sim_state(&mut created);
 
             for (i, desc) in entry.param_descriptors.iter().enumerate() {
                 assert_eq!(
@@ -203,11 +196,7 @@ mod tests {
     #[test]
     fn declared_topology_matches_the_views_the_state_returns() {
         for entry in model_registry(None) {
-            let values: Vec<ParamValue> = entry
-                .param_descriptors
-                .iter()
-                .map(|desc| desc.kind.default_value())
-                .collect();
+            let values = defaults(&entry);
             let ModelState::Cpu(state) = (entry.create)(&values, None) else {
                 continue;
             };
@@ -234,15 +223,10 @@ mod tests {
     /// either way, hence this.
     #[test]
     fn every_declared_stat_series_gets_a_value() {
-        for entry in model_registry(None) {
-            let values: Vec<ParamValue> = entry
-                .param_descriptors
-                .iter()
-                .map(|desc| desc.kind.default_value())
-                .collect();
-            let ModelState::Cpu(state) = (entry.create)(&values, None) else {
-                continue;
-            };
+        for entry in all_entries() {
+            let values = defaults(&entry);
+            let mut created = (entry.create)(&values, None);
+            let state = sim_state(&mut created);
             assert_eq!(
                 state.stats().len(),
                 entry.stat_descriptors.len(),
@@ -250,6 +234,33 @@ mod tests {
                 entry.id,
                 entry.stat_descriptors.len(),
                 state.stats().len()
+            );
+        }
+    }
+
+    /// The GPU counterpart of the test above. A GPU state publishes through its snapshot rather
+    /// than through `grid_view`/`point_view`, so that is what the hint has to agree with.
+    #[test]
+    fn declared_topology_matches_the_layers_a_gpu_state_publishes() {
+        for entry in all_entries() {
+            let values = defaults(&entry);
+            let ModelState::Gpu(state) = (entry.create)(&values, None) else {
+                continue;
+            };
+            let view = state.view();
+            assert_eq!(
+                view.display.is_some(),
+                entry.topology_hint.grid,
+                "{}: declares grid={} but its snapshot disagrees",
+                entry.id,
+                entry.topology_hint.grid
+            );
+            assert_eq!(
+                view.agents.is_some(),
+                entry.topology_hint.agents,
+                "{}: declares agents={} but its snapshot disagrees",
+                entry.id,
+                entry.topology_hint.agents
             );
         }
     }
@@ -265,5 +276,21 @@ mod tests {
             entries.iter().any(|e| e.id == "game_of_life"),
             "CPU models must still be registered without a GPU context"
         );
+    }
+
+    /// Building every GPU model on a baseline device is what makes "runs on a stock WebGPU
+    /// device" a fact rather than an argument: the engine asserts each pass against the device's
+    /// own `max_storage_buffers_per_shader_stage`, which is 8 here.
+    #[test]
+    fn every_gpu_model_builds_on_a_baseline_device() {
+        let entries = all_entries();
+        let gpu: Vec<&ModelEntry> = entries.iter().filter(|e| e.id.starts_with("gpu_")).collect();
+        if gpu.is_empty() {
+            log::warn!("skipping every_gpu_model_builds_on_a_baseline_device: no adapter");
+            return;
+        }
+        for entry in gpu {
+            let _built: ModelState = (entry.create)(&defaults(entry), None);
+        }
     }
 }

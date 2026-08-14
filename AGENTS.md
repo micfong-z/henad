@@ -16,7 +16,7 @@ parallelism are not micro-optimizations — they are the point.
 
 Previous coding sessions or context can be read and referenced from documents in `docs/agent-record`.
 
-After each coding session, write a hand-off document under `docs/agent-record/YYYYMMDD-session-title.md`.
+After each coding session, write a hand-off document under `docs/agent-record/YYYYMMDD-XX-session-title.md`.
 It should include:
 
 - A frontmatter block; see existing documents for more examples.

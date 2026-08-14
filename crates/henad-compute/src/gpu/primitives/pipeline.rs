@@ -28,6 +28,22 @@ pub fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
+/// Writes every shader to `$HENAD_DUMP_WGSL` when that is set, so a validation error against a
+/// generated source can be read as text.
+#[cfg(not(target_arch = "wasm32"))]
+fn dump_source(label: &str, source: &str) {
+    let Some(dir) = std::env::var_os("HENAD_DUMP_WGSL") else {
+        return;
+    };
+    let path = std::path::Path::new(&dir).join(format!("{label}.wgsl"));
+    if let Err(err) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, source)) {
+        log::warn!("could not dump {}: {err}", path.display());
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn dump_source(_label: &str, _source: &str) {}
+
 /// A compute pipeline over a single bind group layout, with `main` as the entry point.
 pub fn compute_pipeline(
     device: &wgpu::Device,
@@ -35,6 +51,7 @@ pub fn compute_pipeline(
     source: &str,
     layout: &wgpu::BindGroupLayout,
 ) -> wgpu::ComputePipeline {
+    dump_source(label, source);
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(&format!("{label}_shader")),
         source: wgpu::ShaderSource::Wgsl(source.into()),

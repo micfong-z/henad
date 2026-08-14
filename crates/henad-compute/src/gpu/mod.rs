@@ -7,6 +7,7 @@
 //! Concrete models live in `henad-models`, as CPU models do. A model contributes shaders, seed
 //! data and metadata. Every wgpu object is built here.
 
+pub mod agent_engine;
 pub mod grid_engine;
 pub mod limits;
 pub mod primitives;
@@ -17,6 +18,7 @@ pub mod view;
 #[cfg(test)]
 mod test_support;
 
+pub use agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
 pub use grid_engine::{GpuGridModelDescriptor, GpuGridState};
 pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 pub use sim_thread::{GpuSimState, GpuStats};
@@ -29,8 +31,7 @@ use test_support::headless_context;
 #[cfg(not(target_arch = "wasm32"))]
 pub use sim_thread::GpuSimThread;
 
-/// Injected GPU handles. Cheap to clone, since `Device` and `Queue` are refcounted `Send + Sync`
-/// handles rather than owned resources, so every GPU model factory can capture its own.
+/// Injected GPU handles. Cheap to clone.
 ///
 /// `target_format` is part of the context rather than a per-call argument because a model builds
 /// its display render pipeline once, and a pipeline is tied to its colour target format.

@@ -9,3 +9,4 @@ pub mod prefix_scan;
 pub mod readback;
 pub mod reduce;
 pub mod spatial_hash;
+pub mod wgsl;

@@ -44,8 +44,6 @@ struct Params {
 @group(0) @binding(6) var<storage, read>       sorted: array<u32>;
 @group(0) @binding(7) var<uniform>             params: Params;
 
-const WORKGROUP: u32 = 256u;
-
 fn wrap(v: i32, m: i32) -> i32 {
     return ((v % m) + m) % m;
 }
@@ -72,7 +70,7 @@ fn main(
     @builtin(local_invocation_id) lid: vec3<u32>,
     @builtin(workgroup_id) wid: vec3<u32>,
 ) {
-    let i = (wid.y * params.groups_x + wid.x) * WORKGROUP + lid.x;
+    let i = linear_index(lid, wid, params.groups_x);
     if (i >= params.num_agents) {
         return;
     }

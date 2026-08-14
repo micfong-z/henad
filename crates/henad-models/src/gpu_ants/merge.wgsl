@@ -16,7 +16,6 @@ struct Params {
 @group(0) @binding(1) var<storage, read_write> accum: array<u32>;
 @group(0) @binding(2) var<uniform> params: Params;
 
-const WORKGROUP: u32 = 256u;
 
 @compute
 @workgroup_size(256)
@@ -24,7 +23,7 @@ fn main(
     @builtin(local_invocation_id) lid: vec3<u32>,
     @builtin(workgroup_id) wid: vec3<u32>,
 ) {
-    let i = (wid.y * params.groups_x + wid.x) * WORKGROUP + lid.x;
+    let i = linear_index(lid, wid, params.groups_x);
     if (i >= params.n) {
         return;
     }

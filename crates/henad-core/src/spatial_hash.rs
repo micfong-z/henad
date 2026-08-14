@@ -1,3 +1,37 @@
+use crate::authoring::field::Extent;
+
+/// Cell geometry on its own, for a caller that needs the grid without the buckets. A GPU model
+/// mirrors it into its step uniform so its query walks the same grid as the CPU sort.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HashGrid {
+    pub grid_w: u32,
+    pub grid_h: u32,
+    pub cell_w: f32,
+    pub cell_h: f32,
+}
+
+impl HashGrid {
+    /// Fits whole cells to the world, same as [`SpatialHash::new`]. A query walks in cell index
+    /// space, so cells all have to span the same distance or the wrap seam gets under-covered.
+    #[must_use]
+    pub fn new(extent: Extent, cell_size: f32) -> Self {
+        let cell_size = if cell_size > 0.0 { cell_size } else { 1.0 };
+        let grid_w = (extent.w / cell_size).floor().max(1.0) as u32;
+        let grid_h = (extent.h / cell_size).floor().max(1.0) as u32;
+        Self {
+            grid_w,
+            grid_h,
+            cell_w: extent.w / grid_w as f32,
+            cell_h: extent.h / grid_h as f32,
+        }
+    }
+
+    #[must_use]
+    pub fn num_cells(&self) -> u32 {
+        self.grid_w * self.grid_h
+    }
+}
+
 /// Spatial hash for efficient neighbor queries in 2D space.
 pub struct SpatialHash {
     /// Requested cell size, only kept to detect changes
