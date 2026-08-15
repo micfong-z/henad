@@ -22,7 +22,6 @@ use crate::gpu::primitives::pipeline::{
 use crate::gpu::primitives::readback::CounterReadback;
 use crate::gpu::primitives::reduce::GpuLaneReduce;
 use crate::gpu::primitives::spatial_hash::{GpuSpatialHash, HashGrid};
-use crate::gpu::primitives::wgsl;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
@@ -251,7 +250,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         if let Some(spec) = &M::DISPLAY {
             passes.push((format!("{}_display", M::ID), storage_bindings(spec.bindings)));
         }
-        passes.push((format!("{}_reduce_leaf", M::ID), storage_bindings(M::REDUCE_BINDINGS)));
+        passes.push((format!("{}_reduce_leaf", M::ID), storage_bindings(M::REDUCE.bindings)));
         passes
     }
 
@@ -373,8 +372,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             None => (None, None),
         };
 
-        let reduce_domain = M::REDUCE_DOMAIN.invocations(&geom);
-        let reduce = GpuLaneReduce::new(device, queue, M::ID, M::REDUCE_LANES, reduce_domain);
+        let reduce_domain = M::REDUCE.domain.invocations(&geom);
+        let reduce = GpuLaneReduce::new(device, queue, M::ID, M::REDUCE.lanes, reduce_domain);
 
         let build = PassBuilder {
             device,
@@ -417,8 +416,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         let reduce_pass = build.pass::<M>(
             PassId::Reduce,
             "reduce_leaf",
-            &wgsl::reduce_leaf(M::REDUCE_HEADER, M::REDUCE_VALUE),
-            M::REDUCE_BINDINGS,
+            M::REDUCE.shader,
+            M::REDUCE.bindings,
             reduce_groups,
             reduce_domain,
         );

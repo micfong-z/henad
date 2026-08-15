@@ -10,7 +10,7 @@ use henad_compute::cpu::field::scalar::ScalarFieldSpec as _;
 use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
 use henad_core::authoring::field::Extent;
 use henad_core::authoring::gpu_agent_model::{
-    Binding, BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec,
+    Binding, BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
 use henad_core::helpers::{extract_f32, extract_u32, mix_seed};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -20,6 +20,7 @@ use crate::ants::field::{CELL_PALETTE, EMPTY, LOW_PHEROMONE, PheromoneField};
 use crate::ants::{ANT_PALETTE, AntLanes, AntsModel};
 use crate::shader_bindings::gpu_ants::display::Params as DisplayParams;
 use crate::shader_bindings::gpu_ants::merge::Params as MergeParams;
+use crate::shader_bindings::gpu_ants::reduce::Params as ReduceParams;
 use crate::shader_bindings::gpu_ants::step::Params as StepParams;
 
 /// The list is [`agent_model_param_descriptors`] for [`AntsModel`] verbatim, so both backends take
@@ -43,18 +44,6 @@ const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 /// `state` packs what the CPU model keeps in three lanes. Mirrored in `step.wgsl`.
 const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
 const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
-
-/// Matches `Params` in the generated reduce leaf.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct ReduceParams {
-    n: u32,
-    lanes: u32,
-    groups_x: u32,
-    num_agents: u32,
-    n_cells: u32,
-    _pad: [u32; 3],
-}
 
 pub struct GpuAnts;
 
@@ -148,46 +137,18 @@ impl GpuAgentModel for GpuAnts {
     });
 
     /// Carrying food, total pheromone. Deliveries is an accumulating counter, not a reduction.
-    const REDUCE_LANES: usize = 2;
-    /// The two lanes have different domains, so the tree covers the longer one.
-    const REDUCE_DOMAIN: Domain = Domain::AgentsOrCells;
-    const REDUCE_BINDINGS: &'static [Binding] = &[
-        Binding::Read(STATE),
-        Binding::Read(FIELD),
-        Binding::ReducePartials,
-        Binding::Uniform,
-    ];
-    const REDUCE_HEADER: &'static str = r"
-struct Params {
-    n: u32,
-    lanes: u32,
-    groups_x: u32,
-    num_agents: u32,
-    n_cells: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
-}
-
-@group(0) @binding(0) var<storage, read> state: array<u32>;
-@group(0) @binding(1) var<storage, read> field: array<f32>;
-@group(0) @binding(2) var<storage, read_write> partials: array<f32>;
-@group(0) @binding(3) var<uniform> params: Params;
-
-const HAS_FOOD_BIT: u32 = 0x100u;
-";
-    /// One lane is per ant and the other per cell, so each bounds-checks its own domain.
-    const REDUCE_VALUE: &'static str = r"
-        if (lane == 0u) {
-            if (i < params.num_agents) {
-                value = f32((state[i] & HAS_FOOD_BIT) != 0u);
-            }
-        } else {
-            if (i < params.n_cells) {
-                value = field[i] + field[params.n_cells + i];
-            }
-        }
-";
+    const REDUCE: ReduceSpec = ReduceSpec {
+        shader: crate::shader_bindings::gpu_ants::reduce::SHADER_STRING,
+        bindings: &[
+            Binding::Read(STATE),
+            Binding::Read(FIELD),
+            Binding::ReducePartials,
+            Binding::Uniform,
+        ],
+        lanes: 2,
+        // The two lanes have different domains, so the tree covers the longer one.
+        domain: Domain::AgentsOrCells,
+    };
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
         agent_model_param_descriptors::<AntsModel>()
@@ -286,11 +247,11 @@ const HAS_FOOD_BIT: u32 = 0x100u;
             .to_vec(),
             PassId::Reduce => bytemuck::bytes_of(&ReduceParams {
                 n: ctx.invocations,
-                lanes: Self::REDUCE_LANES as u32,
+                lanes: Self::REDUCE.lanes as u32,
                 groups_x: ctx.groups_x,
                 num_agents: geom.num_agents,
                 n_cells: geom.n_cells,
-                _pad: [0; 3],
+                ..bytemuck::Zeroable::zeroed()
             })
             .to_vec(),
         }

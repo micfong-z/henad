@@ -34,9 +34,8 @@
 //! module, re-emitted by naga, not the file as written. Set `HENAD_DUMP_WGSL` to a directory to
 //! read back what was actually compiled, since a WGSL error names that text rather than the source.
 //!
-//! The reduce leaf is generated entirely, from [`GpuAgentModel::REDUCE_HEADER`] and
-//! [`GpuAgentModel::REDUCE_VALUE`], since the workgroup tree around it is the same in every model.
-//! Being assembled at runtime, it is the one shader that cannot import.
+//! The reduce leaf is an ordinary shader like any other pass. The workgroup fold it repeats is
+//! `shared::reduce_tree::block_sum`, so a model writes only the per lane value.
 //!
 //! # Unchecked contracts
 //!
@@ -127,6 +126,19 @@ pub struct DisplaySpec {
     pub workgroup: u32,
 }
 
+/// The leaf of the stat reduction, which folds the population down to one value per lane.
+///
+/// The engine owns every level above it, so the leaf only has to write `partials`. Its shader
+/// imports `shared::reduce_tree::block_sum` for the workgroup fold.
+pub struct ReduceSpec {
+    pub shader: &'static str,
+    /// Must include [`Binding::ReducePartials`] and [`Binding::Uniform`].
+    pub bindings: &'static [Binding],
+    /// Values the leaf sums, one per lane.
+    pub lanes: usize,
+    pub domain: Domain,
+}
+
 /// The uniform block [`GpuAgentModel::pass_params_bytes`] is being asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PassId {
@@ -186,16 +198,7 @@ pub trait GpuAgentModel: Send + Sync + 'static {
     const STEP_PASSES: &'static [PassSpec];
     const DISPLAY: Option<DisplaySpec> = None;
 
-    /// Values the leaf sums, one per lane.
-    const REDUCE_LANES: usize;
-    const REDUCE_DOMAIN: Domain = Domain::Agents;
-    /// Must include [`Binding::ReducePartials`] and [`Binding::Uniform`].
-    const REDUCE_BINDINGS: &'static [Binding];
-    /// WGSL declarations the generated leaf needs. The bindings, plus a `params` uniform carrying
-    /// at least `lanes` and `groups_x`.
-    const REDUCE_HEADER: &'static str;
-    /// WGSL assigning `value`, with `lane` and the invocation index `i` in scope.
-    const REDUCE_VALUE: &'static str;
+    const REDUCE: ReduceSpec;
 
     /// The full descriptor list. Unlike [`crate::authoring::agent_model::AgentModel`], nothing is
     /// prepended. A GPU model spells its list out, so it can mirror the exact parameter order of

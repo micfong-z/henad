@@ -7,13 +7,14 @@ use henad_compute::cpu::agent_engine::{AGENT_INIT_SEED, agent_model_param_descri
 use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
 use henad_core::authoring::field::Extent;
 use henad_core::authoring::gpu_agent_model::{
-    Binding, BufferSpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec,
+    Binding, BufferSpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
 use henad_core::helpers::{extract_f32, extract_u32, mix_seed};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::boids::{BoidLanes, BoidsModel, HEADING_PALETTE};
+use crate::shader_bindings::gpu_boids::reduce::Params as ReduceParams;
 use crate::shader_bindings::gpu_boids::step::Params as StepParams;
 
 /// The list is [`agent_model_param_descriptors`] for [`BoidsModel`] verbatim, so both backends
@@ -27,16 +28,6 @@ const PARAM_WORLD_HEIGHT: usize = 2;
 const POS: usize = 0;
 const VEL: usize = 1;
 const COLOR: usize = 2;
-
-/// Matches `Params` in the generated reduce leaf.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct ReduceParams {
-    n: u32,
-    lanes: u32,
-    groups_x: u32,
-    _pad: u32,
-}
 
 pub struct GpuBoids;
 
@@ -89,34 +80,13 @@ impl GpuAgentModel for GpuBoids {
     }];
 
     /// Speed, x velocity, y velocity.
-    const REDUCE_LANES: usize = 3;
-    const REDUCE_BINDINGS: &'static [Binding] = &[Binding::Read(VEL), Binding::ReducePartials, Binding::Uniform];
-    const REDUCE_HEADER: &'static str = r"
-struct Params {
-    n: u32,
-    lanes: u32,
-    groups_x: u32,
-    _pad: u32,
-}
-
-@group(0) @binding(0) var<storage, read> vel: array<vec2<f32>>;
-@group(0) @binding(1) var<storage, read_write> partials: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
-";
-    /// The `sqrt` is per agent, as in `boids::velocity_sums`. Mean speed rebuilt from mean
-    /// velocity is a different quantity for a turning flock.
-    const REDUCE_VALUE: &'static str = r"
-        if (i < params.n) {
-            let v = vel[i];
-            if (lane == 0u) {
-                value = length(v);
-            } else if (lane == 1u) {
-                value = v.x;
-            } else {
-                value = v.y;
-            }
-        }
-";
+    const REDUCE: ReduceSpec = ReduceSpec {
+        shader: crate::shader_bindings::gpu_boids::reduce::SHADER_STRING,
+        bindings: &[Binding::Read(VEL), Binding::ReducePartials, Binding::Uniform],
+        // Speed, x velocity, y velocity.
+        lanes: 3,
+        domain: Domain::Agents,
+    };
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
         agent_model_param_descriptors::<BoidsModel>()
@@ -163,7 +133,7 @@ struct Params {
         if pass == PassId::Reduce {
             return bytemuck::bytes_of(&ReduceParams {
                 n: ctx.invocations,
-                lanes: Self::REDUCE_LANES as u32,
+                lanes: Self::REDUCE.lanes as u32,
                 groups_x: ctx.groups_x,
                 _pad: 0,
             })

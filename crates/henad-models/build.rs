@@ -13,9 +13,11 @@ const ENTRY_POINTS: &[&str] = &[
     "gpu_sir/display.wgsl",
     "gpu_sir/reduce.wgsl",
     "gpu_boids/step.wgsl",
+    "gpu_boids/reduce.wgsl",
     "gpu_ants/step.wgsl",
     "gpu_ants/merge.wgsl",
     "gpu_ants/display.wgsl",
+    "gpu_ants/reduce.wgsl",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
