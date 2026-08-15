@@ -142,12 +142,12 @@ mod tests {
     fn octants_run_clockwise_from_east_with_y_pointing_down() {
         for expected in 0..8u8 {
             // +y is down, so increasing angle sweeps east to south to west.
-            let centre = (f32::from(expected) + 0.5) * std::f32::consts::TAU / 8.0;
-            let (vx, vy) = (centre.cos(), centre.sin());
+            let center = (f32::from(expected) + 0.5) * std::f32::consts::TAU / 8.0;
+            let (vx, vy) = (center.cos(), center.sin());
             assert_eq!(
                 heading_octant(vx, vy),
                 expected,
-                "octant {expected} centre ({vx}, {vy})"
+                "octant {expected} center ({vx}, {vy})"
             );
         }
     }

@@ -8,9 +8,9 @@ struct Dims {
 @group(0) @binding(2) var<uniform> dims: Dims;
 
 // Matches `henad_models::sir::PALETTE`.
-const S_COLOUR: vec4<f32> = vec4<f32>(0.0 / 255.0, 122.0 / 255.0, 245.0 / 255.0, 1.0);
-const I_COLOUR: vec4<f32> = vec4<f32>(228.0 / 255.0, 55.0 / 255.0, 72.0 / 255.0, 1.0);
-const R_COLOUR: vec4<f32> = vec4<f32>(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0);
+const S_COLOR: vec4<f32> = vec4<f32>(0.0 / 255.0, 122.0 / 255.0, 245.0 / 255.0, 1.0);
+const I_COLOR: vec4<f32> = vec4<f32>(228.0 / 255.0, 55.0 / 255.0, 72.0 / 255.0, 1.0);
+const R_COLOR: vec4<f32> = vec4<f32>(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0);
 
 @compute
 @workgroup_size(16, 16)
@@ -25,11 +25,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let y = global_id.y * dims.grid.y / dims.tex.y;
 
     let cell = state[y * width + x];
-    var colour = S_COLOUR;
+    var color = S_COLOR;
     if (cell == 1u) {
-        colour = I_COLOUR;
+        color = I_COLOR;
     } else if (cell == 2u) {
-        colour = R_COLOUR;
+        color = R_COLOR;
     }
-    textureStore(output, vec2<i32>(global_id.xy), colour);
+    textureStore(output, vec2<i32>(global_id.xy), color);
 }

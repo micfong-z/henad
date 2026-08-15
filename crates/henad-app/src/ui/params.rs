@@ -148,7 +148,7 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
     let warn = ui.visuals().warn_fg_color;
     let plain = ui.visuals().text_color();
 
-    let (icon, colour, title, detail) = if !shortfalls.is_empty() {
+    let (icon, color, title, detail) = if !shortfalls.is_empty() {
         (
             MDI_ALERT,
             error,
@@ -195,6 +195,6 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
     ui.scope(|ui| {
         ui.set_max_width(width);
         ui.separator();
-        banner(ui, icon, colour, title, &detail);
+        banner(ui, icon, color, title, &detail);
     });
 }

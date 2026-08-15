@@ -104,10 +104,14 @@ impl ScalarFieldSpec for PheromoneField {
     fn decay(v: f32, p: &FieldParams) -> f32 {
         let d = v * p.evaporation;
         // Without the floor a trail never disappears, it just asymptotes.
-        if d < LOW_PHEROMONE { 0.0 } else { d }
+        if d < LOW_PHEROMONE {
+            0.0
+        } else {
+            d
+        }
     }
 
-    fn quantise(site: u8, values: &[f32], out: &mut u8) {
+    fn quantize(site: u8, values: &[f32], out: &mut u8) {
         *out = match site {
             OBSTACLE => 13,
             FOOD => 14,

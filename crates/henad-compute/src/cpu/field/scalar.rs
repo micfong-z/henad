@@ -30,7 +30,7 @@ pub trait ScalarFieldSpec: Send + Sync + 'static {
     fn decay(v: f32, p: &Self::Params) -> f32;
 
     /// One cell's palette index, from the terrain and every field's current value.
-    fn quantise(site: u8, values: &[f32], out: &mut u8);
+    fn quantize(site: u8, values: &[f32], out: &mut u8);
 }
 
 /// Per agent deposit lanes. One cell each, and one value per field.
@@ -183,7 +183,7 @@ impl<S: ScalarFieldSpec> FieldLayer for ScalarField<S> {
                 for (v, field) in values.iter_mut().zip(current.iter()) {
                     *v = field[c];
                 }
-                S::quantise(sites[c], &values, out);
+                S::quantize(sites[c], &values, out);
             }
         });
     }

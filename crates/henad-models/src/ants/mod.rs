@@ -5,7 +5,7 @@ mod step;
 pub use crate::ants::lanes::{AntLanes, NO_STEP};
 
 use henad_compute::cpu::field::scalar::{Deposits, ScalarField};
-use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_compute::cpu::primitives::chunked::{reduce_chunks, STATS_CHUNK};
 use henad_core::authoring::agent_model::{AgentModel, StepCtx};
 use henad_core::authoring::field::Extent;
 use henad_core::grid::Grid2D;
@@ -13,7 +13,7 @@ use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
-use crate::ants::field::{PheromoneField, TO_FOOD, TO_HOME, nest_cell};
+use crate::ants::field::{nest_cell, PheromoneField, TO_FOOD, TO_HOME};
 
 /// Indexed by `has_food` itself, not by a copy of it.
 pub const ANT_PALETTE: [[u8; 4]; 2] = [
@@ -182,7 +182,7 @@ mod tests {
         for (c, &cell) in state.field().display_cells().iter().enumerate() {
             assert!(
                 (cell as usize) < CELL_PALETTE.len(),
-                "cell {c} quantised to {cell}, past the palette"
+                "cell {c} quantized to {cell}, past the palette"
             );
         }
     }

@@ -33,13 +33,13 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, in: VertexInput) -> VertexO
     ) * 2.0 - 1.0;
 
     // World to clip. Y is flipped, model row 0 is the top and so is clip +1.
-    let centre = vec2<f32>(
+    let center = vec2<f32>(
         in.pos_x / u.world.x * 2.0 - 1.0,
         1.0 - in.pos_y / u.world.y * 2.0,
     );
 
     var out: VertexOutput;
-    out.clip_position = vec4<f32>(centre + corner * u.half_size, 0.0, 1.0);
+    out.clip_position = vec4<f32>(center + corner * u.half_size, 0.0, 1.0);
     out.color = in.color;
     out.offset = corner;
     return out;

@@ -152,7 +152,7 @@ impl StatsHistory {
     }
 
     /// Tick at logical index `j`, where 0 is the oldest visible entry.
-    pub fn get_tick(&self, j: usize) -> Option<u64> {
+    pub fn tick(&self, j: usize) -> Option<u64> {
         let filled = self.len();
         if j >= filled {
             return None;
@@ -180,7 +180,7 @@ impl StatsHistory {
             })
             .collect();
 
-        let new_ticks: Vec<u64> = (skip..filled).filter_map(|j| self.get_tick(j)).collect();
+        let new_ticks: Vec<u64> = (skip..filled).filter_map(|j| self.tick(j)).collect();
 
         self.columns = new_columns;
         self.ticks = new_ticks;

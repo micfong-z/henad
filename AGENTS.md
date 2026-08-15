@@ -41,6 +41,19 @@ After all the above, add a final section for human comments, as
 
 ## Writing style
 
+### Spelling
+
+Code (identifiers, string literals, WGSL) uses **American English** spelling
+(`color`, `center`, `optimize`, `quantize`).
+Comments and doc comments may use British English (`colour`, `centre`,
+`optimisation`) — that is fine and should not be "fixed" on sight.
+
+### Naming
+
+Rust naming follows the [Rust API Guidelines — Naming](https://rust-lang.github.io/api-guidelines/naming.html):
+casing (C-CASE), conversion prefixes `as_`/`to_`/`into_` (C-CONV), no
+`get_` on ordinary getters (C-GETTER), and the rest of that page.
+
 ### Comments and doc comments
 
 Short and plain. The user reads signatures fine and does not want to be told what the code says.

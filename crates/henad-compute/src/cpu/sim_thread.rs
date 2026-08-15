@@ -65,7 +65,7 @@ mod native {
     use std::thread::JoinHandle;
     use std::time::Instant;
 
-    use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
+    use super::{build_snapshot, SimCommand, Snapshot, WakeFn};
     use henad_core::model::SimState;
 
     /// The handoff point between the two threads. `fresh` is the newest publish waiting to be
@@ -350,7 +350,7 @@ mod native {
 // =====================================================================
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
+    use super::{build_snapshot, SimCommand, Snapshot, WakeFn};
     use henad_core::model::SimState;
 
     /// Ceiling on catch-up batches per `update()`, so a backgrounded tab handing back a
@@ -553,8 +553,8 @@ mod pacing_timing_tests {
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
     use henad_core::view::StatEntry;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
 
     struct Counter(Arc<AtomicU64>);
 
@@ -835,7 +835,7 @@ mod snapshot_tests {
         let second = build_snapshot(Some(first), &mut small, 0.0, 0.0);
         let points = layers(&second.view).points.as_ref().expect("agent layer was dropped");
         assert_eq!(points.color, vec![0, 1, 0, 1, 0]);
-        assert_eq!(points.color.capacity(), capacity, "the colour lane reallocated");
+        assert_eq!(points.color.capacity(), capacity, "the color lane reallocated");
         assert_eq!(points.pos_x.len(), 5);
     }
 }

@@ -1,4 +1,4 @@
-// Quantises the field into the display texture, mirroring `PheromoneField::quantise`.
+// Quantizes the field into the display texture, mirroring `PheromoneField::quantize`.
 
 struct Params {
     width: u32,
@@ -74,6 +74,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    let colour = unpack4x8unorm(params.palette[index >> 2u][index & 3u]);
-    textureStore(output, vec2<i32>(global_id.xy), colour);
+    let color = unpack4x8unorm(params.palette[index >> 2u][index & 3u]);
+    textureStore(output, vec2<i32>(global_id.xy), color);
 }
