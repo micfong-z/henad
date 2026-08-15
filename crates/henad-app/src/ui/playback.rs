@@ -33,12 +33,17 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     ui.separator();
 
+    let shortfalls = app.selection_shortfalls();
+
     ui.horizontal(|ui| {
-        if ui
-            .button(format!("{MDI_RESTART} Build"))
-            .on_hover_text("Build the selected model from given parameters, replacing any running simulation")
-            .clicked()
-        {
+        // Past the device's limits wgpu panics on this very thread, so refuse rather than try.
+        let build = ui.add_enabled(shortfalls.is_empty(), egui::Button::new(format!("{MDI_RESTART} Build")));
+        let build = if shortfalls.is_empty() {
+            build.on_hover_text("Build the selected model from given parameters, replacing any running simulation")
+        } else {
+            build.on_disabled_hover_text(format!("Too large for this device: {}", shortfalls.join("; ")))
+        };
+        if build.clicked() {
             app.reset_simulation();
         }
         if ui

@@ -78,6 +78,8 @@ struct DisplayParams {
     height: u32,
     n_cells: u32,
     _pad: u32,
+    tex: [u32; 2],
+    _pad2: [u32; 2],
     palette: [[u32; 4]; 4],
 }
 
@@ -316,6 +318,8 @@ const HAS_FOOD_BIT: u32 = 0x100u;
                 height: geom.height,
                 n_cells: geom.n_cells,
                 _pad: 0,
+                tex: [geom.display.0, geom.display.1],
+                _pad2: [0; 2],
                 palette: packed_cell_palette(),
             })
             .to_vec(),

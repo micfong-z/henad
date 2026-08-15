@@ -2,6 +2,7 @@ use henad_compute::cpu::agent_engine::{AgentModelState, agent_model_param_descri
 use henad_compute::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
+use henad_compute::gpu::capacity::Demand;
 use henad_compute::gpu::grid_engine::{GpuGridModelDescriptor, GpuGridState};
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_core::authoring::agent_model::AgentModel;
@@ -35,6 +36,10 @@ pub enum ModelState {
 /// The `Option<u64>` is the RNG seed, which defaults to the model's fixed default when `None`.
 pub type ModelFactory = Box<dyn Fn(&[ParamValue], Option<u64>) -> ModelState + Send + Sync>;
 
+/// Captures the same [`GpuContext`] the factory does, so a caller can ask whether a model would
+/// build without holding a device of its own.
+pub type CapacityFn = Box<dyn Fn(&[ParamValue]) -> Demand + Send + Sync>;
+
 /// An entry in the model registry.
 pub struct ModelEntry {
     pub name: String,
@@ -44,6 +49,17 @@ pub struct ModelEntry {
     pub stat_descriptors: Vec<StatDescriptor>,
     pub topology_hint: TopologyHint,
     pub create: ModelFactory,
+    /// `None` for a CPU model, which allocates on the host and has no device limit to miss.
+    pub capacity: Option<CapacityFn>,
+}
+
+impl ModelEntry {
+    /// Reasons this machine cannot build the model at `params`. Empty when nothing stops it.
+    pub fn shortfalls(&self, params: &[ParamValue], limits: &wgpu::Limits) -> Vec<String> {
+        self.capacity
+            .as_ref()
+            .map_or_else(Vec::new, |capacity| capacity(params).shortfalls(limits))
+    }
 }
 
 /// Create a `ModelEntry` from a `GridModel` implementation.
@@ -58,6 +74,7 @@ fn register_grid_model<M: GridModel>() -> ModelEntry {
         create: Box::new(|params, seed| {
             ModelState::Cpu(Box::new(GridModelState::<M>::from_params_seeded(params, seed)))
         }),
+        capacity: None,
     }
 }
 
@@ -76,6 +93,7 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
         create: Box::new(|params, seed| {
             ModelState::Cpu(Box::new(AgentModelState::<A>::from_params_seeded(params, seed)))
         }),
+        capacity: None,
     }
 }
 
@@ -84,6 +102,7 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
 fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
     let model = GpuGridModelDescriptor::<M>::new(ctx.clone());
     let factory_ctx = ctx.clone();
+    let capacity_ctx = ctx.clone();
     ModelEntry {
         name: model.name().to_owned(),
         id: model.id().to_owned(),
@@ -94,6 +113,9 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
         create: Box::new(move |params, seed| {
             ModelState::Gpu(Box::new(GpuGridState::<M>::new_seeded(&factory_ctx, params, seed)))
         }),
+        capacity: Some(Box::new(move |params| {
+            GpuGridState::<M>::demand(params, &capacity_ctx.device.limits())
+        })),
     }
 }
 
@@ -102,6 +124,7 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
 fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
     let model = GpuAgentModelDescriptor::<M>::new(ctx.clone());
     let factory_ctx = ctx.clone();
+    let capacity_ctx = ctx.clone();
     ModelEntry {
         name: model.name().to_owned(),
         id: model.id().to_owned(),
@@ -112,7 +135,27 @@ fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
         create: Box::new(move |params, seed| {
             ModelState::Gpu(Box::new(GpuAgentState::<M>::new_seeded(&factory_ctx, params, seed)))
         }),
+        capacity: Some(Box::new(move |params| {
+            GpuAgentState::<M>::demand(params, &capacity_ctx.device.limits())
+        })),
     }
+}
+
+/// Storage buffers the widest pass of any GPU model binds.
+///
+/// Needed before a device exists, so before there is a [`GpuContext`] to build a registry with.
+/// The list below must stay in step with [`model_registry`]'s, which
+/// `the_declared_binding_need_matches_the_registry` enforces.
+pub fn gpu_storage_bindings_needed() -> u32 {
+    [
+        GpuGridState::<crate::gpu_game_of_life::GpuGameOfLife>::max_storage_bindings(),
+        GpuGridState::<crate::gpu_sir::GpuSir>::max_storage_bindings(),
+        GpuAgentState::<crate::gpu_boids::GpuBoids>::max_storage_bindings(),
+        GpuAgentState::<crate::gpu_ants::GpuAnts>::max_storage_bindings(),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0)
 }
 
 /// Returns all available models.
@@ -290,7 +333,91 @@ mod tests {
             return;
         }
         for entry in gpu {
-            let _built: ModelState = (entry.create)(&defaults(entry), None);
+            let params = defaults(entry);
+            // The two pin each other: under-report a pass and the build fails, over-report one
+            // and the assert does.
+            let _built: ModelState = (entry.create)(&params, None);
+            assert!(
+                entry.shortfalls(&params, &wgpu::Limits::default()).is_empty(),
+                "{}: builds on a baseline device but its declared demand says it should not: {:?}",
+                entry.id,
+                entry.shortfalls(&params, &wgpu::Limits::default())
+            );
         }
+    }
+
+    /// The app asks every frame, before building, so a missing capacity is a panic on the UI
+    /// thread.
+    #[test]
+    fn every_gpu_entry_reports_its_capacity() {
+        let entries = all_entries();
+        let gpu: Vec<&ModelEntry> = entries.iter().filter(|e| e.id.starts_with("gpu_")).collect();
+        if gpu.is_empty() {
+            log::warn!("skipping every_gpu_entry_reports_its_capacity: no adapter");
+            return;
+        }
+        for entry in gpu {
+            let capacity = entry.capacity.as_ref().expect("a GPU entry declares its capacity");
+            assert!(
+                capacity(&defaults(entry)).bytes() > 0,
+                "{}: a GPU model allocates something",
+                entry.id
+            );
+        }
+        for entry in entries.iter().filter(|e| !e.id.starts_with("gpu_")) {
+            assert!(
+                entry.capacity.is_none(),
+                "{}: a CPU model has no device demand",
+                entry.id
+            );
+        }
+    }
+
+    /// `gpu_storage_bindings_needed` reads a hand-written list of model types. Forget to add a
+    /// model to it and the device comes out too narrow, which shows up as a validation error.
+    #[test]
+    fn the_declared_binding_need_matches_the_registry() {
+        let entries = all_entries();
+        let gpu: Vec<&ModelEntry> = entries.iter().filter(|e| e.id.starts_with("gpu_")).collect();
+        if gpu.is_empty() {
+            log::warn!("skipping the_declared_binding_need_matches_the_registry: no adapter");
+            return;
+        }
+        let widest = gpu
+            .iter()
+            .filter_map(|entry| entry.capacity.as_ref().map(|capacity| capacity(&defaults(entry))))
+            .flat_map(|demand| demand.passes.into_iter().map(|pass| pass.storage))
+            .max()
+            .unwrap_or(0);
+        assert_eq!(
+            gpu_storage_bindings_needed(),
+            widest,
+            "a registered GPU model is missing from gpu_storage_bindings_needed's list"
+        );
+    }
+
+    /// Reported, not built. Otherwise the Build button hands wgpu a bind group it rejects.
+    #[test]
+    fn a_model_too_large_for_the_device_is_reported() {
+        let entries = all_entries();
+        let Some(entry) = entries.iter().find(|e| e.id == "gpu_sir") else {
+            log::warn!("skipping a_model_too_large_for_the_device_is_reported: no adapter");
+            return;
+        };
+        // Baseline limits, so this is issue #9's 6000x6000 case rather than the machine's.
+        let baseline = wgpu::Limits::default();
+        let mut params = defaults(entry);
+        params[0] = ParamValue::U32(6000);
+        params[1] = ParamValue::U32(6000);
+
+        let found = entry.shortfalls(&params, &baseline);
+        assert!(
+            found.iter().any(|s| s.contains("gpu_sir_buffer0")),
+            "the over-budget state buffer must be named: {found:?}"
+        );
+        assert!(
+            entry.shortfalls(&defaults(entry), &baseline).is_empty(),
+            "the default params fit a baseline device"
+        );
     }
 }

@@ -6,6 +6,7 @@ use crate::{icons::material_design_icons::MDI_CUBE_OFF_OUTLINE, state::AppState}
 use eframe::egui_wgpu;
 use egui::{ColorImage, RichText, TextureOptions};
 use egui_wgpu::{CallbackResources, CallbackTrait};
+use henad_compute::display_scale::{display_dims, source_row};
 use henad_compute::gpu::GpuDisplay;
 use henad_compute::snapshot::{CpuLayers, GpuSnapshot, GridSnapshot, PointSnapshot, SnapshotView};
 
@@ -230,25 +231,55 @@ fn has_points(app: &AppState) -> bool {
     )
 }
 
-fn upload_grid(ctx: &egui::Context, app: &mut AppState, grid: &GridSnapshot) {
-    let size = [grid.width as usize, grid.height as usize];
-
+/// One texel per cell.
+fn expand_grid(grid: &GridSnapshot) -> Vec<egui::Color32> {
     #[cfg(not(target_arch = "wasm32"))]
-    let pixels: Vec<egui::Color32> = {
+    {
         use rayon::prelude::*;
         grid.cells
             .par_iter()
             .map(|&cell| palette_color(grid.palette, cell))
             .collect()
-    };
+    }
     #[cfg(target_arch = "wasm32")]
-    let pixels: Vec<egui::Color32> = grid
-        .cells
+    grid.cells
         .iter()
         .map(|&cell| palette_color(grid.palette, cell))
-        .collect();
+        .collect()
+}
 
-    let image = ColorImage::new(size, pixels);
+/// One representative cell per texel, for a grid too large to upload whole.
+fn sample_grid(grid: &GridSnapshot, tex_w: u32, tex_h: u32) -> Vec<egui::Color32> {
+    let width = grid.width as usize;
+    let row = |ty: u32| {
+        let sy = source_row(ty, grid.height, tex_h) as usize;
+        let cells = &grid.cells[sy * width..(sy + 1) * width];
+        (0..tex_w as usize)
+            .map(|tx| palette_color(grid.palette, cells[tx * width / tex_w as usize]))
+            .collect::<Vec<_>>()
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        (0..tex_h).into_par_iter().flat_map_iter(row).collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    (0..tex_h).flat_map(row).collect()
+}
+
+fn upload_grid(ctx: &egui::Context, app: &mut AppState, grid: &GridSnapshot) {
+    // A CPU grid is not exempt from the texture limit, it just reaches it through egui's upload.
+    let device_max = app.render_ctx.device.limits().max_texture_dimension_2d;
+    let (tex_w, tex_h) = display_dims(grid.width, grid.height, device_max);
+
+    let pixels = if (tex_w, tex_h) == (grid.width, grid.height) {
+        expand_grid(grid)
+    } else {
+        sample_grid(grid, tex_w, tex_h)
+    };
+
+    let image = ColorImage::new([tex_w as usize, tex_h as usize], pixels);
 
     match &mut app.grid_texture {
         Some(tex) => tex.set(image, TextureOptions::NEAREST),

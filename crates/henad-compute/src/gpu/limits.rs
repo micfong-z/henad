@@ -1,83 +1,114 @@
 //! Device limits the GPU models need above the WebGPU baseline.
 //!
-//! `wgpu::Limits::default()` is the spec baseline, not what hardware offers. It caps
-//! `max_storage_buffers_per_shader_stage` at 8 where an M4 Pro reports 31, and a device only gets
-//! more if it asks. Every host that creates one routes its descriptor through [`raise`].
+//! Sizes go to the adapter's report; counts go to exactly the models' needs, since wgpu's own
+//! advice is to request no more than that. `raise` takes the count rather than knowing it, since
+//! henad-compute cannot see the models and a host needs the number before it has a device.
 
-/// Storage buffers per compute stage the engine asks for.
+/// Raises `base` to the models' requirements, clamped to the adapter's.
 ///
-/// Fixed rather than `adapter.limits()`, so which models run cannot silently depend on the
-/// machine.
-pub const STORAGE_BUFFERS_PER_STAGE: u32 = 16;
-
-/// Raises `base` to what the engine needs, clamped to what the adapter offers.
-///
-/// `request_device` fails outright if over-asked. A shortfall is logged, since it otherwise only
-/// shows up much later as a bind group layout failing validation.
-#[must_use]
-pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits) -> wgpu::Limits {
-    let available = adapter.limits().max_storage_buffers_per_shader_stage;
-    if available < STORAGE_BUFFERS_PER_STAGE {
+/// `storage_buffers` comes from `henad_models::registry::gpu_storage_bindings_needed()`.
+pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits, storage_buffers: u32) -> wgpu::Limits {
+    let available = adapter.limits();
+    // Otherwise this only surfaces much later, as a bind group layout failing validation.
+    if available.max_storage_buffers_per_shader_stage < storage_buffers {
         log::warn!(
-            "adapter '{}' offers {available} storage buffers per shader stage, below the {STORAGE_BUFFERS_PER_STAGE} Henad asks for; GPU models needing more will fail to build",
-            adapter.get_info().name
+            "adapter '{}' offers {} storage buffers per shader stage, below the {storage_buffers} the models need; the widest ones will fail to build",
+            adapter.get_info().name,
+            available.max_storage_buffers_per_shader_stage
         );
     }
     wgpu::Limits {
         max_storage_buffers_per_shader_stage: base
             .max_storage_buffers_per_shader_stage
-            .max(STORAGE_BUFFERS_PER_STAGE)
-            .min(available),
+            .max(storage_buffers)
+            .min(available.max_storage_buffers_per_shader_stage),
+        max_texture_dimension_2d: base.max_texture_dimension_2d.max(available.max_texture_dimension_2d),
+        max_storage_buffer_binding_size: base
+            .max_storage_buffer_binding_size
+            .max(available.max_storage_buffer_binding_size),
+        max_buffer_size: base.max_buffer_size.max(available.max_buffer_size),
         ..base.clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{STORAGE_BUFFERS_PER_STAGE, raise};
-    use crate::gpu::headless_context;
-    use crate::gpu::primitives::pipeline::storage_entry;
+    use super::raise;
 
-    /// A layout with more than the baseline 8 storage buffers must build.
-    #[test]
-    fn layout_past_the_webgpu_baseline_builds() {
-        let Some(ctx) = headless_context("gpu_limits_test", wgpu::Features::empty()) else {
-            log::warn!("skipping layout_past_the_webgpu_baseline_builds: no adapter");
-            return;
-        };
-
-        let wanted = ctx.device.limits().max_storage_buffers_per_shader_stage;
-        assert!(
-            wanted >= STORAGE_BUFFERS_PER_STAGE,
-            "the test device was created without the raised limit: {wanted}"
-        );
-
-        let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..12).map(|i| storage_entry(i, i % 2 == 0)).collect();
-        let _layout = ctx.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("twelve_storage_buffers"),
-            entries: &entries,
-        });
+    fn adapter() -> Option<wgpu::Adapter> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()
     }
 
-    /// An adapter offering less must still yield a device, not an error.
+    /// Over-asking fails `request_device` outright, so this is the safety property.
     #[test]
-    fn request_is_clamped_to_what_the_adapter_offers() {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
-            log::warn!("skipping request_is_clamped_to_what_the_adapter_offers: no adapter");
+    fn nothing_is_asked_for_past_what_the_adapter_offers() {
+        let Some(adapter) = adapter() else {
+            log::warn!("skipping nothing_is_asked_for_past_what_the_adapter_offers: no adapter");
             return;
         };
-
-        let available = adapter.limits().max_storage_buffers_per_shader_stage;
-        let raised = raise(&adapter, &wgpu::Limits::default());
+        let available = adapter.limits();
+        // Far past any adapter, so this tests the clamp rather than the input.
+        let raised = raise(&adapter, &wgpu::Limits::default(), 4096);
         assert!(
-            raised.max_storage_buffers_per_shader_stage <= available,
+            raised.max_texture_dimension_2d <= available.max_texture_dimension_2d
+                && raised.max_storage_buffer_binding_size <= available.max_storage_buffer_binding_size
+                && raised.max_buffer_size <= available.max_buffer_size
+                && raised.max_storage_buffers_per_shader_stage <= available.max_storage_buffers_per_shader_stage,
             "asked for more than the adapter offers, which would fail request_device"
         );
+    }
+
+    /// The three size limits are the whole point, so a baseline request must move them.
+    #[test]
+    fn size_limits_reach_what_the_adapter_reports() {
+        let Some(adapter) = adapter() else {
+            log::warn!("skipping size_limits_reach_what_the_adapter_reports: no adapter");
+            return;
+        };
+        let available = adapter.limits();
+        let raised = raise(&adapter, &wgpu::Limits::default(), 0);
+        assert_eq!(raised.max_texture_dimension_2d, available.max_texture_dimension_2d);
         assert_eq!(
-            raised.max_texture_dimension_2d,
-            wgpu::Limits::default().max_texture_dimension_2d,
+            raised.max_storage_buffer_binding_size,
+            available.max_storage_buffer_binding_size
+        );
+        assert_eq!(raised.max_buffer_size, available.max_buffer_size);
+    }
+
+    /// A host with no models must get a device no wider than the one models are tested against.
+    #[test]
+    fn needing_nothing_leaves_the_count_at_the_baseline() {
+        let Some(adapter) = adapter() else {
+            log::warn!("skipping needing_nothing_leaves_the_count_at_the_baseline: no adapter");
+            return;
+        };
+        let base = wgpu::Limits::default();
+        let raised = raise(&adapter, &base, 0);
+        assert_eq!(
+            raised.max_storage_buffers_per_shader_stage,
+            base.max_storage_buffers_per_shader_stage
+        );
+    }
+
+    #[test]
+    fn a_need_above_the_baseline_raises_only_the_count() {
+        let Some(adapter) = adapter() else {
+            log::warn!("skipping a_need_above_the_baseline_raises_only_the_count: no adapter");
+            return;
+        };
+        let base = wgpu::Limits::default();
+        let want = base.max_storage_buffers_per_shader_stage + 2;
+        if adapter.limits().max_storage_buffers_per_shader_stage < want {
+            log::warn!("skipping a_need_above_the_baseline_raises_only_the_count: adapter too small");
+            return;
+        }
+        let raised = raise(&adapter, &base, want);
+        assert_eq!(raised.max_storage_buffers_per_shader_stage, want);
+        assert_eq!(
+            raised.max_compute_workgroups_per_dimension, base.max_compute_workgroups_per_dimension,
             "unrelated limits must pass through untouched"
         );
+        assert_eq!(raised.max_bind_groups, base.max_bind_groups);
     }
 }

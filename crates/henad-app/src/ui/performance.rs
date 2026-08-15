@@ -1,7 +1,7 @@
 //! Live throughput and frame-cost readouts.
 
 use crate::state::AppState;
-use crate::ui::fmt_bytes;
+use henad_core::helpers::fmt_bytes;
 
 /// A label with dimmed leading zeros.
 fn padded_num_label(ui: &mut egui::Ui, s: &str) {

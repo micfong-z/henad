@@ -8,6 +8,8 @@
 
 use std::sync::Arc;
 
+use crate::display_scale::display_dims;
+
 /// The render-only half, handed to the UI inside a snapshot. The UI's paint callback holds an
 /// `Arc` of this and does nothing but bind and draw — it never touches simulation state.
 ///
@@ -15,7 +17,8 @@ use std::sync::Arc;
 /// what makes teardown safe: an in-flight paint callback keeps the pipeline and its texture alive
 /// even if the sim thread and its state are dropped mid-frame.
 pub struct GpuDisplay {
-    /// Cell dimensions of the underlying grid — the UI uses this for aspect-ratio fitting.
+    /// Cell dimensions of the underlying grid — the UI uses this for aspect-ratio fitting. The
+    /// texture behind it may be smaller, see [`crate::display_scale`].
     pub width: u32,
     pub height: u32,
     pub render_pipeline: wgpu::RenderPipeline,
@@ -26,21 +29,26 @@ pub struct GpuDisplay {
 pub struct DisplayTarget {
     /// Bind this as a `texture_storage_2d<rgba8unorm, write>` in the model's display compute pass.
     pub view: wgpu::TextureView,
+    /// Texture dimensions, which the model's display pass dispatches over.
+    pub dims: (u32, u32),
     pub display: Arc<GpuDisplay>,
 }
 
 /// Creates the display texture and the pipeline that samples it into `target_format`.
+///
+/// `width` and `height` are the *grid*; the texture is capped by [`display_dims`].
 pub fn build_display_target(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     width: u32,
     height: u32,
 ) -> DisplayTarget {
+    let (tex_w, tex_h) = display_dims(width, height, device.limits().max_texture_dimension_2d);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("henad_gpu_display_texture"),
         size: wgpu::Extent3d {
-            width,
-            height,
+            width: tex_w,
+            height: tex_h,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -132,6 +140,7 @@ pub fn build_display_target(
 
     DisplayTarget {
         view,
+        dims: (tex_w, tex_h),
         display: Arc::new(GpuDisplay {
             width,
             height,

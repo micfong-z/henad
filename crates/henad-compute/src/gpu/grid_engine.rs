@@ -12,6 +12,7 @@ use henad_core::topology::TopologyHint;
 use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
+use crate::gpu::capacity::Demand;
 use crate::gpu::primitives::pipeline::{compute_pipeline, storage_entry, uniform_entry};
 use crate::gpu::primitives::readback::CounterReadback;
 use crate::gpu::sim_thread::GpuSimState;
@@ -85,6 +86,8 @@ impl<M: GpuGridModel> Model for GpuGridModelDescriptor<M> {
 pub struct GpuGridState<M: GpuGridModel> {
     width: u32,
     height: u32,
+    /// Display texture size, capped independently of the grid. See [`crate::display_scale`].
+    tex: (u32, u32),
     tick: u64,
 
     device: wgpu::Device,
@@ -115,9 +118,50 @@ impl<M: GpuGridModel> GpuGridState<M> {
         Self::new_seeded(ctx, params, None)
     }
 
+    /// Resources that would be allocated for this model based on `params`.
+    pub fn demand(params: &[ParamValue], limits: &wgpu::Limits) -> Demand {
+        let (width, height) = M::dims(params);
+        let (width, height) = (width.max(1), height.max(1));
+
+        let mut demand = Demand::default();
+        for (k, len) in M::buffer_lens(width, height).into_iter().enumerate() {
+            demand.push_sides(&format!("{}_buffer{k}", M::ID), len, true);
+        }
+        demand.set_display(width, height, limits);
+        for (label, storage) in Self::declared_passes() {
+            demand.push_pass(label, storage);
+        }
+        demand
+    }
+
+    /// Storage buffers each generated pass binds. Read by both [`Self::demand`] and
+    /// [`Self::max_storage_bindings`], so the device a host asks for and the shortfall the UI
+    /// reports cannot disagree.
+    fn declared_passes() -> Vec<(String, u32)> {
+        vec![
+            (format!("{}_step", M::ID), 2 * M::BUFFER_COUNT as u32),
+            (format!("{}_display", M::ID), 1),
+            (format!("{}_reduce", M::ID), 2),
+        ]
+    }
+
+    /// Independent of params, so a host can ask before it has a device.
+    pub fn max_storage_bindings() -> u32 {
+        Self::declared_passes()
+            .into_iter()
+            .map(|(_, storage)| storage)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Similar to [`Self::new`], with `seed` controlling the RNG used.
     ///
     /// If `None`, the model's fixed default seed is used.
+    ///
+    /// # Panics
+    ///
+    /// If the device cannot hold the model. The backstop, not the diagnostic — a UI asks
+    /// [`Self::demand`] first.
     #[expect(clippy::too_many_lines)]
     pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;
@@ -125,6 +169,14 @@ impl<M: GpuGridModel> GpuGridState<M> {
 
         let (width, height) = M::dims(params);
         let (width, height) = (width.max(1), height.max(1));
+
+        let shortfalls = Self::demand(params, &device.limits()).shortfalls(&device.limits());
+        assert!(
+            shortfalls.is_empty(),
+            "{} does not fit this device at {width}x{height}: {}",
+            M::ID,
+            shortfalls.join("; ")
+        );
 
         // --- Ping-ponged storage buffers, seeded from the model ---
         // Buffer lengths come from the model, not from the cell count: a bit-packed model holds
@@ -182,9 +234,8 @@ impl<M: GpuGridModel> GpuGridState<M> {
             .collect();
 
         // --- Uniforms ---
-        // The step shader gets the model's full param block; display and reduce only ever read a
-        // leading `vec2<u32> dims`, so they get their own small buffer rather than depending on
-        // the model's layout starting with the dimensions.
+        // Display and reduce get their own small buffer rather than depending on the model's
+        // layout starting with the dimensions.
         let step_params = M::step_params_bytes(width, height, params);
         let step_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("{}_step_params_buffer", M::ID)),
@@ -194,18 +245,19 @@ impl<M: GpuGridModel> GpuGridState<M> {
         });
         queue.write_buffer(&step_params_buffer, 0, &step_params);
 
+        let DisplayTarget {
+            view: display_view,
+            dims: tex,
+            display,
+        } = build_display_target(device, ctx.target_format, width, height);
+
         let dims_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("{}_dims_buffer", M::ID)),
-            size: (2 * std::mem::size_of::<u32>()) as u64,
+            size: (4 * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&dims_buffer, 0, bytemuck::cast_slice(&[width, height]));
-
-        let DisplayTarget {
-            view: display_view,
-            display,
-        } = build_display_target(device, ctx.target_format, width, height);
+        queue.write_buffer(&dims_buffer, 0, bytemuck::cast_slice(&[width, height, tex.0, tex.1]));
 
         let readback = CounterReadback::new(device, &format!("{}_counters", M::ID), M::STATS.len());
 
@@ -337,6 +389,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
         Self {
             width,
             height,
+            tex,
             tick: 0,
             device: device.clone(),
             queue: queue.clone(),
@@ -362,11 +415,19 @@ impl<M: GpuGridModel> GpuGridState<M> {
         (x.div_ceil(M::WORKGROUP_SIZE), y.div_ceil(M::WORKGROUP_SIZE))
     }
 
-    /// Workgroups covering one invocation per cell, which is what display and reduce always want.
+    /// Workgroups for reduce, at one invocation per cell.
     fn cell_workgroups(&self) -> (u32, u32) {
         (
             self.width.div_ceil(M::WORKGROUP_SIZE),
             self.height.div_ceil(M::WORKGROUP_SIZE),
+        )
+    }
+
+    /// Same as [`Self::cell_workgroups`] until the grid outgrows the texture cap.
+    fn texel_workgroups(&self) -> (u32, u32) {
+        (
+            self.tex.0.div_ceil(M::WORKGROUP_SIZE),
+            self.tex.1.div_ceil(M::WORKGROUP_SIZE),
         )
     }
 
@@ -415,13 +476,12 @@ impl<M: GpuGridModel> SimState for GpuGridState<M> {
     }
 
     fn heap_bytes(&self) -> usize {
-        // Two ping-ponged sides per buffer, plus the RGBA display texture. The display texture is
-        // one texel per cell regardless of how densely the buffers pack them.
+        // Two ping-ponged sides per buffer, plus the capped RGBA display texture.
         let buffers: usize = M::buffer_lens(self.width, self.height)
             .iter()
             .map(|len| len * std::mem::size_of::<u32>() * 2)
             .sum();
-        let display_texture = (self.width as usize) * (self.height as usize) * 4;
+        let display_texture = (self.tex.0 as usize) * (self.tex.1 as usize) * 4;
         buffers + display_texture
     }
 }
@@ -476,9 +536,8 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
     }
 
     fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        let (wg_x, wg_y) = self.cell_workgroups();
-
         {
+            let (wg_x, wg_y) = self.texel_workgroups();
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("gpu_grid_display_pass"),
                 timestamp_writes: None,
@@ -487,6 +546,8 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
             pass.set_bind_group(0, self.current_display_bind_group(), &[]);
             pass.dispatch_workgroups(wg_x, wg_y, 1);
         }
+
+        let (wg_x, wg_y) = self.cell_workgroups();
 
         // Clear -> accumulate -> copy out. wgpu inserts the barriers between these because they
         // are separate passes/copies within the one encoder.

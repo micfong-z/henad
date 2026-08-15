@@ -2,8 +2,9 @@
 
 use crate::icons::material_design_icons::{MDI_ALERT, MDI_INFORMATION};
 use crate::state::AppState;
-use crate::ui::{banner, fmt_bytes, kv_grid};
+use crate::ui::{banner, kv_grid};
 use henad_compute::runtime_info::{GpuVerdict, RuntimeInfo, classify_adapter};
+use henad_core::helpers::fmt_bytes;
 
 fn device_type_name(device_type: wgpu::DeviceType) -> &'static str {
     match device_type {
@@ -88,12 +89,6 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 ui.end_row();
             }
 
-            // The binding cap, not VRAM, is what bounds a GPU model's grid.
-            ui.label("Max storage binding");
-            ui.label(fmt_bytes(info.max_storage_binding_bytes))
-                .on_hover_text(format!("{} u32 cells per binding", info.max_storage_binding_bytes / 4));
-            ui.end_row();
-
             ui.label("Timestamp query");
             ui.label(if info.timestamp_query {
                 "Supported"
@@ -102,5 +97,65 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
             });
             ui.end_row();
         });
+
+        ui.add_space(8.0);
+        ui.strong("Device limits");
+        ui.add_space(4.0);
+        limits_grid(ui, info);
+    });
+}
+
+fn limits_grid(ui: &mut egui::Ui, info: &RuntimeInfo) {
+    let (granted, available) = (&info.granted, &info.available);
+
+    kv_grid(ui, "system_limits_grid").show(ui, |ui| {
+        let mut row = |label: &str, granted: String, available: String| {
+            ui.label(label);
+            ui.horizontal(|ui| {
+                ui.style_mut().spacing.item_spacing.x = 0.0;
+                let differs = granted != available;
+                ui.label(granted);
+                if differs {
+                    ui.weak(format!(" of {available}"));
+                }
+            });
+            ui.end_row();
+        };
+
+        row(
+            "Max storage binding",
+            fmt_bytes(granted.max_storage_buffer_binding_size),
+            fmt_bytes(available.max_storage_buffer_binding_size),
+        );
+        row(
+            "Max buffer size",
+            fmt_bytes(granted.max_buffer_size),
+            fmt_bytes(available.max_buffer_size),
+        );
+        row(
+            "Max 2D texture",
+            granted.max_texture_dimension_2d.to_string(),
+            available.max_texture_dimension_2d.to_string(),
+        );
+        row(
+            "Storage buffers / stage",
+            granted.max_storage_buffers_per_shader_stage.to_string(),
+            available.max_storage_buffers_per_shader_stage.to_string(),
+        );
+        row(
+            "Workgroups / dimension",
+            granted.max_compute_workgroups_per_dimension.to_string(),
+            available.max_compute_workgroups_per_dimension.to_string(),
+        );
+        row(
+            "Invocations / workgroup",
+            granted.max_compute_invocations_per_workgroup.to_string(),
+            available.max_compute_invocations_per_workgroup.to_string(),
+        );
+        row(
+            "Device texture cap",
+            info.display_cap().to_string(),
+            info.display_cap().to_string(),
+        );
     });
 }

@@ -30,8 +30,10 @@ impl HostInfo {
 pub struct RuntimeInfo {
     pub host: HostInfo,
     pub adapter: wgpu::AdapterInfo,
-    /// Ceiling on one storage binding — bounds how many cells a GPU model can hold.
-    pub max_storage_binding_bytes: u64,
+    /// Limits the device was created with, after `gpu::limits::raise`.
+    pub granted: wgpu::Limits,
+    /// Limits the adapter would have allowed, so a gap is headroom left unclaimed.
+    pub available: wgpu::Limits,
     /// Whether the device granted `TIMESTAMP_QUERY`.
     pub timestamp_query: bool,
 }
@@ -41,9 +43,15 @@ impl RuntimeInfo {
         Self {
             host: HostInfo::collect(),
             adapter: adapter.get_info(),
-            max_storage_binding_bytes: device.limits().max_storage_buffer_binding_size,
+            granted: device.limits(),
+            available: adapter.limits(),
             timestamp_query: device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
         }
+    }
+
+    /// Largest display texture asked for here, after Henad's own cap.
+    pub fn display_cap(&self) -> u32 {
+        crate::display_scale::MAX_DISPLAY_DIM.min(self.granted.max_texture_dimension_2d)
     }
 }
 

@@ -36,20 +36,30 @@
 //! e.g. 32 cells per `u32` with rows padded to whole words, so that a single invocation owns a
 //! whole word and no two invocations ever write the same one.
 //!
-//! Display and reduce always dispatch one invocation per *cell* regardless, since they produce one
-//! texel and count one cell respectively. A packed model's display/reduce shaders therefore read a
-//! word and extract their own bit.
+//! Reduce always dispatches one invocation per *cell*, so a packed model's reduce shader reads a
+//! word and extracts its own bit.
+//!
+//! # Display is a sampled view, not a mirror
+//!
+//! The display texture is capped well under the grid (`henad_compute::display_scale`). Display
+//! therefore dispatches one invocation per *texel*, reading the cell at `texel * grid / tex`. The
+//! two pairs of dimensions are equal until the grid outgrows the cap.
 //!
 //! ```wgsl
+//! struct Dims {
+//!     grid: vec2<u32>,
+//!     tex: vec2<u32>,
+//! }
+//!
 //! // display.wgsl
 //! @group(0) @binding(0) var<storage, read> state: array<u32>;
 //! @group(0) @binding(1) var out_tex: texture_storage_2d<rgba8unorm, write>;
-//! @group(0) @binding(2) var<uniform> dims: vec2<u32>;
+//! @group(0) @binding(2) var<uniform> dims: Dims;
 //!
 //! // reduce.wgsl
 //! @group(0) @binding(0) var<storage, read> state: array<u32>;
 //! @group(0) @binding(1) var<storage, read_write> totals: array<atomic<u32>, STAT_COUNT>;
-//! @group(0) @binding(2) var<uniform> dims: vec2<u32>;
+//! @group(0) @binding(2) var<uniform> dims: Dims;
 //! ```
 //!
 //! # Unchecked contracts
@@ -113,8 +123,8 @@ pub trait GpuGridModel: Send + Sync + 'static {
 
     /// Dispatch domain of the step pass, in invocations.
     ///
-    /// Defaults to one invocation per cell. Display and reduce always dispatch `(width, height)`
-    /// and are unaffected by this.
+    /// Defaults to one invocation per cell. Reduce always dispatches `(width, height)` and display
+    /// one per texel, so neither is affected by this.
     fn step_dims(width: u32, height: u32) -> (u32, u32) {
         (width, height)
     }

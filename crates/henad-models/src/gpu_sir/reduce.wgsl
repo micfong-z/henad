@@ -1,8 +1,13 @@
 // Counts S/I/R cells on the GPU.
 
+struct Dims {
+    grid: vec2<u32>,
+    tex: vec2<u32>,
+}
+
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var<storage, read_write> totals: array<atomic<u32>, 3>;
-@group(0) @binding(2) var<uniform> dims: vec2<u32>;
+@group(0) @binding(2) var<uniform> dims: Dims;
 
 var<workgroup> partial: array<atomic<u32>, 3>;
 
@@ -19,8 +24,8 @@ fn main(
     }
     workgroupBarrier();
 
-    let width = dims.x;
-    let height = dims.y;
+    let width = dims.grid.x;
+    let height = dims.grid.y;
     if (global_id.x < width && global_id.y < height) {
         let cell = state[global_id.y * width + global_id.x];
         atomicAdd(&partial[cell], 1u);

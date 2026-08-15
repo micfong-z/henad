@@ -65,6 +65,7 @@ pub struct BufferSpec {
 }
 
 /// Where one bind group entry comes from. Position in a pass's slice is the binding index.
+#[derive(Clone, Copy)]
 pub enum Binding {
     Read(usize),
     /// The buffer's next side, or the buffer itself when it is not double buffered.
@@ -76,6 +77,13 @@ pub enum Binding {
     /// The reduction's leaf output. Only a reduce pass has one.
     ReducePartials,
     Uniform,
+}
+
+impl Binding {
+    /// A uniform and a storage texture each count against their own limit, not this one.
+    pub fn is_storage_buffer(self) -> bool {
+        !matches!(self, Self::Uniform | Self::DisplayTexture)
+    }
 }
 
 /// A pass's invocation domain.
@@ -109,6 +117,8 @@ pub struct PassSpec {
 }
 
 /// The pass that turns state into the display texture, for a model that draws a grid layer.
+///
+/// Dispatched over [`Geometry::display`], one invocation per texel, not per cell.
 pub struct DisplaySpec {
     pub shader: &'static str,
     /// [`Binding::DisplayTexture`] is where the texture goes.
@@ -133,6 +143,9 @@ pub struct Geometry {
     pub width: u32,
     pub height: u32,
     pub n_cells: u32,
+    /// Display texture size, capped under the cell grid on a large world. A display pass
+    /// dispatches over this and reads the cell at `texel * grid / tex`.
+    pub display: (u32, u32),
     /// Set when the model declares [`GpuAgentModel::INDEX`].
     pub index: Option<HashGrid>,
 }

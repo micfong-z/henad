@@ -5,6 +5,9 @@ struct Params {
     height: u32,
     n_cells: u32,
     _pad: u32,
+    // Under the cell grid on a large world.
+    tex: vec2<u32>,
+    _pad2: vec2<u32>,
     // `ants::field::CELL_PALETTE`, packed so the colours cannot drift from the CPU model's.
     palette: array<vec4<u32>, 4>,
 }
@@ -37,11 +40,15 @@ fn ramp_step(v: f32) -> u32 {
 @compute
 @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if (global_id.x >= params.width || global_id.y >= params.height) {
+    if (global_id.x >= params.tex.x || global_id.y >= params.tex.y) {
         return;
     }
 
-    let c = global_id.y * params.width + global_id.x;
+    // One invocation per texel, which is one cell until the world outgrows the texture cap.
+    let x = global_id.x * params.width / params.tex.x;
+    let y = global_id.y * params.height / params.tex.y;
+
+    let c = y * params.width + x;
     let site = sites[c];
 
     var index = 0u;
