@@ -106,7 +106,7 @@ impl GpuSpatialHash {
         let count_pipeline = compute_pipeline(
             device,
             &format!("{label}_hash_count"),
-            include_str!("hash_count.wgsl"),
+            crate::shader_bindings::primitives::hash_count::SHADER_STRING,
             &count_layout,
         );
 
@@ -144,7 +144,7 @@ impl GpuSpatialHash {
         let scatter_pipeline = compute_pipeline(
             device,
             &format!("{label}_hash_scatter"),
-            include_str!("hash_scatter.wgsl"),
+            crate::shader_bindings::primitives::hash_scatter::SHADER_STRING,
             &scatter_layout,
         );
 

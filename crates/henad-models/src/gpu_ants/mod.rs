@@ -153,7 +153,7 @@ impl GpuAgentModel for GpuAnts {
     const STEP_PASSES: &'static [PassSpec] = &[
         PassSpec {
             label: "step",
-            shader: include_str!("step.wgsl"),
+            shader: crate::shader_bindings::gpu_ants::step::SHADER_STRING,
             bindings: &[
                 Binding::Write(POS),
                 Binding::Write(STATE),
@@ -169,14 +169,14 @@ impl GpuAgentModel for GpuAnts {
         },
         PassSpec {
             label: "merge",
-            shader: include_str!("merge.wgsl"),
+            shader: crate::shader_bindings::gpu_ants::merge::SHADER_STRING,
             bindings: &[Binding::Write(FIELD), Binding::Write(ACCUM), Binding::Uniform],
             domain: Domain::Cells(2),
         },
     ];
 
     const DISPLAY: Option<DisplaySpec> = Some(DisplaySpec {
-        shader: include_str!("display.wgsl"),
+        shader: crate::shader_bindings::gpu_ants::display::SHADER_STRING,
         bindings: &[
             Binding::Read(FIELD),
             Binding::Read(SITES),

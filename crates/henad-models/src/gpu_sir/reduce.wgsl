@@ -1,9 +1,6 @@
 // Counts S/I/R cells on the GPU.
 
-struct Dims {
-    grid: vec2<u32>,
-    tex: vec2<u32>,
-}
+#import shared::dims::Dims
 
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var<storage, read_write> totals: array<atomic<u32>, 3>;

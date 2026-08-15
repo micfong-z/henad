@@ -607,8 +607,7 @@ impl PassBuilder<'_> {
             b: self.ping_pong.then(|| make_bind(false, "b")),
         };
 
-        let source = format!("{}\n{shader}", wgsl::PRELUDE);
-        let pipeline = compute_pipeline(self.device, &label, &source, &layout);
+        let pipeline = compute_pipeline(self.device, &label, shader, &layout);
         EncodedPass {
             label,
             pipeline,

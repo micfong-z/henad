@@ -4,6 +4,8 @@
 // `SpatialHash::query_radius` does. That query's `<= r^2` filter is folded away here, since the
 // kernel's own `< visual_sq` and `< protected_sq` tests are strictly narrower.
 
+#import shared::prelude::linear_index
+
 struct Params {
     num_agents: u32,
     groups_x: u32,

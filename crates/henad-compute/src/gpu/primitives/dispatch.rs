@@ -3,8 +3,9 @@
 //! Past 65535 workgroups on one axis a dispatch has to be a rectangle, so kernels take `groups_x`
 //! and recover their flat index as `(wid.y * groups_x + wid.x) * WORKGROUP + lid.x`.
 
-/// Workgroup width shared by every linear kernel.
-pub const WORKGROUP: u32 = 256;
+/// Workgroup width shared by every linear kernel, taken from the WGSL that declares it so the two
+/// cannot drift.
+pub const WORKGROUP: u32 = crate::shader_bindings::shared::prelude::WORKGROUP;
 
 /// Hardcoded rather than read from the adapter, so the fold cannot vary by machine.
 const MAX_GROUPS_PER_DIM: u32 = 65_535;

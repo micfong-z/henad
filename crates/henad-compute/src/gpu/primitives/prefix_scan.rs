@@ -72,13 +72,13 @@ fn build_pipelines(
     let scan_pipeline = compute_pipeline(
         device,
         &format!("{label}_scan"),
-        include_str!("scan.wgsl"),
+        crate::shader_bindings::primitives::scan::SHADER_STRING,
         &scan_layout,
     );
     let add_pipeline = compute_pipeline(
         device,
         &format!("{label}_scan_add"),
-        include_str!("scan_add.wgsl"),
+        crate::shader_bindings::primitives::scan_add::SHADER_STRING,
         &add_layout,
     );
     (scan_layout, add_layout, scan_pipeline, add_pipeline)

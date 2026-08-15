@@ -106,7 +106,7 @@ impl GpuAgentModel for GpuBoids {
 
     const STEP_PASSES: &'static [PassSpec] = &[PassSpec {
         label: "step",
-        shader: include_str!("step.wgsl"),
+        shader: crate::shader_bindings::gpu_boids::step::SHADER_STRING,
         bindings: &[
             Binding::Read(POS),
             Binding::Read(VEL),

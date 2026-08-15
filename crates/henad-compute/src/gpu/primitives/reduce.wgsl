@@ -3,6 +3,8 @@
 // Group-major (`input[group * lanes + lane]`), so a model's leaf shader writes one contiguous
 // group per workgroup and needs to know nothing about the tree above it.
 
+#import shared::prelude::WORKGROUP
+
 struct ReduceParams {
     n: u32,
     lanes: u32,
@@ -13,8 +15,6 @@ struct ReduceParams {
 @group(0) @binding(0) var<storage, read> input: array<f32>;
 @group(0) @binding(1) var<storage, read_write> output: array<f32>;
 @group(0) @binding(2) var<uniform> params: ReduceParams;
-
-const WORKGROUP: u32 = 256u;
 
 var<workgroup> scratch: array<f32, 256>;
 

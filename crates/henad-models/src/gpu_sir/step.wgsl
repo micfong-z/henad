@@ -1,3 +1,5 @@
+
+#import shared::rng::pcg_hash
 struct Params {
     width: u32,
     height: u32,
@@ -21,12 +23,6 @@ const R: u32 = 2u;
 // submit once: any uniform written between passes in the same encoder would only become visible
 // after the whole encoder submits, so every pass would see the same tick. Advancing the state
 // in-buffer sidesteps that entirely.
-fn pcg_hash(input: u32) -> u32 {
-    var state = input * 747796405u + 2891336453u;
-    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
-}
-
 fn rand01(h: u32) -> f32 {
     return f32(h) / 4294967295.0;
 }

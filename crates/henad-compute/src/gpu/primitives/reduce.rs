@@ -68,7 +68,12 @@ impl GpuLaneReduce {
             label: Some(&format!("{label}_reduce_layout")),
             entries: &[storage_entry(0, true), storage_entry(1, false), uniform_entry(2)],
         });
-        let pipeline = compute_pipeline(device, &format!("{label}_reduce"), include_str!("reduce.wgsl"), &layout);
+        let pipeline = compute_pipeline(
+            device,
+            &format!("{label}_reduce"),
+            crate::shader_bindings::primitives::reduce::SHADER_STRING,
+            &layout,
+        );
 
         let input_at = |i: usize| if i == 0 { &partials } else { &intermediates[i - 1] };
         let levels = sizes

@@ -83,9 +83,9 @@ impl GpuGridModel for GpuGameOfLife {
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
     const STATS: &'static [StatDescriptor] = &[StatDescriptor::new("Alive", PALETTE[1])];
 
-    const STEP_SHADER: &'static str = include_str!("step.wgsl");
-    const DISPLAY_SHADER: &'static str = include_str!("display.wgsl");
-    const REDUCE_SHADER: &'static str = include_str!("reduce.wgsl");
+    const STEP_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::step::SHADER_STRING;
+    const DISPLAY_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::display::SHADER_STRING;
+    const REDUCE_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::reduce::SHADER_STRING;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
         vec![

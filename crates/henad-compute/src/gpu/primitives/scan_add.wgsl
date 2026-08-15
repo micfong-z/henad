@@ -1,5 +1,7 @@
 // Add-back half of the scan. Lifts each block by the scanned total of every block before it.
 
+#import shared::prelude::WORKGROUP
+
 struct ScanParams {
     n: u32,
     groups_x: u32,
@@ -10,8 +12,6 @@ struct ScanParams {
 @group(0) @binding(0) var<storage, read> offsets: array<u32>;
 @group(0) @binding(1) var<storage, read_write> data: array<u32>;
 @group(0) @binding(2) var<uniform> params: ScanParams;
-
-const WORKGROUP: u32 = 256u;
 
 @compute
 @workgroup_size(256)

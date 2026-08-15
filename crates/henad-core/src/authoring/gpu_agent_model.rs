@@ -27,15 +27,16 @@
 //! two sides of a `double_buffered` buffer and to the same buffer otherwise, so a model that reads
 //! and writes in place declares `Write` alone.
 //!
-//! # Shader preludes
+//! # Shader imports
 //!
-//! Every pass shader is prepended with a shared prelude, so it may use `WORKGROUP` and
-//! `linear_index(lid, wid, groups_x)` without declaring them. The prelude is a prefix, never
-//! spliced in, so a compile error's line number is off by a constant.
+//! A pass shader reaches shared WGSL with `#import shared::prelude::linear_index` and the like,
+//! resolved at build time by `wgsl_bindgen`. What the engine compiles is therefore the composed
+//! module, re-emitted by naga, not the file as written. Set `HENAD_DUMP_WGSL` to a directory to
+//! read back what was actually compiled, since a WGSL error names that text rather than the source.
 //!
 //! The reduce leaf is generated entirely, from [`GpuAgentModel::REDUCE_HEADER`] and
 //! [`GpuAgentModel::REDUCE_VALUE`], since the workgroup tree around it is the same in every model.
-//! Set `HENAD_DUMP_WGSL` to a directory to read back what was actually compiled.
+//! Being assembled at runtime, it is the one shader that cannot import.
 //!
 //! # Unchecked contracts
 //!

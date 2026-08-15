@@ -52,6 +52,36 @@ struct StepParams {
     recovery_rate: f32,
 }
 
+/// This hand-written struct against the one generated from `step.wgsl`, field by field.
+const _: () = {
+    use crate::shader_bindings::gpu_sir::step::Params;
+    use std::mem::offset_of;
+    assert!(
+        size_of::<StepParams>() == size_of::<Params>(),
+        "StepParams size drifted from step.wgsl"
+    );
+    assert!(
+        align_of::<StepParams>() == align_of::<Params>(),
+        "StepParams alignment drifted from step.wgsl"
+    );
+    assert!(
+        offset_of!(StepParams, width) == offset_of!(Params, width),
+        "width moved"
+    );
+    assert!(
+        offset_of!(StepParams, height) == offset_of!(Params, height),
+        "height moved"
+    );
+    assert!(
+        offset_of!(StepParams, infection_rate) == offset_of!(Params, infection_rate),
+        "infection_rate moved"
+    );
+    assert!(
+        offset_of!(StepParams, recovery_rate) == offset_of!(Params, recovery_rate),
+        "recovery_rate moved"
+    );
+};
+
 /// CPU-seeded initial S/I state, identical to `SirGridModel::init` down to the PRNG, the
 /// traversal order and the threshold, so GPU and CPU start from a bit-identical grid.
 pub fn seed_cells(width: u32, height: u32, initial_infected_pct: f32, mut rng: u64) -> Vec<u32> {
@@ -95,9 +125,9 @@ impl GpuGridModel for GpuSir {
         StatDescriptor::new("Recovered", PALETTE[2]),
     ];
 
-    const STEP_SHADER: &'static str = include_str!("step.wgsl");
-    const DISPLAY_SHADER: &'static str = include_str!("display.wgsl");
-    const REDUCE_SHADER: &'static str = include_str!("reduce.wgsl");
+    const STEP_SHADER: &'static str = crate::shader_bindings::gpu_sir::step::SHADER_STRING;
+    const DISPLAY_SHADER: &'static str = crate::shader_bindings::gpu_sir::display::SHADER_STRING;
+    const REDUCE_SHADER: &'static str = crate::shader_bindings::gpu_sir::reduce::SHADER_STRING;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
         vec![

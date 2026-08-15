@@ -3,6 +3,8 @@
 // The cursor starts as a copy of the scanned offsets, so a cell's agents land contiguously. Which
 // slot within the cell is whatever order the atomics resolve in.
 
+#import shared::prelude::WORKGROUP
+
 struct HashParams {
     grid_w: u32,
     grid_h: u32,
@@ -18,8 +20,6 @@ struct HashParams {
 @group(0) @binding(1) var<storage, read_write> cursor: array<atomic<u32>>;
 @group(0) @binding(2) var<storage, read_write> sorted: array<u32>;
 @group(0) @binding(3) var<uniform> params: HashParams;
-
-const WORKGROUP: u32 = 256u;
 
 @compute
 @workgroup_size(256)
