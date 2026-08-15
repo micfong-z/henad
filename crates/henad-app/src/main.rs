@@ -20,8 +20,11 @@ fn main() -> eframe::Result {
                     if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
                         descriptor.required_features |= wgpu::Features::TIMESTAMP_QUERY;
                     }
-                    descriptor.required_limits =
-                        henad_compute::gpu::limits::raise(adapter, &descriptor.required_limits);
+                    descriptor.required_limits = henad_compute::gpu::limits::raise(
+                        adapter,
+                        &descriptor.required_limits,
+                        henad_models::registry::gpu_storage_bindings_needed(),
+                    );
                     descriptor
                 }),
                 ..egui_wgpu::WgpuSetupCreateNew::without_display_handle()

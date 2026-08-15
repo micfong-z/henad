@@ -6,9 +6,14 @@
 // per 256 cells instead of 1 per cell, which is the difference between a negligible pass and a
 // contended one at the grid sizes this engine targets.
 
+struct Dims {
+    grid: vec2<u32>,
+    tex: vec2<u32>,
+}
+
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var<storage, read_write> total: atomic<u32>;
-@group(0) @binding(2) var<uniform> dims: vec2<u32>;
+@group(0) @binding(2) var<uniform> dims: Dims;
 
 var<workgroup> partial: atomic<u32>;
 
@@ -25,11 +30,11 @@ fn main(
 
     // Guarded with an `if` rather than an early `return`: the barriers below must be reached by
     // every invocation in the workgroup, and a partial grid tile would otherwise diverge.
-    let width = dims.x;
-    let height = dims.y;
+    let width = dims.grid.x;
+    let height = dims.grid.y;
     if (global_id.x < width && global_id.y < height) {
-        // One invocation per cell, as for display: read the containing word, extract this cell's
-        // bit. Deliberately not a per-word countOneBits — that would need this pass to dispatch
+        // One invocation per cell: read the containing word, extract this cell's bit.
+        // Deliberately not a per-word countOneBits — that would need this pass to dispatch
         // over words, and the padding bits in a row's last word would then have to be masked off.
         // This runs at the display cadence, so the simpler form is worth more than the speed.
         let words_per_row = (width + 31u) / 32u;

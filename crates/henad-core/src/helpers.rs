@@ -1,6 +1,18 @@
 use crate::params::{ParamApply, ParamDescriptor, ParamKind, ParamValue};
 use crate::view::{StatEntry, StatValue};
 
+pub fn fmt_bytes(bytes: u64) -> String {
+    if bytes >= 1 << 30 {
+        format!("{:.1} GB", bytes as f64 / (1u64 << 30) as f64)
+    } else if bytes >= 1 << 20 {
+        format!("{:.1} MB", bytes as f64 / (1u64 << 20) as f64)
+    } else if bytes >= 1 << 10 {
+        format!("{:.1} KB", bytes as f64 / (1u64 << 10) as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 /// Fast xorshift64 PRNG. The state must never be 0.
 #[inline]
 pub fn xorshift64(mut state: u64) -> u64 {

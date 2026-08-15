@@ -18,12 +18,15 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
         return;
     }
 
+    // Before the sliders draw: a long slider label widens the region behind it, and the footer
+    // would then wrap against that width and be clipped.
+    let panel_width = ui.available_width();
+
     let pending: Vec<bool> = descriptors
         .iter()
         .enumerate()
         .map(|(i, desc)| is_pending_reload(app, i, desc))
         .collect();
-    notice(ui, app, &pending);
 
     let sim_matches = app.selection_is_loaded();
     let mut param_changed = Vec::new();
@@ -103,6 +106,8 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
             });
         }
     }
+
+    notice(ui, app, &descriptors, panel_width);
 }
 
 /// True when `index` has been edited to a value the running sim will not pick up on its own.
@@ -130,47 +135,66 @@ fn with_hint(response: egui::Response, hint: Option<&str>) -> egui::Response {
     }
 }
 
-fn notice(ui: &mut egui::Ui, app: &AppState, pending: &[bool]) {
-    let pending_count = pending.iter().filter(|p| **p).count();
+/// Information on the parameter state, if any, that the user should be aware of.
+fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], width: f32) {
+    let pending_count = descriptors
+        .iter()
+        .enumerate()
+        .filter(|(i, desc)| is_pending_reload(app, *i, desc))
+        .count();
+    let shortfalls = app.selection_shortfalls();
 
-    if app.sim_thread.is_none() {
-        banner(
-            ui,
+    let error = ui.visuals().error_fg_color;
+    let warn = ui.visuals().warn_fg_color;
+    let plain = ui.visuals().text_color();
+
+    let (icon, colour, title, detail) = if !shortfalls.is_empty() {
+        (
+            MDI_ALERT,
+            error,
+            "Too large for this device",
+            format!("{}. Reduce the size parameters to build.", shortfalls.join(". ")),
+        )
+    } else if app.sim_thread.is_none() {
+        (
             MDI_INFORMATION,
-            ui.visuals().text_color(),
+            plain,
             "No simulation loaded",
-            &format!("Parameters will be applied after {MDI_RESTART}\u{a0}Build."),
-        );
+            format!("Parameters will be applied after {MDI_RESTART}\u{a0}Build."),
+        )
     } else if !app.selection_is_loaded() {
         let running = app
             .loaded_model
             .and_then(|i| app.registry.get(i))
             .map_or("Another model", |entry| entry.name.as_str());
-        banner(
-            ui,
+        (
             MDI_ALERT,
-            ui.visuals().warn_fg_color,
+            warn,
             "Selected model not loaded",
-            &format!(
-                "The following parameters do not apply to {running}. Press {MDI_RESTART}\u{a0}Build to switch to selected model."
+            format!(
+                "The parameters above do not apply to {running}. Press {MDI_RESTART}\u{a0}Build to switch to the selected model."
             ),
-        );
+        )
     } else if pending_count > 0 {
         let (plural, verb) = if pending_count == 1 {
             ("", "takes")
         } else {
             ("s", "take")
         };
-        banner(
-            ui,
+        (
             MDI_ALERT,
-            ui.visuals().warn_fg_color,
+            warn,
             "Reload needed",
-            &format!("{pending_count} changed parameter{plural} {verb} effect after {MDI_RESTART}\u{a0}Build."),
-        );
+            format!("{pending_count} changed parameter{plural} {verb} effect after {MDI_RESTART}\u{a0}Build."),
+        )
     } else {
         return;
-    }
+    };
 
-    ui.add_space(4.0);
+    ui.add_space(8.0);
+    ui.scope(|ui| {
+        ui.set_max_width(width);
+        ui.separator();
+        banner(ui, icon, colour, title, &detail);
+    });
 }

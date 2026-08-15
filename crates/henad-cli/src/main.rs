@@ -166,6 +166,14 @@ fn main() -> Result<()> {
     let overrides = parse_overrides(&args.set)?;
     let params = resolve_params(&entry.param_descriptors, &overrides)?;
 
+    // Before anything calls the factory, since wgpu panics rather than returning an error.
+    if let Some(ctx) = gpu_ctx.as_ref() {
+        let shortfalls = entry.shortfalls(&params, &ctx.device.limits());
+        if !shortfalls.is_empty() {
+            bail!("'{}' does not fit this device: {}", entry.id, shortfalls.join("; "));
+        }
+    }
+
     if let Some(path) = &args.export_stats {
         return export_stats(entry, &params, &args, path, gpu_ctx.as_ref());
     }
@@ -206,11 +214,19 @@ fn print_runtime_info(runtime: Option<&RuntimeInfo>) {
             if !adapter.driver_info.is_empty() {
                 println!("    driver:          {}", adapter.driver_info);
             }
+            let limits = &runtime.granted;
             println!(
                 "    max storage binding: {} bytes ({} u32 cells)",
-                runtime.max_storage_binding_bytes,
-                runtime.max_storage_binding_bytes / 4
+                limits.max_storage_buffer_binding_size,
+                limits.max_storage_buffer_binding_size / 4
             );
+            println!("    max buffer size:     {} bytes", limits.max_buffer_size);
+            println!("    max 2d texture:      {}", limits.max_texture_dimension_2d);
+            println!(
+                "    storage buffers:     {} per shader stage",
+                limits.max_storage_buffers_per_shader_stage
+            );
+            println!("    display texture cap: {0}x{0}", runtime.display_cap());
         }
     }
 }
@@ -495,7 +511,11 @@ fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("henad-cli"),
         required_features: wgpu::Features::empty(),
-        required_limits: henad_compute::gpu::limits::raise(&adapter, &wgpu::Limits::default()),
+        required_limits: henad_compute::gpu::limits::raise(
+            &adapter,
+            &wgpu::Limits::default(),
+            henad_models::registry::gpu_storage_bindings_needed(),
+        ),
         memory_hints: wgpu::MemoryHints::Performance,
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         trace: wgpu::Trace::Off,

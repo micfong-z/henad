@@ -110,8 +110,8 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
 - **henad-compute**: the engine machinery that turns an authoring impl into something runnable.
   `cpu/` and `gpu/` are **siblings**, not a base and a specialisation, and mirror each other:
   each has its own `sim_thread.rs` (runner), its `*_engine.rs` (authoring trait → runnable state)
-  and `primitives/` (shared building blocks). `snapshot.rs` and `runtime_info.rs` sit above both,
-  since either backend publishes through them.
+  and `primitives/` (shared building blocks). `snapshot.rs`, `runtime_info.rs` and
+  `display_scale.rs` sit above both, since either backend publishes through them.
   - `cpu/grid_engine.rs` (`GridModelState`) and `cpu/agent_engine.rs` (`AgentModelState`) each
     implement the whole `SimState` for their trait. `cpu/field/ca.rs` (`CaField`, a `GridModel` as
     a field layer) and `cpu/field/scalar.rs` (`ScalarField`, scatter-plus-decay `f32` layers) are
@@ -127,7 +127,8 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
     place). `gpu/primitives/` holds the GPU counterparts of henad-core's data structures —
     `spatial_hash.rs`, `prefix_scan.rs`, `reduce.rs`, `readback.rs` — plus `dispatch.rs`,
     `pipeline.rs` and `wgsl.rs` (the shader prelude every pass gets, and the generated reduce leaf).
-    `gpu/limits.rs` is what raises the device past the WebGPU baseline.
+    `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`
+    is what asks whether a model fits the device before anything is allocated.
     A shared file name always means _counterpart_, never coincidence: `cpu/sim_thread.rs` and
     `gpu/sim_thread.rs`, `cpu/agent_engine.rs` and `gpu/agent_engine.rs`, `ants/step.rs` and
     `boids/step.rs`, `henad-core/src/spatial_hash.rs` and its
@@ -250,14 +251,33 @@ is about not undoing them.
   steps per submission, as `GpuAgentState::run_batched` and the real runner do. This first showed
   up as a flaky test.
 - **`max_storage_buffers_per_shader_stage` is 8** in `wgpu::Limits::default()` and in the WebGPU
-  baseline; `limits.rs::raise` asks for more, clamped to the adapter. Every current model fits 8,
-  and `every_gpu_model_builds_on_a_baseline_device` asserts it on a `Limits::default()` device.
-  Note wgpu on Metal shares one argument table across storage + uniform + vertex, so a check
-  counting only storage buffers can pass locally and fail there.
+  baseline. `limits.rs::raise` asks for exactly what the models need, which
+  `registry::gpu_storage_bindings_needed()` derives by walking every model's declared pass list —
+  no constant, because wgpu's own advice is to request only what you need and a constant would be
+  either short of a future model or dead headroom. Today it comes to 8, since `gpu_ants`'s step
+  pass sits at exactly 8. `raise` takes the number rather than knowing it: henad-compute is below
+  henad-models and cannot see the models. `every_gpu_model_builds_on_a_baseline_device` holds the
+  line on a `Limits::default()` device, and asserts in the same breath that `capacity.rs` agrees —
+  build and declared demand pin each other, so an over-reported pass count fails there. Note wgpu
+  on Metal shares one argument table across storage + uniform + vertex, so a check counting only
+  storage buffers can pass locally and fail there.
+- **`Limits::default()` is not the hardware, and its *size* limits are what bound a run.** The
+  baseline caps one storage binding at 128 MiB, one buffer at 256 MiB and a texture side at 8192,
+  where an M4 Pro offers 4 GiB, 14.3 GB and 16384. `limits.rs::raise` takes all three to whatever
+  the adapter reports. Unlike the buffer count, these are deliberately machine-dependent: how big a
+  run can be is a property of the hardware however we ask.
+- **The display texture is a sampled view, never a mirror of the grid.** One texel per cell caps
+  the grid at `max_texture_dimension_2d` and costs 4 bytes per cell, which at 16384² is 1.07 GB of
+  RGBA for something drawn into a ~1000 px panel. `display_scale.rs` caps each axis at
+  `MAX_DISPLAY_DIM`, a display pass dispatches per *texel* and reads the cell at
+  `texel * grid / tex`, and `viewport.rs` samples the CPU grid the same way on upload. Both are
+  identity below the cap.
 - **A model over the device's limit panics the UI thread at Build time**, via wgpu's default error
-  handler. `gpu/agent_engine.rs` asserts the per-pass count with a readable message first; there is
-  still no `push_error_scope` around model construction, so other unchecked contracts (workgroup
-  size, uniform layout) surface the fatal way.
+  handler. `gpu/capacity.rs` computes a model's buffer sizes, texture dimensions and per-pass
+  storage-binding counts from what it already declares, and checks them first, so the app can
+  disable Build and both engines assert with a readable message. That covers sizes and binding
+  counts — there is still no `push_error_scope` around model construction, so other unchecked
+  contracts (workgroup size, uniform layout) surface the fatal way.
 - **Two clocks that must be reset together.** `gpu/sim_thread.rs` gates its stats refresh on
   `last_stats_publish` but divides by `tps_timer`; resetting one without the other reports a whole
   batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.

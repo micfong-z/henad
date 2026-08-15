@@ -12,14 +12,16 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;
 use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 
+use crate::display_scale::display_dims;
 use crate::gpu::GpuContext;
+use crate::gpu::capacity::Demand;
 use crate::gpu::primitives::dispatch::linear_dispatch;
 use crate::gpu::primitives::pipeline::{
     compute_pipeline, lane_buffer, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
 };
 use crate::gpu::primitives::readback::CounterReadback;
 use crate::gpu::primitives::reduce::GpuLaneReduce;
-use crate::gpu::primitives::spatial_hash::GpuSpatialHash;
+use crate::gpu::primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 use crate::gpu::primitives::wgsl;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::agents::GpuAgents;
@@ -84,6 +86,11 @@ impl EncodedPass {
         pass.set_bind_group(0, self.binds.pick(a_is_current), &[]);
         pass.dispatch_workgroups(self.groups.0, self.groups.1, 1);
     }
+}
+
+/// Bindings that count against `max_storage_buffers_per_shader_stage`.
+fn storage_bindings(bindings: &[Binding]) -> u32 {
+    bindings.iter().filter(|b| b.is_storage_buffer()).count() as u32
 }
 
 /// A `ComputePassTimestampWrites` needs at least one index set, so a pass in the middle of a batch
@@ -193,12 +200,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         Self::new_seeded(ctx, params, None)
     }
 
-    /// `None` uses the model's own default seed.
-    #[expect(clippy::too_many_lines, reason = "one linear construction of every wgpu object")]
-    pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
-        let device = &ctx.device;
-        let queue = &ctx.queue;
-
+    /// Geometry for `params`, without touching a device. `limits` only fixes the display cap.
+    pub fn geometry_for(params: &[ParamValue], limits: &wgpu::Limits) -> Geometry {
         let (num_agents, extent) = M::dims(params);
         let num_agents = num_agents.max(1);
         let extent = Extent {
@@ -206,19 +209,89 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             h: extent.h.max(1.0),
         };
         let (width, height) = extent.cells();
-
-        // Built before the geometry, since a model's uniforms mirror its cell grid.
-        let index =
-            M::INDEX.then(|| GpuSpatialHash::new(device, queue, M::ID, extent, M::index_cell_size(params), num_agents));
-
-        let geom = Geometry {
+        Geometry {
             num_agents,
             extent,
             width,
             height,
             n_cells: width * height,
-            index: index.as_ref().map(GpuSpatialHash::grid),
-        };
+            display: display_dims(width, height, limits.max_texture_dimension_2d),
+            index: M::INDEX.then(|| HashGrid::new(extent, M::index_cell_size(params))),
+        }
+    }
+
+    /// Resources that would be allocated for this model based on `params`.
+    pub fn demand(params: &[ParamValue], limits: &wgpu::Limits) -> Demand {
+        let geom = Self::geometry_for(params, limits);
+        let mut demand = Demand::default();
+        for (spec, len) in M::BUFFERS.iter().zip(M::buffer_lens(&geom)) {
+            demand.push_sides(&format!("{}_{}", M::ID, spec.label), len, spec.double_buffered);
+        }
+        if M::INDEX {
+            demand.push_index(M::ID, geom.n_cells, geom.num_agents);
+        }
+        if M::DISPLAY.is_some() {
+            demand.set_display(geom.width, geom.height, limits);
+        }
+
+        for (label, storage) in Self::declared_passes() {
+            demand.push_pass(label, storage);
+        }
+        demand
+    }
+
+    /// Storage buffers each declared pass binds. Read by both [`Self::demand`] and
+    /// [`Self::max_storage_bindings`], so the device a host asks for and the shortfall the UI
+    /// reports cannot disagree.
+    fn declared_passes() -> Vec<(String, u32)> {
+        let mut passes: Vec<(String, u32)> = M::STEP_PASSES
+            .iter()
+            .map(|spec| (format!("{}_{}", M::ID, spec.label), storage_bindings(spec.bindings)))
+            .collect();
+        if let Some(spec) = &M::DISPLAY {
+            passes.push((format!("{}_display", M::ID), storage_bindings(spec.bindings)));
+        }
+        passes.push((format!("{}_reduce_leaf", M::ID), storage_bindings(M::REDUCE_BINDINGS)));
+        passes
+    }
+
+    /// Independent of params, so a host can ask before it has a device.
+    pub fn max_storage_bindings() -> u32 {
+        Self::declared_passes()
+            .into_iter()
+            .map(|(_, storage)| storage)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// `None` uses the model's own default seed.
+    ///
+    /// # Panics
+    ///
+    /// If the device cannot hold the model. The backstop, not the diagnostic — a UI asks
+    /// [`Self::demand`] first.
+    #[expect(clippy::too_many_lines, reason = "one linear construction of every wgpu object")]
+    pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
+        let device = &ctx.device;
+        let queue = &ctx.queue;
+
+        let limits = device.limits();
+        let shortfalls = Self::demand(params, &limits).shortfalls(&limits);
+        assert!(
+            shortfalls.is_empty(),
+            "{} does not fit this device at these params: {}",
+            M::ID,
+            shortfalls.join("; ")
+        );
+
+        let mut geom = Self::geometry_for(params, &limits);
+        let (num_agents, extent) = (geom.num_agents, geom.extent);
+        let (width, height) = (geom.width, geom.height);
+
+        // The hash fits its own grid to the cell size, which may not be the field's.
+        let index =
+            M::INDEX.then(|| GpuSpatialHash::new(device, queue, M::ID, extent, M::index_cell_size(params), num_agents));
+        geom.index = index.as_ref().map(GpuSpatialHash::grid);
 
         // --- Buffers ---
         let lens = M::buffer_lens(&geom);
@@ -296,7 +369,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             .as_ref()
             .map(|_| build_display_target(device, ctx.target_format, width, height))
         {
-            Some(DisplayTarget { view, display }) => (Some(view), Some(display)),
+            Some(DisplayTarget { view, display, .. }) => (Some(view), Some(display)),
             None => (None, None),
         };
 
@@ -314,7 +387,6 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             counters: counters.as_ref(),
             display_view: display_view.as_ref(),
             reduce: &reduce,
-            limit: device.limits().max_storage_buffers_per_shader_stage,
         };
 
         let steps: Vec<EncodedPass> = M::STEP_PASSES
@@ -326,16 +398,17 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             })
             .collect();
 
-        // One invocation per cell, in 2D, as the grid engine's display does.
+        // One invocation per texel, as the grid engine's display does.
         let display = display_spec.as_ref().zip(display_handle).map(|(spec, handle)| {
-            let groups = (width.div_ceil(spec.workgroup), height.div_ceil(spec.workgroup));
+            let (tex_w, tex_h) = geom.display;
+            let groups = (tex_w.div_ceil(spec.workgroup), tex_h.div_ceil(spec.workgroup));
             let pass = build.pass::<M>(
                 PassId::Display,
                 "display",
                 spec.shader,
                 spec.bindings,
                 groups,
-                geom.n_cells,
+                tex_w * tex_h,
             );
             (pass, handle)
         });
@@ -462,7 +535,6 @@ struct PassBuilder<'a> {
     counters: Option<&'a CounterReadback>,
     display_view: Option<&'a wgpu::TextureView>,
     reduce: &'a GpuLaneReduce,
-    limit: u32,
 }
 
 impl PassBuilder<'_> {
@@ -490,7 +562,6 @@ impl PassBuilder<'_> {
         invocations: u32,
     ) -> EncodedPass {
         let label = format!("{}_{label}", M::ID);
-        self.check_budget::<M>(&label, bindings);
 
         let uniform = uniform_buffer(
             self.device,
@@ -546,21 +617,6 @@ impl PassBuilder<'_> {
             binds,
             groups,
         }
-    }
-
-    /// Turns the wgpu validation panic a model over budget would cause into something readable.
-    fn check_budget<M: GpuAgentModel>(&self, label: &str, bindings: &[Binding]) {
-        // A storage texture counts against its own limit, not this one.
-        let storage = bindings
-            .iter()
-            .filter(|b| !matches!(b, Binding::Uniform | Binding::DisplayTexture))
-            .count() as u32;
-        assert!(
-            storage <= self.limit,
-            "{}: pass '{label}' binds {storage} storage buffers, this device allows {}",
-            M::ID,
-            self.limit
-        );
     }
 
     fn layout_entry(i: u32, binding: &Binding) -> wgpu::BindGroupLayoutEntry {
@@ -636,10 +692,9 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
             .iter()
             .map(|sides| (sides.a.size() + sides.b.as_ref().map_or(0, wgpu::Buffer::size)) as usize)
             .sum();
-        let display = self
-            .display
-            .as_ref()
-            .map_or(0, |_| (self.geom.width as usize) * (self.geom.height as usize) * 4);
+        let display = self.display.as_ref().map_or(0, |_| {
+            (self.geom.display.0 as usize) * (self.geom.display.1 as usize) * 4
+        });
         buffers
             + display
             + self.index.as_ref().map_or(0, GpuSpatialHash::heap_bytes)

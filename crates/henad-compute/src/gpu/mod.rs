@@ -8,6 +8,7 @@
 //! data and metadata. Every wgpu object is built here.
 
 pub mod agent_engine;
+pub mod capacity;
 pub mod grid_engine;
 pub mod limits;
 pub mod primitives;
@@ -19,6 +20,7 @@ pub mod view;
 mod test_support;
 
 pub use agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
+pub use capacity::Demand;
 pub use grid_engine::{GpuGridModelDescriptor, GpuGridState};
 pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 pub use sim_thread::{GpuSimState, GpuStats};

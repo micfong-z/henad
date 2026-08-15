@@ -213,6 +213,23 @@ mod tests {
         check_agreement_over_ticks(&ctx, 50, 30);
     }
 
+    /// A grid wider than `max_texture_dimension_2d`, which used to fail at `create_texture`.
+    ///
+    /// Only the width is over, so this also pins the per-axis capping: display runs 4096x64 while
+    /// step and reduce still cover all 8200 columns.
+    #[test]
+    fn a_grid_past_the_texture_limit_still_builds_and_steps() {
+        let Some(ctx) = headless_context() else {
+            log::warn!("skipping a_grid_past_the_texture_limit_still_builds_and_steps: no adapter");
+            return;
+        };
+        assert!(
+            ctx.device.limits().max_texture_dimension_2d < 8200,
+            "the test device is not a baseline one, so this proves nothing"
+        );
+        check_agreement_over_ticks(&ctx, 8200, 64);
+    }
+
     fn check_agreement_over_ticks(ctx: &GpuContext, width: u32, height: u32) {
         let ctx = ctx.clone();
         let p = params(width, height, 0.3);

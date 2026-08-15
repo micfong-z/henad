@@ -239,6 +239,13 @@ impl AppState {
         self.loaded_model == Some(self.selected_model)
     }
 
+    /// Reasons this machine cannot build the selection. Always empty for a CPU model.
+    pub fn selection_shortfalls(&self) -> Vec<String> {
+        self.registry.get(self.selected_model).map_or_else(Vec::new, |entry| {
+            entry.shortfalls(&self.param_values, &self.runtime.granted)
+        })
+    }
+
     pub fn is_gpu(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
