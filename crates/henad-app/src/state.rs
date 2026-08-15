@@ -30,7 +30,7 @@ const EMA_ALPHA: f64 = 0.1;
 pub struct FrameTimings {
     pub render_ms: f64,
     pub ui_ms: f64,
-    /// Raw viewport cost this frame; folded into the EMAs once the frame is over.
+    /// Raw viewport cost this frame, folded into the EMAs once the frame is over.
     pub frame_render_ms: f64,
 }
 
@@ -66,7 +66,7 @@ pub struct AppState {
     pub ticks_per_snapshot: u32,
     pub stats_history: Option<StatsHistory>,
     pub history_capacity: usize,
-    /// Fixed for the life of the process; collected once at startup.
+    /// Fixed for the life of the process, collected once at startup.
     pub runtime: RuntimeInfo,
     /// Device and queue for rendering, so present on every target. Not `gpu_ctx` below, which
     /// gates GPU models and stays native-only.
@@ -86,7 +86,7 @@ pub struct AppState {
     pub gpu_batch_size: u32,
 }
 
-/// How an agent population is drawn in the viewport.
+/// Draw style for an agent population in the viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PointRenderMode {
     #[default]

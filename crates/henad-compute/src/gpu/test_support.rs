@@ -17,7 +17,6 @@ fn gpu_required() -> bool {
 /// If [`REQUIRE_GPU`] is set and no adapter or device could be acquired. Missing
 /// `required_features` still returns `None`, since a software rasteriser owes us nothing
 /// optional.
-#[must_use]
 pub fn headless_context(label: &str, required_features: wgpu::Features) -> Option<GpuContext> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 

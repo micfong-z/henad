@@ -90,7 +90,7 @@ fn vector_arrow_chart(ui: &mut egui::Ui, label: &str, x: f64, y: f64, color: [u8
         .allow_scroll(false)
         .allow_boxed_zoom(false)
         .show(ui, |plot_ui| {
-            // Arrow from origin to (x, y); y-axis is inverted by the plot
+            // Arrow from origin to (x, y). The plot inverts the y-axis.
             plot_ui.arrows(
                 egui_plot::Arrows::new(label, vec![[0.0, 0.0]], vec![[x, y]])
                     .color(arrow_color)

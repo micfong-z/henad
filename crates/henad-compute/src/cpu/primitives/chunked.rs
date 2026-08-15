@@ -17,7 +17,7 @@ pub const STATS_CHUNK: usize = 8192;
 /// Runs a body over each chunk of a mutable slice, in parallel on native.
 ///
 /// A macro rather than a function taking a closure. The extra closure layer a generic driver needs
-/// stops a hot kernel inlining through it, which measured 30% on SIR's step.
+/// stops a hot kernel inlining through it, and `#[inline]` does not rescue it.
 ///
 /// ```ignore
 /// for_each_chunk_mut!(next, row_width, |y, _base, next_row| { .. });
@@ -123,7 +123,7 @@ pub fn chunk_seed(base: u64, tick: u64, c: usize) -> u64 {
 /// Advances the per tick base handed to [`chunk_seed`].
 ///
 /// Called once per tick on the sequential path, never by a worker. Folding the tick in here rather
-/// than relying on `chunk_seed` alone measured 14% on SIR, for reasons not tracked down.
+/// than relying on `chunk_seed` alone is measurably faster, for reasons not tracked down.
 #[inline]
 pub fn advance_tick_seed(seed: u64, tick: u64) -> u64 {
     xorshift64(seed ^ tick)

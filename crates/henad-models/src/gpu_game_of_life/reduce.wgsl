@@ -33,9 +33,9 @@ fn main(
     let width = dims.grid.x;
     let height = dims.grid.y;
     if (global_id.x < width && global_id.y < height) {
-        // One invocation per cell: read the containing word, extract this cell's bit.
-        // Deliberately not a per-word countOneBits — that would need this pass to dispatch
-        // over words, and the padding bits in a row's last word would then have to be masked off.
+        // One invocation per cell, reading the containing word and extracting this cell's bit.
+        // Deliberately not a per-word countOneBits, which would need this pass to dispatch over
+        // words, and the padding bits in a row's last word would then have to be masked off.
         // This runs at the display cadence, so the simpler form is worth more than the speed.
         let words_per_row = (width + 31u) / 32u;
         let word = state[global_id.y * words_per_row + (global_id.x / 32u)];

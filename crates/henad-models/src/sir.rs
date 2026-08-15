@@ -113,7 +113,7 @@ fn count_sir_seq(cells: &[u8]) -> (u64, u64, u64) {
     (s, i, r)
 }
 
-/// Count the S/I/R compartments.
+/// Chunked over the grid, folded in index order.
 fn count_sir(cells: &[u8]) -> (u64, u64, u64) {
     reduce_chunks(
         cells.len(),

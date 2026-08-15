@@ -1,6 +1,6 @@
 //! Device limits the GPU models need above the WebGPU baseline.
 //!
-//! Sizes go to the adapter's report; counts go to exactly the models' needs, since wgpu's own
+//! Sizes go to the adapter's report, counts to exactly the models' needs, since wgpu's own
 //! advice is to request no more than that. `raise` takes the count rather than knowing it, since
 //! henad-compute cannot see the models and a host needs the number before it has a device.
 

@@ -87,7 +87,7 @@ impl ChunkTally for u64 {
     }
 }
 
-/// What an agent kernel reads besides its own lanes.
+/// Context an agent kernel reads besides its own lanes.
 pub struct StepCtx<'a, A: AgentModel + ?Sized> {
     pub field: <A::Field as FieldLayer>::Read<'a>,
     pub index: &'a A::Index,

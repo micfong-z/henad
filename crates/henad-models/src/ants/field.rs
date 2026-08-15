@@ -19,7 +19,7 @@ pub const OBSTACLE: u8 = 1;
 pub const FOOD: u8 = 2;
 pub const HOME: u8 = 3;
 
-/// Which layer is which in the field set.
+/// Layer indices in the field set.
 pub const TO_FOOD: usize = 0;
 pub const TO_HOME: usize = 1;
 

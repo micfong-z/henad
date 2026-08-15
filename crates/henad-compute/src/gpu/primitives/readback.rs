@@ -1,8 +1,7 @@
 //! Async readback of some `u32` counters reduced on the GPU.
 //!
-//! This exists so a GPU model can answer `SimState::stats()` without ever copying the grid back
-//! to the CPU — reducing on-GPU and reading back a few bytes costs nothing measurable next to a
-//! full grid readback.
+//! Lets a GPU model answer `SimState::stats()` without ever copying the grid back to the CPU.
+//! Reducing on-GPU and reading back a few bytes costs nothing next to a full grid readback.
 //!
 //! # Why the map is asynchronous
 //!
@@ -22,7 +21,7 @@ pub struct CounterReadback {
     staging: wgpu::Buffer,
     /// `Some` while a `map_async` is in flight.
     pending: Option<flume::Receiver<Result<(), wgpu::BufferAsyncError>>>,
-    /// Whether a fresh value has been copied into `staging` and is waiting to be mapped.
+    /// Set once a fresh value is in `staging` and waiting to be mapped.
     copied: bool,
     values: Vec<u32>,
 }
@@ -69,9 +68,9 @@ impl CounterReadback {
     /// Copy the accumulated totals into the staging buffer. Must be recorded *after* the model's
     /// reduce pass, in the same encoder (wgpu inserts the pass/copy barrier for us).
     ///
-    /// Skipped while a previous map is still in flight — writing into a buffer that is mapped or
-    /// pending-map is invalid, and dropping a sample is harmless (the next display tick takes
-    /// another one).
+    /// Skipped while a previous map is still in flight, since writing into a buffer that is
+    /// mapped or pending-map is invalid. Dropping a sample is harmless, the next display tick
+    /// takes another one.
     pub fn encode_copy(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if self.pending.is_some() {
             return;
@@ -81,8 +80,7 @@ impl CounterReadback {
     }
 
     /// Start the async map. Call once, immediately after submitting the encoder that
-    /// [`Self::encode_copy`] was recorded into — mapping before that submission would race the
-    /// copy.
+    /// [`Self::encode_copy`] was recorded into, since mapping any earlier races the copy.
     pub fn begin_map(&mut self) {
         if self.pending.is_some() || !self.copied {
             return;

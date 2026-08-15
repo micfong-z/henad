@@ -7,12 +7,12 @@
 //! `SimState`/`GpuSimState` impl from them.
 //!
 //! Unlike a grid, an agent step is not one dispatch. Boids rebuilds a neighbour index and runs one
-//! kernel; ants runs a kernel over agents and then one over cells. So a model declares a *list* of
+//! kernel, and ants runs a kernel over agents then one over cells. So a model declares a *list* of
 //! passes rather than a fixed step/display/reduce triple.
 //!
 //! # Bindings
 //!
-//! A pass's [`Binding`] slice is positional: entry `i` is `@group(0) @binding(i)`. There is no
+//! A pass's [`Binding`] slice is positional, so entry `i` is `@group(0) @binding(i)`. There is no
 //! naming convention to keep in step, only an order.
 //!
 //! ```wgsl
@@ -34,16 +34,16 @@
 //! spliced in, so a compile error's line number is off by a constant.
 //!
 //! The reduce leaf is generated entirely, from [`GpuAgentModel::REDUCE_HEADER`] and
-//! [`GpuAgentModel::REDUCE_VALUE`] — the workgroup tree around it is the same in every model.
+//! [`GpuAgentModel::REDUCE_VALUE`], since the workgroup tree around it is the same in every model.
 //! Set `HENAD_DUMP_WGSL` to a directory to read back what was actually compiled.
 //!
 //! # Unchecked contracts
 //!
 //! Shaders are opaque strings to Rust, so most of this surfaces as a wgpu validation error at
-//! model construction rather than at compile time:
+//! model construction rather than at compile time.
 //! - each pass's `@binding` indices must match the position of its [`Binding`] in the slice,
 //!   and its declared WGSL types must match what the buffer actually holds,
-//! - a pass shader must declare `@workgroup_size(256)` and fold with `linear_index`; a display
+//! - a pass shader must declare `@workgroup_size(256)` and fold with `linear_index`, and a display
 //!   shader must declare `@workgroup_size(N, N)` for its [`DisplaySpec::workgroup`],
 //! - [`GpuAgentModel::buffer_lens`] and [`GpuAgentModel::seed_buffers`] must each return one entry
 //!   per [`GpuAgentModel::BUFFERS`] entry, and a non-empty seed must be exactly `len * 4` bytes,
@@ -64,7 +64,7 @@ pub struct BufferSpec {
     pub drawable: bool,
 }
 
-/// Where one bind group entry comes from. Position in a pass's slice is the binding index.
+/// The source of one bind group entry. Position in a pass's slice is the binding index.
 #[derive(Clone, Copy)]
 pub enum Binding {
     Read(usize),
@@ -97,7 +97,6 @@ pub enum Domain {
 }
 
 impl Domain {
-    #[must_use]
     pub fn invocations(self, geom: &Geometry) -> u32 {
         let cells = geom.n_cells;
         match self {
@@ -127,7 +126,7 @@ pub struct DisplaySpec {
     pub workgroup: u32,
 }
 
-/// Which uniform block [`GpuAgentModel::pass_params_bytes`] is being asked for.
+/// The uniform block [`GpuAgentModel::pass_params_bytes`] is being asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PassId {
     Step(usize),
@@ -150,7 +149,7 @@ pub struct Geometry {
     pub index: Option<HashGrid>,
 }
 
-/// What a uniform block needs beyond the geometry. `groups_x` is the fold width the prelude's
+/// Extra a uniform block needs beyond the geometry. `groups_x` is the fold width the prelude's
 /// `linear_index` expects, so a shader that folds has to carry it.
 #[derive(Clone, Copy, Debug)]
 pub struct PassCtx<'a> {
@@ -191,14 +190,14 @@ pub trait GpuAgentModel: Send + Sync + 'static {
     const REDUCE_DOMAIN: Domain = Domain::Agents;
     /// Must include [`Binding::ReducePartials`] and [`Binding::Uniform`].
     const REDUCE_BINDINGS: &'static [Binding];
-    /// WGSL declarations the generated leaf needs: the bindings, and a `params` uniform carrying
+    /// WGSL declarations the generated leaf needs. The bindings, plus a `params` uniform carrying
     /// at least `lanes` and `groups_x`.
     const REDUCE_HEADER: &'static str;
     /// WGSL assigning `value`, with `lane` and the invocation index `i` in scope.
     const REDUCE_VALUE: &'static str;
 
     /// The full descriptor list. Unlike [`crate::authoring::agent_model::AgentModel`], nothing is
-    /// prepended — a GPU model spells its list out, so it can mirror the exact parameter order of
+    /// prepended. A GPU model spells its list out, so it can mirror the exact parameter order of
     /// the CPU model it is compared against.
     fn param_descriptors() -> Vec<ParamDescriptor>;
 
@@ -212,8 +211,8 @@ pub trait GpuAgentModel: Send + Sync + 'static {
     /// buffer cleared, which is what a scratch buffer read before it is first written wants.
     ///
     /// Raw bytes rather than `u32`, because agent lanes are mixed and `henad-core` has no
-    /// bytemuck. Only the current side is seeded; a double buffered one has its other side fully
-    /// written by the first step.
+    /// bytemuck. Only the current side is seeded, since a double buffered one has its other side
+    /// fully written by the first step.
     fn seed_buffers(geom: &Geometry, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u8>>;
 
     /// Neighbour index cell size, read only when [`Self::INDEX`].

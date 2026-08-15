@@ -11,9 +11,8 @@ const ALIVE: u8 = 1;
 
 /// Cell colours, shared with the GPU Game of Life's stat colour.
 ///
-/// `pub` so the GPU variant can reuse the same literal rather than duplicating it. Note its
-/// display shader still bakes these same RGB values into WGSL constants — unifying the CPU
-/// palette table with the shader palette is deliberately out of scope for now.
+/// `pub` so the GPU variant can reuse the same literal rather than duplicating it. Its display
+/// shader still bakes the same RGB values into WGSL constants of its own.
 pub const PALETTE: [[u8; 4]; 2] = [
     [0x15, 0x15, 0x15, 0xFF], // Dead - dark gray
     [0x00, 0xE6, 0x76, 0xFF], // Alive - green

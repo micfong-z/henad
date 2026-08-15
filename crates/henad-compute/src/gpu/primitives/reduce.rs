@@ -132,8 +132,7 @@ impl GpuLaneReduce {
         self.partials.as_entire_binding()
     }
 
-    /// What the leaf shader dispatches. `groups_x` also goes in its uniform.
-    #[must_use]
+    /// Dispatch dimensions of the leaf shader. `groups_x` also goes in its uniform.
     pub fn agent_groups(&self) -> (u32, u32) {
         self.agent_groups
     }
@@ -166,12 +165,10 @@ impl GpuLaneReduce {
     }
 
     /// One per lane. All zero until the first readback completes.
-    #[must_use]
     pub fn sums(&self) -> Vec<f32> {
         self.readback.values_f32().collect()
     }
 
-    #[must_use]
     pub fn heap_bytes(&self) -> usize {
         // The leaf partials dominate, every level above divides by WORKGROUP.
         self.levels

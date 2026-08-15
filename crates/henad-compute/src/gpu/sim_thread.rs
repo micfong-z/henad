@@ -1,64 +1,37 @@
 //! Dedicated OS thread that owns a GPU-resident sim state and steps it in batched submissions,
-//! decoupled from the UI frame rate. This is the GPU version of [`crate::cpu::sim_thread`]'s CPU sim thread.
-//!
-//! # [`GpuSimState`] is a runner interface, not a model-authoring shortcut
-//!
-//! `GridModel` is a *model-authoring* abstraction: implement some consts and pure functions, and
-//! the engine derives everything. [`GpuSimState`] is not that. It is the interface this thread
-//! drives, exactly as `SimState` is the interface the CPU thread drives — the minimum needed to
-//! record work into an encoder that this crate then submits and paces.
-//!
-//! The model-authoring counterpart is `henad_core::authoring::gpu_grid_model::GpuGridModel`, implemented by
-//! [`crate::gpu::grid_engine::GpuGridState`]. A GPU model that does not fit
-//! the grid mould could still implement this trait by hand.
+//! decoupled from the UI frame rate. The GPU sibling of [`crate::cpu::sim_thread`].
 //!
 //! # Synchronization
 //!
-//! `Device` and `Queue` are cheap, `Send + Sync` handles cloned from egui's own render state, so
-//! this thread submits work on the same queue egui uses to render. wgpu serializes all
-//! submissions to a given queue in the order `submit()` is called, and each submission is
-//! atomic from the GPU's point of view (a later submission never observes a partially-executed
-//! earlier one). So when this thread's display-texture write and egui's render-pass sample land
-//! in different submissions, the render pass either sees the fully-written previous texture or
-//! the fully-written next one — never a torn one. The one accepted cost is up to one frame of
-//! staleness (the UI may sample last snapshot's texture instead of the newest one), which is
-//! fine for a sim running orders of magnitude faster than the display refresh rate.
+//! This thread submits on the same queue egui renders on, using `Send + Sync` handles cloned from
+//! egui's render state. wgpu serializes submissions to a queue and each is atomic from the GPU's
+//! point of view, so egui's render pass samples either the fully-written previous display texture
+//! or the fully-written next one, never a torn one. The accepted cost is up to one frame of
+//! staleness, which is nothing for a sim running orders of magnitude faster than the refresh rate.
 //!
 //! # Batching
 //!
-//! Steps are batched `batch_size`-per-submission to keep submission overhead from competing with
-//! egui's own per-frame submissions on the shared queue. Each step is still its own compute pass
-//! (see the model's `encode_steps` for why — wgpu only synchronizes between passes, not between
-//! dispatches within one pass, and ping-pong buffers need that). The display compute pass (state
-//! -> texture) and the stats-reduction pass only run when at least [`SNAPSHOT_INTERVAL`] has
-//! elapsed since the last one, so "steps per snapshot" is emergent from how fast the batches run,
-//! exactly like the CPU sim thread's `ticks_per_snapshot`. This cadence is independent of batch
-//! size and unaffected by anything below.
+//! Steps go out `batch_size` per submission, to keep submission overhead off the shared queue.
+//! Each step is still its own compute pass, since wgpu only synchronizes between passes and the
+//! ping-pong needs that. The display and stats-reduction passes run only once [`SNAPSHOT_INTERVAL`]
+//! has elapsed, so steps per snapshot is emergent and independent of batch size.
 //!
-//! `batch_size` itself is either a fixed, UI-set value, or adaptively controlled. The problem
-//! adaptive mode solves: on a shared queue with no preemption, a large fixed batch (e.g. 256
-//! steps on a 4096x4096 grid) can take on the order of 100ms+ of GPU execution time in one
-//! submission, and because egui's own render-pass submissions share that queue, a big batch
-//! blocks egui's rendering behind it — visible as UI stutter, even though the display texture is
-//! already decoupled from batch size (see above).
-//!
-//! Adaptive mode measures the wall-clock time to encode and submit each batch (a proxy for GPU
-//! cost — see [`GpuSimLoop::step_batch`] for the caveats on why this proxy was chosen and what
-//! could make it unreliable), maintains an EMA of `time_per_step`, and picks the next batch size
-//! so that `batch_size * time_per_step` tracks a user-set `target_ms` budget. This deliberately
-//! does not use `TimestampQuery`, which stays diagnostic-only (surfaced as `gpu_us_per_step`).
-
+//! `batch_size` is either fixed from the UI or adaptively controlled. A large fixed batch can take
+//! 100ms+ of GPU time in one submission, and egui's own submissions queue behind it, which shows
+//! up as UI stutter. Adaptive mode keeps an EMA of `time_per_step` and picks a batch size so that
+//! `batch_size * time_per_step` tracks a user-set `target_ms`. It deliberately does not use
+//! `TimestampQuery`, which stays diagnostic-only.
 use henad_core::model::SimState;
 
 use crate::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
 use crate::snapshot::GpuSnapshot;
 
-/// The interface [`GpuSimThread`] drives. See the module docs: this is a *runner* interface (the
-/// GPU analogue of how `SimState` is consumed by the CPU thread), not a model-authoring trait.
+/// The interface [`GpuSimThread`] drives, the GPU counterpart of how the CPU thread drives
+/// `SimState`. Not a model-authoring trait, which is
+/// `henad_core::authoring::gpu_grid_model::GpuGridModel`.
 ///
-/// A GPU model's grid never leaves the GPU. `SimState::stats()` is therefore expected to report
-/// whatever the last completed [`Self::poll_stats_readback`] produced — a value a few
-/// milliseconds stale, not a fresh CPU-side count of the grid.
+/// A GPU model's grid never leaves the GPU, so `SimState::stats()` reports whatever the last
+/// completed [`Self::poll_stats_readback`] produced, a few milliseconds stale.
 pub trait GpuSimState: SimState {
     /// Record `count` steps into `encoder`, advancing the model's own tick counter by `count`.
     ///
@@ -71,15 +44,14 @@ pub trait GpuSimState: SimState {
     fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder);
 
     /// Start the async stats readback. Called immediately after the submission that
-    /// [`Self::encode_snapshot_passes`] was recorded into — mapping earlier would race the copy.
+    /// [`Self::encode_snapshot_passes`] was recorded into, since mapping earlier races the copy.
     fn begin_stats_readback(&mut self);
 
     /// Complete an in-flight stats readback, updating what `SimState::stats()` returns.
     ///
-    /// With `block = false` this must not wait on the GPU: it is called every loop iteration, and
-    /// stalling the sim thread until the queue drains is precisely what this thread exists to
-    /// avoid. `block = true` is used only for one-shot snapshots (initial, pause, step-once),
-    /// where the stats panel showing a real value matters more than a few ms of latency.
+    /// With `block = false` this must not wait on the GPU. It runs every loop iteration, and
+    /// stalling until the queue drains is what this thread exists to avoid. `block = true` is for
+    /// one-shot snapshots only, where a real value in the stats panel beats a few ms of latency.
     fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool);
 
     /// The layers the UI draws. Cloned into every snapshot, so keep it to `Arc` clones of things
@@ -95,8 +67,7 @@ pub trait GpuSimState: SimState {
 pub struct GpuStats {
     /// True GPU execution time per step, if the adapter supports timestamp queries.
     pub gpu_us_per_step: Option<f64>,
-    /// Live batch size — the fixed value in fixed mode, or the controller's current output in
-    /// adaptive mode.
+    /// Live batch size. The fixed value in fixed mode, the controller's output in adaptive mode.
     pub batch_size: u32,
     pub adaptive: bool,
 }
@@ -152,10 +123,10 @@ mod native {
     };
     use crate::snapshot::{Snapshot, SnapshotView};
 
-    /// How often the display texture is refreshed and a `Snapshot` published. Independent of
-    /// batch size and of how fast the sim is actually running.
+    /// Display texture refresh and `Snapshot` publish cadence. Independent of batch size and of
+    /// how fast the sim is actually running.
     const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(16);
-    /// How often wall-clock TPS and the (expensive, blocking) GPU timestamp readback are refreshed.
+    /// Refresh cadence for wall-clock TPS and the expensive, blocking GPU timestamp readback.
     const STATS_INTERVAL: Duration = Duration::from_secs(1);
 
     enum Command {
@@ -171,17 +142,16 @@ mod native {
         gpu_stats: Arc<Mutex<GpuStats>>,
         wake: Option<WakeFn>,
         running: bool,
-        /// Whether the controller is currently in adaptive mode. Kept as a separate bool (rather
-        /// than folding `fixed_batch_size`/`target_ms` into a `BatchMode` enum) so each mode's
-        /// state survives toggling — the manual fixed size is remembered while adaptive is
-        /// active, and the adaptive controller's target/EMA survive switching back to fixed.
+        /// A separate bool rather than a `BatchMode` enum, so each mode's state survives a
+        /// toggle. The manual size is remembered while adaptive runs, and the target and EMA
+        /// survive switching back to fixed.
         adaptive: bool,
         /// Manual batch size, used verbatim when `adaptive` is false.
         fixed_batch_size: u32,
         /// Per-batch wall-clock budget in milliseconds, used by the controller when `adaptive`.
         target_ms: f64,
-        /// Live batch size for the next batch: `fixed_batch_size` when not adaptive, or the
-        /// controller's last output when adaptive.
+        /// Size of the next batch. `fixed_batch_size` when not adaptive, the controller's last
+        /// output when adaptive.
         batch_size: u32,
         /// EMA of measured wall-clock time per step, in milliseconds. `None` until the first
         /// batch has been measured. Only used/updated in adaptive mode.
@@ -299,26 +269,18 @@ mod native {
             self.publish_gpu_stats();
         }
 
-        /// Records and submits one batch of steps (plus, at snapshot/stats cadence, the display
-        /// and stats passes and/or a timestamped-query resolve), then updates published state.
+        /// Records and submits one batch of steps, plus the display, stats and timestamp-resolve
+        /// work at their own cadences, then updates published state.
         ///
-        /// The timestamp-query resolve is deliberately *not* recorded into the same command
-        /// buffer as the writes — see `TimestampQuery::resolve_after` for why.
+        /// The timestamp resolve deliberately does not share a command buffer with the writes.
+        /// See `TimestampQuery::resolve_after`.
         ///
-        /// Also times the encode+submit portion as the adaptive controller's cost signal. This is
-        /// deliberately wall-clock CPU time, not a GPU timestamp query: `queue.submit()` isn't
-        /// required to block for GPU completion, so this is not a direct measure of GPU execution
-        /// time. The assumption underpinning this choice — that on a queue kept continuously busy
-        /// by back-to-back batches from this thread, with no other CPU work in between, the *rate*
-        /// at which `submit()` calls can be issued ends up backpressured by how fast the GPU
-        /// drains the queue — is plausible but has **not** been empirically verified. If it
-        /// doesn't hold on some backend/platform (e.g. `submit()` returns immediately regardless
-        /// of queue depth), this instead mostly measures CPU-side dispatch-recording cost, which
-        /// scales close to linearly with `batch_size` — so `time_per_step` would stay roughly
-        /// constant regardless of true GPU load, and the controller would regulate encode cost
-        /// rather than the GPU-stutter problem it's meant to solve. Flagging this as the main open
-        /// risk of this design rather than asserting it works. It's cheap either way (no readback
-        /// stall) and unaffected by the `TimestampQuery` correctness issue tracked separately.
+        /// The adaptive controller's cost signal is the wall-clock encode plus submit time, not a
+        /// GPU timestamp. That assumes a continuously busy queue backpressures how fast
+        /// `submit()` can be issued, which is plausible but has **not** been verified. Were
+        /// `submit()` to return immediately regardless of queue depth, this would measure CPU
+        /// dispatch recording instead, which scales with `batch_size`, leaving `time_per_step`
+        /// flat and the controller regulating the wrong thing. That is the main open risk here.
         fn step_batch(&mut self) {
             let now = Instant::now();
             let want_timing =
@@ -368,8 +330,8 @@ mod native {
                 self.refresh_tps(now);
                 self.last_stats_publish = now;
             } else if self.timestamp_query.is_none() && now.duration_since(self.tps_timer) >= STATS_INTERVAL {
-                // No GPU timing support on this device/backend — still refresh wall-clock TPS on
-                // the same cadence so the UI keeps updating.
+                // No GPU timing on this device, so refresh wall-clock TPS on the same cadence
+                // anyway, to keep the UI updating.
                 self.refresh_tps(now);
             }
 
@@ -432,12 +394,10 @@ mod native {
         }
     }
 
-    /// Handle to the GPU sim thread.
+    /// Handle to the GPU sim thread. Dropping it shuts the thread down and joins it.
     ///
-    /// Deliberately shaped like
-    /// [`crate::cpu::sim_thread::SimThread`] — `send`/`play`/`pause`/`step_once`/`take_snapshot` — so
-    /// `henad-app` can hold a thin enum over the two backends instead of special-casing GPU
-    /// everywhere. Dropping it shuts the thread down and joins it.
+    /// Shaped like [`crate::cpu::sim_thread::SimThread`], so `henad-app` can hold a thin enum
+    /// over the two backends instead of special-casing GPU everywhere.
     pub struct GpuSimThread {
         cmd_tx: mpsc::Sender<Command>,
         snapshot: Arc<Mutex<Option<Snapshot>>>,
@@ -498,8 +458,8 @@ mod native {
             }
         }
 
-        /// Send a shared command. Pacing commands (`SetTargetTps`, `SetUncapped`,
-        /// `SetTicksPerSnapshot`) are accepted and ignored — see `handle_command`.
+        /// Pacing commands (`SetTargetTps`, `SetUncapped`, `SetTicksPerSnapshot`) are accepted
+        /// and ignored. See `handle_command`.
         pub fn send(&mut self, cmd: SimCommand) {
             drop(self.cmd_tx.send(Command::Sim(cmd)));
         }

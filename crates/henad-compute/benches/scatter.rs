@@ -1,4 +1,4 @@
-//! Which scatter strategy to back `henad_compute::cpu::primitives::scatter` with. Atomics, counting sort, and
+//! Candidate backends for `henad_compute::cpu::primitives::scatter`. Atomics, counting sort, and
 //! per-worker shadow grids, all producing `out[c] = combine(base[c], values landing in c)`.
 //!
 //! Density is swept by shrinking the grid at a fixed agent count, so every configuration does the

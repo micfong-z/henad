@@ -1,8 +1,8 @@
 //! GPU timing (diagnostic) and the adaptive-batching controller (load-bearing).
 //!
-//! These two are deliberately separate concerns. [`TimestampQuery`] measures true GPU execution
-//! time and is *only* surfaced as a readout. The controller ([`ema_update`] / [`next_batch_size`])
-//! runs off wall-clock time instead — see [`crate::gpu::sim_thread`] for why.
+//! [`TimestampQuery`] measures true GPU execution time and is *only* surfaced as a readout. The
+//! controller ([`ema_update`] / [`next_batch_size`]) runs off wall-clock time instead. See
+//! [`crate::gpu::sim_thread`] for why.
 
 use std::time::Duration;
 
@@ -11,32 +11,22 @@ pub const DEFAULT_BATCH_SIZE: u32 = 64;
 
 /// Default per-batch wall-clock budget in adaptive mode, in milliseconds.
 ///
-/// ~8ms leaves roughly
-/// half of a 60fps (16.6ms) frame free, so a single batch submission is unlikely to be the thing
-/// that makes egui miss a frame even when it lands right before an egui submission on the same
-/// queue.
+/// Half of a 60fps frame, so one batch landing right before an egui submission on the same queue
+/// is unlikely to be what makes it miss.
 pub const DEFAULT_TARGET_MS: f64 = 8.0;
 
 /// Smoothing factor for the adaptive controller's EMA of `time_per_step`.
 ///
-/// 0.25 was chosen to react within a handful of batches to a real change in per-step cost (e.g.
-/// after a reseed to a denser pattern, or a grid resize), while still averaging out per-batch
-/// noise from OS scheduling jitter on the sim thread — a pure single-sample estimate was found
-/// to make the controller's output jump around too much batch-to-batch.
+/// Reacts within a handful of batches to a real change in per-step cost, while still averaging
+/// out scheduling jitter on the sim thread. A single-sample estimate made the output jump around.
 pub const ADAPTIVE_EMA_ALPHA: f64 = 0.25;
 
 /// Hard upper bound on the adaptive controller's output.
 ///
-/// Independent of the budget/cost
-/// division. Without this, a very cheap grid (tiny grid, or a GPU idling with headroom) could
-/// drive `target_ms / time_per_step` into tens of thousands of steps per batch; besides being
-/// unnecessary (the point is just to stay under budget), an oversized batch also means the
-/// controller reacts slowly to a subsequent slowdown (e.g. resizing to a much bigger grid),
-/// since that oversized batch is already committed and won't be measured until it completes.
-/// 4096 is comfortably above `DEFAULT_BATCH_SIZE` (64) and the old fixed-mode slider's max
-/// (2000) so it rarely binds in practice, while still bounding worst-case encode/submit latency.
-/// `pub` so the UI's read-only "live batch size" slider can use the same bound as its range,
-/// rather than risk silently clamping (and thus misreporting) a controller output above it.
+/// A cheap grid could otherwise drive `target_ms / time_per_step` into tens of thousands of steps
+/// per batch, and an oversized batch is already committed by the time a slowdown needs reacting
+/// to. `pub` so the UI's live batch size readout bounds its range the same way, rather than
+/// silently clamping a controller output above it.
 pub const MAX_BATCH_SIZE: u32 = 4096;
 
 /// GPU timestamp-query resources, created only if the device supports `Features::TIMESTAMP_QUERY`.
@@ -51,8 +41,7 @@ pub struct TimestampQuery {
 impl TimestampQuery {
     const BUFFER_SIZE: u64 = 2 * std::mem::size_of::<u64>() as u64;
 
-    /// Returns `None` when the device lacks `TIMESTAMP_QUERY`, in which case timing is simply
-    /// not reported.
+    /// `None` when the device lacks `TIMESTAMP_QUERY`, in which case timing is not reported.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
@@ -87,21 +76,15 @@ impl TimestampQuery {
         &self.query_set
     }
 
-    /// Resolves the timestamps written by `write_submission` into `readback_buffer`, in a
-    /// *separate* command buffer submitted only after `write_submission` has fully completed on
-    /// the GPU.
+    /// Resolves the timestamps `write_submission` wrote, in a *separate* command buffer submitted
+    /// only after that one has fully completed on the GPU.
     ///
-    /// This split is required, not cosmetic: recording `resolve_query_set` into the *same*
-    /// command buffer as the timestamp writes (the original implementation) is accepted by wgpu
-    /// but is unreliable in practice — at least on the Metal backend, the driver's counter
-    /// sample buffer is only guaranteed populated after the writing command buffer's completion
-    /// handler has run, so a resolve issued earlier in the same command buffer can read back
-    /// whatever value happened to be resident from an *earlier* submission. Confirmed empirically
-    /// (see `tests::gpu_timing_readback_is_stable_over_many_batches`, which failed 197/200 times
-    /// with the single-submission version — reading a bit-for-bit stale `end` timestamp from one
-    /// submission prior, which is frequently *less than* the fresh `start` timestamp and so
-    /// saturates to a reported 0). Waiting for the writing submission before resolving in a
-    /// follow-up submission eliminates the staleness entirely.
+    /// The split is required, not cosmetic. Resolving in the same command buffer as the writes is
+    /// accepted by wgpu, but on Metal the driver's counter sample buffer is only guaranteed
+    /// populated once the writing command buffer's completion handler has run, so an earlier
+    /// resolve reads back whatever was resident from a previous submission. A stale `end` below
+    /// the fresh `start` saturates to a reported 0. See
+    /// `tests::gpu_timing_readback_is_stable_over_many_batches`.
     pub fn resolve_after(&self, device: &wgpu::Device, queue: &wgpu::Queue, write_submission: wgpu::SubmissionIndex) {
         drop(device.poll(wgpu::PollType::Wait {
             submission_index: Some(write_submission),
@@ -116,9 +99,8 @@ impl TimestampQuery {
         queue.submit(Some(encoder.finish()));
     }
 
-    /// Blocking readback of the two timestamps written by the last stamped batch, called at most
-    /// once per stats interval — the stall this introduces is negligible next to a sim running at
-    /// thousands of TPS.
+    /// Blocking readback of the two timestamps the last stamped batch wrote, called at most once
+    /// per stats interval. The stall is negligible next to a sim running at thousands of TPS.
     pub fn read_gpu_us_per_step(&self, device: &wgpu::Device, batch_size: u32) -> Option<f64> {
         let slice = self.readback_buffer.slice(..);
         let (tx, rx) = flume::bounded(1);
@@ -141,9 +123,7 @@ impl TimestampQuery {
 
 /// Exponential moving average update.
 ///
-/// `prev` is `None` on the very first sample (in which case
-/// the sample seeds the EMA directly, rather than blending against an arbitrary starting value),
-/// `Some` on every subsequent call.
+/// The first sample seeds the EMA directly, rather than blending against an arbitrary start.
 pub fn ema_update(prev: Option<f64>, sample: f64, alpha: f64) -> f64 {
     match prev {
         Some(prev) => alpha.mul_add(sample, (1.0 - alpha) * prev),
@@ -153,16 +133,13 @@ pub fn ema_update(prev: Option<f64>, sample: f64, alpha: f64) -> f64 {
 
 /// Proportional controller for the batch size.
 ///
-/// Picks the batch size that would make `batch_size * ema_ms` land on
-/// `target_ms`, clamped to `[1, MAX_BATCH_SIZE]`. `ema_ms` is clamped away from zero so a
-/// (theoretically impossible, but not `f64`-impossible) zero or negative EMA can't produce a
-/// division blow-up.
+/// Picks the batch size that would make `batch_size * ema_ms` land on `target_ms`, clamped to
+/// `[1, MAX_BATCH_SIZE]`. `ema_ms` is held away from zero so a degenerate EMA cannot blow the
+/// division up.
 pub fn next_batch_size(ema_ms: f64, target_ms: f64) -> u32 {
     let raw = target_ms / ema_ms.max(f64::EPSILON);
-    // `raw` is always finite and non-negative here (both operands are non-negative, and the
-    // denominator is bounded away from zero above), so the `as u32` cast — which saturates
-    // rather than wraps for float-to-int in Rust — just needs the follow-up `.clamp()` to land
-    // it in range.
+    // `raw` is finite and non-negative here, and a float to int cast saturates rather than wraps,
+    // so the clamp is all that is needed to land it in range.
     (raw as u32).clamp(1, MAX_BATCH_SIZE)
 }
 
@@ -245,7 +222,7 @@ mod adaptive_controller_tests {
 
     #[test]
     fn controller_very_cheap_step_clamps_to_max() {
-        // A near-zero per-step cost would naively imply a huge batch size; the hard cap must win.
+        // A near-zero per-step cost would naively imply a huge batch size, so the cap must win.
         assert_eq!(next_batch_size(0.000_001, 8.0), MAX_BATCH_SIZE);
     }
 
@@ -257,8 +234,8 @@ mod adaptive_controller_tests {
 
     #[test]
     fn controller_exact_budget_match_rounds_down_not_up() {
-        // 8.0 / 3.0 = 2.667 steps; truncating (not rounding) keeps the batch under budget rather
-        // than over it, which matches the "stay under the frame budget" intent.
+        // 8.0 / 3.0 = 2.667 steps. Truncating rather than rounding keeps the batch under the
+        // frame budget rather than over it.
         assert_eq!(next_batch_size(3.0, 8.0), 2);
     }
 

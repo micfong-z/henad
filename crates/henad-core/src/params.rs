@@ -1,4 +1,3 @@
-/// Describes a single parameter that a model exposes.
 #[derive(Debug, Clone)]
 pub struct ParamDescriptor {
     pub id: &'static str,
@@ -32,7 +31,6 @@ impl ParamDescriptor {
     }
 }
 
-/// The kind and constraints of a parameter.
 #[derive(Debug, Clone)]
 pub enum ParamKind {
     F32 {
@@ -55,7 +53,6 @@ pub enum ParamKind {
     },
 }
 
-/// A concrete parameter value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamValue {
     F32(f32),
@@ -65,7 +62,6 @@ pub enum ParamValue {
 }
 
 impl ParamKind {
-    /// Returns the default value for this parameter kind.
     pub fn default_value(&self) -> ParamValue {
         match *self {
             Self::F32 { default, .. } => ParamValue::F32(default),
@@ -97,7 +93,7 @@ impl ParamStore {
         &self.values
     }
 
-    /// Returns whether the edit was accepted.
+    /// Accepts the edit only if the parameter is live. The bool says which happened.
     pub fn set(&mut self, index: usize, value: &ParamValue) -> bool {
         if self.live.get(index) == Some(&true) && index < self.values.len() {
             self.values[index] = value.clone();

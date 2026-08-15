@@ -1,14 +1,12 @@
-//! Time-series stat output: one row per sampled tick, one column per stat series.
+//! Time-series stat output. One row per sampled tick, one column per stat series.
 //!
-//! `StatsHistory` in `henad-core` is a fixed-capacity ring buffer built for the in-app chart — it
-//! forgets the oldest entries once full, which is exactly wrong for a run whose output is a data
-//! file. So this writes straight through to disk instead: sample [`SimState::stats`], format, drop.
-//! Memory stays flat regardless of run length.
+//! `StatsHistory` forgets its oldest entries once full, which is exactly wrong for a run whose
+//! output is a data file, so this writes straight through to disk instead. Memory stays flat
+//! regardless of run length.
 //!
-//! The column layout is fixed from the *first* sample and reused for every later row, so the header
-//! and every row always agree. A model whose `stats()` shape changes mid-run (series appearing,
-//! disappearing, or a histogram changing bucket count) is a programming error rather than something
-//! to paper over per row — [`StatsWriter::push`] reports it as an error.
+//! The column layout is fixed from the *first* sample and reused for every later row, so the
+//! header and every row always agree. A model whose `stats()` shape changes mid-run is a
+//! programming error, and [`StatsWriter::push`] reports it as one.
 
 use std::io::Write;
 
@@ -19,7 +17,7 @@ use henad_core::view::{StatEntry, StatValue};
 /// Separator between a series label and a component suffix, e.g. `Average Velocity.x`.
 const SUFFIX_SEP: char = '.';
 
-/// One output column, and which part of which stat series feeds it.
+/// One output column, and the part of the stat series feeding it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Column {
     /// Header text, already escaped for CSV.
@@ -29,7 +27,7 @@ struct Column {
     part: Part,
 }
 
-/// Which scalar to pull out of a [`StatValue`] for one column.
+/// The scalar pulled out of a [`StatValue`] for one column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Part {
     Scalar,
@@ -45,10 +43,10 @@ enum Part {
 
 /// Streams a stat time series to a writer as CSV.
 ///
-/// Construct, [`push`](Self::push) once per sampled tick, then [`finish`](Self::finish). The header
-/// is written on the first `push`, since the column set is derived from the sample shape rather
-/// than declared up front — `StatDescriptor` carries a label and colour but not whether the value
-/// is a scalar, a vector, or a histogram.
+/// Construct, [`push`](Self::push) once per sampled tick, then [`finish`](Self::finish). The
+/// header is written on the first `push`, since the column set comes from the sample shape rather
+/// than being declared up front. `StatDescriptor` carries a label and colour but not whether the
+/// value is a scalar, a vector, or a histogram.
 pub struct StatsWriter<W: Write> {
     out: W,
     /// `None` until the first `push` fixes the layout.
@@ -143,7 +141,7 @@ fn plan_columns(stats: &[StatEntry]) -> Vec<Column> {
             StatValue::Histogram { edges, counts } => {
                 // Label each bucket by its own range so the columns stay meaningful without the
                 // reader needing the edge list. `edges` is bucket boundaries, so a bucket has a
-                // lower and upper edge; fall back to the index if the edges don't line up.
+                // lower and upper edge. Fall back to the index if the edges don't line up.
                 for bucket in 0..counts.len() {
                     let range = match (edges.get(bucket), edges.get(bucket + 1)) {
                         (Some(lo), Some(hi)) => format!("[{}, {})", fmt_f64(*lo), fmt_f64(*hi)),
@@ -172,9 +170,9 @@ fn extract(value: &StatValue, part: Part) -> Option<f64> {
     }
 }
 
-/// Format a float for CSV: integral values without a trailing `.0`, everything else at full
-/// round-trip precision. Non-finite values become empty cells — `NaN`/`inf` are not valid numbers
-/// to most readers, and an empty cell is the conventional "missing" marker.
+/// Integral values lose the trailing `.0`, everything else keeps full round-trip precision.
+/// Non-finite values become empty cells, since `NaN` and `inf` are not valid numbers to most
+/// readers and an empty cell is the conventional missing marker.
 fn fmt_f64(value: f64) -> String {
     if !value.is_finite() {
         String::new()
@@ -186,8 +184,8 @@ fn fmt_f64(value: f64) -> String {
 }
 
 /// Quote a CSV field if it contains a comma, quote, or newline, doubling any inner quotes.
-/// Stat labels are `&'static str` from model source, so this is belt-and-braces — but a label with
-/// a comma in it would otherwise silently shift every column right of it.
+/// Stat labels are `&'static str` from model source, so this is belt-and-braces. A label with a
+/// comma in it would otherwise silently shift every column right of it.
 fn escape_csv(field: &str) -> String {
     if field.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", field.replace('"', "\"\""))

@@ -12,12 +12,12 @@ use henad_compute::snapshot::{CpuLayers, GpuSnapshot, GridSnapshot, PointSnapsho
 
 /// Paints a GPU model's display texture straight into the viewport.
 ///
-/// A GPU model's cells never reach the CPU, so there is no `ColorImage` to upload — the sim
-/// thread has already rendered the grid into a texture, and all that is left is to sample it.
+/// A GPU model's cells never reach the CPU, so there is no `ColorImage` to upload. The sim thread
+/// has already rendered the grid into a texture, and all that is left is to sample it.
+///
 /// The callback carries its own `Arc<GpuDisplay>` rather than looking resources up in egui's
-/// type-keyed `CallbackResources`, which is what makes model teardown safe: if the user switches
-/// models while this frame is still in flight, this `Arc` keeps the pipeline and texture alive
-/// until the render pass is done with them.
+/// type-keyed `CallbackResources`, which is what makes teardown safe. Switch models mid-frame and
+/// this `Arc` keeps the pipeline and texture alive until the render pass is done with them.
 struct GpuViewportPaint {
     display: Arc<GpuDisplay>,
 }
@@ -223,7 +223,7 @@ fn layer_extent(layers: &CpuLayers) -> Option<(f32, f32)> {
     Some((points.world_w, points.world_h))
 }
 
-/// Whether the mode selector applies at all.
+/// The mode selector only applies when there are points to draw.
 fn has_points(app: &AppState) -> bool {
     matches!(
         app.snapshot.as_ref().map(|s| &s.view),

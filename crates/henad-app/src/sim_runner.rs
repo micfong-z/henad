@@ -1,13 +1,11 @@
 //! A thin enum over "whichever sim thread backend is driving the selected model".
 //!
-//! The CPU [`SimThread`] and the GPU `GpuSimThread` deliberately stay separate concrete types —
-//! the CPU one steps a `SimState` once per loop iteration, the GPU one encodes N steps into a
-//! single submission, and unifying them would mean rewriting the GPU batching controller. But
-//! their *handles* were built to the same shape (`send` / `play` / `pause` / `step_once` /
-//! `take_snapshot`), so the app can hold this enum and stay almost entirely backend-agnostic.
+//! The CPU [`SimThread`] and the GPU `GpuSimThread` stay separate concrete types, since one steps
+//! a `SimState` per loop iteration and the other encodes N steps into one submission. Their
+//! *handles* share a shape, so the app can hold this enum and stay backend-agnostic.
 //!
-//! The GPU arm does not exist on wasm: there is no OS thread to run it on, and the registry hands
-//! out no GPU models there anyway (it is given no `GpuContext`).
+//! The GPU arm does not exist on wasm. There is no OS thread to run it on, and the registry is
+//! given no `GpuContext` there anyway.
 
 use henad_compute::cpu::sim_thread::{SimCommand, SimThread};
 use henad_compute::snapshot::Snapshot;
@@ -25,7 +23,7 @@ pub enum SimRunner {
 
 impl SimRunner {
     /// Send a command that both backends understand. The GPU backend ignores the CPU pacing
-    /// commands (`SetTargetTps`, `SetUncapped`, `SetTicksPerSnapshot`) — it paces itself with the
+    /// commands (`SetTargetTps`, `SetUncapped`, `SetTicksPerSnapshot`) and paces itself with the
     /// adaptive batch-size controller instead.
     pub fn send(&mut self, cmd: SimCommand) {
         match self {
@@ -77,7 +75,7 @@ impl SimRunner {
         }
     }
 
-    /// `Some` only for a GPU-backed model — the app uses this to decide whether to show the
+    /// `Some` only for a GPU-backed model, which is how the app decides whether to show the
     /// GPU-only batching controls.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn gpu_stats(&self) -> Option<GpuStats> {

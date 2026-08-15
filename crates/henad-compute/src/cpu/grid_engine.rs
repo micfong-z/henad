@@ -34,9 +34,7 @@ impl<M: GridModel> GridModelState<M> {
         }
     }
 
-    /// Build a state with specified `cells`.
-    ///
-    /// Returns `Some` if the `cells` slice is the right length for the grid dimensions in `params`, or `None` if not.
+    /// `None` unless `cells` is exactly the length `params` implies.
     pub fn from_cells(params: &[ParamValue], cells: &[u8]) -> Option<Self> {
         let extent = Extent {
             w: extract_u32(params, 0, 1024) as f32,
@@ -50,7 +48,7 @@ impl<M: GridModel> GridModelState<M> {
     }
 }
 
-/// Returns the full parameter descriptors list with grid width/height prepended.
+/// Grid width and height, prepended to the model's own descriptors.
 pub fn grid_model_param_descriptors<M: GridModel>() -> Vec<ParamDescriptor> {
     let mut descs = vec![
         u32_param("grid_width", "Grid Width", 1024, 1, 10_000).on_reload(),

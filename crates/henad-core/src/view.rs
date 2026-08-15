@@ -1,6 +1,4 @@
-/// A view of a 2D grid of cells for rendering.
-///
-/// Each cell is a `u8` index into the palette.
+/// A 2D grid for rendering, each cell a `u8` index into the palette.
 pub struct GridView<'a> {
     pub width: u32,
     pub height: u32,
@@ -8,7 +6,7 @@ pub struct GridView<'a> {
     pub palette: &'static [[u8; 4]],
 }
 
-/// A view of an agent population for rendering.
+/// An agent population for rendering.
 ///
 /// Both layers are stretched to the same rect, so a composite model wants
 /// `world_w = width as f32`. Nothing checks this across the crate boundary.
@@ -22,7 +20,6 @@ pub struct PointView<'a> {
     pub palette: &'static [[u8; 4]],
 }
 
-/// The value of a statistic entry.
 #[derive(Debug, Clone)]
 pub enum StatValue {
     Scalar(f64),
@@ -31,8 +28,7 @@ pub enum StatValue {
 }
 
 impl StatValue {
-    /// Extract a single representative f64 for charting.
-    /// Scalar → value, `Vector2D` → magnitude, Histogram → total count.
+    /// A single representative value, for charting.
     pub fn scalar(&self) -> f64 {
         match self {
             Self::Scalar(v) => *v,
@@ -42,7 +38,6 @@ impl StatValue {
     }
 }
 
-/// A single statistic entry for display.
 #[derive(Debug, Clone)]
 pub struct StatEntry {
     pub label: &'static str,
@@ -50,7 +45,6 @@ pub struct StatEntry {
     pub color: [u8; 4],
 }
 
-/// Metadata describing one stat series.
 #[derive(Debug, Clone)]
 pub struct StatDescriptor {
     pub label: &'static str,
@@ -92,7 +86,6 @@ pub struct StatsHistory {
 }
 
 impl StatsHistory {
-    /// Create a new history with the given stat descriptors and ring buffer capacity.
     pub fn new(descriptors: Vec<StatDescriptor>, capacity: usize) -> Self {
         let columns = vec![Vec::with_capacity(capacity); descriptors.len()];
         let ticks = Vec::with_capacity(capacity);
@@ -105,16 +98,14 @@ impl StatsHistory {
         }
     }
 
-    /// Record one snapshot of stats. Called once per snapshot.
     pub fn push(&mut self, values: &[f64], tick: u64) {
         if self.write_count < self.capacity {
-            // Still filling up — just append
             for (col, val) in self.columns.iter_mut().zip(values) {
                 col.push(*val);
             }
             self.ticks.push(tick);
         } else {
-            // Ring buffer full — overwrite oldest
+            // Full, so overwrite the oldest.
             let idx = self.write_count % self.capacity;
             for (col, val) in self.columns.iter_mut().zip(values) {
                 col[idx] = *val;
@@ -146,8 +137,7 @@ impl StatsHistory {
         self.write_count
     }
 
-    /// Get the value at logical index `j` (0 = oldest visible entry) for column `col`.
-    /// Returns `None` if out of bounds or no tick is available for that entry (shouldn't happen in practice).
+    /// Value and tick at logical index `j`, where 0 is the oldest visible entry.
     pub fn get(&self, col: usize, j: usize) -> Option<(f64, u64)> {
         let filled = self.len();
         if j >= filled {
@@ -161,7 +151,7 @@ impl StatsHistory {
         value.map(|v| (v, tick))
     }
 
-    /// Get the tick value at logical index `j` (0 = oldest visible entry). Returns `None` if out of bounds.
+    /// Tick at logical index `j`, where 0 is the oldest visible entry.
     pub fn get_tick(&self, j: usize) -> Option<u64> {
         let filled = self.len();
         if j >= filled {
@@ -172,12 +162,11 @@ impl StatsHistory {
         self.ticks.get(buf_idx).copied()
     }
 
-    /// Heap bytes used by all column buffers.
     pub fn heap_bytes(&self) -> usize {
         self.columns.iter().map(|c| c.capacity() * 8).sum::<usize>() + self.ticks.capacity() * 8
     }
 
-    /// Change the ring-buffer capacity, keeping the most recent entries.
+    /// Keeps the most recent entries.
     pub fn resize(&mut self, new_capacity: usize) {
         let filled = self.len();
         let keep = filled.min(new_capacity);

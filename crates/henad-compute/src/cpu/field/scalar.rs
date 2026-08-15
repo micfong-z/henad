@@ -13,9 +13,8 @@ use crate::for_each_chunk_mut;
 
 /// The rules a scalar field needs that the mechanics cannot supply.
 pub trait ScalarFieldSpec: Send + Sync + 'static {
-    /// How many fields share the grid and the scatter scratch.
+    /// Fields sharing the grid and the scatter scratch.
     const FIELDS: usize;
-    /// How deposits landing in the same cell combine.
     const COMBINE: Combine;
     /// Colours for the quantised display layer.
     const PALETTE: &'static [[u8; 4]];
@@ -34,7 +33,7 @@ pub trait ScalarFieldSpec: Send + Sync + 'static {
     fn quantise(site: u8, values: &[f32], out: &mut u8);
 }
 
-/// Per agent deposit lanes: one cell each, and one value per field.
+/// Per agent deposit lanes. One cell each, and one value per field.
 pub struct Deposits {
     pub cell: Vec<u32>,
     /// `values[f][i]` is agent `i`'s deposit into field `f`. An agent that writes one field leaves
@@ -94,7 +93,7 @@ impl<S: ScalarFieldSpec> ScalarField<S> {
     }
 }
 
-/// What an agent kernel sees of the field.
+/// The field as an agent kernel sees it.
 #[derive(Clone, Copy)]
 pub struct ScalarRead<'a> {
     fields: &'a Vec<Grid2D<f32>>,

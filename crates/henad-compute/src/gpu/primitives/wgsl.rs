@@ -19,7 +19,6 @@ fn linear_index(lid: vec3<u32>, wid: vec3<u32>, groups_x: u32) -> u32 {
 /// `lanes` and `groups_x`. `value` is a statement block assigning `value`, with `lane` and the
 /// invocation index `i` in scope. [`PRELUDE`] is prepended by the engine, as it is for any pass,
 /// so `WORKGROUP` is already in scope here.
-#[must_use]
 pub fn reduce_leaf(header: &str, value: &str) -> String {
     format!(
         "{header}

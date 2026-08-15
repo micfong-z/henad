@@ -105,7 +105,6 @@ mod native {
         fn run(mut self) {
             loop {
                 if !self.running {
-                    // Block until a command arrives
                     let Ok(cmd) = self.cmd_rx.recv() else {
                         return;
                     };
@@ -116,20 +115,17 @@ mod native {
                 }
 
                 if self.uncapped {
-                    // Run a batch of steps, then check for commands
                     for _ in 0..self.ticks_per_snapshot {
                         self.timed_step();
                     }
                     self.update_tps();
                     self.maybe_publish_snapshot();
-                    // Drain pending commands
                     while let Ok(cmd) = self.cmd_rx.try_recv() {
                         if self.handle_command(cmd) {
                             return;
                         }
                     }
                 } else {
-                    // Capped: wait until next deadline or command
                     let now = Instant::now();
                     if now < self.next_step_at {
                         let wait = self.next_step_at - now;
@@ -144,7 +140,6 @@ mod native {
                             Err(mpsc::RecvTimeoutError::Disconnected) => return,
                         }
                     }
-                    // Drain any pending commands before stepping
                     while let Ok(cmd) = self.cmd_rx.try_recv() {
                         if self.handle_command(cmd) {
                             return;
@@ -152,8 +147,8 @@ mod native {
                     }
                     if self.running {
                         let interval = self.batch_interval();
-                        // Advance from the previous deadline, so the batch's own
-                        // execution time doesn't stretch every period. Resync if sim is running behind.
+                        // Advance from the previous deadline, so the batch's own execution time
+                        // doesn't stretch every period. Resync if the sim is running behind.
                         self.next_step_at += interval;
                         let now = Instant::now();
                         if self.next_step_at + interval < now {
@@ -169,7 +164,7 @@ mod native {
             }
         }
 
-        /// Returns true if the thread should exit.
+        /// True when the thread should exit.
         fn handle_command(&mut self, cmd: SimCommand) -> bool {
             match cmd {
                 SimCommand::Play => {
@@ -180,7 +175,7 @@ mod native {
                 }
                 SimCommand::Pause => {
                     self.running = false;
-                    // Publish one final snapshot so UI shows latest state
+                    // Publish a final snapshot, so the UI shows the state it stopped at.
                     self.force_publish_snapshot();
                 }
                 SimCommand::StepOnce => {
@@ -258,8 +253,8 @@ mod native {
             self.publish_snapshot();
         }
 
-        /// Building outside the lock matters: the UI thread would otherwise block on
-        /// `take_snapshot` for the whole grid copy.
+        /// Built outside the lock, or the UI thread would block on `take_snapshot` for the whole
+        /// grid copy.
         fn publish_snapshot(&mut self) {
             let spare = self.snapshot.lock().ok().and_then(|mut slot| slot.spare.take());
             let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, self.engine_ms);
@@ -278,7 +273,7 @@ mod native {
         /// `wake` is `None` only for a headless caller that polls on its own schedule.
         pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel();
-            // Publish initial snapshot so UI has data before play is pressed.
+            // So the UI has something to draw before play is pressed.
             let snapshot = Arc::new(Mutex::new(SnapshotSlot {
                 fresh: Some(build_snapshot(None, &mut *state, 0.0, 0.0)),
                 spare: None,
@@ -311,12 +306,11 @@ mod native {
             }
         }
 
-        /// Send a command to the sim thread.
         pub fn send(&mut self, cmd: SimCommand) {
             drop(self.cmd_tx.send(cmd));
         }
 
-        /// Take the latest snapshot (returns None if no new snapshot since last take).
+        /// `None` when nothing new has been published since the last take.
         pub fn take_snapshot(&mut self) -> Option<Snapshot> {
             self.snapshot.lock().ok()?.fresh.take()
         }
@@ -381,7 +375,7 @@ mod wasm {
         /// `wake` still matters with no thread to wake from, since `send` runs inside `ui()`, after
         /// the frame's snapshot poll in `logic()`.
         pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
-            // Publish initial snapshot so UI has data before play is pressed.
+            // So the UI has something to draw before play is pressed.
             let initial = Some(build_snapshot(None, &mut *state, 0.0, 0.0));
             Self {
                 state,

@@ -10,8 +10,8 @@
 //! The engine generates bind group layouts from [`GpuGridModel::BUFFER_COUNT`] alone, so a
 //! model's shaders must declare exactly these bindings, all in `@group(0)`:
 //!
-//! **`STEP_SHADER`** — for `K = BUFFER_COUNT` ping-ponged buffers, bindings `0..2K` are
-//! interleaved read/write pairs, and binding `2K` is the step uniform:
+//! **`STEP_SHADER`**, for `K = BUFFER_COUNT` ping-ponged buffers. Bindings `0..2K` are
+//! interleaved read/write pairs, and binding `2K` is the step uniform.
 //!
 //! ```wgsl
 //! @group(0) @binding(0) var<storage, read>       buf0_in;   // buffer 0, current
@@ -21,20 +21,20 @@
 //! @group(0) @binding(4) var<uniform>             params;    // at binding 2K
 //! ```
 //!
-//! All `K` buffers are ping-ponged together, in lockstep: a step reads every buffer's current
+//! All `K` buffers are ping-ponged together, in lockstep. A step reads every buffer's current
 //! side and writes every buffer's next side.
 //!
-//! **`DISPLAY_SHADER`** and **`REDUCE_SHADER`** see only buffer 0 — the *primary* state buffer.
-//! Auxiliary buffers (a per-cell RNG, say) are step-private:
+//! **`DISPLAY_SHADER`** and **`REDUCE_SHADER`** see only buffer 0, the *primary* state buffer.
+//! Auxiliary buffers, a per-cell RNG say, are step-private.
 //!
 //! # Buffer length and dispatch domain
 //!
 //! The engine takes no view on how a model maps cells onto `u32`s. A model declares how long each
 //! buffer is ([`GpuGridModel::buffer_lens`]) and how many invocations its step needs
-//! ([`GpuGridModel::step_dims`]); both default to one `u32` and one invocation per cell, which is
-//! what an unpacked model wants. A bit-packed model overrides them to work in words instead —
-//! e.g. 32 cells per `u32` with rows padded to whole words, so that a single invocation owns a
-//! whole word and no two invocations ever write the same one.
+//! ([`GpuGridModel::step_dims`]). Both default to one `u32` and one invocation per cell, which is
+//! what an unpacked model wants. A bit-packed model overrides them to work in words instead, say
+//! 32 cells per `u32` with rows padded to whole words, so that a single invocation owns a whole
+//! word and no two invocations ever write the same one.
 //!
 //! Reduce always dispatches one invocation per *cell*, so a packed model's reduce shader reads a
 //! word and extracts its own bit.
@@ -64,9 +64,9 @@
 //!
 //! # Unchecked contracts
 //!
-//! Nothing here can be verified at compile time — the shaders are opaque strings to Rust, so a
-//! mismatch surfaces as a wgpu validation error at model construction. The following must be true for
-//! a model to be valid:
+//! Nothing here can be verified at compile time. The shaders are opaque strings to Rust, so a
+//! mismatch surfaces as a wgpu validation error at model construction. A valid model has all of
+//! the following true.
 //! - [`Self::WORKGROUP_SIZE`] must equal the `@workgroup_size(N, N)` all three shaders declare,
 //! - [`Self::STATS`] length must equal the reduce shader's `atomic<u32>` array length and the
 //!   number of entries [`Self::stats`] returns,
@@ -84,15 +84,15 @@ pub trait GpuGridModel: Send + Sync + 'static {
     const ID: &'static str;
     const DESCRIPTION: &'static str;
 
-    /// Palette used by the stats UI. The display shader has its own copy of the colours, since it
-    /// writes RGBA directly; keeping the two in agreement is on the model.
+    /// Palette used by the stats UI. The display shader writes RGBA directly, so it has its own
+    /// copy of the colours, and keeping the two in agreement is on the model.
     const PALETTE: &'static [[u8; 4]];
 
     /// Must match the `@workgroup_size(N, N)` declared by all three shaders.
     const WORKGROUP_SIZE: u32 = 16;
 
-    /// How many `array<u32>` buffers are ping-ponged per step. `1` for a plain state buffer; `2`
-    /// for a model that also carries per-cell RNG state.
+    /// Buffers ping-ponged per step. `1` for a plain state buffer, `2` for a model that also
+    /// carries per-cell RNG state.
     const BUFFER_COUNT: usize = 1;
 
     /// Stat series for the history chart. Its length is how many `u32` counters the reduce shader
@@ -104,9 +104,9 @@ pub trait GpuGridModel: Send + Sync + 'static {
     const DISPLAY_SHADER: &'static str;
     const REDUCE_SHADER: &'static str;
 
-    /// Declare parameters for the UI. Unlike [`crate::authoring::grid_model::GridModel`], width and height
-    /// are *not* auto-prepended — a GPU model spells out its full list, so that it can mirror the
-    /// exact parameter order of the CPU model it is compared against.
+    /// The full descriptor list. Unlike [`crate::authoring::grid_model::GridModel`], width and
+    /// height are *not* prepended. A GPU model spells its list out, so it can mirror the exact
+    /// parameter order of the CPU model it is compared against.
     fn param_descriptors() -> Vec<ParamDescriptor>;
 
     /// Grid dimensions for these params. The engine clamps both to at least 1.
@@ -115,8 +115,7 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// Length in `u32` elements of each ping-ponged buffer, in binding order.
     ///
     /// Defaults to one element per cell. A bit-packed model overrides this to return its word
-    /// count — and must override [`Self::step_dims`] to match, so that one invocation owns one
-    /// word.
+    /// count, and must override [`Self::step_dims`] to match, so that one invocation owns one word.
     fn buffer_lens(width: u32, height: u32) -> Vec<usize> {
         vec![(width as usize) * (height as usize); Self::BUFFER_COUNT]
     }
@@ -132,12 +131,12 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// Initial contents of each ping-ponged buffer, CPU-seeded and uploaded once at construction.
     ///
     /// Returns [`Self::BUFFER_COUNT`] vectors, whose lengths match [`Self::buffer_lens`], in
-    /// binding order — index 0 is the primary state buffer that display and reduce read.
+    /// binding order. Index 0 is the primary state buffer that display and reduce read.
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>>;
 
     /// The step shader's uniform block, as raw bytes.
     ///
-    /// Bytes rather than a `bytemuck::Pod` bound because `henad-core` has no bytemuck; models keep
+    /// Bytes rather than a `bytemuck::Pod` bound because `henad-core` has no bytemuck. Models keep
     /// their own `#[repr(C)]` struct and hand over `bytemuck::bytes_of(&s).to_vec()`. A model
     /// whose step needs nothing but the dimensions can return the dims themselves.
     fn step_params_bytes(width: u32, height: u32, params: &[ParamValue]) -> Vec<u8>;

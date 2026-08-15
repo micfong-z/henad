@@ -1,4 +1,4 @@
-//! How fast the sim is allowed to run, and how often it hands back a snapshot.
+//! Sim pacing controls. Speed limit, and snapshot cadence.
 
 use crate::state::AppState;
 use henad_compute::cpu::sim_thread::SimCommand;
@@ -86,8 +86,8 @@ fn gpu_batching_controls(ui: &mut egui::Ui, app: &mut AppState) {
     }
 
     if app.gpu_adaptive {
-        // Live batch size is the controller's output, not the (disabled) local slider value —
-        // read it from stats every frame so it visibly tracks GPU cost.
+        // Live batch size is the controller's output, not the disabled local slider value. Read
+        // from stats every frame so it visibly tracks GPU cost.
         let mut live_batch_size = stats.batch_size;
         ui.add_enabled(
             false,

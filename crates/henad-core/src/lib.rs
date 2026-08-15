@@ -12,5 +12,5 @@ pub mod spatial_hash;
 pub mod topology;
 pub mod view;
 
-/// World size, used far too widely to be worth spelling out its authoring path every time.
+/// World size.
 pub use authoring::field::Extent;

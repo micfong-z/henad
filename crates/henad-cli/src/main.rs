@@ -1,17 +1,14 @@
-//! `henad-cli` — a headless benchmark runner for Henad models.
+//! A headless benchmark runner for Henad models.
 //!
-//! This is the non-GUI sibling of `henad-app`: it instantiates a model straight from the shared
-//! [`model_registry`] and steps its `SimState` in a bare loop, with no rendering, no `SimThread`,
-//! and no pacing. That deliberate leanness is the point — `SimThread`'s EMA smoothing, snapshot
-//! throttling, and TPS capping all exist to keep a *UI* responsive, and every one of them is
-//! measurement noise for a benchmark. Here we time nothing but `state.step()`.
+//! The non-GUI sibling of `henad-app`. It builds a model from the shared [`model_registry`] and
+//! steps its `SimState` in a bare loop, with no rendering, no `SimThread` and no pacing, so a
+//! measurement times nothing but `state.step()`.
 //!
 //! Both CPU and GPU models run. GPU support needs a `wgpu::Device`, which `henad-compute` never
-//! creates itself — so this binary acquires one headlessly (no window, no surface; see
-//! [`acquire_gpu`]) and hands the resulting [`GpuContext`] to [`model_registry`]. If no device is
-//! available, the registry falls back to CPU-only. GPU stepping deliberately does *not* go through
-//! `SimState::step()` (one unwaited submission per step); it batches steps and blocks on GPU
-//! completion — see [`run_gpu_steps`].
+//! creates itself, so this binary acquires one headlessly (see [`acquire_gpu`]) and hands the
+//! resulting [`GpuContext`] to [`model_registry`]. Without a device the registry falls back to
+//! CPU-only. GPU stepping does *not* go through `SimState::step()`, which would leave one
+//! unwaited submission per step. See [`run_gpu_steps`].
 //!
 //! ```text
 //! henad-cli --list
@@ -67,8 +64,8 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     warmup: u64,
 
-    /// Untimed steps for a one-time hardware warm-up ("rep 0") before the timed reps — ramps GPU
-    /// clocks and pays first-use compilation so rep 1 isn't cold. Its cost scales with the workload.
+    /// Untimed steps for a one-time hardware warm-up before the timed reps. Ramps GPU clocks and
+    /// pays first-use compilation, so rep 1 isn't cold. Its cost scales with the workload.
     #[arg(long = "global-warmup", default_value_t = 0)]
     global_warmup: u64,
 
@@ -76,7 +73,7 @@ struct Args {
     #[arg(long)]
     seed: Option<u64>,
 
-    /// How many independent timed runs to collect (each on a freshly created state).
+    /// Independent timed runs to collect, each on a freshly created state.
     #[arg(long, default_value_t = 1)]
     reps: usize,
 
@@ -105,8 +102,8 @@ struct Args {
     #[arg(long)]
     params: bool,
 
-    /// Print host and GPU information. With no model given, prints and exits; with one, prints as a
-    /// provenance header before the benchmark.
+    /// Print host and GPU information. With no model given it prints and exits, with one it
+    /// prints as a provenance header before the benchmark.
     #[arg(long)]
     info: bool,
 }
@@ -263,10 +260,9 @@ fn print_params(entry: &ModelEntry) {
     }
 }
 
-/// Create a fresh CPU state from a registry entry. Errors on a GPU-backed model — callers that can
-/// handle GPU use [`new_gpu_state`] instead; the dispatcher in [`run_benchmark`] routes correctly,
-/// so this only fires for a CPU-only path handed a GPU model (e.g. `--export`, which has no GPU
-/// readback).
+/// Create a fresh CPU state from a registry entry. Errors on a GPU-backed model, for which
+/// callers use [`new_gpu_state`]. The dispatcher in [`run_benchmark`] routes correctly, so this
+/// only fires for a CPU-only path handed a GPU model, such as `--export`.
 fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -> Result<Box<dyn SimState>> {
     match (entry.create)(params, seed) {
         ModelState::Cpu(state) => Ok(state),
@@ -275,7 +271,7 @@ fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -
 }
 
 /// Dispatch to the CPU or GPU benchmark depending on which backend the registry entry produces.
-/// The probe state created here is thrown away; each per-rep loop builds its own fresh state.
+/// The probe state created here is thrown away, and each per-rep loop builds its own.
 fn run_benchmark(entry: &ModelEntry, params: &[ParamValue], args: &Args, gpu_ctx: Option<&GpuContext>) -> Result<()> {
     match (entry.create)(params, args.seed) {
         ModelState::Cpu(_) => bench_cpu(entry, params, args),
@@ -313,8 +309,8 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
 
     let mut samples: Vec<Duration> = Vec::with_capacity(args.reps);
     let mut population: u64 = 0;
-    // Grid dimensions read from the running state, not the params: the state is authoritative —
-    // it reflects any `--set grid_width=…` override and whatever the model actually built.
+    // Grid dimensions read from the running state, not the params, since the state is
+    // authoritative. It reflects any `--set grid_width=…` override and what the model built.
     let mut grid_dims: Option<(u32, u32)> = None;
 
     for rep in 0..args.reps {
@@ -394,9 +390,9 @@ fn report(samples: &[Duration], steps_per_rep: u64, population: u64, grid_dims: 
     Ok(())
 }
 
-/// GPU benchmark. GPU state never leaves the device, so we cannot walk it via `SimState::step()`
-/// (that submits one tiny command buffer per step and never waits). Each rep instead batches
-/// `steps` into GPU submissions and blocks on completion — see [`run_gpu_steps`].
+/// GPU benchmark. GPU state never leaves the device, and `SimState::step()` submits one tiny
+/// command buffer per step without ever waiting. Each rep instead batches `steps` into GPU
+/// submissions and blocks on completion. See [`run_gpu_steps`].
 fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuContext) -> Result<()> {
     eprintln!(
         "benchmarking {} ({}) [GPU]: {} steps x {} reps, {} warmup, {} global-warmup",
@@ -406,9 +402,9 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
         eprintln!("!!! warning: debug build; use --release for benchmarking !!!");
     }
 
-    // Rep 0: optional one-time hardware warm-up. Steps a throwaway state to ramp the GPU off its
-    // idle clocks (DVFS) and pay first-use shader compilation before any timed rep — so rep 1 isn't
-    // cold. Off by default because its cost scales with the workload; opt in with `--global-warmup`.
+    // Optional one-time hardware warm-up. Steps a throwaway state to ramp the GPU off its idle
+    // clocks (DVFS) and pay first-use shader compilation before any timed rep, so rep 1 isn't
+    // cold. Off by default, since its cost scales with the workload.
     if args.global_warmup > 0 {
         let mut warm = new_gpu_state(entry, params, args.seed)?;
         eprint!("  #{: >4}: ", 0);
@@ -435,8 +431,8 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
         samples.push(elapsed);
     }
 
-    // GPU state exposes no `grid_view()`, so derive dimensions from the resolved params instead —
-    // which are exactly what the model was built from.
+    // GPU state exposes no `grid_view()`, so derive dimensions from the resolved params, which
+    // are exactly what the model was built from.
     let grid_dims = grid_dims_from_params(&entry.param_descriptors, params);
     report(&samples, args.steps, population, grid_dims)?;
     Ok(())
@@ -461,11 +457,11 @@ fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
         return Ok(());
     }
     // One compute pass is recorded per step (the ping-pong buffers need a pass boundary each step),
-    // so encoding all `count` steps into a single command buffer becomes pathological — on Metal,
+    // so encoding all `count` steps into a single command buffer becomes pathological. On Metal,
     // thousands of passes in one buffer stall for minutes. Chunk into fixed-size submissions
-    // instead. Correctness is unchanged: wgpu executes submissions to one queue in order, each
-    // atomic, so batch N+1 still reads batch N's output. The batches queue up and one final wait
-    // drains them all, which also lets the CPU encode ahead of the GPU (pipelining).
+    // instead. Correctness is unchanged, since wgpu executes submissions to one queue in order
+    // and each is atomic, so batch N+1 still reads batch N's output. The batches queue up and one
+    // final wait drains them all, which also lets the CPU encode ahead of the GPU.
     const BATCH: u32 = 256;
     let mut remaining = count;
     while remaining > 0 {
@@ -496,8 +492,8 @@ fn grid_dims_from_params(descriptors: &[ParamDescriptor], params: &[ParamValue])
     Some((find("grid_width")?, find("grid_height")?))
 }
 
-/// Acquire a headless GPU device — the same thing eframe does for henad-app, minus any window or
-/// surface. `henad-compute` deliberately never creates a device, so a non-GUI runner must.
+/// Acquire a headless GPU device, the same thing eframe does for henad-app minus any window or
+/// surface. `henad-compute` never creates a device, so a non-GUI runner must.
 ///
 /// The adapter is dropped here, so `RuntimeInfo` has to be captured.
 fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
@@ -542,8 +538,8 @@ fn export_final(entry: &ModelEntry, params: &[ParamValue], args: &Args, path: &P
 ///
 /// Unlike [`run_benchmark`] this is not a timed path: sampling stats every tick is itself
 /// significant work (a full reduction over the grid for a `GridModel`), so numbers from a run with
-/// `--export-stats` are not comparable to a benchmark run. Reps are deliberately ignored — a time
-/// series is one trajectory, and N reps would be N different trajectories in one file.
+/// `--export-stats` are not comparable to a benchmark run. Reps are ignored, since a time series
+/// is one trajectory and N reps would be N different trajectories in one file.
 fn export_stats(
     entry: &ModelEntry,
     params: &[ParamValue],
@@ -594,8 +590,8 @@ fn stats_cpu(
             writer.push(state.tick(), &state.stats())?;
         }
     }
-    // The final tick always lands in the file even if it isn't on a sampling boundary — the end
-    // state of a run is the one value a reader is most likely to want.
+    // The final tick always lands in the file even off a sampling boundary. The end state of a
+    // run is the one value a reader is most likely to want.
     if !total.is_multiple_of(args.stats_every) {
         writer.push(state.tick(), &state.stats())?;
     }
@@ -604,8 +600,8 @@ fn stats_cpu(
 
 /// GPU stat sampling. `SimState::stats()` on a GPU state returns whatever the last completed
 /// readback produced, so each sample needs the full encode-reduce-readback round trip and a
-/// blocking poll — otherwise every row would repeat a stale value. That makes the sampling interval
-/// the dominant cost here; `--stats-every` is how you buy it back.
+/// blocking poll, or every row would repeat a stale value. That makes the sampling interval the
+/// dominant cost here, and `--stats-every` is how you buy it back.
 fn stats_gpu(
     mut state: Box<dyn GpuSimState>,
     ctx: &GpuContext,

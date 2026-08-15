@@ -1,4 +1,4 @@
-//! The grid slot: whatever owns cells, updates them once per tick, and draws them.
+//! The grid slot. Whatever owns cells, updates them once per tick, and draws them.
 
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::view::GridView;
@@ -25,12 +25,12 @@ impl Extent {
 /// Implemented by `CaField` (a [`crate::authoring::grid_model::GridModel`] gather rule) and by scatter-plus-decay
 /// fields, so an agent model can sit over either.
 pub trait FieldLayer: Send + 'static {
-    /// Whether this layer draws a grid. Must agree with what `grid_view` returns.
+    /// Must agree with what `grid_view` returns.
     const HAS_GRID: bool = true;
 
     /// Hot parameters, rebuilt once per tick.
     type Params: Send + Sync;
-    /// What an agent kernel sees of this field.
+    /// The field as an agent kernel sees it.
     type Read<'a>
     where
         Self: 'a;

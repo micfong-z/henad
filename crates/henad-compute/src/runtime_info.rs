@@ -34,7 +34,7 @@ pub struct RuntimeInfo {
     pub granted: wgpu::Limits,
     /// Limits the adapter would have allowed, so a gap is headroom left unclaimed.
     pub available: wgpu::Limits,
-    /// Whether the device granted `TIMESTAMP_QUERY`.
+    /// Set when the device granted `TIMESTAMP_QUERY`.
     pub timestamp_query: bool,
 }
 
@@ -55,7 +55,7 @@ impl RuntimeInfo {
     }
 }
 
-/// How well the adapter suits Henad's workload.
+/// The adapter's fitness for Henad's workload.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GpuVerdict {
     /// A real GPU :)

@@ -3,13 +3,10 @@ use crate::params::{ParamDescriptor, ParamValue};
 use crate::topology::NeighborhoodKind;
 use crate::view::{StatDescriptor, StatValue};
 
-/// Simple API for grid-based cellular automata.
+/// A cellular automaton over `u8` cells.
 ///
-/// The engine handles: `Grid2D` allocation, double-buffering, parallel step execution,
-/// tick counting, `grid_view` construction, and snapshot production.
-///
-/// Model authors implement this trait with const metadata + pure functions.
-/// The engine wraps it in `GridModelState<M>` (in `henad-compute`) which implements `SimState`.
+/// The engine owns grid allocation, double buffering, chunking, tick counting, the views, and the
+/// whole `SimState` impl.
 pub trait GridModel: Send + Sync + 'static {
     const NAME: &'static str;
     const ID: &'static str;
@@ -19,32 +16,20 @@ pub trait GridModel: Send + Sync + 'static {
     /// Stat series for the history chart. Declared once, so `stats` returns bare values.
     const STATS: &'static [StatDescriptor];
 
-    /// Pre-extracted hot parameters. Constructed once per tick via `from_params`,
-    /// then passed by reference to every `step_cell` call. This guarantees zero
-    /// per-cell overhead — no enum matching inside the inner loop.
+    /// Pre-extracted hot parameters, rebuilt once per tick. Keeps enum matching out of the inner
+    /// loop.
     type Params: Send + Sync;
 
-    /// Declare model-specific parameters for the UI.
-    /// Grid width and height are auto-prepended by the engine at indices 0 and 1.
+    /// Model parameters. Grid width and height are prepended by the engine at indices 0 and 1.
     fn param_descriptors() -> Vec<ParamDescriptor>;
-
-    /// Extract hot parameters from the full `ParamValue` slice once per tick.
     fn from_params(params: &[ParamValue]) -> Self::Params;
 
-    /// Initialize the grid cells. Called once when the model is created.
     fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64);
 
-    /// Compute the next state of a single cell given its current state
-    /// and its neighbors' current states.
-    ///
-    /// This function is called once per cell per tick. It must be pure
-    /// (no side effects beyond the rng). The engine calls it in parallel
-    /// across rows on native, sequentially on WASM.
+    /// Must be pure beyond the rng. The engine runs it across rows in parallel on native, and
+    /// sequentially on WASM.
     fn step_cell(cell: u8, neighbors: &[u8], params: &Self::Params, rng: &mut u64) -> u8;
 
-    /// Current statistics, in [`Self::STATS`] order.
-    ///
-    /// Called on demand when a snapshot is published. Implementations should parallelize this if
-    /// the computation is expensive.
+    /// Current statistics, in [`Self::STATS`] order. Called on publish, not every tick.
     fn stats(grid: &Grid2D<u8>) -> Vec<StatValue>;
 }

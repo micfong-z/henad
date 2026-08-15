@@ -5,14 +5,15 @@ pub const MAX_DISPLAY_DIM: u32 = 4096;
 
 /// Display dimensions for a `width` x `height` grid, on a device capping textures at `device_max`.
 ///
-/// Each axis is capped on its own: the rect is fitted to the *grid* aspect, so a non-square texel
+/// Each axis is capped on its own, so the rect is fitted to the *grid* aspect. A non-square texel
 /// still draws correctly and the short axis keeps its detail.
 pub fn display_dims(width: u32, height: u32, device_max: u32) -> (u32, u32) {
     let cap = MAX_DISPLAY_DIM.min(device_max).max(1);
     (width.clamp(1, cap), height.clamp(1, cap))
 }
 
-/// Row a display row samples from. The GPU does this inline in WGSL; this is for the CPU upload.
+/// Row a display row samples from. The GPU does this inline in WGSL, so this is for the CPU
+/// upload.
 pub fn source_row(texel_y: u32, height: u32, tex_h: u32) -> u32 {
     ((u64::from(texel_y) * u64::from(height)) / u64::from(tex_h.max(1))) as u32
 }

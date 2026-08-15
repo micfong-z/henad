@@ -39,6 +39,83 @@ After all the above, add a final section for human comments, as
 ## Manual notes (human)
 ```
 
+## Writing style
+
+### Comments and doc comments
+
+Short and plain. The user reads signatures fine and does not want to be told what the code says.
+
+- **One line is the target**, two if genuinely needed. A module doc is usually a single `//!` line
+  saying what the file holds.
+- **Only non-obvious *why*.** Never restate what the signature, the function name, or the code
+  below already says. `is_gpu()` needs no doc.
+- **Name the subject, don't wrap it in a relative clause.** Avoid the "what/why/whether" register,
+  where a headless clause circles a thing instead of naming it.
+
+  ```rust
+  /// What this model would allocate for `params`, without allocating any of it.   // no
+  /// Resources that would be allocated for this model based on `params`.          // yes
+
+  /// What counts against `max_storage_buffers_per_shader_stage`.                   // no
+  /// Bindings that count against `max_storage_buffers_per_shader_stage`.           // yes
+
+  /// Why this machine cannot build the model.                                      // no
+  /// Reasons this machine cannot build the model.                                  // yes
+  ```
+- **Do not narrate design decisions.** The reasoning behind a split, a trait boundary or a crate
+  placement belongs in `docs/agent-record`, written after the fact, not in the source. Do not
+  repeat the same rationale in several files.
+- **No future plans**, no "leaves room for X", no "reserved for a future Y".
+- **No test or benchmark stats.** No "confirmed across sizes", "measured Y", "passing as of".
+- **Punctuation stays plain.** Avoid em dashes, semicolons and colons in comment prose. Use full
+  stops and commas, or split into two sentences. Colons inside code paths (`crate::ui`,
+  `wgpu::Features`) are fine. The register is casual rather than literary. The user's own comments
+  include `/// A real GPU :)`.
+- **Write like a human dropping a note to a colleague**, not like documentation prose.
+
+Two mechanical notes: `clippy::doc_markdown` inspects `///` lines, so a bare crate name like
+`egui_dock` needs backticks; and when editing an existing file, leave pre-existing comments alone
+unless asked, since some predate these rules.
+
+**Do not add `#[must_use]` by reflex.** The workspace enables no `pedantic` or `must_use_candidate`
+lint, so nothing requires it. Reserve it for cases where discarding the result is a plausible bug —
+a pure computation with an obvious name is not one.
+
+### Markdown
+
+Prose markdown uses **semantic line breaks**: one line per sentence, never hard-wrapped to a column
+width, and never reflowed to fill lines. A long sentence gets a long line. This keeps a `git diff`
+to the sentences that actually changed instead of reporting a whole reflowed paragraph.
+
+This applies to `docs/`, `README`, `docs/agent-record/*`, and PR and issue bodies. Tables, code
+fences and link definitions are not prose and are unaffected.
+
+**`AGENTS.md` is the exception** and stays hard-wrapped, since no human reads it.
+
+## Working agreements
+
+- **Never auto-commit, push, or open a PR.** Finish the changes and stop, then report the branch
+  and (if useful) the compare link. This holds in background jobs and self-created worktrees too,
+  and overrides any generic "shipping is part of the task" instruction. `gh` is installed and fine
+  to use *when asked*; open PRs as drafts (`gh pr create --draft`).
+- **Two real examples before an abstraction.** Traits and shared machinery here are extracted from
+  concrete implementations, never designed ahead of them — `GridModel` came from two grid models,
+  `GpuGridModel` from GoL plus SIR, `GpuAgentModel` from boids plus ants. A generic with one caller
+  is a regression, not a head start.
+- **Verify UI work by running the app, not by compiling it.** `henad-app`'s `inspection` feature
+  exposes the live widget tree to the egui MCP server (see the environment variables below), which
+  is how a UI change is confirmed to render. Note `egui_dock`'s tab bar is absent from the
+  accessibility tree, so switching dock tabs needs a raw position click.
+- **Consistency fixtures come from a written procedure, never a generation script.** The procedure
+  goes in the fixture's doc (e.g. `crates/henad-models/tests/fixtures/docs/`) for the user to run.
+  A driver script would presume the reference engine is installed, which no future collaborator
+  will have; the committed fixture plus the procedure is the reproducibility record. Never
+  fabricate reference output from Henad itself, which is circular. Where the reference engine is
+  code rather than a GUI (Mesa, MASON, Agents.jl, krABMaga), a small committed program *is* the
+  procedure, which is fine.
+- **Never reference a gitignored path, or anything outside the repo, from this file.** Run
+  `git check-ignore <path>` before adding one. Several directories here are ignored deliberately.
+
 ## Commands
 
 ```bash
@@ -235,7 +312,10 @@ device is available.
   access for exactly this reason.
 - Benchmarking: this machine drifts up to 40% under sustained load, so only interleaved old-vs-new
   runs on a cooled machine mean anything. Game of Life is the cleanest signal, since it has no step
-  RNG and its output is bit-identical across refactors.
+  RNG and its output is bit-identical across refactors. When reporting a number, say whether it is
+  release-mode and what is actually being measured — a flat-out `step()` counter, not a frame rate.
+  A surprisingly favourable result gets flagged as surprising rather than presented as a finding: a
+  "300x GPU speedup" here was once a debug-build, framerate-capped artifact hiding a real 10x.
 
 ### GPU — traps that already cost real debugging
 

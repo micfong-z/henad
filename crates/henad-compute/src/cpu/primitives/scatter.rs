@@ -9,7 +9,7 @@ use rayon::prelude::*;
 /// Shadow scratch above this falls back to sorting.
 pub const SHADOW_BUDGET_BYTES: usize = 256 << 20;
 
-/// How deposits landing in the same cell combine.
+/// Rule for combining deposits that land in the same cell.
 ///
 /// Both are commutative and associative, which is what lets the scatter run in parallel at all.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,7 +29,7 @@ impl Combine {
     }
 }
 
-/// Which arm a [`ScatterGrid`] resolved to.
+/// The arm a [`ScatterGrid`] resolved to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     Shadow,
@@ -470,7 +470,7 @@ mod tests {
         }
     }
 
-    /// What a multi-field model relies on to keep one dense lane set.
+    /// A multi-field model relies on this to keep one dense lane set.
     #[test]
     fn identity_deposits_are_a_no_op() {
         for combine in [Combine::Max, SUM] {

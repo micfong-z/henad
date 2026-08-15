@@ -93,7 +93,7 @@ pub struct AgentLayer {
     count: u32,
     /// Reused so a per-tick upload never allocates. See [`AgentLayer::widen_colors`].
     color_scratch: Vec<u32>,
-    /// What a uniform population was last filled with, so it only widens when that changes.
+    /// Colour a uniform population was last filled with, so it only widens when that changes.
     uniform_color: Option<u32>,
 }
 

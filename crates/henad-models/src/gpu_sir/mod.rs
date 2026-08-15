@@ -52,8 +52,8 @@ struct StepParams {
     recovery_rate: f32,
 }
 
-/// CPU-seeded initial S/I state, identical to `SirGridModel::init`: same PRNG, same traversal
-/// order, same threshold — so GPU and CPU start from a bit-identical grid.
+/// CPU-seeded initial S/I state, identical to `SirGridModel::init` down to the PRNG, the
+/// traversal order and the threshold, so GPU and CPU start from a bit-identical grid.
 pub fn seed_cells(width: u32, height: u32, initial_infected_pct: f32, mut rng: u64) -> Vec<u32> {
     let threshold = (initial_infected_pct * u32::MAX as f32) as u32;
     let mut cells = vec![0u32; (width as usize) * (height as usize)];

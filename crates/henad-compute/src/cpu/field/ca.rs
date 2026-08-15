@@ -45,9 +45,7 @@ impl<M: GridModel> CaField<M> {
         }
     }
 
-    /// Build a field with specified `cells`.
-    ///
-    /// Returns `Some` if the `cells` slice is the right length for the grid dimensions in `extent`, or `None` if not.
+    /// `None` unless `cells` is exactly the length `extent` implies.
     pub fn from_cells(extent: Extent, cells: &[u8]) -> Option<Self> {
         let (width, height) = extent.cells();
         if cells.len() != width as usize * height as usize {

@@ -2,7 +2,6 @@ use crate::params::{ParamDescriptor, ParamValue};
 use crate::topology::TopologyHint;
 use crate::view::{GridView, PointView, StatDescriptor, StatEntry};
 
-/// Describes a simulation model and can create new simulation states.
 pub trait Model: Send + Sync + 'static {
     type State: SimState;
 
@@ -15,7 +14,7 @@ pub trait Model: Send + Sync + 'static {
     fn create_state(&self, params: &[ParamValue]) -> Self::State;
 }
 
-/// A running simulation state. Object-safe for type-erased model selection.
+/// Object-safe, so the registry can type-erase every model behind one state.
 pub trait SimState: Send + 'static {
     fn step(&mut self);
     fn tick(&self) -> u64;
@@ -32,6 +31,6 @@ pub trait SimState: Send + 'static {
     fn stats(&self) -> Vec<StatEntry>;
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool;
     fn population(&self) -> u64;
-    /// Approximate heap bytes owned by this state (grid buffers, etc.).
+    /// Approximate, and only what this state owns.
     fn heap_bytes(&self) -> usize;
 }

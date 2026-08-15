@@ -9,7 +9,6 @@ pub struct Grid2D<T: Copy + Default> {
 }
 
 impl<T: Copy + Default> Grid2D<T> {
-    /// Creates a new grid filled with the default value.
     pub fn new(width: u32, height: u32) -> Self {
         let len = (width as usize) * (height as usize);
         Self {
@@ -28,7 +27,6 @@ impl<T: Copy + Default> Grid2D<T> {
         self.height
     }
 
-    /// Heap bytes used by both buffers.
     pub fn heap_bytes(&self) -> usize {
         (self.current.capacity() + self.next.capacity()) * mem::size_of::<T>()
     }
@@ -41,27 +39,25 @@ impl<T: Copy + Default> Grid2D<T> {
         self.current.is_empty()
     }
 
-    /// Returns a read-only slice of the current buffer.
     pub fn current(&self) -> &[T] {
         &self.current
     }
 
-    /// Returns a mutable slice of the current buffer (for initialization).
+    /// For initialisation. A step writes through `next_mut`.
     pub fn current_mut(&mut self) -> &mut [T] {
         &mut self.current
     }
 
-    /// Returns a mutable slice of the next buffer.
     pub fn next_mut(&mut self) -> &mut [T] {
         &mut self.next
     }
 
-    /// Returns both current (read) and next (write) buffers via split borrows.
+    /// Split borrow, so a step can read the current buffer while writing the next.
     pub fn current_and_next_mut(&mut self) -> (&[T], &mut [T]) {
         (&self.current, &mut self.next)
     }
 
-    /// Swaps the current and next buffers (pointer swap, O(1)).
+    /// A pointer swap, so no cells are copied.
     pub fn swap(&mut self) {
         mem::swap(&mut self.current, &mut self.next);
     }

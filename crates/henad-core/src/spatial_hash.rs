@@ -13,7 +13,6 @@ pub struct HashGrid {
 impl HashGrid {
     /// Fits whole cells to the world, same as [`SpatialHash::new`]. A query walks in cell index
     /// space, so cells all have to span the same distance or the wrap seam gets under-covered.
-    #[must_use]
     pub fn new(extent: Extent, cell_size: f32) -> Self {
         let cell_size = if cell_size > 0.0 { cell_size } else { 1.0 };
         let grid_w = (extent.w / cell_size).floor().max(1.0) as u32;
@@ -26,13 +25,12 @@ impl HashGrid {
         }
     }
 
-    #[must_use]
     pub fn num_cells(&self) -> u32 {
         self.grid_w * self.grid_h
     }
 }
 
-/// Spatial hash for efficient neighbor queries in 2D space.
+/// Flat counting-sort grid over agent positions, rebuilt every tick.
 pub struct SpatialHash {
     /// Requested cell size, only kept to detect changes
     cell_size: f32,
@@ -80,7 +78,7 @@ impl SpatialHash {
         }
     }
 
-    /// Returns the flat cell index for a given position (x, y) safely.
+    /// Wraps, so a position outside the world still lands in a cell.
     #[inline]
     pub fn cell_index(&self, x: f32, y: f32) -> u32 {
         let cx = ((x * self.cell_w_inv).floor() as i32).rem_euclid(self.grid_w as i32) as u32;
@@ -164,21 +162,17 @@ impl SpatialHash {
     }
 
     /// Cells along each axis. Fitted to the world, not derived from `cell_size` directly.
-    #[must_use]
     pub fn grid_dims(&self) -> (u32, u32) {
         (self.grid_w, self.grid_h)
     }
 
     /// World distance one cell spans on each axis.
-    #[must_use]
     pub fn cell_extents(&self) -> (f32, f32) {
         (self.cell_w, self.cell_h)
     }
 
-    /// `(cell_start, sorted_agents)`.
-    ///
-    /// Note that cell `c` owns `sorted_agents[cell_start[c]..cell_start[c + 1]]`.
-    #[must_use]
+    /// `(cell_start, sorted_agents)`, where cell `c` owns
+    /// `sorted_agents[cell_start[c]..cell_start[c + 1]]`.
     pub fn buckets(&self) -> (&[u32], &[u32]) {
         (&self.cell_start, &self.sorted_agents)
     }
@@ -230,7 +224,7 @@ mod tests {
         assert_eq!(result, vec![0, 1]);
     }
 
-    /// Toroidal distance on one axis
+    /// Toroidal distance on one axis.
     fn axis_delta(a: f32, b: f32, world: f32) -> f32 {
         let d = (a - b).abs();
         d.min(world - d)

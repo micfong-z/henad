@@ -20,7 +20,7 @@ pub struct Snapshot {
 
 pub enum SnapshotView {
     Cpu(CpuLayers),
-    /// The model's state never left the GPU — there are no cells to copy, only a texture to
+    /// The model's state never left the GPU, so there are no cells to copy, only a texture to
     /// sample. See [`GpuSnapshot`].
     Gpu(GpuSnapshot),
 }
@@ -41,12 +41,6 @@ impl CpuLayers {
 
 /// A GPU model's view. No owned pixel data, just handles to what is already on the GPU.
 ///
-/// This is the reason the GPU display path goes through `Snapshot` rather than through
-/// `SimState::grid_view()` / `View`: those live in `henad-core`, which must never see a `wgpu`
-/// type. `Snapshot` lives here in `henad-compute`, which does depend on wgpu, so it is the
-/// natural seam. CPU models keep producing the owned [`GridSnapshot`]/[`PointSnapshot`] exactly
-/// as before; a GPU model skips `grid_view()` entirely.
-///
 /// The two layers mirror [`CpuLayers`] and composite the same way, field first and agents over
 /// the top.
 ///
@@ -66,7 +60,7 @@ impl GpuSnapshot {
     }
 }
 
-/// Owned grid data — cells are cloned from the sim state.
+/// Owned grid data, cloned from the sim state.
 pub struct GridSnapshot {
     pub width: u32,
     pub height: u32,
@@ -74,7 +68,7 @@ pub struct GridSnapshot {
     pub palette: &'static [[u8; 4]],
 }
 
-/// Owned point cloud data — positions are cloned from the sim state.
+/// Owned point cloud data, cloned from the sim state.
 pub struct PointSnapshot {
     pub pos_x: Vec<f32>,
     pub pos_y: Vec<f32>,

@@ -1,23 +1,20 @@
-//! The display half of a GPU model: a texture the model's compute shader writes, plus the
+//! The display half of a GPU model. A texture the model's compute shader writes, plus the
 //! fullscreen-triangle render pipeline that samples it into the viewport.
 //!
-//! This is model-agnostic — a GPU model only has to write RGBA pixels into
-//! [`DisplayTarget::view`], and it gets a paintable [`GpuDisplay`] for free. Which is why it
-//! lives here rather than in `henad-models`: the checkerboard/GoL spike's `render.wgsl` was
-//! already generic (it just samples a texture), so it becomes shared machinery.
+//! Model-agnostic. A GPU model only has to write RGBA pixels into [`DisplayTarget::view`], and
+//! it gets a paintable [`GpuDisplay`] for free.
 
 use std::sync::Arc;
 
 use crate::display_scale::display_dims;
 
 /// The render-only half, handed to the UI inside a snapshot. The UI's paint callback holds an
-/// `Arc` of this and does nothing but bind and draw — it never touches simulation state.
+/// `Arc` of this and does nothing but bind and draw, never touching simulation state.
 ///
-/// Holding this by `Arc` (rather than stashing it in egui's type-keyed `CallbackResources`) is
-/// what makes teardown safe: an in-flight paint callback keeps the pipeline and its texture alive
-/// even if the sim thread and its state are dropped mid-frame.
+/// The `Arc` is what makes teardown safe. An in-flight paint callback keeps the pipeline and
+/// its texture alive even if the sim thread and its state are dropped mid-frame.
 pub struct GpuDisplay {
-    /// Cell dimensions of the underlying grid — the UI uses this for aspect-ratio fitting. The
+    /// Cell dimensions of the underlying grid, which the UI fits the aspect ratio to. The
     /// texture behind it may be smaller, see [`crate::display_scale`].
     pub width: u32,
     pub height: u32,

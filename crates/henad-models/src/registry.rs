@@ -28,10 +28,9 @@ pub enum ModelState {
 
 /// A type-erased model factory.
 ///
-/// A boxed closure rather than a bare `fn` pointer specifically so that a GPU-backed entry can
-/// *capture* a cloned [`GpuContext`]. That keeps the factory's shape identical for every model —
-/// nobody has to thread a context object through the app at call time — while still letting GPU
-/// models reach a device.
+/// A boxed closure rather than a bare `fn` pointer, so a GPU-backed entry can *capture* a cloned
+/// [`GpuContext`]. Every model's factory then has the same shape, and nothing has to thread a
+/// context through the app at call time.
 ///
 /// The `Option<u64>` is the RNG seed, which defaults to the model's fixed default when `None`.
 pub type ModelFactory = Box<dyn Fn(&[ParamValue], Option<u64>) -> ModelState + Send + Sync>;
@@ -158,12 +157,11 @@ pub fn gpu_storage_bindings_needed() -> u32 {
     .unwrap_or(0)
 }
 
-/// Returns all available models.
+/// Every available model.
 ///
-/// GPU-backed models are included only when a [`GpuContext`] is supplied. When it is `None` (no
-/// wgpu device — e.g. the web build today, or a headless runner that never acquired one) they are
-/// *omitted from the list entirely* rather than listed and then made to fail on selection: a model
-/// the user can see in the dropdown should always be one they can actually run.
+/// GPU-backed models are included only when a [`GpuContext`] is supplied. Without one they are
+/// *omitted entirely* rather than listed and then made to fail on selection. A model the user can
+/// see in the dropdown should always be one they can actually run.
 pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
     let mut entries = vec![
         register_grid_model::<crate::sir::SirGridModel>(),

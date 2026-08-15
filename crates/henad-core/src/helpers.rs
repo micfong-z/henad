@@ -24,10 +24,7 @@ pub fn xorshift64(mut state: u64) -> u64 {
 
 /// Scrambles a user-supplied seed into a usable RNG state.
 ///
-/// This is mainly to avoid
-/// 1. `xorshift64(0) == 0` being absorbing, and
-/// 2. adjacent seeds like 1, 2, 3 are somewhat correlated.
-#[must_use]
+/// Guards against the absorbing `xorshift64(0) == 0`, and decorrelates adjacent seeds like 1, 2, 3.
 pub fn mix_seed(seed: u64) -> u64 {
     const GOLDEN: u64 = 0x7347_5CB4_0A56_8E8D;
     let mut z = seed.wrapping_add(GOLDEN);

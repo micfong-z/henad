@@ -196,7 +196,6 @@ impl GpuSpatialHash {
     }
 
     /// Cell geometry, for a model to mirror into its step uniform.
-    #[must_use]
     pub fn grid(&self) -> HashGrid {
         self.grid
     }
@@ -259,7 +258,6 @@ impl GpuSpatialHash {
         u64::from(self.grid.num_cells() + 1) * std::mem::size_of::<u32>() as u64
     }
 
-    #[must_use]
     pub fn heap_bytes(&self) -> usize {
         let table = (self.grid.num_cells() as usize + 1) * std::mem::size_of::<u32>();
         let agent = self.num_agents as usize * std::mem::size_of::<u32>();

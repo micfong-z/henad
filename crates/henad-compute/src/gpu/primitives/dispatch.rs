@@ -12,7 +12,6 @@ const MAX_GROUPS_PER_DIM: u32 = 65_535;
 /// Workgroup rectangle covering `invocations`, as `(groups_x, groups_y)`.
 ///
 /// Can overshoot. Kernels bounds-check the tail anyway.
-#[must_use]
 pub fn linear_dispatch(invocations: u32) -> (u32, u32) {
     let groups = invocations.div_ceil(WORKGROUP).max(1);
     let groups_x = groups.min(MAX_GROUPS_PER_DIM);

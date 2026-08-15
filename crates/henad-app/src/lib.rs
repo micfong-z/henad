@@ -1,4 +1,4 @@
-//! Henad Engine — GUI application.
+//! The Henad GUI application.
 
 mod icons;
 mod init;

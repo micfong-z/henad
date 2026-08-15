@@ -1,36 +1,30 @@
-//! GPU-accelerated Game of Life: the same rules as [`crate::game_of_life`], but with all state
-//! resident in GPU storage buffers.
-//!
-//! Everything structural — buffers, ping-ponging, pipelines, bind groups, batched step encoding,
-//! the `SimState`/`GpuSimState` impls — comes from `henad_compute::gpu::grid_engine` via the
-//! [`GpuGridModel`] trait. What is left here is what actually makes this Game of Life: the
-//! shaders, the seeding, and the metadata.
+//! GPU Game of Life. The same rules as [`crate::game_of_life`], with all state resident in GPU
+//! storage buffers.
 //!
 //! # State layout
 //!
-//! One `array<u32>` storage buffer, ping-ponged: each step reads one side and writes the other.
+//! One `array<u32>` storage buffer, ping-ponged, so each step reads one side and writes the other.
 //!
-//! Cells are bit-packed, 32 per `u32`: cell `x` of row `y` is bit `x % 32` of word
+//! Cells are bit-packed, 32 per `u32`. Cell `x` of row `y` is bit `x % 32` of word
 //! `y * words_per_row + x / 32`, where rows are padded out to `words_per_row = ceil(width / 32)`
 //! whole words.
 //!
-//! Packing is what puts the 100M-cell target in reach: at 1 bit per cell a 100M grid is 12.5 MB
-//! per side, against 400 MB unpacked — which would blow the 128 MB storage-binding limit outright.
+//! Packing is what puts the 100M-cell target in reach. At 1 bit per cell a 100M grid is 12.5 MB
+//! per side, against 400 MB unpacked, which would blow the 128 MB storage-binding limit outright.
 //!
-//! The step pass therefore dispatches **one invocation per word**, not per cell. This is not an
-//! optimisation but a correctness requirement: 32 cells share an output word, so 32 invocations
-//! would each have to read-modify-write it and race. One owner per word means one plain store.
-//! Display and reduce still dispatch per cell and extract their own bit.
+//! The step pass therefore dispatches **one invocation per word**, not per cell. That is a
+//! correctness requirement, not an optimisation. 32 cells share an output word, so 32 invocations
+//! would each read-modify-write it and race. One owner per word means one plain store. Display
+//! and reduce still dispatch per cell and extract their own bit.
 //!
-//! The grid never leaves the GPU. What the CPU sees is only:
-//! an RGBA display texture (written by `display.wgsl` at the display cadence, sampled by the
-//! viewport) and a single `u32` alive-count (produced by `reduce.wgsl`, read back asynchronously).
+//! The grid never leaves the GPU. The CPU sees only an RGBA display texture and a single `u32`
+//! alive count read back asynchronously.
 //!
 //! # Correctness oracle
 //!
 //! Seeding uses the same `xorshift64` PRNG, the same `GRID_INIT_SEED`, the same traversal order,
 //! and the same density threshold as the CPU `GameOfLifeModel`. Given identical params the two
-//! backends therefore start from a **bit-identical** grid and must agree forever after — which is
+//! backends therefore start from a **bit-identical** grid and must agree forever after, which is
 //! what `tests::gpu_alive_count_matches_cpu_model` checks.
 
 use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
@@ -57,14 +51,14 @@ pub fn words_per_row(width: u32) -> usize {
 
 /// CPU-seeded random fill at the given density, bit-packed into the layout the shaders read.
 ///
-/// The PRNG is drawn per cell in row-major order — the same PRNG, same traversal order and same
-/// threshold as `GameOfLifeModel::init` — so the two backends still start from an identical grid
-/// even though this one stores it 32 cells to a word. Only the *storage* differs; the bit sequence
-/// does not. See the module docs — this is what makes the CPU model a usable oracle.
+/// The PRNG is drawn per cell in row-major order, with the same PRNG, traversal order and
+/// threshold as `GameOfLifeModel::init`, so the two backends still start from an identical grid
+/// even though this one stores it 32 cells to a word. Only the *storage* differs, not the bit
+/// sequence, which is what makes the CPU model a usable oracle.
 ///
-/// Padding bits (present when `width % 32 != 0`) are left zero and never read: the step pass
-/// writes them from cells that don't exist and nothing extracts them, since display and reduce are
-/// both bounded by `width`.
+/// Padding bits, present when `width % 32 != 0`, are left zero and never read. The step pass
+/// writes them from cells that don't exist and nothing extracts them, since display and reduce
+/// are both bounded by `width`.
 pub fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u32> {
     let threshold = (density * u32::MAX as f32) as u32;
     let stride = words_per_row(width);
@@ -341,7 +335,7 @@ mod tests {
     /// error that preserved population would pass it. This checks all 256 neighbourhoods against
     /// Conway's rule stated plainly, including n == 8.
     ///
-    /// Mirrors the shader's ops rather than invoking them — every op is bitwise and the 32 lanes
+    /// Mirrors the shader's ops rather than invoking them. Every op is bitwise and the 32 lanes
     /// are independent, so exercising lane 0 suffices.
     #[test]
     fn swar_rule_matches_conway_for_every_neighbourhood() {
@@ -377,8 +371,8 @@ mod tests {
         }
     }
 
-    /// `population()` reports total cells (like `GridModelState`), *not* the alive count — the
-    /// alive count is a stat. Pinned because it is an easy thing to conflate.
+    /// `population()` reports total cells like `GridModelState` does, *not* the alive count,
+    /// which is a stat. Pinned because it is an easy thing to conflate.
     #[test]
     fn population_is_total_cells_not_alive_count() {
         let Some(ctx) = headless_context() else {
@@ -400,8 +394,8 @@ mod tests {
 }
 
 /// Tests that drive the real [`henad_compute::gpu::GpuSimThread`] rather than poking the state
-/// directly — i.e. the integration surface the GUI actually uses: registry -> `ModelState::Gpu` ->
-/// spawn thread -> play/pause/step -> read the published `Snapshot`.
+/// directly, so they cover the integration surface the GUI uses. Registry, `ModelState::Gpu`,
+/// spawn thread, play/pause/step, then read the published `Snapshot`.
 ///
 /// These exist because the GUI itself cannot be driven headlessly. Everything the manual "select
 /// the GPU model, press play, check the stat, switch away and back" check would exercise is
@@ -423,7 +417,7 @@ mod runner_tests {
 
     /// Spins until the thread publishes a snapshot satisfying `pred`, or the deadline passes.
     /// The GPU thread publishes on a ~16ms wall-clock cadence, so polling is the honest way to
-    /// wait for one — a fixed sleep would be flakier.
+    /// wait for one. A fixed sleep would be flakier.
     fn wait_for(thread: &mut GpuSimThread, timeout: Duration, pred: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -508,7 +502,7 @@ mod runner_tests {
             let snap = wait_for(&mut thread, Duration::from_secs(5), |s| s.tick > 0)
                 .unwrap_or_else(|| panic!("round {round}: a respawned GPU thread must step"));
             assert!(matches!(snap.view, SnapshotView::Gpu(_)));
-            // Dropped mid-run, exactly as a model switch does — not from a paused state.
+            // Dropped mid-run, exactly as a model switch does, not from a paused state.
             drop(thread);
         }
     }

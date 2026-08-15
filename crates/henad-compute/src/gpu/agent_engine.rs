@@ -176,7 +176,7 @@ pub struct GpuAgentState<M: GpuAgentModel> {
     buffers: Vec<BufferSides>,
     /// `true` when the `a` side of every double buffered buffer holds the current state.
     current_is_a: bool,
-    /// Whether anything ping-pongs at all. Nothing flips when no buffer asked for it.
+    /// Set when some buffer asked to be double buffered. Nothing flips otherwise.
     ping_pong: bool,
 
     /// Spatial hash, if the model declares one.
@@ -268,8 +268,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
     ///
     /// # Panics
     ///
-    /// If the device cannot hold the model. The backstop, not the diagnostic — a UI asks
-    /// [`Self::demand`] first.
+    /// If the device cannot hold the model. The backstop, not the diagnostic, since a UI
+    /// asks [`Self::demand`] first.
     #[expect(clippy::too_many_lines, reason = "one linear construction of every wgpu object")]
     pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;
@@ -364,7 +364,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             (M::COUNTERS > 0).then(|| CounterReadback::new(device, &format!("{}_counters", M::ID), M::COUNTERS));
 
         let display_spec = M::DISPLAY;
-        // The view is what the display pass binds; the handle is what the snapshot carries.
+        // The display pass binds the view, the snapshot carries the handle.
         let (display_view, display_handle) = match display_spec
             .as_ref()
             .map(|_| build_display_target(device, ctx.target_format, width, height))
@@ -486,7 +486,6 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
     }
 
     /// The current side of buffer `index`, as raw words. Blocks on the GPU.
-    #[must_use]
     pub fn read_buffer(&self, index: usize) -> Vec<u32> {
         let (buffer, _) = self.buffers[index].sides(self.current_is_a);
         let size = buffer.size();
@@ -517,7 +516,6 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         out
     }
 
-    #[must_use]
     pub fn geometry(&self) -> &Geometry {
         &self.geom
     }
@@ -706,8 +704,9 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
 impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
     /// One compute pass per declared pass per step, all recorded into one encoder.
     ///
-    /// A pass is the synchronization boundary wgpu inserts barriers at, so a step's passes cannot
-    /// be collapsed into dispatches inside one pass — the later ones would read stale data.
+    /// A pass is the synchronization boundary wgpu inserts barriers at, so a step's passes
+    /// cannot be collapsed into dispatches inside one pass. The later ones would read stale
+    /// data.
     fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>) {
         if count == 0 {
             return;

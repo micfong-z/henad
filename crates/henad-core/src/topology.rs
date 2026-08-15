@@ -1,4 +1,4 @@
-/// Which display layers a model presents. A set, not a choice, so a composite model can say so.
+/// Display layers a model presents. A set, not a choice, so a composite model can say so.
 ///
 /// Must match what the state's `grid_view` and `point_view` return. A registry test checks it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +26,6 @@ impl TopologyHint {
     };
 }
 
-/// Kind of neighborhood for grid-based models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NeighborhoodKind {
     /// 8-cell neighborhood

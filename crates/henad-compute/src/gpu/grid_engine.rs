@@ -70,7 +70,7 @@ impl<M: GpuGridModel> Model for GpuGridModelDescriptor<M> {
         M::STATS.to_vec()
     }
 
-    /// Still a 2D grid — it just gets its pixels from a texture instead of a cell buffer. The UI
+    /// Still a 2D grid, just getting its pixels from a texture instead of a cell buffer. The UI
     /// branches on the *snapshot* variant, not on this hint.
     fn topology_hint(&self) -> TopologyHint {
         TopologyHint::GRID
@@ -160,8 +160,8 @@ impl<M: GpuGridModel> GpuGridState<M> {
     ///
     /// # Panics
     ///
-    /// If the device cannot hold the model. The backstop, not the diagnostic — a UI asks
-    /// [`Self::demand`] first.
+    /// If the device cannot hold the model. The backstop, not the diagnostic, since a UI
+    /// asks [`Self::demand`] first.
     #[expect(clippy::too_many_lines)]
     pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;
@@ -262,7 +262,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
         let readback = CounterReadback::new(device, &format!("{}_counters", M::ID), M::STATS.len());
 
         // --- Step pipeline ---
-        // Bindings 0..2K are interleaved (current, next) pairs; binding 2K is the step uniform.
+        // Bindings 0..2K are interleaved (current, next) pairs, and binding 2K is the step uniform.
         let mut step_entries = Vec::with_capacity(2 * M::BUFFER_COUNT + 1);
         for k in 0..M::BUFFER_COUNT {
             let base = 2 * k as u32;
@@ -346,7 +346,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
                 ],
             })
         };
-        // Display and reduce read the *primary* buffer only; auxiliary buffers are step-private.
+        // Display and reduce read the *primary* buffer only. Auxiliary buffers are step-private.
         let primary = buffers.first().expect("BUFFER_COUNT must be at least 1");
         let display_bind_a = make_display_bind_group(&format!("{}_display_bind_a", M::ID), &primary.a);
         let display_bind_b = make_display_bind_group(&format!("{}_display_bind_b", M::ID), &primary.b);
@@ -490,11 +490,9 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
     /// Records `count` step dispatches into `encoder`, one compute pass per step.
     ///
     /// Each step is a read-after-write hazard on the ping-ponged state buffers, and wgpu only
-    /// inserts synchronization barriers *between* passes, not between dispatches within a single
-    /// pass — so this deliberately opens one pass per step rather than looping dispatches inside
-    /// one pass (which would read stale data). Batching still happens at the *submission* level:
-    /// the caller records all `count` passes into one encoder and submits once, which is what
-    /// keeps submission overhead low.
+    /// inserts barriers *between* passes, not between dispatches within one. So this opens one
+    /// pass per step rather than looping dispatches inside one, which would read stale data.
+    /// Batching happens at the *submission* level instead, one encoder for all `count` passes.
     ///
     /// If `timestamps` is `Some`, the first pass's beginning and the last pass's end are stamped
     /// into query indices 0 and 1 so the caller can measure GPU time for the whole batch.
@@ -512,8 +510,7 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
             let is_first = i == 0;
             let is_last = i == count - 1;
             // A `ComputePassTimestampWrites` requires at least one of the two indices to be
-            // `Some`, so only the first and last passes of the batch get one — everything in
-            // between gets `None`.
+            // `Some`, so only the first and last passes of the batch get one.
             let timestamp_writes =
                 timestamps
                     .filter(|_| is_first || is_last)

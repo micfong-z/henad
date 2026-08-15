@@ -58,10 +58,7 @@ impl<A: AgentModel> AgentModelState<A> {
         }
     }
 
-    /// Build a state whose agents come from `seed_lanes`.
-    ///
-    /// This can be used to construct a state with a specific initial agent configuration, e.g.
-    /// to reproduce a particular simulation run.
+    /// Build a state whose agents come from `seed_lanes`, for reproducing a particular run.
     pub fn from_agents(params: &[ParamValue], seed_lanes: impl FnOnce(&mut A::Lanes, Extent)) -> Self {
         let n = extract_u32(params, 0, 10_000) as usize;
         let extent = Extent {

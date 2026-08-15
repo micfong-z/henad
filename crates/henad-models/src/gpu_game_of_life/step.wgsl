@@ -1,7 +1,7 @@
-// Bit-packed Game of Life step: 32 cells per u32, one invocation per word.
+// Bit-packed Game of Life step, 32 cells per u32 and one invocation per word.
 //
-// The rule is evaluated SWAR-style: a u32 is 32 independent 1-bit lanes, and the neighbour count
-// is kept bit-sliced — sb0/sb1/sb2 each hold one bit position of all 32 counts, rather than one
+// The rule is evaluated SWAR-style. A u32 is 32 independent 1-bit lanes, and the neighbour count
+// is kept bit-sliced, so sb0/sb1/sb2 each hold one bit position of all 32 counts rather than one
 // 4-bit count per lane. Summing is then a carry-save adder made of plain XOR/AND, so all 32 cells
 // resolve at once with no loop.
 
@@ -84,22 +84,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let d = full_add(a.sum, b.sum, c.sum);
     let sb0 = d.sum;
 
-    // Weight 2: four terms — the three stage-1 carries, plus d's.
+    // Weight 2, four terms. The three stage-1 carries, plus d's.
     let e = full_add(a.carry, b.carry, c.carry);
     let f = half_add(e.sum, d.carry);
     let sb1 = f.sum;
 
-    // Weight 4: two terms. The weight-8 carry is dropped — only n == 8 sets it, and n == 8 has
-    // sb1 == 0, so the rule below already excludes it.
+    // Weight 4, two terms. The weight-8 carry is dropped, since only n == 8 sets it, and n == 8
+    // has sb1 == 0, so the rule below already excludes it.
     let sb2 = e.carry ^ f.carry;
 
-    // Survive on 2, born on 3. Bit-sliced, 3 is 011 and 2 is 010: both need sb2 == 0 and sb1 == 1
-    // and differ only in sb0, which folds into (sb0 | cells).
+    // Survive on 2, born on 3. Bit-sliced, 3 is 011 and 2 is 010, so both need sb2 == 0 and
+    // sb1 == 1 and differ only in sb0, which folds into (sb0 | cells).
     let alive = ~sb2 & sb1 & (sb0 | r_mid.cells);
 
-    // Trailing bits of a ragged last word hold no cell. Nothing reads them — load_row's patches
-    // keep real cells off them, and display/reduce are bounded by width — but the layout invariant
-    // is that they stay zero, and there is no `break` to leave them so now.
+    // Trailing bits of a ragged last word hold no cell, and nothing reads them. load_row's patches
+    // keep real cells off them, and display/reduce are bounded by width. The layout invariant is
+    // still that they stay zero, and there is no `break` to leave them so now.
     let cells_here = min(width - word * 32u, 32u);
     var mask = 0xFFFFFFFFu;
     if cells_here < 32u {
