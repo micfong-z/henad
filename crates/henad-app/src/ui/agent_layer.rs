@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use crate::shader_bindings::agents::Uniforms;
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait};
 use henad_compute::gpu::GpuAgents;
 use henad_compute::snapshot::PointSnapshot;
@@ -99,7 +100,10 @@ pub struct AgentLayer {
 
 impl AgentLayer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::include_wgsl!("agents.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("henad_agents_shader"),
+            source: wgpu::ShaderSource::Wgsl(crate::shader_bindings::agents::SHADER_STRING.into()),
+        });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("henad_agent_bind_group_layout"),
@@ -293,7 +297,10 @@ impl AgentLayer {
         self.queue.write_buffer(
             &self.uniform,
             0,
-            bytemuck::cast_slice(&[world_w, world_h, half_w, half_h]),
+            bytemuck::bytes_of(&Uniforms {
+                world: [world_w, world_h],
+                half_size: [half_w, half_h],
+            }),
         );
 
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(

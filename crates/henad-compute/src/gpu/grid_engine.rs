@@ -13,11 +13,22 @@ use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
 use crate::gpu::capacity::Demand;
-use crate::gpu::primitives::pipeline::{compute_pipeline, storage_entry, uniform_entry};
+use crate::gpu::primitives::pipeline::{compute_pipeline, storage_entry, uniform_buffer, uniform_entry};
 use crate::gpu::primitives::readback::CounterReadback;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
 use crate::snapshot::GpuSnapshot;
+
+/// The uniform every display and reduce shader reads, mirroring `Dims` in `shared/dims.wgsl`.
+///
+/// Hand written rather than generated, since no shader in this crate uses the type and naga drops
+/// what nothing references. `henad_models` sees both sides and asserts they agree.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Dims {
+    pub grid: [u32; 2],
+    pub tex: [u32; 2],
+}
 
 /// One ping-ponged pair of storage buffers.
 struct BufferPair {
@@ -251,13 +262,15 @@ impl<M: GpuGridModel> GpuGridState<M> {
             display,
         } = build_display_target(device, ctx.target_format, width, height);
 
-        let dims_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("{}_dims_buffer", M::ID)),
-            size: (4 * std::mem::size_of::<u32>()) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&dims_buffer, 0, bytemuck::cast_slice(&[width, height, tex.0, tex.1]));
+        let dims_buffer = uniform_buffer(
+            device,
+            queue,
+            &format!("{}_dims_buffer", M::ID),
+            bytemuck::bytes_of(&Dims {
+                grid: [width, height],
+                tex: [tex.0, tex.1],
+            }),
+        );
 
         let readback = CounterReadback::new(device, &format!("{}_counters", M::ID), M::STATS.len());
 

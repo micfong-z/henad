@@ -12,20 +12,7 @@ use crate::gpu::primitives::pipeline::{
     compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
 };
 use crate::gpu::primitives::prefix_scan::PrefixScan;
-
-/// Matches `HashParams` in `hash_count.wgsl` and `hash_scatter.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct HashParams {
-    grid_w: u32,
-    grid_h: u32,
-    num_agents: u32,
-    groups_x: u32,
-    cell_w_inv: f32,
-    cell_h_inv: f32,
-    _pad0: u32,
-    _pad1: u32,
-}
+use crate::shader_bindings::primitives::hash_count::HashParams;
 
 pub struct GpuSpatialHash {
     grid: HashGrid,

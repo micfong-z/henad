@@ -13,6 +13,7 @@ const ENTRY_POINTS: &[&str] = &[
     "primitives/scan_add.wgsl",
     "primitives/reduce.wgsl",
     "shared/prelude.wgsl",
+    "shared/dims.wgsl",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

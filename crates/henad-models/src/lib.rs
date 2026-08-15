@@ -29,3 +29,17 @@ pub mod gpu_sir;
 mod gpu_test_support;
 pub mod registry;
 pub mod sir;
+
+/// `Dims` is written by the grid engine and read by every grid model's display and reduce shader,
+/// so this crate is the only one that sees both the Rust struct and the WGSL it mirrors.
+const _: () = {
+    use std::mem::offset_of;
+    type Rust = henad_compute::gpu::grid_engine::Dims;
+    type Wgsl = shader_bindings::shared::dims::Dims;
+    assert!(
+        size_of::<Rust>() == size_of::<Wgsl>(),
+        "Dims size drifted from shared/dims.wgsl"
+    );
+    assert!(offset_of!(Rust, grid) == offset_of!(Wgsl, grid), "Dims.grid moved");
+    assert!(offset_of!(Rust, tex) == offset_of!(Wgsl, tex), "Dims.tex moved");
+};

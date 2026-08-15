@@ -1,5 +1,5 @@
 
-#import shared::dims::Dims
+#import shared::dims::{Dims, cell_at}
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> dims: Dims;
@@ -15,10 +15,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // One invocation per texel, which is one cell until the grid outgrows the texture cap.
     let width = dims.grid.x;
-    let x = global_id.x * width / dims.tex.x;
-    let y = global_id.y * dims.grid.y / dims.tex.y;
+    let cell_xy = cell_at(global_id.xy, dims);
+    let x = cell_xy.x;
+    let y = cell_xy.y;
 
     // Read the containing word and extract this cell's bit, unlike the per-word step pass.
     let words_per_row = (width + 31u) / 32u;

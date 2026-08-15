@@ -6,3 +6,8 @@ struct Dims {
     grid: vec2<u32>,
     tex: vec2<u32>,
 }
+
+// Cell a display texel samples. Identity while the grid still fits the texture.
+fn cell_at(texel: vec2<u32>, dims: Dims) -> vec2<u32> {
+    return texel * dims.grid / dims.tex;
+}

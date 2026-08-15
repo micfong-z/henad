@@ -14,6 +14,7 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::boids::{BoidLanes, BoidsModel, HEADING_PALETTE};
+use crate::shader_bindings::gpu_boids::step::Params as StepParams;
 
 /// The list is [`agent_model_param_descriptors`] for [`BoidsModel`] verbatim, so both backends
 /// take the same vector. Only these three are read here, the rest go through
@@ -26,39 +27,6 @@ const PARAM_WORLD_HEIGHT: usize = 2;
 const POS: usize = 0;
 const VEL: usize = 1;
 const COLOR: usize = 2;
-
-/// Matches `Params` in `step.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct StepParams {
-    num_agents: u32,
-    groups_x: u32,
-    grid_w: u32,
-    grid_h: u32,
-
-    cell_w: f32,
-    cell_h: f32,
-    cell_w_inv: f32,
-    cell_h_inv: f32,
-
-    world_w: f32,
-    world_h: f32,
-    half_w: f32,
-    half_h: f32,
-
-    visual_range: f32,
-    visual_sq: f32,
-    protected_sq: f32,
-    separation: f32,
-
-    alignment: f32,
-    cohesion: f32,
-    max_speed: f32,
-    min_speed: f32,
-
-    /// Heading colours, in the uniform to keep a storage binding free.
-    palette: [[u32; 4]; 2],
-}
 
 /// Matches `Params` in the generated reduce leaf.
 #[repr(C)]

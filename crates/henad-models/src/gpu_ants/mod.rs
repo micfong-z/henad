@@ -18,6 +18,9 @@ use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::ants::field::{CELL_PALETTE, EMPTY, LOW_PHEROMONE, PheromoneField};
 use crate::ants::{ANT_PALETTE, AntLanes, AntsModel};
+use crate::shader_bindings::gpu_ants::display::Params as DisplayParams;
+use crate::shader_bindings::gpu_ants::merge::Params as MergeParams;
+use crate::shader_bindings::gpu_ants::step::Params as StepParams;
 
 /// The list is [`agent_model_param_descriptors`] for [`AntsModel`] verbatim, so both backends take
 /// the same vector. Only these three are read here, the rest go through the two `from_params`.
@@ -40,48 +43,6 @@ const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 /// `state` packs what the CPU model keeps in three lanes. Mirrored in `step.wgsl`.
 const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
 const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
-
-/// Matches `Params` in `step.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct StepParams {
-    num_agents: u32,
-    groups_x: u32,
-    grid_w: u32,
-    grid_h: u32,
-
-    n_cells: u32,
-    cutdown: f32,
-    diagonal: f32,
-    reward: f32,
-
-    momentum: f32,
-    random_action: f32,
-    palette: [u32; 2],
-}
-
-/// Matches `Params` in `merge.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct MergeParams {
-    n: u32,
-    groups_x: u32,
-    evaporation: f32,
-    low: f32,
-}
-
-/// Matches `Params` in `display.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct DisplayParams {
-    width: u32,
-    height: u32,
-    n_cells: u32,
-    _pad: u32,
-    tex: [u32; 2],
-    _pad2: [u32; 2],
-    palette: [[u32; 4]; 4],
-}
 
 /// Matches `Params` in the generated reduce leaf.
 #[repr(C)]
