@@ -374,9 +374,19 @@ is about not undoing them.
 - **Two clocks that must be reset together.** `gpu/sim_thread.rs` gates its stats refresh on
   `last_stats_publish` but divides by `tps_timer`; resetting one without the other reports a whole
   batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.
-- **The WGSL/Rust binding correspondence is hand-maintained.** `&[Binding]` puts a pass's bindings
-  in one list next to its shader, but nothing checks that the declared WGSL *types* or the uniform
-  struct layouts match. `wgsl_bindgen` is the known fix, not yet taken.
+- **Uniform layouts are generated, the binding correspondence is not.** A `build.rs` in
+  henad-compute, henad-models and henad-app runs `wgsl_bindgen` over that crate's shaders, and the
+  output lands in `OUT_DIR` behind a `shader_bindings` module. Uniform structs, workgroup sizes and
+  bind group layouts therefore come from the WGSL, and each model asserts its own struct against the
+  generated one. Shared WGSL lives in `henad-compute/src/gpu/shared/` and is reached with `#import`,
+  resolved at build time, so no shader is assembled at runtime any more.
+  What stays hand-maintained is the `&[Binding]` slice per pass, whose position is the `@binding`
+  index. Routing that through the generated bind groups was tried and reverted, since it added 248
+  lines across the models and henad-core to remove an error wgpu already reported loudly at model
+  construction, and left the buffer indices exactly as hand-written as before.
+  Generation also cannot reach a type no shader in the crate uses (hence the hand-written `Dims` in
+  `grid_engine.rs`) or a constant arriving through an `#import`, since naga keeps only what an entry
+  point references.
 
 ### Sim runs off the UI thread
 

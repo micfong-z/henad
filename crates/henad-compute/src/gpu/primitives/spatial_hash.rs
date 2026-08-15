@@ -8,9 +8,7 @@ use henad_core::authoring::field::Extent;
 pub use henad_core::spatial_hash::HashGrid;
 
 use crate::gpu::primitives::dispatch::linear_dispatch;
-use crate::gpu::primitives::pipeline::{
-    compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
-};
+use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::prefix_scan::PrefixScan;
 use crate::shader_bindings::primitives::hash_count::HashParams;
 
@@ -81,15 +79,9 @@ impl GpuSpatialHash {
         );
 
         // Positions are the model's own ping-ponged buffers, so `bind_positions` fills this in.
-        let count_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{label}_hash_count_layout")),
-            entries: &[
-                storage_entry(0, true),
-                storage_entry(1, false),
-                storage_entry(2, false),
-                uniform_entry(3),
-            ],
-        });
+        let count_layout = device.create_bind_group_layout(
+            &crate::shader_bindings::primitives::hash_count::WgpuBindGroup0::LAYOUT_DESCRIPTOR,
+        );
         let count_pipeline = compute_pipeline(
             device,
             &format!("{label}_hash_count"),
@@ -97,15 +89,9 @@ impl GpuSpatialHash {
             &count_layout,
         );
 
-        let scatter_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{label}_hash_scatter_layout")),
-            entries: &[
-                storage_entry(0, true),
-                storage_entry(1, false),
-                storage_entry(2, false),
-                uniform_entry(3),
-            ],
-        });
+        let scatter_layout = device.create_bind_group_layout(
+            &crate::shader_bindings::primitives::hash_scatter::WgpuBindGroup0::LAYOUT_DESCRIPTOR,
+        );
         let scatter_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(&format!("{label}_hash_scatter_bind")),
             layout: &scatter_layout,

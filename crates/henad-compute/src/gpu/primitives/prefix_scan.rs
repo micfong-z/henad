@@ -4,9 +4,7 @@
 //! results are added back down the chain. Levels are built once at construction.
 
 use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
-use crate::gpu::primitives::pipeline::{
-    compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
-};
+use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
 use crate::shader_bindings::primitives::scan::ScanParams;
 
 /// Its bind groups keep the buffers it touches alive.
@@ -47,19 +45,10 @@ fn build_pipelines(
     wgpu::ComputePipeline,
     wgpu::ComputePipeline,
 ) {
-    let scan_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(&format!("{label}_scan_layout")),
-        entries: &[
-            storage_entry(0, true),
-            storage_entry(1, false),
-            storage_entry(2, false),
-            uniform_entry(3),
-        ],
-    });
-    let add_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(&format!("{label}_scan_add_layout")),
-        entries: &[storage_entry(0, true), storage_entry(1, false), uniform_entry(2)],
-    });
+    let scan_layout =
+        device.create_bind_group_layout(&crate::shader_bindings::primitives::scan::WgpuBindGroup0::LAYOUT_DESCRIPTOR);
+    let add_layout = device
+        .create_bind_group_layout(&crate::shader_bindings::primitives::scan_add::WgpuBindGroup0::LAYOUT_DESCRIPTOR);
     let scan_pipeline = compute_pipeline(
         device,
         &format!("{label}_scan"),
