@@ -65,7 +65,7 @@ mod native {
     use std::thread::JoinHandle;
     use std::time::Instant;
 
-    use super::{build_snapshot, SimCommand, Snapshot, WakeFn};
+    use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
     use henad_core::model::SimState;
 
     /// The handoff point between the two threads. `fresh` is the newest publish waiting to be
@@ -350,7 +350,7 @@ mod native {
 // =====================================================================
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use super::{build_snapshot, SimCommand, Snapshot, WakeFn};
+    use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
     use henad_core::model::SimState;
 
     /// Ceiling on catch-up batches per `update()`, so a backgrounded tab handing back a
@@ -553,8 +553,8 @@ mod pacing_timing_tests {
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
     use henad_core::view::StatEntry;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     struct Counter(Arc<AtomicU64>);
 

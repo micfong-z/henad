@@ -323,38 +323,38 @@ fn build_pipelines(
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     // One vertex buffer per lane, so a CPU model's positions upload straight from the snapshot.
     let split = [
-        wgpu::VertexBufferLayout {
+        Some(wgpu::VertexBufferLayout {
             array_stride: 4,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &POS_X_ATTRS,
-        },
-        wgpu::VertexBufferLayout {
+        }),
+        Some(wgpu::VertexBufferLayout {
             array_stride: 4,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &POS_Y_ATTRS,
-        },
-        wgpu::VertexBufferLayout {
+        }),
+        Some(wgpu::VertexBufferLayout {
             array_stride: 4,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &COLOR_ATTRS,
-        },
+        }),
     ];
 
     // A GPU model's position lane is `vec2`, so both attributes come out of one buffer.
     let interleaved = [
-        wgpu::VertexBufferLayout {
+        Some(wgpu::VertexBufferLayout {
             array_stride: 8,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &POS_XY_ATTRS,
-        },
-        wgpu::VertexBufferLayout {
+        }),
+        Some(wgpu::VertexBufferLayout {
             array_stride: 4,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &COLOR_ATTRS,
-        },
+        }),
     ];
 
-    let make = |label: &str, buffers: &[wgpu::VertexBufferLayout<'_>]| {
+    let make = |label: &str, buffers: &[Option<wgpu::VertexBufferLayout<'_>>]| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(pipeline_layout),

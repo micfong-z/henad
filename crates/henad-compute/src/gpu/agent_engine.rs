@@ -509,7 +509,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("readback poll");
         rx.recv().expect("readback channel").expect("readback map");
-        let data = staging.slice(..).get_mapped_range();
+        let data = staging.slice(..).get_mapped_range().expect("readback range");
         let out = bytemuck::cast_slice::<u8, u32>(&data).to_vec();
         drop(data);
         staging.unmap();

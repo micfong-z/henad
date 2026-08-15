@@ -351,7 +351,7 @@ mod tests {
             .expect("device poll");
         rx.recv().expect("map channel").expect("map");
 
-        let data = staging.slice(..).get_mapped_range();
+        let data = staging.slice(..).get_mapped_range().expect("map range");
         let out = bytemuck::cast_slice::<u8, u32>(&data)[..len].to_vec();
         drop(data);
         staging.unmap();

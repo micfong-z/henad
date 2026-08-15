@@ -502,6 +502,7 @@ fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,
         compatible_surface: None,
+        ..Default::default()
     }))
     .context("no suitable GPU adapter found")?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
