@@ -28,7 +28,7 @@ impl<M: GridModel> GridModelState<M> {
             h: extract_u32(params, 1, 1024) as f32,
         };
         Self {
-            field: CaField::with_seed(extent, params, seed),
+            field: CaField::with_seed(extent, own_params(params), seed),
             params: ParamStore::new(&grid_model_param_descriptors::<M>(), params),
             tick: 0,
         }
@@ -49,6 +49,14 @@ impl<M: GridModel> GridModelState<M> {
 }
 
 /// Grid width and height, prepended to the model's own descriptors.
+/// Params the engine prepends before a model's own: `grid_width`, `grid_height`.
+pub const GRID_PARAM_BASE: usize = 2;
+
+/// A grid model's own slice of a composed list.
+fn own_params(params: &[ParamValue]) -> &[ParamValue] {
+    &params[GRID_PARAM_BASE.min(params.len())..]
+}
+
 pub fn grid_model_param_descriptors<M: GridModel>() -> Vec<ParamDescriptor> {
     let mut descs = vec![
         u32_param("grid_width", "Grid Width", 1024, 1, 10_000).on_reload(),
@@ -60,7 +68,7 @@ pub fn grid_model_param_descriptors<M: GridModel>() -> Vec<ParamDescriptor> {
 
 impl<M: GridModel> SimState for GridModelState<M> {
     fn step(&mut self) {
-        let hot = M::from_params(self.params.values());
+        let hot = M::from_params(own_params(self.params.values()));
         self.field.update(&(), &hot, self.tick);
         self.tick += 1;
     }

@@ -9,6 +9,10 @@ use henad_core::view::{StatDescriptor, StatValue};
 const DEAD: u8 = 0;
 const ALIVE: u8 = 1;
 
+henad_core::params! {
+    DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)).on_reload(),
+}
+
 /// Cell colours, shared with the GPU Game of Life's stat colour.
 ///
 /// `pub` so the GPU variant can reuse the same literal rather than duplicating it. Its display
@@ -30,13 +34,13 @@ impl GridModel for GameOfLifeModel {
     type Params = ();
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)).on_reload()]
+        descriptors()
     }
 
     fn from_params(_params: &[ParamValue]) {}
 
     fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
-        let density = extract_f32(params, 2, 0.3);
+        let density = extract_f32(params, DENSITY, 0.3);
         let threshold = (density * u32::MAX as f32) as u32;
         for cell in grid.current_mut().iter_mut() {
             *rng = xorshift64(*rng);
@@ -69,6 +73,7 @@ fn count_alive(cells: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use henad_compute::cpu::grid_engine::GridModelState;
     use henad_core::model::SimState as _;

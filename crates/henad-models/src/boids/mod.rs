@@ -30,14 +30,15 @@ pub const HEADING_PALETTE: [[u8; 4]; 8] = [
     [0x8E, 0x54, 0xD8, 0xFF], // [315, 360) NE -> E
 ];
 
-/// Param indices after the engine's `num_agents`, `world_width`, `world_height`.
-const VISUAL_RANGE: usize = 3;
-const PROTECTED_RANGE: usize = 4;
-const SEPARATION: usize = 5;
-const ALIGNMENT: usize = 6;
-const COHESION: usize = 7;
-const MAX_SPEED: usize = 8;
-const MIN_SPEED: usize = 9;
+henad_core::params! {
+    VISUAL_RANGE = f32_param("visual_range", "Visual Range", 50.0, 1.0, 200.0, Some(1.0)),
+    PROTECTED_RANGE = f32_param("protected_range", "Protected Range", 8.0, 0.5, 50.0, Some(0.5)),
+    SEPARATION = f32_param("separation", "Separation", 0.05, 0.0, 2.0, Some(0.01)),
+    ALIGNMENT = f32_param("alignment", "Alignment", 0.05, 0.0, 2.0, Some(0.01)),
+    COHESION = f32_param("cohesion", "Cohesion", 0.0005, 0.0, 0.01, Some(0.0001)),
+    MAX_SPEED = f32_param("max_speed", "Max Speed", 15.0, 1.0, 50.0, Some(0.5)),
+    MIN_SPEED = f32_param("min_speed", "Min Speed", 3.0, 0.5, 20.0, Some(0.5)),
+}
 
 pub struct BoidsModel;
 
@@ -77,22 +78,13 @@ impl AgentModel for BoidsModel {
     type Tally = ();
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![
-            f32_param("visual_range", "Visual Range", 50.0, 1.0, 200.0, Some(1.0)),
-            f32_param("protected_range", "Protected Range", 8.0, 0.5, 50.0, Some(0.5)),
-            f32_param("separation", "Separation", 0.05, 0.0, 2.0, Some(0.01)),
-            f32_param("alignment", "Alignment", 0.05, 0.0, 2.0, Some(0.01)),
-            f32_param("cohesion", "Cohesion", 0.0005, 0.0, 0.01, Some(0.0001)),
-            f32_param("max_speed", "Max Speed", 15.0, 1.0, 50.0, Some(0.5)),
-            f32_param("min_speed", "Min Speed", 3.0, 0.5, 20.0, Some(0.5)),
-        ]
+        descriptors()
     }
 
-    fn from_params(params: &[ParamValue]) -> BoidParams {
+    fn from_params(params: &[ParamValue], extent: Extent) -> BoidParams {
         let visual_range = extract_f32(params, VISUAL_RANGE, 50.0);
         let protected_range = extract_f32(params, PROTECTED_RANGE, 8.0);
-        let world_w = extract_f32(params, 1, 1_000.0);
-        let world_h = extract_f32(params, 2, 1_000.0);
+        let (world_w, world_h) = (extent.w, extent.h);
         BoidParams {
             visual_range,
             visual_sq: visual_range * visual_range,
@@ -153,6 +145,7 @@ impl AgentModel for BoidsModel {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use henad_compute::cpu::agent_engine::AgentModelState;
     use henad_core::model::SimState as _;

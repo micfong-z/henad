@@ -3,7 +3,7 @@
 //! Tick 0 is bit identical since seeding goes through [`BoidsModel::init`]. After that, the
 //! neighbour index does not fix the order within a cell, so trajectories are likely different.
 
-use henad_compute::cpu::agent_engine::{AGENT_INIT_SEED, agent_model_param_descriptors};
+use henad_compute::cpu::agent_engine::{AGENT_INIT_SEED, agent_model_param_descriptors, split_params};
 use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
 use henad_core::authoring::field::Extent;
 use henad_core::authoring::gpu_agent_model::{
@@ -114,7 +114,7 @@ impl GpuAgentModel for GpuBoids {
         // would be free to drift.
         let mut lanes = BoidLanes::alloc(n);
         let mut rng = seed.map_or(AGENT_INIT_SEED, mix_seed);
-        BoidsModel::init(&mut lanes, geom.extent, params, &mut rng);
+        BoidsModel::init(&mut lanes, geom.extent, split_params::<BoidsModel>(params).0, &mut rng);
 
         // The CPU lane holds palette indices, this one is drawn directly so it holds colours.
         let colors: Vec<u32> = lanes.color.iter().map(|&c| packed_palette_color(c)).collect();
@@ -126,7 +126,10 @@ impl GpuAgentModel for GpuBoids {
     }
 
     fn index_cell_size(params: &[ParamValue]) -> f32 {
-        BoidsModel::index_cell_size(&BoidsModel::from_params(params))
+        BoidsModel::index_cell_size(&BoidsModel::from_params(
+            split_params::<BoidsModel>(params).0,
+            Self::dims(params).1,
+        ))
     }
 
     fn pass_params_bytes(pass: PassId, ctx: PassCtx<'_>, params: &[ParamValue]) -> Vec<u8> {
@@ -140,7 +143,7 @@ impl GpuAgentModel for GpuBoids {
             .to_vec();
         }
 
-        let hot = BoidsModel::from_params(params);
+        let hot = BoidsModel::from_params(split_params::<BoidsModel>(params).0, Self::dims(params).1);
         let grid = ctx.geom.index.expect("INDEX is declared");
         bytemuck::bytes_of(&StepParams {
             num_agents: ctx.geom.num_agents,
@@ -274,7 +277,7 @@ mod tests {
 
         let values = params(4_000, 800.0);
         // Through the model's own extraction, so the test cannot disagree with the kernel.
-        let hot = BoidsModel::from_params(&values);
+        let hot = BoidsModel::from_params(split_params::<BoidsModel>(&values).0, GpuBoids::dims(&values).1);
         let (max_speed, min_speed) = (hot.max_speed, hot.min_speed);
 
         let mut state = State::new(&ctx, &values);
@@ -321,7 +324,7 @@ mod tests {
 
         let values = params(10_000, 1_000.0);
         // Through the model's own extraction, so the test cannot disagree with the kernel.
-        let hot = BoidsModel::from_params(&values);
+        let hot = BoidsModel::from_params(split_params::<BoidsModel>(&values).0, GpuBoids::dims(&values).1);
         let (max_speed, min_speed) = (hot.max_speed, hot.min_speed);
 
         let mut state = State::new(&ctx, &values);

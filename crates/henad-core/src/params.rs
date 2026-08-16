@@ -104,6 +104,38 @@ impl ParamStore {
     }
 }
 
+/// Declares a model's parameters and their indices in one place.
+///
+/// The index is the declaration's position, so it is derived rather than written down and cannot
+/// drift from the list. Expands at module scope, next to the impl that forwards to `descriptors`.
+///
+/// ```ignore
+/// params! {
+///     DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)),
+/// }
+/// ```
+#[macro_export]
+macro_rules! params {
+    ($($name:ident = $descriptor:expr),+ $(,)?) => {
+        $crate::__param_indices!(0usize, $($name,)+);
+
+        /// This model's own parameters, in index order.
+        fn descriptors() -> ::std::vec::Vec<$crate::params::ParamDescriptor> {
+            ::std::vec![$($descriptor),+]
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __param_indices {
+    ($i:expr,) => {};
+    ($i:expr, $first:ident, $($rest:ident,)*) => {
+        const $first: usize = $i;
+        $crate::__param_indices!($i + 1usize, $($rest,)*);
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

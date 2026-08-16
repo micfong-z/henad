@@ -5,7 +5,7 @@
 //! [`crate::gpu_sir`] gives. Deposits still combine with `max`, which is order independent, so
 //! unlike [`crate::gpu_boids`] a run does replay.
 
-use henad_compute::cpu::agent_engine::{AGENT_INIT_SEED, agent_model_param_descriptors};
+use henad_compute::cpu::agent_engine::{AGENT_INIT_SEED, agent_model_param_descriptors, split_params};
 use henad_compute::cpu::field::scalar::ScalarFieldSpec as _;
 use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
 use henad_core::authoring::field::Extent;
@@ -178,7 +178,12 @@ impl GpuAgentModel for GpuAnts {
         // be free to drift.
         let mut lanes = AntLanes::alloc(n);
         let mut rng_state = seed.map_or(AGENT_INIT_SEED, mix_seed);
-        AntsModel::init(&mut lanes, geom.extent, params, &mut rng_state);
+        AntsModel::init(
+            &mut lanes,
+            geom.extent,
+            split_params::<AntsModel>(params).0,
+            &mut rng_state,
+        );
 
         let positions: Vec<f32> = lanes
             .pos_x
@@ -212,7 +217,7 @@ impl GpuAgentModel for GpuAnts {
         let geom = ctx.geom;
         match pass {
             PassId::Step(0) => {
-                let hot = AntsModel::from_params(params);
+                let hot = AntsModel::from_params(split_params::<AntsModel>(params).0, Self::dims(params).1);
                 bytemuck::bytes_of(&StepParams {
                     num_agents: geom.num_agents,
                     groups_x: ctx.groups_x,
@@ -348,7 +353,7 @@ mod tests {
     #[test]
     fn the_cpu_reward_lane_only_ever_holds_two_values() {
         let values = params(500, 200.0);
-        let reward = AntsModel::from_params(&values).reward;
+        let reward = AntsModel::from_params(split_params::<AntsModel>(&values).0, GpuAnts::dims(&values).1).reward;
         let mut state = AgentModelState::<AntsModel>::from_params(&values);
         for tick in 0..200 {
             state.step();
