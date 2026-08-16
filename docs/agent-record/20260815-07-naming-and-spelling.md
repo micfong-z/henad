@@ -1,7 +1,7 @@
 ---
 date: 2026-08-15
 title: "Naming and American-English spelling rules in AGENTS.md, applied to code identifiers"
-model: grok-4.5 (timi-cc-grok/grok-4.5), via opencode
+model: grok-4.5, via opencode
 issue: none — user request to record two style rules and sweep the codebase
 status: complete — rules written, identifier/string/WGSL violations fixed, comments left British
 baseline_commit: 82775b8

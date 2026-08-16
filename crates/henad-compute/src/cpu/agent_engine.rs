@@ -69,13 +69,13 @@ impl<A: AgentModel> AgentModelState<A> {
 
         let mut lanes = A::Lanes::alloc(n);
         let mut seed = AGENT_INIT_SEED;
+        let (own, field_params) = split_params::<A>(params);
 
         // Init is still needed to ensure that seed is advanced to the right value for the first step.
-        A::init(&mut lanes, extent, params, &mut seed);
+        A::init(&mut lanes, extent, own, &mut seed);
 
         seed_lanes(&mut lanes, extent);
 
-        let (own, field_params) = split_params::<A>(params);
         let field = A::Field::new(extent, field_params);
         let deposits = field.alloc_deposits(n);
         let hot = A::from_params(own, extent);

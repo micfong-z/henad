@@ -255,6 +255,35 @@ mod tests {
         assert_eq!((view.world_w, view.world_h), (512.0, 256.0));
         assert!(state.grid_view().is_none(), "boids have no field layer");
     }
+
+    #[test]
+    fn from_agents_initializes_velocities_from_model_params() {
+        let params = vec![
+            ParamValue::U32(1),
+            ParamValue::F32(100.0),
+            ParamValue::F32(100.0),
+            ParamValue::F32(20.0),
+            ParamValue::F32(5.0),
+            ParamValue::F32(0.5),
+            ParamValue::F32(0.25),
+            ParamValue::F32(0.125),
+            ParamValue::F32(8.0),
+            ParamValue::F32(2.0),
+        ];
+        let state = State::from_agents(&params, |lanes, _extent| {
+            lanes.pos_x[0] = 50.0;
+            lanes.pos_y[0] = 50.0;
+        });
+        let lanes = state.lanes();
+
+        // Midpoint of the configured band, not an exact compare: the speed goes through
+        // `sin`/`cos`, whose last bit is a libm detail and so varies by platform.
+        let speed = lanes.vel_x[0].hypot(lanes.vel_y[0]);
+        assert!(
+            (speed - 5.0).abs() < 1e-4,
+            "initial speed should be 0.5 * (min_speed + max_speed), got {speed}"
+        );
+    }
 }
 
 #[derive(Clone, Copy)]
