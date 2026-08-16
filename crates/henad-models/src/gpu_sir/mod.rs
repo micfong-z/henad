@@ -14,43 +14,44 @@
 //! and reduce shaders.
 
 use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_core::authoring::binding::BindingDecl;
 use henad_core::authoring::gpu_grid_model::GpuGridModel;
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, mix_seed, u32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
+use crate::shader_bindings::gpu_sir::step::Params as StepParams;
 use crate::sir::PALETTE;
 
 /// A domain-separated seed for the per-cell RNG buffer, so its stream doesn't start correlated
 /// with the state-seeding stream (which reuses `GRID_INIT_SEED` directly).
 const RNG_INIT_SEED: u64 = GRID_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 
-/// Param indices, matching `SirGridModel::from_params` so this model is a drop-in comparison
-/// against the CPU one.
-const PARAM_WIDTH: usize = 0;
-const PARAM_HEIGHT: usize = 1;
-const PARAM_INFECTION_RATE: usize = 2;
-const PARAM_RECOVERY_RATE: usize = 3;
-const PARAM_INITIAL_INFECTED_PCT: usize = 4;
+// The whole list, matching what the CPU engine composes for `SirGridModel`, so this model is a
+// drop-in comparison against it.
+henad_core::params! {
+    const PARAM_WIDTH = u32_param("grid_width", "Grid Width", DEFAULT_DIM, 1, 16_384);
+    const PARAM_HEIGHT = u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384);
+    const PARAM_INFECTION_RATE =
+        f32_param("infection_rate", "Infection Rate", DEFAULT_INFECTION_RATE, 0.0, 1.0, Some(0.01));
+    const PARAM_RECOVERY_RATE = f32_param("recovery_rate", "Recovery Rate", DEFAULT_RECOVERY_RATE, 0.0, 1.0, Some(0.01));
+    const PARAM_INITIAL_INFECTED_PCT = f32_param(
+        "initial_infected_pct",
+        "Initial Infected %",
+        DEFAULT_INITIAL_INFECTED_PCT,
+        0.0,
+        1.0,
+        Some(0.001),
+    );
+}
 
 const DEFAULT_DIM: u32 = 1024;
 const DEFAULT_INFECTION_RATE: f32 = 0.3;
 const DEFAULT_RECOVERY_RATE: f32 = 0.05;
 const DEFAULT_INITIAL_INFECTED_PCT: f32 = 0.01;
 
-const CELL_S: usize = 0;
-const CELL_I: usize = 1;
-const CELL_R: usize = 2;
-
-/// Matches `Params` in `step.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct StepParams {
-    width: u32,
-    height: u32,
-    infection_rate: f32,
-    recovery_rate: f32,
-}
+// Cell states, taken from the shader that defines them rather than mirrored.
+use crate::shader_bindings::gpu_sir::step::{I as CELL_I, R as CELL_R, S as CELL_S};
 
 /// CPU-seeded initial S/I state, identical to `SirGridModel::init` down to the PRNG, the
 /// traversal order and the threshold, so GPU and CPU start from a bit-identical grid.
@@ -87,47 +88,24 @@ impl GpuGridModel for GpuSir {
     const DESCRIPTION: &'static str =
         "Classic SIR compartmental model on a toroidal grid with Moore neighborhood, stepped entirely on the GPU";
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
-    /// State buffer plus the per-cell RNG buffer. See the module docs.
-    const BUFFER_COUNT: usize = 2;
     const STATS: &'static [StatDescriptor] = &[
         StatDescriptor::new("Susceptible", PALETTE[0]),
         StatDescriptor::new("Infected", PALETTE[1]),
         StatDescriptor::new("Recovered", PALETTE[2]),
     ];
 
-    const STEP_SHADER: &'static str = include_str!("step.wgsl");
-    const DISPLAY_SHADER: &'static str = include_str!("display.wgsl");
-    const REDUCE_SHADER: &'static str = include_str!("reduce.wgsl");
+    const BUFFERS: &'static [&'static str] = &["state", "rng"];
+
+    const STEP_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_SIR_STEP;
+    const DISPLAY_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_SIR_DISPLAY;
+    const REDUCE_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_SIR_REDUCE;
+
+    const STEP_SHADER: &'static str = crate::shader_bindings::gpu_sir::step::SHADER_STRING;
+    const DISPLAY_SHADER: &'static str = crate::shader_bindings::gpu_sir::display::SHADER_STRING;
+    const REDUCE_SHADER: &'static str = crate::shader_bindings::gpu_sir::reduce::SHADER_STRING;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![
-            u32_param("grid_width", "Grid Width", DEFAULT_DIM, 1, 16_384),
-            u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384),
-            f32_param(
-                "infection_rate",
-                "Infection Rate",
-                DEFAULT_INFECTION_RATE,
-                0.0,
-                1.0,
-                Some(0.01),
-            ),
-            f32_param(
-                "recovery_rate",
-                "Recovery Rate",
-                DEFAULT_RECOVERY_RATE,
-                0.0,
-                1.0,
-                Some(0.01),
-            ),
-            f32_param(
-                "initial_infected_pct",
-                "Initial Infected %",
-                DEFAULT_INITIAL_INFECTED_PCT,
-                0.0,
-                1.0,
-                Some(0.001),
-            ),
-        ]
+        descriptors()
     }
 
     fn dims(params: &[ParamValue]) -> (u32, u32) {
@@ -161,9 +139,9 @@ impl GpuGridModel for GpuSir {
 
     fn stats(counts: &[u32]) -> Vec<StatValue> {
         vec![
-            StatValue::Scalar(f64::from(counts[CELL_S])),
-            StatValue::Scalar(f64::from(counts[CELL_I])),
-            StatValue::Scalar(f64::from(counts[CELL_R])),
+            StatValue::Scalar(f64::from(counts[CELL_S as usize])),
+            StatValue::Scalar(f64::from(counts[CELL_I as usize])),
+            StatValue::Scalar(f64::from(counts[CELL_R as usize])),
         ]
     }
 }

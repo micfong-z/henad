@@ -4,19 +4,8 @@
 //! results are added back down the chain. Levels are built once at construction.
 
 use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
-use crate::gpu::primitives::pipeline::{
-    compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
-};
-
-/// Matches `ScanParams` in `scan.wgsl` and `scan_add.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct ScanParams {
-    n: u32,
-    groups_x: u32,
-    num_blocks: u32,
-    _pad: u32,
-}
+use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
+use crate::shader_bindings::primitives::scan::ScanParams;
 
 /// Its bind groups keep the buffers it touches alive.
 struct Level {
@@ -56,29 +45,20 @@ fn build_pipelines(
     wgpu::ComputePipeline,
     wgpu::ComputePipeline,
 ) {
-    let scan_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(&format!("{label}_scan_layout")),
-        entries: &[
-            storage_entry(0, true),
-            storage_entry(1, false),
-            storage_entry(2, false),
-            uniform_entry(3),
-        ],
-    });
-    let add_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(&format!("{label}_scan_add_layout")),
-        entries: &[storage_entry(0, true), storage_entry(1, false), uniform_entry(2)],
-    });
+    let scan_layout =
+        device.create_bind_group_layout(&crate::shader_bindings::primitives::scan::WgpuBindGroup0::LAYOUT_DESCRIPTOR);
+    let add_layout = device
+        .create_bind_group_layout(&crate::shader_bindings::primitives::scan_add::WgpuBindGroup0::LAYOUT_DESCRIPTOR);
     let scan_pipeline = compute_pipeline(
         device,
         &format!("{label}_scan"),
-        include_str!("scan.wgsl"),
+        crate::shader_bindings::primitives::scan::SHADER_STRING,
         &scan_layout,
     );
     let add_pipeline = compute_pipeline(
         device,
         &format!("{label}_scan_add"),
-        include_str!("scan_add.wgsl"),
+        crate::shader_bindings::primitives::scan_add::SHADER_STRING,
         &add_layout,
     );
     (scan_layout, add_layout, scan_pipeline, add_pipeline)

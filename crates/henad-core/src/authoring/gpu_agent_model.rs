@@ -12,37 +12,27 @@
 //!
 //! # Bindings
 //!
-//! A pass's [`Binding`] slice is positional, so entry `i` is `@group(0) @binding(i)`. There is no
-//! naming convention to keep in step, only an order.
+//! A pass does not say which resource goes in which slot. Its [`BindingDecl`] slice is generated
+//! from the shader at build time, and the engine resolves each `name` itself, so a slot index
+//! cannot disagree with the shader that owns it. See [`crate::authoring::binding`] for the seven
+//! reserved names and how a buffer label resolves.
 //!
-//! ```wgsl
-//! // bindings: &[Binding::Read(0), Binding::Write(0), Binding::IndexSorted, Binding::Uniform]
-//! @group(0) @binding(0) var<storage, read>       pos_in:  array<vec2<f32>>;
-//! @group(0) @binding(1) var<storage, read_write> pos_out: array<vec2<f32>>;
-//! @group(0) @binding(2) var<storage, read>       sorted:  array<u32>;
-//! @group(0) @binding(3) var<uniform>             params:  Params;
-//! ```
+//! # Shader imports
 //!
-//! [`Binding::Read`] and [`Binding::Write`] name a [`BufferSpec`] by index. They resolve to the
-//! two sides of a `double_buffered` buffer and to the same buffer otherwise, so a model that reads
-//! and writes in place declares `Write` alone.
+//! A pass shader reaches shared WGSL with `#import shared::prelude::linear_index` and the like,
+//! resolved at build time by `wgsl_bindgen`. What the engine compiles is therefore the composed
+//! module, re-emitted by naga, not the file as written. Set `HENAD_DUMP_WGSL` to a directory to
+//! read back what was actually compiled, since a WGSL error names that text rather than the source.
 //!
-//! # Shader preludes
-//!
-//! Every pass shader is prepended with a shared prelude, so it may use `WORKGROUP` and
-//! `linear_index(lid, wid, groups_x)` without declaring them. The prelude is a prefix, never
-//! spliced in, so a compile error's line number is off by a constant.
-//!
-//! The reduce leaf is generated entirely, from [`GpuAgentModel::REDUCE_HEADER`] and
-//! [`GpuAgentModel::REDUCE_VALUE`], since the workgroup tree around it is the same in every model.
-//! Set `HENAD_DUMP_WGSL` to a directory to read back what was actually compiled.
+//! The reduce leaf is an ordinary shader like any other pass. The workgroup fold it repeats is
+//! `shared::reduce_tree::block_sum`, so a model writes only the per lane value.
 //!
 //! # Unchecked contracts
 //!
 //! Shaders are opaque strings to Rust, so most of this surfaces as a wgpu validation error at
 //! model construction rather than at compile time.
-//! - each pass's `@binding` indices must match the position of its [`Binding`] in the slice,
-//!   and its declared WGSL types must match what the buffer actually holds,
+//! - a binding's declared WGSL type must match what the buffer actually holds, since resolution
+//!   goes by name and every storage slot looks alike,
 //! - a pass shader must declare `@workgroup_size(256)` and fold with `linear_index`, and a display
 //!   shader must declare `@workgroup_size(N, N)` for its [`DisplaySpec::workgroup`],
 //! - [`GpuAgentModel::buffer_lens`] and [`GpuAgentModel::seed_buffers`] must each return one entry
@@ -50,6 +40,7 @@
 //! - [`GpuAgentModel::STATS`] length must equal the number of values
 //!   [`GpuAgentModel::stats`] returns.
 
+use crate::authoring::binding::BindingDecl;
 use crate::authoring::field::Extent;
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::spatial_hash::HashGrid;
@@ -64,26 +55,52 @@ pub struct BufferSpec {
     pub drawable: bool,
 }
 
-/// The source of one bind group entry. Position in a pass's slice is the binding index.
-#[derive(Clone, Copy)]
-pub enum Binding {
-    Read(usize),
-    /// The buffer's next side, or the buffer itself when it is not double buffered.
-    Write(usize),
-    IndexCellStart,
-    IndexSorted,
-    Counters,
-    DisplayTexture,
-    /// The reduction's leaf output. Only a reduce pass has one.
-    ReducePartials,
-    Uniform,
+/// Declares a model's storage buffers and their indices in one place.
+///
+/// The index is the declaration's position, so it is derived rather than written down. Flags are
+/// named rather than positional, as in `agent_lanes!`, and default off. Expands at module scope,
+/// next to the impl that forwards `BUFFERS` to `SPECS`.
+///
+/// ```ignore
+/// buffers! {
+///     const POS = "pos" double_buffered drawable;
+///     const VEL = "vel" double_buffered;
+///     const SITES = "sites";
+/// }
+/// ```
+#[macro_export]
+macro_rules! buffers {
+    ($($(#[$meta:meta])* $vis:vis const $name:ident = $label:literal $($flag:ident)*;)+) => {
+        $crate::__indices!(0usize, $([$(#[$meta])* $vis $name],)+);
+
+        /// This model's storage buffers, in index order.
+        const SPECS: &[$crate::authoring::gpu_agent_model::BufferSpec] = &[
+            $($crate::__buffer_flags!(
+                $crate::authoring::gpu_agent_model::BufferSpec {
+                    label: $label,
+                    double_buffered: false,
+                    drawable: false,
+                }; $($flag)*
+            )),+
+        ];
+    };
 }
 
-impl Binding {
-    /// A uniform and a storage texture each count against their own limit, not this one.
-    pub fn is_storage_buffer(self) -> bool {
-        !matches!(self, Self::Uniform | Self::DisplayTexture)
-    }
+/// Folds each named flag onto a default [`BufferSpec`]. An unknown flag fails to match here.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __buffer_flags {
+    ($spec:expr;) => { $spec };
+    ($spec:expr; double_buffered $($rest:ident)*) => {
+        $crate::__buffer_flags!(
+            $crate::authoring::gpu_agent_model::BufferSpec { double_buffered: true, ..$spec }; $($rest)*
+        )
+    };
+    ($spec:expr; drawable $($rest:ident)*) => {
+        $crate::__buffer_flags!(
+            $crate::authoring::gpu_agent_model::BufferSpec { drawable: true, ..$spec }; $($rest)*
+        )
+    };
 }
 
 /// A pass's invocation domain.
@@ -111,7 +128,7 @@ impl Domain {
 pub struct PassSpec {
     pub label: &'static str,
     pub shader: &'static str,
-    pub bindings: &'static [Binding],
+    pub bindings: &'static [BindingDecl],
     pub domain: Domain,
 }
 
@@ -120,10 +137,21 @@ pub struct PassSpec {
 /// Dispatched over [`Geometry::display`], one invocation per texel, not per cell.
 pub struct DisplaySpec {
     pub shader: &'static str,
-    /// [`Binding::DisplayTexture`] is where the texture goes.
-    pub bindings: &'static [Binding],
+    pub bindings: &'static [BindingDecl],
     /// Must match the `@workgroup_size(N, N)` the shader declares.
     pub workgroup: u32,
+}
+
+/// The leaf of the stat reduction, which folds the population down to one value per lane.
+///
+/// The engine owns every level above it, so the leaf only has to write `partials`. Its shader
+/// imports `shared::reduce_tree::block_sum` for the workgroup fold.
+pub struct ReduceSpec {
+    pub shader: &'static str,
+    pub bindings: &'static [BindingDecl],
+    /// Values the leaf sums, one per lane.
+    pub lanes: usize,
+    pub domain: Domain,
 }
 
 /// The uniform block [`GpuAgentModel::pass_params_bytes`] is being asked for.
@@ -185,16 +213,7 @@ pub trait GpuAgentModel: Send + Sync + 'static {
     const STEP_PASSES: &'static [PassSpec];
     const DISPLAY: Option<DisplaySpec> = None;
 
-    /// Values the leaf sums, one per lane.
-    const REDUCE_LANES: usize;
-    const REDUCE_DOMAIN: Domain = Domain::Agents;
-    /// Must include [`Binding::ReducePartials`] and [`Binding::Uniform`].
-    const REDUCE_BINDINGS: &'static [Binding];
-    /// WGSL declarations the generated leaf needs. The bindings, plus a `params` uniform carrying
-    /// at least `lanes` and `groups_x`.
-    const REDUCE_HEADER: &'static str;
-    /// WGSL assigning `value`, with `lane` and the invocation index `i` in scope.
-    const REDUCE_VALUE: &'static str;
+    const REDUCE: ReduceSpec;
 
     /// The full descriptor list. Unlike [`crate::authoring::agent_model::AgentModel`], nothing is
     /// prepended. A GPU model spells its list out, so it can mirror the exact parameter order of
@@ -228,4 +247,22 @@ pub trait GpuAgentModel: Send + Sync + 'static {
     ///
     /// Both are all-zero until the first readback completes.
     fn stats(sums: &[f32], counters: &[u32], geom: &Geometry) -> Vec<StatValue>;
+}
+
+#[cfg(test)]
+mod tests {
+    /// The macro has to expand in function scope as well as module scope (C-ANYWHERE), and an
+    /// entry has to take attributes (C-MACRO-ATTR).
+    #[test]
+    fn buffers_macro_expands_in_function_scope() {
+        crate::buffers! {
+            const POS = "pos" double_buffered drawable;
+            /// An entry can carry a doc comment, and flags default off.
+            const SITES = "sites";
+        }
+        assert_eq!((POS, SITES), (0, 1), "indices follow declaration order");
+        assert_eq!(SPECS.len(), 2);
+        assert!(SPECS[POS].double_buffered && SPECS[POS].drawable);
+        assert!(!SPECS[SITES].double_buffered && !SPECS[SITES].drawable);
+    }
 }

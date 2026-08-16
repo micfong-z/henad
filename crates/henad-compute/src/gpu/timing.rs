@@ -110,7 +110,11 @@ impl TimestampQuery {
         device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
         rx.recv().ok()?.ok()?;
 
-        let data = slice.get_mapped_range();
+        // Unmap on the error path too, or the next `map_async` finds the buffer still mapped.
+        let Ok(data) = slice.get_mapped_range() else {
+            self.readback_buffer.unmap();
+            return None;
+        };
         let ticks: &[u64] = bytemuck::cast_slice(&data);
         let (start, end) = (ticks[0], ticks[1]);
         drop(data);

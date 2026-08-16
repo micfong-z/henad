@@ -10,6 +10,13 @@ const S: u8 = 0;
 const I: u8 = 1;
 const R: u8 = 2;
 
+henad_core::params! {
+    const INFECTION_RATE = f32_param("infection_rate", "Infection Rate", 0.3, 0.0, 1.0, Some(0.01));
+    const RECOVERY_RATE = f32_param("recovery_rate", "Recovery Rate", 0.05, 0.0, 1.0, Some(0.01));
+    const INITIAL_INFECTED_PCT =
+        f32_param("initial_infected_pct", "Initial Infected %", 0.01, 0.0, 1.0, Some(0.001)).on_reload();
+}
+
 pub const PALETTE: [[u8; 4]; 3] = [
     [0x00, 0x7A, 0xF5, 0xFF], // S - blue
     [0xE4, 0x37, 0x48, 0xFF], // I - red
@@ -37,30 +44,18 @@ impl GridModel for SirGridModel {
     type Params = SirParams;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![
-            f32_param("infection_rate", "Infection Rate", 0.3, 0.0, 1.0, Some(0.01)),
-            f32_param("recovery_rate", "Recovery Rate", 0.05, 0.0, 1.0, Some(0.01)),
-            f32_param(
-                "initial_infected_pct",
-                "Initial Infected %",
-                0.01,
-                0.0,
-                1.0,
-                Some(0.001),
-            )
-            .on_reload(),
-        ]
+        descriptors()
     }
 
     fn from_params(params: &[ParamValue]) -> SirParams {
         SirParams {
-            infection_rate: extract_f32(params, 2, 0.3),
-            recovery_rate: extract_f32(params, 3, 0.05),
+            infection_rate: extract_f32(params, INFECTION_RATE, 0.3),
+            recovery_rate: extract_f32(params, RECOVERY_RATE, 0.05),
         }
     }
 
     fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
-        let initial_pct = extract_f32(params, 4, 0.01);
+        let initial_pct = extract_f32(params, INITIAL_INFECTED_PCT, 0.01);
         let threshold = (initial_pct * u32::MAX as f32) as u32;
         for cell in grid.current_mut().iter_mut() {
             *rng = xorshift64(*rng);
@@ -126,6 +121,7 @@ fn count_sir(cells: &[u8]) -> (u64, u64, u64) {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use henad_compute::cpu::grid_engine::GridModelState;
     use henad_core::model::SimState as _;

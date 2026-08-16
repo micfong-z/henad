@@ -1,6 +1,8 @@
 // One level of a multi-level exclusive prefix sum. Each workgroup scans WORKGROUP elements and
 // publishes its total to `block_sums`, which the level above scans in turn.
 
+#import shared::prelude::WORKGROUP
+
 struct ScanParams {
     n: u32,
     groups_x: u32,
@@ -12,8 +14,6 @@ struct ScanParams {
 @group(0) @binding(1) var<storage, read_write> output: array<u32>;
 @group(0) @binding(2) var<storage, read_write> block_sums: array<u32>;
 @group(0) @binding(3) var<uniform> params: ScanParams;
-
-const WORKGROUP: u32 = 256u;
 
 var<workgroup> partials: array<u32, 256>;
 

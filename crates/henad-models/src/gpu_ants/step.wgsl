@@ -4,6 +4,10 @@
 // this tick's merge, and an ant only ever touches its own lanes, so one invocation doing both in
 // order is the same computation.
 
+#import shared::prelude::linear_index
+#import shared::rng::pcg_hash
+#import gpu_ants::state::{LAST_STEP_MASK, HAS_FOOD_BIT, HAS_REWARD_BIT}
+
 struct Params {
     num_agents: u32,
     groups_x: u32,
@@ -42,19 +46,7 @@ const TO_HOME: u32 = 1u;
 // Matches `ants::lanes::NO_STEP`.
 const NO_STEP: u32 = 255u;
 
-// `state` packs the three per-ant scalars the CPU keeps in separate lanes. `reward` is a bit
-// rather than an f32 because the CPU model only ever stores 0.0 or the reward param in it.
-const LAST_STEP_MASK: u32 = 0xFFu;
-const HAS_FOOD_BIT: u32 = 0x100u;
-const HAS_REWARD_BIT: u32 = 0x200u;
-
 const DELIVERIES: u32 = 0u;
-
-fn pcg_hash(input: u32) -> u32 {
-    var s = input * 747796405u + 2891336453u;
-    let word = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
-    return (word >> 22u) ^ word;
-}
 
 fn next_unit(r: ptr<function, u32>) -> f32 {
     *r = pcg_hash(*r);

@@ -69,7 +69,12 @@ Contributing is very welcome! However Henad is in very early stages so expect ev
 
 _AI Usage Disclaimer and Policy_
 
-This project is assisted by AI (Claude Code on Opus 4.6 and Opus 5), though every line of code generated has been reviewed (and almost always, edited) by a human.
+This project is assisted by AI, though every line of code generated has been reviewed (and almost always, edited) by a human.
+
+Models used include:
+- Claude Code with `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5`
+- OpenCode with `gpt-5.6-terra`
+- OpenCode with `grok-4.5`
 
 We recognise that LLM-assisted coding is evolving increasingly rapidly, but the quality of the code generated is not always guaranteed. In general, we support the [LLVM AI Tool Use Policy](https://llvm.org/docs/AIToolPolicy.html) for coding, but discourage the use of AI for communication (except for translation purposes).
 

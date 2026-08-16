@@ -5,8 +5,9 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use henad_core::authoring::binding::{BindingDecl, buffer_target};
 use henad_core::authoring::field::Extent;
-use henad_core::authoring::gpu_agent_model::{Binding, Geometry, GpuAgentModel, PassCtx, PassId};
+use henad_core::authoring::gpu_agent_model::{Geometry, GpuAgentModel, PassCtx, PassId};
 use henad_core::model::{Model, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;
@@ -14,15 +15,12 @@ use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 
 use crate::display_scale::display_dims;
 use crate::gpu::GpuContext;
-use crate::gpu::capacity::Demand;
+use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
 use crate::gpu::primitives::dispatch::linear_dispatch;
-use crate::gpu::primitives::pipeline::{
-    compute_pipeline, lane_buffer, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
-};
+use crate::gpu::primitives::pipeline::{compute_pipeline, lane_buffer, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::readback::CounterReadback;
 use crate::gpu::primitives::reduce::GpuLaneReduce;
 use crate::gpu::primitives::spatial_hash::{GpuSpatialHash, HashGrid};
-use crate::gpu::primitives::wgsl;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
@@ -86,11 +84,6 @@ impl EncodedPass {
         pass.set_bind_group(0, self.binds.pick(a_is_current), &[]);
         pass.dispatch_workgroups(self.groups.0, self.groups.1, 1);
     }
-}
-
-/// Bindings that count against `max_storage_buffers_per_shader_stage`.
-fn storage_bindings(bindings: &[Binding]) -> u32 {
-    bindings.iter().filter(|b| b.is_storage_buffer()).count() as u32
 }
 
 /// A `ComputePassTimestampWrites` needs at least one index set, so a pass in the middle of a batch
@@ -251,7 +244,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         if let Some(spec) = &M::DISPLAY {
             passes.push((format!("{}_display", M::ID), storage_bindings(spec.bindings)));
         }
-        passes.push((format!("{}_reduce_leaf", M::ID), storage_bindings(M::REDUCE_BINDINGS)));
+        passes.push((format!("{}_reduce_leaf", M::ID), storage_bindings(M::REDUCE.bindings)));
         passes
     }
 
@@ -373,8 +366,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             None => (None, None),
         };
 
-        let reduce_domain = M::REDUCE_DOMAIN.invocations(&geom);
-        let reduce = GpuLaneReduce::new(device, queue, M::ID, M::REDUCE_LANES, reduce_domain);
+        let reduce_domain = M::REDUCE.domain.invocations(&geom);
+        let reduce = GpuLaneReduce::new(device, queue, M::ID, M::REDUCE.lanes, reduce_domain);
 
         let build = PassBuilder {
             device,
@@ -417,8 +410,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         let reduce_pass = build.pass::<M>(
             PassId::Reduce,
             "reduce_leaf",
-            &wgsl::reduce_leaf(M::REDUCE_HEADER, M::REDUCE_VALUE),
-            M::REDUCE_BINDINGS,
+            M::REDUCE.shader,
+            M::REDUCE.bindings,
             reduce_groups,
             reduce_domain,
         );
@@ -509,7 +502,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("readback poll");
         rx.recv().expect("readback channel").expect("readback map");
-        let data = staging.slice(..).get_mapped_range();
+        let data = staging.slice(..).get_mapped_range().expect("readback range");
         let out = bytemuck::cast_slice::<u8, u32>(&data).to_vec();
         drop(data);
         staging.unmap();
@@ -542,7 +535,7 @@ impl PassBuilder<'_> {
         id: PassId,
         label: &str,
         shader: &str,
-        bindings: &[Binding],
+        bindings: &[BindingDecl],
         invocations: u32,
     ) -> EncodedPass {
         self.pass::<M>(id, label, shader, bindings, linear_dispatch(invocations), invocations)
@@ -555,7 +548,7 @@ impl PassBuilder<'_> {
         id: PassId,
         label: &str,
         shader: &str,
-        bindings: &[Binding],
+        bindings: &[BindingDecl],
         groups: (u32, u32),
         invocations: u32,
     ) -> EncodedPass {
@@ -579,7 +572,7 @@ impl PassBuilder<'_> {
         let entries: Vec<wgpu::BindGroupLayoutEntry> = bindings
             .iter()
             .enumerate()
-            .map(|(i, binding)| Self::layout_entry(i as u32, binding))
+            .map(|(i, decl)| layout_entry(i as u32, decl))
             .collect();
         let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(&format!("{label}_layout")),
@@ -590,9 +583,9 @@ impl PassBuilder<'_> {
             let entries: Vec<wgpu::BindGroupEntry<'_>> = bindings
                 .iter()
                 .enumerate()
-                .map(|(i, binding)| wgpu::BindGroupEntry {
+                .map(|(i, decl)| wgpu::BindGroupEntry {
                     binding: i as u32,
-                    resource: self.resource(binding, a_is_current, &uniform),
+                    resource: self.resource::<M>(decl, a_is_current, &uniform),
                 })
                 .collect();
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -607,8 +600,7 @@ impl PassBuilder<'_> {
             b: self.ping_pong.then(|| make_bind(false, "b")),
         };
 
-        let source = format!("{}\n{shader}", wgsl::PRELUDE);
-        let pipeline = compute_pipeline(self.device, &label, &source, &layout);
+        let pipeline = compute_pipeline(self.device, &label, shader, &layout);
         EncodedPass {
             label,
             pipeline,
@@ -617,41 +609,32 @@ impl PassBuilder<'_> {
         }
     }
 
-    fn layout_entry(i: u32, binding: &Binding) -> wgpu::BindGroupLayoutEntry {
-        match binding {
-            Binding::Read(_) | Binding::IndexCellStart | Binding::IndexSorted => storage_entry(i, true),
-            Binding::Write(_) | Binding::Counters | Binding::ReducePartials => storage_entry(i, false),
-            Binding::Uniform => uniform_entry(i),
-            Binding::DisplayTexture => wgpu::BindGroupLayoutEntry {
-                binding: i,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::StorageTexture {
-                    access: wgpu::StorageTextureAccess::WriteOnly,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                },
-                count: None,
-            },
-        }
-    }
-
-    fn resource<'r>(
+    /// The resource a shader's binding names, which is the whole of the correspondence.
+    ///
+    /// Panics rather than returning an error, since a name that resolves to nothing is a shader
+    /// and model that disagree, and no run can be correct after that.
+    fn resource<'r, M: GpuAgentModel>(
         &'r self,
-        binding: &Binding,
+        decl: &BindingDecl,
         a_is_current: bool,
         uniform: &'r wgpu::Buffer,
     ) -> wgpu::BindingResource<'r> {
-        match binding {
-            Binding::Read(k) => self.buffers[*k].sides(a_is_current).0.as_entire_binding(),
-            Binding::Write(k) => self.buffers[*k].sides(a_is_current).1.as_entire_binding(),
-            Binding::IndexCellStart => self.index.expect("INDEX is declared").cell_start_binding(),
-            Binding::IndexSorted => self.index.expect("INDEX is declared").sorted_binding(),
-            Binding::Counters => self.counters.expect("COUNTERS is non-zero").binding(),
-            Binding::DisplayTexture => {
-                wgpu::BindingResource::TextureView(self.display_view.expect("DISPLAY is declared"))
-            }
-            Binding::ReducePartials => self.reduce.partials_binding(),
-            Binding::Uniform => uniform.as_entire_binding(),
+        if let Some((label, writes)) = buffer_target(decl) {
+            let k = M::BUFFERS
+                .iter()
+                .position(|spec| spec.label == label)
+                .unwrap_or_else(|| panic!("{}: no buffer labelled `{label}`, wanted by `{}`", M::ID, decl.name));
+            let (read, write) = self.buffers[k].sides(a_is_current);
+            return if writes { write } else { read }.as_entire_binding();
+        }
+        match decl.name {
+            "params" => uniform.as_entire_binding(),
+            "cell_start" => self.index.expect("INDEX is declared").cell_start_binding(),
+            "sorted" => self.index.expect("INDEX is declared").sorted_binding(),
+            "counters" => self.counters.expect("COUNTERS is non-zero").binding(),
+            "partials" => self.reduce.partials_binding(),
+            "output" => wgpu::BindingResource::TextureView(self.display_view.expect("DISPLAY is declared")),
+            other => panic!("{}: `{other}` is reserved but the engine has no resource for it", M::ID),
         }
     }
 }

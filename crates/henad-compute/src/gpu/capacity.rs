@@ -6,6 +6,32 @@
 use henad_core::helpers::fmt_bytes;
 
 use crate::display_scale::display_dims;
+use crate::gpu::primitives::pipeline::{storage_entry, uniform_entry};
+use henad_core::authoring::binding::{BindingDecl, BindingKind};
+
+/// Bindings that count against `max_storage_buffers_per_shader_stage`. A uniform and a storage
+/// texture each count against their own limit, not this one.
+pub(crate) fn storage_bindings(decls: &[BindingDecl]) -> u32 {
+    decls.iter().filter(|d| d.kind.is_storage_buffer()).count() as u32
+}
+
+/// The layout entry a declaration asks for.
+pub(crate) fn layout_entry(i: u32, decl: &BindingDecl) -> wgpu::BindGroupLayoutEntry {
+    match decl.kind {
+        BindingKind::Storage { read_only } => storage_entry(i, read_only),
+        BindingKind::Uniform => uniform_entry(i),
+        BindingKind::StorageTexture => wgpu::BindGroupLayoutEntry {
+            binding: i,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::StorageTexture {
+                access: wgpu::StorageTextureAccess::WriteOnly,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                view_dimension: wgpu::TextureViewDimension::D2,
+            },
+            count: None,
+        },
+    }
+}
 
 /// Labelled as wgpu would label it, so a message points at something greppable.
 pub struct Alloc {

@@ -38,6 +38,8 @@ pub trait FieldLayer: Send + 'static {
     type DepositLanes: Send + 'static;
 
     fn param_descriptors() -> Vec<ParamDescriptor>;
+    /// `params` is this layer's own slice, so its indices are 0 based and do not move when the
+    /// model above it gains a parameter.
     fn from_params(params: &[ParamValue]) -> Self::Params;
     fn new(extent: Extent, params: &[ParamValue]) -> Self;
 

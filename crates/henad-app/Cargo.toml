@@ -27,6 +27,9 @@ pollster = { workspace = true }
 flume = { workspace = true }
 
 # native:
+[build-dependencies]
+wgsl_bindgen = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { workspace = true }
 rayon = { workspace = true }

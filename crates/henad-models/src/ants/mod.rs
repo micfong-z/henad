@@ -5,7 +5,7 @@ mod step;
 pub use crate::ants::lanes::{AntLanes, NO_STEP};
 
 use henad_compute::cpu::field::scalar::{Deposits, ScalarField};
-use henad_compute::cpu::primitives::chunked::{reduce_chunks, STATS_CHUNK};
+use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
 use henad_core::authoring::agent_model::{AgentModel, StepCtx};
 use henad_core::authoring::field::Extent;
 use henad_core::grid::Grid2D;
@@ -13,7 +13,7 @@ use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
-use crate::ants::field::{nest_cell, PheromoneField, TO_FOOD, TO_HOME};
+use crate::ants::field::{PheromoneField, TO_FOOD, TO_HOME, nest_cell};
 
 /// Indexed by `has_food` itself, not by a copy of it.
 pub const ANT_PALETTE: [[u8; 4]; 2] = [
@@ -28,11 +28,12 @@ pub const STAT_PALETTE: [[u8; 4]; 3] = [
     [0x2E, 0x8B, 0xE8, 0xFF], // total pheromone
 ];
 
-/// Param indices after the engine's `num_agents`, `world_width`, `world_height`.
-const UPDATE_CUTDOWN: usize = 3;
-const REWARD: usize = 4;
-const MOMENTUM: usize = 5;
-const RANDOM_ACTION: usize = 6;
+henad_core::params! {
+    const UPDATE_CUTDOWN = f32_param("update_cutdown", "Trail Falloff", 0.9, 0.5, 1.0, Some(0.01));
+    const REWARD = f32_param("reward", "Site Reward", 1.0, 0.1, 10.0, Some(0.1));
+    const MOMENTUM = f32_param("momentum", "Momentum Probability", 0.8, 0.0, 1.0, Some(0.01));
+    const RANDOM_ACTION = f32_param("random_action", "Random Action Probability", 0.1, 0.0, 1.0, Some(0.01));
+}
 
 /// Ant foraging, ported from krABMaga's `antsforaging`.
 ///
@@ -78,19 +79,14 @@ impl AgentModel for AntsModel {
     type Tally = u64;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![
-            f32_param("update_cutdown", "Trail Falloff", 0.9, 0.5, 1.0, Some(0.01)),
-            f32_param("reward", "Site Reward", 1.0, 0.1, 10.0, Some(0.1)),
-            f32_param("momentum", "Momentum Probability", 0.8, 0.0, 1.0, Some(0.01)),
-            f32_param("random_action", "Random Action Probability", 0.1, 0.0, 1.0, Some(0.01)),
-        ]
+        descriptors()
     }
 
-    fn from_params(params: &[ParamValue]) -> AntParams {
+    fn from_params(params: &[ParamValue], extent: Extent) -> AntParams {
         let cutdown = extract_f32(params, UPDATE_CUTDOWN, 0.9);
         AntParams {
-            w: extract_f32(params, 1, 200.0) as i32,
-            h: extract_f32(params, 2, 200.0) as i32,
+            w: extent.w as i32,
+            h: extent.h as i32,
             cutdown,
             diagonal: cutdown.powf(std::f32::consts::SQRT_2),
             reward: extract_f32(params, REWARD, 1.0),
@@ -148,6 +144,7 @@ fn field_sum(cells: &[f32]) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::ants::field::{CELL_PALETTE, OBSTACLE};
     use henad_compute::cpu::agent_engine::AgentModelState;

@@ -138,7 +138,15 @@ impl CounterReadback {
         }
 
         let slice = self.staging.slice(..);
-        let data = slice.get_mapped_range();
+        // Unmap on the error path too, or the next `map_async` finds the buffer still mapped.
+        let data = match slice.get_mapped_range() {
+            Ok(data) => data,
+            Err(err) => {
+                log::warn!("GPU stat readback failed: {err}");
+                self.staging.unmap();
+                return false;
+            }
+        };
         let words: &[u32] = bytemuck::cast_slice(&data);
         let n = self.values.len();
         self.values.copy_from_slice(&words[..n]);

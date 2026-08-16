@@ -4,20 +4,9 @@
 //! order throughout, so the sum is reproducible.
 
 use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
-use crate::gpu::primitives::pipeline::{
-    compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
-};
+use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::readback::CounterReadback;
-
-/// Matches `ReduceParams` in `reduce.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct ReduceParams {
-    n: u32,
-    lanes: u32,
-    groups_x: u32,
-    _pad: u32,
-}
+use crate::shader_bindings::primitives::reduce::ReduceParams;
 
 struct Level {
     groups: (u32, u32),
@@ -64,11 +53,14 @@ impl GpuLaneReduce {
             .collect();
         let readback = CounterReadback::new(device, &format!("{label}_reduce"), lanes);
 
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{label}_reduce_layout")),
-            entries: &[storage_entry(0, true), storage_entry(1, false), uniform_entry(2)],
-        });
-        let pipeline = compute_pipeline(device, &format!("{label}_reduce"), include_str!("reduce.wgsl"), &layout);
+        let layout = device
+            .create_bind_group_layout(&crate::shader_bindings::primitives::reduce::WgpuBindGroup0::LAYOUT_DESCRIPTOR);
+        let pipeline = compute_pipeline(
+            device,
+            &format!("{label}_reduce"),
+            crate::shader_bindings::primitives::reduce::SHADER_STRING,
+            &layout,
+        );
 
         let input_at = |i: usize| if i == 0 { &partials } else { &intermediates[i - 1] };
         let levels = sizes

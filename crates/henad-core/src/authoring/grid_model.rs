@@ -20,8 +20,9 @@ pub trait GridModel: Send + Sync + 'static {
     /// loop.
     type Params: Send + Sync;
 
-    /// Model parameters. Grid width and height are prepended by the engine at indices 0 and 1.
+    /// Model parameters. The engine prepends grid width and height, but never shows them here.
     fn param_descriptors() -> Vec<ParamDescriptor>;
+    /// Hot params for one tick. `params` is this model's own slice, so its indices are 0 based.
     fn from_params(params: &[ParamValue]) -> Self::Params;
 
     fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64);

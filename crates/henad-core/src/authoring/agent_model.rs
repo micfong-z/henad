@@ -129,7 +129,9 @@ pub trait AgentModel: Send + Sync + 'static {
     /// Model parameters. `num_agents`, `world_width` and `world_height` are prepended by the
     /// engine at indices 0, 1 and 2.
     fn param_descriptors() -> Vec<ParamDescriptor>;
-    fn from_params(params: &[ParamValue]) -> Self::Params;
+    /// Hot params for one tick, extracted once. `params` is this model's own slice, so its
+    /// indices are 0 based and cannot shift when the engine or a field layer changes.
+    fn from_params(params: &[ParamValue], extent: Extent) -> Self::Params;
 
     /// Neighbour index cell size for these params, read every tick so a live edit lands.
     fn index_cell_size(_params: &Self::Params) -> f32 {

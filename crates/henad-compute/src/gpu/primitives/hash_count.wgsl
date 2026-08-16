@@ -1,5 +1,7 @@
 // Counting sort pass 1. Bins every agent and tallies how many landed in each cell.
 
+#import shared::prelude::WORKGROUP
+
 struct HashParams {
     grid_w: u32,
     grid_h: u32,
@@ -16,8 +18,6 @@ struct HashParams {
 @group(0) @binding(1) var<storage, read_write> counts: array<atomic<u32>>;
 @group(0) @binding(2) var<storage, read_write> agent_cell: array<u32>;
 @group(0) @binding(3) var<uniform> params: HashParams;
-
-const WORKGROUP: u32 = 256u;
 
 // WGSL's `%` follows the sign of the dividend, so a position left of the origin would index
 // backwards out of the grid.

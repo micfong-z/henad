@@ -3,71 +3,30 @@
 //! Tick 0 is bit identical since seeding goes through [`BoidsModel::init`]. After that, the
 //! neighbour index does not fix the order within a cell, so trajectories are likely different.
 
-use henad_compute::cpu::agent_engine::{AGENT_INIT_SEED, agent_model_param_descriptors};
+use henad_compute::cpu::agent_engine::{
+    AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
+};
 use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
 use henad_core::authoring::field::Extent;
 use henad_core::authoring::gpu_agent_model::{
-    Binding, BufferSpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec,
+    BufferSpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
 use henad_core::helpers::{extract_f32, extract_u32, mix_seed};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::boids::{BoidLanes, BoidsModel, HEADING_PALETTE};
+use crate::shader_bindings::gpu_boids::reduce::Params as ReduceParams;
+use crate::shader_bindings::gpu_boids::step::Params as StepParams;
 
-/// The list is [`agent_model_param_descriptors`] for [`BoidsModel`] verbatim, so both backends
-/// take the same vector. Only these three are read here, the rest go through
-/// [`BoidsModel::from_params`].
-const PARAM_NUM_AGENTS: usize = 0;
-const PARAM_WORLD_WIDTH: usize = 1;
-const PARAM_WORLD_HEIGHT: usize = 2;
+// The param list is [`agent_model_param_descriptors`] for [`BoidsModel`] verbatim, so both
+// backends take the same vector. Only the engine's own three are read here, by the names
+// `cpu::agent_engine` gives them. The rest go through [`BoidsModel::from_params`].
 
-/// Indices into [`GpuBoids::BUFFERS`].
-const POS: usize = 0;
-const VEL: usize = 1;
-const COLOR: usize = 2;
-
-/// Matches `Params` in `step.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct StepParams {
-    num_agents: u32,
-    groups_x: u32,
-    grid_w: u32,
-    grid_h: u32,
-
-    cell_w: f32,
-    cell_h: f32,
-    cell_w_inv: f32,
-    cell_h_inv: f32,
-
-    world_w: f32,
-    world_h: f32,
-    half_w: f32,
-    half_h: f32,
-
-    visual_range: f32,
-    visual_sq: f32,
-    protected_sq: f32,
-    separation: f32,
-
-    alignment: f32,
-    cohesion: f32,
-    max_speed: f32,
-    min_speed: f32,
-
-    /// Heading colours, in the uniform to keep a storage binding free.
-    palette: [[u32; 4]; 2],
-}
-
-/// Matches `Params` in the generated reduce leaf.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct ReduceParams {
-    n: u32,
-    lanes: u32,
-    groups_x: u32,
-    _pad: u32,
+henad_core::buffers! {
+    const POS = "pos" double_buffered drawable;
+    const VEL = "vel" double_buffered;
+    const COLOR = "color" double_buffered drawable;
 }
 
 pub struct GpuBoids;
@@ -82,23 +41,7 @@ impl GpuAgentModel for GpuBoids {
 
     /// All double buffered, since a boid reads its neighbours' current values while writing its
     /// own next ones.
-    const BUFFERS: &'static [BufferSpec] = &[
-        BufferSpec {
-            label: "pos",
-            double_buffered: true,
-            drawable: true,
-        },
-        BufferSpec {
-            label: "vel",
-            double_buffered: true,
-            drawable: false,
-        },
-        BufferSpec {
-            label: "color",
-            double_buffered: true,
-            drawable: true,
-        },
-    ];
+    const BUFFERS: &'static [BufferSpec] = SPECS;
     const POS_BUFFER: usize = POS;
     const COLOR_BUFFER: usize = COLOR;
 
@@ -106,49 +49,19 @@ impl GpuAgentModel for GpuBoids {
 
     const STEP_PASSES: &'static [PassSpec] = &[PassSpec {
         label: "step",
-        shader: include_str!("step.wgsl"),
-        bindings: &[
-            Binding::Read(POS),
-            Binding::Read(VEL),
-            Binding::Write(POS),
-            Binding::Write(VEL),
-            Binding::Write(COLOR),
-            Binding::IndexCellStart,
-            Binding::IndexSorted,
-            Binding::Uniform,
-        ],
+        shader: crate::shader_bindings::gpu_boids::step::SHADER_STRING,
+        bindings: crate::binding_decls::bindings::GPU_BOIDS_STEP,
         domain: Domain::Agents,
     }];
 
     /// Speed, x velocity, y velocity.
-    const REDUCE_LANES: usize = 3;
-    const REDUCE_BINDINGS: &'static [Binding] = &[Binding::Read(VEL), Binding::ReducePartials, Binding::Uniform];
-    const REDUCE_HEADER: &'static str = r"
-struct Params {
-    n: u32,
-    lanes: u32,
-    groups_x: u32,
-    _pad: u32,
-}
-
-@group(0) @binding(0) var<storage, read> vel: array<vec2<f32>>;
-@group(0) @binding(1) var<storage, read_write> partials: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
-";
-    /// The `sqrt` is per agent, as in `boids::velocity_sums`. Mean speed rebuilt from mean
-    /// velocity is a different quantity for a turning flock.
-    const REDUCE_VALUE: &'static str = r"
-        if (i < params.n) {
-            let v = vel[i];
-            if (lane == 0u) {
-                value = length(v);
-            } else if (lane == 1u) {
-                value = v.x;
-            } else {
-                value = v.y;
-            }
-        }
-";
+    const REDUCE: ReduceSpec = ReduceSpec {
+        shader: crate::shader_bindings::gpu_boids::reduce::SHADER_STRING,
+        bindings: crate::binding_decls::bindings::GPU_BOIDS_REDUCE,
+        // Speed, x velocity, y velocity.
+        lanes: 3,
+        domain: Domain::Agents,
+    };
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
         agent_model_param_descriptors::<BoidsModel>()
@@ -156,10 +69,10 @@ struct Params {
 
     fn dims(params: &[ParamValue]) -> (u32, Extent) {
         (
-            extract_u32(params, PARAM_NUM_AGENTS, BoidsModel::DEFAULT_AGENTS),
+            extract_u32(params, NUM_AGENTS, BoidsModel::DEFAULT_AGENTS),
             Extent {
-                w: extract_f32(params, PARAM_WORLD_WIDTH, BoidsModel::DEFAULT_EXTENT.w),
-                h: extract_f32(params, PARAM_WORLD_HEIGHT, BoidsModel::DEFAULT_EXTENT.h),
+                w: extract_f32(params, WORLD_WIDTH, BoidsModel::DEFAULT_EXTENT.w),
+                h: extract_f32(params, WORLD_HEIGHT, BoidsModel::DEFAULT_EXTENT.h),
             },
         )
     }
@@ -176,7 +89,7 @@ struct Params {
         // would be free to drift.
         let mut lanes = BoidLanes::alloc(n);
         let mut rng = seed.map_or(AGENT_INIT_SEED, mix_seed);
-        BoidsModel::init(&mut lanes, geom.extent, params, &mut rng);
+        BoidsModel::init(&mut lanes, geom.extent, split_params::<BoidsModel>(params).0, &mut rng);
 
         // The CPU lane holds palette indices, this one is drawn directly so it holds colours.
         let colors: Vec<u32> = lanes.color.iter().map(|&c| packed_palette_color(c)).collect();
@@ -188,21 +101,24 @@ struct Params {
     }
 
     fn index_cell_size(params: &[ParamValue]) -> f32 {
-        BoidsModel::index_cell_size(&BoidsModel::from_params(params))
+        BoidsModel::index_cell_size(&BoidsModel::from_params(
+            split_params::<BoidsModel>(params).0,
+            Self::dims(params).1,
+        ))
     }
 
     fn pass_params_bytes(pass: PassId, ctx: PassCtx<'_>, params: &[ParamValue]) -> Vec<u8> {
         if pass == PassId::Reduce {
             return bytemuck::bytes_of(&ReduceParams {
                 n: ctx.invocations,
-                lanes: Self::REDUCE_LANES as u32,
+                lanes: Self::REDUCE.lanes as u32,
                 groups_x: ctx.groups_x,
                 _pad: 0,
             })
             .to_vec();
         }
 
-        let hot = BoidsModel::from_params(params);
+        let hot = BoidsModel::from_params(split_params::<BoidsModel>(params).0, Self::dims(params).1);
         let grid = ctx.geom.index.expect("INDEX is declared");
         bytemuck::bytes_of(&StepParams {
             num_agents: ctx.geom.num_agents,
@@ -283,9 +199,9 @@ mod tests {
             .iter()
             .map(|desc| desc.kind.default_value())
             .collect();
-        values[PARAM_NUM_AGENTS] = ParamValue::U32(num_agents);
-        values[PARAM_WORLD_WIDTH] = ParamValue::F32(world);
-        values[PARAM_WORLD_HEIGHT] = ParamValue::F32(world);
+        values[NUM_AGENTS] = ParamValue::U32(num_agents);
+        values[WORLD_WIDTH] = ParamValue::F32(world);
+        values[WORLD_HEIGHT] = ParamValue::F32(world);
         values
     }
 
@@ -336,7 +252,7 @@ mod tests {
 
         let values = params(4_000, 800.0);
         // Through the model's own extraction, so the test cannot disagree with the kernel.
-        let hot = BoidsModel::from_params(&values);
+        let hot = BoidsModel::from_params(split_params::<BoidsModel>(&values).0, GpuBoids::dims(&values).1);
         let (max_speed, min_speed) = (hot.max_speed, hot.min_speed);
 
         let mut state = State::new(&ctx, &values);
@@ -383,7 +299,7 @@ mod tests {
 
         let values = params(10_000, 1_000.0);
         // Through the model's own extraction, so the test cannot disagree with the kernel.
-        let hot = BoidsModel::from_params(&values);
+        let hot = BoidsModel::from_params(split_params::<BoidsModel>(&values).0, GpuBoids::dims(&values).1);
         let (max_speed, min_speed) = (hot.max_speed, hot.min_speed);
 
         let mut state = State::new(&ctx, &values);

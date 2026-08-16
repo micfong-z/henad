@@ -28,6 +28,7 @@
 //! what `tests::gpu_alive_count_matches_cpu_model` checks.
 
 use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_core::authoring::binding::BindingDecl;
 use henad_core::authoring::gpu_grid_model::GpuGridModel;
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, mix_seed, u32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -35,11 +36,13 @@ use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::game_of_life::PALETTE;
 
-/// Param indices, matching `grid_model_param_descriptors` + `GameOfLifeModel::param_descriptors`
-/// so this model is a drop-in comparison against the CPU one.
-const PARAM_WIDTH: usize = 0;
-const PARAM_HEIGHT: usize = 1;
-const PARAM_DENSITY: usize = 2;
+// The whole list, matching what the CPU engine composes for `GameOfLifeModel`, so this model is a
+// drop-in comparison against it.
+henad_core::params! {
+    const PARAM_WIDTH = u32_param("grid_width", "Grid Width", DEFAULT_DIM, 1, 16_384);
+    const PARAM_HEIGHT = u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384);
+    const PARAM_DENSITY = f32_param("density", "Initial Density", DEFAULT_DENSITY, 0.0, 1.0, Some(0.01));
+}
 
 const DEFAULT_DIM: u32 = 1024;
 const DEFAULT_DENSITY: f32 = 0.3;
@@ -83,16 +86,18 @@ impl GpuGridModel for GpuGameOfLife {
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
     const STATS: &'static [StatDescriptor] = &[StatDescriptor::new("Alive", PALETTE[1])];
 
-    const STEP_SHADER: &'static str = include_str!("step.wgsl");
-    const DISPLAY_SHADER: &'static str = include_str!("display.wgsl");
-    const REDUCE_SHADER: &'static str = include_str!("reduce.wgsl");
+    const BUFFERS: &'static [&'static str] = &["state"];
+
+    const STEP_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_GAME_OF_LIFE_STEP;
+    const DISPLAY_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_GAME_OF_LIFE_DISPLAY;
+    const REDUCE_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_GAME_OF_LIFE_REDUCE;
+
+    const STEP_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::step::SHADER_STRING;
+    const DISPLAY_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::display::SHADER_STRING;
+    const REDUCE_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::reduce::SHADER_STRING;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![
-            u32_param("grid_width", "Grid Width", DEFAULT_DIM, 1, 16_384),
-            u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384),
-            f32_param("density", "Initial Density", DEFAULT_DENSITY, 0.0, 1.0, Some(0.01)),
-        ]
+        descriptors()
     }
 
     fn dims(params: &[ParamValue]) -> (u32, u32) {

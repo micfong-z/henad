@@ -28,19 +28,20 @@ impl<A: AgentModel> AgentModelState<A> {
 
     /// Build a state whose RNG starts from `seed`, or [`AGENT_INIT_SEED`] when it is `None`.
     pub fn from_params_seeded(params: &[ParamValue], seed: Option<u64>) -> Self {
-        let n = extract_u32(params, 0, 10_000) as usize;
+        let n = extract_u32(params, NUM_AGENTS, 10_000) as usize;
         let extent = Extent {
-            w: extract_f32(params, 1, 1_000.0),
-            h: extract_f32(params, 2, 1_000.0),
+            w: extract_f32(params, WORLD_WIDTH, 1_000.0),
+            h: extract_f32(params, WORLD_HEIGHT, 1_000.0),
         };
 
+        let (own, field_params) = split_params::<A>(params);
         let mut lanes = A::Lanes::alloc(n);
         let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::helpers::mix_seed);
-        A::init(&mut lanes, extent, params, &mut seed);
+        A::init(&mut lanes, extent, own, &mut seed);
 
-        let field = A::Field::new(extent, params);
+        let field = A::Field::new(extent, field_params);
         let deposits = field.alloc_deposits(n);
-        let hot = A::from_params(params);
+        let hot = A::from_params(own, extent);
         let (pos_x, pos_y) = lanes.positions();
         let mut index = A::Index::new(extent, A::index_cell_size(&hot));
         index.rebuild(pos_x, pos_y, A::index_cell_size(&hot));
@@ -60,23 +61,24 @@ impl<A: AgentModel> AgentModelState<A> {
 
     /// Build a state whose agents come from `seed_lanes`, for reproducing a particular run.
     pub fn from_agents(params: &[ParamValue], seed_lanes: impl FnOnce(&mut A::Lanes, Extent)) -> Self {
-        let n = extract_u32(params, 0, 10_000) as usize;
+        let n = extract_u32(params, NUM_AGENTS, 10_000) as usize;
         let extent = Extent {
-            w: extract_f32(params, 1, 1_000.0),
-            h: extract_f32(params, 2, 1_000.0),
+            w: extract_f32(params, WORLD_WIDTH, 1_000.0),
+            h: extract_f32(params, WORLD_HEIGHT, 1_000.0),
         };
 
         let mut lanes = A::Lanes::alloc(n);
         let mut seed = AGENT_INIT_SEED;
+        let (own, field_params) = split_params::<A>(params);
 
         // Init is still needed to ensure that seed is advanced to the right value for the first step.
-        A::init(&mut lanes, extent, params, &mut seed);
+        A::init(&mut lanes, extent, own, &mut seed);
 
         seed_lanes(&mut lanes, extent);
 
-        let field = A::Field::new(extent, params);
+        let field = A::Field::new(extent, field_params);
         let deposits = field.alloc_deposits(n);
-        let hot = A::from_params(params);
+        let hot = A::from_params(own, extent);
         let (pos_x, pos_y) = lanes.positions();
         let mut index = A::Index::new(extent, A::index_cell_size(&hot));
         index.rebuild(pos_x, pos_y, A::index_cell_size(&hot));
@@ -111,6 +113,26 @@ impl<A: AgentModel> AgentModelState<A> {
 ///
 /// The extent is the engine's, not either layer's, so an agent layer and a field layer cannot
 /// disagree about how big the world is.
+/// Indices of the params the engine prepends before a model's own. A GPU port reads them too,
+/// since it composes the same list.
+pub const NUM_AGENTS: usize = 0;
+pub const WORLD_WIDTH: usize = 1;
+pub const WORLD_HEIGHT: usize = 2;
+
+/// How many the engine prepends, and so where a model's own params start.
+pub const AGENT_PARAM_BASE: usize = 3;
+
+/// Splits a composed list into `(the model's own, its field layer's)`.
+///
+/// Computed from the descriptor lists rather than hard-coded, so a model or a field layer gaining a
+/// parameter cannot shift the other's indices.
+pub fn split_params<A: AgentModel>(params: &[ParamValue]) -> (&[ParamValue], &[ParamValue]) {
+    let own = A::param_descriptors().len();
+    let start = AGENT_PARAM_BASE.min(params.len());
+    let mid = (start + own).min(params.len());
+    (&params[start..mid], &params[mid..])
+}
+
 pub fn agent_model_param_descriptors<A: AgentModel>() -> Vec<ParamDescriptor> {
     let extent = A::DEFAULT_EXTENT;
     let mut descs = vec![
@@ -125,8 +147,9 @@ pub fn agent_model_param_descriptors<A: AgentModel>() -> Vec<ParamDescriptor> {
 
 impl<A: AgentModel> SimState for AgentModelState<A> {
     fn step(&mut self) {
-        let hot = A::from_params(self.params.values());
-        let field_params = <A::Field as FieldLayer>::from_params(self.params.values());
+        let (own, field_slice) = split_params::<A>(self.params.values());
+        let hot = A::from_params(own, self.extent);
+        let field_params = <A::Field as FieldLayer>::from_params(field_slice);
 
         let (pos_x, pos_y) = self.lanes.positions();
         self.index.rebuild(pos_x, pos_y, A::index_cell_size(&hot));

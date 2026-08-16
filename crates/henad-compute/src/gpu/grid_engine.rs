@@ -5,6 +5,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use henad_core::authoring::binding::{BindingDecl, buffer_target};
 use henad_core::authoring::gpu_grid_model::GpuGridModel;
 use henad_core::model::{Model, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -12,12 +13,23 @@ use henad_core::topology::TopologyHint;
 use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
-use crate::gpu::capacity::Demand;
-use crate::gpu::primitives::pipeline::{compute_pipeline, storage_entry, uniform_entry};
+use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
+use crate::gpu::primitives::pipeline::{compute_pipeline, uniform_buffer};
 use crate::gpu::primitives::readback::CounterReadback;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
 use crate::snapshot::GpuSnapshot;
+
+/// The uniform every display and reduce shader reads, mirroring `Dims` in `shared/dims.wgsl`.
+///
+/// Hand written rather than generated, since no shader in this crate uses the type and naga drops
+/// what nothing references. `henad_models` sees both sides and asserts they agree.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Dims {
+    pub grid: [u32; 2],
+    pub tex: [u32; 2],
+}
 
 /// One ping-ponged pair of storage buffers.
 struct BufferPair {
@@ -139,9 +151,9 @@ impl<M: GpuGridModel> GpuGridState<M> {
     /// reports cannot disagree.
     fn declared_passes() -> Vec<(String, u32)> {
         vec![
-            (format!("{}_step", M::ID), 2 * M::BUFFER_COUNT as u32),
-            (format!("{}_display", M::ID), 1),
-            (format!("{}_reduce", M::ID), 2),
+            (format!("{}_step", M::ID), storage_bindings(M::STEP_BINDINGS)),
+            (format!("{}_display", M::ID), storage_bindings(M::DISPLAY_BINDINGS)),
+            (format!("{}_reduce", M::ID), storage_bindings(M::REDUCE_BINDINGS)),
         ]
     }
 
@@ -184,19 +196,19 @@ impl<M: GpuGridModel> GpuGridState<M> {
         let buffer_lens = M::buffer_lens(width, height);
         assert_eq!(
             buffer_lens.len(),
-            M::BUFFER_COUNT,
+            M::BUFFERS.len(),
             "{}: buffer_lens must return BUFFER_COUNT ({}) lengths, got {}",
             M::ID,
-            M::BUFFER_COUNT,
+            M::BUFFERS.len(),
             buffer_lens.len()
         );
         let seeds = M::seed_buffers(width, height, params, seed);
         assert_eq!(
             seeds.len(),
-            M::BUFFER_COUNT,
+            M::BUFFERS.len(),
             "{}: seed_buffers must return BUFFER_COUNT ({}) vectors, got {}",
             M::ID,
-            M::BUFFER_COUNT,
+            M::BUFFERS.len(),
             seeds.len()
         );
 
@@ -251,140 +263,78 @@ impl<M: GpuGridModel> GpuGridState<M> {
             display,
         } = build_display_target(device, ctx.target_format, width, height);
 
-        let dims_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("{}_dims_buffer", M::ID)),
-            size: (4 * std::mem::size_of::<u32>()) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&dims_buffer, 0, bytemuck::cast_slice(&[width, height, tex.0, tex.1]));
+        let dims_buffer = uniform_buffer(
+            device,
+            queue,
+            &format!("{}_dims_buffer", M::ID),
+            bytemuck::bytes_of(&Dims {
+                grid: [width, height],
+                tex: [tex.0, tex.1],
+            }),
+        );
 
         let readback = CounterReadback::new(device, &format!("{}_counters", M::ID), M::STATS.len());
 
-        // --- Step pipeline ---
-        // Bindings 0..2K are interleaved (current, next) pairs, and binding 2K is the step uniform.
-        let mut step_entries = Vec::with_capacity(2 * M::BUFFER_COUNT + 1);
-        for k in 0..M::BUFFER_COUNT {
-            let base = 2 * k as u32;
-            step_entries.push(storage_entry(base, true));
-            step_entries.push(storage_entry(base + 1, false));
-        }
-        let step_uniform_binding = 2 * M::BUFFER_COUNT as u32;
-        step_entries.push(uniform_entry(step_uniform_binding));
-
-        let step_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{}_step_bind_group_layout", M::ID)),
-            entries: &step_entries,
-        });
-        let make_step_bind_group = |label: &str, a_is_current: bool| {
-            let mut entries = Vec::with_capacity(2 * M::BUFFER_COUNT + 1);
-            for (k, pair) in buffers.iter().enumerate() {
-                let (current, next) = if a_is_current {
+        // --- Pipelines ---
+        // Every layout entry and every bind group entry comes from the name its shader gives the
+        // binding, so a slot index cannot disagree with the shader that owns it.
+        let resolve = |decl: &BindingDecl, a_is_current: bool| -> wgpu::BindingResource<'_> {
+            if let Some((label, writes)) = buffer_target(decl) {
+                let k = M::BUFFERS
+                    .iter()
+                    .position(|l| *l == label)
+                    .unwrap_or_else(|| panic!("{}: no buffer labelled `{label}`, wanted by `{}`", M::ID, decl.name));
+                let pair = &buffers[k];
+                let (read, write) = if a_is_current {
                     (&pair.a, &pair.b)
                 } else {
                     (&pair.b, &pair.a)
                 };
-                let base = 2 * k as u32;
-                entries.push(wgpu::BindGroupEntry {
-                    binding: base,
-                    resource: current.as_entire_binding(),
-                });
-                entries.push(wgpu::BindGroupEntry {
-                    binding: base + 1,
-                    resource: next.as_entire_binding(),
-                });
+                return if writes { write } else { read }.as_entire_binding();
             }
-            entries.push(wgpu::BindGroupEntry {
-                binding: step_uniform_binding,
-                resource: step_params_buffer.as_entire_binding(),
-            });
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &step_layout,
+            match decl.name {
+                "params" => step_params_buffer.as_entire_binding(),
+                "dims" => dims_buffer.as_entire_binding(),
+                "counters" => readback.binding(),
+                "output" => wgpu::BindingResource::TextureView(&display_view),
+                other => panic!("{}: `{other}` is reserved but the engine has no resource for it", M::ID),
+            }
+        };
+
+        let build = |label: &str, shader: &str, decls: &[BindingDecl]| {
+            let entries: Vec<wgpu::BindGroupLayoutEntry> = decls
+                .iter()
+                .enumerate()
+                .map(|(i, decl)| layout_entry(i as u32, decl))
+                .collect();
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(&format!("{}_{label}_layout", M::ID)),
                 entries: &entries,
-            })
+            });
+            let make = |a_is_current: bool, side: &str| {
+                let entries: Vec<wgpu::BindGroupEntry<'_>> = decls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, decl)| wgpu::BindGroupEntry {
+                        binding: i as u32,
+                        resource: resolve(decl, a_is_current),
+                    })
+                    .collect();
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("{}_{label}_bind_{side}", M::ID)),
+                    layout: &layout,
+                    entries: &entries,
+                })
+            };
+            let binds = (make(true, "a"), make(false, "b"));
+            let pipeline = compute_pipeline(device, &format!("{}_{label}", M::ID), shader, &layout);
+            (pipeline, binds)
         };
-        let bind_a2b = make_step_bind_group(&format!("{}_bind_a2b", M::ID), true);
-        let bind_b2a = make_step_bind_group(&format!("{}_bind_b2a", M::ID), false);
-        let step_pipeline = compute_pipeline(device, &format!("{}_step", M::ID), M::STEP_SHADER, &step_layout);
 
-        // --- Display pipeline (primary buffer -> RGBA texture) ---
-        let display_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{}_display_bind_group_layout", M::ID)),
-            entries: &[
-                storage_entry(0, true),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                uniform_entry(2),
-            ],
-        });
-        let make_display_bind_group = |label: &str, state: &wgpu::Buffer| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &display_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: state.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&display_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: dims_buffer.as_entire_binding(),
-                    },
-                ],
-            })
-        };
-        // Display and reduce read the *primary* buffer only. Auxiliary buffers are step-private.
-        let primary = buffers.first().expect("BUFFER_COUNT must be at least 1");
-        let display_bind_a = make_display_bind_group(&format!("{}_display_bind_a", M::ID), &primary.a);
-        let display_bind_b = make_display_bind_group(&format!("{}_display_bind_b", M::ID), &primary.b);
-        let display_pipeline = compute_pipeline(
-            device,
-            &format!("{}_display", M::ID),
-            M::DISPLAY_SHADER,
-            &display_layout,
-        );
-
-        // --- Reduce pipeline (primary buffer -> counters) ---
-        let reduce_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{}_reduce_bind_group_layout", M::ID)),
-            entries: &[storage_entry(0, true), storage_entry(1, false), uniform_entry(2)],
-        });
-        let make_reduce_bind_group = |label: &str, state: &wgpu::Buffer| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &reduce_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: state.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: readback.binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: dims_buffer.as_entire_binding(),
-                    },
-                ],
-            })
-        };
-        let reduce_bind_a = make_reduce_bind_group(&format!("{}_reduce_bind_a", M::ID), &primary.a);
-        let reduce_bind_b = make_reduce_bind_group(&format!("{}_reduce_bind_b", M::ID), &primary.b);
-        let reduce_pipeline = compute_pipeline(device, &format!("{}_reduce", M::ID), M::REDUCE_SHADER, &reduce_layout);
+        let (step_pipeline, (bind_a2b, bind_b2a)) = build("step", M::STEP_SHADER, M::STEP_BINDINGS);
+        let (display_pipeline, (display_bind_a, display_bind_b)) =
+            build("display", M::DISPLAY_SHADER, M::DISPLAY_BINDINGS);
+        let (reduce_pipeline, (reduce_bind_a, reduce_bind_b)) = build("reduce", M::REDUCE_SHADER, M::REDUCE_BINDINGS);
 
         Self {
             width,

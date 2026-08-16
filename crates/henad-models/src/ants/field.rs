@@ -23,8 +23,9 @@ pub const HOME: u8 = 3;
 pub const TO_FOOD: usize = 0;
 pub const TO_HOME: usize = 1;
 
-/// Param index after the engine's `num_agents`, `world_width`, `world_height` and the model's own four.
-const EVAPORATION: usize = 7;
+henad_core::params! {
+    const EVAPORATION = f32_param("evaporation", "Evaporation", 0.999, 0.9, 1.0, Some(0.001));
+}
 
 /// Background, two trail ramps, then the site markers. The ramps differ by hue so route home and
 /// route to food stay apart at a glance.
@@ -64,7 +65,7 @@ impl ScalarFieldSpec for PheromoneField {
     type Params = FieldParams;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![f32_param("evaporation", "Evaporation", 0.999, 0.9, 1.0, Some(0.001))]
+        descriptors()
     }
 
     fn from_params(params: &[ParamValue]) -> FieldParams {
@@ -104,11 +105,7 @@ impl ScalarFieldSpec for PheromoneField {
     fn decay(v: f32, p: &FieldParams) -> f32 {
         let d = v * p.evaporation;
         // Without the floor a trail never disappears, it just asymptotes.
-        if d < LOW_PHEROMONE {
-            0.0
-        } else {
-            d
-        }
+        if d < LOW_PHEROMONE { 0.0 } else { d }
     }
 
     fn quantize(site: u8, values: &[f32], out: &mut u8) {
@@ -156,6 +153,7 @@ fn ramp_step(v: f32) -> u8 {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     /// Proportional placement has to land exactly where the reference hard-codes these.

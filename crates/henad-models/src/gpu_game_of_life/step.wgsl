@@ -5,9 +5,9 @@
 // 4-bit count per lane. Summing is then a carry-save adder made of plain XOR/AND, so all 32 cells
 // resolve at once with no loop.
 
-@group(0) @binding(0) var<storage, read> current: array<u32>;
-@group(0) @binding(1) var<storage, read_write> next: array<u32>;
-@group(0) @binding(2) var<uniform> dims: vec2<u32>;
+@group(0) @binding(0) var<storage, read> state_in: array<u32>;
+@group(0) @binding(1) var<storage, read_write> state_out: array<u32>;
+@group(0) @binding(2) var<uniform> params: vec2<u32>;
 
 // Preloaded row window, with west and east being the cells shifted by 1 bit left and right, respectively.
 struct Row {
@@ -33,14 +33,14 @@ fn half_add(a: u32, b: u32) -> Adder {
 
 fn load_row(row: u32, word: u32, stride: u32, width: u32) -> Row {
     let base = row * stride;
-    let mid = current[base + word];
-    let left = current[base + (word + stride - 1u) % stride];
-    let right = current[base + (word + 1u) % stride];
+    let mid = state_in[base + word];
+    let left = state_in[base + (word + stride - 1u) % stride];
+    let right = state_in[base + (word + 1u) % stride];
 
     var r: Row;
     r.cells = mid;
     r.west = (mid << 1u) | (left >> 31u);   // bit 0 comes from the previous word's bit 31
-    r.east = (mid >> 1u) | (right << 31u);  // bit 31 comes from the next word's bit 0
+    r.east = (mid >> 1u) | (right << 31u);  // bit 31 comes from the state_out word's bit 0
 
     // Those two shifts assume the grid's x-wrap lands on a word edge, which holds only when
     // width % 32 == 0. When the last word is ragged, exactly two bits are wrong, and need to be fixed.
@@ -59,8 +59,8 @@ fn load_row(row: u32, word: u32, stride: u32, width: u32) -> Row {
 @compute
 @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let width = dims.x;
-    let height = dims.y;
+    let width = params.x;
+    let height = params.y;
     let stride = (width + 31u) / 32u;
 
     let word = global_id.x;
@@ -106,5 +106,5 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         mask = (1u << cells_here) - 1u;
     }
 
-    next[y * stride + word] = alive & mask;
+    state_out[y * stride + word] = alive & mask;
 }

@@ -33,11 +33,25 @@ After all the above, add a final section for human comments, as
 <!-- ─────────────────────────────────────────────────────────────────────────
      EVERYTHING BELOW THIS LINE IS WRITTEN BY THE HUMAN MAINTAINER.
      Agents: do not edit, summarise, reformat, or regenerate this section.
-     If you update this document, stop at the line above.
+     The one exception is the seed comment below, written once when the record
+     is created. Any later pass leaves the whole section alone.
      ───────────────────────────────────────────────────────────────────── -->
 
 ## Manual notes (human)
+
+<!-- Seeded by the agent: what the human did this session, from the agent's point of view.
+     Raw material to reframe, not notes. Delete this block once rewritten.
+
+     - ...
+-->
 ```
+
+Seed that comment with what the *human* did: the calls they made, the corrections they gave, the things
+they caught that the agent had wrong. It is there so the maintainer can reframe a session into their own
+notes without reconstructing it from the transcript, so keep it factual and specific — a decision and the
+reason behind it, an intervention and what it changed. Not praise, and not a summary of the agent's own
+work, which the sections above already cover. Write it only when creating the record; a later pass leaves
+it alone, since by then the human may have started rewriting the section.
 
 ## Writing style
 
@@ -374,9 +388,19 @@ is about not undoing them.
 - **Two clocks that must be reset together.** `gpu/sim_thread.rs` gates its stats refresh on
   `last_stats_publish` but divides by `tps_timer`; resetting one without the other reports a whole
   batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.
-- **The WGSL/Rust binding correspondence is hand-maintained.** `&[Binding]` puts a pass's bindings
-  in one list next to its shader, but nothing checks that the declared WGSL *types* or the uniform
-  struct layouts match. `wgsl_bindgen` is the known fix, not yet taken.
+- **Uniform layouts are generated, the binding correspondence is not.** A `build.rs` in
+  henad-compute, henad-models and henad-app runs `wgsl_bindgen` over that crate's shaders, and the
+  output lands in `OUT_DIR` behind a `shader_bindings` module. Uniform structs, workgroup sizes and
+  bind group layouts therefore come from the WGSL, and each model asserts its own struct against the
+  generated one. Shared WGSL lives in `henad-compute/src/gpu/shared/` and is reached with `#import`,
+  resolved at build time, so no shader is assembled at runtime any more.
+  What stays hand-maintained is the `&[Binding]` slice per pass, whose position is the `@binding`
+  index. Routing that through the generated bind groups was tried and reverted, since it added 248
+  lines across the models and henad-core to remove an error wgpu already reported loudly at model
+  construction, and left the buffer indices exactly as hand-written as before.
+  Generation also cannot reach a type no shader in the crate uses (hence the hand-written `Dims` in
+  `grid_engine.rs`) or a constant arriving through an `#import`, since naga keeps only what an entry
+  point references.
 
 ### Sim runs off the UI thread
 

@@ -104,6 +104,41 @@ impl ParamStore {
     }
 }
 
+/// Declares a model's parameters and their indices in one place.
+///
+/// The index is the declaration's position, so it is derived rather than written down. Expands at
+/// module scope, next to the impl that forwards `param_descriptors` to `descriptors`.
+///
+/// ```ignore
+/// params! {
+///     /// Why this default, if it needs saying.
+///     const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01));
+/// }
+/// ```
+#[macro_export]
+macro_rules! params {
+    ($($(#[$meta:meta])* $vis:vis const $name:ident = $descriptor:expr;)+) => {
+        $crate::__indices!(0usize, $([$(#[$meta])* $vis $name],)+);
+
+        /// This model's own parameters, in index order.
+        fn descriptors() -> ::std::vec::Vec<$crate::params::ParamDescriptor> {
+            ::std::vec![$($descriptor),+]
+        }
+    };
+}
+
+/// Assigns each name its position, for [`params`] and [`crate::buffers`].
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __indices {
+    ($i:expr,) => {};
+    ($i:expr, [$(#[$meta:meta])* $vis:vis $first:ident], $($rest:tt,)*) => {
+        $(#[$meta])*
+        $vis const $first: usize = $i;
+        $crate::__indices!($i + 1usize, $($rest,)*);
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +181,19 @@ mod tests {
         assert_eq!(store.values()[1], ParamValue::U32(1), "a rejected edit must not land");
 
         assert!(!store.set(9, &ParamValue::F32(0.0)), "out of range index");
+    }
+
+    /// The macro has to expand in function scope as well as module scope (C-ANYWHERE), and an
+    /// entry has to take attributes (C-MACRO-ATTR).
+    #[test]
+    fn params_macro_expands_in_function_scope() {
+        crate::params! {
+            const FIRST = crate::helpers::f32_param("first", "First", 0.0, 0.0, 1.0, None);
+            /// An entry can carry a doc comment.
+            const SECOND = crate::helpers::f32_param("second", "Second", 1.0, 0.0, 1.0, None);
+        }
+        assert_eq!((FIRST, SECOND), (0, 1), "indices follow declaration order");
+        assert_eq!(descriptors().len(), 2);
     }
 
     #[test]

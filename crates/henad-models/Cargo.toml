@@ -12,6 +12,9 @@ henad-compute = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 
+[build-dependencies]
+wgsl_bindgen = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
 

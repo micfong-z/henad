@@ -4,6 +4,8 @@
 // then decay it. Resetting `accum` here rather than clearing the buffer each tick costs nothing,
 // since this pass already owns the cell.
 
+#import shared::prelude::linear_index
+
 struct Params {
     n: u32,
     groups_x: u32,
