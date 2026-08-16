@@ -3,11 +3,13 @@
 //! Tick 0 is bit identical since seeding goes through [`BoidsModel::init`]. After that, the
 //! neighbour index does not fix the order within a cell, so trajectories are likely different.
 
-use henad_compute::cpu::agent_engine::{AGENT_INIT_SEED, agent_model_param_descriptors, split_params};
+use henad_compute::cpu::agent_engine::{
+    AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
+};
 use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
 use henad_core::authoring::field::Extent;
 use henad_core::authoring::gpu_agent_model::{
-    Binding, BufferSpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
+    BufferSpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
 use henad_core::helpers::{extract_f32, extract_u32, mix_seed};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -17,17 +19,15 @@ use crate::boids::{BoidLanes, BoidsModel, HEADING_PALETTE};
 use crate::shader_bindings::gpu_boids::reduce::Params as ReduceParams;
 use crate::shader_bindings::gpu_boids::step::Params as StepParams;
 
-/// The list is [`agent_model_param_descriptors`] for [`BoidsModel`] verbatim, so both backends
-/// take the same vector. Only these three are read here, the rest go through
-/// [`BoidsModel::from_params`].
-const PARAM_NUM_AGENTS: usize = 0;
-const PARAM_WORLD_WIDTH: usize = 1;
-const PARAM_WORLD_HEIGHT: usize = 2;
+// The param list is [`agent_model_param_descriptors`] for [`BoidsModel`] verbatim, so both
+// backends take the same vector. Only the engine's own three are read here, by the names
+// `cpu::agent_engine` gives them. The rest go through [`BoidsModel::from_params`].
 
-/// Indices into [`GpuBoids::BUFFERS`].
-const POS: usize = 0;
-const VEL: usize = 1;
-const COLOR: usize = 2;
+henad_core::buffers! {
+    const POS = "pos" double_buffered drawable;
+    const VEL = "vel" double_buffered;
+    const COLOR = "color" double_buffered drawable;
+}
 
 pub struct GpuBoids;
 
@@ -41,23 +41,7 @@ impl GpuAgentModel for GpuBoids {
 
     /// All double buffered, since a boid reads its neighbours' current values while writing its
     /// own next ones.
-    const BUFFERS: &'static [BufferSpec] = &[
-        BufferSpec {
-            label: "pos",
-            double_buffered: true,
-            drawable: true,
-        },
-        BufferSpec {
-            label: "vel",
-            double_buffered: true,
-            drawable: false,
-        },
-        BufferSpec {
-            label: "color",
-            double_buffered: true,
-            drawable: true,
-        },
-    ];
+    const BUFFERS: &'static [BufferSpec] = SPECS;
     const POS_BUFFER: usize = POS;
     const COLOR_BUFFER: usize = COLOR;
 
@@ -66,23 +50,14 @@ impl GpuAgentModel for GpuBoids {
     const STEP_PASSES: &'static [PassSpec] = &[PassSpec {
         label: "step",
         shader: crate::shader_bindings::gpu_boids::step::SHADER_STRING,
-        bindings: &[
-            Binding::Read(POS),
-            Binding::Read(VEL),
-            Binding::Write(POS),
-            Binding::Write(VEL),
-            Binding::Write(COLOR),
-            Binding::IndexCellStart,
-            Binding::IndexSorted,
-            Binding::Uniform,
-        ],
+        bindings: crate::binding_decls::bindings::GPU_BOIDS_STEP,
         domain: Domain::Agents,
     }];
 
     /// Speed, x velocity, y velocity.
     const REDUCE: ReduceSpec = ReduceSpec {
         shader: crate::shader_bindings::gpu_boids::reduce::SHADER_STRING,
-        bindings: &[Binding::Read(VEL), Binding::ReducePartials, Binding::Uniform],
+        bindings: crate::binding_decls::bindings::GPU_BOIDS_REDUCE,
         // Speed, x velocity, y velocity.
         lanes: 3,
         domain: Domain::Agents,
@@ -94,10 +69,10 @@ impl GpuAgentModel for GpuBoids {
 
     fn dims(params: &[ParamValue]) -> (u32, Extent) {
         (
-            extract_u32(params, PARAM_NUM_AGENTS, BoidsModel::DEFAULT_AGENTS),
+            extract_u32(params, NUM_AGENTS, BoidsModel::DEFAULT_AGENTS),
             Extent {
-                w: extract_f32(params, PARAM_WORLD_WIDTH, BoidsModel::DEFAULT_EXTENT.w),
-                h: extract_f32(params, PARAM_WORLD_HEIGHT, BoidsModel::DEFAULT_EXTENT.h),
+                w: extract_f32(params, WORLD_WIDTH, BoidsModel::DEFAULT_EXTENT.w),
+                h: extract_f32(params, WORLD_HEIGHT, BoidsModel::DEFAULT_EXTENT.h),
             },
         )
     }
@@ -224,9 +199,9 @@ mod tests {
             .iter()
             .map(|desc| desc.kind.default_value())
             .collect();
-        values[PARAM_NUM_AGENTS] = ParamValue::U32(num_agents);
-        values[PARAM_WORLD_WIDTH] = ParamValue::F32(world);
-        values[PARAM_WORLD_HEIGHT] = ParamValue::F32(world);
+        values[NUM_AGENTS] = ParamValue::U32(num_agents);
+        values[WORLD_WIDTH] = ParamValue::F32(world);
+        values[WORLD_HEIGHT] = ParamValue::F32(world);
         values
     }
 

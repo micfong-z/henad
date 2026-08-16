@@ -11,10 +11,10 @@ const I: u8 = 1;
 const R: u8 = 2;
 
 henad_core::params! {
-    INFECTION_RATE = f32_param("infection_rate", "Infection Rate", 0.3, 0.0, 1.0, Some(0.01)),
-    RECOVERY_RATE = f32_param("recovery_rate", "Recovery Rate", 0.05, 0.0, 1.0, Some(0.01)),
-    INITIAL_INFECTED_PCT =
-        f32_param("initial_infected_pct", "Initial Infected %", 0.01, 0.0, 1.0, Some(0.001)).on_reload(),
+    const INFECTION_RATE = f32_param("infection_rate", "Infection Rate", 0.3, 0.0, 1.0, Some(0.01));
+    const RECOVERY_RATE = f32_param("recovery_rate", "Recovery Rate", 0.05, 0.0, 1.0, Some(0.01));
+    const INITIAL_INFECTED_PCT =
+        f32_param("initial_infected_pct", "Initial Infected %", 0.01, 0.0, 1.0, Some(0.001)).on_reload();
 }
 
 pub const PALETTE: [[u8; 4]; 3] = [

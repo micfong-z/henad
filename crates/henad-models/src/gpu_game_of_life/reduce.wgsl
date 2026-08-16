@@ -2,14 +2,14 @@
 // to the CPU. Dispatched at the display cadence (~16ms), not every step.
 //
 // Two-level reduction: every invocation adds its cell into a workgroup-local atomic, then one
-// invocation per workgroup does a single atomicAdd into the global total. That is 1 global atomic
+// invocation per workgroup does a single atomicAdd into the global counters. That is 1 global atomic
 // per 256 cells instead of 1 per cell, which is the difference between a negligible pass and a
 // contended one at the grid sizes this engine targets.
 
 #import shared::dims::Dims
 
 @group(0) @binding(0) var<storage, read> state: array<u32>;
-@group(0) @binding(1) var<storage, read_write> total: atomic<u32>;
+@group(0) @binding(1) var<storage, read_write> counters: atomic<u32>;
 @group(0) @binding(2) var<uniform> dims: Dims;
 
 var<workgroup> partial: atomic<u32>;
@@ -43,6 +43,6 @@ fn main(
     workgroupBarrier();
 
     if (local_index == 0u) {
-        atomicAdd(&total, atomicLoad(&partial));
+        atomicAdd(&counters, atomicLoad(&partial));
     }
 }

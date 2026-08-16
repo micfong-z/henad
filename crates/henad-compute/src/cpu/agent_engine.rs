@@ -28,10 +28,10 @@ impl<A: AgentModel> AgentModelState<A> {
 
     /// Build a state whose RNG starts from `seed`, or [`AGENT_INIT_SEED`] when it is `None`.
     pub fn from_params_seeded(params: &[ParamValue], seed: Option<u64>) -> Self {
-        let n = extract_u32(params, 0, 10_000) as usize;
+        let n = extract_u32(params, NUM_AGENTS, 10_000) as usize;
         let extent = Extent {
-            w: extract_f32(params, 1, 1_000.0),
-            h: extract_f32(params, 2, 1_000.0),
+            w: extract_f32(params, WORLD_WIDTH, 1_000.0),
+            h: extract_f32(params, WORLD_HEIGHT, 1_000.0),
         };
 
         let (own, field_params) = split_params::<A>(params);
@@ -61,10 +61,10 @@ impl<A: AgentModel> AgentModelState<A> {
 
     /// Build a state whose agents come from `seed_lanes`, for reproducing a particular run.
     pub fn from_agents(params: &[ParamValue], seed_lanes: impl FnOnce(&mut A::Lanes, Extent)) -> Self {
-        let n = extract_u32(params, 0, 10_000) as usize;
+        let n = extract_u32(params, NUM_AGENTS, 10_000) as usize;
         let extent = Extent {
-            w: extract_f32(params, 1, 1_000.0),
-            h: extract_f32(params, 2, 1_000.0),
+            w: extract_f32(params, WORLD_WIDTH, 1_000.0),
+            h: extract_f32(params, WORLD_HEIGHT, 1_000.0),
         };
 
         let mut lanes = A::Lanes::alloc(n);
@@ -113,7 +113,13 @@ impl<A: AgentModel> AgentModelState<A> {
 ///
 /// The extent is the engine's, not either layer's, so an agent layer and a field layer cannot
 /// disagree about how big the world is.
-/// Params the engine prepends before a model's own: `num_agents`, `world_width`, `world_height`.
+/// Indices of the params the engine prepends before a model's own. A GPU port reads them too,
+/// since it composes the same list.
+pub const NUM_AGENTS: usize = 0;
+pub const WORLD_WIDTH: usize = 1;
+pub const WORLD_HEIGHT: usize = 2;
+
+/// How many the engine prepends, and so where a model's own params start.
 pub const AGENT_PARAM_BASE: usize = 3;
 
 /// Splits a composed list into `(the model's own, its field layer's)`.

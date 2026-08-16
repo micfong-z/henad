@@ -18,6 +18,11 @@ mod shader_bindings {
     include!(concat!(env!("OUT_DIR"), "/shader_bindings.rs"));
 }
 
+/// Each shader's `@group(0)` declarations, generated alongside the bindings in `build.rs`.
+mod binding_decls {
+    include!(concat!(env!("OUT_DIR"), "/binding_decls.rs"));
+}
+
 pub mod ants;
 pub mod boids;
 pub mod game_of_life;

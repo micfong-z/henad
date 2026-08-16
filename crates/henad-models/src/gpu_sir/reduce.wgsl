@@ -3,7 +3,7 @@
 #import shared::dims::Dims
 
 @group(0) @binding(0) var<storage, read> state: array<u32>;
-@group(0) @binding(1) var<storage, read_write> totals: array<atomic<u32>, 3>;
+@group(0) @binding(1) var<storage, read_write> counters: array<atomic<u32>, 3>;
 @group(0) @binding(2) var<uniform> dims: Dims;
 
 var<workgroup> partial: array<atomic<u32>, 3>;
@@ -30,8 +30,8 @@ fn main(
     workgroupBarrier();
 
     if (local_index == 0u) {
-        atomicAdd(&totals[0], atomicLoad(&partial[0]));
-        atomicAdd(&totals[1], atomicLoad(&partial[1]));
-        atomicAdd(&totals[2], atomicLoad(&partial[2]));
+        atomicAdd(&counters[0], atomicLoad(&partial[0]));
+        atomicAdd(&counters[1], atomicLoad(&partial[1]));
+        atomicAdd(&counters[2], atomicLoad(&partial[2]));
     }
 }

@@ -31,13 +31,13 @@ pub const HEADING_PALETTE: [[u8; 4]; 8] = [
 ];
 
 henad_core::params! {
-    VISUAL_RANGE = f32_param("visual_range", "Visual Range", 50.0, 1.0, 200.0, Some(1.0)),
-    PROTECTED_RANGE = f32_param("protected_range", "Protected Range", 8.0, 0.5, 50.0, Some(0.5)),
-    SEPARATION = f32_param("separation", "Separation", 0.05, 0.0, 2.0, Some(0.01)),
-    ALIGNMENT = f32_param("alignment", "Alignment", 0.05, 0.0, 2.0, Some(0.01)),
-    COHESION = f32_param("cohesion", "Cohesion", 0.0005, 0.0, 0.01, Some(0.0001)),
-    MAX_SPEED = f32_param("max_speed", "Max Speed", 15.0, 1.0, 50.0, Some(0.5)),
-    MIN_SPEED = f32_param("min_speed", "Min Speed", 3.0, 0.5, 20.0, Some(0.5)),
+    const VISUAL_RANGE = f32_param("visual_range", "Visual Range", 50.0, 1.0, 200.0, Some(1.0));
+    const PROTECTED_RANGE = f32_param("protected_range", "Protected Range", 8.0, 0.5, 50.0, Some(0.5));
+    const SEPARATION = f32_param("separation", "Separation", 0.05, 0.0, 2.0, Some(0.01));
+    const ALIGNMENT = f32_param("alignment", "Alignment", 0.05, 0.0, 2.0, Some(0.01));
+    const COHESION = f32_param("cohesion", "Cohesion", 0.0005, 0.0, 0.01, Some(0.0001));
+    const MAX_SPEED = f32_param("max_speed", "Max Speed", 15.0, 1.0, 50.0, Some(0.5));
+    const MIN_SPEED = f32_param("min_speed", "Min Speed", 3.0, 0.5, 20.0, Some(0.5));
 }
 
 pub struct BoidsModel;

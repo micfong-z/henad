@@ -24,8 +24,8 @@ impl<M: GridModel> GridModelState<M> {
     /// Build a state whose RNG starts from `seed`, or [`GRID_INIT_SEED`] when it is `None`.
     pub fn from_params_seeded(params: &[ParamValue], seed: Option<u64>) -> Self {
         let extent = Extent {
-            w: extract_u32(params, 0, 1024) as f32,
-            h: extract_u32(params, 1, 1024) as f32,
+            w: extract_u32(params, GRID_WIDTH, 1024) as f32,
+            h: extract_u32(params, GRID_HEIGHT, 1024) as f32,
         };
         Self {
             field: CaField::with_seed(extent, own_params(params), seed),
@@ -37,8 +37,8 @@ impl<M: GridModel> GridModelState<M> {
     /// `None` unless `cells` is exactly the length `params` implies.
     pub fn from_cells(params: &[ParamValue], cells: &[u8]) -> Option<Self> {
         let extent = Extent {
-            w: extract_u32(params, 0, 1024) as f32,
-            h: extract_u32(params, 1, 1024) as f32,
+            w: extract_u32(params, GRID_WIDTH, 1024) as f32,
+            h: extract_u32(params, GRID_HEIGHT, 1024) as f32,
         };
         Some(Self {
             field: CaField::from_cells(extent, cells)?,
@@ -49,7 +49,11 @@ impl<M: GridModel> GridModelState<M> {
 }
 
 /// Grid width and height, prepended to the model's own descriptors.
-/// Params the engine prepends before a model's own: `grid_width`, `grid_height`.
+/// Indices of the params the engine prepends before a model's own.
+pub const GRID_WIDTH: usize = 0;
+pub const GRID_HEIGHT: usize = 1;
+
+/// How many the engine prepends, and so where a model's own params start.
 pub const GRID_PARAM_BASE: usize = 2;
 
 /// A grid model's own slice of a composed list.

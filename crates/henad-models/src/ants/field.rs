@@ -24,7 +24,7 @@ pub const TO_FOOD: usize = 0;
 pub const TO_HOME: usize = 1;
 
 henad_core::params! {
-    EVAPORATION = f32_param("evaporation", "Evaporation", 0.999, 0.9, 1.0, Some(0.001)),
+    const EVAPORATION = f32_param("evaporation", "Evaporation", 0.999, 0.9, 1.0, Some(0.001));
 }
 
 /// Background, two trail ramps, then the site markers. The ramps differ by hue so route home and

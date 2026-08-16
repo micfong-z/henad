@@ -7,7 +7,7 @@
 //!
 //! # Binding conventions
 //!
-//! The engine generates bind group layouts from [`GpuGridModel::BUFFER_COUNT`] alone, so a
+//! The engine resolves each binding by the name the shader gives it, so a
 //! model's shaders must declare exactly these bindings, all in `@group(0)`:
 //!
 //! **`STEP_SHADER`**, for `K = BUFFER_COUNT` ping-ponged buffers. Bindings `0..2K` are
@@ -70,9 +70,10 @@
 //! - [`Self::WORKGROUP_SIZE`] must equal the `@workgroup_size(N, N)` all three shaders declare,
 //! - [`Self::STATS`] length must equal the reduce shader's `atomic<u32>` array length and the
 //!   number of entries [`Self::stats`] returns,
-//! - [`Self::buffer_lens`] must return exactly [`Self::BUFFER_COUNT`] lengths, and
+//! - [`Self::buffer_lens`] must return exactly [`Self::BUFFERS.len()`] lengths, and
 //!   [`Self::seed_buffers`] exactly that many vectors, of exactly those lengths.
 
+use crate::authoring::binding::BindingDecl;
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::view::{StatDescriptor, StatValue};
 
@@ -91,13 +92,18 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// Must match the `@workgroup_size(N, N)` declared by all three shaders.
     const WORKGROUP_SIZE: u32 = 16;
 
-    /// Buffers ping-ponged per step. `1` for a plain state buffer, `2` for a model that also
-    /// carries per-cell RNG state.
-    const BUFFER_COUNT: usize = 1;
-
     /// Stat series for the history chart. Its length is how many `u32` counters the reduce shader
     /// accumulates.
     const STATS: &'static [StatDescriptor];
+
+    /// Labels for the buffers ping-ponged per step, which a shader's binding names refer to.
+    /// One label for a plain state buffer, two for a model that also carries per-cell RNG state.
+    const BUFFERS: &'static [&'static str];
+
+    /// Each pass's `@group(0)` declarations, generated from its shader.
+    const STEP_BINDINGS: &'static [BindingDecl];
+    const DISPLAY_BINDINGS: &'static [BindingDecl];
+    const REDUCE_BINDINGS: &'static [BindingDecl];
 
     /// WGSL source for the compute shaders.
     const STEP_SHADER: &'static str;
@@ -117,7 +123,7 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// Defaults to one element per cell. A bit-packed model overrides this to return its word
     /// count, and must override [`Self::step_dims`] to match, so that one invocation owns one word.
     fn buffer_lens(width: u32, height: u32) -> Vec<usize> {
-        vec![(width as usize) * (height as usize); Self::BUFFER_COUNT]
+        vec![(width as usize) * (height as usize); Self::BUFFERS.len()]
     }
 
     /// Dispatch domain of the step pass, in invocations.
@@ -130,7 +136,7 @@ pub trait GpuGridModel: Send + Sync + 'static {
 
     /// Initial contents of each ping-ponged buffer, CPU-seeded and uploaded once at construction.
     ///
-    /// Returns [`Self::BUFFER_COUNT`] vectors, whose lengths match [`Self::buffer_lens`], in
+    /// Returns [`Self::BUFFERS.len()`] vectors, whose lengths match [`Self::buffer_lens`], in
     /// binding order. Index 0 is the primary state buffer that display and reduce read.
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>>;
 

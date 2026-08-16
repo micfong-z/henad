@@ -5,12 +5,14 @@
 //! [`crate::gpu_sir`] gives. Deposits still combine with `max`, which is order independent, so
 //! unlike [`crate::gpu_boids`] a run does replay.
 
-use henad_compute::cpu::agent_engine::{AGENT_INIT_SEED, agent_model_param_descriptors, split_params};
+use henad_compute::cpu::agent_engine::{
+    AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
+};
 use henad_compute::cpu::field::scalar::ScalarFieldSpec as _;
 use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
 use henad_core::authoring::field::Extent;
 use henad_core::authoring::gpu_agent_model::{
-    Binding, BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
+    BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
 use henad_core::helpers::{extract_f32, extract_u32, mix_seed};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -23,20 +25,19 @@ use crate::shader_bindings::gpu_ants::merge::Params as MergeParams;
 use crate::shader_bindings::gpu_ants::reduce::Params as ReduceParams;
 use crate::shader_bindings::gpu_ants::step::Params as StepParams;
 
-/// The list is [`agent_model_param_descriptors`] for [`AntsModel`] verbatim, so both backends take
-/// the same vector. Only these three are read here, the rest go through the two `from_params`.
-const PARAM_NUM_AGENTS: usize = 0;
-const PARAM_WORLD_WIDTH: usize = 1;
-const PARAM_WORLD_HEIGHT: usize = 2;
+// The param list is [`agent_model_param_descriptors`] for [`AntsModel`] verbatim, so both backends
+// take the same vector. Only the engine's own three are read here, by the names
+// `cpu::agent_engine` gives them. The rest go through the two `from_params`.
 
-/// Indices into [`GpuAnts::BUFFERS`].
-const POS: usize = 0;
-const STATE: usize = 1;
-const COLOR: usize = 2;
-const RNG: usize = 3;
-const FIELD: usize = 4;
-const ACCUM: usize = 5;
-const SITES: usize = 6;
+henad_core::buffers! {
+    const POS = "pos" drawable;
+    const STATE = "state";
+    const COLOR = "color" drawable;
+    const RNG = "rng";
+    const FIELD = "field";
+    const ACCUM = "accum";
+    const SITES = "sites";
+}
 
 /// Domain separated from the ant seeding stream, so the two do not start correlated.
 const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
@@ -57,43 +58,7 @@ impl GpuAgentModel for GpuAnts {
 
     /// Nothing is double buffered. Ants never read one another, and deposits land in `accum`
     /// rather than in the field the step is reading.
-    const BUFFERS: &'static [BufferSpec] = &[
-        BufferSpec {
-            label: "pos",
-            double_buffered: false,
-            drawable: true,
-        },
-        BufferSpec {
-            label: "state",
-            double_buffered: false,
-            drawable: false,
-        },
-        BufferSpec {
-            label: "color",
-            double_buffered: false,
-            drawable: true,
-        },
-        BufferSpec {
-            label: "rng",
-            double_buffered: false,
-            drawable: false,
-        },
-        BufferSpec {
-            label: "field",
-            double_buffered: false,
-            drawable: false,
-        },
-        BufferSpec {
-            label: "accum",
-            double_buffered: false,
-            drawable: false,
-        },
-        BufferSpec {
-            label: "sites",
-            double_buffered: false,
-            drawable: false,
-        },
-    ];
+    const BUFFERS: &'static [BufferSpec] = SPECS;
     const POS_BUFFER: usize = POS;
     const COLOR_BUFFER: usize = COLOR;
 
@@ -104,47 +69,27 @@ impl GpuAgentModel for GpuAnts {
         PassSpec {
             label: "step",
             shader: crate::shader_bindings::gpu_ants::step::SHADER_STRING,
-            bindings: &[
-                Binding::Write(POS),
-                Binding::Write(STATE),
-                Binding::Write(COLOR),
-                Binding::Write(RNG),
-                Binding::Read(FIELD),
-                Binding::Write(ACCUM),
-                Binding::Read(SITES),
-                Binding::Counters,
-                Binding::Uniform,
-            ],
+            bindings: crate::binding_decls::bindings::GPU_ANTS_STEP,
             domain: Domain::Agents,
         },
         PassSpec {
             label: "merge",
             shader: crate::shader_bindings::gpu_ants::merge::SHADER_STRING,
-            bindings: &[Binding::Write(FIELD), Binding::Write(ACCUM), Binding::Uniform],
+            bindings: crate::binding_decls::bindings::GPU_ANTS_MERGE,
             domain: Domain::Cells(2),
         },
     ];
 
     const DISPLAY: Option<DisplaySpec> = Some(DisplaySpec {
         shader: crate::shader_bindings::gpu_ants::display::SHADER_STRING,
-        bindings: &[
-            Binding::Read(FIELD),
-            Binding::Read(SITES),
-            Binding::DisplayTexture,
-            Binding::Uniform,
-        ],
+        bindings: crate::binding_decls::bindings::GPU_ANTS_DISPLAY,
         workgroup: 16,
     });
 
     /// Carrying food, total pheromone. Deliveries is an accumulating counter, not a reduction.
     const REDUCE: ReduceSpec = ReduceSpec {
         shader: crate::shader_bindings::gpu_ants::reduce::SHADER_STRING,
-        bindings: &[
-            Binding::Read(STATE),
-            Binding::Read(FIELD),
-            Binding::ReducePartials,
-            Binding::Uniform,
-        ],
+        bindings: crate::binding_decls::bindings::GPU_ANTS_REDUCE,
         lanes: 2,
         // The two lanes have different domains, so the tree covers the longer one.
         domain: Domain::AgentsOrCells,
@@ -156,10 +101,10 @@ impl GpuAgentModel for GpuAnts {
 
     fn dims(params: &[ParamValue]) -> (u32, Extent) {
         (
-            extract_u32(params, PARAM_NUM_AGENTS, AntsModel::DEFAULT_AGENTS),
+            extract_u32(params, NUM_AGENTS, AntsModel::DEFAULT_AGENTS),
             Extent {
-                w: extract_f32(params, PARAM_WORLD_WIDTH, AntsModel::DEFAULT_EXTENT.w),
-                h: extract_f32(params, PARAM_WORLD_HEIGHT, AntsModel::DEFAULT_EXTENT.h),
+                w: extract_f32(params, WORLD_WIDTH, AntsModel::DEFAULT_EXTENT.w),
+                h: extract_f32(params, WORLD_HEIGHT, AntsModel::DEFAULT_EXTENT.h),
             },
         )
     }
@@ -333,9 +278,9 @@ mod tests {
             .iter()
             .map(|desc| desc.kind.default_value())
             .collect();
-        values[PARAM_NUM_AGENTS] = ParamValue::U32(num_agents);
-        values[PARAM_WORLD_WIDTH] = ParamValue::F32(world);
-        values[PARAM_WORLD_HEIGHT] = ParamValue::F32(world);
+        values[NUM_AGENTS] = ParamValue::U32(num_agents);
+        values[WORLD_WIDTH] = ParamValue::F32(world);
+        values[WORLD_HEIGHT] = ParamValue::F32(world);
         values
     }
 

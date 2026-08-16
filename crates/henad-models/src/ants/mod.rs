@@ -29,10 +29,10 @@ pub const STAT_PALETTE: [[u8; 4]; 3] = [
 ];
 
 henad_core::params! {
-    UPDATE_CUTDOWN = f32_param("update_cutdown", "Trail Falloff", 0.9, 0.5, 1.0, Some(0.01)),
-    REWARD = f32_param("reward", "Site Reward", 1.0, 0.1, 10.0, Some(0.1)),
-    MOMENTUM = f32_param("momentum", "Momentum Probability", 0.8, 0.0, 1.0, Some(0.01)),
-    RANDOM_ACTION = f32_param("random_action", "Random Action Probability", 0.1, 0.0, 1.0, Some(0.01)),
+    const UPDATE_CUTDOWN = f32_param("update_cutdown", "Trail Falloff", 0.9, 0.5, 1.0, Some(0.01));
+    const REWARD = f32_param("reward", "Site Reward", 1.0, 0.1, 10.0, Some(0.1));
+    const MOMENTUM = f32_param("momentum", "Momentum Probability", 0.8, 0.0, 1.0, Some(0.01));
+    const RANDOM_ACTION = f32_param("random_action", "Random Action Probability", 0.1, 0.0, 1.0, Some(0.01));
 }
 
 /// Ant foraging, ported from krABMaga's `antsforaging`.

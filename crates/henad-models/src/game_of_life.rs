@@ -10,7 +10,7 @@ const DEAD: u8 = 0;
 const ALIVE: u8 = 1;
 
 henad_core::params! {
-    DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)).on_reload(),
+    const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)).on_reload();
 }
 
 /// Cell colours, shared with the GPU Game of Life's stat colour.
