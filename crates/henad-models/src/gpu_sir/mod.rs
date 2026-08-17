@@ -14,8 +14,8 @@
 //! and reduce shaders.
 
 use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
-use henad_core::authoring::binding::BindingDecl;
-use henad_core::authoring::gpu_grid_model::GpuGridModel;
+use henad_core::authoring::model::binding::BindingDecl;
+use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, mix_seed, u32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};

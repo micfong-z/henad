@@ -6,8 +6,8 @@ pub use crate::ants::lanes::{AntLanes, NO_STEP};
 
 use henad_compute::cpu::field::scalar::{Deposits, ScalarField};
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_core::authoring::agent_model::{AgentModel, StepCtx};
-use henad_core::authoring::field::Extent;
+use henad_core::authoring::model::agent_model::{AgentModel, StepCtx};
+use henad_core::authoring::model::field::Extent;
 use henad_core::grid::Grid2D;
 use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -74,7 +74,7 @@ impl AgentModel for AntsModel {
 
     type Lanes = AntLanes;
     type Field = ScalarField<PheromoneField>;
-    type Index = henad_core::authoring::agent_model::NoIndex;
+    type Index = henad_core::authoring::model::agent_model::NoIndex;
     type Params = AntParams;
     type Tally = u64;
 

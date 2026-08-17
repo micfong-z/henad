@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use henad_core::authoring::agent_model::{AgentModel as _, StepCtx};
+use henad_core::authoring::model::agent_model::{AgentModel as _, StepCtx};
 
 use crate::boids::lanes::{BoidChunk, BoidLanes, BoidRead};
 use crate::boids::{BoidParams, BoidsModel};

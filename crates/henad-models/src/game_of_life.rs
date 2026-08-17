@@ -1,5 +1,5 @@
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_core::authoring::grid_model::GridModel;
+use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::grid::Grid2D;
 use henad_core::helpers::{extract_f32, f32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};

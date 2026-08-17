@@ -198,15 +198,20 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
 
 - **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
   GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
-  abstractions everything else builds on. `authoring/` holds the four traits a model implements,
-  one per (topology × backend): `GridModel` (`authoring/grid_model.rs`) for cellular automata,
-  `AgentModel` (`authoring/agent_model.rs`) for agent populations, `GpuGridModel`
-  (`authoring/gpu_grid_model.rs`) for shader-resident grids and `GpuAgentModel`
-  (`authoring/gpu_agent_model.rs`) for shader-resident populations, plus `FieldLayer`
-  (`authoring/field.rs`),
-  the grid slot an `AgentModel` sits over. `Model`/`SimState` (`model.rs`) are the _runner_
+  abstractions everything else builds on. `authoring/` is the model authoring API and splits in two.
+  `authoring/model/` holds the four traits a model implements,
+  one per (topology × backend): `GridModel` (`authoring/model/grid_model.rs`) for cellular automata,
+  `AgentModel` (`authoring/model/agent_model.rs`) for agent populations, `GpuGridModel`
+  (`authoring/model/gpu_grid_model.rs`) for shader-resident grids and `GpuAgentModel`
+  (`authoring/model/gpu_agent_model.rs`) for shader-resident populations, plus `FieldLayer`
+  (`authoring/model/field.rs`),
+  the grid slot an `AgentModel` sits over. `authoring/std/` is the primitive vocabulary those
+  kernels call — wrapping, neighbourhoods, distances, random draws — each paired with a WGSL twin
+  under `henad-compute/src/gpu/shared/` and pinned to it by a parity test. `docs/authoring/primitives.md`
+  is the index and records what is deliberately absent.
+  `Model`/`SimState` (`model.rs`) are the _runner_
   interface the sim thread drives, not an authoring API — that split is why the traits live under
-  `authoring/` and this one does not. Also the `Grid2D<T>` double-buffered SoA grid (`grid.rs`),
+  `authoring/model/` and this one does not. Also the `Grid2D<T>` double-buffered SoA grid (`grid.rs`),
   the counting-sort `SpatialHash` and the `HashGrid` cell geometry both backends share
   (`spatial_hash.rs`), param descriptors and `ParamStore`
   (`params.rs`), stat/view types consumed by the UI (`view.rs`), and small shared helpers
@@ -261,11 +266,11 @@ Pick the trait matching the topology and the backend. All four are const metadat
 functions; the engine owns allocation, buffering, chunking, RNG seeding, param storage, the views,
 and the whole `SimState` impl.
 
-1. **`GridModel`** (`henad-core/src/authoring/grid_model.rs`) — cellular automata over `u8` cells.
+1. **`GridModel`** (`henad-core/src/authoring/model/grid_model.rs`) — cellular automata over `u8` cells.
    Implement `init`, `step_cell`, `stats` and the consts; `cpu/grid_engine.rs` does the rest, including the parallel
    row-wise step. Grid width/height are prepended to the param list at indices 0 and 1. See
    `game_of_life.rs`, `sir.rs`.
-2. **`AgentModel`** (`henad-core/src/authoring/agent_model.rs`) — a population of agents, optionally over a
+2. **`AgentModel`** (`henad-core/src/authoring/model/agent_model.rs`) — a population of agents, optionally over a
    field. Declare lanes with `agent_lanes!`, then implement `init`, `run_step_pass` and `stats`.
    `run_step_pass` is normally one call to the generated `lanes.run_pass(CHUNK, seed, tick, ..)`
    with a per-agent closure, which is where the chunking and seeding happen — see
@@ -279,10 +284,10 @@ and the whole `SimState` impl.
 
    A model needing a second pass over agents before the step (ants filling deposit lanes)
    overrides `run_deposit_pass`.
-3. **`GpuGridModel`** (`henad-core/src/authoring/gpu_grid_model.rs`) — a grid stepped by a compute
+3. **`GpuGridModel`** (`henad-core/src/authoring/model/gpu_grid_model.rs`) — a grid stepped by a compute
    shader. Three WGSL sources (step, display, reduce), buffer lengths, seeds and a uniform block.
    All `K` buffers ping-pong together; display and reduce see buffer 0 only.
-4. **`GpuAgentModel`** (`henad-core/src/authoring/gpu_agent_model.rs`) — a population stepped by
+4. **`GpuAgentModel`** (`henad-core/src/authoring/model/gpu_agent_model.rs`) — a population stepped by
    compute shaders. Unlike a grid, a step is a *list* of passes, because the two real models
    disagree about almost everything structural: boids rebuilds a neighbour index and runs one pass
    over three ping-ponged lanes, ants runs two passes over seven in-place buffers with a display

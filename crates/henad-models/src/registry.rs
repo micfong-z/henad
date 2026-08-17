@@ -5,10 +5,10 @@ use henad_compute::gpu::agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
 use henad_compute::gpu::capacity::Demand;
 use henad_compute::gpu::grid_engine::{GpuGridModelDescriptor, GpuGridState};
 use henad_compute::gpu::sim_thread::GpuSimState;
-use henad_core::authoring::agent_model::AgentModel;
-use henad_core::authoring::gpu_agent_model::GpuAgentModel;
-use henad_core::authoring::gpu_grid_model::GpuGridModel;
-use henad_core::authoring::grid_model::GridModel;
+use henad_core::authoring::model::agent_model::AgentModel;
+use henad_core::authoring::model::gpu_agent_model::GpuAgentModel;
+use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
+use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::model::{Model as _, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;
@@ -86,7 +86,7 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
         param_descriptors: agent_model_param_descriptors::<A>(),
         stat_descriptors: A::STATS.to_vec(),
         topology_hint: TopologyHint {
-            grid: <A::Field as henad_core::authoring::field::FieldLayer>::HAS_GRID,
+            grid: <A::Field as henad_core::authoring::model::field::FieldLayer>::HAS_GRID,
             agents: true,
         },
         create: Box::new(|params, seed| {

@@ -1,5 +1,7 @@
-use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel, ChunkTally as _, NeighborIndex as _, StepCtx};
-use henad_core::authoring::field::{Extent, FieldLayer};
+use henad_core::authoring::model::agent_model::{
+    AgentLanes as _, AgentModel, ChunkTally as _, NeighborIndex as _, StepCtx,
+};
+use henad_core::authoring::model::field::{Extent, FieldLayer};
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamStore, ParamValue};

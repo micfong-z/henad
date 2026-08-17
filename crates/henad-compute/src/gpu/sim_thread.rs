@@ -28,7 +28,7 @@ use crate::snapshot::GpuSnapshot;
 
 /// The interface [`GpuSimThread`] drives, the GPU counterpart of how the CPU thread drives
 /// `SimState`. Not a model-authoring trait, which is
-/// `henad_core::authoring::gpu_grid_model::GpuGridModel`.
+/// `henad_core::authoring::model::gpu_grid_model::GpuGridModel`.
 ///
 /// A GPU model's grid never leaves the GPU, so `SimState::stats()` reports whatever the last
 /// completed [`Self::poll_stats_readback`] produced, a few milliseconds stale.

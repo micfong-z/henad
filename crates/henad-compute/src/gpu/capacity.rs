@@ -7,7 +7,7 @@ use henad_core::helpers::fmt_bytes;
 
 use crate::display_scale::display_dims;
 use crate::gpu::primitives::pipeline::{storage_entry, uniform_entry};
-use henad_core::authoring::binding::{BindingDecl, BindingKind};
+use henad_core::authoring::model::binding::{BindingDecl, BindingKind};
 
 /// Bindings that count against `max_storage_buffers_per_shader_stage`. A uniform and a storage
 /// texture each count against their own limit, not this one.

@@ -6,9 +6,9 @@
 use henad_compute::cpu::agent_engine::{
     AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
 };
-use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
-use henad_core::authoring::field::Extent;
-use henad_core::authoring::gpu_agent_model::{
+use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel as _};
+use henad_core::authoring::model::field::Extent;
+use henad_core::authoring::model::gpu_agent_model::{
     BufferSpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
 use henad_core::helpers::{extract_f32, extract_u32, mix_seed};

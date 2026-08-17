@@ -147,5 +147,5 @@ macro_rules! agent_lanes {
 /// Re-exported so the macro can name these without the caller importing them.
 #[doc(hidden)]
 pub mod __lanes {
-    pub use henad_core::authoring::agent_model::{AgentLanes, ChunkTally};
+    pub use henad_core::authoring::model::agent_model::{AgentLanes, ChunkTally};
 }

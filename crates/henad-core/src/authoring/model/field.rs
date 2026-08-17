@@ -22,7 +22,7 @@ impl Extent {
 
 /// A layer of cells stepped once per tick.
 ///
-/// Implemented by `CaField` (a [`crate::authoring::grid_model::GridModel`] gather rule) and by scatter-plus-decay
+/// Implemented by `CaField` (a [`crate::authoring::model::grid_model::GridModel`] gather rule) and by scatter-plus-decay
 /// fields, so an agent model can sit over either.
 pub trait FieldLayer: Send + 'static {
     /// Must agree with what `grid_view` returns.

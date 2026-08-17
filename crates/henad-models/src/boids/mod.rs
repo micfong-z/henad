@@ -2,8 +2,8 @@ mod lanes;
 mod step;
 
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_core::authoring::agent_model::{AgentModel, StepCtx};
-use henad_core::authoring::field::{Extent, NoField};
+use henad_core::authoring::model::agent_model::{AgentModel, StepCtx};
+use henad_core::authoring::model::field::{Extent, NoField};
 use henad_core::helpers::{extract_f32, f32_param, xorshift64};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::spatial_hash::SpatialHash;

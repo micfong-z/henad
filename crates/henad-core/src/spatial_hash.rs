@@ -1,4 +1,4 @@
-use crate::authoring::field::Extent;
+use crate::authoring::model::field::Extent;
 
 /// Cell geometry on its own, for a caller that needs the grid without the buckets. A GPU model
 /// mirrors it into its step uniform so its query walks the same grid as the CPU sort.

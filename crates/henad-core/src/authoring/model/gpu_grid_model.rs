@@ -1,6 +1,6 @@
 //! Authoring API for grid models whose state lives entirely in GPU buffers.
 //!
-//! This is the GPU sibling of [`crate::authoring::grid_model::GridModel`], and it plays the same role: a
+//! This is the GPU sibling of [`crate::authoring::model::grid_model::GridModel`], and it plays the same role: a
 //! model declares const metadata plus a few pure functions, and the engine
 //! (`henad_compute::gpu::grid_engine`) derives every buffer, layout, pipeline, bind group, and
 //! the whole `SimState`/`GpuSimState` impl from them.
@@ -73,7 +73,7 @@
 //! - [`Self::buffer_lens`] must return exactly [`Self::BUFFERS.len()`] lengths, and
 //!   [`Self::seed_buffers`] exactly that many vectors, of exactly those lengths.
 
-use crate::authoring::binding::BindingDecl;
+use crate::authoring::model::binding::BindingDecl;
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::view::{StatDescriptor, StatValue};
 
@@ -110,7 +110,7 @@ pub trait GpuGridModel: Send + Sync + 'static {
     const DISPLAY_SHADER: &'static str;
     const REDUCE_SHADER: &'static str;
 
-    /// The full descriptor list. Unlike [`crate::authoring::grid_model::GridModel`], width and
+    /// The full descriptor list. Unlike [`crate::authoring::model::grid_model::GridModel`], width and
     /// height are *not* prepended. A GPU model spells its list out, so it can mirror the exact
     /// parameter order of the CPU model it is compared against.
     fn param_descriptors() -> Vec<ParamDescriptor>;
