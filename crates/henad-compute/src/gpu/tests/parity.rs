@@ -12,9 +12,9 @@ use henad_core::authoring::primitives::space::{self, Boundary, MOORE_COLUMN_MAJO
 use crate::gpu::headless_context;
 use crate::gpu::primitives::pipeline::compute_pipeline;
 use crate::shader_bindings::shared::parity::{
-    Case, Out, WgpuBindGroup0, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT,
-    OP_NEIGHBOR_COUNT, OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD,
-    OP_WRAP_INDEX, SHADER_STRING,
+    Case, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT, OP_NEIGHBOR_COUNT,
+    OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD, OP_WRAP_INDEX, Out,
+    SHADER_STRING, WgpuBindGroup0,
 };
 use crate::shader_bindings::shared::space as codes;
 
@@ -27,11 +27,7 @@ const TOLERANCE: f32 = 1e-4;
 /// through a division where Rust's is an fmod, so the two round apart on inputs far outside the
 /// world.
 fn tolerance_for(op: u32) -> f32 {
-    if op == OP_RANDOM_FLOAT {
-        0.0
-    } else {
-        TOLERANCE
-    }
+    if op == OP_RANDOM_FLOAT { 0.0 } else { TOLERANCE }
 }
 
 /// A case plus the result its Rust twin produces.
