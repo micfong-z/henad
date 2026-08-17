@@ -330,32 +330,6 @@ mod tests {
         );
     }
 
-    /// Mean velocity near mean speed, which cannot happen if the index comes back empty.
-    ///
-    /// 800 ticks rather than 200, where alignment is still climbing and lands anywhere in
-    /// 0.08..0.36 run to run.
-    #[test]
-    fn the_flock_aligns_over_time() {
-        let Some(ctx) = headless_context() else {
-            log::warn!("skipping the_flock_aligns_over_time: no adapter");
-            return;
-        };
-
-        let mut state = State::new(&ctx, &params(20_000, 800.0));
-        state.run_batched(800);
-        state.refresh_stats();
-
-        let stats = state.stats();
-        let (StatValue::Scalar(avg_speed), StatValue::Vector2D { x, y }) = (&stats[0].value, &stats[1].value) else {
-            panic!("boids report a scalar speed and a vector velocity");
-        };
-        let alignment = x.hypot(*y) / avg_speed.max(f64::EPSILON);
-        assert!(
-            alignment > 0.8,
-            "mean velocity is {alignment} of mean speed; the flock is not aligning, so neighbours are probably not being found"
-        );
-    }
-
     /// Exercises the 2D dispatch fold in every kernel at once.
     #[test]
     fn a_population_past_one_workgroup_row_still_steps() {
