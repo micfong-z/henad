@@ -189,7 +189,7 @@ mod tests {
     /// The device asks for `Limits::default()`, so a GPU model that only fits a raised limit fails
     /// to build here. That is deliberate: every model is meant to run on a stock WebGPU device.
     fn all_entries() -> Vec<ModelEntry> {
-        model_registry(crate::gpu_test_support::headless_context(
+        model_registry(crate::tests::support::headless_context(
             "registry_test_device",
             wgpu::Features::empty(),
         ))

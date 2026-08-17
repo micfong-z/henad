@@ -151,7 +151,7 @@ mod tests {
     type State = GpuGridState<GpuGameOfLife>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        crate::gpu_test_support::headless_context("gpu_gol_test_device", wgpu::Features::empty())
+        crate::tests::support::headless_context("gpu_gol_test_device", wgpu::Features::empty())
     }
 
     pub(super) fn params(width: u32, height: u32, density: f32) -> Vec<ParamValue> {
@@ -271,7 +271,7 @@ mod tests {
     /// Like `headless_context`, but requests `TIMESTAMP_QUERY` explicitly (mirroring what the app
     /// does when the adapter supports it), since the default test device requests no features.
     fn headless_timing_context() -> Option<GpuContext> {
-        crate::gpu_test_support::headless_context("gpu_gol_timing_test_device", wgpu::Features::TIMESTAMP_QUERY)
+        crate::tests::support::headless_context("gpu_gol_timing_test_device", wgpu::Features::TIMESTAMP_QUERY)
     }
 
     /// Regression test for "GPU time/step flickers to 0/None during a sustained run": runs many

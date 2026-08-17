@@ -133,6 +133,13 @@ fences and link definitions are not prose and are unaffected.
   exposes the live widget tree to the egui MCP server (see the environment variables below), which
   is how a UI change is confirmed to render. Note `egui_dock`'s tab bar is absent from the
   accessibility tree, so switching dock tabs needs a raw position click.
+- **A test-only module goes under a `tests/` directory in `src/`, never beside production modules.**
+  `henad-compute/src/gpu/tests/` and `henad-models/src/tests/` hold their crate's `support.rs` (the
+  headless device) plus any test module too big to inline, so each `mod.rs` lists exactly one
+  `#[cfg(test)] mod tests;` rather than interleaving test modules with real ones. An inline
+  `#[cfg(test)] mod tests` at the bottom of the file it tests is still the default and is unaffected. The two `support.rs` files look like duplicates and are not: henad-compute raises
+  the device limits, henad-models deliberately does not, since
+  `every_gpu_model_builds_on_a_baseline_device` has to run on a `Limits::default()` device.
 - **Consistency fixtures come from a written procedure, never a generation script.** The procedure
   goes in the fixture's doc (e.g. `crates/henad-models/tests/fixtures/docs/`) for the user to run.
   A driver script would presume the reference engine is installed, which no future collaborator
@@ -205,7 +212,7 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
   (`authoring/model/gpu_grid_model.rs`) for shader-resident grids and `GpuAgentModel`
   (`authoring/model/gpu_agent_model.rs`) for shader-resident populations, plus `FieldLayer`
   (`authoring/model/field.rs`),
-  the grid slot an `AgentModel` sits over. `authoring/std/` is the primitive vocabulary those
+  the grid slot an `AgentModel` sits over. `authoring/primitives/` is the primitive vocabulary those
   kernels call — wrapping, neighbourhoods, distances, random draws — each paired with a WGSL twin
   under `henad-compute/src/gpu/shared/` and pinned to it by a parity test. `docs/authoring/primitives.md`
   is the index and records what is deliberately absent.
@@ -242,6 +249,10 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
     `gpu/sim_thread.rs`, `cpu/agent_engine.rs` and `gpu/agent_engine.rs`, `ants/step.rs` and
     `boids/step.rs`, `henad-core/src/spatial_hash.rs` and its
     GPU twin. Two unrelated things must not share a basename.
+    The one name carrying three meanings is `primitives`, so keep them straight: `cpu/primitives/`
+    and `gpu/primitives/` are engine internals and are counterparts of each other, while
+    `henad-core/src/authoring/primitives/` is the model-author-facing vocabulary and is a
+    counterpart of `gpu/shared/` instead.
 
 - **henad-models**: concrete simulations — `sir.rs` and `game_of_life.rs` (`GridModel`), `boids/`
   (`AgentModel` over `NoField`), `ants/` (`AgentModel` over `ScalarField`, the one composite

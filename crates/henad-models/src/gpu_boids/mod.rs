@@ -191,7 +191,7 @@ mod tests {
     type State = GpuAgentState<GpuBoids>;
 
     fn headless_context() -> Option<GpuContext> {
-        crate::gpu_test_support::headless_context("gpu_boids_test_device", wgpu::Features::empty())
+        crate::tests::support::headless_context("gpu_boids_test_device", wgpu::Features::empty())
     }
 
     fn params(num_agents: u32, world: f32) -> Vec<ParamValue> {

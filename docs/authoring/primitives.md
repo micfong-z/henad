@@ -3,8 +3,10 @@
 This is the index of the primitives Henad provides to model authors.
 
 Every primitive here has two implementations, one for CPU models and one for GPU models.
-CPU models use a Rust function in `henad_core::authoring::std`, and GPU models use a WGSL function under `shared::` with `#import`.
-Each pair has the same semantics and is tested for parity equality on the outputs.
+CPU models use a Rust function in `henad_core::authoring::primitives`, and GPU models use a WGSL function under `shared::` with `#import`.
+Each pair has the same semantics and is tested for parity on the outputs.
+Integer results must match exactly.
+Float results are compared with a tolerance, since WGSL's float `%` goes through a division while Rust's is an exact fmod.
 
 See docstring for each primitive for its full signature and semantics.
 
@@ -12,7 +14,7 @@ See docstring for each primitive for its full signature and semantics.
 
 | Status | Meaning |
 |---|---|
-| `shipped` | Exists in `authoring::std` and in `shared::`, with a parity test |
+| `shipped` | Exists in `authoring::primitives` and in `shared::`, with a parity test |
 | `planned` | Being built now, under issue #11 |
 | `deferred` | Wanted, but no model needs it yet, so it is not written |
 | `elsewhere` | Already covered by something Henad has, named in the row |
@@ -54,14 +56,14 @@ The WGSL idiom is a loop over the offset table instead, and the tables are the s
 
 | NetLogo | Henad | Status | Notes |
 |---|---|---|---|
-| — | `Boundary` (`Torus`, `Bounded`) | `planned` | A world setting in NetLogo, an argument here |
-| — | `wrap_index(v, m)` | `planned` | Wraps an index into `0..m`, replacing three spellings of `(v + m - 1) % m` |
-| — | `wrap_coord(v, world)` | `planned` | The `rem_euclid` position wrap |
-| `patch-at` | `offset_cell(x, y, dx, dy, w, h, boundary)` | `planned` | `dy` runs south, matching the display's downward y axis |
-| `distancexy` | `axis_delta(a, b, world, boundary)` | `planned` | One axis, signed, shortest way round on a torus |
-| `distancexy` | `dist_sq(ax, ay, bx, by, world_w, world_h, boundary)` | `planned` | Squared, so the hot paths pay no `sqrt` |
-| — | `cell_index(x, y, w)` | `planned` | Pins the `y * w + x` convention once |
-| `towards` | `heading_octant(vx, vy)` | `planned` | Eight-way discretisation, comparisons rather than `atan2` |
+| — | `Boundary` (`Torus`, `Bounded`) | `shipped` | A world setting in NetLogo, an argument here |
+| — | `wrap_index(v, m)` | `shipped` | Wraps an index into `0..m`, replacing three spellings of `(v + m - 1) % m` |
+| — | `wrap_coord(v, world)` | `shipped` | The `rem_euclid` position wrap |
+| `patch-at` | `offset_cell(x, y, dx, dy, w, h, boundary)` | `shipped` | `dy` runs south, matching the display's downward y axis |
+| `distancexy` | `axis_delta(a, b, world, boundary)` | `shipped` | One axis, signed, shortest way round on a torus |
+| `distancexy` | `dist_sq(ax, ay, bx, by, world_w, world_h, boundary)` | `shipped` | Squared, so the hot paths pay no `sqrt` |
+| — | `cell_index(x, y, w)` | `shipped` | Pins the `y * w + x` convention once |
+| `towards` | `heading_octant(vx, vy)` | `shipped` | Eight-way discretisation, comparisons rather than `atan2` |
 | `distance`, `distancexy` | true distance with `sqrt` | `deferred` | Every caller today wants the square |
 | `towards`, `towardsxy` | heading in radians | `deferred` | Boids deliberately avoids per-agent `atan2` |
 | `dx`, `dy` | heading components | `deferred` | No caller |
@@ -77,10 +79,12 @@ The WGSL idiom is a loop over the offset table instead, and the tables are the s
 
 | NetLogo | Henad | Status | Notes |
 |---|---|---|---|
-| `neighbors` | `MOORE_OFFSETS` | `planned` | The 8 surrounding cells |
-| `neighbors4` | `VON_NEUMANN_OFFSETS` | `planned` | The 4 orthogonal cells |
-| `neighbors`, `neighbors4` | `for_each_neighbor(..)` | `planned` | Rust only. The WGSL idiom is a loop over the offset table |
-| — | `neighbor_offset(kind, n)`, `neighbor_count(kind)` | `planned` | WGSL only, the loop form of the tables above |
+| `neighbors` | `MOORE_ROW_MAJOR` | `shipped` | The 8 surrounding cells, `dy` outer. The `step_cell` slice order |
+| `neighbors` | `MOORE_COLUMN_MAJOR` | `shipped` | The same 8 cells, `dx` outer. See the warning below |
+| `neighbors4` | `VON_NEUMANN` | `shipped` | The 4 orthogonal cells |
+| — | `offsets(kind)` | `shipped` | The table for a `NeighborhoodKind`, in `step_cell` order |
+| `neighbors`, `neighbors4` | `for_each_neighbor(..)` | `shipped` | Rust only. The WGSL idiom is a loop over the offset table |
+| — | `neighbor_offset(table, n)`, `neighbor_count(table)` | `shipped` | WGSL only, the loop form of the tables above |
 
 
 > [!warning]
@@ -126,9 +130,12 @@ The `next_*` forms advance a generator and then call the pure form.
 ## Where these live
 
 ```
-crates/henad-core/src/authoring/std/space.rs   <->  crates/henad-compute/src/gpu/shared/space.wgsl
-crates/henad-core/src/authoring/std/rng.rs     <->  crates/henad-compute/src/gpu/shared/rng.wgsl
+crates/henad-core/src/authoring/primitives/space.rs   <->  crates/henad-compute/src/gpu/shared/space.wgsl
+crates/henad-core/src/authoring/primitives/rng.rs     <->  crates/henad-compute/src/gpu/shared/rng.wgsl
 ```
 
-The parity test that pins each pair is `crates/henad-compute/src/gpu/shared/parity.wgsl` and its Rust driver.
-Set `HENAD_REQUIRE_GPU=1` to run the test.
+The parity test that pins each pair is `crates/henad-compute/src/gpu/shared/parity.wgsl`, driven from `crates/henad-compute/src/gpu/tests/parity.rs`.
+It skips silently on a machine with no adapter, so set `HENAD_REQUIRE_GPU=1` to turn that into a failure.
+
+The shader is one invocation per case and one dispatch for the lot, switching on an op code.
+Adding a primitive means adding an op there and a case builder in the driver, and the op codes come from the generated bindings rather than being retyped.

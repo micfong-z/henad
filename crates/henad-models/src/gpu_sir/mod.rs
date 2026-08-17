@@ -161,7 +161,7 @@ mod tests {
     type State = GpuGridState<GpuSir>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        crate::gpu_test_support::headless_context("gpu_sir_test_device", wgpu::Features::empty())
+        crate::tests::support::headless_context("gpu_sir_test_device", wgpu::Features::empty())
     }
 
     pub(super) fn params(
