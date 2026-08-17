@@ -145,6 +145,22 @@ pub fn axis_delta(a: f32, b: f32, world: f32, boundary: Boundary) -> f32 {
         Boundary::Bounded => d,
         Boundary::Torus => {
             let half = world * 0.5;
+            // A single correction covers any pair within a world of each other, which is every
+            // position the engine produces. The fmod below is only for inputs that never wrapped,
+            // and it costs far too much to pay for it per neighbour per agent.
+            if d >= half {
+                let c = d - world;
+                if c < half {
+                    return c;
+                }
+            } else if d < -half {
+                let c = d + world;
+                if c >= -half {
+                    return c;
+                }
+            } else {
+                return d;
+            }
             (d + half).rem_euclid(world) - half
         }
     }

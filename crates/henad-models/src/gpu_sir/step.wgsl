@@ -1,5 +1,6 @@
 
-#import shared::rng::pcg_hash
+#import shared::rng::{pcg_hash, random_float}
+#import shared::space::{cell_index, offset_cell, TORUS}
 struct Params {
     width: u32,
     height: u32,
@@ -23,9 +24,6 @@ const R: u32 = 2u;
 // submit once: any uniform written between passes in the same encoder would only become visible
 // after the whole encoder submits, so every pass would see the same tick. Advancing the state
 // in-buffer sidesteps that entirely.
-fn rand01(h: u32) -> f32 {
-    return f32(h) / 4294967295.0;
-}
 
 @compute
 @workgroup_size(16, 16)
@@ -38,22 +36,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let x = global_id.x;
     let y = global_id.y;
-    let idx = y * width + x;
+    let idx = cell_index(x, y, width);
 
-    let left = (x + width - 1u) % width;
-    let right = (x + 1u) % width;
-    let up = (y + height - 1u) % height;
-    let down = (y + 1u) % height;
+    let left = u32(offset_cell(x, y, -1, 0, width, height, TORUS).x);
+    let right = u32(offset_cell(x, y, 1, 0, width, height, TORUS).x);
+    let up = u32(offset_cell(x, y, 0, -1, width, height, TORUS).y);
+    let down = u32(offset_cell(x, y, 0, 1, width, height, TORUS).y);
 
     var infected_neighbors: u32 = 0u;
-    infected_neighbors += u32(state_in[up * width + left] == I);
-    infected_neighbors += u32(state_in[up * width + x] == I);
-    infected_neighbors += u32(state_in[up * width + right] == I);
-    infected_neighbors += u32(state_in[y * width + left] == I);
-    infected_neighbors += u32(state_in[y * width + right] == I);
-    infected_neighbors += u32(state_in[down * width + left] == I);
-    infected_neighbors += u32(state_in[down * width + x] == I);
-    infected_neighbors += u32(state_in[down * width + right] == I);
+    infected_neighbors += u32(state_in[cell_index(left, up, width)] == I);
+    infected_neighbors += u32(state_in[cell_index(x, up, width)] == I);
+    infected_neighbors += u32(state_in[cell_index(right, up, width)] == I);
+    infected_neighbors += u32(state_in[cell_index(left, y, width)] == I);
+    infected_neighbors += u32(state_in[cell_index(right, y, width)] == I);
+    infected_neighbors += u32(state_in[cell_index(left, down, width)] == I);
+    infected_neighbors += u32(state_in[cell_index(x, down, width)] == I);
+    infected_neighbors += u32(state_in[cell_index(right, down, width)] == I);
 
     let rng_next = pcg_hash(rng_in[idx]);
     rng_out[idx] = rng_next;
@@ -62,11 +60,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var next_cell = cell;
     if (cell == S && infected_neighbors > 0u) {
         let prob_safe = pow(1.0 - params.infection_rate, f32(infected_neighbors));
-        if (rand01(rng_next) > prob_safe) {
+        // `>=`, matching the CPU model. A zero draw would otherwise escape a rate of 1.
+        if (random_float(rng_next, 1.0) >= prob_safe) {
             next_cell = I;
         }
     } else if (cell == I) {
-        if (rand01(rng_next) < params.recovery_rate) {
+        if (random_float(rng_next, 1.0) < params.recovery_rate) {
             next_cell = R;
         }
     }

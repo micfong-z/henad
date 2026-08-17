@@ -5,7 +5,7 @@
 // order is the same computation.
 
 #import shared::prelude::linear_index
-#import shared::rng::pcg_hash
+#import shared::rng::{choice3, next_bits, next_float, reservoir_accept}
 #import gpu_ants::state::{LAST_STEP_MASK, HAS_FOOD_BIT, HAS_REWARD_BIT}
 
 struct Params {
@@ -47,16 +47,6 @@ const TO_HOME: u32 = 1u;
 const NO_STEP: u32 = 255u;
 
 const DELIVERIES: u32 = 0u;
-
-fn next_unit(r: ptr<function, u32>) -> f32 {
-    *r = pcg_hash(*r);
-    return f32(*r) / 4294967295.0;
-}
-
-fn next_delta(r: ptr<function, u32>) -> i32 {
-    *r = pcg_hash(*r);
-    return i32(*r % 3u) - 1;
-}
 
 fn cell_of(x: i32, y: i32) -> u32 {
     return u32(y * i32(params.grid_w) + x);
@@ -154,7 +144,7 @@ fn main(
             if (m > best) {
                 count = 2u;
             }
-            if (m > best || (m == best && next_unit(&r) < 1.0 / f32(count))) {
+            if (m > best || (m == best && reservoir_accept(next_bits(&r), count))) {
                 best = m;
                 bx = nx;
                 by = ny;
@@ -165,7 +155,7 @@ fn main(
 
     if (best == 0.0 && last_step != NO_STEP) {
         // No pheromone nearby, so probably keep going the way we were.
-        if (next_unit(&r) < params.momentum) {
+        if (next_float(&r, 1.0) < params.momentum) {
             let mx = x + i32(last_step / 3u) - 1;
             let my = y + i32(last_step % 3u) - 1;
             if (passable(mx, my)) {
@@ -173,9 +163,9 @@ fn main(
                 by = my;
             }
         }
-    } else if (next_unit(&r) < params.random_action) {
-        let dx = next_delta(&r);
-        let dy = next_delta(&r);
+    } else if (next_float(&r, 1.0) < params.random_action) {
+        let dx = choice3(next_bits(&r));
+        let dy = choice3(next_bits(&r));
         let mx = x + dx;
         let my = y + dy;
         if (!(dx == 0 && dy == 0) && passable(mx, my)) {

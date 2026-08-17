@@ -1,6 +1,6 @@
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
 use henad_core::authoring::model::grid_model::GridModel;
-use henad_core::authoring::primitives::rng::xorshift64;
+use henad_core::authoring::primitives::rng::{below, next_bits};
 use henad_core::grid::Grid2D;
 use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -44,8 +44,7 @@ impl GridModel for GameOfLifeModel {
         let density = extract_f32(params, DENSITY, 0.3);
         let threshold = (density * u32::MAX as f32) as u32;
         for cell in grid.current_mut().iter_mut() {
-            *rng = xorshift64(*rng);
-            *cell = if ((*rng >> 32) as u32) < threshold { ALIVE } else { DEAD };
+            *cell = if below(next_bits(rng), threshold) { ALIVE } else { DEAD };
         }
     }
 

@@ -4,7 +4,8 @@ mod step;
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
 use henad_core::authoring::model::agent_model::{AgentModel, StepCtx};
 use henad_core::authoring::model::field::{Extent, NoField};
-use henad_core::authoring::primitives::rng::xorshift64;
+use henad_core::authoring::primitives::rng::next_float;
+use henad_core::authoring::primitives::space::heading_octant;
 use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::spatial_hash::SpatialHash;
@@ -110,20 +111,14 @@ impl AgentModel for BoidsModel {
         let max_speed = extract_f32(params, MAX_SPEED, 15.0);
         let min_speed = extract_f32(params, MIN_SPEED, 3.0);
         let speed = 0.5 * (min_speed + max_speed);
-        let inv_u32_range = 1.0f32 / (u32::MAX as f32 + 1.0);
-        let mut unit = || {
-            *rng = xorshift64(*rng);
-            ((*rng >> 32) as u32) as f32 * inv_u32_range
-        };
-
         for i in 0..lanes.pos_x.len() {
-            lanes.pos_x[i] = unit() * extent.w;
-            lanes.pos_y[i] = unit() * extent.h;
-            let angle = unit() * std::f32::consts::TAU;
+            lanes.pos_x[i] = next_float(rng, extent.w);
+            lanes.pos_y[i] = next_float(rng, extent.h);
+            let angle = next_float(rng, std::f32::consts::TAU);
             lanes.vel_x[i] = angle.cos() * speed;
             lanes.vel_y[i] = angle.sin() * speed;
             // The initial snapshot is published before any tick, so seed the lane here too.
-            lanes.color[i] = step::heading_octant(lanes.vel_x[i], lanes.vel_y[i]);
+            lanes.color[i] = heading_octant(lanes.vel_x[i], lanes.vel_y[i]);
         }
     }
 

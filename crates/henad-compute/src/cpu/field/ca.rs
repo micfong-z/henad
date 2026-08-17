@@ -193,3 +193,84 @@ fn step_row_vn<M: GridModel>(rows: [&[u8]; 3], next_row: &mut [u8], hot: &M::Par
         next_row[last] = vn_cell::<M>(rows, last - 1, last, 0, hot, rng);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use henad_core::authoring::primitives::space::{MOORE_ROW_MAJOR, VON_NEUMANN};
+    use henad_core::view::{StatDescriptor, StatValue};
+
+    use super::*;
+
+    /// Each cell holds its own offset from the centre, so a neighbour slice spells out the order.
+    fn encode(dx: i32, dy: i32) -> u8 {
+        ((dx + 1) * 3 + (dy + 1)) as u8
+    }
+
+    const CENTER: u8 = 4;
+
+    macro_rules! order_probe {
+        ($name:ident, $kind:expr, $table:expr) => {
+            struct $name;
+
+            impl GridModel for $name {
+                const NAME: &'static str = "order probe";
+                const ID: &'static str = "order_probe";
+                const DESCRIPTION: &'static str = "";
+                const PALETTE: &'static [[u8; 4]] = &[[0, 0, 0, 255]];
+                const NEIGHBORHOOD: NeighborhoodKind = $kind;
+                const STATS: &'static [StatDescriptor] = &[];
+                type Params = ();
+
+                fn param_descriptors() -> Vec<ParamDescriptor> {
+                    Vec::new()
+                }
+
+                fn from_params(_params: &[ParamValue]) {}
+
+                fn init(_grid: &mut Grid2D<u8>, _params: &[ParamValue], _rng: &mut u64) {}
+
+                fn step_cell(cell: u8, neighbors: &[u8], (): &(), _rng: &mut u64) -> u8 {
+                    if cell == CENTER {
+                        let want: Vec<u8> = $table.iter().map(|&(dx, dy)| encode(dx, dy)).collect();
+                        assert_eq!(
+                            neighbors,
+                            want.as_slice(),
+                            "step_cell's neighbour order must match the published table"
+                        );
+                    }
+                    cell
+                }
+
+                fn stats(_grid: &Grid2D<u8>) -> Vec<StatValue> {
+                    Vec::new()
+                }
+            }
+        };
+    }
+
+    order_probe!(MooreProbe, NeighborhoodKind::Moore, MOORE_ROW_MAJOR);
+    order_probe!(VonNeumannProbe, NeighborhoodKind::VonNeumann, VON_NEUMANN);
+
+    fn probe_grid() -> Grid2D<u8> {
+        let mut grid = Grid2D::new(3, 3);
+        let cells = grid.current_mut();
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                cells[((dy + 1) * 3 + (dx + 1)) as usize] = encode(dx, dy);
+            }
+        }
+        grid
+    }
+
+    /// A model indexes its `neighbors` slice by position, so the engine's gather order is API.
+    /// The assertion itself lives inside the probe's `step_cell`.
+    #[test]
+    fn the_gather_order_matches_the_published_moore_table() {
+        step_grid::<MooreProbe>(&mut probe_grid(), &(), 1, 0);
+    }
+
+    #[test]
+    fn the_gather_order_matches_the_published_von_neumann_table() {
+        step_grid::<VonNeumannProbe>(&mut probe_grid(), &(), 1, 0);
+    }
+}

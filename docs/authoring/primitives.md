@@ -61,7 +61,7 @@ The WGSL idiom is a loop over the offset table instead, and the tables are the s
 | — | `wrap_index(v, m)` | `shipped` | Wraps an index into `0..m`, replacing three spellings of `(v + m - 1) % m` |
 | — | `wrap_coord(v, world)` | `shipped` | The `rem_euclid` position wrap |
 | `patch-at` | `offset_cell(x, y, dx, dy, w, h, boundary)` | `shipped` | `dy` runs south, matching the display's downward y axis |
-| `distancexy` | `axis_delta(a, b, world, boundary)` | `shipped` | One axis, signed, shortest way round on a torus |
+| `distancexy` | `axis_delta(a, b, world, boundary)` | `shipped` | One axis, signed, shortest way round on a torus. Positions must be within one world of each other |
 | `distancexy` | `dist_sq(ax, ay, bx, by, world_w, world_h, boundary)` | `shipped` | Squared, so the hot paths pay no `sqrt` |
 | — | `cell_index(x, y, w)` | `shipped` | Pins the `y * w + x` convention once |
 | `towards` | `heading_octant(vx, vy)` | `shipped` | Eight-way discretisation, comparisons rather than `atan2` |

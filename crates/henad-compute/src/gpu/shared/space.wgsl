@@ -48,8 +48,17 @@ fn axis_delta(a: f32, b: f32, world: f32, boundary: u32) -> f32 {
     if (boundary == BOUNDED) {
         return d;
     }
+    // Both positions must be within one world of each other, as on the Rust side. Two independent
+    // compares rather than a `%`, because this runs per neighbour per agent.
     let half = world * 0.5;
-    return wrap_coord(d + half, world) - half;
+    var c = d;
+    if (c >= half) {
+        c = c - world;
+    }
+    if (c < -half) {
+        c = c + world;
+    }
+    return c;
 }
 
 // Squared distance, taking points as `vec2` since that is how the agent buffers are packed. The

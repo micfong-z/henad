@@ -5,6 +5,7 @@
 // kernel's own `< visual_sq` and `< protected_sq` tests are strictly narrower.
 
 #import shared::prelude::linear_index
+#import shared::space::{TORUS, axis_delta, heading_octant, wrap_index}
 
 struct Params {
     num_agents: u32,
@@ -46,26 +47,6 @@ struct Params {
 @group(0) @binding(6) var<storage, read>       sorted: array<u32>;
 @group(0) @binding(7) var<uniform>             params: Params;
 
-fn wrap(v: i32, m: i32) -> i32 {
-    return ((v % m) + m) % m;
-}
-
-// Mirrors `boids::step::heading_octant`. Half-open spans running clockwise from east, since the
-// display's y axis points down.
-fn heading_octant(vx: f32, vy: f32) -> u32 {
-    let east = vx >= 0.0;
-    let south = vy >= 0.0;
-    let steep = abs(vy) > abs(vx);
-    if (east && south && !steep) { return 0u; }
-    if (east && south && steep) { return 1u; }
-    if (!east && south && steep) { return 2u; }
-    if (!east && south && !steep) { return 3u; }
-    if (!east && !south && !steep) { return 4u; }
-    if (!east && !south && steep) { return 5u; }
-    if (east && !south && steep) { return 6u; }
-    return 7u;
-}
-
 @compute
 @workgroup_size(256)
 fn main(
@@ -84,8 +65,8 @@ fn main(
     let grid_h = i32(params.grid_h);
     let cell_radius_x = i32(ceil(params.visual_range / params.cell_w));
     let cell_radius_y = i32(ceil(params.visual_range / params.cell_h));
-    let cell_x = wrap(i32(floor(p.x * params.cell_w_inv)), grid_w);
-    let cell_y = wrap(i32(floor(p.y * params.cell_h_inv)), grid_h);
+    let cell_x = wrap_index(i32(floor(p.x * params.cell_w_inv)), grid_w);
+    let cell_y = wrap_index(i32(floor(p.y * params.cell_h_inv)), grid_h);
 
     // A radius wider than the world would walk the same cell twice. Same guard as the CPU query.
     var x_lo = cell_x - cell_radius_x;
@@ -107,9 +88,9 @@ fn main(
     var count = 0u;
 
     for (var gy = y_lo; gy <= y_hi; gy = gy + 1) {
-        let wy = u32(wrap(gy, grid_h));
+        let wy = u32(wrap_index(gy, grid_h));
         for (var gx = x_lo; gx <= x_hi; gx = gx + 1) {
-            let wx = u32(wrap(gx, grid_w));
+            let wx = u32(wrap_index(gx, grid_w));
             let cell = wy * params.grid_w + wx;
             let start = cell_start[cell];
             let end = cell_start[cell + 1u];
@@ -120,17 +101,11 @@ fn main(
                     continue;
                 }
 
-                var d = pos_in[j] - p;
-                if (d.x > params.half_w) {
-                    d.x = d.x - params.world_w;
-                } else if (d.x < -params.half_w) {
-                    d.x = d.x + params.world_w;
-                }
-                if (d.y > params.half_h) {
-                    d.y = d.y - params.world_h;
-                } else if (d.y < -params.half_h) {
-                    d.y = d.y + params.world_h;
-                }
+                let q = pos_in[j];
+                let d = vec2<f32>(
+                    axis_delta(p.x, q.x, params.world_w, TORUS),
+                    axis_delta(p.y, q.y, params.world_h, TORUS),
+                );
 
                 let dist_sq = dot(d, d);
                 if (dist_sq < params.protected_sq) {
