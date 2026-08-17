@@ -9,7 +9,7 @@ use std::hint::black_box;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use henad_core::helpers::xorshift64;
+use henad_core::authoring::primitives::rng::xorshift64;
 use rayon::prelude::*;
 
 /// There is no atomic float add, and a CAS loop over f32 would depend on arrival order.

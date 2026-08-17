@@ -6,18 +6,29 @@
 //! float `%` is defined through a division while Rust's is an exact fmod, so the two round
 //! differently on inputs far outside the world.
 
+use henad_core::authoring::primitives::rng;
 use henad_core::authoring::primitives::space::{self, Boundary, MOORE_COLUMN_MAJOR, MOORE_ROW_MAJOR, VON_NEUMANN};
 
 use crate::gpu::headless_context;
 use crate::gpu::primitives::pipeline::compute_pipeline;
 use crate::shader_bindings::shared::parity::{
-    Case, OP_AXIS_DELTA, OP_CELL_INDEX, OP_DIST_SQ, OP_HEADING_OCTANT, OP_NEIGHBOR_COUNT, OP_NEIGHBOR_OFFSET,
-    OP_OFFSET_CELL, OP_WRAP_COORD, OP_WRAP_INDEX, Out, SHADER_STRING, WgpuBindGroup0,
+    Case, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT, OP_NEIGHBOR_COUNT,
+    OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD, OP_WRAP_INDEX, Out,
+    SHADER_STRING, WgpuBindGroup0,
 };
 use crate::shader_bindings::shared::space as codes;
 
-/// Absolute slack allowed on a float result.
+/// Absolute slack allowed on a float result that goes through WGSL's float `%`.
 const TOLERANCE: f32 = 1e-4;
+
+/// Slack for `op`, zero where the two sides are meant to agree bit for bit.
+///
+/// Only `random_float` is exact. Everything else float-valued reaches WGSL's `%`, which is defined
+/// through a division where Rust's is an fmod, so the two round apart on inputs far outside the
+/// world.
+fn tolerance_for(op: u32) -> f32 {
+    if op == OP_RANDOM_FLOAT { 0.0 } else { TOLERANCE }
+}
 
 /// A case plus the result its Rust twin produces.
 struct Check {
@@ -130,7 +141,7 @@ fn offset_cell_checks(out: &mut Vec<Check>) {
                             };
                             out.push(Check {
                                 case,
-                                expected: expected,
+                                expected,
                                 call: format!("offset_cell({x}, {y}, {dx}, {dy}, {w}, {h}, {boundary:?})"),
                             });
                         }
@@ -222,6 +233,67 @@ fn heading_octant_checks(out: &mut Vec<Check>) {
     }
 }
 
+/// Bit patterns chosen to hit the ends and the awkward middles rather than a uniform sweep.
+const WORDS: [u32; 12] = [
+    0,
+    1,
+    2,
+    3,
+    17,
+    255,
+    1 << 16,
+    u32::MAX / 3,
+    u32::MAX / 2,
+    u32::MAX - 2,
+    u32::MAX - 1,
+    u32::MAX,
+];
+
+fn rng_checks(out: &mut Vec<Check>) {
+    for bits in WORDS {
+        for max in [1.0f32, 0.5, 10.0] {
+            let mut case = blank(OP_RANDOM_FLOAT);
+            case.u = [bits, 0, 0, 0];
+            case.f = [max, 0.0, 0.0, 0.0];
+            out.push(Check {
+                case,
+                expected: float(rng::random_float(bits, max)),
+                call: format!("random_float({bits}, {max})"),
+            });
+        }
+
+        let mut case = blank(OP_CHOICE3);
+        case.u = [bits, 0, 0, 0];
+        out.push(Check {
+            case,
+            expected: ints([rng::choice3(bits), 0, 0, 0]),
+            call: format!("choice3({bits})"),
+        });
+
+        for threshold in [0u32, 1, u32::MAX / 2, u32::MAX] {
+            let mut case = blank(OP_BELOW);
+            case.u = [bits, threshold, 0, 0];
+            out.push(Check {
+                case,
+                expected: ints([i32::from(rng::below(bits, threshold)), 0, 0, 0]),
+                call: format!("below({bits}, {threshold})"),
+            });
+        }
+
+        // 0 is in range because the ants tie-break starts its counter at 2, not 1, and a future
+        // caller could start it anywhere.
+        for count in [0u32, 1, 2, 3, 8, 64] {
+            let mut case = blank(OP_RESERVOIR_ACCEPT);
+            case.u = [bits, count, 0, 0];
+            out.push(Check {
+                case,
+                expected: ints([i32::from(rng::reservoir_accept(bits, count)), 0, 0, 0]),
+                call: format!("reservoir_accept({bits}, {count})"),
+            });
+        }
+    }
+}
+
 fn all_checks() -> Vec<Check> {
     let mut out = Vec::new();
     wrap_index_checks(&mut out);
@@ -232,6 +304,7 @@ fn all_checks() -> Vec<Check> {
     dist_sq_checks(&mut out);
     neighbor_checks(&mut out);
     heading_octant_checks(&mut out);
+    rng_checks(&mut out);
     out
 }
 
@@ -329,11 +402,15 @@ fn every_space_primitive_agrees_with_its_wgsl_twin() {
     let mut failures = Vec::new();
     for (check, got) in checks.iter().zip(&results) {
         if check.expected.i != got.i {
-            failures.push(format!("{}: expected ints {:?}, got {:?}", check.call, check.expected.i, got.i));
+            failures.push(format!(
+                "{}: expected ints {:?}, got {:?}",
+                check.call, check.expected.i, got.i
+            ));
             continue;
         }
+        let tolerance = tolerance_for(check.case.op);
         for (k, (expected, got)) in check.expected.f.iter().zip(&got.f).enumerate() {
-            if (expected - got).abs() > TOLERANCE {
+            if (expected - got).abs() > tolerance {
                 failures.push(format!("{}: float {k} expected {expected}, got {got}", check.call));
             }
         }

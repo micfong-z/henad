@@ -257,7 +257,7 @@ mod tests {
     use crate::gpu::primitives::dispatch::WORKGROUP;
     use crate::gpu::primitives::pipeline::storage_buffer;
     use henad_core::authoring::model::field::Extent;
-    use henad_core::helpers::xorshift64;
+    use henad_core::authoring::primitives::rng::xorshift64;
     use henad_core::spatial_hash::SpatialHash;
 
     fn extent(w: f32, h: f32) -> Extent {

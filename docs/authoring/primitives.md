@@ -5,8 +5,8 @@ This is the index of the primitives Henad provides to model authors.
 Every primitive here has two implementations, one for CPU models and one for GPU models.
 CPU models use a Rust function in `henad_core::authoring::primitives`, and GPU models use a WGSL function under `shared::` with `#import`.
 Each pair has the same semantics and is tested for parity on the outputs.
-Integer results must match exactly.
-Float results are compared with a tolerance, since WGSL's float `%` goes through a division while Rust's is an exact fmod.
+Integer results must match exactly, and so must `random_float`.
+The other float results are compared with a tolerance, since WGSL's float `%` goes through a division while Rust's is an exact fmod.
 
 See docstring for each primitive for its full signature and semantics.
 
@@ -46,7 +46,8 @@ WGSL has no `Option`, so a Rust `Option<(u32, u32)>` becomes a `vec3<i32>` whose
 **Parity covers pure functions only.**
 Note that the CPU RNG is `xorshift64` over `u64` and the GPU RNG is `pcg_hash` over `u32`, because WGSL has no 64-bit integers.
 Those two are counterparts in role and produce different streams.
-Hence, only those derived from a raw word are parity-tested, such as `unit` and `choice3`, which are bit-equal on both sides by construction.
+Hence, only those derived from raw bits are parity-tested, such as `random_float` and `choice3`, which are bit-equal on both sides by construction.
+`random_float` is bit-equal because a 24-bit numerator over a power of two is exact in f32, so neither side rounds.
 
 **Some primitives have no WGSL twin.**
 For example, `for_each_neighbor` takes a closure, which WGSL has no equivalent for.
@@ -98,16 +99,27 @@ The WGSL idiom is a loop over the offset table instead, and the tables are the s
 
 ## Random
 
-Draws take a raw `u32` word so the same function serves both backends.
+Draws take raw `u32` bits so the same function serves both backends.
 The `next_*` forms advance a generator and then call the pure form.
+
+> [!warning]
+> Every draw needs its own `next_bits`.
+> Feeding one word to two draws correlates them, and neither the compiler nor a test will say so.
+> The split into an advancing call and pure draws exists so the draws can be parity-tested against WGSL, not so a word can be reused.
+
+> [!warning]
+> `random_float` is half-open, as NetLogo's `random-float` is.
+> Dividing all 32 bits by `u32::MAX` looks equivalent but is not: the largest word rounds up to exactly `max`, and a closed range makes `reservoir_accept(bits, 1)` reject the first candidate of a tie run.
+> The 24-bit form is both exact and half-open.
 
 | NetLogo | Henad | Status | Notes |
 |---|---|---|---|
-| `random-float 1` | `unit(word)` | `planned` | `word / u32::MAX`, bit-equal on both backends |
-| `random-float 1` | `next_unit(rng)` | `planned` | Advances the generator, then `unit` |
-| — | `below(word, threshold)` | `planned` | The Bernoulli draw both grid models' `init` writes out by hand |
-| `random 3` | `choice3(word)` | `planned` | One of `-1`, `0`, `+1` |
-| `one-of` | `reservoir_accept(word, count)` | `planned` | Uniform pick among equal candidates, the tie-break ants needs |
+| `random-float` | `random_float(bits, max)` | `shipped` | Half-open `[0, max)`, from the top 24 bits. The one float primitive held to bit equality rather than a tolerance |
+| — | `next_bits(rng)` | `shipped` | Advances and returns the top 32 bits, dropping xorshift64's weaker low half |
+| `random-float` | `next_float(rng, max)` | `shipped` | `next_bits` then `random_float`. Not parity-tested, since the generators differ |
+| — | `below(bits, threshold)` | `shipped` | The Bernoulli draw both grid models' `init` writes out by hand |
+| `random 3` | `choice3(bits)` | `shipped` | One of `-1`, `0`, `+1` |
+| `one-of` | `reservoir_accept(bits, count)` | `shipped` | Uniform pick among equal candidates, the tie-break ants needs |
 | `random-normal` | — | `deferred` | No caller |
 | `random-exponential`, `random-poisson`, `random-gamma` | — | `deferred` | No caller |
 | `n-of`, `up-to-n-of` | — | `deferred` | No caller |

@@ -2,4 +2,5 @@
 //!
 //! See `docs/authoring/primitives.md` for the index and the deliberate omissions.
 
+pub mod rng;
 pub mod space;

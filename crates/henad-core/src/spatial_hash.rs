@@ -192,7 +192,7 @@ impl SpatialHash {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::xorshift64;
+    use crate::authoring::primitives::rng::xorshift64;
 
     #[test]
     fn build_and_query_finds_all_close_agents() {

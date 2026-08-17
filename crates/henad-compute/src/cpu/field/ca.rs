@@ -36,7 +36,7 @@ impl<M: GridModel> CaField<M> {
     pub fn with_seed(extent: Extent, params: &[ParamValue], seed: Option<u64>) -> Self {
         let (width, height) = extent.cells();
         let mut grid = Grid2D::new(width, height);
-        let mut seed = seed.map_or(GRID_INIT_SEED, henad_core::helpers::mix_seed);
+        let mut seed = seed.map_or(GRID_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
         M::init(&mut grid, params, &mut seed);
         Self {
             grid,

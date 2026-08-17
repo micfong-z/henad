@@ -106,8 +106,8 @@ impl<M: GridModel> SimState for GridModelState<M> {
 mod tests {
     use super::GridModelState;
     use henad_core::authoring::model::grid_model::GridModel;
+    use henad_core::authoring::primitives::rng::xorshift64;
     use henad_core::grid::Grid2D;
-    use henad_core::helpers::xorshift64;
     use henad_core::model::SimState as _;
     use henad_core::params::{ParamDescriptor, ParamValue};
     use henad_core::topology::NeighborhoodKind;

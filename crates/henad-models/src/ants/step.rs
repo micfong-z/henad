@@ -1,7 +1,7 @@
 use henad_compute::cpu::field::scalar::{Deposits, ScalarRead};
 use henad_compute::for_each_chunk_mut;
 use henad_core::authoring::model::agent_model::{AgentModel as _, StepCtx};
-use henad_core::helpers::xorshift64;
+use henad_core::authoring::primitives::rng::xorshift64;
 
 use crate::ants::field::{FOOD, HOME, OBSTACLE, TO_FOOD, TO_HOME};
 use crate::ants::lanes::{AntChunk, AntLanes, NO_STEP};

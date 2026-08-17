@@ -13,27 +13,6 @@ pub fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
-/// Fast xorshift64 PRNG. The state must never be 0.
-#[inline]
-pub fn xorshift64(mut state: u64) -> u64 {
-    state ^= state << 13;
-    state ^= state >> 7;
-    state ^= state << 17;
-    state
-}
-
-/// Scrambles a user-supplied seed into a usable RNG state.
-///
-/// Guards against the absorbing `xorshift64(0) == 0`, and decorrelates adjacent seeds like 1, 2, 3.
-pub fn mix_seed(seed: u64) -> u64 {
-    const GOLDEN: u64 = 0x7347_5CB4_0A56_8E8D;
-    let mut z = seed.wrapping_add(GOLDEN);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^= z >> 31;
-    if z == 0 { GOLDEN } else { z }
-}
-
 // --- Parameter descriptor builders ---
 
 pub fn f32_param(
@@ -111,54 +90,6 @@ pub fn stat_histogram(label: &'static str, edges: Vec<f64>, counts: Vec<u64>, co
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn xorshift64_no_zero() {
-        let mut s = 1u64;
-        for _ in 0..1000 {
-            s = xorshift64(s);
-            assert_ne!(s, 0, "xorshift64 should not produce 0");
-        }
-    }
-
-    #[test]
-    fn mix_seed_rescues_the_absorbing_zero_state() {
-        assert_ne!(mix_seed(0), 0, "seed 0 must not stay in xorshift64's absorbing state");
-        for s in 0..8u64 {
-            assert_ne!(xorshift64(mix_seed(s)), 0);
-        }
-    }
-
-    #[test]
-    fn seed_that_would_mix_to_zero_is_guarded() {
-        const PREIMAGE_OF_ZERO: u64 = 0x61C8_8646_80B5_83EB;
-        assert_ne!(mix_seed(PREIMAGE_OF_ZERO), 0);
-        assert_ne!(xorshift64(mix_seed(PREIMAGE_OF_ZERO)), 0);
-        // Neighbours are unaffected, so the guard has not perturbed the surrounding range.
-        assert_ne!(mix_seed(PREIMAGE_OF_ZERO - 1), mix_seed(PREIMAGE_OF_ZERO));
-        assert_ne!(mix_seed(PREIMAGE_OF_ZERO + 1), mix_seed(PREIMAGE_OF_ZERO));
-    }
-
-    #[test]
-    fn mix_seed_separates_adjacent_seeds() {
-        for s in 0..64u64 {
-            let (a, b) = (mix_seed(s), mix_seed(s + 1));
-            assert_ne!(a, b);
-            assert!(
-                (a ^ b).count_ones() >= 8,
-                "seeds {s} and {} differ in only {} bits after mixing",
-                s + 1,
-                (a ^ b).count_ones()
-            );
-        }
-    }
-
-    #[test]
-    fn xorshift64_deterministic() {
-        let a = xorshift64(42);
-        let b = xorshift64(42);
-        assert_eq!(a, b);
-    }
 
     #[test]
     fn param_builders() {

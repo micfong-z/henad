@@ -38,7 +38,7 @@ impl<A: AgentModel> AgentModelState<A> {
 
         let (own, field_params) = split_params::<A>(params);
         let mut lanes = A::Lanes::alloc(n);
-        let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::helpers::mix_seed);
+        let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
         A::init(&mut lanes, extent, own, &mut seed);
 
         let field = A::Field::new(extent, field_params);
