@@ -17,7 +17,7 @@ pub mod timing;
 pub mod view;
 
 #[cfg(test)]
-mod test_support;
+mod tests;
 
 pub use agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
 pub use capacity::Demand;
@@ -28,7 +28,7 @@ pub use view::agents::GpuAgents;
 pub use view::display::{DisplayTarget, GpuDisplay};
 
 #[cfg(test)]
-use test_support::headless_context;
+use tests::support::headless_context;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use sim_thread::GpuSimThread;

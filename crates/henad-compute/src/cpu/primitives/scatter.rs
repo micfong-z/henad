@@ -346,7 +346,7 @@ impl ScatterGrid {
 
 #[cfg(test)]
 mod tests {
-    use henad_core::helpers::xorshift64;
+    use henad_core::authoring::primitives::rng::xorshift64;
 
     use super::*;
 

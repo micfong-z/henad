@@ -5,8 +5,8 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use henad_core::authoring::binding::{BindingDecl, buffer_target};
-use henad_core::authoring::gpu_grid_model::GpuGridModel;
+use henad_core::authoring::model::binding::{BindingDecl, buffer_target};
+use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
 use henad_core::model::{Model, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;

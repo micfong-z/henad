@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 
-use henad_core::authoring::agent_model::{AgentModel as _, StepCtx};
+use henad_core::authoring::model::agent_model::{AgentModel as _, StepCtx};
+use henad_core::authoring::primitives::space::{Boundary, axis_delta, heading_octant, wrap_coord};
 
 use crate::boids::lanes::{BoidChunk, BoidLanes, BoidRead};
 use crate::boids::{BoidParams, BoidsModel};
@@ -46,20 +47,10 @@ fn step_agent(
         if j == i as u32 {
             continue;
         }
-        let mut dx = pos_x[j as usize] - pos_x[i];
-        let mut dy = pos_y[j as usize] - pos_y[i];
-
-        // Handle toroidal wraparound
-        if dx > params.half_w {
-            dx -= params.world_w;
-        } else if dx < -params.half_w {
-            dx += params.world_w;
-        }
-        if dy > params.half_h {
-            dy -= params.world_h;
-        } else if dy < -params.half_h {
-            dy += params.world_h;
-        }
+        // Not `space::dist_sq` below, which would have to recompute both deltas, and the
+        // separation and cohesion sums still need them.
+        let dx = axis_delta(pos_x[i], pos_x[j as usize], params.world_w, Boundary::Torus);
+        let dy = axis_delta(pos_y[i], pos_y[j as usize], params.world_h, Boundary::Torus);
 
         let dist_sq = dx * dx + dy * dy;
 
@@ -103,60 +94,18 @@ fn step_agent(
         new_vy = 0.0;
     }
 
-    out.pos_x[k] = (pos_x[i] + new_vx).rem_euclid(params.world_w);
-    out.pos_y[k] = (pos_y[i] + new_vy).rem_euclid(params.world_h);
+    out.pos_x[k] = wrap_coord(pos_x[i] + new_vx, params.world_w);
+    out.pos_y[k] = wrap_coord(pos_y[i] + new_vy, params.world_h);
     out.vel_x[k] = new_vx;
     out.vel_y[k] = new_vy;
     out.color[k] = heading_octant(new_vx, new_vy);
 }
 
-/// Heading to one of eight octants, indexing `HEADING_PALETTE`.
-///
-/// Comparisons rather than `atan2`, too much to pay per agent per tick for something only looked
-/// at. Spans are half-open and run clockwise from east, since the display's y axis points down.
-#[inline]
-pub(crate) fn heading_octant(vel_x: f32, vel_y: f32) -> u8 {
-    let east = vel_x >= 0.0;
-    let south = vel_y >= 0.0;
-    let steep = vel_y.abs() > vel_x.abs();
-    match (east, south, steep) {
-        (true, true, false) => 0,
-        (true, true, true) => 1,
-        (false, true, true) => 2,
-        (false, true, false) => 3,
-        (false, false, false) => 4,
-        (false, false, true) => 5,
-        (true, false, true) => 6,
-        (true, false, false) => 7,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::heading_octant;
+    use henad_core::authoring::primitives::space::heading_octant;
+
     use crate::boids::HEADING_PALETTE;
-
-    /// A flipped sign still looks colourful on screen, so the mapping is pinned rather than
-    /// eyeballed. Sampled at octant centres, since the cardinals land on boundaries.
-    #[test]
-    fn octants_run_clockwise_from_east_with_y_pointing_down() {
-        for expected in 0..8u8 {
-            // +y is down, so increasing angle sweeps east to south to west.
-            let center = (f32::from(expected) + 0.5) * std::f32::consts::TAU / 8.0;
-            let (vx, vy) = (center.cos(), center.sin());
-            assert_eq!(
-                heading_octant(vx, vy),
-                expected,
-                "octant {expected} center ({vx}, {vy})"
-            );
-        }
-    }
-
-    /// The one cardinal that is unambiguously octant 0.
-    #[test]
-    fn due_east_starts_the_sweep() {
-        assert_eq!(heading_octant(1.0, 0.0), 0);
-    }
 
     /// Every octant must land inside the palette, or the renderer silently falls back to entry 0.
     #[test]

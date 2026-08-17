@@ -21,7 +21,7 @@
 //! `_in` or `_out` suffix. Which side it resolves to comes from the access mode, not the suffix, so
 //! a buffer read by one pass and written by another needs no naming trick.
 //!
-//! [`BufferSpec`]: crate::authoring::gpu_agent_model::BufferSpec
+//! [`BufferSpec`]: crate::authoring::model::gpu_agent_model::BufferSpec
 
 /// How a binding is declared, which is what the engine needs to build a layout entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

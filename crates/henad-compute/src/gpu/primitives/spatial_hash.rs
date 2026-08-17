@@ -4,7 +4,7 @@
 //! Not stable, unlike the CPU sort. Membership is the same, but a cell's slice comes out in
 //! whatever order the atomics resolve in, so a kernel summing floats over one will not replay.
 
-use henad_core::authoring::field::Extent;
+use henad_core::authoring::model::field::Extent;
 pub use henad_core::spatial_hash::HashGrid;
 
 use crate::gpu::primitives::dispatch::linear_dispatch;
@@ -256,8 +256,8 @@ mod tests {
     use crate::gpu::headless_context;
     use crate::gpu::primitives::dispatch::WORKGROUP;
     use crate::gpu::primitives::pipeline::storage_buffer;
-    use henad_core::authoring::field::Extent;
-    use henad_core::helpers::xorshift64;
+    use henad_core::authoring::model::field::Extent;
+    use henad_core::authoring::primitives::rng::xorshift64;
     use henad_core::spatial_hash::SpatialHash;
 
     fn extent(w: f32, h: f32) -> Extent {

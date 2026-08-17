@@ -1,7 +1,8 @@
 use henad_compute::cpu::field::scalar::{Deposits, ScalarRead};
 use henad_compute::for_each_chunk_mut;
-use henad_core::authoring::agent_model::{AgentModel as _, StepCtx};
-use henad_core::helpers::xorshift64;
+use henad_core::authoring::model::agent_model::{AgentModel as _, StepCtx};
+use henad_core::authoring::primitives::rng::{choice3, next_bits, next_float, reservoir_accept};
+use henad_core::authoring::primitives::space::{Boundary, MOORE_COLUMN_MAJOR, cell_index, offset_cell};
 
 use crate::ants::field::{FOOD, HOME, OBSTACLE, TO_FOOD, TO_HOME};
 use crate::ants::lanes::{AntChunk, AntLanes, NO_STEP};
@@ -15,18 +16,17 @@ use crate::ants::{AntParams, AntsModel};
 /// reference's plain overwrite. A deposit can never come out below the existing value.
 #[inline]
 fn deposit_value(x: i32, y: i32, reward: f32, field: &[f32], p: &AntParams) -> f32 {
-    let mut best = field[(y * p.w + x) as usize];
-    for dx in -1..=1 {
-        for dy in -1..=1 {
-            let (nx, ny) = (x + dx, y + dy);
-            if nx < 0 || ny < 0 || nx >= p.w || ny >= p.h {
-                continue;
-            }
-            let cut = if dx * dy != 0 { p.diagonal } else { p.cutdown };
-            let m = field[(ny * p.w + nx) as usize] * cut + reward;
-            if m > best {
-                best = m;
-            }
+    let here = field[cell_index(x as u32, y as u32, p.w as u32) as usize];
+    // The centre counts as an orthogonal neighbour, and a max reduction does not care about order.
+    let mut best = here.max(here * p.cutdown + reward);
+    for &(dx, dy) in &MOORE_COLUMN_MAJOR {
+        let Some((nx, ny)) = offset_cell(x as u32, y as u32, dx, dy, p.w as u32, p.h as u32, Boundary::Bounded) else {
+            continue;
+        };
+        let cut = if dx * dy != 0 { p.diagonal } else { p.cutdown };
+        let m = field[cell_index(nx, ny, p.w as u32) as usize] * cut + reward;
+        if m > best {
+            best = m;
         }
     }
     best
@@ -89,18 +89,6 @@ fn passable(x: i32, y: i32, sites: &[u8], p: &AntParams) -> bool {
     x >= 0 && y >= 0 && x < p.w && y < p.h && sites[(y * p.w + x) as usize] != OBSTACLE
 }
 
-#[inline]
-fn next_unit(rng: &mut u64) -> f32 {
-    *rng = xorshift64(*rng);
-    ((*rng >> 40) as f32) / 16_777_216.0
-}
-
-#[inline]
-fn next_delta(rng: &mut u64) -> i32 {
-    *rng = xorshift64(*rng);
-    ((*rng >> 32) % 3) as i32 - 1
-}
-
 struct AntMove {
     x: i32,
     y: i32,
@@ -138,31 +126,26 @@ fn advect_agent(
     // 1/(k+1) for the rest, which drifts ants up-left. Kept deliberately, see the gap report.
     let mut count = 2u32;
 
-    for dx in -1..=1 {
-        for dy in -1..=1 {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            let (nx, ny) = (x + dx, y + dy);
-            if !passable(nx, ny, sites, p) {
-                continue;
-            }
-            let m = trail[(ny * p.w + nx) as usize];
-            if m > best {
-                count = 2;
-            }
-            if m > best || (m == best && next_unit(rng) < 1.0 / count as f32) {
-                best = m;
-                bx = nx;
-                by = ny;
-            }
-            count += 1;
+    for &(dx, dy) in &MOORE_COLUMN_MAJOR {
+        let (nx, ny) = (x + dx, y + dy);
+        if !passable(nx, ny, sites, p) {
+            continue;
         }
+        let m = trail[(ny * p.w + nx) as usize];
+        if m > best {
+            count = 2;
+        }
+        if m > best || (m == best && reservoir_accept(next_bits(rng), count)) {
+            best = m;
+            bx = nx;
+            by = ny;
+        }
+        count += 1;
     }
 
     if best == 0.0 && last_step != NO_STEP {
         // No pheromone nearby, so probably keep going the way we were.
-        if next_unit(rng) < p.momentum {
+        if next_float(rng, 1.0) < p.momentum {
             let (dx, dy) = decode_step(last_step);
             let (mx, my) = (x + dx, y + dy);
             if passable(mx, my, sites, p) {
@@ -170,8 +153,8 @@ fn advect_agent(
                 by = my;
             }
         }
-    } else if next_unit(rng) < p.random_action {
-        let (dx, dy) = (next_delta(rng), next_delta(rng));
+    } else if next_float(rng, 1.0) < p.random_action {
+        let (dx, dy) = (choice3(next_bits(rng)), choice3(next_bits(rng)));
         let (mx, my) = (x + dx, y + dy);
         if !(dx == 0 && dy == 0) && passable(mx, my, sites, p) {
             bx = mx;

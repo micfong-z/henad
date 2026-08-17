@@ -1,4 +1,5 @@
-use crate::authoring::field::Extent;
+use crate::authoring::model::field::Extent;
+use crate::authoring::primitives::space::{Boundary, dist_sq};
 
 /// Cell geometry on its own, for a caller that needs the grid without the buckets. A GPU model
 /// mirrors it into its step uniform so its query walks the same grid as the CPU sort.
@@ -125,9 +126,6 @@ impl SpatialHash {
         let cell_radius_y = (r / self.cell_h).ceil() as i32;
         let cell_x = ((x * self.cell_w_inv).floor() as i32).rem_euclid(self.grid_w as i32);
         let cell_y = ((y * self.cell_h_inv).floor() as i32).rem_euclid(self.grid_h as i32);
-        let half_w = self.world_w * 0.5;
-        let half_h = self.world_h * 0.5;
-
         // In case the radius is larger than the world, avoid repeatedly wrapping the grid.
         let (y_lo, y_hi) = if 2 * cell_radius_y + 1 > self.grid_h as i32 {
             (0, self.grid_h as i32 - 1)
@@ -149,11 +147,16 @@ impl SpatialHash {
                 let end = self.cell_start[cell_index as usize + 1];
                 for i in start..end {
                     let agent_idx = self.sorted_agents[i as usize];
-                    let raw_dx = pos_x[agent_idx as usize] - x;
-                    let raw_dy = pos_y[agent_idx as usize] - y;
-                    let dx = (raw_dx + half_w).rem_euclid(self.world_w) - half_w;
-                    let dy = (raw_dy + half_h).rem_euclid(self.world_h) - half_h;
-                    if dx * dx + dy * dy <= r2 {
+                    let d2 = dist_sq(
+                        x,
+                        y,
+                        pos_x[agent_idx as usize],
+                        pos_y[agent_idx as usize],
+                        self.world_w,
+                        self.world_h,
+                        Boundary::Torus,
+                    );
+                    if d2 <= r2 {
                         result.push(agent_idx);
                     }
                 }
@@ -192,7 +195,7 @@ impl SpatialHash {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::xorshift64;
+    use crate::authoring::primitives::rng::xorshift64;
 
     #[test]
     fn build_and_query_finds_all_close_agents() {
@@ -224,8 +227,8 @@ mod tests {
         assert_eq!(result, vec![0, 1]);
     }
 
-    /// Toroidal distance on one axis.
-    fn axis_delta(a: f32, b: f32, world: f32) -> f32 {
+    /// Unsigned toroidal distance on one axis, unlike the signed `space::axis_delta`.
+    fn axis_distance(a: f32, b: f32, world: f32) -> f32 {
         let d = (a - b).abs();
         d.min(world - d)
     }
@@ -257,8 +260,8 @@ mod tests {
 
             let mut expected: Vec<u32> = (0..pos_x.len() as u32)
                 .filter(|&j| {
-                    let dx = axis_delta(pos_x[j as usize], pos_x[i], world_w);
-                    let dy = axis_delta(pos_y[j as usize], pos_y[i], world_h);
+                    let dx = axis_distance(pos_x[j as usize], pos_x[i], world_w);
+                    let dy = axis_distance(pos_y[j as usize], pos_y[i], world_h);
                     dx * dx + dy * dy <= r * r
                 })
                 .collect();

@@ -1,5 +1,7 @@
-use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel, ChunkTally as _, NeighborIndex as _, StepCtx};
-use henad_core::authoring::field::{Extent, FieldLayer};
+use henad_core::authoring::model::agent_model::{
+    AgentLanes as _, AgentModel, ChunkTally as _, NeighborIndex as _, StepCtx,
+};
+use henad_core::authoring::model::field::{Extent, FieldLayer};
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamStore, ParamValue};
@@ -36,7 +38,7 @@ impl<A: AgentModel> AgentModelState<A> {
 
         let (own, field_params) = split_params::<A>(params);
         let mut lanes = A::Lanes::alloc(n);
-        let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::helpers::mix_seed);
+        let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
         A::init(&mut lanes, extent, own, &mut seed);
 
         let field = A::Field::new(extent, field_params);

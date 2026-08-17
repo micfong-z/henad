@@ -14,6 +14,8 @@ const ENTRY_POINTS: &[&str] = &[
     "primitives/reduce.wgsl",
     "shared/prelude.wgsl",
     "shared/dims.wgsl",
+    "shared/space.wgsl",
+    "shared/parity.wgsl",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

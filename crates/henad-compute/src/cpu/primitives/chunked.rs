@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use henad_core::helpers::xorshift64;
+use henad_core::authoring::primitives::rng::xorshift64;
 
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;

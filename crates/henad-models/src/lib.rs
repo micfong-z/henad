@@ -30,10 +30,11 @@ pub mod gpu_ants;
 pub mod gpu_boids;
 pub mod gpu_game_of_life;
 pub mod gpu_sir;
-#[cfg(test)]
-mod gpu_test_support;
 pub mod registry;
 pub mod sir;
+
+#[cfg(test)]
+mod tests;
 
 /// `Dims` is written by the grid engine and read by every grid model's display and reduce shader,
 /// so this crate is the only one that sees both the Rust struct and the WGSL it mirrors.

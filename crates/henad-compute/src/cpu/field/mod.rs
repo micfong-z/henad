@@ -1,4 +1,4 @@
-//! [`henad_core::authoring::field::FieldLayer`] implementations.
+//! [`henad_core::authoring::model::field::FieldLayer`] implementations.
 
 pub mod ca;
 pub mod scalar;

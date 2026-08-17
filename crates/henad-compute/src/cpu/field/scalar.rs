@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use henad_core::authoring::field::{Extent, FieldLayer};
+use henad_core::authoring::model::field::{Extent, FieldLayer};
 use henad_core::grid::Grid2D;
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::GridView;

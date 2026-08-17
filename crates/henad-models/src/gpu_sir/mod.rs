@@ -14,9 +14,10 @@
 //! and reduce shaders.
 
 use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
-use henad_core::authoring::binding::BindingDecl;
-use henad_core::authoring::gpu_grid_model::GpuGridModel;
-use henad_core::helpers::{extract_f32, extract_u32, f32_param, mix_seed, u32_param, xorshift64};
+use henad_core::authoring::model::binding::BindingDecl;
+use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
+use henad_core::authoring::primitives::rng::{mix_seed, xorshift64};
+use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
@@ -161,7 +162,7 @@ mod tests {
     type State = GpuGridState<GpuSir>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        crate::gpu_test_support::headless_context("gpu_sir_test_device", wgpu::Features::empty())
+        crate::tests::support::headless_context("gpu_sir_test_device", wgpu::Features::empty())
     }
 
     pub(super) fn params(

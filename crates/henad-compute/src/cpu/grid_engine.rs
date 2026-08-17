@@ -1,5 +1,5 @@
-use henad_core::authoring::field::{Extent, FieldLayer as _};
-use henad_core::authoring::grid_model::GridModel;
+use henad_core::authoring::model::field::{Extent, FieldLayer as _};
+use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::helpers::{extract_u32, u32_param};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamStore, ParamValue};
@@ -105,9 +105,9 @@ impl<M: GridModel> SimState for GridModelState<M> {
 #[cfg(test)]
 mod tests {
     use super::GridModelState;
-    use henad_core::authoring::grid_model::GridModel;
+    use henad_core::authoring::model::grid_model::GridModel;
+    use henad_core::authoring::primitives::rng::xorshift64;
     use henad_core::grid::Grid2D;
-    use henad_core::helpers::xorshift64;
     use henad_core::model::SimState as _;
     use henad_core::params::{ParamDescriptor, ParamValue};
     use henad_core::topology::NeighborhoodKind;

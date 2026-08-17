@@ -5,9 +5,9 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use henad_core::authoring::binding::{BindingDecl, buffer_target};
-use henad_core::authoring::field::Extent;
-use henad_core::authoring::gpu_agent_model::{Geometry, GpuAgentModel, PassCtx, PassId};
+use henad_core::authoring::model::binding::{BindingDecl, buffer_target};
+use henad_core::authoring::model::field::Extent;
+use henad_core::authoring::model::gpu_agent_model::{Geometry, GpuAgentModel, PassCtx, PassId};
 use henad_core::model::{Model, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;

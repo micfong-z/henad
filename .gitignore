@@ -28,6 +28,7 @@ results
 # development documentation (may or may not contain sensitive info >:( )
 /docs/*
 !/docs/agent-record/
+!/docs/authoring/
 
 # python tooling
 .venv

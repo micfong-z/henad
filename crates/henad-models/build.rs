@@ -56,7 +56,7 @@ fn emit_binding_decls(src: &std::path::Path, out: &std::path::Path) -> Result<()
     use std::fmt::Write as _;
 
     let mut rust = String::from(
-        "/// Each shader's `@group(0)` declarations, in `@binding` order.\npub mod bindings {\n    use henad_core::authoring::binding::{BindingDecl, BindingKind};\n",
+        "/// Each shader's `@group(0)` declarations, in `@binding` order.\npub mod bindings {\n    use henad_core::authoring::model::binding::{BindingDecl, BindingKind};\n",
     );
     for entry in ENTRY_POINTS {
         let path = src.join(entry);

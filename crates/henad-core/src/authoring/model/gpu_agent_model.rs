@@ -1,7 +1,7 @@
 //! Authoring API for agent models whose population lives entirely in GPU buffers.
 //!
-//! This is the GPU sibling of [`crate::authoring::agent_model::AgentModel`], and the agent-shaped
-//! counterpart of [`crate::authoring::gpu_grid_model::GpuGridModel`]. A model declares its buffers,
+//! This is the GPU sibling of [`crate::authoring::model::agent_model::AgentModel`], and the agent-shaped
+//! counterpart of [`crate::authoring::model::gpu_grid_model::GpuGridModel`]. A model declares its buffers,
 //! its passes and its bindings as plain data, and the engine (`henad_compute::gpu::agent_engine`)
 //! derives every wgpu object, the neighbour index, the ping-pong, the stat reduction and the whole
 //! `SimState`/`GpuSimState` impl from them.
@@ -14,7 +14,7 @@
 //!
 //! A pass does not say which resource goes in which slot. Its [`BindingDecl`] slice is generated
 //! from the shader at build time, and the engine resolves each `name` itself, so a slot index
-//! cannot disagree with the shader that owns it. See [`crate::authoring::binding`] for the seven
+//! cannot disagree with the shader that owns it. See [`crate::authoring::model::binding`] for the seven
 //! reserved names and how a buffer label resolves.
 //!
 //! # Shader imports
@@ -40,8 +40,8 @@
 //! - [`GpuAgentModel::STATS`] length must equal the number of values
 //!   [`GpuAgentModel::stats`] returns.
 
-use crate::authoring::binding::BindingDecl;
-use crate::authoring::field::Extent;
+use crate::authoring::model::binding::BindingDecl;
+use crate::authoring::model::field::Extent;
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::spatial_hash::HashGrid;
 use crate::view::{StatDescriptor, StatValue};
@@ -74,9 +74,9 @@ macro_rules! buffers {
         $crate::__indices!(0usize, $([$(#[$meta])* $vis $name],)+);
 
         /// This model's storage buffers, in index order.
-        const SPECS: &[$crate::authoring::gpu_agent_model::BufferSpec] = &[
+        const SPECS: &[$crate::authoring::model::gpu_agent_model::BufferSpec] = &[
             $($crate::__buffer_flags!(
-                $crate::authoring::gpu_agent_model::BufferSpec {
+                $crate::authoring::model::gpu_agent_model::BufferSpec {
                     label: $label,
                     double_buffered: false,
                     drawable: false,
@@ -93,12 +93,12 @@ macro_rules! __buffer_flags {
     ($spec:expr;) => { $spec };
     ($spec:expr; double_buffered $($rest:ident)*) => {
         $crate::__buffer_flags!(
-            $crate::authoring::gpu_agent_model::BufferSpec { double_buffered: true, ..$spec }; $($rest)*
+            $crate::authoring::model::gpu_agent_model::BufferSpec { double_buffered: true, ..$spec }; $($rest)*
         )
     };
     ($spec:expr; drawable $($rest:ident)*) => {
         $crate::__buffer_flags!(
-            $crate::authoring::gpu_agent_model::BufferSpec { drawable: true, ..$spec }; $($rest)*
+            $crate::authoring::model::gpu_agent_model::BufferSpec { drawable: true, ..$spec }; $($rest)*
         )
     };
 }
@@ -215,7 +215,7 @@ pub trait GpuAgentModel: Send + Sync + 'static {
 
     const REDUCE: ReduceSpec;
 
-    /// The full descriptor list. Unlike [`crate::authoring::agent_model::AgentModel`], nothing is
+    /// The full descriptor list. Unlike [`crate::authoring::model::agent_model::AgentModel`], nothing is
     /// prepended. A GPU model spells its list out, so it can mirror the exact parameter order of
     /// the CPU model it is compared against.
     fn param_descriptors() -> Vec<ParamDescriptor>;

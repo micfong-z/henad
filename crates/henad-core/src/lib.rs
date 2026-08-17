@@ -13,4 +13,4 @@ pub mod topology;
 pub mod view;
 
 /// World size.
-pub use authoring::field::Extent;
+pub use authoring::model::field::Extent;

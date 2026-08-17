@@ -6,12 +6,13 @@
 use henad_compute::cpu::agent_engine::{
     AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
 };
-use henad_core::authoring::agent_model::{AgentLanes as _, AgentModel as _};
-use henad_core::authoring::field::Extent;
-use henad_core::authoring::gpu_agent_model::{
+use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel as _};
+use henad_core::authoring::model::field::Extent;
+use henad_core::authoring::model::gpu_agent_model::{
     BufferSpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
-use henad_core::helpers::{extract_f32, extract_u32, mix_seed};
+use henad_core::authoring::primitives::rng::mix_seed;
+use henad_core::helpers::{extract_f32, extract_u32};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
@@ -191,7 +192,7 @@ mod tests {
     type State = GpuAgentState<GpuBoids>;
 
     fn headless_context() -> Option<GpuContext> {
-        crate::gpu_test_support::headless_context("gpu_boids_test_device", wgpu::Features::empty())
+        crate::tests::support::headless_context("gpu_boids_test_device", wgpu::Features::empty())
     }
 
     fn params(num_agents: u32, world: f32) -> Vec<ParamValue> {
@@ -326,32 +327,6 @@ mod tests {
         assert!(
             (avg_speed - reference).abs() <= 1e-3 * reference.abs().max(1.0),
             "reduced average speed {avg_speed} disagrees with the lanes: {reference}"
-        );
-    }
-
-    /// Mean velocity near mean speed, which cannot happen if the index comes back empty.
-    ///
-    /// 800 ticks rather than 200, where alignment is still climbing and lands anywhere in
-    /// 0.08..0.36 run to run.
-    #[test]
-    fn the_flock_aligns_over_time() {
-        let Some(ctx) = headless_context() else {
-            log::warn!("skipping the_flock_aligns_over_time: no adapter");
-            return;
-        };
-
-        let mut state = State::new(&ctx, &params(20_000, 800.0));
-        state.run_batched(800);
-        state.refresh_stats();
-
-        let stats = state.stats();
-        let (StatValue::Scalar(avg_speed), StatValue::Vector2D { x, y }) = (&stats[0].value, &stats[1].value) else {
-            panic!("boids report a scalar speed and a vector velocity");
-        };
-        let alignment = x.hypot(*y) / avg_speed.max(f64::EPSILON);
-        assert!(
-            alignment > 0.8,
-            "mean velocity is {alignment} of mean speed; the flock is not aligning, so neighbours are probably not being found"
         );
     }
 

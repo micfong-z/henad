@@ -1,7 +1,8 @@
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_core::authoring::grid_model::GridModel;
+use henad_core::authoring::model::grid_model::GridModel;
+use henad_core::authoring::primitives::rng::{below, next_bits, next_float};
 use henad_core::grid::Grid2D;
-use henad_core::helpers::{extract_f32, f32_param, xorshift64};
+use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{StatDescriptor, StatValue};
@@ -58,8 +59,7 @@ impl GridModel for SirGridModel {
         let initial_pct = extract_f32(params, INITIAL_INFECTED_PCT, 0.01);
         let threshold = (initial_pct * u32::MAX as f32) as u32;
         for cell in grid.current_mut().iter_mut() {
-            *rng = xorshift64(*rng);
-            *cell = if ((*rng >> 32) as u32) < threshold { I } else { S };
+            *cell = if below(next_bits(rng), threshold) { I } else { S };
         }
     }
 
@@ -69,17 +69,19 @@ impl GridModel for SirGridModel {
                 let infected_count = neighbors.iter().filter(|&&n| n == I).count();
                 if infected_count > 0 {
                     let prob_safe = (1.0 - params.infection_rate).powi(infected_count as i32);
-                    *rng = xorshift64(*rng);
-                    let rand_val = (*rng >> 33) as f32 / (u32::MAX >> 1) as f32;
-                    if rand_val > prob_safe { I } else { S }
+                    // `>=`, so a rate of 1 always infects. The draw is half-open, so a zero draw
+                    // is reachable and `>` would let it escape.
+                    if next_float(rng, 1.0) >= prob_safe { I } else { S }
                 } else {
                     S
                 }
             }
             I => {
-                *rng = xorshift64(*rng);
-                let rand_val = (*rng >> 33) as f32 / (u32::MAX >> 1) as f32;
-                if rand_val < params.recovery_rate { R } else { I }
+                if next_float(rng, 1.0) < params.recovery_rate {
+                    R
+                } else {
+                    I
+                }
             }
             _ => cell,
         }
