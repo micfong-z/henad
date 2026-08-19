@@ -24,11 +24,9 @@ use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
 use henad_compute::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
 
 /// Exponential moving average smoothing factor (0..1, higher = more responsive).
-#[cfg(not(target_arch = "wasm32"))]
 const EMA_ALPHA: f64 = 0.1;
 
 /// Per-frame timing breakdown, smoothed with EMA.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub struct FrameTimings {
     pub render_ms: f64,
@@ -37,7 +35,6 @@ pub struct FrameTimings {
     pub frame_render_ms: f64,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl FrameTimings {
     pub fn update_ema(smoothed: &mut f64, sample_ms: f64) {
         *smoothed += EMA_ALPHA * (sample_ms - *smoothed);
@@ -76,7 +73,6 @@ pub struct AppState {
     pub render_ctx: GpuContext,
     /// The fault being shown, cleared when the user dismisses the modal.
     pub fault: Option<Fault>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub timings: FrameTimings,
     /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
     /// switch. `None` on the web build.
@@ -140,7 +136,6 @@ impl AppState {
             runtime,
             render_ctx,
             fault: None,
-            #[cfg(not(target_arch = "wasm32"))]
             timings: FrameTimings::default(),
             #[cfg(not(target_arch = "wasm32"))]
             gpu_ctx,

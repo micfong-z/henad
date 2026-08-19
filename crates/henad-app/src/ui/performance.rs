@@ -70,12 +70,8 @@ pub fn performance_ui(ui: &mut egui::Ui, app: &mut AppState) {
         let engine_ms = app.snapshot.as_ref().map_or(0.0, |s| s.engine_ms);
         padded_row(ui, "Engine", &format!("{engine_ms:05.1} ms"));
 
-        // No `Instant` on wasm, where the sim runs on the UI thread anyway.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            padded_row(ui, "Render", &format!("{:05.1} ms", app.timings.render_ms));
-            padded_row(ui, "UI", &format!("{:05.1} ms", app.timings.ui_ms));
-        }
+        padded_row(ui, "Render", &format!("{:05.1} ms", app.timings.render_ms));
+        padded_row(ui, "UI", &format!("{:05.1} ms", app.timings.ui_ms));
     });
 }
 

@@ -33,7 +33,6 @@ use crate::ui::dock::{Tab, default_dock_state};
 use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::runtime_info::RuntimeInfo;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::state::FrameTimings;
 
 pub struct HenadApp {
@@ -121,12 +120,8 @@ impl eframe::App for HenadApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        #[cfg(not(target_arch = "wasm32"))]
-        let frame_start = std::time::Instant::now();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.state.timings.frame_render_ms = 0.0;
-        }
+        let frame_start = web_time::Instant::now();
+        self.state.timings.frame_render_ms = 0.0;
 
         ui::menu_bar::menu_bar_panel(ui, &mut self.dock);
         ui::fault::fault_modal(ui.ctx(), &mut self.state);
@@ -139,12 +134,9 @@ impl eframe::App for HenadApp {
             .show_inside(ui, &mut self.state);
 
         // The viewport tab times itself. Whatever is left over is UI.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let total_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
-            let render_ms = self.state.timings.frame_render_ms;
-            FrameTimings::update_ema(&mut self.state.timings.render_ms, render_ms);
-            FrameTimings::update_ema(&mut self.state.timings.ui_ms, (total_ms - render_ms).max(0.0));
-        }
+        let total_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+        let render_ms = self.state.timings.frame_render_ms;
+        FrameTimings::update_ema(&mut self.state.timings.render_ms, render_ms);
+        FrameTimings::update_ema(&mut self.state.timings.ui_ms, (total_ms - render_ms).max(0.0));
     }
 }

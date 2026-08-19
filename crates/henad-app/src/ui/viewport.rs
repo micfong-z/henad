@@ -83,8 +83,7 @@ fn fit_aspect(available: egui::Vec2, width: f32, height: f32) -> egui::Vec2 {
 
 /// Draws the view and records its cost
 pub fn viewport_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    #[cfg(not(target_arch = "wasm32"))]
-    let render_start = std::time::Instant::now();
+    let render_start = web_time::Instant::now();
 
     let mode_before = app.point_render_mode;
     ui.horizontal(|ui| {
@@ -104,10 +103,7 @@ pub fn viewport_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     draw_view(ui, app);
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        app.timings.frame_render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-    }
+    app.timings.frame_render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
 }
 
 fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {

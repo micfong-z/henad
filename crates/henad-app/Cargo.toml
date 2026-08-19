@@ -26,6 +26,7 @@ wgpu = { workspace = true }
 bytemuck = { workspace = true }
 pollster = { workspace = true }
 flume = { workspace = true }
+web-time = { workspace = true }
 
 # native:
 [build-dependencies]

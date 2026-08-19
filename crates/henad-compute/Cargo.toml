@@ -13,6 +13,7 @@ bytemuck = { workspace = true }
 flume = { workspace = true }
 log = { workspace = true }
 pollster = { workspace = true }
+web-time = { workspace = true }
 
 [build-dependencies]
 wgsl_bindgen = { workspace = true }

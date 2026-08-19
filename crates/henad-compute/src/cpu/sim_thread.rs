@@ -63,7 +63,7 @@ mod native {
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
-    use std::time::Instant;
+    use web_time::Instant;
 
     use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
     use crate::fault::{FaultSink, STEPPING, catching};

@@ -118,7 +118,8 @@ mod native {
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+    use web_time::Instant;
 
     use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats};
     use crate::cpu::sim_thread::{SimCommand, WakeFn};
