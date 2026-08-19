@@ -531,7 +531,9 @@ mod runner_tests {
             .expect("a GPU context must make the GPU model selectable");
 
         // Note there is no context argument here: the registry closure captured its own clone.
-        let ModelState::Gpu(mut state) = (entry.create)(&params(32, 32, 0.3), None) else {
+        let built = (entry.create)(&params(32, 32, 0.3), None)
+            .unwrap_or_else(|fault| panic!("the GPU entry's factory failed to build: {fault}"));
+        let ModelState::Gpu(mut state) = built else {
             panic!("the GPU entry's factory must yield ModelState::Gpu, not ModelState::Cpu");
         };
 

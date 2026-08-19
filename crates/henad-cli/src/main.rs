@@ -37,6 +37,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 use clap::Parser;
 
+use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::gpu::{GpuContext, GpuSimState};
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
 use henad_core::model::SimState;
@@ -109,6 +110,8 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    install_panic_hook();
+
     let args = Args::parse();
 
     // Best-effort headless GPU: acquire a device so GPU models can be listed and run. If none is
@@ -163,7 +166,8 @@ fn main() -> Result<()> {
     let overrides = parse_overrides(&args.set)?;
     let params = resolve_params(&entry.param_descriptors, &overrides)?;
 
-    // Before anything calls the factory, since wgpu panics rather than returning an error.
+    // Ahead of the factory. An over-sized run is then refused by name instead of by whichever
+    // binding the device happened to reject first.
     if let Some(ctx) = gpu_ctx.as_ref() {
         let shortfalls = entry.shortfalls(&params, &ctx.device.limits());
         if !shortfalls.is_empty() {
@@ -264,7 +268,7 @@ fn print_params(entry: &ModelEntry) {
 /// callers use [`new_gpu_state`]. The dispatcher in [`run_benchmark`] routes correctly, so this
 /// only fires for a CPU-only path handed a GPU model, such as `--export`.
 fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -> Result<Box<dyn SimState>> {
-    match (entry.create)(params, seed) {
+    match (entry.create)(params, seed)? {
         ModelState::Cpu(state) => Ok(state),
         ModelState::Gpu(_) => bail!("model '{}' is GPU-backed; this path is CPU-only", entry.id),
     }
@@ -273,7 +277,7 @@ fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -
 /// Dispatch to the CPU or GPU benchmark depending on which backend the registry entry produces.
 /// The probe state created here is thrown away, and each per-rep loop builds its own.
 fn run_benchmark(entry: &ModelEntry, params: &[ParamValue], args: &Args, gpu_ctx: Option<&GpuContext>) -> Result<()> {
-    match (entry.create)(params, args.seed) {
+    match (entry.create)(params, args.seed)? {
         ModelState::Cpu(_) => bench_cpu(entry, params, args),
         ModelState::Gpu(_) => {
             let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
@@ -440,7 +444,7 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
 
 /// Create a fresh GPU state from a registry entry. Errors on a CPU-backed model.
 fn new_gpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -> Result<Box<dyn GpuSimState>> {
-    match (entry.create)(params, seed) {
+    match (entry.create)(params, seed)? {
         ModelState::Gpu(state) => Ok(state),
         ModelState::Cpu(_) => bail!("expected a GPU model but '{}' is CPU-backed", entry.id),
     }
@@ -476,6 +480,10 @@ fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
     ctx.device
         .poll(wgpu::PollType::wait_indefinitely())
         .context("GPU failed to complete steps")?;
+
+    if let Some(fault) = ctx.faults.take() {
+        return Err(fault.into());
+    }
     Ok(())
 }
 
@@ -521,7 +529,10 @@ fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
     let runtime = RuntimeInfo::collect(&adapter, &device);
     // No surface exists, so `target_format` is arbitrary: the models' display texture is an
     // offscreen Rgba8Unorm target, never a swapchain, and the benchmark never reads it back.
-    Ok((GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm), runtime))
+    Ok((
+        GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, FaultSink::new()),
+        runtime,
+    ))
 }
 
 /// Run once (warmup + steps) and write the final state to `path`.
@@ -564,7 +575,7 @@ fn export_stats(
         entry.name, entry.id, total, args.stats_every
     );
 
-    let rows = match (entry.create)(params, args.seed) {
+    let rows = match (entry.create)(params, args.seed)? {
         ModelState::Cpu(state) => stats_cpu(state, args, total, writer)?,
         ModelState::Gpu(state) => {
             let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;

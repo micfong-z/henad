@@ -12,6 +12,7 @@ wgpu = { workspace = true }
 bytemuck = { workspace = true }
 flume = { workspace = true }
 log = { workspace = true }
+pollster = { workspace = true }
 
 [build-dependencies]
 wgsl_bindgen = { workspace = true }
@@ -21,7 +22,6 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-pollster = { workspace = true }
 
 [[bench]]
 name = "scatter"

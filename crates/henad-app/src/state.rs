@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use egui::TextureHandle;
 use henad_compute::cpu::sim_thread::{SimCommand, SimThread, WakeFn};
+use henad_compute::fault::{BUILDING, Fault, catching};
 use henad_compute::snapshot::Snapshot;
 use henad_core::params::ParamValue;
 use henad_core::view::StatsHistory;
@@ -15,6 +16,8 @@ use crate::ui::agent_layer::AgentLayer;
 use henad_compute::runtime_info::RuntimeInfo;
 
 use henad_compute::gpu::GpuContext;
+#[cfg(not(target_arch = "wasm32"))]
+use henad_compute::gpu::fault::catching_on;
 #[cfg(not(target_arch = "wasm32"))]
 use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
 #[cfg(not(target_arch = "wasm32"))]
@@ -69,8 +72,10 @@ pub struct AppState {
     /// Fixed for the life of the process, collected once at startup.
     pub runtime: RuntimeInfo,
     /// Device and queue for rendering, so present on every target. Not `gpu_ctx` below, which
-    /// gates GPU models and stays native-only.
+    /// gates GPU models and stays native-only. Errors are reported into `faults`.
     pub render_ctx: GpuContext,
+    /// The fault being shown, cleared when the user dismisses the modal.
+    pub fault: Option<Fault>,
     #[cfg(not(target_arch = "wasm32"))]
     pub timings: FrameTimings,
     /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
@@ -134,6 +139,7 @@ impl AppState {
             history_capacity: 10_000,
             runtime,
             render_ctx,
+            fault: None,
             #[cfg(not(target_arch = "wasm32"))]
             timings: FrameTimings::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -152,6 +158,7 @@ impl AppState {
         // still in flight this frame holds its own `Arc` to the display, so tearing down mid-frame cannot pull
         // the texture out from under the renderer.
         self.sim_thread = None;
+        drop(self.render_ctx.faults.take());
         self.snapshot = None;
         self.last_rendered_tick = None;
         self.grid_texture = None;
@@ -177,32 +184,10 @@ impl AppState {
             Arc::new(move || ctx.request_repaint())
         };
 
-        match (entry.create)(&self.param_values, None) {
-            ModelState::Cpu(state) => {
-                let mut thread = SimThread::new(state, self.target_tps, Some(wake));
-                if self.uncapped {
-                    thread.send(SimCommand::SetUncapped(true));
-                }
-                self.sim_thread = Some(SimRunner::Cpu(thread));
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            ModelState::Gpu(state) => {
-                let Some(ctx) = self.gpu_ctx.clone() else {
-                    // Unreachable in practice: without a context the registry never offers a GPU
-                    // entry to select in the first place.
-                    log::error!("a GPU model was selected but no GPU context is available");
-                    return;
-                };
-                let settings = GpuBatchSettings {
-                    adaptive: self.gpu_adaptive,
-                    batch_size: self.gpu_batch_size,
-                    target_ms: self.gpu_target_ms,
-                };
-                self.sim_thread = Some(SimRunner::Gpu(GpuSimThread::new(ctx, state, settings, Some(wake))));
-            }
-            #[cfg(target_arch = "wasm32")]
-            ModelState::Gpu(_) => {
-                log::error!("GPU models are not available on the web build");
+        match self.build_runner(entry, &wake) {
+            Ok(runner) => self.sim_thread = Some(runner),
+            Err(fault) => {
+                self.report_fault(fault);
                 return;
             }
         }
@@ -213,8 +198,59 @@ impl AppState {
         self.pending_reload = vec![false; self.param_values.len()];
     }
 
+    /// Builds the selected model and the thread that will drive it.
+    ///
+    /// # Errors
+    ///
+    /// If the model's kernels panic, or the GPU refuses to build it, or the model is not compatible with this machine.
+    fn build_runner(&self, entry: &ModelEntry, wake: &WakeFn) -> Result<SimRunner, Fault> {
+        match (entry.create)(&self.param_values, None)? {
+            ModelState::Cpu(state) => catching(BUILDING, || {
+                let mut thread = SimThread::new(
+                    state,
+                    self.target_tps,
+                    Some(wake.clone()),
+                    self.render_ctx.faults.clone(),
+                );
+                if self.uncapped {
+                    thread.send(SimCommand::SetUncapped(true));
+                }
+                SimRunner::Cpu(thread)
+            }),
+            #[cfg(not(target_arch = "wasm32"))]
+            ModelState::Gpu(state) => {
+                // Unreachable in practice. Without a context the registry never offers a GPU
+                // entry to select.
+                let Some(ctx) = self.gpu_ctx.clone() else {
+                    return Err(Fault::refused(BUILDING, "no GPU context is available"));
+                };
+                let settings = GpuBatchSettings {
+                    adaptive: self.gpu_adaptive,
+                    batch_size: self.gpu_batch_size,
+                    target_ms: self.gpu_target_ms,
+                };
+                catching_on(&ctx.device.clone(), BUILDING, || {
+                    SimRunner::Gpu(GpuSimThread::new(ctx, state, settings, Some(wake.clone())))
+                })
+            }
+            #[cfg(target_arch = "wasm32")]
+            ModelState::Gpu(_) => Err(Fault::refused(
+                BUILDING,
+                "GPU models are not available in the web build",
+            )),
+        }
+    }
+
+    /// Stops everything and hands the fault to the modal.
+    pub fn report_fault(&mut self, fault: Fault) {
+        log::error!("{fault}");
+        self.offload_simulation();
+        self.fault = Some(fault);
+    }
+
     pub fn offload_simulation(&mut self) {
         self.sim_thread = None;
+        drop(self.render_ctx.faults.take());
         self.snapshot = None;
         self.sim_running = false;
         self.grid_texture = None;

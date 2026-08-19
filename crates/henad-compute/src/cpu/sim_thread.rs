@@ -66,6 +66,7 @@ mod native {
     use std::time::Instant;
 
     use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
+    use crate::fault::{FaultSink, STEPPING, catching};
     use henad_core::model::SimState;
 
     /// The handoff point between the two threads. `fresh` is the newest publish waiting to be
@@ -271,7 +272,10 @@ mod native {
 
     impl SimThread {
         /// `wake` is `None` only for a headless caller that polls on its own schedule.
-        pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
+        ///
+        /// A panic out of the loop lands in `faults`. The GPU sibling has no such parameter and
+        /// reads the same sink off its `GpuContext`.
+        pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel();
             // So the UI has something to draw before play is pressed.
             let snapshot = Arc::new(Mutex::new(SnapshotSlot {
@@ -280,6 +284,7 @@ mod native {
             }));
             let snapshot_clone = Arc::clone(&snapshot);
 
+            let on_fault = wake.clone();
             let sim_loop = SimLoop {
                 state,
                 cmd_rx,
@@ -297,7 +302,16 @@ mod native {
                 next_step_at: Instant::now(),
             };
 
-            let handle = std::thread::spawn(move || sim_loop.run());
+            // Outside the loop. A catch per tick would sit in the hot path.
+            let handle = std::thread::spawn(move || {
+                if let Err(fault) = catching(STEPPING, || sim_loop.run()) {
+                    log::error!("{fault}");
+                    faults.set_once(fault);
+                    if let Some(wake) = &on_fault {
+                        wake();
+                    }
+                }
+            });
 
             Self {
                 cmd_tx,
@@ -351,6 +365,7 @@ mod native {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
+    use crate::fault::FaultSink;
     use henad_core::model::SimState;
 
     /// Ceiling on catch-up batches per `update()`, so a backgrounded tab handing back a
@@ -374,7 +389,11 @@ mod wasm {
     impl SimThread {
         /// `wake` still matters with no thread to wake from, since `send` runs inside `ui()`, after
         /// the frame's snapshot poll in `logic()`.
-        pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>) -> Self {
+        ///
+        /// `faults` matches the native runner's signature and is never written to. Wasm panics
+        /// abort without unwinding, leaving nothing here to catch.
+        pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
+            drop(faults);
             // So the UI has something to draw before play is pressed.
             let initial = Some(build_snapshot(None, &mut *state, 0.0, 0.0));
             Self {
@@ -550,6 +569,7 @@ pub use wasm::SimThread;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod pacing_timing_tests {
     use super::{SimCommand, SimThread};
+    use crate::fault::{FaultSink, STEPPING};
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
     use henad_core::view::StatEntry;
@@ -579,10 +599,66 @@ mod pacing_timing_tests {
         }
     }
 
+    /// A model author's bug, from the engine's point of view.
+    struct Exploding(u64);
+
+    impl SimState for Exploding {
+        fn step(&mut self) {
+            let zero: u64 = std::hint::black_box(0);
+            self.0 = 1 / zero;
+        }
+        fn tick(&self) -> u64 {
+            self.0
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    /// A panicking kernel used to take the thread with it and leave the UI polling a viewport
+    /// that never updated again. The panic still prints. This test is noisy by design.
+    #[test]
+    fn a_panicking_step_lands_in_the_sink_instead_of_killing_the_thread() {
+        let faults = FaultSink::new();
+        let wakes = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&wakes);
+
+        let mut thread = SimThread::new(
+            Box::new(Exploding(0)),
+            1000.0,
+            Some(Arc::new(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            })),
+            faults.clone(),
+        );
+        thread.play();
+
+        for _ in 0..200 {
+            if faults.is_set() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let fault = faults.take().expect("the panic should have reached the sink");
+        assert_eq!(fault.during, STEPPING);
+        assert!(fault.to_string().contains("divide by zero"), "{fault}");
+        // Without the wake the UI would sit idle and never come and look.
+        assert!(wakes.load(Ordering::Relaxed) > 0, "the UI was never woken");
+    }
+
     #[test]
     fn capped_batching_holds_the_target_rate() {
         let ticks = Arc::new(AtomicU64::new(0));
-        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 50.0, None);
+        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 50.0, None, FaultSink::new());
         thread.send(SimCommand::SetTicksPerSnapshot(10));
         thread.play();
         std::thread::sleep(std::time::Duration::from_millis(1000));
@@ -618,6 +694,7 @@ mod pacing_timing_tests {
             Some(Arc::new(move || {
                 counter.fetch_add(1, Ordering::Relaxed);
             })),
+            FaultSink::new(),
         );
 
         thread.step_once();

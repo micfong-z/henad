@@ -1,5 +1,6 @@
 //! Headless device setup shared by the GPU models' tests.
 
+use henad_compute::fault::FaultSink;
 use henad_compute::gpu::GpuContext;
 
 const REQUIRE_GPU: &str = "HENAD_REQUIRE_GPU";
@@ -43,5 +44,10 @@ pub(crate) fn headless_context(label: &str, required_features: wgpu::Features) -
     }
     let (device, queue) = device.ok()?;
 
-    Some(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm))
+    Some(GpuContext::new(
+        device,
+        queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        FaultSink::new(),
+    ))
 }
