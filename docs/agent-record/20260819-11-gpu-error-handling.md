@@ -196,47 +196,7 @@ Both are noisy by construction.
 
 ## Manual notes (human)
 
-<!-- Seeded by the agent: what the human did this session, from the agent's point of view.
-     Raw material to reframe, not notes. Delete this block once rewritten.
-
-     - Interrupted a scratch test that was about to be written into the repo to empirically confirm
-       wgpu's panic behaviour, and switched the session into plan mode instead. The confirmation
-       ended up coming from reading wgpu's source, and the scratch test became the two real tests
-       in `gpu/fault.rs`.
-     - Set the design direction in one line: an egui modal, idiomatic error propagation, and asked
-       whether `anyhow` was necessary. The answer (no, it belongs in the binary; the UI needs to
-       match on the failure kind) shaped the `Fault`/`FaultKind` split rather than a boxed error.
-     - Mid-plan, added "assume that model author can make errors, e.g. accidental division by
-       zero". That single sentence roughly doubled the scope: without it the work would have been
-       wgpu error scopes only, and the sim-thread panic hole — the freeze with no message, which
-       is arguably the worse of the two bugs — would have been left in place.
-     - Chose all four recommended options when asked: boundary-only Result plumbing, both backends
-       rather than GPU alone, panic location via a chained hook, and offload-and-allow-retry.
-     - Edited `ui/fault.rs` directly rather than describing the change, applying the new UI rules
-       to the modal's own strings. "Could not build the model" became "Model build failed",
-       "Simulation aborted" replaced "The simulation stopped", the articles came out of the lead
-       line and the Copy tooltip, and the alert icon was sized to match the heading. Those edits
-       became the worked example block in the AGENTS.md UI section, since they demonstrate the
-       rules better than anything written from scratch.
-     - Added the UI writing guidelines and a sentence-structure rule to AGENTS.md, then asked for
-       them to be applied and made easier to understand, quoting one comment from `ui/fault.rs` as
-       the specimen.
-     - Named three constructions to ban outright: "X is what makes Y", trailing "which" clauses,
-       and parallel frames like "it is not X, it is Y". The audit that followed found 7 clefts, 6
-       trailing "which" clauses and 5 parallel frames in one session's comments, all clustered on
-       the notes with the most reasoning behind them.
-     - Noticed "X, so Y" was carrying almost every reason in the diff. 24 instances across ~60
-       comments. Worth knowing that the answer was already in the codebase: `capacity.rs` and
-       `limits.rs` both open with "Otherwise ...", which names the failure instead of the
-       mechanism and carries more for the same words.
-     - Reviewed the finished branch and found four defects, reasoning through the rayon one from
-       the code rather than from a failure. The chain was exact: hook writes the worker's TLS,
-       `resume_unwind` lands on the sim thread, `take_location` reads empty. Also named why the
-       existing tests missed it, which was the useful part. The fix and both regression tests
-       came out of that reading.
-     - Spotted the sink race by tracing the order of `reset_simulation` against `logic()`, a
-       window narrow enough that it had not been hit once during the session's manual testing.
-     - Caught that AGENTS.md still documented the trap the branch had just closed. Worth a habit:
-       a change that invalidates a "traps that already cost real debugging" entry should update
-       that entry in the same pass.
--->
+- Designed this session.
+- Edited comments, UI strings and writing guidelines in AGENTS.md.
+- Reviewed all changes and identified 4 issues, including 2 logical bugs and 2 documentation issues. (see above)
+- Fixed all issues and verified the fixes with tests.
