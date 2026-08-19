@@ -1,8 +1,10 @@
 use henad_compute::cpu::agent_engine::{AgentModelState, agent_model_param_descriptors};
 use henad_compute::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
+use henad_compute::fault::{BUILDING, Fault, catching};
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
 use henad_compute::gpu::capacity::Demand;
+use henad_compute::gpu::fault::catching_on;
 use henad_compute::gpu::grid_engine::{GpuGridModelDescriptor, GpuGridState};
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_core::authoring::model::agent_model::AgentModel;
@@ -33,7 +35,10 @@ pub enum ModelState {
 /// context through the app at call time.
 ///
 /// The `Option<u64>` is the RNG seed, which defaults to the model's fixed default when `None`.
-pub type ModelFactory = Box<dyn Fn(&[ParamValue], Option<u64>) -> ModelState + Send + Sync>;
+///
+/// Fallible. A model author can get a kernel wrong, and a device can refuse what
+/// [`ModelEntry::shortfalls`] could not know to ask about. Neither may end the process.
+pub type ModelFactory = Box<dyn Fn(&[ParamValue], Option<u64>) -> Result<ModelState, Fault> + Send + Sync>;
 
 /// Captures the same [`GpuContext`] the factory does, so a caller can ask whether a model would
 /// build without holding a device of its own.
@@ -71,7 +76,9 @@ fn register_grid_model<M: GridModel>() -> ModelEntry {
         stat_descriptors: M::STATS.to_vec(),
         topology_hint: TopologyHint::GRID,
         create: Box::new(|params, seed| {
-            ModelState::Cpu(Box::new(GridModelState::<M>::from_params_seeded(params, seed)))
+            catching(BUILDING, || {
+                ModelState::Cpu(Box::new(GridModelState::<M>::from_params_seeded(params, seed)))
+            })
         }),
         capacity: None,
     }
@@ -90,7 +97,9 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
             agents: true,
         },
         create: Box::new(|params, seed| {
-            ModelState::Cpu(Box::new(AgentModelState::<A>::from_params_seeded(params, seed)))
+            catching(BUILDING, || {
+                ModelState::Cpu(Box::new(AgentModelState::<A>::from_params_seeded(params, seed)))
+            })
         }),
         capacity: None,
     }
@@ -110,7 +119,9 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
         stat_descriptors: model.stat_descriptors(),
         topology_hint: model.topology_hint(),
         create: Box::new(move |params, seed| {
-            ModelState::Gpu(Box::new(GpuGridState::<M>::new_seeded(&factory_ctx, params, seed)))
+            catching_on(&factory_ctx.device, BUILDING, || {
+                ModelState::Gpu(Box::new(GpuGridState::<M>::new_seeded(&factory_ctx, params, seed)))
+            })
         }),
         capacity: Some(Box::new(move |params| {
             GpuGridState::<M>::demand(params, &capacity_ctx.device.limits())
@@ -132,7 +143,9 @@ fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
         stat_descriptors: model.stat_descriptors(),
         topology_hint: model.topology_hint(),
         create: Box::new(move |params, seed| {
-            ModelState::Gpu(Box::new(GpuAgentState::<M>::new_seeded(&factory_ctx, params, seed)))
+            catching_on(&factory_ctx.device, BUILDING, || {
+                ModelState::Gpu(Box::new(GpuAgentState::<M>::new_seeded(&factory_ctx, params, seed)))
+            })
         }),
         capacity: Some(Box::new(move |params| {
             GpuAgentState::<M>::demand(params, &capacity_ctx.device.limits())
@@ -203,6 +216,12 @@ mod tests {
             .collect()
     }
 
+    /// A model that cannot build from its own defaults has already failed. The tests below treat
+    /// a `Fault` as a failure rather than threading it through.
+    fn build(entry: &ModelEntry, values: &[ParamValue]) -> ModelState {
+        (entry.create)(values, None).unwrap_or_else(|fault| panic!("{}: {fault}", entry.id))
+    }
+
     /// Both arms are a `SimState`, which is where the contracts below live.
     fn sim_state(state: &mut ModelState) -> &mut dyn SimState {
         match state {
@@ -217,7 +236,7 @@ mod tests {
     fn declared_apply_mode_matches_what_the_state_accepts() {
         for entry in all_entries() {
             let values = defaults(&entry);
-            let mut created = (entry.create)(&values, None);
+            let mut created = build(&entry, &values);
             let state = sim_state(&mut created);
 
             for (i, desc) in entry.param_descriptors.iter().enumerate() {
@@ -238,7 +257,7 @@ mod tests {
     fn declared_topology_matches_the_views_the_state_returns() {
         for entry in model_registry(None) {
             let values = defaults(&entry);
-            let ModelState::Cpu(state) = (entry.create)(&values, None) else {
+            let ModelState::Cpu(state) = build(&entry, &values) else {
                 continue;
             };
 
@@ -266,7 +285,7 @@ mod tests {
     fn every_declared_stat_series_gets_a_value() {
         for entry in all_entries() {
             let values = defaults(&entry);
-            let mut created = (entry.create)(&values, None);
+            let mut created = build(&entry, &values);
             let state = sim_state(&mut created);
             assert_eq!(
                 state.stats().len(),
@@ -285,7 +304,7 @@ mod tests {
     fn declared_topology_matches_the_layers_a_gpu_state_publishes() {
         for entry in all_entries() {
             let values = defaults(&entry);
-            let ModelState::Gpu(state) = (entry.create)(&values, None) else {
+            let ModelState::Gpu(state) = build(&entry, &values) else {
                 continue;
             };
             let view = state.view();
@@ -304,6 +323,41 @@ mod tests {
                 entry.topology_hint.agents
             );
         }
+    }
+
+    /// A model author can get a kernel wrong, and that must reach Build as a message rather than
+    /// as a dead process. The panic still prints. This test is noisy by design.
+    #[test]
+    fn a_model_that_panics_while_building_comes_back_as_a_fault() {
+        let entry = register_grid_model::<crate::tests::broken::DividesByZero>();
+        let Err(fault) = (entry.create)(&defaults(&entry), None) else {
+            panic!("the broken model should not have built");
+        };
+        assert_eq!(fault.during, BUILDING);
+        assert!(fault.to_string().contains("divide by zero"), "{fault}");
+    }
+
+    /// The panic an author is most likely to write lands in `step_cell`, which the engine runs on
+    /// a rayon worker. Rayon re-raises it on the sim thread without running the panic hook again,
+    /// so the location has to survive the hop or the modal loses it for the common case.
+    #[test]
+    fn a_kernel_that_panics_mid_step_keeps_its_location() {
+        use henad_compute::fault::{FaultKind, STEPPING, install_panic_hook};
+
+        install_panic_hook();
+        let entry = register_grid_model::<crate::tests::broken::DividesByZeroMidStep>();
+        let ModelState::Cpu(mut state) = build(&entry, &defaults(&entry)) else {
+            panic!("a GridModel registers as a CPU entry");
+        };
+        let outcome: Result<(), _> = catching(STEPPING, || state.step());
+        let Err(fault) = outcome else {
+            panic!("the broken kernel should not have stepped");
+        };
+        let FaultKind::Panic { location, .. } = &fault.kind else {
+            panic!("expected a panic fault, got {fault:?}");
+        };
+        let location = location.as_deref().expect("a kernel panic must carry its location");
+        assert!(location.contains("broken.rs"), "{location}");
     }
 
     #[test]
@@ -334,7 +388,7 @@ mod tests {
             let params = defaults(entry);
             // The two pin each other: under-report a pass and the build fails, over-report one
             // and the assert does.
-            let _built: ModelState = (entry.create)(&params, None);
+            let _built = build(entry, &params);
             assert!(
                 entry.shortfalls(&params, &wgpu::Limits::default()).is_empty(),
                 "{}: builds on a baseline device but its declared demand says it should not: {:?}",

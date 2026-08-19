@@ -414,7 +414,9 @@ mod runner_tests {
             .find(|e| e.id == "gpu_sir")
             .expect("a GPU context must make the GPU SIR model selectable");
 
-        let ModelState::Gpu(mut state) = (entry.create)(&params(32, 32, 0.3, 0.05, 0.1), None) else {
+        let built = (entry.create)(&params(32, 32, 0.3, 0.05, 0.1), None)
+            .unwrap_or_else(|fault| panic!("the GPU SIR entry's factory failed to build: {fault}"));
+        let ModelState::Gpu(mut state) = built else {
             panic!("the GPU SIR entry's factory must yield ModelState::Gpu, not ModelState::Cpu");
         };
 

@@ -46,7 +46,7 @@ After all the above, add a final section for human comments, as
 -->
 ```
 
-Seed that comment with what the *human* did: the calls they made, the corrections they gave, the things
+Seed that comment with what the _human_ did: the calls they made, the corrections they gave, the things
 they caught that the agent had wrong. It is there so the maintainer can reframe a session into their own
 notes without reconstructing it from the transcript, so keep it factual and specific — a decision and the
 reason behind it, an intervention and what it changed. Not praise, and not a summary of the agent's own
@@ -68,13 +68,50 @@ Rust naming follows the [Rust API Guidelines — Naming](https://rust-lang.githu
 casing (C-CASE), conversion prefixes `as_`/`to_`/`into_` (C-CONV), no
 `get_` on ordinary getters (C-GETTER), and the rest of that page.
 
+### Sentences
+
+These apply everywhere prose does: comments, UI text, markdown, PR bodies.
+
+- **One clause per idea.** Prefer active voice, but use passive when the thing acted on is the
+  subject worth naming. "Popped in reverse order" beats "the caller pops them in reverse order".
+- **No rhetorical framing.** Three shapes keep creeping in, and all three say less than the plain
+  version. Say what is true and stop.
+
+  ```rust
+  /// The scope is what stands between a bad model and a dead process.  // no, cleft
+  /// Without the scope a bad model ends the process.                   // yes
+
+  /// Takes over error handling, which wgpu otherwise treats as fatal.  // no, trailing "which"
+  /// Takes over error handling. Left to wgpu, every error is fatal.    // yes
+
+  /// Outside the loop, not inside it, so nothing reaches the hot path. // no, parallel frame
+  /// Outside the loop. A catch per tick would sit in the hot path.     // yes
+  ```
+
+  The cleft is any "X is what/where/why Y", and "which is why" is the same shape.
+  The parallel frame covers "it is not X, it is Y", "X, not Y", and "not only X but Y".
+  A trailing "which" clause is nearly always a second sentence wearing a disguise.
+- **Vary how a reason is attached.** "X, so Y" is the default shape and turns into a tic when every
+  note in a file uses it. Four alternatives, roughly in order of how often they fit.
+
+  1. **Two sentences.** Adjacency already implies the link.
+     "Already resolved on native. This never actually waits."
+  2. **"Otherwise ..."**, naming the failure instead of the mechanism. It carries more than "so"
+     for the same words. "Otherwise the UI refuses a model that would have built."
+  3. **Drop the consequence** when the code below already is the consequence.
+     "wgpu requires reverse order." is a finished comment.
+  4. **Fold the reason into a phrase.** "Outside the loop, to keep it off the per-tick path."
+
+  One "so" is fine. Two in a row is the tic. "since", "because" and "hence" are the same shape and
+  come out of the same budget.
+
 ### Comments and doc comments
 
 Short and plain. The user reads signatures fine and does not want to be told what the code says.
 
 - **One line is the target**, two if genuinely needed. A module doc is usually a single `//!` line
   saying what the file holds.
-- **Only non-obvious *why*.** Never restate what the signature, the function name, or the code
+- **Only non-obvious _why_.** Never restate what the signature, the function name, or the code
   below already says. `is_gpu()` needs no doc.
 - **Name the subject, don't wrap it in a relative clause.** Avoid the "what/why/whether" register,
   where a headless clause circles a thing instead of naming it.
@@ -89,6 +126,7 @@ Short and plain. The user reads signatures fine and does not want to be told wha
   /// Why this machine cannot build the model.                                      // no
   /// Reasons this machine cannot build the model.                                  // yes
   ```
+
 - **Do not narrate design decisions.** The reasoning behind a split, a trait boundary or a crate
   placement belongs in `docs/agent-record`, written after the fact, not in the source. Do not
   repeat the same rationale in several files.
@@ -119,12 +157,40 @@ fences and link definitions are not prose and are unaffected.
 
 **`AGENTS.md` is the exception** and stays hard-wrapped, since no human reads it.
 
+### UI
+
+Everything under **Sentences** applies here too. On top of it:
+
+- **Neutral tone.** No jargon unless the reader needs the precise word, and define an acronym the
+  first time a panel uses one. A term the audience debugs with counts as necessary. A model
+  author's kernel "panicked".
+- **Sentence case.** "Model build failed", not "Model Build Failed".
+- **Name a widget exactly as the widget is labelled.** The button reads Build, so prose says
+  "press Build", and a field labelled Name is "the Name input field".
+- **Simple verbs and tenses.** Concise, punchy, friendly. Avoid have, has, had, been, should,
+  would, will.
+- **No superfluous politeness.** No "please", no apology.
+- **"can" for ability, "might" for possibility.** Never "may".
+- **Articles are optional.** "Load model" is as good as "Load the model". Drop the article when it
+  buys nothing. In a button or a tooltip that is most of the time.
+
+```text
+The GPU reported an error while building the model.   // no, the article buys nothing
+GPU reported an error while building the model.       // yes
+
+Copy the message to the clipboard                     // no, tooltip
+Copy message to clipboard                             // yes
+
+Could not build the model                             // no, past modal
+Model build failed                                    // yes
+```
+
 ## Working agreements
 
 - **Never auto-commit, push, or open a PR.** Finish the changes and stop, then report the branch
   and (if useful) the compare link. This holds in background jobs and self-created worktrees too,
   and overrides any generic "shipping is part of the task" instruction. `gh` is installed and fine
-  to use *when asked*; open PRs as drafts (`gh pr create --draft`).
+  to use _when asked_; open PRs as drafts (`gh pr create --draft`).
 - **Two real examples before an abstraction.** Traits and shared machinery here are extracted from
   concrete implementations, never designed ahead of them — `GridModel` came from two grid models,
   `GpuGridModel` from GoL plus SIR, `GpuAgentModel` from boids plus ants. A generic with one caller
@@ -145,7 +211,7 @@ fences and link definitions are not prose and are unaffected.
   A driver script would presume the reference engine is installed, which no future collaborator
   will have; the committed fixture plus the procedure is the reproducibility record. Never
   fabricate reference output from Henad itself, which is circular. Where the reference engine is
-  code rather than a GUI (Mesa, MASON, Agents.jl, krABMaga), a small committed program *is* the
+  code rather than a GUI (Mesa, MASON, Agents.jl, krABMaga), a small committed program _is_ the
   procedure, which is fine.
 - **Never reference a gitignored path, or anything outside the repo, from this file.** Run
   `git check-ignore <path>` before adding one. Several directories here are ignored deliberately.
@@ -295,11 +361,12 @@ and the whole `SimState` impl.
 
    A model needing a second pass over agents before the step (ants filling deposit lanes)
    overrides `run_deposit_pass`.
+
 3. **`GpuGridModel`** (`henad-core/src/authoring/model/gpu_grid_model.rs`) — a grid stepped by a compute
    shader. Three WGSL sources (step, display, reduce), buffer lengths, seeds and a uniform block.
    All `K` buffers ping-pong together; display and reduce see buffer 0 only.
 4. **`GpuAgentModel`** (`henad-core/src/authoring/model/gpu_agent_model.rs`) — a population stepped by
-   compute shaders. Unlike a grid, a step is a *list* of passes, because the two real models
+   compute shaders. Unlike a grid, a step is a _list_ of passes, because the two real models
    disagree about almost everything structural: boids rebuilds a neighbour index and runs one pass
    over three ping-ponged lanes, ants runs two passes over seven in-place buffers with a display
    pass and a persistent counter. So a model declares `BUFFERS`, `STEP_PASSES`, an optional
@@ -384,7 +451,7 @@ is about not undoing them.
   build and declared demand pin each other, so an over-reported pass count fails there. Note wgpu
   on Metal shares one argument table across storage + uniform + vertex, so a check counting only
   storage buffers can pass locally and fail there.
-- **`Limits::default()` is not the hardware, and its *size* limits are what bound a run.** The
+- **`Limits::default()` is not the hardware, and its _size_ limits are what bound a run.** The
   baseline caps one storage binding at 128 MiB, one buffer at 256 MiB and a texture side at 8192,
   where an M4 Pro offers 4 GiB, 14.3 GB and 16384. `limits.rs::raise` takes all three to whatever
   the adapter reports. Unlike the buffer count, these are deliberately machine-dependent: how big a
@@ -392,15 +459,26 @@ is about not undoing them.
 - **The display texture is a sampled view, never a mirror of the grid.** One texel per cell caps
   the grid at `max_texture_dimension_2d` and costs 4 bytes per cell, which at 16384² is 1.07 GB of
   RGBA for something drawn into a ~1000 px panel. `display_scale.rs` caps each axis at
-  `MAX_DISPLAY_DIM`, a display pass dispatches per *texel* and reads the cell at
+  `MAX_DISPLAY_DIM`, a display pass dispatches per _texel_ and reads the cell at
   `texel * grid / tex`, and `viewport.rs` samples the CPU grid the same way on upload. Both are
   identity below the cap.
-- **A model over the device's limit panics the UI thread at Build time**, via wgpu's default error
-  handler. `gpu/capacity.rs` computes a model's buffer sizes, texture dimensions and per-pass
-  storage-binding counts from what it already declares, and checks them first, so the app can
-  disable Build and both engines assert with a readable message. That covers sizes and binding
-  counts — there is still no `push_error_scope` around model construction, so other unchecked
-  contracts (workgroup size, uniform layout) surface the fatal way.
+- **A model over the device's limit is refused before it is built.** `gpu/capacity.rs` computes a
+  model's buffer sizes, texture dimensions and per-pass storage-binding counts from what it already
+  declares, and checks them first. The app disables Build and both engines assert with a readable
+  message. That covers sizes and binding counts. The cheap half.
+- **Everything else the device rejects reaches the UI instead of the process.** wgpu's default handler panics on any
+  error no scope claims. `gpu::fault::catching_on` wraps model construction in error scopes for all
+  three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the floor under
+  every path no scope covers, egui's own rendering included. Contracts `capacity.rs` cannot see
+  (workgroup size, uniform layout, an allocation the device has no memory for) now reach the UI as
+  a modal. Do not undo either half — remove the handler and the next validation error ends the
+  process. Note error scopes are **thread-local**, so a scope pushed on the UI thread never sees
+  what a sim thread does. The sink exists to cover that asymmetry.
+- **A panicking kernel is caught too, and its location needs help.** Both sim threads wrap
+  `run()` once at thread start, outside the loop, so the catch costs nothing per tick. Rayon
+  catches a worker's panic and re-raises it on the caller with `resume_unwind`, which does not run
+  the panic hook again, so `fault.rs` keeps a global fallback alongside its thread-local record.
+  Drop the fallback and every `step_cell` panic loses its `file:line`.
 - **Two clocks that must be reset together.** `gpu/sim_thread.rs` gates its stats refresh on
   `last_stats_publish` but divides by `tps_timer`; resetting one without the other reports a whole
   batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.

@@ -117,6 +117,7 @@ mod native {
 
     use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats};
     use crate::cpu::sim_thread::{SimCommand, WakeFn};
+    use crate::fault::{STEPPING, catching};
     use crate::gpu::GpuContext;
     use crate::gpu::timing::{
         ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms, tps_over,
@@ -173,6 +174,15 @@ mod native {
             self.snapshot_now();
 
             loop {
+                // A device error raised by `submit` lands in the sink rather than unwinding. The
+                // loop finds out about it here. Stepping on would only pile up more.
+                if self.ctx.faults.is_set() {
+                    self.running = false;
+                    self.actual_tps = 0.0;
+                    self.publish_snapshot();
+                    return;
+                }
+
                 if !self.running {
                     let Ok(cmd) = self.cmd_rx.recv() else {
                         return;
@@ -425,6 +435,8 @@ mod native {
             }));
 
             let timestamp_query = TimestampQuery::new(&ctx.device, &ctx.queue);
+            let faults = ctx.faults.clone();
+            let on_fault = wake.clone();
 
             let sim_loop = GpuSimLoop {
                 ctx,
@@ -448,7 +460,16 @@ mod native {
                 timestamp_query,
             };
 
-            let handle = std::thread::spawn(move || sim_loop.run());
+            // Outside the loop. A catch per batch would sit in the hot path.
+            let handle = std::thread::spawn(move || {
+                if let Err(fault) = catching(STEPPING, || sim_loop.run()) {
+                    log::error!("{fault}");
+                    faults.set_once(fault);
+                    if let Some(wake) = &on_fault {
+                        wake();
+                    }
+                }
+            });
 
             Self {
                 cmd_tx,

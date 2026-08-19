@@ -30,6 +30,7 @@ use egui_dock::{DockArea, DockState, Style};
 use crate::init::{setup_custom_fonts, setup_custom_styles};
 use crate::state::AppState;
 use crate::ui::dock::{Tab, default_dock_state};
+use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::runtime_info::RuntimeInfo;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,6 +43,8 @@ pub struct HenadApp {
 
 impl HenadApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        install_panic_hook();
+
         let render_state = &cc
             .wgpu_render_state
             .as_ref()
@@ -51,11 +54,13 @@ impl HenadApp {
         log::info!("{}", egui_wgpu::adapter_info_summary(&adapter_info));
 
         // egui's `RenderState` is the sole authority on device acquisition; `henad-compute` never
-        // creates a device, it only ever receives cloned handles.
+        // creates a device, it only ever receives cloned handles. Building the context also takes
+        // the device's error handling off wgpu's fatal default.
         let render_ctx = henad_compute::gpu::GpuContext::new(
             render_state.device.clone(),
             render_state.queue.clone(),
             render_state.target_format,
+            FaultSink::new(),
         );
 
         // Rendering always has a device, but GPU models stay native-only. On wasm we hand the
@@ -105,6 +110,10 @@ impl eframe::App for HenadApp {
             }
         }
 
+        if let Some(fault) = self.state.render_ctx.faults.take() {
+            self.state.report_fault(fault);
+        }
+
         // Request continuous repaint while running.
         if self.state.sim_running {
             ctx.request_repaint_after(std::time::Duration::ZERO);
@@ -120,6 +129,7 @@ impl eframe::App for HenadApp {
         }
 
         ui::menu_bar::menu_bar_panel(ui, &mut self.dock);
+        ui::fault::fault_modal(ui.ctx(), &mut self.state);
 
         let dock_style = Style::from_egui(ui.style());
         DockArea::new(&mut self.dock)

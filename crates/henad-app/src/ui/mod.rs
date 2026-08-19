@@ -1,6 +1,7 @@
 pub mod agent_layer;
 pub mod charts;
 pub mod dock;
+pub mod fault;
 pub mod menu_bar;
 pub mod model;
 pub mod pacing;

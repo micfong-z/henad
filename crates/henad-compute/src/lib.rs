@@ -1,8 +1,8 @@
 //! Engine machinery that turns an authoring impl into something runnable.
 //!
 //! [`cpu`] and [`gpu`] are siblings, not a base and a specialisation. Each holds its own runner,
-//! its own engines, and its own primitives. [`snapshot`], [`runtime_info`] and [`display_scale`]
-//! are shared, since both backends publish through them.
+//! its own engines, and its own primitives. [`snapshot`], [`runtime_info`], [`display_scale`] and
+//! [`fault`] are shared, since both backends publish through them.
 
 /// Rust generated from this crate's WGSL by `wgsl_bindgen`, in `build.rs`.
 ///
@@ -24,6 +24,7 @@ pub mod shader_bindings {
 
 pub mod cpu;
 pub mod display_scale;
+pub mod fault;
 pub mod gpu;
 pub mod runtime_info;
 pub mod snapshot;

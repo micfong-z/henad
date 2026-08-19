@@ -1,5 +1,6 @@
 //! Headless device for this crate's GPU tests.
 
+use crate::fault::FaultSink;
 use crate::gpu::GpuContext;
 
 /// Set in CI to turn "no GPU here" from a skip into a failure.
@@ -49,5 +50,10 @@ pub fn headless_context(label: &str, required_features: wgpu::Features) -> Optio
     }
     let (device, queue) = device.ok()?;
 
-    Some(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm))
+    Some(GpuContext::new(
+        device,
+        queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        FaultSink::new(),
+    ))
 }
