@@ -38,7 +38,7 @@ use anyhow::{Context as _, Result, bail};
 use clap::Parser;
 
 use henad_compute::fault::{FaultSink, install_panic_hook};
-use henad_compute::gpu::{GpuContext, GpuSimState};
+use henad_compute::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION};
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
@@ -460,16 +460,11 @@ fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
     if count == 0 {
         return Ok(());
     }
-    // One compute pass is recorded per step (the ping-pong buffers need a pass boundary each step),
-    // so encoding all `count` steps into a single command buffer becomes pathological. On Metal,
-    // thousands of passes in one buffer stall for minutes. Chunk into fixed-size submissions
-    // instead. Correctness is unchanged, since wgpu executes submissions to one queue in order
-    // and each is atomic, so batch N+1 still reads batch N's output. The batches queue up and one
-    // final wait drains them all, which also lets the CPU encode ahead of the GPU.
-    const BATCH: u32 = 256;
+    // Submissions to one queue run in order, so batch N+1 still reads batch N's output. They all
+    // queue up and one wait drains them, letting the CPU encode ahead of the GPU.
     let mut remaining = count;
     while remaining > 0 {
-        let n = remaining.min(u64::from(BATCH)) as u32;
+        let n = remaining.min(u64::from(MAX_STEPS_PER_SUBMISSION)) as u32;
         let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("cli_gpu_steps"),
         });

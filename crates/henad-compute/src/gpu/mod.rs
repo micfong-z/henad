@@ -36,6 +36,9 @@ pub use sim_thread::GpuSimThread;
 
 use crate::fault::{Fault, FaultSink};
 
+/// Steps one command buffer may hold.
+pub const MAX_STEPS_PER_SUBMISSION: u32 = 64;
+
 /// Injected GPU handles. Cheap to clone.
 ///
 /// `target_format` is part of the context rather than a per-call argument because a model builds

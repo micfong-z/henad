@@ -11,16 +11,19 @@
 //!
 //! # Batching
 //!
-//! Steps go out `batch_size` per submission, to keep submission overhead off the shared queue.
-//! Each step is still its own compute pass, since wgpu only synchronizes between passes and the
-//! ping-pong needs that. The display and stats-reduction passes run only once [`SNAPSHOT_INTERVAL`]
-//! has elapsed, so steps per snapshot is emergent and independent of batch size.
+//! Steps go out `batch_size` per batch, split across submissions of at most
+//! [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] steps each. Each step is still its own compute pass,
+//! since wgpu only synchronizes between passes and the ping-pong needs that. The display and
+//! stats-reduction passes run only once [`SNAPSHOT_INTERVAL`] has elapsed, so steps per snapshot
+//! is emergent and independent of batch size.
 //!
-//! `batch_size` is either fixed from the UI or adaptively controlled. A large fixed batch can take
-//! 100ms+ of GPU time in one submission, and egui's own submissions queue behind it, which shows
-//! up as UI stutter. Adaptive mode keeps an EMA of `time_per_step` and picks a batch size so that
-//! `batch_size * time_per_step` tracks a user-set `target_ms`. It deliberately does not use
-//! `TimestampQuery`, which stays diagnostic-only.
+//! One batch is outstanding at a time. Left unbounded, egui's own submissions queue behind a
+//! dozen batches of sim work and every frame pays for all of them.
+//!
+//! `batch_size` is either fixed from the UI or adaptively controlled. Adaptive mode keeps an EMA
+//! of `time_per_step` and picks a batch size so that `batch_size * time_per_step` tracks a
+//! user-set `target_ms`. It deliberately does not use `TimestampQuery`, which stays
+//! diagnostic-only.
 use henad_core::model::SimState;
 
 use crate::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
@@ -35,8 +38,10 @@ use crate::snapshot::GpuSnapshot;
 pub trait GpuSimState: SimState {
     /// Record `count` steps into `encoder`, advancing the model's own tick counter by `count`.
     ///
+    /// `count` must not exceed [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] for one submission.
+    ///
     /// If `timestamps` is `Some`, stamp the beginning of the first step and the end of the last
-    /// into query indices 0 and 1, so the caller can measure GPU time for the whole batch.
+    /// into query indices 0 and 1, so the caller can measure GPU time over `count` steps.
     fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>);
 
     /// Record the display pass (state -> display texture) and the stats-reduction pass
@@ -118,10 +123,10 @@ mod native {
     use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats};
     use crate::cpu::sim_thread::{SimCommand, WakeFn};
     use crate::fault::{STEPPING, catching};
-    use crate::gpu::GpuContext;
     use crate::gpu::timing::{
         ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms, tps_over,
     };
+    use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
     use crate::snapshot::{Snapshot, SnapshotView};
 
     /// Display texture refresh and `Snapshot` publish cadence. Independent of batch size and of
@@ -135,6 +140,13 @@ mod native {
         Gpu(GpuCommand),
     }
 
+    /// The batch the GPU is working on.
+    struct InFlight {
+        submission: wgpu::SubmissionIndex,
+        steps: u32,
+        started_at: Instant,
+    }
+
     struct GpuSimLoop {
         ctx: GpuContext,
         state: Box<dyn GpuSimState>,
@@ -144,8 +156,8 @@ mod native {
         wake: Option<WakeFn>,
         running: bool,
         /// A separate bool rather than a `BatchMode` enum, so each mode's state survives a
-        /// toggle. The manual size is remembered while adaptive runs, and the target and EMA
-        /// survive switching back to fixed.
+        /// toggle. The manual size is remembered while adaptive runs, and the target survives
+        /// switching back to fixed.
         adaptive: bool,
         /// Manual batch size, used verbatim when `adaptive` is false.
         fixed_batch_size: u32,
@@ -155,8 +167,9 @@ mod native {
         /// output when adaptive.
         batch_size: u32,
         /// EMA of measured wall-clock time per step, in milliseconds. `None` until the first
-        /// batch has been measured. Only used/updated in adaptive mode.
+        /// batch has been measured.
         ema_time_per_step_ms: Option<f64>,
+        in_flight: Option<InFlight>,
         step_count: u64,
         actual_tps: f64,
         gpu_us_per_step: Option<f64>,
@@ -242,11 +255,7 @@ mod native {
                 }
                 Command::Gpu(GpuCommand::SetAdaptive(enabled)) => {
                     self.adaptive = enabled;
-                    if enabled {
-                        // Reset the estimator so a stale EMA from a previous adaptive session
-                        // (e.g. measured on a different grid size) doesn't bias the first batches.
-                        self.ema_time_per_step_ms = None;
-                    } else {
+                    if !enabled {
                         self.batch_size = self.fixed_batch_size;
                     }
                     self.publish_gpu_stats();
@@ -273,46 +282,78 @@ mod native {
             self.ctx.queue.submit(Some(encoder.finish()));
             self.state.begin_stats_readback();
             self.state.poll_stats_readback(&self.ctx.device, true);
+            // The blocking readback drained the queue, outstanding batch included.
+            self.in_flight = None;
 
             self.last_snapshot_publish = Instant::now();
             self.publish_snapshot();
             self.publish_gpu_stats();
         }
 
+        /// The sample is one loop period, from the start of encoding a batch to the GPU finishing
+        /// it. Encode plus submit alone reads CPU dispatch cost, orders of magnitude too low.
+        fn await_previous(&mut self) {
+            let Some(prev) = self.in_flight.take() else {
+                return;
+            };
+            drop(self.ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(prev.submission),
+                timeout: None,
+            }));
+
+            let sample = time_per_step_ms(prev.started_at.elapsed(), prev.steps);
+            let ema = ema_update(self.ema_time_per_step_ms, sample, ADAPTIVE_EMA_ALPHA);
+            self.ema_time_per_step_ms = Some(ema);
+            if self.adaptive {
+                self.batch_size = next_batch_size(ema, self.target_ms);
+            }
+        }
+
         /// Records and submits one batch of steps, plus the display, stats and timestamp-resolve
         /// work at their own cadences, then updates published state.
         ///
+        /// Only the first submission of a batch carries the timestamps, so the reported per-step
+        /// time divides by that chunk rather than by the batch.
+        ///
         /// The timestamp resolve deliberately does not share a command buffer with the writes.
         /// See `TimestampQuery::resolve_after`.
-        ///
-        /// The adaptive controller's cost signal is the wall-clock encode plus submit time, not a
-        /// GPU timestamp. That assumes a continuously busy queue backpressures how fast
-        /// `submit()` can be issued, which is plausible but has **not** been verified. Were
-        /// `submit()` to return immediately regardless of queue depth, this would measure CPU
-        /// dispatch recording instead, which scales with `batch_size`, leaving `time_per_step`
-        /// flat and the controller regulating the wrong thing. That is the main open risk here.
         fn step_batch(&mut self) {
+            self.await_previous();
+
             let now = Instant::now();
             let want_timing =
                 self.timestamp_query.is_some() && now.duration_since(self.last_stats_publish) >= STATS_INTERVAL;
             let want_snapshot = now.duration_since(self.last_snapshot_publish) >= SNAPSHOT_INTERVAL;
 
-            let mut encoder = self.encoder("henad_gpu_sim_encoder");
-
+            let batch_size_submitted = self.batch_size;
             let query_set = if want_timing {
                 self.timestamp_query.as_ref().map(TimestampQuery::query_set)
             } else {
                 None
             };
-            self.state.encode_steps(&mut encoder, self.batch_size, query_set);
 
-            if want_snapshot {
-                self.state.encode_snapshot_passes(&mut encoder);
+            let mut submitted = 0;
+            let mut stamped_steps = None;
+            let mut write_submission = None;
+            while submitted < batch_size_submitted {
+                let chunk = MAX_STEPS_PER_SUBMISSION.min(batch_size_submitted - submitted);
+                let mut encoder = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("henad_gpu_sim_encoder"),
+                });
+
+                let stamp = query_set.filter(|_| stamped_steps.is_none());
+                if stamp.is_some() {
+                    stamped_steps = Some(chunk);
+                }
+                self.state.encode_steps(&mut encoder, chunk, stamp);
+
+                submitted += chunk;
+                if want_snapshot && submitted >= batch_size_submitted {
+                    self.state.encode_snapshot_passes(&mut encoder);
+                }
+                write_submission = Some(self.ctx.queue.submit(Some(encoder.finish())));
             }
 
-            let batch_size_submitted = self.batch_size;
-            let write_submission = self.ctx.queue.submit(Some(encoder.finish()));
-            let batch_wall_elapsed = Instant::now().duration_since(now);
             self.step_count += u64::from(batch_size_submitted);
 
             if want_snapshot {
@@ -322,20 +363,15 @@ mod native {
             // caught up with it by now. Never stalls this thread.
             self.state.poll_stats_readback(&self.ctx.device, false);
 
-            if want_timing && let Some(tq) = self.timestamp_query.as_ref() {
-                tq.resolve_after(&self.ctx.device, &self.ctx.queue, write_submission);
-            }
-
-            if self.adaptive {
-                let sample = time_per_step_ms(batch_wall_elapsed, batch_size_submitted);
-                let ema = ema_update(self.ema_time_per_step_ms, sample, ADAPTIVE_EMA_ALPHA);
-                self.ema_time_per_step_ms = Some(ema);
-                self.batch_size = next_batch_size(ema, self.target_ms);
+            if want_timing
+                && let (Some(tq), Some(submission)) = (self.timestamp_query.as_ref(), write_submission.clone())
+            {
+                tq.resolve_after(&self.ctx.device, &self.ctx.queue, submission);
             }
 
             if want_timing {
-                if let Some(tq) = self.timestamp_query.as_ref() {
-                    self.gpu_us_per_step = tq.read_gpu_us_per_step(&self.ctx.device, batch_size_submitted);
+                if let (Some(tq), Some(steps)) = (self.timestamp_query.as_ref(), stamped_steps) {
+                    self.gpu_us_per_step = tq.read_gpu_us_per_step(&self.ctx.device, steps);
                 }
                 self.refresh_tps(now);
                 self.last_stats_publish = now;
@@ -350,6 +386,12 @@ mod native {
                 self.publish_snapshot();
                 self.publish_gpu_stats();
             }
+
+            self.in_flight = write_submission.map(|submission| InFlight {
+                submission,
+                steps: batch_size_submitted,
+                started_at: now,
+            });
         }
 
         /// Both clocks together. `want_timing` is gated on `last_stats_publish` but divides by
@@ -451,6 +493,7 @@ mod native {
                 target_ms: settings.target_ms,
                 batch_size,
                 ema_time_per_step_ms: None,
+                in_flight: None,
                 step_count: 0,
                 actual_tps: 0.0,
                 gpu_us_per_step: None,
