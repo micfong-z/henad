@@ -195,6 +195,8 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
 
 #[cfg(test)]
 mod tests {
+    use henad_compute::gpu::MAX_STEPS_PER_SUBMISSION;
+
     use super::*;
 
     /// Every entry, GPU ones included when this machine can give a device.
@@ -394,6 +396,44 @@ mod tests {
                 "{}: builds on a baseline device but its declared demand says it should not: {:?}",
                 entry.id,
                 entry.shortfalls(&params, &wgpu::Limits::default())
+            );
+        }
+    }
+
+    /// An oversized submission stops running with no error and no panic, leaving the tick counter
+    /// advanced and every readback zero. How many steps that takes depends on the passes a model
+    /// records per step, hence every model rather than one.
+    #[test]
+    fn a_full_submission_executes_every_step() {
+        let Some(ctx) = crate::tests::support::headless_context("submission_ceiling_device", wgpu::Features::empty())
+        else {
+            log::warn!("skipping a_full_submission_executes_every_step: no adapter");
+            return;
+        };
+
+        for entry in model_registry(Some(ctx.clone())) {
+            let ModelState::Gpu(mut state) = build(&entry, &defaults(&entry)) else {
+                continue;
+            };
+            let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("henad_submission_ceiling"),
+            });
+            state.encode_steps(&mut encoder, MAX_STEPS_PER_SUBMISSION, None);
+            state.encode_snapshot_passes(&mut encoder);
+            ctx.queue.submit(Some(encoder.finish()));
+            state.begin_stats_readback();
+            state.poll_stats_readback(&ctx.device, true);
+
+            assert_eq!(
+                state.tick(),
+                u64::from(MAX_STEPS_PER_SUBMISSION),
+                "{}: tick after one full submission",
+                entry.id
+            );
+            assert!(
+                state.stats().iter().any(|stat| stat.value.scalar() != 0.0),
+                "{}: every stat read back zero after a submission of {MAX_STEPS_PER_SUBMISSION} steps, which is what a dropped submission looks like",
+                entry.id
             );
         }
     }

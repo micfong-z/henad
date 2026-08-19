@@ -14,7 +14,6 @@ use henad_core::topology::TopologyHint;
 use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 
 use crate::display_scale::display_dims;
-use crate::gpu::GpuContext;
 use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
 use crate::gpu::primitives::dispatch::linear_dispatch;
 use crate::gpu::primitives::pipeline::{compute_pipeline, lane_buffer, storage_buffer, uniform_buffer};
@@ -24,11 +23,8 @@ use crate::gpu::primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
+use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
 use crate::snapshot::GpuSnapshot;
-
-/// Steps per submission. Enough passes in one command buffer trips the OS GPU watchdog, after
-/// which every readback returns zeros with no error and no panic.
-const STEPS_PER_SUBMISSION: u32 = 64;
 
 /// A thing that exists once, or once per ping-ponged side.
 struct Sides<T> {
@@ -456,7 +452,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
     pub fn run_batched(&mut self, steps: u32) {
         let mut remaining = steps;
         while remaining > 0 {
-            let batch = remaining.min(STEPS_PER_SUBMISSION);
+            let batch = remaining.min(MAX_STEPS_PER_SUBMISSION);
             let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("henad_gpu_agent_batch"),
             });
