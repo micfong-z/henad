@@ -364,6 +364,8 @@ mod native {
 // =====================================================================
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use web_time::Instant;
+
     use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
     use crate::fault::FaultSink;
     use henad_core::model::SimState;
@@ -380,6 +382,11 @@ mod wasm {
         ticks_per_snapshot: u32,
         accumulated_time: f64,
         actual_tps: f64,
+        /// Steps since the TPS window opened.
+        step_count: u64,
+        tps_timer: Instant,
+        /// Smoothed engine time per tick (EMA).
+        engine_ms: f64,
         snapshot: Option<Snapshot>,
         /// Handed back by the UI so a republish refills its buffers instead of allocating.
         spare: Option<Snapshot>,
@@ -404,6 +411,9 @@ mod wasm {
                 ticks_per_snapshot: 1,
                 accumulated_time: 0.0,
                 actual_tps: 0.0,
+                step_count: 0,
+                tps_timer: Instant::now(),
+                engine_ms: 0.0,
                 snapshot: initial,
                 spare: None,
                 wake,
@@ -413,7 +423,7 @@ mod wasm {
         /// An unclaimed `snapshot` is stale by definition, so it is the first buffer to reuse.
         fn republish(&mut self) {
             let reuse = self.snapshot.take().or_else(|| self.spare.take());
-            self.snapshot = Some(build_snapshot(reuse, &mut *self.state, self.actual_tps, 0.0));
+            self.snapshot = Some(build_snapshot(reuse, &mut *self.state, self.actual_tps, self.engine_ms));
             if let Some(wake) = &self.wake {
                 wake();
             }
@@ -421,14 +431,18 @@ mod wasm {
 
         pub fn send(&mut self, cmd: SimCommand) {
             match cmd {
-                SimCommand::Play => self.running = true,
+                SimCommand::Play => {
+                    self.running = true;
+                    self.tps_timer = Instant::now();
+                    self.step_count = 0;
+                }
                 SimCommand::Pause => {
                     self.running = false;
                     self.accumulated_time = 0.0;
                     self.republish();
                 }
                 SimCommand::StepOnce => {
-                    self.state.step();
+                    self.run_steps(1);
                     self.republish();
                 }
                 SimCommand::SetTargetTps(tps) => self.target_tps = tps,
@@ -485,16 +499,40 @@ mod wasm {
                 batches
             };
 
-            for _ in 0..batches {
-                for _ in 0..self.ticks_per_snapshot {
-                    self.state.step();
-                }
-            }
+            self.run_steps(u64::from(batches) * u64::from(self.ticks_per_snapshot));
+            self.update_tps();
 
             // Nothing advanced, so the last publish is still current. Rebuilding it would re-copy
             // the grid and re-run `stats()` for no new data.
             if batches > 0 {
                 self.republish();
+            }
+        }
+
+        /// Steps `count` times, timing the run as a whole.
+        ///
+        /// One clock read per call. `Instant::now` is `performance.now` here, and at a thousand
+        /// steps a second a per-step read would show up in the measurement itself.
+        fn run_steps(&mut self, count: u64) {
+            if count == 0 {
+                return;
+            }
+            let t0 = Instant::now();
+            for _ in 0..count {
+                self.state.step();
+            }
+            let per_step = t0.elapsed().as_secs_f64() * 1000.0 / count as f64;
+            // EMA with a = 0.1, as the native loop uses.
+            self.engine_ms += 0.1 * (per_step - self.engine_ms);
+            self.step_count += count;
+        }
+
+        fn update_tps(&mut self) {
+            let elapsed = self.tps_timer.elapsed().as_secs_f64();
+            if elapsed >= 1.0 {
+                self.actual_tps = self.step_count as f64 / elapsed;
+                self.step_count = 0;
+                self.tps_timer = Instant::now();
             }
         }
     }

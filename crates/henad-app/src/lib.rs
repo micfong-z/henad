@@ -28,10 +28,12 @@ use eframe::egui_wgpu;
 use egui_dock::{DockArea, DockState, Style};
 
 use crate::init::{setup_custom_fonts, setup_custom_styles};
+
+pub use crate::init::wgpu_configuration;
 use crate::state::AppState;
 use crate::ui::dock::{Tab, default_dock_state};
 use henad_compute::fault::{FaultSink, install_panic_hook};
-use henad_compute::runtime_info::RuntimeInfo;
+use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
 
 use crate::state::FrameTimings;
 
@@ -62,12 +64,7 @@ impl HenadApp {
             FaultSink::new(),
         );
 
-        // Rendering always has a device, but GPU models stay native-only. On wasm we hand the
-        // registry no context, so they are simply absent from the web build.
-        #[cfg(not(target_arch = "wasm32"))]
-        let gpu_ctx = Some(render_ctx.clone());
-        #[cfg(target_arch = "wasm32")]
-        let gpu_ctx: Option<henad_compute::gpu::GpuContext> = None;
+        let gpu_ctx = supports_compute(&adapter_info).then(|| render_ctx.clone());
 
         setup_custom_fonts(&cc.egui_ctx);
         setup_custom_styles(&cc.egui_ctx);

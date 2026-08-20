@@ -16,11 +16,8 @@ use crate::ui::agent_layer::AgentLayer;
 use henad_compute::runtime_info::RuntimeInfo;
 
 use henad_compute::gpu::GpuContext;
-#[cfg(not(target_arch = "wasm32"))]
 use henad_compute::gpu::fault::catching_on;
-#[cfg(not(target_arch = "wasm32"))]
 use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
-#[cfg(not(target_arch = "wasm32"))]
 use henad_compute::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
 
 /// Exponential moving average smoothing factor (0..1, higher = more responsive).
@@ -68,22 +65,18 @@ pub struct AppState {
     pub history_capacity: usize,
     /// Fixed for the life of the process, collected once at startup.
     pub runtime: RuntimeInfo,
-    /// Device and queue for rendering, so present on every target. Not `gpu_ctx` below, which
-    /// gates GPU models and stays native-only. Errors are reported into `faults`.
+    /// Device and queue for rendering, present wherever the app runs. Errors are reported into
+    /// `faults`. `gpu_ctx` below is a different thing, and gates GPU models.
     pub render_ctx: GpuContext,
     /// The fault being shown, cleared when the user dismisses the modal.
     pub fault: Option<Fault>,
     pub timings: FrameTimings,
     /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
-    /// switch. `None` on the web build.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// switch. `None` where the adapter cannot run compute shaders.
     pub gpu_ctx: Option<GpuContext>,
     /// GPU batching controls
-    #[cfg(not(target_arch = "wasm32"))]
     pub gpu_adaptive: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     pub gpu_target_ms: f64,
-    #[cfg(not(target_arch = "wasm32"))]
     pub gpu_batch_size: u32,
 }
 
@@ -97,8 +90,8 @@ pub enum PointRenderMode {
 }
 
 impl AppState {
-    /// `render_ctx` always exists, eframe is wgpu-only here. `gpu_ctx` is `None` on web, which
-    /// keeps GPU models out of the registry without affecting rendering.
+    /// `render_ctx` always exists, eframe is wgpu-only here. `gpu_ctx` is `None` on an adapter
+    /// without compute. GPU models then stay out of the registry, and rendering is unaffected.
     pub fn new(
         egui_ctx: egui::Context,
         render_ctx: GpuContext,
@@ -137,13 +130,9 @@ impl AppState {
             render_ctx,
             fault: None,
             timings: FrameTimings::default(),
-            #[cfg(not(target_arch = "wasm32"))]
             gpu_ctx,
-            #[cfg(not(target_arch = "wasm32"))]
             gpu_adaptive: true,
-            #[cfg(not(target_arch = "wasm32"))]
             gpu_target_ms: DEFAULT_TARGET_MS,
-            #[cfg(not(target_arch = "wasm32"))]
             gpu_batch_size: DEFAULT_BATCH_SIZE,
         }
     }
@@ -212,7 +201,6 @@ impl AppState {
                 }
                 SimRunner::Cpu(thread)
             }),
-            #[cfg(not(target_arch = "wasm32"))]
             ModelState::Gpu(state) => {
                 // Unreachable in practice. Without a context the registry never offers a GPU
                 // entry to select.
@@ -224,15 +212,10 @@ impl AppState {
                     batch_size: self.gpu_batch_size,
                     target_ms: self.gpu_target_ms,
                 };
-                catching_on(&ctx.device.clone(), BUILDING, || {
+                catching_on(&ctx.clone(), BUILDING, || {
                     SimRunner::Gpu(GpuSimThread::new(ctx, state, settings, Some(wake.clone())))
                 })
             }
-            #[cfg(target_arch = "wasm32")]
-            ModelState::Gpu(_) => Err(Fault::refused(
-                BUILDING,
-                "GPU models are not available in the web build",
-            )),
         }
     }
 
@@ -278,13 +261,6 @@ impl AppState {
     }
 
     pub fn is_gpu(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.sim_thread.as_ref().is_some_and(|t| t.gpu_stats().is_some())
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+        self.sim_thread.as_ref().is_some_and(|t| t.gpu_stats().is_some())
     }
 }

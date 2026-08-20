@@ -1,13 +1,15 @@
-//! Dedicated OS thread that owns a GPU-resident sim state and steps it in batched submissions,
-//! decoupled from the UI frame rate. The GPU sibling of [`crate::cpu::sim_thread`].
+//! Owns a GPU-resident sim state and steps it in batched submissions.
+//!
+//! The GPU sibling of [`crate::cpu::sim_thread`], split the same way. A dedicated OS thread on
+//! native, a per-frame pump on wasm, one public surface over both.
 //!
 //! # Synchronization
 //!
-//! This thread submits on the same queue egui renders on, using `Send + Sync` handles cloned from
-//! egui's render state. wgpu serializes submissions to a queue and each is atomic from the GPU's
-//! point of view, so egui's render pass samples either the fully-written previous display texture
-//! or the fully-written next one, never a torn one. The accepted cost is up to one frame of
-//! staleness, which is nothing for a sim running orders of magnitude faster than the refresh rate.
+//! Submissions go on the same queue egui renders on, using handles cloned from egui's render
+//! state. wgpu serializes submissions to a queue and each is atomic from the GPU's point of view,
+//! so egui's render pass samples either the fully-written previous display texture or the
+//! fully-written next one, never a torn one. The accepted cost is up to one frame of staleness,
+//! which is nothing for a sim running orders of magnitude faster than the refresh rate.
 //!
 //! # Batching
 //!
@@ -113,15 +115,24 @@ impl Default for GpuBatchSettings {
     }
 }
 
+/// Display texture refresh and `Snapshot` publish cadence. Independent of batch size and of how
+/// fast the sim is actually running.
+const SNAPSHOT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// Refresh cadence for wall-clock TPS and the GPU timestamp readback.
+const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+// =====================================================================
+// Native: threaded implementation
+// =====================================================================
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
-    use std::time::Duration;
     use web_time::Instant;
 
-    use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats};
+    use super::{GpuBatchSettings, GpuCommand, GpuSimState, GpuStats, SNAPSHOT_INTERVAL, STATS_INTERVAL};
     use crate::cpu::sim_thread::{SimCommand, WakeFn};
     use crate::fault::{STEPPING, catching};
     use crate::gpu::timing::{
@@ -129,12 +140,6 @@ mod native {
     };
     use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
     use crate::snapshot::{Snapshot, SnapshotView};
-
-    /// Display texture refresh and `Snapshot` publish cadence. Independent of batch size and of
-    /// how fast the sim is actually running.
-    const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(16);
-    /// Refresh cadence for wall-clock TPS and the expensive, blocking GPU timestamp readback.
-    const STATS_INTERVAL: Duration = Duration::from_secs(1);
 
     enum Command {
         Sim(SimCommand),
@@ -580,5 +585,335 @@ mod native {
     }
 }
 
+// =====================================================================
+// WASM: per-frame pump
+// =====================================================================
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use web_time::Instant;
+
+    use super::{GpuBatchSettings, GpuSimState, GpuStats, SNAPSHOT_INTERVAL, STATS_INTERVAL};
+    use crate::cpu::sim_thread::{SimCommand, WakeFn};
+    use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, ema_update, next_batch_size, time_per_step_ms, tps_over};
+    use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
+    use crate::snapshot::{Snapshot, SnapshotView};
+
+    /// The batch the GPU is working on.
+    ///
+    /// `on_submitted_work_done` is the only completion signal here. WebGPU's `Device::poll`
+    /// returns immediately whatever the queue is doing, leaving the native arm's `Wait` nothing
+    /// to measure.
+    ///
+    /// The callback stamps the duration itself. Nothing here can look sooner than the next frame,
+    /// and measuring up to that point puts 16 ms on every batch however fast the GPU was. The
+    /// controller then walks the batch size down to 1.
+    struct InFlight {
+        /// Microseconds plus one, stamped by the callback. Zero while the batch is still running.
+        elapsed_us: Arc<AtomicU64>,
+        steps: u32,
+    }
+
+    /// Drives a GPU-resident sim state from the browser's frame loop. The wasm sibling of the
+    /// native `GpuSimThread`, same surface plus [`Self::update`].
+    ///
+    /// One batch is outstanding at a time, as on native, and a frame that finds the previous one
+    /// still running submits nothing. Otherwise sim work queues ahead of egui's own submissions on
+    /// the shared queue and every frame pays for the backlog.
+    ///
+    /// No `TimestampQuery` here. Reading the resolved timestamps back means waiting on the GPU,
+    /// and the browser's only thread cannot wait. "GPU time/step" reads N/A instead.
+    pub struct GpuSimThread {
+        ctx: GpuContext,
+        state: Box<dyn GpuSimState>,
+        snapshot: Option<Snapshot>,
+        gpu_stats: GpuStats,
+        wake: Option<WakeFn>,
+        running: bool,
+        /// A separate bool rather than a `BatchMode` enum, so each mode's state survives a
+        /// toggle. The manual size is remembered while adaptive runs, and the target survives
+        /// switching back to fixed.
+        adaptive: bool,
+        fixed_batch_size: u32,
+        target_ms: f64,
+        batch_size: u32,
+        ema_time_per_step_ms: Option<f64>,
+        in_flight: Option<InFlight>,
+        step_count: u64,
+        actual_tps: f64,
+        tps_timer: Instant,
+        last_snapshot_publish: Instant,
+    }
+
+    impl GpuSimThread {
+        /// Starts paused, like the native arm and like [`crate::cpu::sim_thread::SimThread`].
+        pub fn new(
+            ctx: GpuContext,
+            state: Box<dyn GpuSimState>,
+            settings: GpuBatchSettings,
+            wake: Option<WakeFn>,
+        ) -> Self {
+            let batch_size = settings.batch_size.max(1);
+            let now = Instant::now();
+            let mut this = Self {
+                ctx,
+                state,
+                snapshot: None,
+                gpu_stats: GpuStats {
+                    gpu_us_per_step: None,
+                    batch_size,
+                    adaptive: settings.adaptive,
+                },
+                wake,
+                running: false,
+                adaptive: settings.adaptive,
+                fixed_batch_size: batch_size,
+                target_ms: settings.target_ms,
+                batch_size,
+                ema_time_per_step_ms: None,
+                in_flight: None,
+                step_count: 0,
+                actual_tps: 0.0,
+                tps_timer: now,
+                last_snapshot_publish: now,
+            };
+            // So the viewport shows the seeded grid the moment the model is loaded.
+            this.snapshot_now();
+            this
+        }
+
+        /// Called from `eframe::App` each frame.
+        ///
+        /// `dt` is unread. The browser sets the cadence and the batch-size controller sets how much
+        /// work goes into one batch.
+        pub fn update(&mut self, _dt: f64) {
+            if self.running && self.ctx.faults.is_set() {
+                self.running = false;
+                self.actual_tps = 0.0;
+                self.publish_snapshot();
+                return;
+            }
+            if !self.running || !self.previous_finished() {
+                return;
+            }
+            self.step_batch();
+        }
+
+        /// Pacing commands (`SetTargetTps`, `SetUncapped`, `SetTicksPerSnapshot`) are accepted and
+        /// ignored, as on native. See the native arm's `handle_command`.
+        pub fn send(&mut self, cmd: SimCommand) {
+            match cmd {
+                SimCommand::Play => {
+                    self.running = true;
+                    self.tps_timer = Instant::now();
+                    self.step_count = 0;
+                }
+                SimCommand::Pause => {
+                    self.running = false;
+                    self.actual_tps = 0.0;
+                    self.snapshot_now();
+                }
+                SimCommand::StepOnce => {
+                    let mut encoder = self.encoder("henad_gpu_step_once");
+                    self.state.encode_steps(&mut encoder, 1, None);
+                    self.ctx.queue.submit(Some(encoder.finish()));
+                    self.snapshot_now();
+                }
+                SimCommand::SetParam { index, value } => {
+                    if !self.state.set_param(index, &value) {
+                        log::warn!("Failed to set param index {index} to {value:?}");
+                    }
+                }
+                SimCommand::SetTargetTps(_) | SimCommand::SetUncapped(_) | SimCommand::SetTicksPerSnapshot(_) => {}
+                SimCommand::Shutdown => self.running = false,
+            }
+        }
+
+        pub fn play(&mut self) {
+            self.send(SimCommand::Play);
+        }
+
+        pub fn pause(&mut self) {
+            self.send(SimCommand::Pause);
+        }
+
+        pub fn step_once(&mut self) {
+            self.send(SimCommand::StepOnce);
+        }
+
+        pub fn take_snapshot(&mut self) -> Option<Snapshot> {
+            self.snapshot.take()
+        }
+
+        /// Sets the manual batch size used in fixed mode. Has no visible effect while adaptive
+        /// mode is on, but is remembered for when it is turned back off.
+        pub fn set_batch_size(&mut self, batch_size: u32) {
+            self.fixed_batch_size = batch_size.max(1);
+            if !self.adaptive {
+                self.batch_size = self.fixed_batch_size;
+            }
+        }
+
+        /// Turns adaptive batching on or off. Fixed mode's manual batch size and adaptive mode's
+        /// target are each preserved independently across toggles.
+        pub fn set_adaptive(&mut self, enabled: bool) {
+            self.adaptive = enabled;
+            if !enabled {
+                self.batch_size = self.fixed_batch_size;
+            }
+            self.publish_gpu_stats();
+        }
+
+        /// Sets the per-batch wall-clock budget (ms) used by the adaptive controller.
+        pub fn set_target_ms(&mut self, target_ms: f64) {
+            self.target_ms = target_ms.max(0.1);
+        }
+
+        pub fn gpu_stats(&self) -> GpuStats {
+            self.gpu_stats
+        }
+
+        fn encoder(&self, label: &str) -> wgpu::CommandEncoder {
+            self.ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) })
+        }
+
+        /// True once the outstanding batch has come back, taking its timing sample on the way.
+        ///
+        /// The sample runs from the start of encoding a batch to the GPU finishing it, the same
+        /// span the native arm measures.
+        fn previous_finished(&mut self) -> bool {
+            let Some(prev) = self.in_flight.as_ref() else {
+                return true;
+            };
+            let Some(elapsed_us) = prev.elapsed_us.load(Ordering::Relaxed).checked_sub(1) else {
+                return false;
+            };
+            let sample = time_per_step_ms(Duration::from_micros(elapsed_us), prev.steps);
+            self.in_flight = None;
+
+            let ema = ema_update(self.ema_time_per_step_ms, sample, ADAPTIVE_EMA_ALPHA);
+            self.ema_time_per_step_ms = Some(ema);
+            if self.adaptive {
+                self.batch_size = next_batch_size(ema, self.target_ms);
+            }
+            true
+        }
+
+        /// Records and submits one batch of steps, plus the display and stats work at the snapshot
+        /// cadence.
+        fn step_batch(&mut self) {
+            let now = Instant::now();
+            let want_snapshot = now.duration_since(self.last_snapshot_publish) >= SNAPSHOT_INTERVAL;
+
+            let batch_size_submitted = self.batch_size;
+            let mut submitted = 0;
+            while submitted < batch_size_submitted {
+                let chunk = MAX_STEPS_PER_SUBMISSION.min(batch_size_submitted - submitted);
+                let mut encoder = self.encoder("henad_gpu_sim_encoder");
+                self.state.encode_steps(&mut encoder, chunk, None);
+
+                submitted += chunk;
+                if want_snapshot && submitted >= batch_size_submitted {
+                    self.state.encode_snapshot_passes(&mut encoder);
+                }
+                self.ctx.queue.submit(Some(encoder.finish()));
+            }
+
+            self.step_count += u64::from(batch_size_submitted);
+
+            if want_snapshot {
+                self.state.begin_stats_readback();
+            }
+            // Picks up a readback started on an earlier frame, if the map has resolved by now.
+            self.state.poll_stats_readback(&self.ctx.device, false);
+
+            // Covers every submission above, so one registration per batch is enough.
+            let elapsed_us = Arc::new(AtomicU64::new(0));
+            let signal = Arc::clone(&elapsed_us);
+            self.ctx.queue.on_submitted_work_done(move || {
+                let micros = now.elapsed().as_micros().min(u128::from(u64::MAX - 1)) as u64;
+                signal.store(micros + 1, Ordering::Relaxed);
+            });
+            self.in_flight = Some(InFlight {
+                elapsed_us,
+                steps: batch_size_submitted,
+            });
+
+            if now.duration_since(self.tps_timer) >= STATS_INTERVAL {
+                self.refresh_tps(now);
+            }
+
+            if want_snapshot {
+                self.last_snapshot_publish = now;
+                self.publish_snapshot();
+                self.publish_gpu_stats();
+            }
+        }
+
+        /// Refresh the display texture and publish a snapshot right now. Used for one-shot updates
+        /// (initial, pause, step-once).
+        ///
+        /// The stats readback stays asynchronous, so the numbers those updates publish are the
+        /// previous ones and the fresh values arrive on a later frame.
+        fn snapshot_now(&mut self) {
+            let mut encoder = self.encoder("henad_gpu_snapshot_now");
+            self.state.encode_snapshot_passes(&mut encoder);
+            self.ctx.queue.submit(Some(encoder.finish()));
+            self.state.begin_stats_readback();
+            self.state.poll_stats_readback(&self.ctx.device, false);
+            // Abandons the outstanding batch instead of timing it. Its sample would cover the
+            // one-shot work too. The next frame submits a fresh one.
+            self.in_flight = None;
+
+            self.last_snapshot_publish = Instant::now();
+            self.publish_snapshot();
+            self.publish_gpu_stats();
+        }
+
+        fn refresh_tps(&mut self, now: Instant) {
+            let Some(tps) = tps_over(self.step_count, now.duration_since(self.tps_timer)) else {
+                // Leave the window open rather than reporting a rate over nothing. `step_count`
+                // keeps accumulating, so the next refresh covers both.
+                return;
+            };
+            self.actual_tps = tps;
+            self.step_count = 0;
+            self.tps_timer = now;
+        }
+
+        fn publish_snapshot(&mut self) {
+            self.snapshot = Some(Snapshot {
+                tick: self.state.tick(),
+                population: self.state.population(),
+                heap_bytes: self.state.heap_bytes(),
+                actual_tps: self.actual_tps,
+                // No timestamp query here, and nothing to report in the toolbar's engine time.
+                // The native arm falls back to the same 0 on an adapter without support.
+                engine_ms: 0.0,
+                view: SnapshotView::Gpu(self.state.view()),
+                stats: self.state.stats(),
+            });
+            if let Some(wake) = &self.wake {
+                wake();
+            }
+        }
+
+        fn publish_gpu_stats(&mut self) {
+            self.gpu_stats = GpuStats {
+                gpu_us_per_step: None,
+                batch_size: self.batch_size,
+                adaptive: self.adaptive,
+            };
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::GpuSimThread;
+#[cfg(target_arch = "wasm32")]
+pub use wasm::GpuSimThread;

@@ -132,10 +132,10 @@
         <div class="lds-dual-ring"></div>
     </div>
 
-    <!--Register Service Worker. this will cache the wasm / js scripts for offline use (for PWA functionality). -->
-    <!-- Force refresh (Ctrl + F5) to load the latest files instead of cached files  -->
+    <!-- Register the service worker. It caches the app for offline use, network first, so a
+         reload always picks up the latest build. -->
     <script>
-        // We disable caching during development so that we always view the latest version.
+        // #dev skips the worker entirely, for when one is in the way.
         if ('serviceWorker' in navigator && window.location.hash !== "#dev") {
             window.addEventListener('load', function () {
                 navigator.serviceWorker.register('sw.js');

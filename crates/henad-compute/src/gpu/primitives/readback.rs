@@ -117,6 +117,7 @@ impl CounterReadback {
     /// Only for one-shot snapshots (initial load, pause, step-once). Never call from the hot
     /// batching loop.
     /// Returns whether a fresh value landed in [`Self::values`].
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn poll_blocking(&mut self, device: &wgpu::Device) -> bool {
         let Some(rx) = self.pending.take() else {
             return false;
@@ -128,6 +129,13 @@ impl CounterReadback {
             return false;
         };
         self.finish_map(result)
+    }
+
+    /// Nothing to wait on. WebGPU's `poll` is a no-op and the map resolves on the JS microtask
+    /// queue, so a wait here hangs the tab. The value lands on a later [`Self::poll`] instead.
+    #[cfg(target_arch = "wasm32")]
+    pub fn poll_blocking(&mut self, device: &wgpu::Device) -> bool {
+        self.poll(device)
     }
 
     /// Reads and unmaps the staging buffer after a completed `map_async`.

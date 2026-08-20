@@ -31,7 +31,6 @@ pub use view::display::{DisplayTarget, GpuDisplay};
 #[cfg(test)]
 use tests::support::headless_context;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use sim_thread::GpuSimThread;
 
 use crate::fault::{Fault, FaultSink};
@@ -56,7 +55,12 @@ impl GpuContext {
     /// Also takes over the device's error handling. Left to wgpu, every error is fatal.
     ///
     /// Errors raised inside a [`fault::catching_on`] go to that scope. Everything else, including
-    /// egui's own rendering on the same device, lands in `faults` for the host to pick up.
+    /// egui's own rendering on the same device, lands in `faults` for the host to pick up. On the
+    /// web this is the only route. [`fault::catching_on`] pushes no scopes there.
+    ///
+    /// A `GPUInternalError` still ends the web build. wgpu converts an error with
+    /// `Error::from_js`. Anything other than a `GPUValidationError` or a `GPUOutOfMemoryError`
+    /// panics there. A model provokes those two, and the handler reports them normally.
     pub fn new(
         device: wgpu::Device,
         queue: wgpu::Queue,

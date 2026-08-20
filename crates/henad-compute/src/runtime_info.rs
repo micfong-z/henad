@@ -67,6 +67,11 @@ pub enum GpuVerdict {
     Absent,
 }
 
+/// True for every backend except `Gl`, as WebGL2 has no compute stage.
+pub fn supports_compute(info: &wgpu::AdapterInfo) -> bool {
+    info.backend != wgpu::Backend::Gl
+}
+
 /// `DeviceType` describes memory topology, not speed, so only `DiscreteGpu` is claimed outright.
 pub fn classify_adapter(info: &wgpu::AdapterInfo) -> GpuVerdict {
     if info.device_type == wgpu::DeviceType::Cpu {

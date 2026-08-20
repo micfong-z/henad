@@ -119,7 +119,7 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
         stat_descriptors: model.stat_descriptors(),
         topology_hint: model.topology_hint(),
         create: Box::new(move |params, seed| {
-            catching_on(&factory_ctx.device, BUILDING, || {
+            catching_on(&factory_ctx, BUILDING, || {
                 ModelState::Gpu(Box::new(GpuGridState::<M>::new_seeded(&factory_ctx, params, seed)))
             })
         }),
@@ -143,7 +143,7 @@ fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
         stat_descriptors: model.stat_descriptors(),
         topology_hint: model.topology_hint(),
         create: Box::new(move |params, seed| {
-            catching_on(&factory_ctx.device, BUILDING, || {
+            catching_on(&factory_ctx, BUILDING, || {
                 ModelState::Gpu(Box::new(GpuAgentState::<M>::new_seeded(&factory_ctx, params, seed)))
             })
         }),
