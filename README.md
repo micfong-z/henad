@@ -2,6 +2,13 @@
 
 **Henad** is a very fast agent-based modelling engine that aims to be the most powerful and flexible ABM engine on personal computers.
 
+Try Henad at henad.micfong.space
+
+> [!warning]
+> CPU models run noticably slower on WASM. GPU models appear to have similar performance compared to native builds.
+>
+> Consider running Henad natively for maximum performance.
+
 ## WIP Screen Recording (2026-08-01)
 
 <img width="800" height="450" alt="GIF screen recording" src="https://github.com/user-attachments/assets/a64ffa6d-2d96-4fe7-9351-ee9e7810b751" />
@@ -44,6 +51,8 @@ _Parameters Used_
 ## Running Henad
 
 Use any device with a CPU and optionally a GPU, and any OS that can build [wgpu](https://github.com/gfx-rs/wgpu).
+
+### Native
 
 Then, clone the repository and run:
 
