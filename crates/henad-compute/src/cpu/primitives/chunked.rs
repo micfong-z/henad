@@ -1,20 +1,17 @@
-//! Chunk-parallel drivers. The only place the rayon/wasm split lives.
+//! Chunk-parallel drivers.
 
 use std::ops::Range;
 
 use henad_core::authoring::primitives::rng::xorshift64;
-
-#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
-#[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub use rayon as __rayon;
 
 /// Cells or agents per chunk in a stats reduction.
 pub const STATS_CHUNK: usize = 8192;
 
-/// Runs a body over each chunk of a mutable slice, in parallel on native.
+/// Runs a body over each chunk of a mutable slice, in parallel.
 ///
 /// A macro rather than a function taking a closure. The extra closure layer a generic driver needs
 /// stops a hot kernel inlining through it, and `#[inline]` does not rescue it.
@@ -27,7 +24,6 @@ macro_rules! for_each_chunk_mut {
     ($items:expr, $chunk:expr, |$c:ident, $base:ident, $slice:ident| $body:block) => {{
         let chunk = ($chunk).max(1);
 
-        #[cfg(not(target_arch = "wasm32"))]
         {
             use $crate::cpu::primitives::chunked::__rayon::prelude::*;
             $items.par_chunks_mut(chunk).enumerate().for_each(|($c, $slice)| {
@@ -35,21 +31,12 @@ macro_rules! for_each_chunk_mut {
                 $body
             });
         }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            for ($c, $slice) in $items.chunks_mut(chunk).enumerate() {
-                let $base = $c * chunk;
-                $body
-            }
-        }
     }};
 
     // Three lanes stepped together, for a pass that writes more than one output lane.
     ($a:expr, $b:expr, $d:expr, $chunk:expr, |$c:ident, $base:ident, $sa:ident, $sb:ident, $sd:ident| $body:block) => {{
         let chunk = ($chunk).max(1);
 
-        #[cfg(not(target_arch = "wasm32"))]
         {
             use $crate::cpu::primitives::chunked::__rayon::prelude::*;
             $a.par_chunks_mut(chunk)
@@ -60,19 +47,6 @@ macro_rules! for_each_chunk_mut {
                     let $base = $c * chunk;
                     $body
                 });
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            for ($c, (($sa, $sb), $sd)) in $a
-                .chunks_mut(chunk)
-                .zip($b.chunks_mut(chunk))
-                .zip($d.chunks_mut(chunk))
-                .enumerate()
-            {
-                let $base = $c * chunk;
-                $body
-            }
         }
     }};
 }
@@ -97,14 +71,10 @@ where
     let chunk = chunk.max(1);
     let n = len.div_ceil(chunk);
 
-    #[cfg(not(target_arch = "wasm32"))]
     let partials: Vec<A> = (0..n)
         .into_par_iter()
         .map(|c| map(chunk_range(c, chunk, len)))
         .collect();
-
-    #[cfg(target_arch = "wasm32")]
-    let partials: Vec<A> = (0..n).map(|c| map(chunk_range(c, chunk, len))).collect();
 
     partials.into_iter().fold(init, fold)
 }

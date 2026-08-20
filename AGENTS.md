@@ -221,18 +221,19 @@ Model build failed                                    // yes
 ```bash
 ./check.sh                    # full CI-equivalent check — run this before considering work done
 cargo check --workspace --all-targets
-cargo check --workspace --all-features --lib --target wasm32-unknown-unknown   # wasm build must also typecheck
+cargo check -p henad-core -p henad-compute -p henad-models --all-features --lib \
+  --target wasm32-unknown-unknown          # typechecks without atomics; henad-app cannot
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
 cargo test --workspace --all-targets
 cargo test --workspace --doc
-trunk build                   # builds the WASM/web target
+./scripts/build_web.sh build  # builds the WASM/web target
 ```
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
 Run desktop app: `cargo run -p henad-app`
-Run web version locally: `trunk serve` (from repo root, uses `Trunk.toml` + `index.html`)
+Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` + `index.html`)
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
 one, `--export-stats` for the time series)
@@ -240,6 +241,10 @@ Sweep every model across the config matrix: `python3 scripts/bench_matrix.py` (g
 over grid size, agent models over agent count at constant density; `--dry-run` to see the matrix)
 
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).
+The web build is the exception and runs on nightly, which `scripts/build_web.sh` selects. Threads on
+wasm need `-C target-feature=+atomics,+bulk-memory,+mutable-globals` and a std rebuilt to match, so
+nightly needs `rust-src`. That script is the only supported way to build for the web; a bare `trunk
+build` produces a binary whose thread pool cannot start.
 
 ### Environment variables
 
@@ -391,13 +396,15 @@ device is available.
   `henad-models/src/*/step.rs` (the per-agent kernels) are the hot inner loops. The x-wrap is
   peeled off both row loops so the interior runs without a per-cell modulo; keep that shape,
   including the `enumerate()` interior loop.
-- **Every rayon/wasm `#[cfg]` split lives in `cpu/primitives/chunked.rs`.** There are no longer paired
-  `_parallel`/`_sequential` functions to keep in step, and reintroducing one is a regression.
+- **rayon runs on every target, web included, and no kernel has a sequential twin.** There are no
+  paired `_parallel`/`_sequential` functions to keep in step, and reintroducing one is a regression.
+  A `#[cfg(target_arch = "wasm32")]` around a hot loop means someone rebuilt a twin.
 - **`for_each_chunk_mut!` is a macro, not a function, and must stay one.** As a generic fn taking
   `F: Fn(..)` the extra closure layer stopped the kernel inlining through it and cost 48% on SIR;
   `#[inline]` did not help. Same trap applies to any new hot-loop driver.
 - Determinism: a chunk's RNG comes from `chunk_seed(base, tick, chunk_index)`, never from anything
-  a worker mutates, so results don't depend on how rayon schedules chunks. `base` is advanced once
+  a worker mutates, so results don't depend on how rayon schedules chunks. This now has to hold on
+  the web too, where the pool width is whatever `navigator.hardwareConcurrency` reported. `base` is advanced once
   per tick on the sequential path by `advance_tick_seed` — folding the tick in only through
   `chunk_seed` measured 14% slower on SIR with identical content, and that was never explained.
   Both agent models have a `results_do_not_depend_on_the_thread_count` test; keep them.

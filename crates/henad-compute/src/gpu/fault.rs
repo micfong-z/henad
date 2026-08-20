@@ -4,9 +4,11 @@
 //! process down with it. The device-wide handler [`super::GpuContext::new`] installs catches
 //! whatever never reaches a scope.
 
-use crate::fault::{Fault, FaultKind, catching};
+use crate::fault::{Fault, catching};
+use crate::gpu::GpuContext;
 
 /// One scope per filter. A scope catches only its own, and any of the three can end a build.
+#[cfg(not(target_arch = "wasm32"))]
 const FILTERS: [wgpu::ErrorFilter; 3] = [
     wgpu::ErrorFilter::OutOfMemory,
     wgpu::ErrorFilter::Validation,
@@ -22,8 +24,12 @@ const FILTERS: [wgpu::ErrorFilter; 3] = [
 ///
 /// If `f` panics, or if the device reported an error while it ran. A panic wins, having stopped
 /// `f` outright.
-pub fn catching_on<T>(device: &wgpu::Device, during: &'static str, f: impl FnOnce() -> T) -> Result<T, Fault> {
-    let guards: Vec<wgpu::ErrorScopeGuard> = FILTERS.iter().map(|&filter| device.push_error_scope(filter)).collect();
+#[cfg(not(target_arch = "wasm32"))]
+pub fn catching_on<T>(ctx: &GpuContext, during: &'static str, f: impl FnOnce() -> T) -> Result<T, Fault> {
+    let guards: Vec<wgpu::ErrorScopeGuard> = FILTERS
+        .iter()
+        .map(|&filter| ctx.device.push_error_scope(filter))
+        .collect();
     let caught = catching(during, f);
 
     // wgpu requires reverse order. Only the first error found is kept.
@@ -35,12 +41,19 @@ pub fn catching_on<T>(device: &wgpu::Device, during: &'static str, f: impl FnOnc
 
     match (caught, reported) {
         (Err(fault), _) => Err(fault),
-        (Ok(_), Some(error)) => Err(Fault {
-            during,
-            kind: FaultKind::Device(error),
-        }),
+        (Ok(_), Some(error)) => Err(Fault::device(during, error)),
         (Ok(value), None) => Ok(value),
     }
+}
+
+/// Runs `f`. This is not scoped as wgpu 30 cannot pop one without aborting the module.
+///
+/// # Errors
+///
+/// Never. wasm cannot unwind, and a panic in `f` ends the module.
+#[cfg(target_arch = "wasm32")]
+pub fn catching_on<T>(_ctx: &GpuContext, during: &'static str, f: impl FnOnce() -> T) -> Result<T, Fault> {
+    catching(during, f)
 }
 
 #[cfg(test)]
@@ -65,7 +78,7 @@ mod tests {
             log::warn!("skipping a_device_error_comes_back_as_a_fault: no adapter");
             return;
         };
-        let fault = catching_on(&ctx.device, "testing", || oversized_buffer(&ctx.device))
+        let fault = catching_on(&ctx, "testing", || oversized_buffer(&ctx.device))
             .expect_err("an over-sized buffer should have been reported");
         assert!(
             matches!(fault.kind, FaultKind::Device(_)),
@@ -80,9 +93,9 @@ mod tests {
             log::warn!("skipping the_device_still_works_after_a_captured_error: no adapter");
             return;
         };
-        drop(catching_on(&ctx.device, "testing", || oversized_buffer(&ctx.device)));
+        drop(catching_on(&ctx, "testing", || oversized_buffer(&ctx.device)));
 
-        let outcome = catching_on(&ctx.device, "testing", || {
+        let outcome = catching_on(&ctx, "testing", || {
             let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("henad_fault_test_fine"),
                 size: 1024,
@@ -106,9 +119,9 @@ mod tests {
             log::warn!("skipping a_panic_inside_a_scope_leaves_the_scopes_balanced: no adapter");
             return;
         };
-        let fault = catching_on(&ctx.device, "testing", || panic!("from inside a scope"))
+        let fault = catching_on(&ctx, "testing", || panic!("from inside a scope"))
             .expect_err("the panic should have been caught");
         assert!(matches!(fault.kind, FaultKind::Panic { .. }), "{fault:?}");
-        assert!(catching_on(&ctx.device, "testing", || ()).is_ok());
+        assert!(catching_on(&ctx, "testing", || ()).is_ok());
     }
 }

@@ -1,17 +1,14 @@
 //! Sim pacing controls. Speed limit, and snapshot cadence.
 
+use crate::sim_runner::SimRunner;
 use crate::state::AppState;
 use henad_compute::cpu::sim_thread::SimCommand;
-
-#[cfg(not(target_arch = "wasm32"))]
-use crate::sim_runner::SimRunner;
 
 pub fn pacing_ui(ui: &mut egui::Ui, app: &mut AppState) {
     // A GPU model paces itself with the batch-size controller below and has no notion of a TPS cap
     // or a tick-based snapshot cadence, so the CPU pacing controls are swapped out for the GPU ones
     // rather than shown alongside them (they would be inert).
     if app.is_gpu() {
-        #[cfg(not(target_arch = "wasm32"))]
         gpu_batching_controls(ui, app);
     } else {
         cpu_pacing_controls(ui, app);
@@ -55,7 +52,6 @@ fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
 }
 
 /// Batching controls, shown in place of the CPU pacing controls for a GPU model.
-#[cfg(not(target_arch = "wasm32"))]
 fn gpu_batching_controls(ui: &mut egui::Ui, app: &mut AppState) {
     use henad_compute::gpu::timing::MAX_BATCH_SIZE;
 

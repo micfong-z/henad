@@ -13,12 +13,16 @@ bytemuck = { workspace = true }
 flume = { workspace = true }
 log = { workspace = true }
 pollster = { workspace = true }
+rayon = { workspace = true }
+web-time = { workspace = true }
 
 [build-dependencies]
 wgsl_bindgen = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rayon = { workspace = true }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Only under atomics, where a `wgpu::Error` stops being `Send`. See `GpuContext::new`.
+send_wrapper = { workspace = true }
+web-sys = { workspace = true, features = ["Navigator", "Window"] }
 
 [dev-dependencies]
 criterion = { workspace = true }

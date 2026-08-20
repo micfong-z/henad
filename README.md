@@ -57,6 +57,45 @@ Or if you wish to run in headless mode:
 cargo run --release --bin henad-cli
 ```
 
+### In a browser
+
+The web build runs the same models on the same backends, with the same thread pool.
+
+```bash
+./scripts/build_web.sh serve --release   # http://localhost:8080
+./scripts/build_web.sh build --release   # writes dist/
+```
+
+Use the script rather than `trunk` directly.
+Threads on wasm need nightly, a standard library rebuilt with atomics, and a shared wasm memory,
+and a binary built without those cannot start its thread pool.
+The script needs `rustup toolchain install nightly --component rust-src --target wasm32-unknown-unknown`.
+
+Whatever serves the build has to send two headers, or the browser withholds `SharedArrayBuffer`
+and the app does not start:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+`Trunk.toml` sends them locally and `vercel.json` sends them in production.
+`?threads=N` caps the pool for a run, so `?threads=1` measures what the same build does without one.
+GitHub Pages cannot send headers at all, so it is unsupported for now.
+
+Five things differ from the desktop build, all of them browser limits:
+
+- A panicking model kernel ends the app, since wasm cannot unwind. The fault modal covers device
+  errors only.
+- A GPU device error reaches that modal a frame or two late, because wgpu 30 cannot pop an error
+  scope on WebGPU without aborting the module.
+- "GPU time/step" reads N/A. Reading GPU timestamps back means waiting on the GPU, and the browser
+  gives the page one thread.
+- Model size is capped by the browser's device limits rather than the hardware's, so Build refuses
+  a large model far sooner.
+- `HENAD_DUMP_WGSL` and `HENAD_REQUIRE_GPU` do nothing. There are no environment variables in a
+  browser.
+
 **More docs will follow soon ;)**
 
 ## License
@@ -74,7 +113,7 @@ This project is assisted by AI, though every line of code generated has been rev
 Models used include:
 - Claude Code with `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5`
 - OpenCode with `gpt-5.6-terra`
-- OpenCode with `grok-4.5`
+- OpenCode with `grok-4.5`, `grok-4.6`
 
 We recognise that LLM-assisted coding is evolving increasingly rapidly, but the quality of the code generated is not always guaranteed. In general, we support the [LLVM AI Tool Use Policy](https://llvm.org/docs/AIToolPolicy.html) for coding, but discourage the use of AI for communication (except for translation purposes).
 

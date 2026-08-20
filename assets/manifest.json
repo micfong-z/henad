@@ -1,6 +1,6 @@
 {
-  "name": "egui Template PWA",
-  "short_name": "egui-template-pwa",
+  "name": "Henad",
+  "short_name": "Henad",
   "icons": [
     {
       "src": "./assets/icon-256.png",
@@ -23,6 +23,6 @@
   "id": "/index.html",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "white",
-  "theme_color": "white"
+  "background_color": "#404040",
+  "theme_color": "#404040"
 }

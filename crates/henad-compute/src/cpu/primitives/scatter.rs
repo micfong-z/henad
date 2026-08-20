@@ -3,7 +3,6 @@
 //! Two arms behind one API, picked from how much scratch the shadow route would need. That depends
 //! on the worker count, so both arms have to produce identical bits.
 
-#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
 /// Shadow scratch above this falls back to sorting.
@@ -203,19 +202,11 @@ fn chunk_len(n_agents: usize, workers: usize) -> usize {
     n_agents.div_ceil(workers.max(1)).max(1)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn worker_count() -> usize {
     rayon::current_num_threads()
 }
 
-/// One worker on wasm, which turns the shadow arm into a plain sequential scatter.
-#[cfg(target_arch = "wasm32")]
-fn worker_count() -> usize {
-    1
-}
-
 impl ScatterGrid {
-    #[cfg(not(target_arch = "wasm32"))]
     fn scatter_shadow(&mut self, cells: &[u32], values: &[f32], base: &[f32], out: &mut [f32]) {
         let workers = self.shadow_max.len().max(self.shadow_sum.len());
         let chunk = chunk_len(cells.len(), workers);
@@ -250,51 +241,9 @@ impl ScatterGrid {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn scatter_shadow(&mut self, cells: &[u32], values: &[f32], base: &[f32], out: &mut [f32]) {
-        let workers = self.shadow_max.len().max(self.shadow_sum.len());
-        let chunk = chunk_len(cells.len(), workers);
-        let live = cells.len().div_ceil(chunk).min(workers);
-
-        match self.combine {
-            Combine::Max => {
-                for ((shadow, cs), vs) in self
-                    .shadow_max
-                    .iter_mut()
-                    .zip(cells.chunks(chunk))
-                    .zip(values.chunks(chunk))
-                {
-                    shadow_chunk_max(shadow, cs, vs);
-                }
-
-                let shadows = &self.shadow_max[..live];
-                for (c, o) in out.iter_mut().enumerate() {
-                    *o = reduce_shadow_max(c, base, shadows);
-                }
-            }
-            Combine::SumFixed { scale } => {
-                for ((shadow, cs), vs) in self
-                    .shadow_sum
-                    .iter_mut()
-                    .zip(cells.chunks(chunk))
-                    .zip(values.chunks(chunk))
-                {
-                    shadow_chunk_sum(shadow, cs, vs, scale);
-                }
-
-                let shadows = &self.shadow_sum[..live];
-                for (c, o) in out.iter_mut().enumerate() {
-                    *o = reduce_shadow_sum(c, base, shadows, scale);
-                }
-            }
-        }
-    }
-}
-
-impl ScatterGrid {
     /// Counting sort by cell, permuting the values so the reduce reads contiguously.
     ///
-    /// Sequential on both targets. The count and permute passes are scatter writes themselves.
+    /// Sequential. The count and permute passes are scatter writes themselves.
     fn build_runs(&mut self, cells: &[u32], values: &[f32]) {
         self.sorted_values.clear();
         self.sorted_values.resize(cells.len(), 0.0);
@@ -320,26 +269,14 @@ impl ScatterGrid {
         let run = |c: usize| &sorted[starts[c] as usize..starts[c + 1] as usize];
 
         match self.combine {
-            Combine::Max => {
-                #[cfg(not(target_arch = "wasm32"))]
-                out.par_iter_mut()
-                    .enumerate()
-                    .for_each(|(c, o)| *o = reduce_run_max(c, base, run(c)));
-                #[cfg(target_arch = "wasm32")]
-                for (c, o) in out.iter_mut().enumerate() {
-                    *o = reduce_run_max(c, base, run(c));
-                }
-            }
-            Combine::SumFixed { scale } => {
-                #[cfg(not(target_arch = "wasm32"))]
-                out.par_iter_mut()
-                    .enumerate()
-                    .for_each(|(c, o)| *o = reduce_run_sum(c, base, run(c), scale));
-                #[cfg(target_arch = "wasm32")]
-                for (c, o) in out.iter_mut().enumerate() {
-                    *o = reduce_run_sum(c, base, run(c), scale);
-                }
-            }
+            Combine::Max => out
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(c, o)| *o = reduce_run_max(c, base, run(c))),
+            Combine::SumFixed { scale } => out
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(c, o)| *o = reduce_run_sum(c, base, run(c), scale)),
         }
     }
 }

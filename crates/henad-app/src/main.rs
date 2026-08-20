@@ -4,33 +4,11 @@
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
-    use eframe::egui_wgpu;
-
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
 
     let native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        wgpu_options: egui_wgpu::WgpuConfiguration {
-            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
-                device_descriptor: std::sync::Arc::new(|adapter| {
-                    let base = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
-                    let mut descriptor = (base.device_descriptor)(adapter);
-                    // Enables the GPU per-step timing readout when the adapter supports it.
-                    // Reported as "N/A" otherwise.
-                    if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-                        descriptor.required_features |= wgpu::Features::TIMESTAMP_QUERY;
-                    }
-                    descriptor.required_limits = henad_compute::gpu::limits::raise(
-                        adapter,
-                        &descriptor.required_limits,
-                        henad_models::registry::gpu_storage_bindings_needed(),
-                    );
-                    descriptor
-                }),
-                ..egui_wgpu::WgpuSetupCreateNew::without_display_handle()
-            }),
-            ..Default::default()
-        },
+        wgpu_options: henad_app::wgpu_configuration(),
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([400.0, 300.0])
             .with_min_inner_size([300.0, 220.0])
@@ -56,10 +34,24 @@ fn main() {
     // Redirect `log` message to `console.log` and friends:
     eframe::WebLogger::init(log::LevelFilter::Debug).ok();
 
-    let web_options = eframe::WebOptions::default();
+    let web_options = eframe::WebOptions {
+        wgpu_options: henad_app::wgpu_configuration(),
+        ..Default::default()
+    };
 
     wasm_bindgen_futures::spawn_local(async {
-        let document = web_sys::window().expect("No window").document().expect("No document");
+        let window = web_sys::window().expect("No window");
+        let document = window.document().expect("No document");
+
+        // Before anything asks rayon how wide it is. A pool built later would be built by rayon's
+        // own defaults, which cannot spawn a worker in a browser.
+        let available = window.navigator().hardware_concurrency() as usize;
+        let search = window.location().search().unwrap_or_default();
+        let workers = henad_app::requested_threads(&search, available);
+        log::info!("thread pool: {workers} workers, {available} reported by the browser");
+        if let Err(err) = wasm_bindgen_futures::JsFuture::from(henad_app::init_thread_pool(workers)).await {
+            log::error!("thread pool init failed, models will run on one core: {err:?}");
+        }
 
         let canvas = document
             .get_element_by_id("the_canvas_id")

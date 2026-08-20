@@ -31,7 +31,6 @@ pub use view::display::{DisplayTarget, GpuDisplay};
 #[cfg(test)]
 use tests::support::headless_context;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use sim_thread::GpuSimThread;
 
 use crate::fault::{Fault, FaultSink};
@@ -56,7 +55,12 @@ impl GpuContext {
     /// Also takes over the device's error handling. Left to wgpu, every error is fatal.
     ///
     /// Errors raised inside a [`fault::catching_on`] go to that scope. Everything else, including
-    /// egui's own rendering on the same device, lands in `faults` for the host to pick up.
+    /// egui's own rendering on the same device, lands in `faults` for the host to pick up. On the
+    /// web this is the only route. [`fault::catching_on`] pushes no scopes there.
+    ///
+    /// A `GPUInternalError` still ends the web build. wgpu converts an error with
+    /// `Error::from_js`. Anything other than a `GPUValidationError` or a `GPUOutOfMemoryError`
+    /// panics there. A model provokes those two, and the handler reports them normally.
     pub fn new(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -64,6 +68,11 @@ impl GpuContext {
         faults: FaultSink,
     ) -> Self {
         let sink = faults.clone();
+        // wgpu asks for `Send + Sync` here even where nothing can be sent. Under atomics a
+        // `wgpu::Error` is neither, and the sink holds one. `SendWrapper` panics the moment a
+        // second thread touches it, which on the web is the whole guarantee.
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        let sink = send_wrapper::SendWrapper::new(sink);
         device.on_uncaptured_error(std::sync::Arc::new(move |error: wgpu::Error| {
             log::error!("unhandled GPU error: {error}");
             sink.set_once(Fault::device("running on the GPU", error));

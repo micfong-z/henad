@@ -1,2 +1,7 @@
 [build]
 filehash = false
+
+# `SharedArrayBuffer` is only handed to a cross-origin-isolated page, and without it the threaded
+# build cannot start at all. A host serving `dist/` has to send these two headers as well.
+[serve]
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }

@@ -2,7 +2,8 @@
 //!
 //! [`cpu`] and [`gpu`] are siblings, not a base and a specialisation. Each holds its own runner,
 //! its own engines, and its own primitives. [`snapshot`], [`runtime_info`], [`display_scale`] and
-//! [`fault`] are shared, since both backends publish through them.
+//! [`fault`] are shared, since both backends publish through them. [`runner`] is how either
+//! one gets driven.
 
 /// Rust generated from this crate's WGSL by `wgsl_bindgen`, in `build.rs`.
 ///
@@ -26,6 +27,7 @@ pub mod cpu;
 pub mod display_scale;
 pub mod fault;
 pub mod gpu;
+pub mod runner;
 pub mod runtime_info;
 pub mod snapshot;
 

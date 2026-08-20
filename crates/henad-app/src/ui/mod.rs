@@ -5,6 +5,7 @@ pub mod fault;
 pub mod menu_bar;
 pub mod model;
 pub mod pacing;
+pub mod painted;
 pub mod params;
 pub mod performance;
 pub mod playback;

@@ -10,7 +10,8 @@
     <title>Henad</title>
 
     <!-- config for our rust wasm binary. go to https://trunkrs.dev/assets/#rust for more customization -->
-    <link data-trunk rel="rust" href="crates/henad-app" data-bin="henad-app" data-wasm-opt="2" />
+    <link data-trunk rel="rust" href="crates/henad-app" data-bin="henad-app" data-wasm-opt="2"
+        data-wasm-opt-params="--enable-threads --enable-bulk-memory --enable-simd" />
     <!-- this is the base url relative to which other urls will be constructed. trunk will insert this from the public-url option -->
     <base data-trunk-public-url />
 
@@ -132,10 +133,10 @@
         <div class="lds-dual-ring"></div>
     </div>
 
-    <!--Register Service Worker. this will cache the wasm / js scripts for offline use (for PWA functionality). -->
-    <!-- Force refresh (Ctrl + F5) to load the latest files instead of cached files  -->
+    <!-- Register the service worker. It caches the app for offline use, network first, so a
+         reload always picks up the latest build. -->
     <script>
-        // We disable caching during development so that we always view the latest version.
+        // #dev skips the worker entirely, for when one is in the way.
         if ('serviceWorker' in navigator && window.location.hash !== "#dev") {
             window.addEventListener('load', function () {
                 navigator.serviceWorker.register('sw.js');
