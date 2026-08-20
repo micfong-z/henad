@@ -102,13 +102,10 @@ impl HenadApp {
 
 impl eframe::App for HenadApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // --- On WASM: drive simulation synchronously ---
-        #[cfg(target_arch = "wasm32")]
-        {
-            let dt = ctx.input(|i| i.unstable_dt as f64);
-            if let Some(thread) = &mut self.state.sim_thread {
-                thread.update(dt);
-            }
+        // Advances the sim where it has no thread of its own. A no-op where it has.
+        let dt = ctx.input(|i| f64::from(i.unstable_dt));
+        if let Some(thread) = &mut self.state.sim_thread {
+            thread.update(dt);
         }
 
         // --- Poll snapshot from sim thread ---

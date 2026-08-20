@@ -78,8 +78,7 @@ impl SimRunner {
         }
     }
 
-    /// Drives the simulation on wasm, where neither backend has a thread of its own.
-    #[cfg(target_arch = "wasm32")]
+    /// Advances the simulation where the runner has no thread of its own. A no-op where it has.
     pub fn update(&mut self, dt: f64) {
         match self {
             Self::Cpu(t) => t.update(dt),

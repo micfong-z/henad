@@ -113,7 +113,7 @@ This project is assisted by AI, though every line of code generated has been rev
 Models used include:
 - Claude Code with `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5`
 - OpenCode with `gpt-5.6-terra`
-- OpenCode with `grok-4.5`
+- OpenCode with `grok-4.5`, `grok-4.6`
 
 We recognise that LLM-assisted coding is evolving increasingly rapidly, but the quality of the code generated is not always guaranteed. In general, we support the [LLVM AI Tool Use Policy](https://llvm.org/docs/AIToolPolicy.html) for coding, but discourage the use of AI for communication (except for translation purposes).
 

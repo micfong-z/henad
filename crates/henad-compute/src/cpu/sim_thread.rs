@@ -1,7 +1,10 @@
+use crate::fault::FaultSink;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 
+use crate::runner::{Driver, Pace, SharedSlot, SimLoop, SnapshotSlot};
 use crate::snapshot::{CpuLayers, GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
+use web_time::Instant;
 
 /// Wall-clock seconds between capped batches.
 fn capped_batch_interval_secs(target_tps: f64, ticks_per_snapshot: u32) -> f64 {
@@ -11,30 +14,6 @@ fn capped_batch_interval_secs(target_tps: f64, ticks_per_snapshot: u32) -> f64 {
         1.0
     };
     f64::from(ticks_per_snapshot.max(1)) / tps
-}
-
-/// Whole batches owed by `accumulated` seconds, and the debt to carry forward.
-///
-/// Past `max_batches` the carried debt is clamped to one interval and the rest dropped, so a stall
-/// can't bank debt that gets repaid as a burst. Same tolerance as the native resync.
-#[cfg(any(target_arch = "wasm32", test))]
-fn batches_owed(accumulated: f64, batch_interval: f64, max_batches: u32) -> (u32, f64) {
-    let accumulated = if accumulated.is_finite() {
-        accumulated.max(0.0)
-    } else {
-        0.0
-    };
-    if accumulated < batch_interval {
-        return (0, accumulated);
-    }
-    let owed_exact = (accumulated / batch_interval).floor();
-    let owed = owed_exact.min(f64::from(max_batches)) as u32;
-    let carry = accumulated - f64::from(owed) * batch_interval;
-    if owed_exact > f64::from(max_batches) {
-        (owed, carry.min(batch_interval))
-    } else {
-        (owed, carry)
-    }
 }
 
 /// Called on every publish, so an idle UI knows to come and collect the snapshot.
@@ -60,522 +39,283 @@ pub enum SimCommand {
     Shutdown,
 }
 
-// =====================================================================
-// Native: threaded implementation
-// =====================================================================
-#[cfg(not(target_arch = "wasm32"))]
-mod native {
-    use std::sync::mpsc;
-    use std::sync::{Arc, Mutex};
-    use std::thread::JoinHandle;
-    use web_time::Instant;
+/// Publish cadence. Independent of how fast the sim is running.
+const PUBLISH_INTERVAL_MS: u128 = 16;
 
-    use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
-    use crate::fault::{FaultSink, STEPPING, catching};
-    use henad_core::model::SimState;
+/// Ceiling on a single uncapped batch, so a bad estimate cannot buy a long stall.
+const MAX_UNCAPPED_BATCH: u32 = 4096;
 
-    /// The handoff point between the two threads. `fresh` is the newest publish waiting to be
-    /// picked up, `spare` is a consumed one the UI handed back for its buffers.
-    #[derive(Default)]
-    struct SnapshotSlot {
-        fresh: Option<Snapshot>,
-        spare: Option<Snapshot>,
+/// Wall clock one uncapped batch aims to fill.
+///
+/// The threaded driver would happily run one step per pump. The frame driver hands the frame back
+/// between pumps, and one step per frame pinned a fast model to the refresh rate. Matching the
+/// driver's own budget keeps a frame to one batch.
+const UNCAPPED_BATCH_MS: f64 = crate::runner::PUMP_BUDGET_MS;
+
+/// Batches that fit [`UNCAPPED_BATCH_MS`], from the measured cost of a step.
+///
+/// `engine_ms` is `None` until a step has been timed, and one batch is enough to measure with.
+fn uncapped_batch_for(engine_ms: Option<f64>, ticks_per_snapshot: u32) -> u32 {
+    let Some(engine_ms) = engine_ms else {
+        return 1;
+    };
+    let per_batch_ms = engine_ms * f64::from(ticks_per_snapshot.max(1));
+    if per_batch_ms <= 0.0 {
+        return MAX_UNCAPPED_BATCH;
     }
-
-    pub struct SimThread {
-        cmd_tx: mpsc::Sender<SimCommand>,
-        snapshot: Arc<Mutex<SnapshotSlot>>,
-        handle: Option<JoinHandle<()>>,
-    }
-
-    struct SimLoop {
-        state: Box<dyn SimState>,
-        cmd_rx: mpsc::Receiver<SimCommand>,
-        snapshot: Arc<Mutex<SnapshotSlot>>,
-        wake: Option<WakeFn>,
-        running: bool,
-        target_tps: f64,
-        uncapped: bool,
-        ticks_per_snapshot: u32,
-        step_count: u64,
-        tps_timer: Instant,
-        actual_tps: f64,
-        last_publish: Instant,
-        /// Smoothed engine time per tick (EMA).
-        engine_ms: f64,
-        /// When the next capped step should fire.
-        next_step_at: Instant,
-    }
-
-    impl SimLoop {
-        fn run(mut self) {
-            loop {
-                if !self.running {
-                    let Ok(cmd) = self.cmd_rx.recv() else {
-                        return;
-                    };
-                    if self.handle_command(cmd) {
-                        return;
-                    }
-                    continue;
-                }
-
-                if self.uncapped {
-                    for _ in 0..self.ticks_per_snapshot {
-                        self.timed_step();
-                    }
-                    self.update_tps();
-                    self.maybe_publish_snapshot();
-                    while let Ok(cmd) = self.cmd_rx.try_recv() {
-                        if self.handle_command(cmd) {
-                            return;
-                        }
-                    }
-                } else {
-                    let now = Instant::now();
-                    if now < self.next_step_at {
-                        let wait = self.next_step_at - now;
-                        match self.cmd_rx.recv_timeout(wait) {
-                            Ok(cmd) => {
-                                if self.handle_command(cmd) {
-                                    return;
-                                }
-                                continue;
-                            }
-                            Err(mpsc::RecvTimeoutError::Timeout) => {}
-                            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                        }
-                    }
-                    while let Ok(cmd) = self.cmd_rx.try_recv() {
-                        if self.handle_command(cmd) {
-                            return;
-                        }
-                    }
-                    if self.running {
-                        let interval = self.batch_interval();
-                        // Advance from the previous deadline, so the batch's own execution time
-                        // doesn't stretch every period. Resync if the sim is running behind.
-                        self.next_step_at += interval;
-                        let now = Instant::now();
-                        if self.next_step_at + interval < now {
-                            self.next_step_at = now + interval;
-                        }
-                        for _ in 0..self.ticks_per_snapshot {
-                            self.timed_step();
-                        }
-                        self.update_tps();
-                        self.maybe_publish_snapshot();
-                    }
-                }
-            }
-        }
-
-        /// True when the thread should exit.
-        fn handle_command(&mut self, cmd: SimCommand) -> bool {
-            match cmd {
-                SimCommand::Play => {
-                    self.running = true;
-                    self.tps_timer = Instant::now();
-                    self.step_count = 0;
-                    self.next_step_at = Instant::now();
-                }
-                SimCommand::Pause => {
-                    self.running = false;
-                    // Publish a final snapshot, so the UI shows the state it stopped at.
-                    self.force_publish_snapshot();
-                }
-                SimCommand::StepOnce => {
-                    self.timed_step();
-                    self.update_tps();
-                    self.force_publish_snapshot();
-                }
-                SimCommand::SetTargetTps(tps) => {
-                    self.target_tps = tps;
-                    self.reclamp_deadline();
-                }
-                SimCommand::SetUncapped(v) => {
-                    self.uncapped = v;
-                }
-                SimCommand::SetTicksPerSnapshot(v) => {
-                    self.ticks_per_snapshot = v.max(1);
-                    self.reclamp_deadline();
-                }
-                SimCommand::SetParam { index, value } => {
-                    if !self.state.set_param(index, &value) {
-                        log::warn!("Failed to set param index {index} to {value:?}");
-                    }
-                }
-                SimCommand::Shutdown => return true,
-            }
-            false
-        }
-
-        fn batch_interval(&self) -> std::time::Duration {
-            std::time::Duration::from_secs_f64(super::capped_batch_interval_secs(
-                self.target_tps,
-                self.ticks_per_snapshot,
-            ))
-        }
-
-        /// Only ever moves the deadline earlier. Re-anchoring it to now would let a slider drag
-        /// fire a batch per event and outrun the cap.
-        fn reclamp_deadline(&mut self) {
-            let limit = Instant::now() + self.batch_interval();
-            if self.next_step_at > limit {
-                self.next_step_at = limit;
-            }
-        }
-
-        /// Step + measure engine time (EMA-smoothed).
-        fn timed_step(&mut self) {
-            let t0 = Instant::now();
-            self.state.step();
-            self.step_count += 1;
-            let sample = t0.elapsed().as_secs_f64() * 1000.0;
-            // EMA with α = 0.1
-            self.engine_ms += 0.1 * (sample - self.engine_ms);
-        }
-
-        fn update_tps(&mut self) {
-            let elapsed = self.tps_timer.elapsed().as_secs_f64();
-            if elapsed >= 1.0 {
-                self.actual_tps = self.step_count as f64 / elapsed;
-                self.step_count = 0;
-                self.tps_timer = Instant::now();
-            }
-        }
-
-        fn maybe_publish_snapshot(&mut self) {
-            let now = Instant::now();
-            if now.duration_since(self.last_publish).as_millis() < 16 {
-                return;
-            }
-            self.last_publish = now;
-            self.publish_snapshot();
-        }
-
-        fn force_publish_snapshot(&mut self) {
-            self.last_publish = Instant::now();
-            self.publish_snapshot();
-        }
-
-        /// Built outside the lock, or the UI thread would block on `take_snapshot` for the whole
-        /// grid copy.
-        fn publish_snapshot(&mut self) {
-            let spare = self.snapshot.lock().ok().and_then(|mut slot| slot.spare.take());
-            let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, self.engine_ms);
-            if let Ok(mut slot) = self.snapshot.lock() {
-                // A `fresh` the UI never picked up is stale, so it becomes the next spare.
-                slot.spare = slot.fresh.replace(snap);
-            }
-            // After the lock, so waking the UI can never make it block on us.
-            if let Some(wake) = &self.wake {
-                wake();
-            }
-        }
-    }
-
-    impl SimThread {
-        /// `wake` is `None` only for a headless caller that polls on its own schedule.
-        ///
-        /// A panic out of the loop lands in `faults`. The GPU sibling has no such parameter and
-        /// reads the same sink off its `GpuContext`.
-        pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
-            let (cmd_tx, cmd_rx) = mpsc::channel();
-            // So the UI has something to draw before play is pressed.
-            let snapshot = Arc::new(Mutex::new(SnapshotSlot {
-                fresh: Some(build_snapshot(None, &mut *state, 0.0, 0.0)),
-                spare: None,
-            }));
-            let snapshot_clone = Arc::clone(&snapshot);
-
-            let on_fault = wake.clone();
-            let sim_loop = SimLoop {
-                state,
-                cmd_rx,
-                snapshot: snapshot_clone,
-                wake,
-                running: false,
-                target_tps,
-                uncapped: false,
-                ticks_per_snapshot: 1,
-                step_count: 0,
-                tps_timer: Instant::now(),
-                actual_tps: 0.0,
-                last_publish: Instant::now(),
-                engine_ms: 0.0,
-                next_step_at: Instant::now(),
-            };
-
-            // Outside the loop. A catch per tick would sit in the hot path.
-            let handle = std::thread::spawn(move || {
-                if let Err(fault) = catching(STEPPING, || sim_loop.run()) {
-                    log::error!("{fault}");
-                    faults.set_once(fault);
-                    if let Some(wake) = &on_fault {
-                        wake();
-                    }
-                }
-            });
-
-            Self {
-                cmd_tx,
-                snapshot,
-                handle: Some(handle),
-            }
-        }
-
-        pub fn send(&mut self, cmd: SimCommand) {
-            drop(self.cmd_tx.send(cmd));
-        }
-
-        /// `None` when nothing new has been published since the last take.
-        pub fn take_snapshot(&mut self) -> Option<Snapshot> {
-            self.snapshot.lock().ok()?.fresh.take()
-        }
-
-        /// Purely an optimisation, dropping it instead just means the next publish allocates.
-        pub fn recycle(&mut self, snap: Snapshot) {
-            if let Ok(mut slot) = self.snapshot.lock() {
-                slot.spare = Some(snap);
-            }
-        }
-
-        pub fn play(&mut self) {
-            self.send(SimCommand::Play);
-        }
-
-        pub fn pause(&mut self) {
-            self.send(SimCommand::Pause);
-        }
-
-        pub fn step_once(&mut self) {
-            self.send(SimCommand::StepOnce);
-        }
-    }
-
-    impl Drop for SimThread {
-        fn drop(&mut self) {
-            drop(self.cmd_tx.send(SimCommand::Shutdown));
-            if let Some(h) = self.handle.take() {
-                drop(h.join());
-            }
-        }
-    }
+    let fits = (UNCAPPED_BATCH_MS / per_batch_ms).floor();
+    fits.clamp(1.0, f64::from(MAX_UNCAPPED_BATCH)) as u32
 }
 
-// =====================================================================
-// WASM: synchronous fallback
-// =====================================================================
-#[cfg(target_arch = "wasm32")]
-mod wasm {
-    use web_time::Instant;
+/// Steps a `SimState` and publishes snapshots. [`Driver`] decides what drives it.
+struct Loop {
+    state: Box<dyn SimState>,
+    slot: SharedSlot,
+    wake: Option<WakeFn>,
+    running: bool,
+    target_tps: f64,
+    uncapped: bool,
+    ticks_per_snapshot: u32,
+    step_count: u64,
+    tps_timer: Instant,
+    actual_tps: f64,
+    last_publish: Instant,
+    /// Smoothed engine time per tick (EMA). `None` until the first step has been timed.
+    engine_ms: Option<f64>,
+    /// When the next capped batch falls due.
+    next_step_at: Instant,
+}
 
-    use super::{SimCommand, Snapshot, WakeFn, build_snapshot};
-    use crate::fault::FaultSink;
-    use henad_core::model::SimState;
+impl SimLoop for Loop {
+    type Command = SimCommand;
 
-    /// Ceiling on catch-up batches per `update()`, so a backgrounded tab handing back a
-    /// multi-second `dt` can't dump all of it into one frame. 1000 TPS at 60 fps owes ~17.
-    const MAX_BATCHES_PER_FRAME: u32 = 64;
-
-    /// Wall clock one frame may spend stepping when uncapped.
-    ///
-    /// The browser wants the rest of the frame to paint in. Native runs uncapped on a thread of
-    /// its own and just spins.
-    const UNCAPPED_BUDGET_MS: f64 = 6.0;
-
-    /// Ceiling on uncapped batches per frame. [`UNCAPPED_BUDGET_MS`] is the real limit and this
-    /// only bounds what a bad estimate can do.
-    const MAX_UNCAPPED_BATCHES_PER_FRAME: u32 = 4096;
-
-    pub struct SimThread {
-        state: Box<dyn SimState>,
-        running: bool,
-        target_tps: f64,
-        uncapped: bool,
-        ticks_per_snapshot: u32,
-        accumulated_time: f64,
-        actual_tps: f64,
-        /// Steps since the TPS window opened.
-        step_count: u64,
-        tps_timer: Instant,
-        /// Smoothed engine time per tick (EMA). `None` until the first step has been timed.
-        engine_ms: Option<f64>,
-        snapshot: Option<Snapshot>,
-        /// Handed back by the UI so a republish refills its buffers instead of allocating.
-        spare: Option<Snapshot>,
-        wake: Option<WakeFn>,
+    fn handle_command(&mut self, cmd: SimCommand) -> bool {
+        match cmd {
+            SimCommand::Play => {
+                self.running = true;
+                self.tps_timer = Instant::now();
+                self.step_count = 0;
+                self.next_step_at = Instant::now();
+            }
+            SimCommand::Pause => {
+                self.running = false;
+                // Publish a final snapshot, so the UI shows the state it stopped at.
+                self.force_publish_snapshot();
+            }
+            SimCommand::StepOnce => {
+                self.timed_step();
+                self.update_tps();
+                self.force_publish_snapshot();
+            }
+            SimCommand::SetTargetTps(tps) => {
+                self.target_tps = tps;
+                self.reclamp_deadline();
+            }
+            SimCommand::SetUncapped(v) => {
+                self.uncapped = v;
+            }
+            SimCommand::SetTicksPerSnapshot(v) => {
+                self.ticks_per_snapshot = v.max(1);
+                self.reclamp_deadline();
+            }
+            SimCommand::SetParam { index, value } => {
+                if !self.state.set_param(index, &value) {
+                    log::warn!("Failed to set param index {index} to {value:?}");
+                }
+            }
+            SimCommand::Shutdown => return true,
+        }
+        false
     }
 
-    impl SimThread {
-        /// `wake` still matters with no thread to wake from, since `send` runs inside `ui()`, after
-        /// the frame's snapshot poll in `logic()`.
-        ///
-        /// `faults` matches the native runner's signature and is never written to. Wasm panics
-        /// abort without unwinding, leaving nothing here to catch.
-        pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
-            drop(faults);
-            // So the UI has something to draw before play is pressed.
-            let initial = Some(build_snapshot(None, &mut *state, 0.0, 0.0));
-            Self {
-                state,
-                running: false,
-                target_tps,
-                uncapped: false,
-                ticks_per_snapshot: 1,
-                accumulated_time: 0.0,
-                actual_tps: 0.0,
-                step_count: 0,
-                tps_timer: Instant::now(),
-                engine_ms: None,
-                snapshot: initial,
-                spare: None,
-                wake,
+    fn pump(&mut self) -> Pace {
+        if !self.running {
+            return Pace::Idle;
+        }
+        if self.uncapped {
+            let batches = uncapped_batch_for(self.engine_ms, self.ticks_per_snapshot);
+            for _ in 0..u64::from(batches) * u64::from(self.ticks_per_snapshot) {
+                self.timed_step();
             }
-        }
-
-        /// An unclaimed `snapshot` is stale by definition, so it is the first buffer to reuse.
-        fn republish(&mut self) {
-            let reuse = self.snapshot.take().or_else(|| self.spare.take());
-            let engine_ms = self.engine_ms.unwrap_or(0.0);
-            self.snapshot = Some(build_snapshot(reuse, &mut *self.state, self.actual_tps, engine_ms));
-            if let Some(wake) = &self.wake {
-                wake();
-            }
-        }
-
-        pub fn send(&mut self, cmd: SimCommand) {
-            match cmd {
-                SimCommand::Play => {
-                    self.running = true;
-                    self.tps_timer = Instant::now();
-                    self.step_count = 0;
-                }
-                SimCommand::Pause => {
-                    self.running = false;
-                    self.accumulated_time = 0.0;
-                    self.republish();
-                }
-                SimCommand::StepOnce => {
-                    self.run_steps(1);
-                    self.republish();
-                }
-                SimCommand::SetTargetTps(tps) => self.target_tps = tps,
-                SimCommand::SetUncapped(v) => {
-                    self.uncapped = v;
-                    if !v {
-                        self.accumulated_time = 0.0;
-                    }
-                }
-                SimCommand::SetTicksPerSnapshot(v) => self.ticks_per_snapshot = v.max(1),
-                SimCommand::SetParam { index, value } => {
-                    self.state.set_param(index, &value);
-                }
-                SimCommand::Shutdown => {}
-            }
-        }
-
-        pub fn take_snapshot(&mut self) -> Option<Snapshot> {
-            self.snapshot.take()
-        }
-
-        /// Hands a consumed snapshot back for the next republish to refill.
-        pub fn recycle(&mut self, snap: Snapshot) {
-            self.spare = Some(snap);
-        }
-
-        pub fn play(&mut self) {
-            self.send(SimCommand::Play);
-        }
-
-        pub fn pause(&mut self) {
-            self.send(SimCommand::Pause);
-        }
-
-        pub fn step_once(&mut self) {
-            self.send(SimCommand::StepOnce);
-        }
-
-        /// Called from `eframe::App::update()` on WASM. Runs steps synchronously.
-        pub fn update(&mut self, dt: f64) {
-            if !self.running {
-                return;
-            }
-
-            let batches = if self.uncapped {
-                self.uncapped_batches()
-            } else {
-                // Same batch cadence as the native loop, so both backends run at `target_tps`.
-                let batch_interval = super::capped_batch_interval_secs(self.target_tps, self.ticks_per_snapshot);
-                self.accumulated_time += dt;
-                let (batches, carry) =
-                    super::batches_owed(self.accumulated_time, batch_interval, MAX_BATCHES_PER_FRAME);
-                self.accumulated_time = carry;
-                batches
-            };
-
-            self.run_steps(u64::from(batches) * u64::from(self.ticks_per_snapshot));
             self.update_tps();
-
-            // Nothing advanced, so the last publish is still current. Rebuilding it would re-copy
-            // the grid and re-run `stats()` for no new data.
-            if batches > 0 {
-                self.republish();
-            }
+            self.maybe_publish_snapshot();
+            return Pace::Now;
         }
 
-        /// Batches that fit [`UNCAPPED_BUDGET_MS`], from the measured cost of a step.
-        ///
-        /// One batch per frame was the old answer, which pinned any model faster than the display
-        /// to the refresh rate.
-        fn uncapped_batches(&self) -> u32 {
-            let Some(engine_ms) = self.engine_ms else {
-                return 1;
-            };
-            let per_batch_ms = engine_ms * f64::from(self.ticks_per_snapshot.max(1));
-            if per_batch_ms <= 0.0 {
-                return MAX_UNCAPPED_BATCHES_PER_FRAME;
-            }
-            let fits = (UNCAPPED_BUDGET_MS / per_batch_ms).floor();
-            fits.clamp(1.0, f64::from(MAX_UNCAPPED_BATCHES_PER_FRAME)) as u32
+        let now = Instant::now();
+        if now < self.next_step_at {
+            return Pace::After(self.next_step_at - now);
         }
-
-        /// Steps `count` times, timing the run as a whole.
-        ///
-        /// One clock read per call. `Instant::now` is `performance.now` here, and at a thousand
-        /// steps a second a per-step read would show up in the measurement itself.
-        fn run_steps(&mut self, count: u64) {
-            if count == 0 {
-                return;
-            }
-            let t0 = Instant::now();
-            for _ in 0..count {
-                self.state.step();
-            }
-            let per_step = t0.elapsed().as_secs_f64() * 1000.0 / count as f64;
-            // EMA with a = 0.1, as the native loop uses. The first sample is taken whole. Easing
-            // it in from zero would leave `uncapped_batches` reading ten times too fast, and a
-            // frame would be spent paying for that.
-            self.engine_ms = Some(match self.engine_ms {
-                Some(prev) => prev + 0.1 * (per_step - prev),
-                None => per_step,
-            });
-            self.step_count += count;
+        // Advance from the previous deadline, so the batch's own execution time doesn't stretch
+        // every period. Resync if the sim is running behind.
+        let interval = self.batch_interval();
+        self.next_step_at += interval;
+        let now = Instant::now();
+        if self.next_step_at + interval < now {
+            self.next_step_at = now + interval;
         }
+        for _ in 0..self.ticks_per_snapshot {
+            self.timed_step();
+        }
+        self.update_tps();
+        self.maybe_publish_snapshot();
 
-        fn update_tps(&mut self) {
-            let elapsed = self.tps_timer.elapsed().as_secs_f64();
-            if elapsed >= 1.0 {
-                self.actual_tps = self.step_count as f64 / elapsed;
-                self.step_count = 0;
-                self.tps_timer = Instant::now();
-            }
+        let now = Instant::now();
+        if now >= self.next_step_at {
+            Pace::Now
+        } else {
+            Pace::After(self.next_step_at - now)
         }
     }
 }
 
-/// Overwrites `dst` with `src`, keeping `dst`'s allocation when it is already large enough.
+impl Loop {
+    fn batch_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs_f64(capped_batch_interval_secs(self.target_tps, self.ticks_per_snapshot))
+    }
+
+    /// Only ever moves the deadline earlier. Re-anchoring it to now would let a slider drag fire a
+    /// batch per event and outrun the cap.
+    fn reclamp_deadline(&mut self) {
+        let limit = Instant::now() + self.batch_interval();
+        if self.next_step_at > limit {
+            self.next_step_at = limit;
+        }
+    }
+
+    /// Step, and fold its cost into the smoothed engine time.
+    ///
+    /// The first sample is taken whole. Easing it in from zero would leave `uncapped_batch`
+    /// reading far too fast, and a frame would be spent paying for that.
+    fn timed_step(&mut self) {
+        let t0 = Instant::now();
+        self.state.step();
+        self.step_count += 1;
+        let sample = t0.elapsed().as_secs_f64() * 1000.0;
+        // EMA with a = 0.1
+        self.engine_ms = Some(match self.engine_ms {
+            Some(prev) => prev + 0.1 * (sample - prev),
+            None => sample,
+        });
+    }
+
+    fn update_tps(&mut self) {
+        let elapsed = self.tps_timer.elapsed().as_secs_f64();
+        if elapsed >= 1.0 {
+            self.actual_tps = self.step_count as f64 / elapsed;
+            self.step_count = 0;
+            self.tps_timer = Instant::now();
+        }
+    }
+
+    fn maybe_publish_snapshot(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_publish).as_millis() < PUBLISH_INTERVAL_MS {
+            return;
+        }
+        self.last_publish = now;
+        self.publish_snapshot();
+    }
+
+    fn force_publish_snapshot(&mut self) {
+        self.last_publish = Instant::now();
+        self.publish_snapshot();
+    }
+
+    /// Built outside the lock, or the UI thread would block on `take_snapshot` for the whole grid
+    /// copy.
+    fn publish_snapshot(&mut self) {
+        let spare = crate::runner::claim_spare(&self.slot);
+        let engine_ms = self.engine_ms.unwrap_or(0.0);
+        let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, engine_ms);
+        crate::runner::publish(&self.slot, snap);
+        // After the lock, so waking the UI can never make it block on us.
+        if let Some(wake) = &self.wake {
+            wake();
+        }
+    }
+}
+
+/// Handle on a running simulation. The sim itself is off the UI thread wherever the platform has
+/// somewhere to put it.
+pub struct SimThread {
+    driver: Driver<Loop>,
+    slot: SharedSlot,
+}
+
+impl SimThread {
+    /// `wake` is `None` only for a headless caller that polls on its own schedule.
+    ///
+    /// A panic out of the loop lands in `faults`. The GPU sibling has no such parameter and reads
+    /// the same sink off its `GpuContext`.
+    pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
+        // So the UI has something to draw before play is pressed.
+        let slot = SnapshotSlot::with_initial(build_snapshot(None, &mut *state, 0.0, 0.0));
+        let now = Instant::now();
+        let sim = Loop {
+            state,
+            slot: SharedSlot::clone(&slot),
+            wake: wake.clone(),
+            running: false,
+            target_tps,
+            uncapped: false,
+            ticks_per_snapshot: 1,
+            step_count: 0,
+            tps_timer: now,
+            actual_tps: 0.0,
+            last_publish: now,
+            engine_ms: None,
+            next_step_at: now,
+        };
+
+        let driver = Driver::spawn(sim, move |fault| {
+            faults.set_once(fault);
+            if let Some(wake) = &wake {
+                wake();
+            }
+        });
+
+        Self { driver, slot }
+    }
+
+    pub fn send(&mut self, cmd: SimCommand) {
+        self.driver.send(cmd);
+    }
+
+    /// `None` when nothing new has been published since the last take.
+    pub fn take_snapshot(&mut self) -> Option<Snapshot> {
+        crate::runner::take_snapshot(&self.slot)
+    }
+
+    /// Purely an optimisation, dropping it instead just means the next publish allocates.
+    pub fn recycle(&mut self, snap: Snapshot) {
+        crate::runner::recycle(&self.slot, snap);
+    }
+
+    pub fn play(&mut self) {
+        self.send(SimCommand::Play);
+    }
+
+    pub fn pause(&mut self) {
+        self.send(SimCommand::Pause);
+    }
+
+    pub fn step_once(&mut self) {
+        self.send(SimCommand::StepOnce);
+    }
+
+    /// Advances the sim where the driver has no thread of its own. A no-op where it has.
+    pub fn update(&mut self, dt: f64) {
+        self.driver.update(dt);
+    }
+}
+
+impl Drop for SimThread {
+    fn drop(&mut self) {
+        self.driver.shutdown(SimCommand::Shutdown);
+    }
+}
+
 fn refill<T: Copy>(dst: &mut Vec<T>, src: &[T]) {
     dst.clear();
     dst.extend_from_slice(src);
@@ -635,11 +375,6 @@ fn build_snapshot(reuse: Option<Snapshot>, state: &mut dyn SimState, actual_tps:
         stats: state.stats(),
     }
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-pub use native::SimThread;
-#[cfg(target_arch = "wasm32")]
-pub use wasm::SimThread;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod pacing_timing_tests {
@@ -790,7 +525,7 @@ mod pacing_timing_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{batches_owed, capped_batch_interval_secs};
+    use super::{MAX_UNCAPPED_BATCH, UNCAPPED_BATCH_MS, capped_batch_interval_secs, uncapped_batch_for};
 
     /// The regression. Batching used to multiply the tick rate by the batch size.
     #[test]
@@ -824,47 +559,30 @@ mod tests {
     }
 
     #[test]
-    fn backlog_below_one_interval_runs_nothing_and_is_carried() {
-        let (n, carry) = batches_owed(0.007, 0.01, 64);
-        assert_eq!(n, 0);
-        assert!((carry - 0.007).abs() < 1e-12);
-    }
-
-    #[test]
-    fn backlog_runs_whole_batches_and_carries_the_remainder() {
-        let (n, carry) = batches_owed(0.035, 0.01, 64);
-        assert_eq!(n, 3);
-        assert!((carry - 0.005).abs() < 1e-9);
-    }
-
-    /// A backgrounded tab resumes rather than replaying its whole absence.
-    #[test]
-    fn backlog_past_the_ceiling_is_dropped_to_one_interval() {
-        let (n, carry) = batches_owed(30.0, 0.01, 64);
-        assert_eq!(n, 64);
-        assert!((carry - 0.01).abs() < 1e-12, "carry {carry}");
-    }
-
-    /// Hitting the ceiling exactly is not behind, so nothing is discarded.
-    #[test]
-    fn backlog_exactly_at_the_ceiling_keeps_its_remainder() {
-        let (n, carry) = batches_owed(0.645, 0.01, 64);
-        assert_eq!(n, 64);
-        assert!((carry - 0.005).abs() < 1e-9, "carry {carry}");
-    }
-
-    #[test]
-    fn backlog_ignores_degenerate_accumulated_time() {
-        for &acc in &[f64::NAN, f64::INFINITY, -1.0] {
-            let (n, carry) = batches_owed(acc, 0.01, 64);
-            assert_eq!(n, 0, "acc {acc}");
-            assert!(carry.is_finite() && carry >= 0.0, "acc {acc} -> {carry}");
-        }
-    }
-
-    #[test]
     fn zero_ticks_per_snapshot_is_treated_as_one() {
         assert!((capped_batch_interval_secs(50.0, 0) - capped_batch_interval_secs(50.0, 1)).abs() < 1e-12);
+    }
+
+    /// A frame is handed back between pumps, so a batch has to be worth a frame's work.
+    #[test]
+    fn an_uncapped_batch_fills_the_budget() {
+        // A step costing a tenth of the budget earns ten of them.
+        assert_eq!(uncapped_batch_for(Some(UNCAPPED_BATCH_MS / 10.0), 1), 10);
+        // One costing more than the budget still earns one.
+        assert_eq!(uncapped_batch_for(Some(UNCAPPED_BATCH_MS * 5.0), 1), 1);
+    }
+
+    /// `ticks_per_snapshot` steps run per batch, so the budget buys proportionally fewer batches.
+    #[test]
+    fn an_uncapped_batch_accounts_for_the_snapshot_stride() {
+        assert_eq!(uncapped_batch_for(Some(UNCAPPED_BATCH_MS / 10.0), 5), 2);
+    }
+
+    /// Before anything has been timed, and where a step measures as free.
+    #[test]
+    fn an_unmeasured_step_is_bounded() {
+        assert_eq!(uncapped_batch_for(None, 1), 1);
+        assert_eq!(uncapped_batch_for(Some(0.0), 1), MAX_UNCAPPED_BATCH);
     }
 }
 
