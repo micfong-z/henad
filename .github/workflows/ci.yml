@@ -37,8 +37,11 @@ jobs:
       - name: clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -W clippy::all
 
+      # Without atomics, so a `std::thread` reaching the web build fails here. henad-app is left
+      # out because `wasm-bindgen-rayon` refuses to compile without them, and the `web` job builds
+      # it the way it actually ships.
       - name: wasm typecheck
-        run: cargo check --locked --workspace --all-features --lib --target wasm32-unknown-unknown
+        run: cargo check --locked -p henad-core -p henad-compute -p henad-models --all-features --lib --target wasm32-unknown-unknown
 
   test:
     name: test (${{ matrix.os }})
@@ -125,6 +128,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Threads need a std rebuilt with atomics, which needs nightly and `rust-src`.
+      - name: Install nightly
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            --component rust-src --target wasm32-unknown-unknown
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Install trunk
@@ -133,4 +142,4 @@ jobs:
             | tar -xzf - -C "$HOME/.cargo/bin"
 
       - name: Build
-        run: trunk build
+        run: ./scripts/build_web.sh build

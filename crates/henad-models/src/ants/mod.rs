@@ -256,7 +256,6 @@ mod tests {
     /// count, the movement RNG is seeded per chunk, and deliveries are a parallel reduction.
     ///
     /// One worker also stands in for wasm, where the shadow arm reduces through a single grid.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
         /// Ant cells, deliveries, and both pheromone fields as raw bits.

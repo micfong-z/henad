@@ -97,14 +97,10 @@ macro_rules! agent_lanes {
                     acc
                 };
 
-                #[cfg(not(target_arch = "wasm32"))]
                 let per_chunk: Vec<T> = {
                     use $crate::cpu::primitives::chunked::__rayon::prelude::*;
                     views.par_iter_mut().enumerate().map(|(c, v)| run(c, v)).collect()
                 };
-
-                #[cfg(target_arch = "wasm32")]
-                let per_chunk: Vec<T> = views.iter_mut().enumerate().map(|(c, v)| run(c, v)).collect();
 
                 per_chunk
                     .into_iter()

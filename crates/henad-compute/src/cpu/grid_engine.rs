@@ -257,7 +257,6 @@ mod tests {
 
     /// The row seed comes from the row index, so a grid stepped in one thread and the same grid
     /// stepped across many must agree bit for bit.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
         let params = vec![ParamValue::U32(64), ParamValue::U32(64)];

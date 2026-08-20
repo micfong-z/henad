@@ -8,6 +8,7 @@ pub mod grid;
 pub mod helpers;
 pub mod model;
 pub mod params;
+pub mod send_sync;
 pub mod spatial_hash;
 pub mod topology;
 pub mod view;

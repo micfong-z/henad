@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::state::PointRenderMode;
 use crate::ui::agent_layer::AgentLayer;
+use crate::ui::painted::{Painted, painted};
 use crate::{icons::material_design_icons::MDI_CUBE_OFF_OUTLINE, state::AppState};
 use eframe::egui_wgpu;
 use egui::{ColorImage, RichText, TextureOptions};
@@ -19,7 +20,7 @@ use henad_compute::snapshot::{CpuLayers, GpuSnapshot, GridSnapshot, PointSnapsho
 /// type-keyed `CallbackResources`, which is what makes teardown safe. Switch models mid-frame and
 /// this `Arc` keeps the pipeline and texture alive until the render pass is done with them.
 struct GpuViewportPaint {
-    display: Arc<GpuDisplay>,
+    display: Painted<Arc<GpuDisplay>>,
 }
 
 impl CallbackTrait for GpuViewportPaint {
@@ -60,7 +61,7 @@ fn paint_gpu_view(ui: &mut egui::Ui, app: &mut AppState, gpu: &GpuSnapshot) {
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                 rect,
                 GpuViewportPaint {
-                    display: Arc::clone(display),
+                    display: painted(Arc::clone(display)),
                 },
             ));
         }
@@ -229,17 +230,9 @@ fn has_points(app: &AppState) -> bool {
 
 /// One texel per cell.
 fn expand_grid(grid: &GridSnapshot) -> Vec<egui::Color32> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        grid.cells
-            .par_iter()
-            .map(|&cell| palette_color(grid.palette, cell))
-            .collect()
-    }
-    #[cfg(target_arch = "wasm32")]
+    use rayon::prelude::*;
     grid.cells
-        .iter()
+        .par_iter()
         .map(|&cell| palette_color(grid.palette, cell))
         .collect()
 }
@@ -255,13 +248,8 @@ fn sample_grid(grid: &GridSnapshot, tex_w: u32, tex_h: u32) -> Vec<egui::Color32
             .collect::<Vec<_>>()
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        (0..tex_h).into_par_iter().flat_map_iter(row).collect()
-    }
-    #[cfg(target_arch = "wasm32")]
-    (0..tex_h).flat_map(row).collect()
+    use rayon::prelude::*;
+    (0..tex_h).into_par_iter().flat_map_iter(row).collect()
 }
 
 fn upload_grid(ctx: &egui::Context, app: &mut AppState, grid: &GridSnapshot) {
@@ -342,7 +330,6 @@ fn render_density_heatmap(
     let inv_world_w = DENSITY_W as f32 / world_w;
     let inv_world_h = DENSITY_H as f32 / world_h;
 
-    #[cfg(not(target_arch = "wasm32"))]
     let density = {
         use rayon::prelude::*;
 
@@ -368,17 +355,6 @@ fn render_density_heatmap(
             for (d, &p) in density.iter_mut().zip(buf.iter()) {
                 *d += p;
             }
-        }
-        density
-    };
-
-    #[cfg(target_arch = "wasm32")]
-    let density = {
-        let mut density = vec![0u32; num_pixels];
-        for (&x, &y) in pos_x.iter().zip(pos_y.iter()) {
-            let px = ((x * inv_world_w) as usize).min(DENSITY_W - 1);
-            let py = ((y * inv_world_h) as usize).min(DENSITY_H - 1);
-            density[py * DENSITY_W + px] += 1;
         }
         density
     };

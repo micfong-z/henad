@@ -68,6 +68,11 @@ impl GpuContext {
         faults: FaultSink,
     ) -> Self {
         let sink = faults.clone();
+        // wgpu asks for `Send + Sync` here even where nothing can be sent. Under atomics a
+        // `wgpu::Error` is neither, and the sink holds one. `SendWrapper` panics the moment a
+        // second thread touches it, which on the web is the whole guarantee.
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        let sink = send_wrapper::SendWrapper::new(sink);
         device.on_uncaptured_error(std::sync::Arc::new(move |error: wgpu::Error| {
             log::error!("unhandled GPU error: {error}");
             sink.set_once(Fault::device("running on the GPU", error));

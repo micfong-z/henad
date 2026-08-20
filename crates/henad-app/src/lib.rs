@@ -30,10 +30,29 @@ use egui_dock::{DockArea, DockState, Style};
 use crate::init::{setup_custom_fonts, setup_custom_styles};
 
 pub use crate::init::wgpu_configuration;
+
 use crate::state::AppState;
 use crate::ui::dock::{Tab, default_dock_state};
 use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
+/// Re-exported so wasm-bindgen emits the worker glue `wasm_bindgen_rayon` builds its pool from.
+#[cfg(target_arch = "wasm32")]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
+/// Pool width asked for by a `?threads=N` query string, clamped to what the host offers.
+///
+/// `?threads=1` is how the threaded build gets compared against no pool at all, without keeping a
+/// second build around to compare against.
+pub fn requested_threads(search: &str, available: usize) -> usize {
+    let available = available.max(1);
+    search
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("threads="))
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(available)
+        .clamp(1, available)
+}
 
 use crate::state::FrameTimings;
 
@@ -135,5 +154,30 @@ impl eframe::App for HenadApp {
         let render_ms = self.state.timings.frame_render_ms;
         FrameTimings::update_ema(&mut self.state.timings.render_ms, render_ms);
         FrameTimings::update_ema(&mut self.state.timings.ui_ms, (total_ms - render_ms).max(0.0));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requested_threads;
+
+    #[test]
+    fn an_absent_query_asks_for_every_core() {
+        assert_eq!(requested_threads("", 14), 14);
+        assert_eq!(requested_threads("?debug=1", 14), 14);
+    }
+
+    #[test]
+    fn threads_one_is_how_a_single_threaded_run_is_asked_for() {
+        assert_eq!(requested_threads("?threads=1", 14), 1);
+        assert_eq!(requested_threads("?foo=a&threads=4", 14), 4);
+    }
+
+    /// More workers than cores only adds contention, and zero would build no pool at all.
+    #[test]
+    fn a_request_is_clamped_to_the_host() {
+        assert_eq!(requested_threads("?threads=99", 14), 14);
+        assert_eq!(requested_threads("?threads=0", 14), 1);
+        assert_eq!(requested_threads("?threads=nonsense", 14), 14);
     }
 }

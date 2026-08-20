@@ -1,8 +1,9 @@
 use crate::params::{ParamDescriptor, ParamValue};
+use crate::send_sync::{WasmNotSend, WasmNotSync};
 use crate::topology::TopologyHint;
 use crate::view::{GridView, PointView, StatDescriptor, StatEntry};
 
-pub trait Model: Send + Sync + 'static {
+pub trait Model: WasmNotSend + WasmNotSync + 'static {
     type State: SimState;
 
     fn name(&self) -> &'static str;
@@ -15,7 +16,7 @@ pub trait Model: Send + Sync + 'static {
 }
 
 /// Object-safe, so the registry can type-erase every model behind one state.
-pub trait SimState: Send + 'static {
+pub trait SimState: WasmNotSend + 'static {
     fn step(&mut self);
     fn tick(&self) -> u64;
     /// Not exclusive with [`SimState::point_view`]. Return both to get agents drawn over a field.

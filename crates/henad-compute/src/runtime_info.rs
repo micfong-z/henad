@@ -4,27 +4,37 @@
 pub struct HostInfo {
     pub os: &'static str,
     pub arch: &'static str,
-    /// `None` where the platform cannot report it (notably wasm).
+    /// `None` where the platform cannot report it.
     pub logical_cpus: Option<usize>,
-    /// Size of rayon's pool, i.e. how wide the CPU models actually step. `None` on wasm, which has
-    /// no thread pool at all.
+    /// Size of rayon's pool, i.e. how wide the CPU models actually step.
     pub worker_threads: Option<usize>,
 }
 
 impl HostInfo {
+    /// Call once the thread pool exists. Asking rayon first would build it with rayon's own
+    /// defaults, which in a browser means asking for threads the pool has no way to spawn.
     pub fn collect() -> Self {
         Self {
             os: std::env::consts::OS,
             arch: std::env::consts::ARCH,
-            logical_cpus: std::thread::available_parallelism()
-                .ok()
-                .map(std::num::NonZeroUsize::get),
-            #[cfg(not(target_arch = "wasm32"))]
+            logical_cpus: logical_cpus(),
             worker_threads: Some(rayon::current_num_threads()),
-            #[cfg(target_arch = "wasm32")]
-            worker_threads: None,
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn logical_cpus() -> Option<usize> {
+    std::thread::available_parallelism()
+        .ok()
+        .map(std::num::NonZeroUsize::get)
+}
+
+/// `available_parallelism` is unsupported on wasm. The browser reports the same count itself.
+#[cfg(target_arch = "wasm32")]
+fn logical_cpus() -> Option<usize> {
+    let cores = web_sys::window()?.navigator().hardware_concurrency();
+    (cores >= 1.0).then_some(cores as usize)
 }
 
 pub struct RuntimeInfo {

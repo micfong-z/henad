@@ -41,7 +41,12 @@ fn batches_owed(accumulated: f64, batch_interval: f64, max_batches: u32) -> (u32
 ///
 /// Without it a publish while the UI is idle, like a single step or the final one after pause,
 /// sits unread until some unrelated input event wakes the event loop. Must not block.
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
 pub type WakeFn = std::sync::Arc<dyn Fn() + Send + Sync>;
+
+/// An `egui::Context` is not `Send` under atomics, and no thread waits on this one anyway.
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub type WakeFn = std::sync::Arc<dyn Fn()>;
 
 /// Commands sent from the UI thread to the simulation thread.
 pub enum SimCommand {
@@ -374,6 +379,16 @@ mod wasm {
     /// multi-second `dt` can't dump all of it into one frame. 1000 TPS at 60 fps owes ~17.
     const MAX_BATCHES_PER_FRAME: u32 = 64;
 
+    /// Wall clock one frame may spend stepping when uncapped.
+    ///
+    /// The browser wants the rest of the frame to paint in. Native runs uncapped on a thread of
+    /// its own and just spins.
+    const UNCAPPED_BUDGET_MS: f64 = 6.0;
+
+    /// Ceiling on uncapped batches per frame. [`UNCAPPED_BUDGET_MS`] is the real limit and this
+    /// only bounds what a bad estimate can do.
+    const MAX_UNCAPPED_BATCHES_PER_FRAME: u32 = 4096;
+
     pub struct SimThread {
         state: Box<dyn SimState>,
         running: bool,
@@ -385,8 +400,8 @@ mod wasm {
         /// Steps since the TPS window opened.
         step_count: u64,
         tps_timer: Instant,
-        /// Smoothed engine time per tick (EMA).
-        engine_ms: f64,
+        /// Smoothed engine time per tick (EMA). `None` until the first step has been timed.
+        engine_ms: Option<f64>,
         snapshot: Option<Snapshot>,
         /// Handed back by the UI so a republish refills its buffers instead of allocating.
         spare: Option<Snapshot>,
@@ -413,7 +428,7 @@ mod wasm {
                 actual_tps: 0.0,
                 step_count: 0,
                 tps_timer: Instant::now(),
-                engine_ms: 0.0,
+                engine_ms: None,
                 snapshot: initial,
                 spare: None,
                 wake,
@@ -423,7 +438,8 @@ mod wasm {
         /// An unclaimed `snapshot` is stale by definition, so it is the first buffer to reuse.
         fn republish(&mut self) {
             let reuse = self.snapshot.take().or_else(|| self.spare.take());
-            self.snapshot = Some(build_snapshot(reuse, &mut *self.state, self.actual_tps, self.engine_ms));
+            let engine_ms = self.engine_ms.unwrap_or(0.0);
+            self.snapshot = Some(build_snapshot(reuse, &mut *self.state, self.actual_tps, engine_ms));
             if let Some(wake) = &self.wake {
                 wake();
             }
@@ -488,7 +504,7 @@ mod wasm {
             }
 
             let batches = if self.uncapped {
-                1
+                self.uncapped_batches()
             } else {
                 // Same batch cadence as the native loop, so both backends run at `target_tps`.
                 let batch_interval = super::capped_batch_interval_secs(self.target_tps, self.ticks_per_snapshot);
@@ -509,6 +525,22 @@ mod wasm {
             }
         }
 
+        /// Batches that fit [`UNCAPPED_BUDGET_MS`], from the measured cost of a step.
+        ///
+        /// One batch per frame was the old answer, which pinned any model faster than the display
+        /// to the refresh rate.
+        fn uncapped_batches(&self) -> u32 {
+            let Some(engine_ms) = self.engine_ms else {
+                return 1;
+            };
+            let per_batch_ms = engine_ms * f64::from(self.ticks_per_snapshot.max(1));
+            if per_batch_ms <= 0.0 {
+                return MAX_UNCAPPED_BATCHES_PER_FRAME;
+            }
+            let fits = (UNCAPPED_BUDGET_MS / per_batch_ms).floor();
+            fits.clamp(1.0, f64::from(MAX_UNCAPPED_BATCHES_PER_FRAME)) as u32
+        }
+
         /// Steps `count` times, timing the run as a whole.
         ///
         /// One clock read per call. `Instant::now` is `performance.now` here, and at a thousand
@@ -522,8 +554,13 @@ mod wasm {
                 self.state.step();
             }
             let per_step = t0.elapsed().as_secs_f64() * 1000.0 / count as f64;
-            // EMA with a = 0.1, as the native loop uses.
-            self.engine_ms += 0.1 * (per_step - self.engine_ms);
+            // EMA with a = 0.1, as the native loop uses. The first sample is taken whole. Easing
+            // it in from zero would leave `uncapped_batches` reading ten times too fast, and a
+            // frame would be spent paying for that.
+            self.engine_ms = Some(match self.engine_ms {
+                Some(prev) => prev + 0.1 * (per_step - prev),
+                None => per_step,
+            });
             self.step_count += count;
         }
 

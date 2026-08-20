@@ -25,6 +25,7 @@ log = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 pollster = { workspace = true }
+rayon = { workspace = true }
 flume = { workspace = true }
 web-time = { workspace = true }
 
@@ -34,11 +35,12 @@ wgsl_bindgen = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { workspace = true }
-rayon = { workspace = true }
 
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+send_wrapper = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-rayon = { workspace = true }
 web-sys = { workspace = true }
 
 [lints]

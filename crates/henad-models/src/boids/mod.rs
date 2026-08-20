@@ -216,7 +216,6 @@ mod tests {
 
     /// The chunk seed comes from the chunk index, so the flock must not depend on how rayon
     /// splits the work.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
         fn run(threads: usize) -> Vec<u32> {

@@ -38,11 +38,11 @@ pub enum ModelState {
 ///
 /// Fallible. A model author can get a kernel wrong, and a device can refuse what
 /// [`ModelEntry::shortfalls`] could not know to ask about. Neither may end the process.
-pub type ModelFactory = Box<dyn Fn(&[ParamValue], Option<u64>) -> Result<ModelState, Fault> + Send + Sync>;
+pub type ModelFactory = Box<dyn Fn(&[ParamValue], Option<u64>) -> Result<ModelState, Fault>>;
 
 /// Captures the same [`GpuContext`] the factory does, so a caller can ask whether a model would
 /// build without holding a device of its own.
-pub type CapacityFn = Box<dyn Fn(&[ParamValue]) -> Demand + Send + Sync>;
+pub type CapacityFn = Box<dyn Fn(&[ParamValue]) -> Demand>;
 
 /// An entry in the model registry.
 pub struct ModelEntry {

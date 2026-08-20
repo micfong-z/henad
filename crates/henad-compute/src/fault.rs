@@ -250,7 +250,6 @@ mod tests {
     /// the caller with `resume_unwind`, which does not run the hook again. Without a fallback the
     /// modal loses the line for exactly the panics most worth locating.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn a_location_survives_a_panic_on_a_rayon_worker() {
         use rayon::prelude::*;
 

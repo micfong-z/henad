@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::shader_bindings::agents::Uniforms;
+use crate::ui::painted::{Painted, painted};
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait};
 use henad_compute::gpu::GpuAgents;
 use henad_compute::snapshot::PointSnapshot;
@@ -50,6 +51,10 @@ enum PositionSource {
 }
 
 struct AgentPaint {
+    draw: Painted<AgentDraw>,
+}
+
+struct AgentDraw {
     pipeline: Arc<AgentPipeline>,
     positions: PositionSource,
     color: wgpu::Buffer,
@@ -63,22 +68,22 @@ impl CallbackTrait for AgentPaint {
         render_pass: &mut wgpu::RenderPass<'static>,
         _callback_resources: &CallbackResources,
     ) {
-        let color_slot = match &self.positions {
+        let color_slot = match &self.draw.positions {
             PositionSource::Split { pos_x, pos_y } => {
-                render_pass.set_pipeline(&self.pipeline.pipeline);
+                render_pass.set_pipeline(&self.draw.pipeline.pipeline);
                 render_pass.set_vertex_buffer(0, pos_x.slice(..));
                 render_pass.set_vertex_buffer(1, pos_y.slice(..));
                 2
             }
             PositionSource::Interleaved(pos) => {
-                render_pass.set_pipeline(&self.pipeline.interleaved_pipeline);
+                render_pass.set_pipeline(&self.draw.pipeline.interleaved_pipeline);
                 render_pass.set_vertex_buffer(0, pos.slice(..));
                 1
             }
         };
-        render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-        render_pass.set_vertex_buffer(color_slot, self.color.slice(..));
-        render_pass.draw(0..4, 0..self.count);
+        render_pass.set_bind_group(0, &self.draw.pipeline.bind_group, &[]);
+        render_pass.set_vertex_buffer(color_slot, self.draw.color.slice(..));
+        render_pass.draw(0..4, 0..self.draw.count);
     }
 }
 
@@ -214,19 +219,10 @@ impl AgentLayer {
         self.color_scratch.resize(n, lut[0]);
         let dst = &mut self.color_scratch[..color.len()];
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use rayon::prelude::*;
-            dst.par_iter_mut().zip(color.par_iter()).for_each(|(out, &c)| {
-                *out = lut[c as usize];
-            });
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            for (out, &c) in dst.iter_mut().zip(color.iter()) {
-                *out = lut[c as usize];
-            }
-        }
+        use rayon::prelude::*;
+        dst.par_iter_mut().zip(color.par_iter()).for_each(|(out, &c)| {
+            *out = lut[c as usize];
+        });
     }
 
     /// Powers of two, so a model with a varying population stops reallocating quickly.
@@ -306,10 +302,12 @@ impl AgentLayer {
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             rect,
             AgentPaint {
-                pipeline: Arc::clone(&self.pipeline),
-                positions,
-                color: color.clone(),
-                count,
+                draw: painted(AgentDraw {
+                    pipeline: Arc::clone(&self.pipeline),
+                    positions,
+                    color: color.clone(),
+                    count,
+                }),
             },
         ));
     }
