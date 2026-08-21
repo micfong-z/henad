@@ -33,6 +33,7 @@ impl<L: SimLoop> Driver<L> {
             return;
         }
         self.finished = self.sim.handle_command(cmd);
+        self.next_pump_at = Instant::now();
     }
 
     /// Pumps until the loop has nothing due or the frame budget is spent.
@@ -69,5 +70,64 @@ impl<L: SimLoop> Driver<L> {
     /// No thread to join. The loop is dropped with the driver.
     pub fn shutdown(&mut self, cmd: L::Command) {
         self.send(cmd);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::Driver;
+    use crate::runner::{Pace, SimLoop};
+
+    /// Asks for a second between pumps, like a model capped at a low tick rate.
+    struct Capped {
+        pumps: u32,
+        commands: u32,
+    }
+
+    impl SimLoop for Capped {
+        /// True is the shutdown.
+        type Command = bool;
+
+        fn handle_command(&mut self, stop: bool) -> bool {
+            self.commands += 1;
+            stop
+        }
+
+        fn pump(&mut self) -> Pace {
+            self.pumps += 1;
+            Pace::After(Duration::from_secs(1))
+        }
+    }
+
+    fn driver() -> Driver<Capped> {
+        Driver::spawn(Capped { pumps: 0, commands: 0 }, |_| {})
+    }
+
+    /// The regression. A command used to sit out whatever wait the last pump asked for, so dragging
+    /// the tick rate up on a slow model did nothing for a second.
+    #[test]
+    fn a_command_makes_the_next_pump_due() {
+        let mut driver = driver();
+        driver.update(0.0);
+        assert_eq!(driver.sim.pumps, 1);
+        // Inside the wait the first pump asked for.
+        driver.update(0.0);
+        assert_eq!(driver.sim.pumps, 1);
+
+        driver.send(false);
+        driver.update(0.0);
+        assert_eq!(driver.sim.pumps, 2, "the command waited out the old deadline");
+    }
+
+    /// Nothing runs after the loop says it is finished.
+    #[test]
+    fn shutdown_stops_the_pumping() {
+        let mut driver = driver();
+        driver.shutdown(true);
+        driver.update(0.0);
+        assert_eq!(driver.sim.pumps, 0);
+        assert_eq!(driver.sim.commands, 1);
     }
 }

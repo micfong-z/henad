@@ -61,6 +61,12 @@ pub trait GpuSimState: SimState {
     /// one-shot snapshots only, where a real value in the stats panel beats a few ms of latency.
     fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool);
 
+    /// True while a readback started by [`Self::begin_stats_readback`] has not landed yet.
+    ///
+    /// In a browser `block = true` above cannot block, so a one-shot snapshot publishes before its
+    /// readback arrives and the loop has to come back for it.
+    fn stats_readback_pending(&self) -> bool;
+
     /// The layers the UI draws. Cloned into every snapshot, so keep it to `Arc` clones of things
     /// built once at construction.
     fn view(&self) -> GpuSnapshot;
@@ -270,7 +276,7 @@ impl SimLoop for Loop {
             return Pace::Idle;
         }
         if !self.running {
-            return Pace::Idle;
+            return self.collect_late_stats();
         }
         if !self.await_previous() {
             return Pace::After(OUTSTANDING_POLL);
@@ -357,6 +363,26 @@ impl Loop {
             signal.store(micros + 1, Ordering::Relaxed);
         });
         self.in_flight = Some(InFlight { elapsed_us, steps });
+    }
+
+    /// Picks up a readback a one-shot snapshot could not wait for, and republishes once it lands.
+    ///
+    /// Browsers only. `poll_stats_readback(block = true)` returns without waiting there, so the
+    /// snapshot goes out reporting whatever the previous readback left, zeroes after a build.
+    /// Nothing else looks again while paused, and the wake is what brings a frame-driven loop back.
+    fn collect_late_stats(&mut self) -> Pace {
+        if !self.state.stats_readback_pending() {
+            return Pace::Idle;
+        }
+        self.state.poll_stats_readback(&self.ctx.device, false);
+        if self.state.stats_readback_pending() {
+            if let Some(wake) = &self.wake {
+                wake();
+            }
+            return Pace::After(OUTSTANDING_POLL);
+        }
+        self.publish_snapshot();
+        Pace::Idle
     }
 
     /// Refresh the display texture and stats and publish a snapshot right now. Used for one-shot
@@ -614,5 +640,95 @@ impl GpuSimThread {
 impl Drop for GpuSimThread {
     fn drop(&mut self) {
         self.driver.shutdown(Command::Sim(SimCommand::Shutdown));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::{GpuBatchSettings, GpuSimState, GpuSimThread};
+    use crate::gpu::headless_context;
+    use crate::snapshot::GpuSnapshot;
+    use henad_core::model::SimState;
+    use henad_core::params::ParamValue;
+    use henad_core::view::StatEntry;
+
+    /// Population lands on the second poll rather than on the blocking one, which is how a browser
+    /// behaves: `poll_blocking` there is an ordinary poll and the map resolves a frame later.
+    struct LateStats {
+        polls_left: u32,
+        population: u64,
+    }
+
+    const LANDED: u64 = 7;
+
+    impl SimState for LateStats {
+        fn step(&mut self) {}
+        fn tick(&self) -> u64 {
+            0
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            self.population
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    impl GpuSimState for LateStats {
+        fn encode_steps(&mut self, _encoder: &mut wgpu::CommandEncoder, _count: u32, _t: Option<&wgpu::QuerySet>) {}
+        fn encode_snapshot_passes(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
+        fn begin_stats_readback(&mut self) {}
+
+        fn poll_stats_readback(&mut self, _device: &wgpu::Device, _block: bool) {
+            self.polls_left = self.polls_left.saturating_sub(1);
+            if self.polls_left == 0 {
+                self.population = LANDED;
+            }
+        }
+
+        fn stats_readback_pending(&self) -> bool {
+            self.polls_left > 0
+        }
+
+        fn view(&self) -> GpuSnapshot {
+            GpuSnapshot {
+                display: None,
+                agents: None,
+            }
+        }
+    }
+
+    /// The regression, as the web build shows it. The initial snapshot goes out before the readback
+    /// lands, and a paused loop used to go idle without looking again, so population and the stats
+    /// panel read zero until the first Play.
+    #[test]
+    fn a_readback_landing_after_the_initial_snapshot_is_published() {
+        let Some(ctx) = headless_context("henad_late_stats_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_readback_landing_after_the_initial_snapshot_is_published: no adapter");
+            return;
+        };
+        let state = LateStats {
+            polls_left: 2,
+            population: 0,
+        };
+        let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default(), None);
+
+        let mut seen = None;
+        for _ in 0..200 {
+            if let Some(snap) = thread.take_snapshot() {
+                seen = Some(snap.population);
+                if seen == Some(LANDED) {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(seen, Some(LANDED), "the late readback was never published");
     }
 }

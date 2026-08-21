@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod frame;
 #[cfg(not(target_arch = "wasm32"))]
 mod thread;

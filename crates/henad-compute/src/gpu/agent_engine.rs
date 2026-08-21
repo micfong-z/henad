@@ -749,6 +749,10 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
         }
     }
 
+    fn stats_readback_pending(&self) -> bool {
+        self.reduce.readback_pending() || self.counters.as_ref().is_some_and(CounterReadback::is_pending)
+    }
+
     fn view(&self) -> GpuSnapshot {
         GpuSnapshot {
             display: self.display.as_ref().map(|(_, display)| Arc::clone(display)),

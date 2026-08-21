@@ -42,29 +42,32 @@ pub enum SimCommand {
 /// Publish cadence. Independent of how fast the sim is running.
 const PUBLISH_INTERVAL_MS: u128 = 16;
 
-/// Ceiling on a single uncapped batch, so a bad estimate cannot buy a long stall.
-const MAX_UNCAPPED_BATCH: u32 = 4096;
+/// Ceiling on a single uncapped pump, so a bad estimate cannot buy a long stall.
+const MAX_UNCAPPED_STEPS: u32 = 4096;
 
-/// Wall clock one uncapped batch aims to fill.
+/// Wall clock one uncapped pump aims to fill.
 ///
 /// The threaded driver would happily run one step per pump. The frame driver hands the frame back
 /// between pumps, and one step per frame pinned a fast model to the refresh rate. Matching the
-/// driver's own budget keeps a frame to one batch.
-const UNCAPPED_BATCH_MS: f64 = crate::runner::PUMP_BUDGET_MS;
+/// driver's own budget keeps a frame to one pump.
+const UNCAPPED_PUMP_MS: f64 = crate::runner::PUMP_BUDGET_MS;
 
-/// Batches that fit [`UNCAPPED_BATCH_MS`], from the measured cost of a step.
+/// Steps that fit [`UNCAPPED_PUMP_MS`], from the measured cost of a step.
 ///
-/// `engine_ms` is `None` until a step has been timed, and one batch is enough to measure with.
-fn uncapped_batch_for(engine_ms: Option<f64>, ticks_per_snapshot: u32) -> u32 {
+/// `engine_ms` is `None` until a step has been timed, and one step is enough to measure with.
+fn uncapped_steps_for(engine_ms: Option<f64>, ticks_per_snapshot: u32) -> u32 {
     let Some(engine_ms) = engine_ms else {
         return 1;
     };
-    let per_batch_ms = engine_ms * f64::from(ticks_per_snapshot.max(1));
-    if per_batch_ms <= 0.0 {
-        return MAX_UNCAPPED_BATCH;
-    }
-    let fits = (UNCAPPED_BATCH_MS / per_batch_ms).floor();
-    fits.clamp(1.0, f64::from(MAX_UNCAPPED_BATCH)) as u32
+    let fits = if engine_ms > 0.0 {
+        (UNCAPPED_PUMP_MS / engine_ms)
+            .floor()
+            .clamp(1.0, f64::from(MAX_UNCAPPED_STEPS)) as u32
+    } else {
+        MAX_UNCAPPED_STEPS
+    };
+    let stride = ticks_per_snapshot.max(1);
+    if fits < stride { fits } else { fits - fits % stride }
 }
 
 /// Steps a `SimState` and publishes snapshots. [`Driver`] decides what drives it.
@@ -93,18 +96,21 @@ impl SimLoop for Loop {
         match cmd {
             SimCommand::Play => {
                 self.running = true;
-                self.tps_timer = Instant::now();
-                self.step_count = 0;
+                self.reset_tps_window();
                 self.next_step_at = Instant::now();
             }
             SimCommand::Pause => {
                 self.running = false;
+                // A stopped sim runs at no rate. The GPU runner reports a pause the same way.
+                self.actual_tps = 0.0;
                 // Publish a final snapshot, so the UI shows the state it stopped at.
                 self.force_publish_snapshot();
             }
             SimCommand::StepOnce => {
                 self.timed_step();
-                self.update_tps();
+                // One step is not a rate. `update_tps` would divide it by however long the pause
+                // before it lasted and report a fraction of a tick per second.
+                self.reset_tps_window();
                 self.force_publish_snapshot();
             }
             SimCommand::SetTargetTps(tps) => {
@@ -133,8 +139,7 @@ impl SimLoop for Loop {
             return Pace::Idle;
         }
         if self.uncapped {
-            let batches = uncapped_batch_for(self.engine_ms, self.ticks_per_snapshot);
-            for _ in 0..u64::from(batches) * u64::from(self.ticks_per_snapshot) {
+            for _ in 0..uncapped_steps_for(self.engine_ms, self.ticks_per_snapshot) {
                 self.timed_step();
             }
             self.update_tps();
@@ -185,7 +190,7 @@ impl Loop {
 
     /// Step, and fold its cost into the smoothed engine time.
     ///
-    /// The first sample is taken whole. Easing it in from zero would leave `uncapped_batch`
+    /// The first sample is taken whole. Easing it in from zero would leave `uncapped_steps_for`
     /// reading far too fast, and a frame would be spent paying for that.
     fn timed_step(&mut self) {
         let t0 = Instant::now();
@@ -197,6 +202,12 @@ impl Loop {
             Some(prev) => prev + 0.1 * (sample - prev),
             None => sample,
         });
+    }
+
+    /// Starts the window `update_tps` divides by, and drops the steps it had counted.
+    fn reset_tps_window(&mut self) {
+        self.tps_timer = Instant::now();
+        self.step_count = 0;
     }
 
     fn update_tps(&mut self) {
@@ -490,6 +501,40 @@ mod pacing_timing_tests {
         wakes.load(Ordering::Relaxed)
     }
 
+    /// Long enough that nothing else can publish. Both callers have already stopped the loop.
+    fn settle() {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    /// Pause used to leave the last running rate on screen, where the GPU runner already reported
+    /// zero, and a step after a long pause was divided by the whole pause.
+    #[test]
+    fn a_pause_and_a_step_after_it_report_no_rate() {
+        let ticks = Arc::new(AtomicU64::new(0));
+        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 1000.0, None, FaultSink::new());
+
+        thread.play();
+        // A TPS window is a second wide, and nothing is reported until one closes.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let running = thread.take_snapshot().expect("a running sim publishes");
+        assert!(
+            running.actual_tps > 0.0,
+            "the window never closed, so the test proves nothing"
+        );
+
+        thread.pause();
+        settle();
+        let paused = thread.take_snapshot().expect("pause publishes a final snapshot");
+        assert_eq!(paused.actual_tps, 0.0, "a paused sim reported a rate");
+
+        // The stale window a single step used to be divided by.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        thread.step_once();
+        settle();
+        let stepped = thread.take_snapshot().expect("a step publishes");
+        assert_eq!(stepped.actual_tps, 0.0, "one step over a long pause reported a rate");
+    }
+
     /// A snapshot nobody is told about is a snapshot nobody draws. Stepping used to only refresh
     /// the viewport once you moved the mouse.
     #[test]
@@ -525,7 +570,7 @@ mod pacing_timing_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_UNCAPPED_BATCH, UNCAPPED_BATCH_MS, capped_batch_interval_secs, uncapped_batch_for};
+    use super::{MAX_UNCAPPED_STEPS, UNCAPPED_PUMP_MS, capped_batch_interval_secs, uncapped_steps_for};
 
     /// The regression. Batching used to multiply the tick rate by the batch size.
     #[test]
@@ -563,26 +608,39 @@ mod tests {
         assert!((capped_batch_interval_secs(50.0, 0) - capped_batch_interval_secs(50.0, 1)).abs() < 1e-12);
     }
 
-    /// A frame is handed back between pumps, so a batch has to be worth a frame's work.
+    /// A frame is handed back between pumps, so a pump has to be worth a frame's work.
     #[test]
-    fn an_uncapped_batch_fills_the_budget() {
+    fn an_uncapped_pump_fills_the_budget() {
         // A step costing a tenth of the budget earns ten of them.
-        assert_eq!(uncapped_batch_for(Some(UNCAPPED_BATCH_MS / 10.0), 1), 10);
+        assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS / 10.0), 1), 10);
         // One costing more than the budget still earns one.
-        assert_eq!(uncapped_batch_for(Some(UNCAPPED_BATCH_MS * 5.0), 1), 1);
+        assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS * 5.0), 1), 1);
     }
 
-    /// `ticks_per_snapshot` steps run per batch, so the budget buys proportionally fewer batches.
+    /// A publish lands on a stride boundary, so what fits is rounded down to whole strides.
     #[test]
-    fn an_uncapped_batch_accounts_for_the_snapshot_stride() {
-        assert_eq!(uncapped_batch_for(Some(UNCAPPED_BATCH_MS / 10.0), 5), 2);
+    fn an_uncapped_pump_runs_whole_snapshot_strides() {
+        assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS / 10.0), 5), 10);
+        assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS / 12.0), 5), 10);
+    }
+
+    /// The regression. The floor used to be a whole stride, so a slow model with a large stride ran
+    /// one anyway and spent however long that took.
+    #[test]
+    fn a_stride_too_slow_for_the_budget_is_not_run_whole() {
+        // Three steps fit, where a stride is a hundred.
+        assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS / 3.0), 100), 3);
+        // Not even one fits.
+        assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS * 2.0), 100), 1);
     }
 
     /// Before anything has been timed, and where a step measures as free.
     #[test]
     fn an_unmeasured_step_is_bounded() {
-        assert_eq!(uncapped_batch_for(None, 1), 1);
-        assert_eq!(uncapped_batch_for(Some(0.0), 1), MAX_UNCAPPED_BATCH);
+        assert_eq!(uncapped_steps_for(None, 1), 1);
+        assert_eq!(uncapped_steps_for(None, 100), 1);
+        assert_eq!(uncapped_steps_for(Some(0.0), 1), MAX_UNCAPPED_STEPS);
+        assert!(uncapped_steps_for(Some(0.0), 100) <= MAX_UNCAPPED_STEPS);
     }
 }
 

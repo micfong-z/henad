@@ -93,6 +93,11 @@ impl CounterReadback {
         self.pending = Some(rx);
     }
 
+    /// True while a map started by [`Self::begin_map`] has not been consumed yet.
+    pub fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// Non-blocking. If the in-flight map has completed, consume it and update [`Self::values`].
     ///
     /// `device.poll` is what actually runs wgpu's map callbacks on native, so this must be called

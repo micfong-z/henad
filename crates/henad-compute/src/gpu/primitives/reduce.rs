@@ -148,6 +148,10 @@ impl GpuLaneReduce {
         self.readback.begin_map();
     }
 
+    pub fn readback_pending(&self) -> bool {
+        self.readback.is_pending()
+    }
+
     pub fn poll_readback(&mut self, device: &wgpu::Device, block: bool) {
         if block {
             self.readback.poll_blocking(device);

@@ -34,7 +34,7 @@ use std::io::{BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, bail, ensure};
 use clap::Parser;
 
 use henad_compute::fault::{FaultSink, install_panic_hook};
@@ -702,30 +702,132 @@ fn resolve_params(descriptors: &[ParamDescriptor], overrides: &[(String, String)
             .iter()
             .position(|d| d.id == *id)
             .with_context(|| format!("model has no parameter '{id}'"))?;
-        values[index] = parse_value(&descriptors[index].kind, raw)?;
+        values[index] = parse_value(&descriptors[index].kind, raw).with_context(|| format!("--set {id}"))?;
     }
 
     Ok(values)
 }
 
-/// Parse a raw string into a [`ParamValue`] matching the descriptor's kind.
+/// Parse a raw string into a [`ParamValue`] matching the descriptor's kind, and refuse whatever the
+/// descriptor's own range does not allow.
+///
+/// The GUI cannot produce an out-of-range value, since it edits every parameter through a widget
+/// built from this range. `--set` reaches the same parameter with nothing between it and `init`,
+/// where a model sizes its buffers from the number it is given.
 fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue> {
     let value = match kind {
-        ParamKind::F32 { .. } => ParamValue::F32(raw.parse().with_context(|| format!("'{raw}' is not a number"))?),
-        ParamKind::U32 { .. } => ParamValue::U32(raw.parse().with_context(|| format!("'{raw}' is not an integer"))?),
+        ParamKind::F32 { min, max, .. } => {
+            let value: f32 = raw.parse().with_context(|| format!("'{raw}' is not a number"))?;
+            ensure!(value >= *min && value <= *max, "{value} is outside {min}..={max}");
+            ParamValue::F32(value)
+        }
+        ParamKind::U32 { min, max, .. } => {
+            let value: u32 = raw.parse().with_context(|| format!("'{raw}' is not an integer"))?;
+            ensure!(value >= *min && value <= *max, "{value} is outside {min}..={max}");
+            ParamValue::U32(value)
+        }
         ParamKind::Bool { .. } => ParamValue::Bool(raw.parse().with_context(|| format!("'{raw}' is not a bool"))?),
         ParamKind::Choice { options, .. } => {
             // Accept either a numeric index or one of the option labels.
-            if let Ok(index) = raw.parse::<usize>() {
-                ParamValue::Choice(index)
+            let index = if let Ok(index) = raw.parse::<usize>() {
+                ensure!(index < options.len(), "index {index} is not one of {options:?}");
+                index
             } else {
-                let index = options
+                options
                     .iter()
                     .position(|o| *o == raw)
-                    .with_context(|| format!("'{raw}' is not one of {options:?}"))?;
-                ParamValue::Choice(index)
-            }
+                    .with_context(|| format!("'{raw}' is not one of {options:?}"))?
+            };
+            ParamValue::Choice(index)
         }
     };
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_overrides, resolve_params};
+    use henad_core::helpers::{f32_param, u32_param};
+    use henad_core::params::{ParamApply, ParamDescriptor, ParamKind, ParamValue};
+
+    const OPTIONS: &[&str] = &["moore", "von_neumann"];
+
+    fn descriptors() -> Vec<ParamDescriptor> {
+        vec![
+            u32_param("num_agents", "Agents", 1000, 1, 5_000_000),
+            f32_param("cohesion", "Cohesion", 0.5, 0.0, 1.0, None),
+            ParamDescriptor {
+                id: "neighborhood",
+                label: "Neighborhood",
+                kind: ParamKind::Choice {
+                    options: OPTIONS,
+                    default: 0,
+                },
+                apply: ParamApply::Live,
+            },
+        ]
+    }
+
+    fn resolve(raw: &str) -> anyhow::Result<Vec<ParamValue>> {
+        let overrides = parse_overrides(&[raw.to_owned()])?;
+        resolve_params(&descriptors(), &overrides)
+    }
+
+    #[test]
+    fn an_override_replaces_one_default_and_leaves_the_rest() {
+        let values = resolve("num_agents=2500").expect("2500 agents is in range");
+        assert_eq!(values[0], ParamValue::U32(2500));
+        assert_eq!(values[1], ParamValue::F32(0.5));
+        assert_eq!(values[2], ParamValue::Choice(0));
+    }
+
+    /// The regression. A slider cannot ask for four billion agents, `--set` used to be able to, and
+    /// the number went straight to `init`.
+    #[test]
+    fn a_value_outside_the_descriptor_range_is_refused() {
+        let err = resolve("num_agents=4000000000").expect_err("4e9 agents is over the maximum");
+        assert!(format!("{err:#}").contains("5000000"), "{err:#}");
+
+        let err = resolve("num_agents=0").expect_err("0 agents is under the minimum");
+        assert!(format!("{err:#}").contains("num_agents"), "{err:#}");
+
+        assert!(resolve("cohesion=1.5").is_err(), "1.5 is over the maximum");
+        assert!(resolve("cohesion=-0.5").is_err(), "-0.5 is under the minimum");
+        assert!(resolve("cohesion=nan").is_err(), "NaN is in no range");
+    }
+
+    /// Both ends of the range are allowed.
+    #[test]
+    fn the_limits_themselves_are_accepted() {
+        assert_eq!(resolve("cohesion=0").expect("the minimum")[1], ParamValue::F32(0.0));
+        assert_eq!(resolve("cohesion=1").expect("the maximum")[1], ParamValue::F32(1.0));
+        assert_eq!(
+            resolve("num_agents=5000000").expect("the maximum")[0],
+            ParamValue::U32(5_000_000)
+        );
+    }
+
+    /// A choice is an index into the option list, by number or by label.
+    #[test]
+    fn a_choice_index_is_checked_against_the_options() {
+        assert_eq!(
+            resolve("neighborhood=1").expect("index 1 exists")[2],
+            ParamValue::Choice(1)
+        );
+        assert_eq!(
+            resolve("neighborhood=von_neumann").expect("a label")[2],
+            ParamValue::Choice(1)
+        );
+        assert!(resolve("neighborhood=2").is_err(), "there is no third option");
+        assert!(resolve("neighborhood=hexagonal").is_err(), "no such label");
+    }
+
+    #[test]
+    fn an_unknown_parameter_is_refused() {
+        assert!(resolve("no_such_param=1").is_err());
+        assert!(
+            parse_overrides(&["num_agents".to_owned()]).is_err(),
+            "no '=' in the pair"
+        );
+    }
 }

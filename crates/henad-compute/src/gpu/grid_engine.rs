@@ -523,6 +523,10 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
         }
     }
 
+    fn stats_readback_pending(&self) -> bool {
+        self.readback.is_pending()
+    }
+
     /// Grid only, a `GpuGridModel` has no agent layer.
     fn view(&self) -> GpuSnapshot {
         GpuSnapshot {
