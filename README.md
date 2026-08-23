@@ -1,4 +1,6 @@
-# Henad
+<img width="100%" alt="banner" src="https://github.com/user-attachments/assets/9d277d98-19ba-457d-b51c-8560a1251818" />
+
+---
 
 **Henad** is a very fast agent-based modelling engine that aims to be the most powerful and flexible ABM engine on personal computers.
 
