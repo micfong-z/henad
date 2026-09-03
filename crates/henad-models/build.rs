@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use wgsl_bindgen::{RustWgslTypeMap, WgslBindgenOptionBuilder, WgslShaderSourceType, WgslTypeSerializeStrategy};
 
+// --8<-- [start:entry_points]
 /// Every shader a model hands the engine, relative to `src`.
 const ENTRY_POINTS: &[&str] = &[
     "gpu_game_of_life/step.wgsl",
@@ -19,6 +20,7 @@ const ENTRY_POINTS: &[&str] = &[
     "gpu_ants/display.wgsl",
     "gpu_ants/reduce.wgsl",
 ];
+// --8<-- [end:entry_points]
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);

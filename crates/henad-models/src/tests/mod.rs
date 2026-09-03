@@ -3,3 +3,4 @@
 
 pub mod broken;
 pub mod support;
+pub mod tutorial;

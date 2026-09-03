@@ -26,9 +26,10 @@ results
 .temporary
 
 # development documentation (may or may not contain sensitive info >:( )
-/docs/*
-!/docs/agent-record/
-!/docs/authoring/
+/dev-docs
+
+# built documentation site
+/site
 
 # python tooling
 .venv

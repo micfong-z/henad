@@ -32,6 +32,7 @@ pub const HEADING_PALETTE: [[u8; 4]; 8] = [
     [0x8E, 0x54, 0xD8, 0xFF], // [315, 360) NE -> E
 ];
 
+// --8<-- [start:params]
 henad_core::params! {
     const VISUAL_RANGE = f32_param("visual_range", "Visual Range", 50.0, 1.0, 200.0, Some(1.0));
     const PROTECTED_RANGE = f32_param("protected_range", "Protected Range", 8.0, 0.5, 50.0, Some(0.5));
@@ -41,6 +42,7 @@ henad_core::params! {
     const MAX_SPEED = f32_param("max_speed", "Max Speed", 15.0, 1.0, 50.0, Some(0.5));
     const MIN_SPEED = f32_param("min_speed", "Min Speed", 3.0, 0.5, 20.0, Some(0.5));
 }
+// --8<-- [end:params]
 
 pub struct BoidsModel;
 

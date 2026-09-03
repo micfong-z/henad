@@ -14,18 +14,26 @@ parallelism are not micro-optimizations — they are the point.
 
 ## Coding sessions
 
-Previous coding sessions or context can be read and referenced from documents in `docs/agent-record`.
+Previous coding sessions or context can be read and referenced from documents in
+`docs/developing/agent-record`.
 
-After each coding session, write a hand-off document under `docs/agent-record/YYYYMMDD-XX-session-title.md`.
+After each coding session, write a hand-off document under
+`docs/developing/agent-record/YYYYMMDD-XX-session-title.md`.
 It should include:
 
-- A frontmatter block; see existing documents for more examples.
+- A frontmatter block; see existing documents for more examples. `title`, `description` and `icon`
+  are what the site reads, and every record carries all three.
 - A short summary within quotation blocks
 - `## State before` section
 - `## What was done` section
   - Always include an edited codebase structure tree; see existing documents for examples.
 - `## State after` section
 - `## Issues found & future directions` section
+
+The records are published with the rest of the site, so a new one also needs its nav entry in
+`zensical.toml`, reading `{ "#NN, YYYY-MM-DD" = "developing/agent-record/<file>.md" }`. Without it
+the page builds but nothing links to it. `docs/developing/agent-record/agent-record.md` is the
+landing page telling readers what the records are.
 
 After all the above, add a final section for human comments, as
 
@@ -52,6 +60,35 @@ notes without reconstructing it from the transcript, so keep it factual and spec
 reason behind it, an intervention and what it changed. Not praise, and not a summary of the agent's own
 work, which the sections above already cover. Write it only when creating the record; a later pass leaves
 it alone, since by then the human may have started rewriting the section.
+
+## Documentation site
+
+`docs/` is the published documentation site, built by [Zensical](https://zensical.org) from
+`zensical.toml` at the repository root. Zensical reads MkDocs Material's configuration format and
+Material's Markdown dialect, so admonitions are `!!! note`, not GitHub's `> [!NOTE]`, which renders
+as a literal blockquote. Python dependencies are pinned in `pyproject.toml` and `uv.lock`, and CI
+builds the site on every pull request and deploys it to GitHub Pages from `master`.
+
+Anything under `docs/` is published, the session records included. Those sit under
+`developing/agent-record/` behind a landing page that tells readers what they are. Notes written for
+nobody but the maintainer still do not belong anywhere under `docs/`.
+
+Code examples are included from real workspace files rather than retyped, so an example cannot
+drift from the code it documents. The include reads
+
+```md
+--8<-- "crates/henad-models/src/game_of_life.rs:step_cell"
+```
+
+and the named region is marked in the source with a pair of comments:
+
+```rust
+// --8<-- [start:step_cell]
+// --8<-- [end:step_cell]
+```
+
+Those two lines are a build directive rather than a comment, and are the one exception to the
+comment rules below. Do not include by line range, which is also supported and drifts silently.
 
 ## Writing style
 
@@ -128,8 +165,8 @@ Short and plain. The user reads signatures fine and does not want to be told wha
   ```
 
 - **Do not narrate design decisions.** The reasoning behind a split, a trait boundary or a crate
-  placement belongs in `docs/agent-record`, written after the fact, not in the source. Do not
-  repeat the same rationale in several files.
+  placement belongs in `docs/developing/agent-record`, written after the fact, not in the source. Do
+  not repeat the same rationale in several files.
 - **No future plans**, no "leaves room for X", no "reserved for a future Y".
 - **No test or benchmark stats.** No "confirmed across sizes", "measured Y", "passing as of".
 - **Punctuation stays plain.** Avoid em dashes, semicolons and colons in comment prose. Use full
@@ -152,8 +189,8 @@ Prose markdown uses **semantic line breaks**: one line per sentence, never hard-
 width, and never reflowed to fill lines. A long sentence gets a long line. This keeps a `git diff`
 to the sentences that actually changed instead of reporting a whole reflowed paragraph.
 
-This applies to `docs/`, `README`, `docs/agent-record/*`, and PR and issue bodies. Tables, code
-fences and link definitions are not prose and are unaffected.
+This applies to `docs/` (the session records included), `README`, and PR and issue bodies. Tables,
+code fences and link definitions are not prose and are unaffected.
 
 **`AGENTS.md` is the exception** and stays hard-wrapped, since no human reads it.
 
@@ -239,6 +276,7 @@ Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps
 one, `--export-stats` for the time series)
 Sweep every model across the config matrix: `python3 scripts/bench_matrix.py` (grid models scale
 over grid size, agent models over agent count at constant density; `--dry-run` to see the matrix)
+Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` writes `site/`)
 
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).
 The web build is the exception and runs on nightly, which `scripts/build_web.sh` selects. Threads on
@@ -285,7 +323,7 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
   (`authoring/model/field.rs`),
   the grid slot an `AgentModel` sits over. `authoring/primitives/` is the primitive vocabulary those
   kernels call — wrapping, neighbourhoods, distances, random draws — each paired with a WGSL twin
-  under `henad-compute/src/gpu/shared/` and pinned to it by a parity test. `docs/authoring/primitives.md`
+  under `henad-compute/src/gpu/shared/` and pinned to it by a parity test. `docs/reference/primitives.md`
   is the index and records what is deliberately absent.
   `Model`/`SimState` (`model.rs`) are the _runner_
   interface the sim thread drives, not an authoring API — that split is why the traits live under
@@ -298,15 +336,17 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
   `cpu/` and `gpu/` are **siblings**, not a base and a specialisation, and mirror each other:
   each has its own `sim_thread.rs` (runner), its `*_engine.rs` (authoring trait → runnable state)
   and `primitives/` (shared building blocks). `snapshot.rs`, `runtime_info.rs` and
-  `display_scale.rs` sit above both, since either backend publishes through them.
+  `display_scale.rs` sit above both, since either backend publishes through them. So does `runner/`,
+  which owns how a sim loop gets driven and the one place the two ways of driving one differ:
+  `runner/mod.rs` holds the `SimLoop` trait, `Pace` and the `SnapshotSlot`, with `runner/thread.rs`
+  the native driver and `runner/frame.rs` the wasm one.
   - `cpu/grid_engine.rs` (`GridModelState`) and `cpu/agent_engine.rs` (`AgentModelState`) each
     implement the whole `SimState` for their trait. `cpu/field/ca.rs` (`CaField`, a `GridModel` as
     a field layer) and `cpu/field/scalar.rs` (`ScalarField`, scatter-plus-decay `f32` layers) are
     the two `FieldLayer` impls. `cpu/primitives/` holds `lanes_macro.rs` (`agent_lanes!`),
     `chunked.rs` (chunk drivers and RNG seeding) and `scatter.rs` (the many-agents-one-cell write
-    path). `cpu/sim_thread.rs` is the sim runner (a real OS thread with play/pause/TPS-capping on
-    native, a synchronous per-frame stepper on WASM — same command API, different backend, gated
-    by `#[cfg(target_arch = "wasm32")]`).
+    path). `cpu/sim_thread.rs` is the sim runner, a `SimLoop` with play/pause/TPS-capping, driven by
+    whichever `runner::Driver` the target has.
   - `gpu/grid_engine.rs` (`GpuGridState`) and `gpu/agent_engine.rs` (`GpuAgentState`) are the
     engines for the two GPU traits, mirroring their `cpu/` namesakes. `gpu/sim_thread.rs` is the
     batching GPU runner and `gpu/timing.rs` its adaptive-batch controller. `gpu/view/` is what a
@@ -337,8 +377,12 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
   model behind `ModelEntry` so the UI can list/instantiate models without knowing their concrete
   type.
 - **henad-app**: eframe/egui desktop+web GUI. `HenadApp` (`lib.rs`) owns the `SimThread` and
-  polls snapshots each frame; `ui/` has one file per panel (`toolbar.rs`, `sidebar.rs`,
-  `viewport.rs`, `stats.rs`).
+  polls snapshots each frame; `ui/` has one file per panel (`menu_bar.rs`, `model.rs`, `params.rs`,
+  `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`, `charts.rs`, `performance.rs`,
+  `system.rs`, `fault.rs`). `dock.rs` holds the tab definitions, the default layout and the
+  dispatch to each panel. `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer
+  drawn over the grid layer, and `painted.rs` carries a paint callback's wgpu handles past
+  `CallbackTrait`'s `Send + Sync` bound.
 - **henad-cli**: headless benchmark runner. Steps a state in a bare loop with no rendering, no
   `SimThread` and no pacing, so a measurement times nothing but `step()`.
 
@@ -506,13 +550,23 @@ is about not undoing them.
 ### Sim runs off the UI thread
 
 `SimThread` (`henad-compute/src/cpu/sim_thread.rs`) exists so simulation stepping never blocks
-rendering. On native it's a dedicated OS thread communicating via `mpsc` commands and an
-`Arc<Mutex<Option<Snapshot>>>`; the UI thread only ever reads the latest snapshot (`snapshot.rs`)
-and never touches the live `SimState` directly. On WASM there's no thread — `SimThread::update()`
-is called synchronously from `eframe::App::update()` each frame — but the public API
-(`play`/`pause`/`step_once`/`send`) is identical, so `henad-app` code doesn't need to know which
-backend is active. When changing `SimThread`, both `native` and `wasm` submodules need updating
-together.
+rendering. It is a thin handle over a `Driver<Loop>`, and the split underneath it lives in
+`henad-compute/src/runner/`. A `SimLoop` does whatever is due now and says when it next wants
+calling, as `Pace::Idle`, `Pace::Now` or `Pace::After`. A `Driver` decides how to wait.
+`runner/thread.rs` runs the loop on an OS thread of its own, taking `mpsc` commands.
+`runner/frame.rs` pumps it inline from `SimThread::update()`, which `henad-app` calls each frame,
+and stops once a frame has spent `PUMP_BUDGET_MS`. `wasm32-unknown-unknown` cannot spawn a thread
+even with atomics, hence the second driver.
+
+The `#[cfg(target_arch = "wasm32")]` choosing between the two sits in `runner/mod.rs` and nowhere
+else, so stepping is written once. `SimThread`'s API (`play`/`pause`/`step_once`/`send`/`update`)
+is the same either way and `henad-app` never learns which driver it holds. `gpu/sim_thread.rs` is
+driven the same way.
+
+The UI thread only ever reads the latest snapshot (`snapshot.rs`) and never touches the live
+`SimState` directly. Publishing goes through a `SnapshotSlot`, holding the `fresh` snapshot plus a
+`spare` the host hands back for its buffers. Recycling is only an optimisation. Dropping a snapshot
+instead means the next publish allocates.
 
 `build_snapshot` calls `SimState::prepare_view` first, which is where a model turns state into
 something drawable — ants quantises its `f32` pheromone field into palette indices there. That

@@ -1,5 +1,6 @@
 use henad_compute::agent_lanes;
 
+// --8<-- [start:lanes]
 agent_lanes! {
     /// Position and velocity are double buffered, since a boid reads its neighbours' current
     /// values while writing its own next ones. Colour is not, each boid only writes its own slot.
@@ -14,3 +15,4 @@ agent_lanes! {
     }
     color = color;
 }
+// --8<-- [end:lanes]

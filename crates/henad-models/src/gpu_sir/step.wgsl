@@ -8,11 +8,13 @@ struct Params {
     recovery_rate: f32,
 }
 
+// --8<-- [start:bindings]
 @group(0) @binding(0) var<storage, read> state_in: array<u32>;
 @group(0) @binding(1) var<storage, read_write> state_out: array<u32>;
 @group(0) @binding(2) var<storage, read> rng_in: array<u32>;
 @group(0) @binding(3) var<storage, read_write> rng_out: array<u32>;
 @group(0) @binding(4) var<uniform> params: Params;
+// --8<-- [end:bindings]
 
 const S: u32 = 0u;
 const I: u32 = 1u;

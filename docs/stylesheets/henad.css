@@ -1,0 +1,55 @@
+:root {
+  --md-text-font: "IBM Plex Sans";
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("/assets/fonts/IBM Plex Sans Var-Roman.woff2") format("woff2");
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("/assets/fonts/IBM Plex Sans Var-Italic.woff2") format("woff2");
+  font-style: italic;
+}
+
+body {
+  font-feature-settings: "kern", "liga", "tnum", "ss02", "ss01";
+}
+
+/* Inline chip standing in for a button in the app. */
+.md-typeset .ui {
+  display: inline-block;
+  padding: 0.1em 0.4em;
+  background-color: var(--md-default-fg-color--lightest);
+  font-size: 0.85em;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.md-typeset .ui:hover {
+  background-color: var(--md-default-fg-color--lighter);
+  outline: 1px solid var(--md-default-fg-color--light);
+}
+
+.md-typeset .ui:active {
+  background-color: var(--md-default-fg-color--lightest);
+  outline: 1px solid var(--md-default-fg-color);
+}
+
+.md-typeset .ui .twemoji {
+  --md-icon-size: 1.15em;
+  width: var(--md-icon-size);
+  vertical-align: -0.2em;
+}
+
+/* Page status for the agent records. Zensical only ships icons for its own two. */
+:root {
+  --md-status--ai-generated: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><title>robot-outline</title><path d="M17.5 15.5C17.5 16.61 16.61 17.5 15.5 17.5S13.5 16.61 13.5 15.5 14.4 13.5 15.5 13.5 17.5 14.4 17.5 15.5M8.5 13.5C7.4 13.5 6.5 14.4 6.5 15.5S7.4 17.5 8.5 17.5 10.5 16.61 10.5 15.5 9.61 13.5 8.5 13.5M23 15V18C23 18.55 22.55 19 22 19H21V20C21 21.11 20.11 22 19 22H5C3.9 22 3 21.11 3 20V19H2C1.45 19 1 18.55 1 18V15C1 14.45 1.45 14 2 14H3C3 10.13 6.13 7 10 7H11V5.73C10.4 5.39 10 4.74 10 4C10 2.9 10.9 2 12 2S14 2.9 14 4C14 4.74 13.6 5.39 13 5.73V7H14C17.87 7 21 10.13 21 14H22C22.55 14 23 14.45 23 15M21 16H19V14C19 11.24 16.76 9 14 9H10C7.24 9 5 11.24 5 14V16H3V17H5V20H19V17H21V16Z" /></svg>');
+}
+
+.md-status--ai-generated::after {
+  -webkit-mask-image: var(--md-status--ai-generated);
+  mask-image: var(--md-status--ai-generated);
+}

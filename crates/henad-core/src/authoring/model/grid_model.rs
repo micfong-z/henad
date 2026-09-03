@@ -27,8 +27,7 @@ pub trait GridModel: Send + Sync + 'static {
 
     fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64);
 
-    /// Must be pure beyond the rng. The engine runs it across rows in parallel on native, and
-    /// sequentially on WASM.
+    /// Must be pure beyond the rng. The engine runs rows in parallel.
     fn step_cell(cell: u8, neighbors: &[u8], params: &Self::Params, rng: &mut u64) -> u8;
 
     /// Current statistics, in [`Self::STATS`] order. Called on publish, not every tick.

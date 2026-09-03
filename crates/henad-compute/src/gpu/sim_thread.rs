@@ -314,7 +314,7 @@ impl Loop {
 
     /// Reads the duration the completion callback stamped, and reports the batch still running
     /// until it lands. WebGPU's `Device::poll` returns immediately whatever the queue is doing, so
-    /// there is nothing here to wait on, and the browser's one thread could not wait anyway.
+    /// there is nothing here to wait on.
     #[cfg(target_arch = "wasm32")]
     fn await_previous(&mut self) -> bool {
         use std::sync::atomic::Ordering;

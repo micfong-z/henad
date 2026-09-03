@@ -177,18 +177,22 @@ pub fn gpu_storage_bindings_needed() -> u32 {
 /// see in the dropdown should always be one they can actually run.
 pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
     let mut entries = vec![
+        // --8<-- [start:cpu_entries]
         register_grid_model::<crate::sir::SirGridModel>(),
         register_agent_model::<crate::boids::BoidsModel>(),
         register_grid_model::<crate::game_of_life::GameOfLifeModel>(),
         register_agent_model::<crate::ants::AntsModel>(),
+        // --8<-- [end:cpu_entries]
     ];
 
+    // --8<-- [start:gpu_entries]
     if let Some(ctx) = gpu {
         entries.push(register_gpu_grid_model::<crate::gpu_game_of_life::GpuGameOfLife>(&ctx));
         entries.push(register_gpu_grid_model::<crate::gpu_sir::GpuSir>(&ctx));
         entries.push(register_gpu_agent_model::<crate::gpu_boids::GpuBoids>(&ctx));
         entries.push(register_gpu_agent_model::<crate::gpu_ants::GpuAnts>(&ctx));
     }
+    // --8<-- [end:gpu_entries]
 
     entries
 }

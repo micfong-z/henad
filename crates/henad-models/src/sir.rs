@@ -48,12 +48,14 @@ impl GridModel for SirGridModel {
         descriptors()
     }
 
+    // --8<-- [start:from_params]
     fn from_params(params: &[ParamValue]) -> SirParams {
         SirParams {
             infection_rate: extract_f32(params, INFECTION_RATE, 0.3),
             recovery_rate: extract_f32(params, RECOVERY_RATE, 0.05),
         }
     }
+    // --8<-- [end:from_params]
 
     fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
         let initial_pct = extract_f32(params, INITIAL_INFECTED_PCT, 0.01);

@@ -68,7 +68,7 @@ pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'sta
     let base = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     let mut descriptor = (base.device_descriptor)(adapter);
     // Feeds the GPU time/step readout, "N/A" without it. Reading the timestamps back blocks, and
-    // the web build has one thread to block.
+    // the browser's main thread must not.
     #[cfg(not(target_arch = "wasm32"))]
     if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
         descriptor.required_features |= wgpu::Features::TIMESTAMP_QUERY;

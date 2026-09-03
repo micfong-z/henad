@@ -40,7 +40,7 @@ fn load_row(row: u32, word: u32, stride: u32, width: u32) -> Row {
     var r: Row;
     r.cells = mid;
     r.west = (mid << 1u) | (left >> 31u);   // bit 0 comes from the previous word's bit 31
-    r.east = (mid >> 1u) | (right << 31u);  // bit 31 comes from the state_out word's bit 0
+    r.east = (mid >> 1u) | (right << 31u);  // bit 31 comes from the next word's bit 0
 
     // Those two shifts assume the grid's x-wrap lands on a word edge, which holds only when
     // width % 32 == 0. When the last word is ragged, exactly two bits are wrong, and need to be fixed.

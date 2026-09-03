@@ -24,11 +24,13 @@ use crate::shader_bindings::gpu_boids::step::Params as StepParams;
 // backends take the same vector. Only the engine's own three are read here, by the names
 // `cpu::agent_engine` gives them. The rest go through [`BoidsModel::from_params`].
 
+// --8<-- [start:buffers]
 henad_core::buffers! {
     const POS = "pos" double_buffered drawable;
     const VEL = "vel" double_buffered;
     const COLOR = "color" double_buffered drawable;
 }
+// --8<-- [end:buffers]
 
 pub struct GpuBoids;
 
@@ -48,12 +50,14 @@ impl GpuAgentModel for GpuBoids {
 
     const INDEX: bool = true;
 
+    // --8<-- [start:passes]
     const STEP_PASSES: &'static [PassSpec] = &[PassSpec {
         label: "step",
         shader: crate::shader_bindings::gpu_boids::step::SHADER_STRING,
         bindings: crate::binding_decls::bindings::GPU_BOIDS_STEP,
         domain: Domain::Agents,
     }];
+    // --8<-- [end:passes]
 
     /// Speed, x velocity, y velocity.
     const REDUCE: ReduceSpec = ReduceSpec {

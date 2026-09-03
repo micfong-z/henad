@@ -1,0 +1,8 @@
+[project]
+name = "henad-docs"
+version = "0.1.0"
+description = "The Henad documentation site"
+requires-python = ">=3.13"
+dependencies = [
+    "zensical>=0.0.56",
+]

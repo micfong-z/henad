@@ -81,7 +81,14 @@ Use the build script rather than `trunk` directly.
 
 The script requires `rustup toolchain install nightly --component rust-src --target wasm32-unknown-unknown`.
 
-**More docs will follow soon ;)**
+## Documentation
+
+Full documentation is at https://docs.henad.micfong.space, covering installation, the models that ship with the engine, and how to write your own.
+It is built from `docs/` with [Zensical](https://zensical.org):
+
+```bash
+uv run zensical serve
+```
 
 ## License
 
@@ -102,6 +109,6 @@ Models used include:
 
 We recognise that LLM-assisted coding is evolving increasingly rapidly, but the quality of the code generated is not always guaranteed. In general, we support the [LLVM AI Tool Use Policy](https://llvm.org/docs/AIToolPolicy.html) for coding, but discourage the use of AI for communication (except for translation purposes).
 
-All agent coding sessions since 2026-08-12 are auto-documented in `docs/agent-record`, along with human comments.
+All agent coding sessions since 2026-08-12 are auto-documented in `docs/developing/agent-record`, along with human comments.
 
 And yes, this README was written entirely by a human with the help of the good-old **spellchecker** only.

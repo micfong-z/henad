@@ -48,13 +48,15 @@ impl GridModel for GameOfLifeModel {
         }
     }
 
+    // --8<-- [start:step_cell]
     fn step_cell(cell: u8, neighbors: &[u8], _params: &(), _rng: &mut u64) -> u8 {
-        let alive_count: u8 = neighbors.iter().map(|&n| n & 1).sum();
+        let alive_count: u8 = neighbors.iter().sum();
         match (cell, alive_count) {
             (ALIVE, 2..=3) | (DEAD, 3) => ALIVE,
             _ => DEAD,
         }
     }
+    // --8<-- [end:step_cell]
 
     fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
         vec![StatValue::Scalar(count_alive(grid.current()) as f64)]

@@ -1,0 +1,205 @@
+[project]
+site_name = "Henad"
+site_url = "https://docs.henad.micfong.space/"
+site_description = "A massively parallel agent-based modelling engine for millions of agents."
+site_author = "Micfong"
+copyright = "By <a href=\"https://micfong.space\">Micfong</a>. Licensed under <a href=\"https://github.com/micfong-z/henad/blob/master/LICENSE-MIT\">MIT</a> OR <a href=\"https://github.com/micfong-z/henad/blob/master/LICENSE-APACHE\">Apache-2.0</a>."
+
+repo_url = "https://github.com/micfong-z/henad"
+repo_name = "micfong-z/henad"
+edit_uri = "edit/master/docs/"
+
+docs_dir = "docs"
+site_dir = "site"
+
+extra_css = ["stylesheets/henad.css"]
+
+nav = [
+    { "Overview" = [
+        "index.md",
+        "benchmarks.md",
+        { "Roadmap" = "https://github.com/users/micfong-z/projects/2" },
+    ] },
+    { "Guides" = [
+        { "Getting started" = [
+            "guide/installation.md",
+            "guide/running.md",
+            "guide/app.md",
+        ] },
+        { "Writing your first model" = [
+            "guide/first-model/game-of-life.md",
+            "guide/first-model/ants.md",
+            "guide/first-model/gpu-game-of-life.md",
+            "guide/first-model/gpu-ants.md",
+        ] },
+    ] },
+    { "Authoring" = [
+        "authoring/index.md",
+        { "Model traits" = [
+            "authoring/grid-models.md",
+            "authoring/agent-models.md",
+            "authoring/gpu-grid-models.md",
+            "authoring/gpu-agent-models.md",
+        ] },
+        { "Model features" = [
+            "authoring/parameters.md",
+            "authoring/statistics.md",
+            "authoring/views.md",
+            "authoring/fields.md",
+        ] },
+        { "Going to the GPU" = [
+            "authoring/porting.md",
+            "authoring/shaders.md",
+        ] },
+        { "Getting it right" = [
+            "authoring/determinism.md",
+            "authoring/performance.md",
+            "authoring/registering.md",
+        ] },
+    ] },
+    { "Reference" = [
+        "reference/primitives.md",
+        "reference/models.md",
+        "reference/cli.md",
+        "reference/environment.md",
+    ] },
+    { "Developing" = [
+        "developing/architecture.md",
+        "developing/cpu-backend.md",
+        "developing/gpu-backend.md",
+        "developing/contributing.md",
+        { "Agent session records" = [
+            "developing/agent-record/agent-record.md",
+            { "#01, 2026-08-12" = "developing/agent-record/20260812-01-gpu-boids.md" },
+            { "#02, 2026-08-12" = "developing/agent-record/20260812-02-module-restructure.md" },
+            { "#03, 2026-08-13" = "developing/agent-record/20260813-03-gpu-ants.md" },
+            { "#04, 2026-08-13" = "developing/agent-record/20260813-04-gpu-agent-model-trait.md" },
+            { "#05, 2026-08-14" = "developing/agent-record/20260814-05-gpu-size-limits.md" },
+            { "#06, 2026-08-15" = "developing/agent-record/20260815-06-comment-style-sweep.md" },
+            { "#07, 2026-08-15" = "developing/agent-record/20260815-07-naming-and-spelling.md" },
+            { "#08, 2026-08-16" = "developing/agent-record/20260816-08-wgsl-bindgen.md" },
+            { "#09, 2026-08-16" = "developing/agent-record/20260816-09-from-agents-param-slice.md" },
+            { "#10, 2026-08-17" = "developing/agent-record/20260817-10-authoring-primitives.md" },
+            { "#11, 2026-08-19" = "developing/agent-record/20260819-11-gpu-error-handling.md" },
+            { "#12, 2026-08-19" = "developing/agent-record/20260819-12-gpu-queue-latency.md" },
+            { "#13, 2026-08-20" = "developing/agent-record/20260820-13-wasm-parity.md" },
+            { "#14, 2026-08-21" = "developing/agent-record/20260821-14-runner-review-fixes.md" },
+            { "#15, 2026-08-21" = "developing/agent-record/20260821-15-docs-site.md" },
+            { "#16, 2026-08-22" = "developing/agent-record/20260822-16-first-model-guide.md" },
+            { "#17, 2026-08-22" = "developing/agent-record/20260822-17-app-tour.md" },
+            { "#18, 2026-08-23" = "developing/agent-record/20260823-18-authoring-reference.md" },
+            { "#19, 2026-08-24" = "developing/agent-record/20260824-19-doc-tone-rewrite.md" },
+            { "#20, 2026-08-28" = "developing/agent-record/20260828-20-second-tone-pass.md" },
+            { "#21, 2026-09-02" = "developing/agent-record/20260902-21-third-tone-pass.md" },
+        ] },
+    ] },
+]
+
+[project.extra.status]
+ai-generated = "Nearly fully AI-generated."
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+toc.permalink = true
+pymdownx.arithmatex.generic = true
+pymdownx.betterem = {}
+pymdownx.caret = {}
+pymdownx.details = {}
+pymdownx.emoji.emoji_generator = "zensical.extensions.emoji.to_svg"
+pymdownx.emoji.emoji_index = "zensical.extensions.emoji.twemoji"
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.magiclink = {}
+pymdownx.mark = {}
+pymdownx.smartsymbols = {}
+pymdownx.superfences.custom_fences = [
+    { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tabbed.alternate_style = true
+pymdownx.tabbed.combine_header_slug = true
+pymdownx.tasklist.custom_checkbox = true
+pymdownx.tilde = {}
+pymdownx.snippets.base_path = ["."]
+pymdownx.snippets.check_paths = true
+pymdownx.snippets.dedent_subsections = true
+
+[project.theme]
+variant = "modern"
+language = "en"
+
+features = [
+    "content.action.edit",
+    "content.action.view",
+    "content.code.copy",
+    "content.code.select",
+    "content.tooltips",
+
+    "navigation.footer",
+    "navigation.instant",
+    "navigation.instant.prefetch",
+    "navigation.instant.progress",
+    "navigation.tracking",
+    "navigation.tabs",
+    "navigation.sections",
+    "navigation.path",
+    "navigation.expand",
+    # "navigation.indexes",
+    "navigation.top",
+
+    "toc.follow",
+
+    "search.highlight",
+]
+logo = "assets/logo.svg"
+
+[project.theme.icon]
+menu = "material/menu"
+search = "material/magnify"
+previous = "material/chevron-left"
+next = "material/chevron-right"
+repo = "fontawesome/brands/github"
+edit = "material/file-edit-outline"
+view = "material/file-code-outline"
+top = "material/arrow-up"
+
+[project.theme.icon.admonition]
+note = "material/information-box-outline"
+abstract = "material/note-text-outline"
+info = "material/information-outline"
+tip = "material/lightbulb-outline"
+success = "material/check"
+question = "material/help-circle"
+warning = "material/alert-outline"
+failure = "material/close-octagon-outline"
+danger = "material/flash-alert-outline"
+bug = "material/bug-outline"
+example = "material/flask-outline"
+quote = "material/format-quote-open-outline"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+accent = "orange"
+toggle.icon = "material/theme-light-dark"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+accent = "orange"
+scheme = "default"
+toggle.icon = "material/weather-sunny"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+accent = "orange"
+scheme = "slate"
+toggle.icon = "material/weather-night"
+toggle.name = "Switch to system preference"
