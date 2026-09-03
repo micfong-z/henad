@@ -1,9 +1,3 @@
----
-title: Contribution Guidelines
-description: A guide to contributing to Henad
-icon: material/source-pull
----
-
 # Contribution Guidelines
 
 Thank you for considering to contribute to Henad!
