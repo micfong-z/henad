@@ -93,22 +93,3 @@ uv run zensical serve
 ## License
 
 Henad is licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Bevy has an [excellent explanation](https://github.com/bevyengine/bevy/issues/2373) of what this means. Compiled distributions can additionally include third-party dependencies under their own terms; see [license.html](license.html) for more information.
-
-## Contributing
-
-Contributing is very welcome! However Henad is in very early stages so expect everything to change. It would be best if you could create an issue first to discuss what you want to contribute before making a PR.
-
-_AI Usage Disclaimer and Policy_
-
-This project is assisted by AI, though every line of code generated has been reviewed (and almost always, edited) by a human.
-
-Models used include:
-- Claude Code with `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5`
-- OpenCode with `gpt-5.6-terra`
-- OpenCode with `grok-4.5`, `grok-4.6`
-
-We recognise that LLM-assisted coding is evolving increasingly rapidly, but the quality of the code generated is not always guaranteed. In general, we support the [LLVM AI Tool Use Policy](https://llvm.org/docs/AIToolPolicy.html) for coding, but discourage the use of AI for communication (except for translation purposes).
-
-All agent coding sessions since 2026-08-12 are auto-documented in `docs/developing/agent-record`, along with human comments.
-
-And yes, this README was written entirely by a human with the help of the good-old **spellchecker** only.
