@@ -1,6 +1,6 @@
 [project]
 site_name = "Henad"
-site_url = "https://docs.henad.micfong.space/"
+site_url = "https://micfong-z.github.io/henad/"
 site_description = "A massively parallel agent-based modelling engine for millions of agents."
 site_author = "Micfong"
 copyright = "By <a href=\"https://micfong.space\">Micfong</a>. Licensed under <a href=\"https://github.com/micfong-z/henad/blob/master/LICENSE-MIT\">MIT</a> OR <a href=\"https://github.com/micfong-z/henad/blob/master/LICENSE-APACHE\">Apache-2.0</a>."

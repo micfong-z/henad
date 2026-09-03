@@ -4,7 +4,7 @@
 
 **Henad** is a very fast agent-based modelling engine that aims to be the most powerful and flexible ABM engine on personal computers.
 
-Try Henad on https://henad.micfong.space
+Try Henad on https://henad.micfong.space. Documentation is at https://micfong-z.github.io/henad/.
 
 > [!warning]
 > CPU models run noticably slower on WASM. GPU models appear to have similar performance compared to native builds.
@@ -83,7 +83,7 @@ The script requires `rustup toolchain install nightly --component rust-src --tar
 
 ## Documentation
 
-Full documentation is at https://docs.henad.micfong.space, covering installation, the models that ship with the engine, and how to write your own.
+Full documentation is at https://micfong-z.github.io/henad/, covering installation, the models that ship with the engine, and how to write your own.
 It is built from `docs/` with [Zensical](https://zensical.org):
 
 ```bash
