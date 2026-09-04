@@ -17,10 +17,10 @@ Henad against MASON, Agents.jl, NetLogo, Mesa and krABMaga, on the same four mod
 
 !!! failure "Work in progress"
 
-    Only Henad's own rows are measured so far, and those are provisional: they come from a laptop
-    that was not idle, and the sweep was cut short of its last few points.
-    They are here to show the shape of the tables, not to be cited.
-    The reference implementations land one engine at a time.
+    Mesa is ported and gated; MASON, Agents.jl, NetLogo and krABMaga are not written yet.
+    Every number here is provisional: the sweeps so far ran on a laptop that was not idle, and were
+    cut short.
+    They show the shape of the tables rather than anything to cite.
 
 ## Method
 
@@ -99,6 +99,14 @@ A port is timed only after it agrees with Henad.
 
 `scripts/validate_ports.py` runs them and refuses to time a port that fails.
 
+| Engine | Game of Life | Boids | SIR | Ant foraging |
+|---|---|---|---|---|
+| Mesa 3.5.1 | exact | within 1e-5 | equivalent | within 1e-6 |
+
+Game of Life is worth a line on its own. Mesa's grid came out bit-identical to the NetLogo fixture
+recorded for the earlier consistency work, so three independent implementations of the same rule
+agree exactly after 101 and 500 ticks.
+
 ## Engines and hardware
 
 Numbers from different machines are not comparable, so a sweep is re-run rather than merged.
@@ -157,6 +165,10 @@ dominates the agent pass that the threads are there to spread.
 How much each model costs to express, counting neither blanks nor comments.
 The Agents.jl comparison reports this next to time, and it is worth keeping: an engine that wins on
 throughput and loses badly here has moved the cost rather than removed it.
+
+Read the column, not the row. Henad's files also declare that model's parameters, its statistics and
+its display palette, which in every other engine live in the harness or nowhere. The counts are
+comparable between reference engines and generous to none of them against Henad.
 
 --8<-- "docs/assets/benchmarks/tables/loc.md"
 

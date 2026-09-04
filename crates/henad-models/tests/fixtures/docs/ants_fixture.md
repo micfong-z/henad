@@ -176,3 +176,15 @@ A `# key: value` header, then the agent rows, then the two layers, each row of a
 `1e-6` relative.
 Henad holds the field in `f32` and most engines hold it in `f64`, so the two agree to about seven digits and no further.
 Agent positions, `last_step` and `has_food` are integers and must match exactly.
+
+## Other engines
+
+Every engine in the cross-engine benchmarks implements this model from the rules above, and commits
+its own fixture as `<scenario>_<engine>.txt`. `scripts/validate_ports.py` produces them:
+
+```bash
+uv run --project scripts scripts/validate_ports.py --engines <engine>
+```
+
+`consistency_*.rs` then checks Henad against every fixture in the directory, so a port stays checked
+with nothing installed but cargo.

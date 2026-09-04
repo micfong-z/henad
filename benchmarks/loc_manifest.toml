@@ -18,3 +18,9 @@ ants = [
     "crates/henad-models/src/ants/step.rs",
     "crates/henad-models/src/ants/field.rs",
 ]
+
+[mesa]
+game_of_life = ["benchmarks/mesa/models/game_of_life.py"]
+boids = ["benchmarks/mesa/models/boids.py"]
+sir = ["benchmarks/mesa/models/sir.py"]
+ants = ["benchmarks/mesa/models/ants.py"]

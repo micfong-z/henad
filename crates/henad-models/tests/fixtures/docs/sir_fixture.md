@@ -110,6 +110,22 @@ A two-sample KS test is also printed as a diagnostic, since it could catch shape
 
 KS diagnostics were unremarkable (`D` 0.12 to 0.18, `p` 0.40 to 0.87).
 
+## Other engines
+
+The same comparison, against the ports written for the cross-engine benchmarks. Each is run by
+`scripts/validate_ports.py`, which drives that engine's harness under `benchmarks/<engine>/` and
+then this script.
+
+Mesa 3.5.1, same configuration and replicate count:
+
+| statistic                | Henad             | Mesa 3.5.1        | difference (95% CI) | margin | verdict    |
+| ------------------------ | ----------------- | ----------------- | ------------------- | ------ | ---------- |
+| peak infected fraction   | 0.02990 ± 0.00250 | 0.02969 ± 0.00181 | 0.00021 ± 0.00087   | ±0.004 | EQUIVALENT |
+| tick of peak             | 11.04 ± 1.78      | 10.88 ± 1.64      | 0.16 ± 0.68         | ±1.5   | EQUIVALENT |
+| final recovered fraction | 0.32560 ± 0.01852 | 0.32196 ± 0.01466 | 0.00364 ± 0.00663   | ±0.03  | EQUIVALENT |
+
+KS diagnostics again unremarkable (`D` 0.12 to 0.18, `p` 0.40 to 0.55).
+
 ---
 
 This document is assisted with Claude Opus 5, with heavy human edits after generation.

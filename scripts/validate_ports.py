@@ -181,10 +181,21 @@ def main() -> int:
         print("no port has a validate mode yet, so nothing was gated", file=sys.stderr)
         return 0
 
+    # Merged, not replaced: gates are run a model or an engine at a time, and a slow one run on its
+    # own should not erase the verdicts around it.
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps({"generated": time.strftime("%Y-%m-%d %H:%M"), "results": results}, indent=2))
+    merged: dict[str, dict[str, list[str]]] = {}
+    if args.out.exists():
+        try:
+            merged = json.loads(args.out.read_text()).get("results", {})
+        except (OSError, json.JSONDecodeError):
+            merged = {}
+    for engine_name, models_run in results.items():
+        merged.setdefault(engine_name, {}).update(models_run)
+    args.out.write_text(json.dumps({"generated": time.strftime("%Y-%m-%d %H:%M"), "results": merged}, indent=2))
     print(f"wrote {args.out}", file=sys.stderr)
     failed = [(e, m) for e, ms in results.items() for m, (v, _) in ms.items() if v != "yes"]
+    print(f"{ran - len(failed)}/{ran} gates passed", file=sys.stderr)
     for engine_name, model in failed:
         print(f"FAILED {engine_name} {model}", file=sys.stderr)
     return 1 if failed else 0

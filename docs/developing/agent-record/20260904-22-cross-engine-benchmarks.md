@@ -1,12 +1,12 @@
 ---
 date: 2026-09-04
-title: "Cross-engine benchmarks, part 1 — the harness, and a gate for ants"
-description: The driver, protocol and validation gates for comparing Henad against five other ABM engines, plus the scenario that finally makes ants checkable across engines.
+title: "Cross-engine benchmarks — the harness, a gate for ants, and the Mesa port"
+description: The driver, protocol and validation gates for comparing Henad against five other ABM engines, the scenario that finally makes ants checkable across engines, and the first reference implementation.
 icon: material/note-text-outline
 status: ai-generated
 model: claude-opus-5 (Claude Code)
 issue: 25
-state: harness protocol written and Henad's side of it implemented, driver and gate scripts running end to end, ants gated across engines for the first time, benchmarks page written with Henad's own rows
+state: harness protocol written and Henad's side of it implemented, driver and gate scripts running end to end, ants gated across engines for the first time, all four models ported to Mesa and passing their gates, benchmarks page written
 baseline_commit: 3f9f990
 delta_state: uncommitted on `25-cross-abm-comparison`
 ---
@@ -16,7 +16,8 @@ delta_state: uncommitted on `25-cross-abm-comparison`
 > Issue 25 asks for Henad to be measured against MASON, Agents.jl, NetLogo, Mesa and krABMaga.
 > This session built the machinery every later engine plugs into: a harness contract, a driver, a validation gate per model, and the plotting and page that turn a sweep into something publishable.
 > The one piece of real modelling work was ants, which had no cross-engine check at all and now has one.
-> Reference implementations land one engine at a time, starting next session.
+> Mesa is then the first engine through it, with all four models ported and gated.
+> Four engines are left, one per session.
 
 ## State before
 
@@ -126,6 +127,13 @@ benchmarks/                                       new
     protocol.md                                   the harness contract
     loc_manifest.toml                             what the lines-of-code table counts
     mason/mason.22.jar                            fetched, not committed
+    mesa/                                         new, the first reference engine
+        pyproject.toml, uv.lock                   its own locked project
+        bench.py                                  Mesa's side of the harness contract
+        scenarios.py                              gate starting states, from the declarations
+        models/game_of_life.py, sir.py            a cell agent each, two-phase
+        models/boids.py                           continuous space, Henad's rule
+        models/ants.py                            cell agents over two property layers
 crates/
     henad-cli/
         Cargo.toml                                + serde_json, rayon
@@ -137,6 +145,7 @@ crates/
         field/scalar.rs                           + seed_field
     henad-models/tests/
         consistency_ants.rs                       + the gate scenario and its fixture reader
+        fixtures/{game_of_life,boids,ants}/       + five Mesa reference fixtures
         fixtures/docs/
             ants_fixture.md                       new, the fourth declaration
             sir_fixture.md                        flag rename
@@ -158,9 +167,41 @@ Cargo.toml                                        + workspace exclude, serde_jso
 .gitignore                                        + *.jar
 ```
 
+### Mesa, the first engine through
+
+All four models are ported and all four gates pass.
+
+Mesa ships its examples inside the package, so the shapes are its own rather than invented: a
+`FixedAgent` per cell on an `OrthogonalMooreGrid` with a two-phase step for Game of Life and SIR, a
+`ContinuousSpaceAgent` for boids, `CellAgent` ants over two property layers.
+What is inside those shapes is Henad's rule, not Mesa's.
+Mesa's own boids is Reynolds's algorithm with a normalised direction and a constant speed, which is
+a different simulation; using it would have measured that difference rather than the two engines.
+
+The two-phase step matters for more than tidiness. Mesa's boids example activates agents in a
+shuffled order, so each one sees the moves of those before it. Henad reads the whole population
+before writing any of it. Following the Game of Life example's `determine_state` then
+`assume_state` shape rather than the boids example's `shuffle_do` is what makes the two comparable
+at all, and it is ordinary Mesa either way.
+
+Initial conditions are shared rather than reimplemented, extracted from the declarations into
+`benchmarks/mesa/scenarios.py`. Both sides have to begin from the same numbers for a gate to mean
+anything; it is the rules that are written twice.
+
+Game of Life came out bit-identical to the NetLogo fixture recorded for the earlier consistency
+work, on the first run, which is a stronger check than it looks: three independent implementations
+of the same rule agreeing exactly after 101 and 500 ticks.
+
+All four gates passed first time. SIR took fifty replicates a side at 256 squared and about an
+hour, and returned equivalent on all three summary statistics with the differences well inside
+their margins. Its numbers are now in `sir_fixture.md` beside the NetLogo ones.
+
 ## State after
 
 `./check.sh` is green and the ants test file holds seven tests where it held three.
+
+Five Mesa fixtures are committed, so `cargo test` now checks Henad against another engine on three
+of the four models with nothing installed but cargo.
 
 The driver runs every Henad row end to end, CPU on one thread, CPU on every core, and GPU, across all four models.
 Every other engine reports itself as not yet written, which is the correct answer and the shape the next sessions fill in.
@@ -177,6 +218,13 @@ That is a real property of the engine and the ladder now shows it rather than st
 
 ## Issues found & future directions
 
+- **The lines-of-code column is not yet an apples-to-apples row.** Henad's model files also declare
+  the model's parameters, statistics and palette, which in Mesa live in the harness. The page says
+  so, but the honest fix is either to count the harness too or to stop counting Henad in that table
+  at all. Worth settling before a second engine makes the row look like a trend.
+- **`validated.json` replaced rather than merged**, so running one slow gate on its own erased the
+  verdicts around it. Fixed, and the general shape is worth watching: three files now accumulate
+  state across separate invocations, and each of them got this wrong once.
 - **Resume rebuilds state from the CSV, which is the only record.** That works, but it means the
   CSV's columns are now load-bearing for control flow as well as for results. A schema change would
   silently change what a resume skips. Worth a version column, or worth deciding the file is
@@ -204,6 +252,19 @@ That is a real property of the engine and the ladder now shows it rather than st
 
 <!-- Seeded by the agent: what the human did this session, from the agent's point of view.
      Raw material to reframe, not notes. Delete this block once rewritten.
+
+     - Set the benchmark run-sizing rule: probe small, raise if reasonable, and treat about 1000
+       seconds per configuration as the ceiling, reporting the cap instead of waiting. Gave the
+       reason as well as the rule, that Mesa can take over 100k seconds where Henad takes a couple,
+       so covering every range on every engine is not the goal. This found a real bug: the budget
+       had been per process, and with one rep per process a 220-second rep never tripped a
+       900-second limit.
+     - Asked for a progress display on the sweep, which is what surfaced the width and wrapping
+       problem in the live block.
+     - Asked whether the sweep was resumable, which is what surfaced three resume bugs, including a
+       fresh run silently truncating an existing sweep.
+     - Called both sets of numbers provisional while the laptop was under load, and said the real
+       ones would come from an idle overnight run.
 
      - Chose all four models implemented identically in all five engines, over a cheaper split
        where ants would have been stock MASON and krABMaga code with the differences merely
