@@ -97,7 +97,8 @@ Two engines with different generators can therefore agree on the rules and still
 
 The gate removes all three draws instead of trying to match generators.
 `momentum` and `random_action` are zero, so neither branch can fire.
-The field is seeded with values that are distinct within every 3 by 3 neighbourhood, so no tie is ever reached and no draw is ever taken.
+The field is seeded with values that are distinct within every 3 by 3 neighbourhood, so no tie is reached from the field the run starts on.
+Deposits then rebuild ties as the run goes, which is what bounds the tick count below.
 What is left is the rules, and any correct implementation reaches the same state from any generator.
 
 The tie-break distribution is the one thing this does not check.
@@ -135,9 +136,18 @@ Every value lies in `(0, 1]`, which also keeps the best neighbour off zero and t
 At this size the nest is `(28, 28)` and the food source `(4, 4)`, so ants 5 and 6 start on them.
 Ant 7 has an obstacle at `(9, 13)` and ant 8 one at `(21, 19)`.
 
-**Steps** 5.
-Deposits eventually recreate ties in the evolved field, and the run stops being generator-independent at nine ticks, so five leaves headroom.
-`consistency_ants.rs::the_gate_scenario_does_not_depend_on_the_random_stream` is what holds that line.
+**Steps** 4.
+
+Four rather than five, and the reason is worth stating because the first version of this document got it wrong.
+Deposits put decayed copies of the same value into different cells, and by the fifth tick two of them are exactly equal in a neighbourhood an ant is standing in.
+Ant 5 leaves equal `to_home` deposits at `(4, 5)` and `(5, 4)`; ant 0 reaches the food source in time to meet that tie on the fifth tick, where it draws at one chance in four.
+So a correct implementation reaches a different answer a quarter of the time.
+Ticks 1 to 4 take no draw at all, in `f32` and in `f64`.
+
+`consistency_ants.rs::the_gate_scenario_does_not_depend_on_the_random_stream` holds that line, over 64 seeds.
+The seed count matters: an earlier version used six, and a one-in-four tie survived it with probability 0.75 to the sixth, about 18%.
+It did survive, and the scenario shipped broken until an independent port hit the other side of the coin.
+`the_tick_after_the_gate_is_where_ties_begin` pins the reason rather than the number, so a change to the deposit rule that moves the first tie fails loudly instead of leaving the gate quietly too long.
 
 ## Procedure
 

@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.4" snapToGrid="true">
+  <code><![CDATA[;; Henad's ants rule in NetLogo, for the cross-engine benchmarks.
+;;
+;; Written from the declaration in crates/henad-models/tests/fixtures/docs/. No engine ships
+;; this model, MASON's antsforage and krABMaga's antsforaging included.
+
+globals [
+  cutdown diagonal-cutdown reward-value momentum-prob random-action-prob evaporation
+  offsets deliveries
+]
+;; site: 0 empty, 1 obstacle, 2 food source, 3 nest
+patches-own [ site to-food to-home dep-food dep-home ]
+turtles-own [ has-food last-step reward ]
+
+to setup-world [ cut rew mom rnd evap ]
+  clear-all
+  set cutdown cut
+  set diagonal-cutdown cut ^ (sqrt 2)
+  set reward-value rew
+  set momentum-prob mom
+  set random-action-prob rnd
+  set evaporation evap
+  ;; dx outer from -1 to 1, dy inner. A tie between two equally good neighbours is broken
+  ;; from the visit order, so this list cannot be reordered without moving the ants.
+  set offsets [ [-1 -1] [-1 0] [-1 1] [0 -1] [0 1] [1 -1] [1 0] [1 1] ]
+  set deliveries 0
+  build-sites
+  reset-ticks
+end
+
+;; Nest, food source and the two obstacle blobs, placed proportionally. At 200 by 200 this is
+;; where the model Henad descends from hard-codes them.
+to build-sites
+  let s 0.407 * (200 / world-width)
+  ask patches [
+    ifelse (blob? pxcor pycor (0.5 * world-width) (0.725 * world-height) s)
+        or (blob? pxcor pycor (0.45 * world-width) (0.275 * world-height) s)
+      [ set site 1 ]
+      [ set site 0 ]
+    set to-food 0   set to-home 0
+    set dep-food 0  set dep-home 0
+  ]
+  ;; After the blobs, so neither site is buried.
+  ask patch (floor (0.125 * world-width)) (floor (0.125 * world-height)) [ set site 2 ]
+  ask patch (floor (0.875 * world-width)) (floor (0.875 * world-height)) [ set site 3 ]
+end
+
+to-report blob? [ x y cx cy s ]
+  let a ((x - cx) + (y - cy)) * s
+  let b ((x - cx) - (y - cy)) * s
+  report ((a * a / 36) + (b * b / 1024)) <= 1
+end
+
+;; A timed run starts every ant on the nest holding one reward, as Henad does.
+to setup-bench [ n cut rew mom rnd evap ]
+  setup-world cut rew mom rnd evap
+  let nest patch (floor (0.875 * world-width)) (floor (0.875 * world-height))
+  create-turtles n [
+    move-to nest
+    set has-food 0
+    set last-step 255
+    set reward rew
+  ]
+end
+
+to setup-ants-lattice
+  setup-world 0.9 1 0 0 0.999
+  ;; Distinct within every 3 by 3 neighbourhood, so no tie is reached and no draw is taken.
+  ask patches [
+    set to-food (((7 * pxcor + 13 * pycor) mod 97) + 1) / 98
+    set to-home (((11 * pxcor + 5 * pycor) mod 89) + 1) / 90
+  ]
+  ;; Turtles are created in list order, so `who` matches the scenario index.
+  foreach [ [0 0 255 0 1] [31 0 255 1 1] [0 31 255 0 0.5] [31 31 255 1 0.5]
+            [16 0 255 0 1] [4 4 255 0 1] [28 28 255 1 1] [8 12 255 0 1]
+            [22 20 255 1 1] [15 15 7 0 1] [15 15 255 0 0.25] [15 16 2 1 1] ] [ a ->
+    create-turtles 1 [
+      move-to patch (item 0 a) (item 1 a)
+      set last-step item 2 a
+      set has-food item 3 a
+      set reward item 4 a
+    ]
+  ]
+  reset-ticks
+end
+
+to go
+  ;; Three passes. Deposits are read off the old field and merged with `max`, and nothing is
+  ;; written back until every ant has moved, so the tick does not depend on the order `ask`
+  ;; happens to visit the ants in.
+  ask turtles [ deposit ]
+  ask turtles [ advect ]
+  update-field
+  tick
+end
+
+;; The value this ant lays, largest over its own cell and the eight around it. Floored at what
+;; the cell already holds. Combining with `max` then reproduces the plain overwrite of the
+;; model this descends from.
+to deposit
+  let laying-food? has-food = 1
+  let here-value ifelse-value laying-food? [ to-food ] [ to-home ]
+  let best here-value
+  let centre here-value * cutdown + reward
+  if centre > best [ set best centre ]
+  foreach offsets [ d ->
+    let p patch-at (item 0 d) (item 1 d)
+    ;; Only the lattice edge stops the scan. Obstacles are not skipped here.
+    if p != nobody [
+      let v ifelse-value laying-food? [ [ to-food ] of p ] [ [ to-home ] of p ]
+      let cut ifelse-value ((item 0 d) != 0 and (item 1 d) != 0) [ diagonal-cutdown ] [ cutdown ]
+      let candidate v * cut + reward
+      if candidate > best [ set best candidate ]
+    ]
+  ]
+  ask patch-here [
+    ifelse laying-food?
+      [ if best > dep-food [ set dep-food best ] ]
+      [ if best > dep-home [ set dep-home best ] ]
+  ]
+end
+
+to advect
+  let x pxcor
+  let y pycor
+  ;; Ants follow the trip they are not currently making.
+  let reading-food? has-food = 0
+  let best -1
+  let tx x
+  let ty y
+  ;; 2 rather than 1 is the reference's off-by-one. It gives the first neighbour visited twice
+  ;; the chance of the rest, and is reproduced so the ports stay the same simulation.
+  let seen 2
+  foreach offsets [ d ->
+    let p patch-at (item 0 d) (item 1 d)
+    if p != nobody [
+      if [ site ] of p != 1 [
+        let m ifelse-value reading-food? [ [ to-food ] of p ] [ [ to-home ] of p ]
+        if m > best [ set seen 2 ]
+        if m > best or (m = best and random-float 1 < 1 / seen) [
+          set best m
+          set tx [ pxcor ] of p
+          set ty [ pycor ] of p
+        ]
+        set seen seen + 1
+      ]
+    ]
+  ]
+
+  ifelse best = 0 and last-step != 255 [
+    if random-float 1 < momentum-prob [
+      let p patch-at ((floor (last-step / 3)) - 1) ((last-step mod 3) - 1)
+      if p != nobody [
+        if [ site ] of p != 1 [ set tx [ pxcor ] of p   set ty [ pycor ] of p ]
+      ]
+    ]
+  ] [
+    if random-float 1 < random-action-prob [
+      let sx (random 3) - 1
+      let sy (random 3) - 1
+      if sx != 0 or sy != 0 [
+        let p patch-at sx sy
+        if p != nobody [
+          if [ site ] of p != 1 [ set tx [ pxcor ] of p   set ty [ pycor ] of p ]
+        ]
+      ]
+    ]
+  ]
+
+  set last-step ((tx - x) + 1) * 3 + ((ty - y) + 1)
+  ;; The deposit pass spent whatever the ant was carrying, so only a site grants more.
+  set reward 0
+  let s [ site ] of patch tx ty
+  ifelse s = 3 and has-food = 1
+    [ set reward reward-value   set has-food 0   set deliveries deliveries + 1 ]
+    [ if s = 2 and has-food = 0 [ set reward reward-value   set has-food 1 ] ]
+  move-to patch tx ty
+end
+
+to update-field
+  ask patches [
+    if dep-food > to-food [ set to-food dep-food ]
+    if dep-home > to-home [ set to-home dep-home ]
+    set to-food to-food * evaporation
+    set to-home to-home * evaporation
+    ;; Below this a trail reads as zero, so it disappears instead of asymptoting.
+    if to-food < 1e-14 [ set to-food 0 ]
+    if to-home < 1e-14 [ set to-home 0 ]
+    set dep-food 0
+    set dep-home 0
+  ]
+end
+
+to export-ants [ filename scenario-name steps ]
+  if file-exists? filename [ file-delete filename ]
+  file-open filename
+  file-print (word "# engine: NetLogo " netlogo-version)
+  file-print "# model: Henad ants rule, ported for this comparison"
+  file-print (word "# scenario: " scenario-name)
+  file-print (word "# steps: " steps)
+  file-print (word "# width: " world-width)
+  file-print (word "# height: " world-height)
+  file-print (word "# agents: " count turtles)
+  file-print "# --- agents: x y last_step has_food reward"
+  ;; sort gives `who` order, matching the scenario indices.
+  foreach sort turtles [ t ->
+    file-print (word ([ pxcor ] of t) " " ([ pycor ] of t) " " ([ last-step ] of t)
+                     " " ([ has-food ] of t) " " ([ reward ] of t))
+  ]
+  export-layer "to_food"
+  export-layer "to_home"
+  file-close
+end
+
+;; A row of the fixture is a row of the lattice, ascending in x then in y.
+to export-layer [ layer-name ]
+  file-print (word "# --- " layer-name)
+  let y min-pycor
+  while [ y <= max-pycor ] [
+    let x min-pxcor
+    while [ x <= max-pxcor ] [
+      if x > min-pxcor [ file-type " " ]
+      file-type ifelse-value (layer-name = "to_food") [ [ to-food ] of patch x y ]
+                                                      [ [ to-home ] of patch x y ]
+      set x x + 1
+    ]
+    file-print ""
+    set y y + 1
+  ]
+end
+]]></code>
+  <widgets>
+    <view x="10" wrappingAllowedX="false" y="10" frameRate="30.0" minPycor="0" height="516" showTickCounter="true" patchSize="16.0" fontSize="10" wrappingAllowedY="false" width="516" tickCounterLabel="ticks" maxPycor="31" updateMode="0" maxPxcor="31" minPxcor="0"></view>
+  </widgets>
+  <info>This model is a part of the cross-engine benchmarks for [Henad](https://github.com/micfong-z/henad). See the repository for license information and relevant documentation.
+</info>
+</model>

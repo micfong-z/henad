@@ -157,7 +157,7 @@ def validate(args):
         ]
 
     elif scenario == "ants-lattice":
-        steps, width, height = 5, 32, 32
+        steps, width, height = 4, 32, 32
         field = {name: scenarios.ants_field(width, height, name) for name in ("to_food", "to_home")}
         model = Ants(agents=scenarios.ANTS_AGENTS, field=field, rng=1, **scenarios.ANTS_PARAMS)
         for _ in range(steps):

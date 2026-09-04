@@ -158,9 +158,19 @@ fn deliveries_never_decrease() {
 /// Small enough to write out in full, large enough for both obstacle blobs and both sites.
 const GATE_W: u32 = 32;
 const GATE_H: u32 = 32;
-/// Deposits eventually recreate ties in the evolved field, and the run stops being
-/// stream-independent at nine ticks. Five leaves headroom.
-const GATE_TICKS: u32 = 5;
+/// Four, because five is already too many.
+///
+/// Deposits put decayed copies of the same value into different cells, and by the fifth tick two
+/// of them are exactly equal in a neighbourhood an ant is standing in. That tie draws, at one
+/// chance in four, so a correct implementation reaches a different answer a quarter of the time.
+/// Four ticks is tie free in both `f32` and `f64`.
+const GATE_TICKS: u32 = 4;
+
+/// Enough seeds that a tie cannot hide behind luck.
+///
+/// The first version of this test used six, and a one-in-four tie survived it with probability
+/// 0.75^6, about 18%. It did survive, and the scenario shipped broken.
+const GATE_SEEDS: u64 = 64;
 
 /// Twelve ants: the four corners, a top edge, both sites, two cells beside an obstacle, one ant
 /// carrying momentum history, and two sharing a cell so the deposit combine has something to merge.
@@ -274,13 +284,28 @@ fn the_seeded_field_has_no_ties_in_any_neighbourhood() {
 #[test]
 fn the_gate_scenario_does_not_depend_on_the_random_stream() {
     let reference = gate_run(Some(1), GATE_TICKS);
-    for seed in [2_u64, 3, 97, 20_260_904, u64::MAX] {
+    for seed in 2..=GATE_SEEDS {
         let other = gate_run(Some(seed), GATE_TICKS);
         assert!(
             other == reference,
             "seed {seed} moved the gate scenario, so it draws somewhere and cannot gate another engine"
         );
     }
+}
+
+/// The tick after the gate does draw, which is why the count is what it is.
+///
+/// Pins the reason rather than the number. If a change to the deposit rule moves the first tie,
+/// this fails and the gate's tick count has to be rechosen rather than silently left too high.
+#[test]
+fn the_tick_after_the_gate_is_where_ties_begin() {
+    let reference = gate_run(Some(1), GATE_TICKS + 1);
+    let diverges = (2..=GATE_SEEDS).any(|seed| gate_run(Some(seed), GATE_TICKS + 1) != reference);
+    assert!(
+        diverges,
+        "tick {} no longer draws, so the gate is shorter than it needs to be",
+        GATE_TICKS + 1
+    );
 }
 
 /// Both halves of the gate have to actually do something, or it would pass against a stub.
@@ -378,6 +403,11 @@ fn matches_every_reference_fixture() {
             .unwrap_or_else(|| panic!("{name} has no `steps` header"))
             .parse()
             .unwrap_or_else(|_| panic!("{name}: `steps` is not a number"));
+
+        assert!(
+            steps <= GATE_TICKS,
+            "{name} was recorded at {steps} ticks, past the {GATE_TICKS} the scenario stays draw free for.              Regenerate it rather than comparing against a run that draws."
+        );
 
         let (ours_agents, ours_food, ours_home) = gate_run(None, steps);
         assert_eq!(agents.len(), ours_agents.len(), "{name} has the wrong agent count");

@@ -142,7 +142,14 @@ class Engine:
         raise NotImplementedError
 
     def prepare(self) -> None:
-        """Compile or instantiate, once per sweep."""
+        """Compile or instantiate, once per sweep, so no build lands in a timed window."""
+
+    @staticmethod
+    def build_with(args: list[str], what: str) -> None:
+        result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=1800)
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout).strip().splitlines()[-6:]
+            raise SystemExit(f"building {what} failed:\n  " + "\n  ".join(tail))
 
     def launcher(self, variant: str) -> list[str]:
         """How this engine's harness is started, before any harness argument."""
@@ -239,8 +246,32 @@ class NetLogo(Engine):
             return "java not on PATH"
         return None
 
+    def jar(self) -> Path:
+        jars = sorted(self.home.glob("app/netlogo-*.jar"))
+        if not jars:
+            raise SystemExit(f"no netlogo jar under {self.home / 'app'}")
+        return jars[-1]
+
+    def prepare(self) -> None:
+        self.classes.mkdir(parents=True, exist_ok=True)
+        sources = sorted(str(p) for p in (BENCHMARKS / "netlogo").glob("*.java"))
+        self.build_with(["javac", "-nowarn", "-d", str(self.classes), "-cp", str(self.jar()), *sources], "netlogo")
+        self.version = self.jar().stem.replace("netlogo-", "NetLogo ")
+
     def launcher(self, variant: str) -> list[str]:
-        return ["java", "-cp", str(self.classes), "NetLogoBench"]
+        # What `netlogo-headless.sh` passes, minus everything about the GUI.
+        return [
+            "java",
+            "-XX:MaxRAMPercentage=50",
+            "-Dfile.encoding=UTF-8",
+            f"-Dnetlogo.extensions.dir={self.home / 'extensions'}",
+            "--add-exports=java.base/java.lang=ALL-UNNAMED",
+            "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
+            "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED",
+            "-cp",
+            f"{self.jar()}:{self.classes}",
+            "NetLogoBench",
+        ]
 
 
 class Mason(Engine):
@@ -258,6 +289,12 @@ class Mason(Engine):
             return "java not on PATH"
         return None
 
+    def prepare(self) -> None:
+        self.classes.mkdir(parents=True, exist_ok=True)
+        sources = sorted(str(p) for p in (BENCHMARKS / "mason").glob("*.java"))
+        self.build_with(["javac", "-nowarn", "-d", str(self.classes), "-cp", str(self.jar), *sources], "mason")
+        self.version = "MASON 22"
+
     def launcher(self, variant: str) -> list[str]:
         return ["java", "-cp", f"{self.jar}:{self.classes}", "Bench"]
 
@@ -266,16 +303,35 @@ class AgentsJl(Engine):
     def __init__(self) -> None:
         super().__init__(name="agents_jl")
         self.project = BENCHMARKS / "agents_jl"
+        self.julia = ""
+
+    def find_julia(self) -> str | None:
+        """`$JULIA`, then the path, then juliaup's shim directory.
+
+        juliaup puts its shims on the interactive path only, so a sweep started from a script finds
+        nothing and would skip the engine without saying anything useful.
+        """
+        if explicit := os.environ.get("JULIA"):
+            return explicit if Path(explicit).exists() else None
+        if found := shutil.which("julia"):
+            return found
+        shim = Path.home() / ".juliaup" / "bin" / "julia"
+        return str(shim) if shim.exists() else None
 
     def detect(self) -> str | None:
         if not (self.project / "bench.jl").exists():
             return "benchmarks/agents_jl not written yet"
-        if shutil.which("julia") is None:
-            return "julia not on PATH"
+        julia = self.find_julia()
+        if julia is None:
+            return "julia not found (set $JULIA, or put juliaup's bin on PATH)"
+        self.julia = julia
         return None
 
+    def prepare(self) -> None:
+        self.build_with([self.julia, f"--project={self.project}", "-e", "using Pkg; Pkg.instantiate()"], "agents_jl")
+
     def launcher(self, variant: str) -> list[str]:
-        return ["julia", f"--project={self.project}", "--threads", "1", str(self.project / "bench.jl")]
+        return [self.julia, f"--project={self.project}", "--threads", "1", str(self.project / "bench.jl")]
 
 
 class Krabmaga(Engine):
@@ -292,6 +348,22 @@ class Krabmaga(Engine):
 
     def threads_for(self, variant: str) -> int:
         return 1 if variant == "default" else 0
+
+    def prepare(self) -> None:
+        for variant in self.variants:
+            args = [
+                "cargo",
+                "build",
+                "--release",
+                "--manifest-path",
+                str(self.crate / "Cargo.toml"),
+                "--target-dir",
+                str(REPO_ROOT / "target" / "bench" / f"krabmaga-{variant}"),
+            ]
+            if variant != "default":
+                args += ["--features", variant]
+            self.build_with(args, f"krabmaga ({variant})")
+        self.version = "krABMaga 0.6.2"
 
     def binary_for(self, variant: str) -> Path:
         return REPO_ROOT / "target" / "bench" / f"krabmaga-{variant}" / "release" / "krabmaga-bench"

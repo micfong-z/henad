@@ -1,4 +1,4 @@
-# engine: Mesa 3.5.1
+# engine: MASON 22.0
 # model: Henad rule, ported for this comparison
 # scenario: ants-lattice
 # steps: 4

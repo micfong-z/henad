@@ -126,6 +126,23 @@ Mesa 3.5.1, same configuration and replicate count:
 
 KS diagnostics again unremarkable (`D` 0.12 to 0.18, `p` 0.40 to 0.55).
 
+The remaining four, same configuration and replicate count. Every statistic equivalent.
+
+| engine | statistic | reference | difference (95% CI) | margin |
+| --- | --- | --- | --- | --- |
+| NetLogo 7.0.4 | peak infected fraction | 0.03006 ± 0.00194 | -0.00016 ± 0.00089 | 0.004 |
+| NetLogo 7.0.4 | tick of peak | 11.12 ± 1.52 | -0.08 ± 0.66 | 1.5 |
+| NetLogo 7.0.4 | final recovered fraction | 0.32319 ± 0.01634 | 0.00242 ± 0.00693 | 0.03 |
+| MASON 22 | peak infected fraction | 0.02988 ± 0.00187 | 0.00002 ± 0.00088 | 0.004 |
+| MASON 22 | tick of peak | 10.90 ± 1.45 | 0.14 ± 0.64 | 1.5 |
+| MASON 22 | final recovered fraction | 0.32099 ± 0.01851 | 0.00461 ± 0.00735 | 0.03 |
+| Agents.jl 7.0.3 | peak infected fraction | 0.02974 ± 0.00198 | 0.00016 ± 0.00090 | 0.004 |
+| Agents.jl 7.0.3 | tick of peak | 10.84 ± 1.33 | 0.20 ± 0.63 | 1.5 |
+| Agents.jl 7.0.3 | final recovered fraction | 0.32206 ± 0.01920 | 0.00355 ± 0.00749 | 0.03 |
+| krABMaga 0.6.2 | peak infected fraction | 0.02970 ± 0.00180 | 0.00020 ± 0.00087 | 0.004 |
+| krABMaga 0.6.2 | tick of peak | 10.42 ± 1.49 | 0.62 ± 0.65 | 1.5 |
+| krABMaga 0.6.2 | final recovered fraction | 0.31952 ± 0.01767 | 0.00609 ± 0.00718 | 0.03 |
+
 ---
 
 This document is assisted with Claude Opus 5, with heavy human edits after generation.

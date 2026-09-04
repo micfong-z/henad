@@ -102,10 +102,14 @@ A port is timed only after it agrees with Henad.
 | Engine | Game of Life | Boids | SIR | Ant foraging |
 |---|---|---|---|---|
 | Mesa 3.5.1 | exact | within 1e-5 | equivalent | within 1e-6 |
+| NetLogo 7.0.4 | exact | within 1e-5 | equivalent | within 1e-6 |
+| MASON 22 | exact | within 1e-5 | equivalent | within 1e-6 |
+| Agents.jl 7.0.3 | exact | within 1e-5 | equivalent | within 1e-6 |
+| krABMaga 0.6.2 | exact | within 1e-5 | equivalent | within 1e-6 |
 
-Game of Life is worth a line on its own. Mesa's grid came out bit-identical to the NetLogo fixture
-recorded for the earlier consistency work, so three independent implementations of the same rule
-agree exactly after 101 and 500 ticks.
+Game of Life is worth a line on its own. Every port's grid came out bit-identical to the NetLogo
+fixture recorded for the earlier consistency work, so six independent implementations of the same
+rule agree exactly after 101 and 500 ticks.
 
 ## Engines and hardware
 
@@ -166,9 +170,11 @@ How much each model costs to express, counting neither blanks nor comments.
 The Agents.jl comparison reports this next to time, and it is worth keeping: an engine that wins on
 throughput and loses badly here has moved the cost rather than removed it.
 
-Read the column, not the row. Henad's files also declare that model's parameters, its statistics and
-its display palette, which in every other engine live in the harness or nowhere. The counts are
-comparable between reference engines and generous to none of them against Henad.
+Read the column, not the row, and read it loosely. Henad's files also declare that model's
+parameters, statistics and display palette, which in most engines live in the harness. NetLogo's are
+worse: a model is one file, so its count includes the scenario setup and the fixture export as well
+as the rule. Its Game of Life is 52 lines of which 12 are the rule. Making this table fair needs a
+way to count only the rule, which does not exist yet.
 
 --8<-- "docs/assets/benchmarks/tables/loc.md"
 
@@ -188,6 +194,14 @@ Where two engines cannot be made identical, the difference is stated rather than
   it visits twice the chance of the others, which drifts ants up and left. Every port reproduces
   it, so the ports stay comparable, but it is not gated and any measurement of how fast ants find
   food is partly measuring it.
+- **krABMaga's `parallel` feature does not run agents concurrently.** Its scheduler holds one lock
+  on the whole state for each agent's step, so the workers serialise, and the feature also swaps the
+  flat field vectors for sharded hash maps. Its row is reported at one effective thread and is
+  slower than the default build, which is the measurement, not a mistake.
+- **NetLogo's boids and SIR carry two costs that are not the rule**, because their models are the
+  ones the earlier consistency work validated and were left unchanged rather than tuned for speed.
+  SIR repaints every patch each tick, worth 25% of its step, and boids sorts its neighbour set,
+  worth 21%.
 - **Henad's release profile** is `opt-level = 2` rather than 3, chosen for the size of the
   WebAssembly build, where the other Rust engine in the comparison defaults to 3. Measured
   interleaved on one thread, level 3 runs Game of Life 1.3% faster and boids 4.8% slower, so the

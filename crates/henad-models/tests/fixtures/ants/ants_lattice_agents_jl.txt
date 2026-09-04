@@ -1,4 +1,4 @@
-# engine: Mesa 3.5.1
+# engine: Agents.jl 7.0.3
 # model: Henad rule, ported for this comparison
 # scenario: ants-lattice
 # steps: 4

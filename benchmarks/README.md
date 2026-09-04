@@ -53,11 +53,32 @@ partial table.
 | Mesa | `uv` | `benchmarks/mesa`, its own locked project |
 | NetLogo | NetLogo 7 and a JDK | `$NETLOGO_HOME`, else `/Applications/NetLogo 7.0.4` |
 | MASON | `mason.22.jar` and a JDK | `$MASON_JAR`, else `benchmarks/mason/mason.22.jar` |
-| Agents.jl | Julia | `julia` on the path, project `benchmarks/agents_jl` |
+| Agents.jl | Julia | `$JULIA`, else `julia` on the path, else juliaup's `~/.juliaup/bin/julia` |
 | krABMaga | cargo | `benchmarks/krabmaga`, outside the workspace |
 
 The MASON jar is not committed.
 `benchmarks/mason/fetch_mason.sh` downloads it and checks its digest.
+
+## Engine notes
+
+Things a reader of a results table has to know, that the table itself cannot say.
+
+- **NetLogo** runs all model code on one job thread, and its world is a patch grid, so a world side
+  is rounded to whole patches. Its boids and SIR models are byte copies of the reference models the
+  earlier consistency work validated, with one setup procedure appended, so the `go` that was
+  validated is the `go` that is timed. That also means they carry two costs a benchmark model would
+  not: SIR repaints every patch each tick, and boids sorts its neighbour set. Both were measured
+  (25% and 21% of their step) and both were left in place rather than tuned away.
+- **MASON** gets its synchrony from schedule orderings, since it shuffles steppables that share a
+  time and an ordering. `SimState.doLoop` is never used, because it folds `start()` into the time it
+  reports.
+- **Agents.jl** steps on one thread. Its own parallelism is `ensemblerun!` across independent
+  replicates, which is not what a thread count means here.
+- **krABMaga's `parallel` feature does not run agents concurrently.** Its scheduler takes one lock
+  around the whole state for each agent's step, so the workers serialise, and the feature also swaps
+  the flat field vectors for sharded hash maps. Measured on boids, the parallel build spends less
+  than one core of user time and the rest in the kernel contending for that lock. It is reported as
+  a separate row because it is a real configuration a user can select, not because it is faster.
 
 ## Reading a number
 

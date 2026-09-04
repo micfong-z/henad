@@ -1,12 +1,12 @@
 ---
 date: 2026-09-04
-title: "Cross-engine benchmarks — the harness, a gate for ants, and the Mesa port"
-description: The driver, protocol and validation gates for comparing Henad against five other ABM engines, the scenario that finally makes ants checkable across engines, and the first reference implementation.
+title: "Cross-engine benchmarks — the harness, a gate for ants, and all five reference engines"
+description: The driver, protocol and validation gates for comparing Henad against five other ABM engines, the scenario that finally makes ants checkable across engines, and twenty ported models that pass it.
 icon: material/note-text-outline
 status: ai-generated
 model: claude-opus-5 (Claude Code)
 issue: 25
-state: harness protocol written and Henad's side of it implemented, driver and gate scripts running end to end, ants gated across engines for the first time, all four models ported to Mesa and passing their gates, benchmarks page written
+state: harness protocol and driver running end to end, all four models ported to Mesa, NetLogo, MASON, Agents.jl and krABMaga, every port gated against Henad, and the ants gate corrected after an independent port found it was not draw free
 baseline_commit: 3f9f990
 delta_state: uncommitted on `25-cross-abm-comparison`
 ---
@@ -16,8 +16,9 @@ delta_state: uncommitted on `25-cross-abm-comparison`
 > Issue 25 asks for Henad to be measured against MASON, Agents.jl, NetLogo, Mesa and krABMaga.
 > This session built the machinery every later engine plugs into: a harness contract, a driver, a validation gate per model, and the plotting and page that turn a sweep into something publishable.
 > The one piece of real modelling work was ants, which had no cross-engine check at all and now has one.
-> Mesa is then the first engine through it, with all four models ported and gated.
-> Four engines are left, one per session.
+> Mesa went through first, by hand.
+> The other four were then ported in parallel by one agent each, reviewed adversarially, and repaired.
+> That review is what caught the ants gate being wrong in the first place.
 
 ## State before
 
@@ -127,13 +128,24 @@ benchmarks/                                       new
     protocol.md                                   the harness contract
     loc_manifest.toml                             what the lines-of-code table counts
     mason/mason.22.jar                            fetched, not committed
-    mesa/                                         new, the first reference engine
+    mesa/                                         new, written by hand
         pyproject.toml, uv.lock                   its own locked project
-        bench.py                                  Mesa's side of the harness contract
-        scenarios.py                              gate starting states, from the declarations
-        models/game_of_life.py, sir.py            a cell agent each, two-phase
-        models/boids.py                           continuous space, Henad's rule
-        models/ants.py                            cell agents over two property layers
+        bench.py, scenarios.py                    Mesa's side of the contract, and the gate states
+        models/*.py                               four models
+    netlogo/                                      new
+        NetLogoBench.java                         the controlling API, headless
+        life.nlogox, ants.nlogox                  written from the declarations
+        boids.nlogox, sir.nlogox                  copies of the validated reference models
+    mason/                                        new
+        Bench.java, HenadModel.java, Scenarios.java
+        GameOfLife.java, Sir.java, Boids.java, Ants.java
+        fetch_mason.sh                            the download the README promises
+    agents_jl/                                    new
+        Project.toml, Manifest.toml               pinned
+        bench.jl, scenarios.jl, src/*.jl          four models
+    krabmaga/                                     new, outside the cargo workspace
+        Cargo.toml, Cargo.lock                    krabmaga pinned at 0.6.2
+        src/main.rs, src/scenarios.rs, src/models/*.rs
 crates/
     henad-cli/
         Cargo.toml                                + serde_json, rayon
@@ -145,7 +157,8 @@ crates/
         field/scalar.rs                           + seed_field
     henad-models/tests/
         consistency_ants.rs                       + the gate scenario and its fixture reader
-        fixtures/{game_of_life,boids,ants}/       + five Mesa reference fixtures
+        fixtures/{game_of_life,boids,ants}/       + 25 reference fixtures, five engines
+        fixtures/docs/ants_fixture.md             the tick count corrected to four
         fixtures/docs/
             ants_fixture.md                       new, the fourth declaration
             sir_fixture.md                        flag rename
@@ -196,12 +209,67 @@ All four gates passed first time. SIR took fifty replicates a side at 256 square
 hour, and returned equivalent on all three summary statistics with the differences well inside
 their margins. Its numbers are now in `sir_fixture.md` beside the NetLogo ones.
 
+### The other four engines, in parallel
+
+NetLogo, MASON, Agents.jl and krABMaga were ported concurrently, one agent per engine, each scouting
+its toolchain, writing a harness and four models, then checked by two independent reviewers with
+different lenses: one comparing the code against the declarations rule by rule, one asking whether
+the port cheats and whether the timed region is honest.
+
+Parallelism here is only safe because the work is disjoint. Each agent owned one directory under
+`benchmarks/` and nothing else, and none could run cargo, since a shared target directory would have
+serialised them anyway. Everything shared, the driver, the manifest, the pages and the gates
+themselves, was left to one writer afterwards.
+
+All twenty ports pass, on all four gates: Game of Life exact, boids within 1e-5, ants within 1e-6,
+and SIR equivalent on all three summary statistics over fifty replicates a side. Every one of the five engines reproduces the Game of Life fixtures byte for
+byte, so six independent implementations of that rule now agree exactly.
+
+The reviews earned their place. They found a NetLogo torus wrapping its y axis at the x period,
+invisible on the square worlds the gate uses; a per-tick repaint inside NetLogo's timed region; a
+grid in MASON's ants updated every tick and never read; and a doubled memory figure caused by the
+warm-up model staying reachable.
+
+### krABMaga's parallel feature is a pessimisation, measured
+
+The architecture notes had predicted from a code reading that krABMaga's `parallel` feature would
+give no speedup and possibly a slowdown, and recorded that the prediction was untested. It is tested
+now. The scheduler takes one lock on the whole state for each agent's step, so its workers
+serialise, and the feature also swaps the flat field vectors for sharded hash maps. On boids the
+parallel build spends under one core of user time and the rest in the kernel contending for that
+lock.
+
+It still gets a row, because it is a configuration a user can select. It reports one effective
+thread, and the page says why.
+
+### The ants gate was wrong, and a port found it
+
+The scenario built earlier this session claimed to take no random draw at all. It takes one.
+
+Deposits put decayed copies of the same value into different cells, and by the fifth tick two of
+them are exactly equal in a neighbourhood an ant is standing in. Ant 5 leaves equal to-home deposits
+at two cells; ant 0 reaches the food source in time to meet that tie on the fifth tick, where it
+draws at one chance in four.
+
+The test meant to catch this used six seeds. A one-in-four tie survives six seeds with probability
+0.75 to the sixth, about 18%, and it did. Mesa's fixture won the same coin flip. The NetLogo port
+lost it, which is how the defect surfaced: a correct implementation failing a gate.
+
+Confirmed directly: across 64 seeds the scenario has one outcome at four ticks and two at five. The
+gate is now four ticks, the test runs 64 seeds, a second test pins that the fifth tick is where ties
+begin so the count cannot silently drift, and the fixture reader refuses any fixture recorded past
+the gate rather than comparing against a run that draws. Every ants fixture was regenerated.
+
+The lesson is about the test, not the model. A probabilistic property tested with six samples is
+not tested.
+
 ## State after
 
 `./check.sh` is green and the ants test file holds seven tests where it held three.
 
-Five Mesa fixtures are committed, so `cargo test` now checks Henad against another engine on three
-of the four models with nothing installed but cargo.
+Twenty-five reference fixtures are committed across five engines, so `cargo test` checks Henad
+against all of them on three of the four models with nothing installed but cargo. SIR is
+distributional and is checked by `validate_ports.py` instead.
 
 The driver runs every Henad row end to end, CPU on one thread, CPU on every core, and GPU, across all four models.
 Every other engine reports itself as not yet written, which is the correct answer and the shape the next sessions fill in.
@@ -218,10 +286,17 @@ That is a real property of the engine and the ladder now shows it rather than st
 
 ## Issues found & future directions
 
-- **The lines-of-code column is not yet an apples-to-apples row.** Henad's model files also declare
-  the model's parameters, statistics and palette, which in Mesa live in the harness. The page says
-  so, but the honest fix is either to count the harness too or to stop counting Henad in that table
-  at all. Worth settling before a second engine makes the row look like a trend.
+- **The lines-of-code table is not yet fair and now has six rows pretending otherwise.** Henad's
+  model files also declare parameters, statistics and palette. NetLogo's are worse: a model is one
+  file, so its count includes the scenario setup and the fixture export as well as the rule, and its
+  Game of Life is 52 lines of which 12 are the rule. Counting only the rule needs a marker
+  convention that does not exist. Until it does, the table is a rough gesture and the page should
+  probably say less than it does.
+- **NetLogo's boids and SIR carry costs that are not the rule**, because they are byte copies of the
+  models the consistency work validated and were deliberately not tuned. SIR repaints every patch
+  each tick, worth 25% of its step, and boids sorts its neighbour set, worth 21%. Both are safe to
+  remove without changing any fixture. Leaving them is defensible and so is stripping them, but the
+  choice should be made deliberately rather than by inertia.
 - **`validated.json` replaced rather than merged**, so running one slow gate on its own erased the
   verdicts around it. Fixed, and the general shape is worth watching: three files now accumulate
   state across separate invocations, and each of them got this wrong once.
