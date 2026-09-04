@@ -90,6 +90,20 @@ and the named region is marked in the source with a pair of comments:
 Those two lines are a build directive rather than a comment, and are the one exception to the
 comment rules below. Do not include by line range, which is also supported and drifts silently.
 
+## Cross-engine benchmarks
+
+`benchmarks/` holds one directory per reference engine (Mesa, NetLogo, MASON, Agents.jl,
+krABMaga), each with a harness and one implementation per model. Every implementation is written
+from the same declaration the consistency fixtures use, and `scripts/validate_ports.py` checks it
+against Henad before `scripts/compare_bench.py` will time it. `benchmarks/protocol.md` is the
+interface every harness implements, and `henad-cli --json` is Henad's side of it.
+
+Two rules that are easy to break. A port is written the way a competent user of that engine would
+write it, using only its documented API, since the engine is being measured as its users meet it.
+And no engine's stock flocking or foraging example is used: that would compare two simulations, not
+two engines. `benchmarks/krabmaga` is outside the cargo workspace (`exclude` in the root
+`Cargo.toml`), so `./check.sh` never builds it.
+
 ## Writing style
 
 ### Spelling
@@ -276,6 +290,9 @@ Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps
 one, `--export-stats` for the time series)
 Sweep every model across the config matrix: `python3 scripts/bench_matrix.py` (grid models scale
 over grid size, agent models over agent count at constant density; `--dry-run` to see the matrix)
+Sweep every installed engine across the cross-engine ladder: `uv run --project scripts
+scripts/compare_bench.py` (`--dry-run` for the matrix, `--smoke` for one small point each); gate the
+ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py`
 Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` writes `site/`)
 
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).

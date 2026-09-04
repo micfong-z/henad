@@ -1,0 +1,20 @@
+# Files counted for the lines-of-code table on the benchmarks page.
+#
+# The secondary metric the Agents.jl comparison reports alongside time: how much a model costs to
+# express. Blank lines and comments are excluded, and a NetLogo model counts its code section only.
+# List the model itself, never the harness, which is scaffolding no model author would write.
+
+[henad]
+game_of_life = ["crates/henad-models/src/game_of_life.rs"]
+boids = [
+    "crates/henad-models/src/boids/mod.rs",
+    "crates/henad-models/src/boids/lanes.rs",
+    "crates/henad-models/src/boids/step.rs",
+]
+sir = ["crates/henad-models/src/sir.rs"]
+ants = [
+    "crates/henad-models/src/ants/mod.rs",
+    "crates/henad-models/src/ants/lanes.rs",
+    "crates/henad-models/src/ants/step.rs",
+    "crates/henad-models/src/ants/field.rs",
+]

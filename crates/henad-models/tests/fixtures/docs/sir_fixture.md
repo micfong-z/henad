@@ -91,7 +91,7 @@ Each margin is several times the CI half-width, so two correct engines should pa
 
 ```bash
 cargo build --release -p henad-cli
-uv run --project scripts scripts/compare_sir.py --netlogo path/to/netlogo_csvs --generate 50
+uv run --project scripts scripts/compare_sir.py --reference path/to/reference_csvs --generate 50
 ```
 
 The script reports `EQUIVALENT`, `INCONCLUSIVE` or `DIFFERENT` per statistic. `INCONCLUSIVE` indicates that the interval is wider than the margin, so the replicate count is too low to decide, and more runs are needed.

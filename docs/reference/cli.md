@@ -22,6 +22,8 @@ henad-cli [OPTIONS] [MODEL]
 | `--list` | | Print the available model ids and exit |
 | `--params` | | Print the model's parameters, with kinds, defaults and ranges, and exit |
 | `--info` | | Print host and GPU details. Without a model, prints and exits. With a model, prints as a provenance header |
+| `--json` | | Emit one JSON object per line instead of the human report, for a driver to parse |
+| `--threads <N>` | 0 | Worker threads for CPU models. 0 leaves rayon's own choice, one per logical cpu |
 | `--set <ID=VALUE>` | | Override one parameter. Repeatable |
 | `--steps <N>` | 1000 | Steps to run and time per rep |
 | `--reps <N>` | 1 | Independent timed runs, each on a freshly created state |
@@ -54,6 +56,27 @@ Record the per-tick stat series instead of a timing:
 ```bash
 cargo run --release -p henad-cli -- sir --steps 2000 --stats-every 10 --export-stats sir.csv
 ```
+
+Measure one thread against every core, which is what the cross-engine comparison reports:
+
+```bash
+cargo run --release -p henad-cli -- boids --threads 1 --steps 100 --reps 5 --json
+```
+
+## Machine-readable output
+
+`--json` replaces the report with one JSON object per line on stdout, leaving progress on stderr.
+An `info` line comes first, then one `rep` line per timed rep as it finishes, then a `summary`.
+A run killed part way still reports the reps it managed.
+
+```json
+{"kind":"info","engine":"henad","engine_version":"0.1.0","model":"boids","variant":"cpu","threads":1}
+{"kind":"rep","rep":0,"seed":42,"steps":100,"elapsed_s":1.234,"population":50000,"heap_bytes":2050020}
+```
+
+This is the same shape every other engine in the [benchmarks](../benchmarks.md) speaks, so one
+driver reads them all.
+`--info --json` prints host and adapter details in the same stream.
 
 Always build with `--release`.
 A debug build steps one to two orders of magnitude slower, and its timings mean nothing.

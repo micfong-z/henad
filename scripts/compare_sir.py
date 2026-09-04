@@ -9,7 +9,7 @@ measured run-to-run spread.
 
 Usage:
 
-    uv run scripts/compare_sir.py --netlogo DIR --generate 50
+    uv run scripts/compare_sir.py --reference DIR --generate 50
 """
 
 from __future__ import annotations
@@ -168,8 +168,11 @@ def verdict(diff: float, half_width: float, margin: float) -> Verdict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--netlogo", type=Path, required=True, help="directory of reference CSVs")
-    parser.add_argument("--henad", type=Path, help="directory of Henad CSVs (default: <netlogo>/../henad)")
+    # `--netlogo` is the old name, kept because the fixture docs give it.
+    parser.add_argument(
+        "--reference", "--netlogo", dest="reference", type=Path, required=True, help="directory of reference CSVs"
+    )
+    parser.add_argument("--henad", type=Path, help="directory of Henad CSVs (default: <reference>/../henad)")
     parser.add_argument("--generate", type=int, metavar="N", help="produce N Henad replicates first")
     parser.add_argument("--grid", type=int, default=DEFAULT_GRID)
     parser.add_argument("--beta", type=float, default=DEFAULT_BETA)
@@ -178,12 +181,12 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
     args = parser.parse_args()
 
-    henad_dir = args.henad or args.netlogo.parent / "henad"
+    henad_dir = args.henad or args.reference.parent / "henad"
     if args.generate:
         print(f"generating {args.generate} Henad replicates into {henad_dir}", file=sys.stderr)
         generate_henad(henad_dir, args.generate, args)
 
-    reference = read_dir(args.netlogo)
+    reference = read_dir(args.reference)
     henad = read_dir(henad_dir)
 
     print(f"\nHenad n={len(henad)}   reference n={len(reference)}")

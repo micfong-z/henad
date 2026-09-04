@@ -45,6 +45,7 @@ use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
 use numfmt::{Formatter, Scales};
 
+mod json_report;
 mod stats_export;
 
 use stats_export::StatsWriter;
@@ -107,12 +108,29 @@ struct Args {
     /// prints as a provenance header before the benchmark.
     #[arg(long)]
     info: bool,
+
+    /// Emit one JSON object per line instead of the human report, for a driver to parse.
+    #[arg(long)]
+    json: bool,
+
+    /// Worker threads for CPU models. 0 leaves rayon's own choice, which is one per logical cpu.
+    #[arg(long, default_value_t = 0, value_name = "N")]
+    threads: usize,
 }
 
 fn main() -> Result<()> {
     install_panic_hook();
 
     let args = Args::parse();
+
+    // Before anything builds a state. Rayon's global pool is set once per process, and
+    // `HostInfo::worker_threads` reads back whatever it ends up with.
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .context("cannot size the worker pool")?;
+    }
 
     // Best-effort headless GPU: acquire a device so GPU models can be listed and run. If none is
     // available (e.g. CI with no GPU), fall back to a CPU-only registry rather than failing.
@@ -137,7 +155,11 @@ fn main() -> Result<()> {
     }
 
     if args.info {
-        print_runtime_info(runtime.as_ref());
+        if args.json {
+            json_report::runtime(runtime.as_ref());
+        } else {
+            print_runtime_info(runtime.as_ref());
+        }
     }
 
     let registry = model_registry(gpu_ctx.clone());
@@ -183,7 +205,8 @@ fn main() -> Result<()> {
         return export_final(entry, &params, &args, path);
     }
 
-    run_benchmark(entry, &params, &args, gpu_ctx.as_ref())
+    let adapter = runtime.as_ref().map(|r| r.adapter.name.clone());
+    run_benchmark(entry, &params, &args, gpu_ctx.as_ref(), adapter.as_deref())
 }
 
 /// Benchmark provenance. Goes to stdout with the results, not the progress log.
@@ -276,11 +299,25 @@ fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -
 
 /// Dispatch to the CPU or GPU benchmark depending on which backend the registry entry produces.
 /// The probe state created here is thrown away, and each per-rep loop builds its own.
-fn run_benchmark(entry: &ModelEntry, params: &[ParamValue], args: &Args, gpu_ctx: Option<&GpuContext>) -> Result<()> {
+fn run_benchmark(
+    entry: &ModelEntry,
+    params: &[ParamValue],
+    args: &Args,
+    gpu_ctx: Option<&GpuContext>,
+    adapter: Option<&str>,
+) -> Result<()> {
     match (entry.create)(params, args.seed)? {
-        ModelState::Cpu(_) => bench_cpu(entry, params, args),
+        ModelState::Cpu(_) => {
+            if args.json {
+                json_report::info(&entry.id, "cpu", rayon::current_num_threads(), None);
+            }
+            bench_cpu(entry, params, args)
+        }
         ModelState::Gpu(_) => {
             let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
+            if args.json {
+                json_report::info(&entry.id, "gpu", rayon::current_num_threads(), adapter);
+            }
             bench_gpu(entry, params, args, ctx)
         }
     }
@@ -325,6 +362,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         // For grid models `population()` is the total cell count (width×height); for agent models
         // it is the agent count. Either way it is the right denominator for agent-updates/sec.
         population = state.population();
+        let heap_bytes = state.heap_bytes();
         grid_dims = state.grid_view().map(|g| (g.width, g.height));
 
         let start = Instant::now();
@@ -335,9 +373,31 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         let elapsed = start.elapsed();
         eprintln!("{elapsed:>8.3?}");
         samples.push(elapsed);
+        if args.json {
+            json_report::rep(
+                rep,
+                args.seed,
+                args.steps,
+                args.warmup,
+                elapsed,
+                population,
+                Some(heap_bytes),
+            );
+        }
     }
 
-    report(&samples, args.steps, population, grid_dims)?;
+    if args.json {
+        json_report::summary(
+            &samples,
+            args.steps,
+            population,
+            grid_dims,
+            &entry.param_descriptors,
+            params,
+        );
+    } else {
+        report(&samples, args.steps, population, grid_dims)?;
+    }
     Ok(())
 }
 
@@ -433,12 +493,26 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
         let elapsed = start.elapsed();
         eprintln!("{elapsed:>8.3?}");
         samples.push(elapsed);
+        if args.json {
+            json_report::rep(rep, args.seed, args.steps, args.warmup, elapsed, population, None);
+        }
     }
 
     // GPU state exposes no `grid_view()`, so derive dimensions from the resolved params, which
     // are exactly what the model was built from.
     let grid_dims = grid_dims_from_params(&entry.param_descriptors, params);
-    report(&samples, args.steps, population, grid_dims)?;
+    if args.json {
+        json_report::summary(
+            &samples,
+            args.steps,
+            population,
+            grid_dims,
+            &entry.param_descriptors,
+            params,
+        );
+    } else {
+        report(&samples, args.steps, population, grid_dims)?;
+    }
     Ok(())
 }
 
