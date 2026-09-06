@@ -12,6 +12,7 @@ edit_uri = "edit/master/docs/"
 docs_dir = "docs"
 site_dir = "site"
 
+
 extra_css = ["stylesheets/henad.css"]
 
 nav = [
@@ -91,6 +92,8 @@ nav = [
             { "#19, 2026-08-24" = "developing/agent-record/20260824-19-doc-tone-rewrite.md" },
             { "#20, 2026-08-28" = "developing/agent-record/20260828-20-second-tone-pass.md" },
             { "#21, 2026-09-02" = "developing/agent-record/20260902-21-third-tone-pass.md" },
+            { "#22, 2026-09-04" = "developing/agent-record/20260904-22-cross-engine-benchmarks.md" },
+            { "#23, 2026-09-05" = "developing/agent-record/20260905-23-audit-repairs.md" },
         ] },
     ] },
 ]

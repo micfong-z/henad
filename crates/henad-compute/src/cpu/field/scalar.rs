@@ -82,6 +82,23 @@ impl<S: ScalarFieldSpec> ScalarField<S> {
         &self.display_cells
     }
 
+    /// Overwrite field `i`'s current values, for reproducing a particular run.
+    ///
+    /// The counterpart of [`crate::cpu::grid_engine::GridModelState::from_cells`] for a field
+    /// layer. Deposits and decay make an evolved field impractical to reach by stepping, and a
+    /// hand written one is what pins the advection rule across engines.
+    pub fn seed_field(&mut self, i: usize, values: &[f32]) -> bool {
+        let Some(grid) = self.fields.get_mut(i) else {
+            return false;
+        };
+        let current = grid.current_mut();
+        if current.len() != values.len() {
+            return false;
+        }
+        current.copy_from_slice(values);
+        true
+    }
+
     /// Every field's current side, for an agent kernel to read.
     pub fn current(&self) -> ScalarRead<'_> {
         ScalarRead {

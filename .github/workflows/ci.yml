@@ -122,6 +122,56 @@ jobs:
       - name: Doc tests
         run: cargo test --locked --workspace --doc
 
+  ports:
+    name: reference ports build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # krABMaga depends on plotters off wasm, and plotters links system fontconfig through
+      # font-kit. macOS reaches Core Text instead and needs nothing installed.
+      - name: Install krABMaga build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfontconfig1-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: benchmarks/krabmaga
+
+      # Outside the cargo workspace, so nothing else in CI ever touches it.
+      - name: krABMaga
+        run: |
+          cargo check --locked --manifest-path benchmarks/krabmaga/Cargo.toml --all-targets
+          cargo check --locked --manifest-path benchmarks/krabmaga/Cargo.toml --all-targets --features parallel
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # Imports every model, which is as close to compiling as Python gets.
+      - name: Mesa
+        run: |
+          uv run --project benchmarks/mesa python -c "
+          import sys; sys.path.insert(0, 'benchmarks/mesa')
+          import scenarios
+          from models.ants import Ants
+          from models.boids import Boids
+          from models.game_of_life import GameOfLife
+          from models.sir import Sir
+          "
+          uv run --project benchmarks/mesa python benchmarks/mesa/bench.py \
+            --model game_of_life --grid 16 16 --steps 2 --reps 1
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+
+      - name: Agents.jl
+        run: |
+          julia --project=benchmarks/agents_jl -e 'using Pkg; Pkg.instantiate()'
+          julia --project=benchmarks/agents_jl benchmarks/agents_jl/bench.jl \
+            --model game_of_life --grid 16 16 --steps 2 --reps 1
+
   web:
     name: trunk build
     runs-on: ubuntu-24.04

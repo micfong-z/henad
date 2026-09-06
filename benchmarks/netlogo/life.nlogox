@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.4" snapToGrid="true">
+  <code><![CDATA[;; Henad's Game of Life rule in NetLogo, for the cross-engine benchmarks.
+;;
+;; Written from the declaration in crates/henad-models/tests/fixtures/docs/, not from
+;; Wilensky's Life, which is licensed separately.
+
+patches-own [ alive? alive-next ]
+
+to setup-blank
+  clear-all
+  ask patches [ set alive? false ]
+  reset-ticks
+end
+
+;; An exact set of live cells, as [x y] pairs, for a gate scenario.
+to setup-pattern [ cells ]
+  setup-blank
+  foreach cells [ c -> ask patch (item 0 c) (item 1 c) [ set alive? true ] ]
+end
+
+;; Glider at the Henad origin.
+;;   .X.
+;;   ..X
+;;   XXX
+to setup-glider
+  setup-pattern [ [1 0] [2 1] [0 2] [1 2] [2 2] ]
+end
+
+;; R-pentomino at the Henad origin.
+;;   .XX
+;;   XX.
+;;   .X.
+to setup-r-pentomino
+  setup-pattern [ [1 0] [2 0] [0 1] [1 1] [1 2] ]
+end
+
+;; A timed run fills at random instead, the way Henad's own init does.
+to setup-bench [ density ]
+  setup-blank
+  ask patches [ set alive? (random-float 1 < density) ]
+end
+
+to go
+  ;; Two passes, so no cell sees a neighbour that has already moved on. `ask` is sequential.
+  ;; Counting and applying together would make the result depend on the visit order.
+  ask patches [
+    let k count neighbors with [ alive? ]
+    set alive-next ifelse-value alive? [ k = 2 or k = 3 ] [ k = 3 ]
+  ]
+  ask patches [ set alive? alive-next ]
+  tick
+end
+
+to-report live-count
+  report count patches with [ alive? ]
+end
+
+to export-grid [ filename scenario-name steps ]
+  if file-exists? filename [ file-delete filename ]
+  file-open filename
+  file-print (word "# engine: NetLogo " netlogo-version)
+  file-print "# model: Henad Game of Life rule, ported for this comparison"
+  file-print (word "# scenario: " scenario-name)
+  file-print (word "# steps: " steps)
+  file-print (word "# width: " world-width)
+  file-print (word "# height: " world-height)
+  ;; Ascending pycor, so Henad row y is NetLogo row y.
+  let y min-pycor
+  while [ y <= max-pycor ] [
+    let x min-pxcor
+    while [ x <= max-pxcor ] [
+      file-type ifelse-value ([ alive? ] of patch x y) [ "1" ] [ "0" ]
+      set x x + 1
+    ]
+    file-print ""
+    set y y + 1
+  ]
+  file-close
+end
+]]></code>
+  <widgets>
+    <view x="10" wrappingAllowedX="true" y="10" frameRate="30.0" minPycor="0" height="516" showTickCounter="true" patchSize="8.0" fontSize="10" wrappingAllowedY="true" width="516" tickCounterLabel="ticks" maxPycor="63" updateMode="0" maxPxcor="63" minPxcor="0"></view>
+  </widgets>
+  <info>This model is a part of the cross-engine benchmarks for [Henad](https://github.com/micfong-z/henad). See the repository for license information and relevant documentation.
+</info>
+</model>

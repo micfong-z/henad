@@ -9,7 +9,7 @@ measured run-to-run spread.
 
 Usage:
 
-    uv run scripts/compare_sir.py --netlogo DIR --generate 50
+    uv run scripts/compare_sir.py --reference DIR --generate 50
 """
 
 from __future__ import annotations
@@ -110,7 +110,7 @@ def read_dir(directory: Path) -> list[Run]:
 def generate_henad(out_dir: Path, count: int, args: argparse.Namespace) -> None:
     """Run `henad-cli` once per seed. Seeds are 1..count, matching the reference procedure."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    binary = REPO_ROOT / "target" / "release" / "henad-cli"
+    binary = args.binary
     if not binary.exists():
         raise SystemExit(f"{binary} not found; run `cargo build --release -p henad-cli` first")
 
@@ -168,9 +168,13 @@ def verdict(diff: float, half_width: float, margin: float) -> Verdict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--netlogo", type=Path, required=True, help="directory of reference CSVs")
-    parser.add_argument("--henad", type=Path, help="directory of Henad CSVs (default: <netlogo>/../henad)")
+    # `--netlogo` is the old name, kept because the fixture docs give it.
+    parser.add_argument(
+        "--reference", "--netlogo", dest="reference", type=Path, required=True, help="directory of reference CSVs"
+    )
+    parser.add_argument("--henad", type=Path, help="directory of Henad CSVs (default: <reference>/../henad)")
     parser.add_argument("--generate", type=int, metavar="N", help="produce N Henad replicates first")
+    parser.add_argument("--binary", type=Path, default=REPO_ROOT / "target" / "release" / "henad-cli")
     parser.add_argument("--grid", type=int, default=DEFAULT_GRID)
     parser.add_argument("--beta", type=float, default=DEFAULT_BETA)
     parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
@@ -178,12 +182,12 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
     args = parser.parse_args()
 
-    henad_dir = args.henad or args.netlogo.parent / "henad"
+    henad_dir = args.henad or args.reference.parent / "henad"
     if args.generate:
         print(f"generating {args.generate} Henad replicates into {henad_dir}", file=sys.stderr)
         generate_henad(henad_dir, args.generate, args)
 
-    reference = read_dir(args.netlogo)
+    reference = read_dir(args.reference)
     henad = read_dir(henad_dir)
 
     print(f"\nHenad n={len(henad)}   reference n={len(reference)}")
@@ -194,13 +198,13 @@ def main() -> int:
     print(header)
     print("-" * len(header))
 
-    all_equivalent = True
+    verdicts = []
     for spec in STATISTICS:
         h = [spec.of(r) for r in henad]
         n = [spec.of(r) for r in reference]
         diff, half = difference_interval(h, n)
         result = verdict(diff, half, spec.margin)
-        all_equivalent &= result == Verdict.EQUIVALENT
+        verdicts.append(result)
         print(
             f"{spec.label:>24} | "
             f"{spec.fmt.format(st.mean(h)):>8} ±{spec.fmt.format(st.stdev(h)):>9} | "
@@ -220,11 +224,16 @@ def main() -> int:
         print(f"{spec.label:>24} | D = {result.statistic:.4f}  p = {result.pvalue:.4f}") # type: ignore
 
     print()
-    if all_equivalent:
+    if all(v == Verdict.EQUIVALENT for v in verdicts):
         print("All statistics equivalent within margin.")
         return 0
-    print("Not all statistics equivalent - see the table above.")
-    return 1
+    if any(v == Verdict.DIFFERENT for v in verdicts):
+        print("At least one statistic differs beyond its margin - see the table above.")
+        return 1
+    # Undecided, not failed. More replicates is the answer, and the caller needs to tell the two
+    # apart rather than record a correct engine as a failure.
+    print("At least one statistic is inconclusive; run more replicates.")
+    return 2
 
 
 if __name__ == "__main__":

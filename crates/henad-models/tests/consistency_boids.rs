@@ -84,6 +84,23 @@ fn scenario(name: &str) -> Agents {
         .unwrap_or_else(|| panic!("fixture declares unknown scenario `{key}`"))
 }
 
+/// Where the reference fixtures live.
+///
+/// `HENAD_FIXTURE_DIR` points the gate at a directory holding one engine's candidates, so a
+/// failure names that engine and no tracked fixture is written or removed to find out.
+fn fixture_dir(model: &str) -> std::path::PathBuf {
+    match std::env::var_os("HENAD_FIXTURE_DIR") {
+        Some(root) => std::path::PathBuf::from(root).join(model),
+        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(model),
+    }
+}
+
+/// One tick, as `boids_fixture.md` declares for both scenarios.
+///
+/// Henad holds `f32` where the others hold `f64`, and the model is chaotic enough that a second
+/// tick would put the two flocks past any useful tolerance.
+const DECLARED_STEPS: u32 = 1;
+
 const WORLD: f32 = 100.0;
 const MAX_SPEED: f32 = 8.0;
 const MIN_SPEED: f32 = 2.0;
@@ -160,7 +177,7 @@ fn parse_fixture(text: &str) -> Fixture {
 /// Henad's agents against every reference within tolerance.
 #[test]
 fn matches_every_reference_fixture() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/boids");
+    let dir = fixture_dir("boids");
     let mut seen: Vec<String> = Vec::new();
 
     let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
@@ -186,6 +203,17 @@ fn matches_every_reference_fixture() {
             .get("scenario")
             .unwrap_or_else(|| panic!("{name} has no `scenario` header"));
         let agents = scenario(which);
+        assert_eq!(
+            steps, DECLARED_STEPS,
+            "{name} was recorded at {steps} ticks where `{which}` declares {DECLARED_STEPS}"
+        );
+        if let Some(world) = fixture.header.get("world") {
+            assert_eq!(
+                world.parse::<f32>().ok(),
+                Some(WORLD),
+                "{name} declares world {world} where the scenario is {WORLD}"
+            );
+        }
 
         assert_eq!(
             fixture.agents.len(),

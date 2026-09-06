@@ -197,17 +197,17 @@ We will build two elliptical walls of obstacles, and place the nest and food sou
 
 ``` { .rust .annotate title="crates/henad-models/src/foraging/field.rs" }
     fn build_sites(width: u32, height: u32, sites: &mut [u8]) {
-        let (w, h) = (width as f32, height as f32);
+        let (w, h) = (f64::from(width), f64::from(height));
         let size = 0.407 * (200.0 / w); // (1)!
-        let blob = |x: f32, y: f32, cx: f32, cy: f32| -> bool {
-            let a = (x - cx) * size + (y - cy) * size;
-            let b = (x - cx) * size - (y - cy) * size;
+        let blob = |x: f64, y: f64, cx: f64, cy: f64| -> bool {
+            let a = ((x - cx) + (y - cy)) * size;
+            let b = ((x - cx) - (y - cy)) * size;
             a * a / 36.0 + b * b / 1024.0 <= 1.0 // (2)!
         };
 
         for j in 0..height {
             for i in 0..width {
-                let (x, y) = (i as f32, j as f32);
+                let (x, y) = (f64::from(i), f64::from(j));
                 if blob(x, y, 0.500 * w, 0.725 * h) || blob(x, y, 0.450 * w, 0.275 * h) {
                     sites[(j * width + i) as usize] = OBSTACLE;
                 }
