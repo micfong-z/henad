@@ -48,20 +48,30 @@ BENCHMARKS = REPO_ROOT / "benchmarks"
 # density, which is `bench_matrix.py`'s rule. Step counts are uniform across engines; a slow engine
 # runs out of time rather than out of steps, and that is the measurement.
 
-GRID_SIZES = [64, 256, 1024, 2048, 4096]
+GRID_SIZES = [64, 128, 256, 512, 1024, 2048, 4096]
 
 # Untimed steps on a throwaway state before Henad's GPU reps, enough to pay shader compilation and
 # lift the clocks. Measured: without it rep 0 of a 1024 squared grid ran 2.3x the warm time.
 GPU_RAMP_STEPS = 1000
 
+# Rungs are evenly spaced on a log axis, grids doubling their side and agent models stepping by
+# the square root of ten. A slope fitted over three or four irregular rungs was mostly reading the
+# spacing. Boids stops at 1000 going down: density is fixed, so the world is `sqrt(20n)`, and below
+# about 500 agents that falls under twice `visual_range` and every agent's neighbourhood wraps onto
+# itself.
 LADDER: dict[str, dict] = {
     "game_of_life": {"axis": "grid", "points": GRID_SIZES, "steps": 100, "warmup": 10},
     "sir": {"axis": "grid", "points": GRID_SIZES, "steps": 100, "warmup": 10},
-    "boids": {"axis": "agents", "points": [1_000, 10_000, 50_000, 100_000, 1_000_000], "steps": 100, "warmup": 10},
+    "boids": {
+        "axis": "agents",
+        "points": [1_000, 3_000, 10_000, 30_000, 100_000, 300_000, 1_000_000],
+        "steps": 100,
+        "warmup": 10,
+    },
     # Ants stops at 200k. Constant density puts twenty field cells behind every ant, and the
     # field update is per cell per tick, so a 2M rung spends its time on the field rather than
     # on the agents. `bench_matrix.py` already carries Henad past this point.
-    "ants": {"axis": "agents", "points": [2_000, 20_000, 200_000], "steps": 200, "warmup": 20},
+    "ants": {"axis": "agents", "points": [2_000, 6_000, 20_000, 60_000, 200_000], "steps": 200, "warmup": 20},
 }
 
 MODELS = list(LADDER)

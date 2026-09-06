@@ -56,12 +56,15 @@ The driver computes that itself from the per-rep times, so no engine's own arith
 ### Scale
 
 Grid models climb 64² to 4096²; agent models climb their population at the model's own default density, so the neighbour count per agent stays fixed and a larger run is more agents rather than more work per agent as well.
+Rungs are evenly spaced on a log axis, grids doubling their side and agent models stepping by the square root of ten, so a fitted slope reads the engine rather than the spacing.
+Boids stops at a thousand going down.
+Density is fixed, which puts the world at `sqrt(20n)`, and below about five hundred agents that falls under twice the visual range and every agent's neighbourhood wraps onto itself.
 
 | Model | Rungs | Steps |
 |---|---|---|
-| Game of Life, SIR | 64², 256², 1024², 2048², 4096² | 100 |
-| Boids | 1k, 10k, 50k, 100k, 1M | 100 |
-| Ant foraging | 2k, 20k, 200k | 200 |
+| Game of Life, SIR | 64², 128², 256², 512², 1024², 2048², 4096² | 100 |
+| Boids | 1k, 3k, 10k, 30k, 100k, 300k, 1M | 100 |
+| Ant foraging | 2k, 6k, 20k, 60k, 200k | 200 |
 
 Ant foraging stops at 200k because constant density puts twenty field cells behind every ant, and the field is updated per cell per tick.
 A larger rung would spend its time on the field rather than on the agents, which is not what an agent-scaling curve is for.
