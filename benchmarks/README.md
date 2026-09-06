@@ -84,11 +84,19 @@ Things a reader of a results table has to know, that the table itself cannot say
 - **Mesa turns the cyclic collector off inside its timed window**, where MASON's and NetLogo's
   collectors run inside theirs. Both are disclosed rather than equalised, since either choice
   favours somebody.
-- **krABMaga's `parallel` feature does not run agents concurrently.** Its scheduler takes one lock
-  around the whole state for each agent's step, so the workers serialise, and the feature also swaps
-  the flat field vectors for sharded hash maps. Measured on boids, the parallel build spends less
-  than one core of user time and the rest in the kernel contending for that lock. It is reported as
-  a separate row because it is a real configuration a user can select, not because it is faster.
+- **krABMaga's `parallel` feature does not run agents concurrently.** `Schedule::step` divides the
+  agents across crossbeam workers, then each worker takes one lock on the whole state and holds it
+  across that agent's `before_step`, `step` and `after_step`. Two agents never run at once. The same
+  feature swaps `DenseNumberGrid2D` and `Field2D` from flat vectors to sharded hash maps, and its
+  own `THREAD_NUM` reads `--nt` off the process argv and falls back to one thread. Measured on
+  boids, the build spends less than one core of user time and the rest in the kernel contending for
+  that lock.
+
+  It is gated and built like any other variant, and left off the ladder. A ladder of it would
+  measure krABMaga's serial path carrying that overhead, at 16.7x the default build on 1024² SIR,
+  16.1x on 2048² Game of Life and 11.9x on 20k ants. Two rungs say that. Eighteen say it again.
+  `compare_bench.py` carries it in `untimed`, so a future release that changes the scheduler needs
+  one line to put it back.
 
 ## Reading a number
 

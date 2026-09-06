@@ -232,8 +232,8 @@ def main() -> int:
             print(f"skipping {engine.name}: {reason}", file=sys.stderr)
             continue
         engine.prepare()
-        # Every variant is gated. krABMaga's `parallel` build swaps its field storage outright and
-        # was timed on the default build's verdict.
+        # Every variant is gated, timed or not. krABMaga's `parallel` build swaps its field storage
+        # outright, and a release that changes the swap shows up here.
         for variant in engine.variants:
             key = engine.name if variant == engine.variants[0] else f"{engine.name}/{variant}"
             results[key] = {}

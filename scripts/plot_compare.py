@@ -5,10 +5,10 @@
 # ///
 """Turn a cross-engine sweep into the figures and tables the benchmarks page includes.
 
-Reads whatever `compare_bench.py` wrote and produces, per model, a throughput curve against scale
-and a table of median times normalised to Henad on one thread. Lines of code come from
-`benchmarks/loc_manifest.toml`, the secondary metric the Agents.jl comparison reports next to time:
-how much a model costs to express.
+Reads whatever `compare_bench.py` wrote and produces, per model, the measured time against scale,
+two throughput curves derived from it, and a table of median times normalised to Henad on one
+thread. Lines of code come from `benchmarks/loc_manifest.toml`, the secondary metric the Agents.jl
+comparison reports next to time: how much a model costs to express.
 
     uv run scripts/plot_compare.py results/compare/<host>_<date>.csv
     uv run scripts/plot_compare.py results/compare/<host>_<date>.csv --publish
@@ -85,7 +85,13 @@ class Series:
             return {"1t": "Henad, 1 thread", "all": "Henad, all cores", "gpu": "Henad, GPU"}.get(
                 self.variant, f"Henad ({self.variant})"
             )
-        pretty = {"agents_jl": "Agents.jl", "netlogo": "NetLogo", "mesa": "Mesa", "mason": "MASON"}
+        pretty = {
+            "agents_jl": "Agents.jl",
+            "netlogo": "NetLogo",
+            "mesa": "Mesa",
+            "mason": "MASON",
+            "krabmaga": "krABMaga",
+        }
         name = pretty.get(self.engine, self.engine)
         return name if self.variant == "default" else f"{name} ({self.variant})"
 
@@ -148,6 +154,15 @@ def series_of(rows: list[dict]) -> dict[Series, list[dict]]:
     return grouped
 
 
+def y_label(metric: str, points: list[dict]) -> str:
+    if metric == "steps_per_sec":
+        return "steps / second"
+    if metric == "updates_per_sec":
+        return "cell or agent updates / second"
+    steps = {r["steps"] for r in points}
+    return f"seconds for {steps.pop()} steps" if len(steps) == 1 else "seconds"
+
+
 def draw_model(rows: list[dict], model: str, metric: str, out: Path) -> bool:
     points = [r for r in rows if r["model"] == model]
     if not points:
@@ -158,22 +173,39 @@ def draw_model(rows: list[dict], model: str, metric: str, out: Path) -> bool:
 
     drawn = False
     for series, group in sorted(series_of(points).items(), key=lambda kv: kv[0].label):
-        xs = [int(r["scale"]) for r in group if r["status"] == "ok" and number(r, metric)]
-        ys = [number(r, metric) for r in group if r["status"] == "ok" and number(r, metric)]
-        if not xs:
+        measured = sorted((r for r in group if number(r, metric)), key=lambda r: int(r["scale"]))
+        if not measured:
             continue
+        xs = [int(r["scale"]) for r in measured]
+        ys = [number(r, metric) for r in measured]
         color, line, marker = series.style
         ax.plot(xs, ys, line, marker=marker, color=color, label=series.label, linewidth=1.6, markersize=4.5)
+        # A rung that ran out of budget still timed the reps it finished. Hollow, since a median
+        # over two reps is not the same measurement as one over five.
+        short = [(int(r["scale"]), number(r, metric)) for r in measured if r["status"] != "ok"]
+        if short:
+            ax.plot(
+                [x for x, _ in short],
+                [y for _, y in short],
+                linestyle="none",
+                marker=marker,
+                color=color,
+                markersize=7.0,
+                markerfacecolor=SURFACE,
+                markeredgewidth=1.3,
+            )
         drawn = True
         stopped = next((r for r in group if r["status"] in INCOMPLETE and INCOMPLETE[r["status"]]), None)
         if stopped:
+            last = xs[-1] == max(int(r["scale"]) for r in points)
             ax.annotate(
                 INCOMPLETE[stopped["status"]],
                 xy=(xs[-1], ys[-1]),
-                xytext=(4, -10),
+                xytext=(-6 if last else 4, -10),
                 textcoords="offset points",
                 fontsize=7,
                 color=color,
+                ha="right" if last else "left",
             )
     if not drawn:
         plt.close(fig)
@@ -182,7 +214,7 @@ def draw_model(rows: list[dict], model: str, metric: str, out: Path) -> bool:
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(AXIS_LABELS.get(axis, axis))
-    ax.set_ylabel("steps / second" if metric == "steps_per_sec" else "cell or agent updates / second")
+    ax.set_ylabel(y_label(metric, points))
     ax.set_title(MODEL_TITLES.get(model, model))
     ax.yaxis.set_major_formatter(FuncFormatter(si))
     ax.xaxis.set_major_formatter(FuncFormatter(si))
@@ -393,8 +425,12 @@ def main() -> int:
 
     made = []
     for model in sorted({r["model"] for r in rows}):
-        for metric, suffix in (("steps_per_sec", "steps"), ("updates_per_sec", "updates")):
-            target = out / f"{model}_{suffix}_per_sec.png"
+        for metric, stem in (
+            ("median_s", "seconds"),
+            ("steps_per_sec", "steps_per_sec"),
+            ("updates_per_sec", "updates_per_sec"),
+        ):
+            target = out / f"{model}_{stem}.png"
             if draw_model(rows, model, metric, target):
                 made.append(target)
         table = ratio_table(rows, model)

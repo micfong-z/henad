@@ -134,13 +134,21 @@ class Engine:
     `one_rep_per_process` is for an engine whose reps would otherwise share a trajectory. No engine
     needs it now that henad-cli seeds rep `i` from `base + i`, and running Henad one process per rep
     put GPU ramp-up inside every timed window.
+
+    `variants` is every build that exists, which is what gets gated and built. `timed` is the subset
+    the sweep puts on the ladder.
     """
 
     name: str
     variants: list[str] = field(default_factory=lambda: ["default"])
+    untimed: tuple[str, ...] = ()
     one_rep_per_process: bool = False
     version: str = ""
     _reason: str | None = None
+
+    @property
+    def timed(self) -> list[str]:
+        return [v for v in self.variants if v not in self.untimed]
 
     def detect(self) -> str | None:
         """Return why this engine cannot run here, or None when it can."""
@@ -170,8 +178,7 @@ class Engine:
     ) -> list[str] | None:
         """Run one gate scenario and write its fixture. None when the harness has no validate mode.
 
-        `variant` defaults to the first, which for krABMaga meant the `parallel` build was timed
-        without ever being gated.
+        `variant` defaults to the first. Gating every variant means passing this one explicitly.
         """
         args = [*self.launcher(variant or self.variants[0]), "--validate", scenario, "--out", str(out)]
         if seed is not None:
@@ -357,7 +364,11 @@ class AgentsJl(Engine):
 
 class Krabmaga(Engine):
     def __init__(self) -> None:
-        super().__init__(name="krabmaga", variants=["default", "parallel"])
+        # `parallel` is gated and built, never timed. Its scheduler holds one state lock across
+        # each agent's whole step, so the workers serialise, and the feature swaps the flat field
+        # vectors for sharded hash maps. A ladder of it measures krABMaga's serial path carrying
+        # that overhead. `benchmarks/README.md` records the penalty and where it comes from.
+        super().__init__(name="krabmaga", variants=["default", "parallel"], untimed=("parallel",))
         self.crate = BENCHMARKS / "krabmaga"
 
     def detect(self) -> str | None:
@@ -711,8 +722,8 @@ def row_for(
             "engine": engine.name,
             "engine_version": (result.info.get("engine_version", engine.version) if result else engine.version),
             "variant": variant,
-            # What the harness says it used. krABMaga under `parallel` honestly reports 1, and
-            # recording the request instead published it as "all".
+            # What the harness says it used, not what was requested. An engine whose workers
+            # serialise reports 1, and recording the request would publish it as "all".
             "threads": (result.info.get("threads", threads) if result and result.info else threads),
             "model": point.model,
             "axis": "grid" if point.grid else "agents",
@@ -906,7 +917,7 @@ def main() -> int:
         points = [p for p in points if p.scale == LADDER[p.model]["points"][0]]
         points = [Point(p.model, p.scale, p.grid, p.agents, p.world, 10, 1) for p in points]
 
-    runs = [(engine, variant, point) for engine in available for variant in engine.variants for point in points]
+    runs = [(engine, variant, point) for engine in available for variant in engine.timed for point in points]
 
     if args.dry_run:
         print(f"engines: {', '.join(e.name for e in available)}")

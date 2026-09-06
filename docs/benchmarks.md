@@ -74,8 +74,14 @@ Once a rung goes over, the larger ones are not attempted, and a rung that crashe
 ### Threads
 
 Henad appears three times: on one thread, on every core, and on the GPU.
-The reference engines run single-threaded, which is what their own examples do, and krABMaga appears again under its `parallel` feature.
-Comparing Henad on one thread against a single-threaded engine is the like-for-like row; the rest shows what the engine does with the hardware it is given.
+Every reference engine runs single-threaded, which is what their own examples do.
+Comparing Henad on one thread against them is the like-for-like row, and Henad's other two rows show what the same machine gives an engine built to use it.
+
+No engine here offers a parallel counterpart to Henad's all-cores row.
+krABMaga is the only one with a thread count to set, and its `parallel` feature does not run agents concurrently: the scheduler takes one lock on the whole state for each agent and holds it across `before_step`, `step` and `after_step`.
+The workers serialise, and the same feature swaps the flat field vectors for sharded hash maps.
+The build is gated like any other and left off the ladder, since timing it would measure krABMaga's serial path carrying that overhead.
+Its cost is recorded in `benchmarks/README.md` rather than drawn as a curve.
 
 ### Gates
 
@@ -91,6 +97,7 @@ A port is timed only after it agrees with Henad.
 `scripts/validate_ports.py` runs them and records a verdict per engine, variant and model.
 `compare_bench.py` reads that file and skips anything whose verdict is not `yes`, so a port that fails its gate is not timed and the verdict travels into the results as a column.
 Each variant is gated separately, krABMaga's `parallel` build included, which puts the full set at twenty-four rather than the twenty this table shows.
+A build is gated whether or not it is timed.
 
 | Engine | Game of Life | Boids | SIR | Ant foraging |
 |---|---|---|---|---|
@@ -116,7 +123,14 @@ Henad's own rows, as a baseline for the ports still to come.
 Each cell is that engine's median step time against Henad on one thread at the same rung.
 Below 1 is faster than Henad on one thread; above 1 is slower.
 
+The first figure per model is the measurement itself, seconds to run the fixed step count, on log axes.
+Slope is the scaling exponent and height is the constant factor.
+The two rate figures divide that time by the step count and by the population.
+A hollow marker is a rung whose budget ran out before all five reps, timed on however many finished.
+
 ### Game of Life
+
+![Seconds for 100 steps](assets/benchmarks/game_of_life_seconds.png){ loading=lazy }
 
 ![Steps per second](assets/benchmarks/game_of_life_steps_per_sec.png){ loading=lazy }
 
@@ -128,6 +142,8 @@ Both of Henad's parallel backends *lose* to a single thread on a small grid, and
 Four thousand cells is not enough work to pay for a rayon fan-out, and it is far from enough to pay for a round trip to the GPU.
 
 ### SIR
+
+![Seconds for 100 steps](assets/benchmarks/sir_seconds.png){ loading=lazy }
 
 ![Steps per second](assets/benchmarks/sir_steps_per_sec.png){ loading=lazy }
 
@@ -142,6 +158,8 @@ Every engine runs the same window.
 
 ### Boids
 
+![Seconds for 100 steps](assets/benchmarks/boids_seconds.png){ loading=lazy }
+
 ![Steps per second](assets/benchmarks/boids_steps_per_sec.png){ loading=lazy }
 
 ![Cell or agent updates per second](assets/benchmarks/boids_updates_per_sec.png){ loading=lazy }
@@ -149,6 +167,8 @@ Every engine runs the same window.
 --8<-- "docs/assets/benchmarks/tables/ratio_boids.snippet"
 
 ### Ant foraging
+
+![Seconds for 200 steps](assets/benchmarks/ants_seconds.png){ loading=lazy }
 
 ![Steps per second](assets/benchmarks/ants_steps_per_sec.png){ loading=lazy }
 
@@ -206,10 +226,10 @@ Where two engines cannot be made identical, the difference is stated rather than
   it visits twice the chance of the others, which drifts ants up and left. Every port reproduces
   it, so the ports stay comparable, but it is not gated and any measurement of how fast ants find
   food is partly measuring it.
-- **krABMaga's `parallel` feature does not run agents concurrently.** Its scheduler holds one lock
-  on the whole state for each agent's step, so the workers serialise, and the feature also swaps the
-  flat field vectors for sharded hash maps. Its row is reported at one effective thread and is
-  slower than the default build, which is the measurement, not a mistake.
+- **krABMaga's `parallel` feature does not run agents concurrently**, and is gated but not timed.
+  Its scheduler holds one lock on the whole state for each agent's step, so the workers serialise,
+  and the feature also swaps the flat field vectors for sharded hash maps. Measured at 16.7x the
+  default build on 1024² SIR and 11.9x on 20k ants, all of it overhead.
 - **NetLogo's boids sorts its neighbour set**, worth 21% of its step, because the model is the one
   the earlier consistency work validated and was left unchanged rather than tuned for speed. Its
   SIR carries no such cost: the benchmark copy drops the per-patch repaint the validated model
