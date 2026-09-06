@@ -56,7 +56,7 @@ change in Henad, and only `validate_ports.py` catches a change in a port.
 |---|---|---|
 | Henad | this repository, built with `--release` | `target/release/henad-cli` |
 | Mesa | `uv` | `benchmarks/mesa`, its own locked project |
-| NetLogo | NetLogo 7 and a JDK | `$NETLOGO_HOME`, else `/Applications/NetLogo 7.0.4` |
+| NetLogo | NetLogo 7 and a JDK | `$NETLOGO_HOME`, else `/Applications/NetLogo 7.0.4`. The jar is found under `app/` (macOS) or `lib/app/` (Linux tarball) |
 | MASON | `mason.22.jar` and a JDK | `$MASON_JAR`, else `benchmarks/mason/mason.22.jar` |
 | Agents.jl | Julia | `$JULIA`, else `julia` on the path, else juliaup's `~/.juliaup/bin/julia` |
 | krABMaga | cargo | `benchmarks/krabmaga`, outside the workspace |

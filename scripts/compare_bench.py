@@ -275,9 +275,11 @@ class NetLogo(Engine):
         return None
 
     def jar(self) -> Path:
-        jars = sorted(self.home.glob("app/netlogo-*.jar"))
+        # The macOS bundle keeps the jar in `app/`, the Linux tarball in `lib/app/`. `extensions`
+        # sits at the root on both, so pointing NETLOGO_HOME a level in would fix one and break it.
+        jars = sorted(self.home.glob("app/netlogo-*.jar")) or sorted(self.home.glob("lib/app/netlogo-*.jar"))
         if not jars:
-            raise SystemExit(f"no netlogo jar under {self.home / 'app'}")
+            raise SystemExit(f"no netlogo jar under {self.home}")
         return jars[-1]
 
     def prepare(self) -> None:
