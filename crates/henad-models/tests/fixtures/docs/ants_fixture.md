@@ -39,7 +39,7 @@ Every ant then moves, reading the layer for the trip it is *not* making: carryin
 It scans the eight neighbours in **column-major order**, `dx` outer from `-1` to `1` and `dy` inner from `-1` to `1`, skipping any that leave the lattice or hold an obstacle, and keeps the largest value.
 
 ```
-best = -1, count = 2
+best = -1, count = 2, target = (x, y)
 for each passable neighbour (nx, ny) in column-major order:
     m = trail[nx, ny]
     if m > best:                       count = 2
@@ -90,6 +90,9 @@ At 200 by 200 this is where the reference hard-codes them.
 
 Sites are written after the blobs, so neither is buried.
 
+The discriminant is computed in double precision, and the two sums inside it are formed before the multiply, exactly as written.
+Distributing that multiply moves the boundary at some widths, so a port that reassociates it disagrees with Henad about which cells are obstacles.
+
 ## The scenario
 
 Randomness in this model lives entirely inside the advect pass: a tie between two neighbours draws, and so do the momentum and random-action branches.
@@ -101,8 +104,11 @@ The field is seeded with values that are distinct within every 3 by 3 neighbourh
 Deposits then rebuild ties as the run goes, which is what bounds the tick count below.
 What is left is the rules, and any correct implementation reaches the same state from any generator.
 
-The tie-break distribution is the one thing this does not check.
-That is deliberate: it is the reference's defect, reproduced on purpose, and it is disclosed in the write-up instead.
+Removing the draws removes some of the model with them, and the gate is worth reading for what it cannot reach.
+`momentum` and `random_action` at zero make both branches unreachable, and with every seeded cell positive `best == 0` never holds either, so the momentum test, `decode_step` and the recorded `last_step` of an ant that has not moved are never exercised.
+No value falls to the 1e-14 floor in four ticks, and no ant reaches the nest carrying food, so the delivery arm is untouched.
+The food arm is reached, by ant 0 landing on `(4, 4)`.
+The tie-break distribution is out of reach by construction, that being the reference's defect reproduced on purpose and disclosed in the write-up instead.
 
 **World** 32 by 32, `cutdown` 0.9, `reward` 1.0, `momentum` 0, `random_action` 0, `evaporation` 0.999.
 
@@ -164,10 +170,10 @@ That runs `benchmarks/<engine>/` in validate mode, writes `crates/henad-models/t
 A `# key: value` header, then the agent rows, then the two layers, each row of a layer being one lattice row of `width` values ascending in `x`, and the rows ascending in `y`.
 
 ```text
-# engine: Mesa 3.3.0
-# model: Henad ants rule, ported for this comparison
+# engine: Mesa 3.5.1
+# model: Henad rule, ported for this comparison
 # scenario: ants-lattice
-# steps: 5
+# steps: 4
 # width: 32
 # height: 32
 # agents: 12
@@ -183,7 +189,7 @@ A `# key: value` header, then the agent rows, then the two layers, each row of a
 
 ## Tolerance
 
-`1e-6` relative.
+`1e-6` relative, against a scale that is floored at 1, so below that it is `1e-6` absolute.
 Henad holds the field in `f32` and most engines hold it in `f64`, so the two agree to about seven digits and no further.
 Agent positions, `last_step` and `has_food` are integers and must match exactly.
 

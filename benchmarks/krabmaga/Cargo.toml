@@ -16,7 +16,7 @@ krabmaga = "=0.6.2"
 [features]
 parallel = ["krabmaga/parallel"]
 
+# Cargo's own release defaults. krABMaga documents no profile of its own, and pinning lto and
+# codegen-units here compiled it under settings henad-cli does not get.
 [profile.release]
 opt-level = 3
-lto = true
-codegen-units = 1

@@ -103,7 +103,9 @@ function grid_spacing(width, height, target)
             return spacing
         end
     end
-    return side
+    # Reachable only for a rectangular world whose sides share no such divisor. Saying so beats
+    # returning a spacing that was never checked and letting ContinuousSpace abort on it.
+    error("no neighbour-grid spacing near $target divides a $(width) by $(height) world exactly")
 end
 
 """`agents` places an exact `(x, y, vx, vy)` list, for a gate scenario, otherwise the population is

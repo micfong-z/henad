@@ -311,7 +311,7 @@ fn the_tick_after_the_gate_is_where_ties_begin() {
 /// Both halves of the gate have to actually do something, or it would pass against a stub.
 #[test]
 fn the_gate_scenario_moves_ants_and_changes_the_field() {
-    let (agents, to_food, to_home) = gate_run(None, GATE_TICKS);
+    let (agents, to_food, to_home) = gate_run(Some(1), GATE_TICKS);
     let start: Vec<(f32, f32)> = GATE_AGENTS.iter().map(|&(x, y, ..)| (x, y)).collect();
     let moved = agents
         .iter()
@@ -320,9 +320,21 @@ fn the_gate_scenario_moves_ants_and_changes_the_field() {
         .count();
     assert!(moved >= GATE_AGENTS.len() - 2, "only {moved} of the gate's ants moved");
 
-    let (seed_food, seed_home) = (gate_field(TO_FOOD), gate_field(TO_HOME));
-    assert_ne!(to_food, seed_food, "the to-food layer never changed");
-    assert_ne!(to_home, seed_home, "the to-home layer never changed");
+    // Above what pure evaporation would leave. Comparing against the seeded field instead passes
+    // for a model that deposits nothing, since decay moves every cell.
+    let decay = 0.999f32.powi(GATE_TICKS as i32);
+    for (layer, ours) in [("to_food", &to_food), ("to_home", &to_home)] {
+        let seeded = gate_field(if layer == "to_food" { TO_FOOD } else { TO_HOME });
+        let raised = ours
+            .iter()
+            .zip(&seeded)
+            .filter(|(got, want)| **got > **want * decay * (1.0 + 1e-6))
+            .count();
+        assert!(
+            raised > 0,
+            "no cell of {layer} rose above plain decay, so nothing was deposited"
+        );
+    }
 }
 
 /// Parse a fixture: `# key: value` header lines, an agent block, then one block per layer.
@@ -376,16 +388,26 @@ fn close(got: f32, want: f32) -> bool {
     (got - want).abs() <= GATE_TOLERANCE * scale
 }
 
-/// Henad against every engine that has committed a fixture.
+/// Where the reference fixtures live.
 ///
-/// The directory arrives with the first port. Until then there is nothing to check, and
-/// `the_gate_scenario_does_not_depend_on_the_random_stream` is what holds the scenario itself.
+/// `HENAD_FIXTURE_DIR` points the gate at a directory holding one engine's candidates, so a
+/// failure names that engine and no tracked fixture is written or removed to find out.
+fn fixture_dir(model: &str) -> std::path::PathBuf {
+    match std::env::var_os("HENAD_FIXTURE_DIR") {
+        Some(root) => std::path::PathBuf::from(root).join(model),
+        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(model),
+    }
+}
+
+/// Henad against every engine that has committed a fixture.
 #[test]
 fn matches_every_reference_fixture() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ants");
-    if !dir.exists() {
-        return;
-    }
+    let dir = fixture_dir("ants");
+    assert!(
+        dir.is_dir(),
+        "{} is missing, so no port is being checked at all",
+        dir.display()
+    );
 
     let mut checked = Vec::new();
     let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
@@ -404,12 +426,26 @@ fn matches_every_reference_fixture() {
             .parse()
             .unwrap_or_else(|_| panic!("{name}: `steps` is not a number"));
 
-        assert!(
-            steps <= GATE_TICKS,
-            "{name} was recorded at {steps} ticks, past the {GATE_TICKS} the scenario stays draw free for.              Regenerate it rather than comparing against a run that draws."
+        assert_eq!(
+            steps, GATE_TICKS,
+            "{name} was recorded at {steps} ticks where the scenario declares {GATE_TICKS}, the last \
+             tick it stays draw free for. Regenerate it rather than comparing against a different run."
         );
+        for (key, want) in [
+            ("width", GATE_W),
+            ("height", GATE_H),
+            ("agents", GATE_AGENTS.len() as u32),
+        ] {
+            let got = header.get(key).and_then(|v| v.parse::<u32>().ok());
+            assert_eq!(
+                got,
+                Some(want),
+                "{name} declares {key} {got:?} where the scenario is {want}"
+            );
+        }
 
-        let (ours_agents, ours_food, ours_home) = gate_run(None, steps);
+        // Seed 1 is the reference the stream-independence test is anchored on.
+        let (ours_agents, ours_food, ours_home) = gate_run(Some(1), steps);
         assert_eq!(agents.len(), ours_agents.len(), "{name} has the wrong agent count");
         for (i, (got, want)) in ours_agents.iter().zip(&agents).enumerate() {
             assert_eq!(

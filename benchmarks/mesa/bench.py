@@ -32,9 +32,42 @@ from models.sir import Sir  # noqa: E402
 ENGINE = "mesa"
 
 
+# What each model will answer to. `protocol.md` makes a parameter this engine does not have an
+# error, since a silently ignored one means the two runs are no longer the same model.
+PARAMS = {
+    "game_of_life": ("density",),
+    "sir": ("infection_rate", "recovery_rate", "initial_infected_pct"),
+    "boids": (
+        "visual_range",
+        "protected_range",
+        "separation",
+        "alignment",
+        "cohesion",
+        "max_speed",
+        "min_speed",
+    ),
+    "ants": ("update_cutdown", "reward", "momentum", "random_action", "evaporation"),
+}
+
+
+def overrides_for(model, pairs):
+    known = PARAMS.get(model)
+    if known is None:
+        raise SystemExit(f"unknown model '{model}'")
+    out = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise SystemExit(f"--set wants id=value, got '{pair}'")
+        key, value = pair.split("=", 1)
+        if key not in known:
+            raise SystemExit(f"{model} has no parameter '{key}'")
+        out[key] = value
+    return out
+
+
 def build(args, seed):
     """The model a timed rep runs, at Henad's defaults with the sweep's overrides applied."""
-    overrides = dict(pair.split("=", 1) for pair in args.set)
+    overrides = overrides_for(args.model, args.set)
     number = lambda key, default: float(overrides.get(key, default))  # noqa: E731
 
     if args.model == "game_of_life":
@@ -210,6 +243,8 @@ def main():
         return
     if not args.model:
         raise SystemExit("--model is required unless --validate names a scenario")
+    # Before the info line, so a rejected parameter set produces an error and nothing else.
+    overrides_for(args.model, args.set)
     if args.threads not in (0, 1):
         print(f"note: Mesa is single threaded; ignoring --threads {args.threads}", file=sys.stderr)
     benchmark(args)

@@ -19,6 +19,7 @@ import csv
 import json
 import os
 import platform
+import signal
 import shutil
 import statistics
 import subprocess
@@ -48,6 +49,10 @@ BENCHMARKS = REPO_ROOT / "benchmarks"
 # runs out of time rather than out of steps, and that is the measurement.
 
 GRID_SIZES = [64, 256, 1024, 2048, 4096]
+
+# Untimed steps on a throwaway state before Henad's GPU reps, enough to pay shader compilation and
+# lift the clocks. Measured: without it rep 0 of a 1024 squared grid ran 2.3x the warm time.
+GPU_RAMP_STEPS = 1000
 
 LADDER: dict[str, dict] = {
     "game_of_life": {"axis": "grid", "points": GRID_SIZES, "steps": 100, "warmup": 10},
@@ -126,9 +131,9 @@ def build_points(infos: dict[str, ModelInfo], models: list[str]) -> list[Point]:
 class Engine:
     """One engine, in as many variants as it is worth measuring separately.
 
-    `one_rep_per_process` is for an engine whose reps would otherwise share a trajectory. Henad
-    seeds every rep from the same `--seed`, so the driver re-invokes it instead, which costs
-    milliseconds and buys an independent draw per rep.
+    `one_rep_per_process` is for an engine whose reps would otherwise share a trajectory. No engine
+    needs it now that henad-cli seeds rep `i` from `base + i`, and running Henad one process per rep
+    put GPU ramp-up inside every timed window.
     """
 
     name: str
@@ -155,12 +160,20 @@ class Engine:
         """How this engine's harness is started, before any harness argument."""
         raise NotImplementedError
 
-    def command(self, variant: str, point: Point, reps: int, seed: int, threads: int) -> list[str]:
-        return [*self.launcher(variant), *common_harness_args(point, reps, seed, threads)]
+    def command(
+        self, variant: str, point: Point, reps: int, seed: int, threads: int, resolved: dict[str, str]
+    ) -> list[str]:
+        return [*self.launcher(variant), *common_harness_args(point, reps, seed, threads, resolved)]
 
-    def validate_command(self, scenario: str, out: Path, seed: int | None = None) -> list[str] | None:
-        """Run one gate scenario and write its fixture. None when the harness has no validate mode."""
-        args = [*self.launcher(self.variants[0]), "--validate", scenario, "--out", str(out)]
+    def validate_command(
+        self, scenario: str, out: Path, seed: int | None = None, variant: str | None = None
+    ) -> list[str] | None:
+        """Run one gate scenario and write its fixture. None when the harness has no validate mode.
+
+        `variant` defaults to the first, which for krABMaga meant the `parallel` build was timed
+        without ever being gated.
+        """
+        args = [*self.launcher(variant or self.variants[0]), "--validate", scenario, "--out", str(out)]
         if seed is not None:
             args += ["--seed", str(seed)]
         return args
@@ -174,7 +187,7 @@ class Engine:
 
 class Henad(Engine):
     def __init__(self, binary: Path) -> None:
-        super().__init__(name="henad", variants=["1t", "all", "gpu"], one_rep_per_process=True)
+        super().__init__(name="henad", variants=["1t", "all", "gpu"])
         self.binary = binary
 
     def detect(self) -> str | None:
@@ -191,10 +204,14 @@ class Henad(Engine):
     def model_for(self, variant: str, model: str) -> str:
         return f"gpu_{model}" if variant == "gpu" else model
 
-    def validate_command(self, scenario: str, out: Path, seed: int | None = None) -> list[str] | None:
+    def validate_command(
+        self, scenario: str, out: Path, seed: int | None = None, variant: str | None = None
+    ) -> list[str] | None:
         return None  # Henad is what the ports are gated against, so it has no gate of its own.
 
-    def command(self, variant: str, point: Point, reps: int, seed: int, threads: int) -> list[str]:
+    def command(
+        self, variant: str, point: Point, reps: int, seed: int, threads: int, resolved: dict[str, str]
+    ) -> list[str]:
         args = [
             str(self.binary),
             self.model_for(variant, point.model),
@@ -210,6 +227,10 @@ class Henad(Engine):
             "--threads",
             str(threads),
         ]
+        if variant == "gpu":
+            # First use compiles shaders and the clocks are still low. Without this the whole cost
+            # lands in rep 0's timed window.
+            args += ["--global-warmup", str(GPU_RAMP_STEPS)]
         for key, value in point.overrides().items():
             args += ["--set", f"{key}={value}"]
         return args
@@ -222,7 +243,7 @@ class Mesa(Engine):
 
     def detect(self) -> str | None:
         if not (self.project / "bench.py").exists():
-            return "benchmarks/mesa not written yet"
+            return "benchmarks/mesa is missing"
         if shutil.which("uv") is None:
             return "uv not on PATH"
         return None
@@ -239,7 +260,7 @@ class NetLogo(Engine):
 
     def detect(self) -> str | None:
         if not (BENCHMARKS / "netlogo" / "NetLogoBench.java").exists():
-            return "benchmarks/netlogo not written yet"
+            return "benchmarks/netlogo is missing"
         if not self.home.exists():
             return f"NETLOGO_HOME not found at {self.home}"
         if shutil.which("java") is None:
@@ -282,7 +303,7 @@ class Mason(Engine):
 
     def detect(self) -> str | None:
         if not (BENCHMARKS / "mason" / "Bench.java").exists():
-            return "benchmarks/mason not written yet"
+            return "benchmarks/mason is missing"
         if not self.jar.exists():
             return f"{self.jar} missing (run benchmarks/mason/fetch_mason.sh)"
         if shutil.which("java") is None:
@@ -320,7 +341,7 @@ class AgentsJl(Engine):
 
     def detect(self) -> str | None:
         if not (self.project / "bench.jl").exists():
-            return "benchmarks/agents_jl not written yet"
+            return "benchmarks/agents_jl is missing"
         julia = self.find_julia()
         if julia is None:
             return "julia not found (set $JULIA, or put juliaup's bin on PATH)"
@@ -341,7 +362,7 @@ class Krabmaga(Engine):
 
     def detect(self) -> str | None:
         if not (self.crate / "Cargo.toml").exists():
-            return "benchmarks/krabmaga not written yet"
+            return "benchmarks/krabmaga is missing"
         if shutil.which("cargo") is None:
             return "cargo not on PATH"
         return None
@@ -372,7 +393,17 @@ class Krabmaga(Engine):
         return [str(self.binary_for(variant))]
 
 
-def common_harness_args(point: Point, reps: int, seed: int, threads: int) -> list[str]:
+# Passed through `--grid`, `--agents` and `--world` rather than `--set`.
+SIZE_KEYS = {"grid_width", "grid_height", "num_agents", "world_width", "world_height"}
+
+
+def common_harness_args(point: Point, reps: int, seed: int, threads: int, resolved: dict[str, str]) -> list[str]:
+    """The contract's arguments, including every parameter Henad resolved for this point.
+
+    Sending them is what makes the docstring true: the reference engines are held to Henad's own
+    descriptors. Before this only size keys were ever sent, so each port ran its own hard-coded
+    defaults while the CSV recorded Henad's.
+    """
     args = [
         "--model",
         point.model,
@@ -388,8 +419,8 @@ def common_harness_args(point: Point, reps: int, seed: int, threads: int) -> lis
         "--threads",
         str(threads),
     ]
-    for key, value in point.overrides().items():
-        if key in {"grid_width", "grid_height", "num_agents", "world_width", "world_height"}:
+    for key, value in sorted(resolved.items()):
+        if key in SIZE_KEYS:
             continue
         args += ["--set", f"{key}={value}"]
     return args
@@ -403,6 +434,11 @@ def all_engines(binary: Path) -> list[Engine]:
 
 
 def describe_commit() -> str:
+    """The commit a row was measured at, marked when the tree it was built from was not clean.
+
+    The published sweep stamps a commit whose henad-cli accepts neither flag the driver passes, so
+    nothing identifies the code that actually ran.
+    """
     try:
         out = subprocess.run(
             ["git", "-C", str(REPO_ROOT), "rev-parse", "--short", "HEAD"],
@@ -411,7 +447,15 @@ def describe_commit() -> str:
             check=False,
             timeout=10,
         )
-        return out.stdout.strip() or "unknown"
+        commit = out.stdout.strip() or "unknown"
+        dirty = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        return f"{commit}-dirty" if dirty.stdout.strip() else commit
     except (OSError, subprocess.SubprocessError):
         return "unknown"
 
@@ -428,20 +472,59 @@ class Invocation:
     status: str
 
 
+def as_text(stream) -> str:
+    """Whatever a stream gives back, as text.
+
+    `TimeoutExpired` carries raw bytes even from a `text=True` child, since the decode only happens
+    on the path where the process finished.
+    """
+    if stream is None:
+        return ""
+    return stream.decode(errors="replace") if isinstance(stream, bytes) else stream
+
+
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the child and anything it started.
+
+    Mesa runs behind `uv run`, so signalling the direct child alone leaves a Python process holding
+    a core against every later point of the sweep.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+
+
 def invoke(args: list[str], timeout: float) -> Invocation:
     """Run one harness process. A timeout keeps whatever reps it streamed before it was killed."""
     started = time.perf_counter()
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, check=False, timeout=max(timeout, 1.0))
-        code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
-        status = "ok" if code == 0 else "error"
-    except subprocess.TimeoutExpired as expired:
-        code = -1
-        stdout = expired.stdout.decode() if isinstance(expired.stdout, bytes) else (expired.stdout or "")
-        stderr = expired.stderr.decode() if isinstance(expired.stderr, bytes) else (expired.stderr or "")
-        status = "over_budget"
+        # `start_new_session` puts the harness in its own process group, which is what makes
+        # `kill_tree` able to reach a wrapper's children. `subprocess.run`'s own timeout would
+        # signal the wrapper only.
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
     except FileNotFoundError as missing:
         return Invocation(-1, [], {}, str(missing), time.perf_counter() - started, "error")
+
+    try:
+        raw_out, raw_err = proc.communicate(timeout=max(timeout, 1.0))
+        code = proc.returncode
+        status = "ok" if code == 0 else "error"
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        raw_out, raw_err = proc.communicate()
+        code = -1
+        status = "over_budget"
+    except KeyboardInterrupt:
+        # The harness is in its own group, so the terminal's interrupt never reached it.
+        kill_tree(proc)
+        raise
+    stdout, stderr = as_text(raw_out), as_text(raw_err)
     wall = time.perf_counter() - started
 
     reps: list[dict] = []
@@ -463,7 +546,9 @@ def invoke(args: list[str], timeout: float) -> Invocation:
         status = "error"
     if status == "over_budget" and not reps:
         status = "timeout"
-    if is_oom(stderr, code):
+    # Only a run that already failed. A marker in a healthy run's stderr was relabelling a good
+    # measurement as an allocation failure.
+    if status != "ok" and is_oom(stderr, code):
         status = "oom"
     return Invocation(code, reps, info, stderr, wall, status)
 
@@ -475,6 +560,7 @@ def run_point(
     reps: int,
     threads: int,
     budget: float,
+    resolved: dict[str, str],
     note=None,
 ) -> Invocation:
     """Collect up to `reps` timed reps for one point, inside one wall-clock budget.
@@ -487,7 +573,7 @@ def run_point(
     if not engine.one_rep_per_process:
         if note:
             note(f"{reps} reps")
-        return invoke(engine.command(variant, point, reps, BASE_SEED, threads), budget)
+        return invoke(engine.command(variant, point, reps, BASE_SEED, threads, resolved), budget)
 
     collected: list[dict] = []
     info_line: dict = {}
@@ -497,12 +583,14 @@ def run_point(
     code = 0
     for rep in range(reps):
         remaining = budget - spent
-        if remaining <= 0:
+        # A rep that cannot finish inside what is left is a rep whose time is thrown away, so stop
+        # rather than spend the remainder producing nothing.
+        if remaining <= 0 or (collected and remaining < spent / len(collected)):
             status = "over_budget"
             break
         if note:
             note(f"rep {rep + 1}/{reps} · {remaining:.0f}s left")
-        single = invoke(engine.command(variant, point, 1, BASE_SEED + rep, threads), remaining)
+        single = invoke(engine.command(variant, point, 1, BASE_SEED + rep, threads, resolved), remaining)
         spent += single.wall
         info_line = info_line or single.info
         collected.extend(single.reps)
@@ -521,21 +609,25 @@ def run_point(
 
 def is_oom(stderr: str, code: int) -> bool:
     markers = ("MemoryError", "OutOfMemoryError", "memory allocation of", "Cannot allocate memory", "std::bad_alloc")
-    return code == 137 or any(m in stderr for m in markers)
+    # 137 comes through a shell, -9 from a direct exec. Both are the kernel reaping the process.
+    return code in (137, -9) or any(m in stderr for m in markers)
 
 
 def summarise(times: list[float], steps: int, population: int) -> dict:
     if not times:
         return {}
     mean = statistics.fmean(times)
+    median = statistics.median(times)
     return {
         "min_s": min(times),
-        "median_s": statistics.median(times),
+        "median_s": median,
         "max_s": max(times),
         "mean_s": mean,
+        # Throughput from the median, which is what the ratio tables rank on. Derived from the mean
+        # these disagreed with the table beside them by up to 8%.
         "std_dev_s": statistics.pstdev(times) if len(times) > 1 else 0.0,
-        "steps_per_sec": steps / mean if mean > 0 else "",
-        "updates_per_sec": steps * population / mean if mean > 0 else "",
+        "steps_per_sec": steps / median if median > 0 else "",
+        "updates_per_sec": steps * population / median if median > 0 else "",
     }
 
 
@@ -619,7 +711,9 @@ def row_for(
             "engine": engine.name,
             "engine_version": (result.info.get("engine_version", engine.version) if result else engine.version),
             "variant": variant,
-            "threads": threads,
+            # What the harness says it used. krABMaga under `parallel` honestly reports 1, and
+            # recording the request instead published it as "all".
+            "threads": (result.info.get("threads", threads) if result and result.info else threads),
             "model": point.model,
             "axis": "grid" if point.grid else "agents",
             "scale": point.scale,
@@ -686,19 +780,59 @@ def load_done(path: Path) -> tuple[set[tuple], set[tuple[str, str, str]]]:
             # fills with None. Leave it out of `done` so its point runs again and lands complete.
             if None in row.values() or not row.get("status"):
                 continue
-            done.add((row["engine"], row["variant"], row["model"], row["scale"]))
+            # A crash or a skip is not a settled point. Left in `done` they could never be retried
+            # without a full re-sweep.
+            if row["status"] in {"error", "skipped"}:
+                continue
+            done.add(
+                (row["engine"], row["variant"], row["model"], row["scale"], row["steps"], row["warmup"])
+            )
             if row["status"] in STOPPED:
                 stalled.add((row["engine"], row["variant"], row["model"]))
     return done, stalled
 
 
-def newest_sweep(directory: Path) -> Path | None:
+VALIDATED = REPO_ROOT / "results" / "compare" / "validated.json"
+
+
+def load_validated(path: Path) -> dict[tuple[str, str], dict[str, str]]:
+    """The verdicts `validate_ports.py` left, keyed by engine, variant and model.
+
+    A port that has not passed its gate is not timed. Six documents said so before anything read
+    this file.
+    """
+    if not path.exists():
+        return {}
+    try:
+        results = json.loads(path.read_text()).get("results", {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+    verdicts: dict[tuple[str, str], dict[str, str]] = {}
+    for key, models in results.items():
+        engine, _, variant = key.partition("/")
+        verdicts[(engine, variant)] = {m: v[0] if isinstance(v, list) else str(v) for m, v in models.items()}
+    return verdicts
+
+
+def gate_verdict(
+    verdicts: dict[tuple[str, str], dict[str, str]], engine: Engine, variant: str, model: str
+) -> str:
+    """This run's gate verdict, `reference` for Henad and `ungated` when nothing recorded one."""
+    if isinstance(engine, Henad):
+        return "reference"
+    # A non-default variant is recorded under `engine/variant`, the default under the bare name.
+    key = (engine.name, "" if variant == engine.variants[0] else variant)
+    return verdicts.get(key, {}).get(model, "ungated")
+
+
+def newest_sweep(directory: Path, host: str) -> Path | None:
     """The sweep a bare `--resume` should continue.
 
     The default output name carries the date, so an overnight sweep resumed the next morning would
-    otherwise start a second file and silently redo everything.
+    otherwise start a second file and silently redo everything. Restricted to this host, since two
+    machines' numbers never belong in one file.
     """
-    candidates = sorted(directory.glob("*.csv"), key=lambda p: p.stat().st_mtime)
+    candidates = sorted(directory.glob(f"{host}_*.csv"), key=lambda p: p.stat().st_mtime)
     return candidates[-1] if candidates else None
 
 
@@ -725,11 +859,14 @@ def main() -> int:
     commit = describe_commit()
     sweeps = REPO_ROOT / "results" / "compare"
     out = args.out
-    if out is None and args.resume and (previous := newest_sweep(sweeps)):
+    if out is None and args.resume and (previous := newest_sweep(sweeps, host)):
         out = previous
         print(f"resuming {out}", file=sys.stderr)
     if out is None:
-        out = sweeps / f"{host}_{time.strftime('%Y%m%d')}.csv"
+        # A smoke run writes elsewhere. Sharing the name let its short rows stand in for the real
+        # ladder's smallest rung on the next resume.
+        suffix = "_smoke" if args.smoke else ""
+        out = sweeps / f"{host}_{time.strftime('%Y%m%d')}{suffix}.csv"
     if out.exists() and not (args.resume or args.force or args.dry_run):
         raise SystemExit(f"{out} already holds a sweep; pass --resume to continue it or --force to replace it")
 
@@ -757,7 +894,9 @@ def main() -> int:
         if reason:
             print(f"skipping {engine.name}: {reason}", file=sys.stderr)
             continue
-        engine.prepare()
+        # Not before the dry run, which promises to run nothing and was compiling four toolchains.
+        if not args.dry_run:
+            engine.prepare()
         available.append(engine)
     if not available:
         raise SystemExit("no engines available")
@@ -777,13 +916,29 @@ def main() -> int:
             print(f"  {engine.name}/{variant:<8} {point.model:<13} {point.label()}")
         return 0
 
+    verdicts = load_validated(VALIDATED)
+    if not verdicts and not args.allow_unvalidated:
+        print(f"no gate verdicts at {VALIDATED}; run scripts/validate_ports.py first", file=sys.stderr)
+
     done, stalled = load_done(out) if args.resume else (set(), set())
     out.parent.mkdir(parents=True, exist_ok=True)
     fresh = not out.exists() or not args.resume
-    pending = [r for r in runs if (r[0].name, r[1], r[2].model, str(r[2].scale)) not in done]
+    # Steps and warm-up are part of the key, so a `--smoke` row at 10 steps cannot satisfy the real
+    # ladder's rung at 100.
+    pending = [
+        r
+        for r in runs
+        if (r[0].name, r[1], r[2].model, str(r[2].scale), str(r[2].steps), str(r[2].warmup)) not in done
+    ]
     subtitle = f"up to {args.reps} reps · {args.budget:.0f}s per point"
     if done:
         subtitle += f" · {len(done)} already done"
+
+    if not fresh and out.exists() and (raw := out.read_bytes()) and not raw.endswith(b"\n"):
+        # A hard kill can leave the last row without its newline, and appending would splice the
+        # next row onto it.
+        with out.open("ab") as handle:
+            handle.write(b"\n")
 
     with out.open("w" if fresh else "a", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
@@ -793,6 +948,28 @@ def main() -> int:
             for engine, variant, point in pending:
                 threads = engine.threads_for(variant)
                 label = f"{engine.name}/{variant}  {point.model}  {point.label()}"
+
+                verdict = gate_verdict(verdicts, engine, variant, point.model)
+                if verdict not in {"yes", "reference"} and not args.allow_unvalidated:
+                    reason = f"gate verdict is `{verdict}`"
+                    writer.writerow(
+                        row_for(
+                            engine,
+                            variant,
+                            point,
+                            infos[point.model],
+                            args.reps,
+                            threads,
+                            None,
+                            verdict,
+                            host,
+                            commit,
+                            reason,
+                        )
+                    )
+                    handle.flush()
+                    progress.finish(label, "skipped", reason)
+                    continue
 
                 if (engine.name, variant, point.model) in stalled:
                     reason = "a smaller point did not finish"
@@ -805,7 +982,7 @@ def main() -> int:
                             args.reps,
                             threads,
                             None,
-                            "",
+                            verdict,
                             host,
                             commit,
                             reason,
@@ -816,13 +993,16 @@ def main() -> int:
                     continue
 
                 progress.start(label)
-                merged = run_point(engine, variant, point, args.reps, threads, args.budget, progress.note)
+                resolved = infos[point.model].resolved(point.overrides())
+                merged = run_point(
+                    engine, variant, point, args.reps, threads, args.budget, resolved, progress.note
+                )
 
                 if merged.status != "ok":
                     stalled.add((engine.name, variant, point.model))
                 writer.writerow(
                     row_for(
-                        engine, variant, point, infos[point.model], args.reps, threads, merged, "", host, commit
+                        engine, variant, point, infos[point.model], args.reps, threads, merged, verdict, host, commit
                     )
                 )
                 handle.flush()

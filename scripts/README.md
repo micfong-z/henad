@@ -9,8 +9,7 @@ Analysis and comparison scripts.
 - `validate_ports.py`: checks each reference implementation against Henad before anything is timed
 - `plot_compare.py`: figures and tables from that CSV, for the benchmarks page
 
-`progress.py` is a helper rather than a script: the live display the sweep draws while it runs, which
-falls back to one line per run whenever output is redirected.
+`progress.py` is a helper rather than a script: the live display the sweep draws while it runs, which falls back to one line per run whenever output is redirected.
 
 ```bash
 uv run --project scripts scripts/compare_sir.py --reference path/to/reference_csvs --generate 50

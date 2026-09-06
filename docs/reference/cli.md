@@ -57,7 +57,8 @@ Record the per-tick stat series instead of a timing:
 cargo run --release -p henad-cli -- sir --steps 2000 --stats-every 10 --export-stats sir.csv
 ```
 
-Measure one thread against every core, which is what the cross-engine comparison reports:
+Pin the worker count, which is how the cross-engine comparison separates its one-thread row from
+its all-cores one. It runs this twice, at `--threads 1` and `--threads 0`:
 
 ```bash
 cargo run --release -p henad-cli -- boids --threads 1 --steps 100 --reps 5 --json
@@ -68,10 +69,15 @@ cargo run --release -p henad-cli -- boids --threads 1 --steps 100 --reps 5 --jso
 `--json` replaces the report with one JSON object per line on stdout, leaving progress on stderr.
 An `info` line comes first, then one `rep` line per timed rep as it finishes, then a `summary`.
 A run killed part way still reports the reps it managed.
+With `--info` a `runtime` line comes before all of them.
+
+With `--seed`, rep `i` is built from `base + i`, so `--reps` measures independent trajectories
+rather than re-timing one. Without it every rep starts from the engine default and they all
+replay the same run.
 
 ```json
-{"kind":"info","engine":"henad","engine_version":"0.1.0","model":"boids","variant":"cpu","threads":1}
-{"kind":"rep","rep":0,"seed":42,"steps":100,"elapsed_s":1.234,"population":50000,"heap_bytes":2050020}
+{"kind":"info","engine":"henad","engine_version":"0.1.0","model":"boids","variant":"cpu","threads":1,"adapter":null,"debug_build":false}
+{"kind":"rep","rep":0,"seed":42,"steps":100,"warmup":10,"elapsed_s":1.234,"population":50000,"heap_bytes":2050020}
 ```
 
 This is the same shape every other engine in the [benchmarks](../benchmarks.md) speaks, so one

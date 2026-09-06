@@ -94,8 +94,9 @@ comment rules below. Do not include by line range, which is also supported and d
 
 `benchmarks/` holds one directory per reference engine (Mesa, NetLogo, MASON, Agents.jl,
 krABMaga), each with a harness and one implementation per model. Every implementation is written
-from the same declaration the consistency fixtures use, and `scripts/validate_ports.py` checks it
-against Henad before `scripts/compare_bench.py` will time it. `benchmarks/protocol.md` is the
+from the same declaration the consistency fixtures use. `scripts/validate_ports.py` checks each
+against Henad and records a verdict per engine, variant and model in `results/compare/validated.json`,
+and `compare_bench.py` reads that file and skips anything whose verdict is not `yes`. `benchmarks/protocol.md` is the
 interface every harness implements, and `henad-cli --json` is Henad's side of it.
 
 Two rules that are easy to break. A port is written the way a competent user of that engine would
@@ -261,9 +262,9 @@ Model build failed                                    // yes
   goes in the fixture's doc (e.g. `crates/henad-models/tests/fixtures/docs/`) for the user to run.
   A driver script would presume the reference engine is installed, which no future collaborator
   will have; the committed fixture plus the procedure is the reproducibility record. Never
-  fabricate reference output from Henad itself, which is circular. Where the reference engine is
-  code rather than a GUI (Mesa, MASON, Agents.jl, krABMaga), a small committed program _is_ the
-  procedure, which is fine.
+  fabricate reference output from Henad itself, which is circular. Where a committed program drives
+  the reference engine, that program _is_ the procedure, which is fine. All five cross-engine ports
+  are that shape, NetLogo included, since `NetLogoBench.java` runs it headless.
 - **Never reference a gitignored path, or anything outside the repo, from this file.** Run
   `git check-ignore <path>` before adding one. Several directories here are ignored deliberately.
 

@@ -116,8 +116,10 @@ class Progress:
                 self._write(line + "\n")
                 self._label = ""
                 self._redraw()
-            elif status != "ok":
-                self._write(f"        {status}: {detail}\n")
+            else:
+                # Plain mode is the usual one, a sweep being redirected to a log. Dropping the
+                # detail on success threw away the only number a finished run leaves behind.
+                self._write(f"        {status}{': ' + detail if detail else ''}\n")
 
     # --- drawing ---
 

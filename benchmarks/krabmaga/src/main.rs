@@ -361,8 +361,14 @@ fn benchmark(args: &Args) -> Result<(), String> {
 /// `%.9e`, the format the other ports write their fixtures in.
 fn sci(value: f32) -> String {
     let text = format!("{:.9e}", value);
-    let (mantissa, exponent) = text.split_once('e').expect("scientific notation");
-    let exponent: i32 = exponent.parse().expect("integer exponent");
+    // `inf` and `NaN` format without an exponent. Write them through, so the gate reports a wrong
+    // number rather than the harness dying before it produces one.
+    let Some((mantissa, exponent)) = text.split_once('e') else {
+        return text;
+    };
+    let Ok(exponent) = exponent.parse::<i32>() else {
+        return text;
+    };
     format!(
         "{mantissa}e{}{:02}",
         if exponent < 0 { '-' } else { '+' },

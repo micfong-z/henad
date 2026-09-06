@@ -47,7 +47,15 @@ ENGINE_COLORS = {
     "agents_jl": "#c2185b",
     "krabmaga": "#a8791c",
 }
-HENAD_STYLE = {"1t": ("-", "o"), "all": ("--", "s"), "gpu": (":", "^")}
+# One dash and marker per variant, so an engine measured two ways gives two readable curves. The
+# page asks the reader to compare krABMaga's builds against each other.
+VARIANT_STYLE = {
+    "1t": ("-", "o"),
+    "all": ("--", "s"),
+    "gpu": (":", "^"),
+    "default": ("-", "o"),
+    "parallel": ("--", "s"),
+}
 
 MODEL_TITLES = {
     "game_of_life": "Game of Life",
@@ -84,10 +92,7 @@ class Series:
     @property
     def style(self) -> tuple[str, str, str]:
         color = ENGINE_COLORS.get(self.engine, "#666666")
-        if self.engine == "henad":
-            line, marker = HENAD_STYLE.get(self.variant, ("-", "o"))
-        else:
-            line, marker = "-", "o"
+        line, marker = VARIANT_STYLE.get(self.variant, ("-", "o"))
         return color, line, marker
 
 
@@ -216,19 +221,29 @@ def ratio_table(rows: list[dict], model: str) -> str:
                 cells.append(INCOMPLETE.get(row["status"], row["status"]) or "not run")
                 continue
             mine, base = number(row, "median_s"), baseline.get(scale)
-            cells.append(f"{mine / base:.2f}" if mine and base else "")
+            if not base:
+                # No Henad row to divide by, or a zero one. An empty cell here would read as
+                # "this engine never ran".
+                cells.append("no baseline")
+            else:
+                cells.append(f"{mine / base:.2f}" if mine else "")
         lines.append("| " + " | ".join([series.label] + cells) + " |")
     return "\n".join(lines) + "\n"
 
 
 def engines_table(rows: list[dict]) -> str:
     """What actually ran, so a table's provenance travels with it."""
-    seen: dict[tuple[str, str], dict] = {}
+    seen: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in rows:
-        seen.setdefault((row["engine"], row["variant"]), row)
+        seen[(row["engine"], row["variant"])].append(row)
     header = ["engine", "version", "variant", "threads", "host", "Henad commit"]
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
-    for (engine, variant), row in sorted(seen.items()):
+    for (engine, variant), group in sorted(seen.items()):
+        row = group[0]
+        # A resumed sweep can span a rebuild, and publishing the first row as though it covered
+        # every number hid that.
+        commits = sorted({r["henad_commit"] for r in group if r["henad_commit"]})
+        hosts = sorted({r["host"] for r in group if r["host"]})
         # A GPU row's thread count is the host side of a device queue, which says nothing useful.
         threads = "—" if variant == "gpu" else (row["threads"] or "?")
         lines.append(
@@ -238,9 +253,9 @@ def engines_table(rows: list[dict]) -> str:
                     Series(engine, variant).label,
                     row["engine_version"] or "unknown",
                     variant,
-                    "all" if threads == "0" else threads,
-                    row["host"],
-                    row["henad_commit"],
+                    "all" if str(threads) == "0" else str(threads),
+                    ", ".join(hosts) or "?",
+                    ", ".join(commits) or "?",
                 ]
             )
             + " |"
@@ -248,19 +263,90 @@ def engines_table(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Line comments by language. One rule for all six charged Python and Julia for their docstrings
+# while excusing every other language's comments, and read Rust attributes as comments.
+LINE_COMMENTS = {
+    ".py": ("#",),
+    ".jl": ("#",),
+    ".rs": ("//",),
+    ".java": ("//",),
+    ".nlogox": (";",),
+    ".nlogo": (";",),
+}
+# Languages whose idiomatic comment is a string literal, which no prefix test sees.
+DOCSTRING_FENCES = ('"""', "'''")
+DOCSTRING_LANGUAGES = {".py", ".jl"}
+# Languages with a delimited block comment, which a line-prefix test also never sees.
+BLOCK_COMMENTS = {".rs": ("/*", "*/"), ".java": ("/*", "*/")}
+
+
+def strip_netlogo(text: str) -> str:
+    """A NetLogo model's code section, without the XML wrapper around it.
+
+    The CDATA markers are markup, and were counting as two lines of every NetLogo model.
+    """
+    start, end = text.find("<code>"), text.find("</code>")
+    if not 0 <= start < end:
+        return ""
+    body = text[start + len("<code>") : end]
+    for marker in ("<![CDATA[", "]]>"):
+        body = body.replace(marker, "")
+    return body
+
+
+def strip_rust_tests(text: str) -> str:
+    """Rust source without its `#[cfg(test)]` blocks.
+
+    Henad's model files carry their unit tests inline where no port file does, and counting them
+    put Game of Life at more than twice its real size.
+    """
+    out, lines = [], text.splitlines()
+    i = 0
+    while i < len(lines):
+        if lines[i].strip().startswith("#[cfg(test)]"):
+            depth, seen = 0, False
+            while i < len(lines) and not (seen and depth == 0):
+                depth += lines[i].count("{") - lines[i].count("}")
+                seen = seen or "{" in lines[i]
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
 def count_lines(path: Path) -> int:
-    """Non-blank, non-comment lines. A NetLogo model counts its code section only."""
+    """Non-blank, non-comment lines, by the rules of the language the file is written in."""
     if not path.exists():
         return 0
     text = path.read_text(errors="replace")
     if path.suffix in {".nlogox", ".nlogo"}:
-        start = text.find("<code>")
-        end = text.find("</code>")
-        text = text[start + 6 : end] if 0 <= start < end else ""
+        text = strip_netlogo(text)
+    if path.suffix == ".rs":
+        text = strip_rust_tests(text)
+    prefixes = LINE_COMMENTS.get(path.suffix, ("#", "//", ";"))
+    docstrings = path.suffix in DOCSTRING_LANGUAGES
+    block = BLOCK_COMMENTS.get(path.suffix)
     total = 0
+    closer = ""
     for line in text.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith(("#", "//", ";", "///", "/*", "*")):
+        if closer:
+            if closer in stripped:
+                closer = ""
+            continue
+        if not stripped:
+            continue
+        if docstrings and (opener := next((q for q in DOCSTRING_FENCES if stripped.startswith(q)), "")):
+            # One that opens and closes on the same line is still only a comment.
+            if not (stripped.endswith(opener) and len(stripped) > len(opener)):
+                closer = opener
+            continue
+        if block and stripped.startswith(block[0]):
+            if block[1] not in stripped[len(block[0]) :]:
+                closer = block[1]
+            continue
+        if stripped.startswith(prefixes):
             continue
         total += 1
     return total
@@ -313,20 +399,20 @@ def main() -> int:
                 made.append(target)
         table = ratio_table(rows, model)
         if table:
-            path = out / "tables" / f"ratio_{model}.md"
+            path = out / "tables" / f"ratio_{model}.snippet"
             path.write_text(table)
             made.append(path)
 
-    (out / "tables" / "engines.md").write_text(engines_table(rows))
-    made.append(out / "tables" / "engines.md")
+    (out / "tables" / "engines.snippet").write_text(engines_table(rows))
+    made.append(out / "tables" / "engines.snippet")
 
     loc = loc_table(REPO_ROOT / "benchmarks" / "loc_manifest.toml")
     if loc:
-        path = out / "tables" / "loc.md"
+        path = out / "tables" / "loc.snippet"
         path.write_text(loc)
         made.append(path)
 
-    if args.publish:
+    if args.publish and out == PUBLISH_DIR:
         target = PUBLISH_DIR / source.name
         target.write_bytes(source.read_bytes())
         made.append(target)

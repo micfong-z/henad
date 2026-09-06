@@ -76,8 +76,8 @@ struct Args {
     seed: Option<u64>,
 
     /// Independent timed runs to collect, each on a freshly created state.
-    #[arg(long, default_value_t = 1)]
-    reps: usize,
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+    reps: u64,
 
     /// Override a model parameter, e.g. `--set grid_size=512`. Repeatable.
     #[arg(long = "set", value_name = "ID=VALUE")]
@@ -306,21 +306,28 @@ fn run_benchmark(
     gpu_ctx: Option<&GpuContext>,
     adapter: Option<&str>,
 ) -> Result<()> {
-    match (entry.create)(params, args.seed)? {
-        ModelState::Cpu(_) => {
-            if args.json {
-                json_report::info(&entry.id, "cpu", rayon::current_num_threads(), None);
-            }
-            bench_cpu(entry, params, args)
+    // Bound in a statement of its own. As a `match` scrutinee the probe outlived the arm and kept
+    // a second full model alive for the whole run.
+    let is_gpu = matches!((entry.create)(params, args.seed)?, ModelState::Gpu(_));
+    if is_gpu {
+        let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
+        if args.json {
+            json_report::info(&entry.id, "gpu", rayon::current_num_threads(), adapter);
         }
-        ModelState::Gpu(_) => {
-            let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
-            if args.json {
-                json_report::info(&entry.id, "gpu", rayon::current_num_threads(), adapter);
-            }
-            bench_gpu(entry, params, args, ctx)
+        bench_gpu(entry, params, args, ctx)
+    } else {
+        if args.json {
+            json_report::info(&entry.id, "cpu", rayon::current_num_threads(), None);
         }
+        bench_cpu(entry, params, args)
     }
+}
+
+/// Rep `i`'s seed, which `benchmarks/protocol.md` fixes as `base + i`.
+///
+/// Without it every rep replays one trajectory and the spread across reps is timer jitter.
+fn rep_seed(base: Option<u64>, rep: u64) -> Option<u64> {
+    base.map(|s| s.wrapping_add(rep))
 }
 
 /// CPU benchmark: for each rep, build a fresh state, warm it up untimed, then time `steps` steps.
@@ -348,14 +355,15 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         eprintln!("{elapsed:>8.3?}  ({0} global warmup steps)", args.global_warmup);
     }
 
-    let mut samples: Vec<Duration> = Vec::with_capacity(args.reps);
+    let mut samples: Vec<Duration> = Vec::with_capacity(args.reps as usize);
     let mut population: u64 = 0;
     // Grid dimensions read from the running state, not the params, since the state is
     // authoritative. It reflects any `--set grid_width=…` override and what the model built.
     let mut grid_dims: Option<(u32, u32)> = None;
 
     for rep in 0..args.reps {
-        let mut state = new_cpu_state(entry, params, args.seed)?;
+        let seed = rep_seed(args.seed, rep);
+        let mut state = new_cpu_state(entry, params, seed)?;
         for _ in 0..args.warmup {
             state.step();
         }
@@ -365,8 +373,8 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         let heap_bytes = state.heap_bytes();
         grid_dims = state.grid_view().map(|g| (g.width, g.height));
 
-        let start = Instant::now();
         eprint!("  #{: >4}: ", rep + 1);
+        let start = Instant::now();
         for _ in 0..args.steps {
             state.step();
         }
@@ -376,7 +384,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         if args.json {
             json_report::rep(
                 rep,
-                args.seed,
+                seed,
                 args.steps,
                 args.warmup,
                 elapsed,
@@ -401,6 +409,17 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
     Ok(())
 }
 
+/// Median of an already sorted slice, averaging the middle two on an even count.
+///
+/// The driver's `statistics.median` does the same, and a lone middle sample disagreed with it.
+pub fn median_of(sorted: &[Duration]) -> Duration {
+    match sorted.len() {
+        0 => Duration::ZERO,
+        n if n % 2 == 1 => sorted[n / 2],
+        n => (sorted[n / 2 - 1] + sorted[n / 2]) / 2,
+    }
+}
+
 /// Turn the raw per-rep timings into the reported benchmark result.
 ///
 /// - `samples`: one wall-clock [`Duration`] per rep, each covering `steps_per_rep` steps. Never
@@ -417,7 +436,7 @@ fn report(samples: &[Duration], steps_per_rep: u64, population: u64, grid_dims: 
     let median = {
         let mut sorted = samples.to_vec();
         sorted.sort_unstable();
-        sorted[sorted.len() / 2]
+        median_of(&sorted)
     };
     let std_dev = {
         let mean_secs = mean.as_secs_f64();
@@ -478,11 +497,12 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
         eprintln!("{elapsed:>8.3?}  ({0} global warmup steps)", args.global_warmup);
     }
 
-    let mut samples: Vec<Duration> = Vec::with_capacity(args.reps);
+    let mut samples: Vec<Duration> = Vec::with_capacity(args.reps as usize);
     let mut population: u64 = 0;
 
     for rep in 0..args.reps {
-        let mut state = new_gpu_state(entry, params, args.seed)?;
+        let seed = rep_seed(args.seed, rep);
+        let mut state = new_gpu_state(entry, params, seed)?;
         // Per-rep sim warm-up (untimed), matching the CPU path.
         run_gpu_steps(&mut *state, ctx, args.warmup)?;
         population = state.population();
@@ -494,7 +514,7 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
         eprintln!("{elapsed:>8.3?}");
         samples.push(elapsed);
         if args.json {
-            json_report::rep(rep, args.seed, args.steps, args.warmup, elapsed, population, None);
+            json_report::rep(rep, seed, args.steps, args.warmup, elapsed, population, None);
         }
     }
 

@@ -12,6 +12,7 @@
 
 use core::fmt;
 use std::any::Any;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use krabmaga::engine::agent::Agent;
 use krabmaga::engine::fields::dense_number_grid_2d::DenseNumberGrid2D;
@@ -141,6 +142,7 @@ impl Ant {
             HOME if self.has_food != 0 => {
                 self.reward = model.reward;
                 self.has_food = 0;
+                model.deliveries.fetch_add(1, Ordering::Relaxed);
             }
             FOOD if self.has_food == 0 => {
                 self.reward = model.reward;
@@ -184,6 +186,9 @@ pub struct Ants {
     /// Seeds both layers from the gate's formula instead of leaving them empty.
     seeded_field: bool,
     seed: u64,
+    /// Counted for the same reason Henad and the other four ports count it, so the timed step does
+    /// the same work everywhere. Nothing reads it.
+    deliveries: AtomicU64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -216,6 +221,7 @@ impl Ants {
             num_agents,
             agents: None,
             seeded_field: false,
+            deliveries: AtomicU64::new(0),
             seed,
         }
     }
@@ -365,18 +371,19 @@ impl State for Ants {
 /// At 200 by 200 this is where the model Henad descends from hard-codes them.
 fn build_sites(width: i32, height: i32) -> Vec<u8> {
     let mut sites = vec![EMPTY; (width * height) as usize];
-    let (w, h) = (width as f32, height as f32);
+    let (w, h) = (f64::from(width), f64::from(height));
     // The reference's ellipse constant is calibrated to a 200 wide field.
     let size = 0.407 * (200.0 / w);
-    let blob = |x: f32, y: f32, cx: f32, cy: f32| {
-        let a = (x - cx) * size + (y - cy) * size;
-        let b = (x - cx) * size - (y - cy) * size;
+    // Double precision and this grouping, as the declaration writes it.
+    let blob = |x: f64, y: f64, cx: f64, cy: f64| {
+        let a = ((x - cx) + (y - cy)) * size;
+        let b = ((x - cx) - (y - cy)) * size;
         a * a / 36.0 + b * b / 1024.0 <= 1.0
     };
 
     for x in 0..width {
         for y in 0..height {
-            let (fx, fy) = (x as f32, y as f32);
+            let (fx, fy) = (f64::from(x), f64::from(y));
             if blob(fx, fy, 0.500 * w, 0.725 * h) || blob(fx, fy, 0.450 * w, 0.275 * h) {
                 sites[(x * height + y) as usize] = OBSTACLE;
             }

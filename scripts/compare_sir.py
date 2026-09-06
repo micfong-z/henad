@@ -110,7 +110,7 @@ def read_dir(directory: Path) -> list[Run]:
 def generate_henad(out_dir: Path, count: int, args: argparse.Namespace) -> None:
     """Run `henad-cli` once per seed. Seeds are 1..count, matching the reference procedure."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    binary = REPO_ROOT / "target" / "release" / "henad-cli"
+    binary = args.binary
     if not binary.exists():
         raise SystemExit(f"{binary} not found; run `cargo build --release -p henad-cli` first")
 
@@ -174,6 +174,7 @@ def main() -> int:
     )
     parser.add_argument("--henad", type=Path, help="directory of Henad CSVs (default: <reference>/../henad)")
     parser.add_argument("--generate", type=int, metavar="N", help="produce N Henad replicates first")
+    parser.add_argument("--binary", type=Path, default=REPO_ROOT / "target" / "release" / "henad-cli")
     parser.add_argument("--grid", type=int, default=DEFAULT_GRID)
     parser.add_argument("--beta", type=float, default=DEFAULT_BETA)
     parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
@@ -197,13 +198,13 @@ def main() -> int:
     print(header)
     print("-" * len(header))
 
-    all_equivalent = True
+    verdicts = []
     for spec in STATISTICS:
         h = [spec.of(r) for r in henad]
         n = [spec.of(r) for r in reference]
         diff, half = difference_interval(h, n)
         result = verdict(diff, half, spec.margin)
-        all_equivalent &= result == Verdict.EQUIVALENT
+        verdicts.append(result)
         print(
             f"{spec.label:>24} | "
             f"{spec.fmt.format(st.mean(h)):>8} ±{spec.fmt.format(st.stdev(h)):>9} | "
@@ -223,11 +224,16 @@ def main() -> int:
         print(f"{spec.label:>24} | D = {result.statistic:.4f}  p = {result.pvalue:.4f}") # type: ignore
 
     print()
-    if all_equivalent:
+    if all(v == Verdict.EQUIVALENT for v in verdicts):
         print("All statistics equivalent within margin.")
         return 0
-    print("Not all statistics equivalent - see the table above.")
-    return 1
+    if any(v == Verdict.DIFFERENT for v in verdicts):
+        print("At least one statistic differs beyond its margin - see the table above.")
+        return 1
+    # Undecided, not failed. More replicates is the answer, and the caller needs to tell the two
+    # apart rather than record a correct engine as a failure.
+    print("At least one statistic is inconclusive; run more replicates.")
+    return 2
 
 
 if __name__ == "__main__":

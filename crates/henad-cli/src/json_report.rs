@@ -49,7 +49,7 @@ pub fn runtime(runtime: Option<&RuntimeInfo>) {
 
 /// One line per timed rep. `heap_bytes` is `None` for a GPU model, whose state lives on the device.
 pub fn rep(
-    index: usize,
+    index: u64,
     seed: Option<u64>,
     steps: u64,
     warmup: u64,
@@ -98,7 +98,7 @@ pub fn summary(
         "kind": "summary",
         "reps": samples.len(),
         "min_s": sorted.first().map(Duration::as_secs_f64),
-        "median_s": sorted.get(sorted.len() / 2).map(Duration::as_secs_f64),
+        "median_s": (!sorted.is_empty()).then(|| crate::median_of(&sorted).as_secs_f64()),
         "max_s": sorted.last().map(Duration::as_secs_f64),
         "mean_s": mean,
         "std_dev_s": variance.sqrt(),
