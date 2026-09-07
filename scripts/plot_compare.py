@@ -139,6 +139,9 @@ def apply_style(theme: dict[str, str]) -> None:
             # Text as paths. An SVG in an `img` tag cannot reach the page's own `@font-face`, so
             # keeping it as text would render in whatever the viewer happens to have.
             "svg.fonttype": "path",
+            # Without a fixed salt, clip-path and marker ids are regenerated per run, so republishing
+            # rewrites every file whether or not its chart moved.
+            "svg.hashsalt": "henad",
             # Legend labels and any bare `text` call read this, not `axes.labelcolor`.
             "text.color": theme["text"],
             "axes.edgecolor": theme["edge"],
@@ -208,7 +211,7 @@ def draw_headline(rows: list[dict], out: Path, theme: dict[str, str], compact: b
     apply_style(theme)
     # Compact is for the README, where the figure renders at about half a content column. Shrinking
     # the canvas at a fixed point size is what makes the text bigger relative to the plot.
-    fig, ax = plt.subplots(figsize=(5.6, 2.9) if compact else (7.9, 3.4))
+    fig, ax = plt.subplots(figsize=(5.6, 3.9) if compact else (7.9, 3.4))
     times = [t for t, _, _ in ranked]
     ys = list(range(len(ranked) - 1, -1, -1))
     ax.barh(ys, times, color=[series.style[0] for _, series, _ in ranked], height=0.62)
@@ -241,16 +244,17 @@ def draw_headline(rows: list[dict], out: Path, theme: dict[str, str], compact: b
     ax.set_xticks(ticks)
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _p: human_time(v).replace(".0", "")))
     ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.set_title(MODEL_TITLES.get(HEADLINE["model"], HEADLINE["model"]))
     ax.set_xlabel("time")
     ax.grid(axis="y", visible=False)
     for side in ("left", "right", "top"):
         ax.spines[side].set_visible(False)
     if compact:
-        fig.subplots_adjust(left=0.30, right=0.99, top=0.98, bottom=0.17)
+        fig.subplots_adjust(left=0.30, right=0.99, top=0.92, bottom=0.13)
     else:
-        fig.subplots_adjust(left=0.22, right=0.97, top=0.95, bottom=0.20)
+        fig.subplots_adjust(left=0.22, right=0.97, top=0.91, bottom=0.20)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out)
+    fig.savefig(out, metadata={"Date": None})
     plt.close(fig)
     return True
 
@@ -333,7 +337,7 @@ def draw_model(
         ax.legend(loc="center right", bbox_to_anchor=(-0.15, 0.5), fontsize=8)
         fig.subplots_adjust(left=0.28, right=0.975, top=0.91, bottom=0.13)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out)
+    fig.savefig(out, metadata={"Date": None})
     plt.close(fig)
     return True
 
