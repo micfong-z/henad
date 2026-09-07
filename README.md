@@ -32,7 +32,6 @@ https://github.com/user-attachments/assets/7ee3fadb-a8fa-4b79-84fa-7b4cd4099f23
 
 Use any device with a CPU and optionally a GPU, and any OS that can build [wgpu](https://github.com/gfx-rs/wgpu).
 
-
 > [!warning]
 > CPU models run noticably slower on WASM. GPU models appear to have similar performance compared to native builds.
 >
