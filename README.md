@@ -10,14 +10,19 @@ Try Henad on https://henad.micfong.space. Documentation is at https://micfong-z.
 
 <p align="center">
   <picture align="center">
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/benchmarks/headline_game_of_life-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/benchmarks/headline_game_of_life-light.svg">
-    <img alt="Time taken to run 100 steps of Game of Life on a 1024² grid." src="docs/assets/benchmarks/headline_game_of_life-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/benchmarks/headline_game_of_life_readme-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/benchmarks/headline_game_of_life_readme-light.svg">
+    <img alt="Time taken to run 100 steps of Game of Life on a 1024² grid." src="docs/assets/benchmarks/headline_game_of_life_readme-light.svg" width="49%">
+  </picture>
+  <picture align="center">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/benchmarks/boids_seconds_readme-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/benchmarks/boids_seconds_readme-light.svg">
+    <img alt="Time taken to run 100 steps of Boids flocking, from 1,000 to 1,000,000 agents." src="docs/assets/benchmarks/boids_seconds_readme-light.svg" width="49%">
   </picture>
 </p>
 
 <p align="center">
-  <i>Time taken to run 100 steps of Game of Life on a 1024&sup2; grid.</i>
+  <i>Left: 100 steps of Game of Life on a 1024&sup2; grid. Right: 100 steps of Boids flocking, from 1,000 to 1,000,000 agents. Both on log scales; hollow markers ran out of budget before five repetitions.</i>
 </p>
 
 See [Benchmarks](https://micfong-z.github.io/henad/benchmarks/) for more details.

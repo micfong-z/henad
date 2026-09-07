@@ -191,7 +191,7 @@ def speedup(factor: float) -> str:
     return f"{round(factor, -(digits - 2)):,.0f}x"
 
 
-def draw_headline(rows: list[dict], out: Path, theme: dict[str, str]) -> bool:
+def draw_headline(rows: list[dict], out: Path, theme: dict[str, str], compact: bool = False) -> bool:
     """One rung as a sorted bar chart. Log axis, since the rung spans four orders of magnitude."""
     points = [
         r
@@ -206,14 +206,16 @@ def draw_headline(rows: list[dict], out: Path, theme: dict[str, str]) -> bool:
     )
 
     apply_style(theme)
-    fig, ax = plt.subplots(figsize=(7.9, 3.4))
+    # Compact is for the README, where the figure renders at about half a content column. Shrinking
+    # the canvas at a fixed point size is what makes the text bigger relative to the plot.
+    fig, ax = plt.subplots(figsize=(5.6, 2.9) if compact else (7.9, 3.4))
     times = [t for t, _, _ in ranked]
     ys = list(range(len(ranked) - 1, -1, -1))
     ax.barh(ys, times, color=[series.style[0] for _, series, _ in ranked], height=0.62)
 
     floor = 10 ** math.floor(math.log10(min(times)))
     ax.set_xscale("log")
-    ax.set_xlim(floor, max(times) * 18)
+    ax.set_xlim(floor, max(times) * (55 if compact else 18))
     ax.set_yticks(ys, [series.label for _, series, _ in ranked])
     for tick, (_, series, _) in zip(ax.get_yticklabels(), ranked):
         tick.set_fontweight("bold" if series is ranked[0][1] else "normal")
@@ -229,13 +231,24 @@ def draw_headline(rows: list[dict], out: Path, theme: dict[str, str]) -> bool:
             color=theme["text"],
         )
 
+    # Only decades the bars reach. The headroom past the longest bar is for its label, and a tick
+    # out there would be clipped by the figure edge.
+    top = 10 ** math.floor(math.log10(max(times)))
+    ticks, tick = [], floor
+    while tick <= top:
+        ticks.append(tick)
+        tick *= 10
+    ax.set_xticks(ticks)
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _p: human_time(v).replace(".0", "")))
     ax.xaxis.set_minor_formatter(NullFormatter())
     ax.set_xlabel("time")
     ax.grid(axis="y", visible=False)
     for side in ("left", "right", "top"):
         ax.spines[side].set_visible(False)
-    fig.subplots_adjust(left=0.22, right=0.97, top=0.95, bottom=0.20)
+    if compact:
+        fig.subplots_adjust(left=0.30, right=0.99, top=0.98, bottom=0.17)
+    else:
+        fig.subplots_adjust(left=0.22, right=0.97, top=0.95, bottom=0.20)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out)
     plt.close(fig)
@@ -251,13 +264,16 @@ def y_label(metric: str, points: list[dict]) -> str:
     return f"seconds for {steps.pop()} steps" if len(steps) == 1 else "seconds"
 
 
-def draw_model(rows: list[dict], model: str, metric: str, out: Path, theme: dict[str, str]) -> bool:
+def draw_model(
+    rows: list[dict], model: str, metric: str, out: Path, theme: dict[str, str], compact: bool = False
+) -> bool:
     points = [r for r in rows if r["model"] == model]
     if not points:
         return False
     apply_style(theme)
-    # Wider than the plot needs, since the legend sits outside the axes on the left.
-    fig, ax = plt.subplots(figsize=(7.9, 4.0))
+    # Wider than the plot needs, since the legend sits outside the axes on the left. Compact puts
+    # the legend underneath instead, which costs height rather than width.
+    fig, ax = plt.subplots(figsize=(5.6, 3.9) if compact else (7.9, 4.0))
     axis = points[0]["axis"]
 
     drawn = False
@@ -285,7 +301,7 @@ def draw_model(rows: list[dict], model: str, metric: str, out: Path, theme: dict
             )
         drawn = True
         stopped = next((r for r in group if r["status"] in INCOMPLETE and INCOMPLETE[r["status"]]), None)
-        if stopped:
+        if stopped and not compact:
             last = xs[-1] == max(int(r["scale"]) for r in points)
             ax.annotate(
                 INCOMPLETE[stopped["status"]],
@@ -309,9 +325,13 @@ def draw_model(rows: list[dict], model: str, metric: str, out: Path, theme: dict
     ax.xaxis.set_major_formatter(FuncFormatter(si))
     # Outside the axes. Inside, a legend covers data on every figure where a slow engine stops
     # early and leaves the top-left empty on some models and not others.
-    # Anchored by its right edge, so the gap to the axes holds whatever the labels are.
-    ax.legend(loc="center right", bbox_to_anchor=(-0.15, 0.5), fontsize=8)
-    fig.subplots_adjust(left=0.28, right=0.975, top=0.91, bottom=0.13)
+    if compact:
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22), ncols=3, fontsize=8, columnspacing=1.4)
+        fig.subplots_adjust(left=0.14, right=0.985, top=0.93, bottom=0.35)
+    else:
+        # Anchored by its right edge, so the gap to the axes holds whatever the labels are.
+        ax.legend(loc="center right", bbox_to_anchor=(-0.15, 0.5), fontsize=8)
+        fig.subplots_adjust(left=0.28, right=0.975, top=0.91, bottom=0.13)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out)
     plt.close(fig)
@@ -542,6 +562,12 @@ def main() -> int:
             made.append(path)
 
     made += themed(lambda t, th: draw_headline(rows, t, th), out / HEADLINE["stem"])
+    # The README shows these two at about half a content column each.
+    made += themed(lambda t, th: draw_headline(rows, t, th, compact=True), out / f"{HEADLINE['stem']}_readme")
+    made += themed(
+        lambda t, th: draw_model(rows, "boids", "median_s", t, th, compact=True),
+        out / "boids_seconds_readme",
+    )
 
     (out / "tables" / "engines.snippet").write_text(engines_table(rows))
     made.append(out / "tables" / "engines.snippet")
