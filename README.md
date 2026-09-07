@@ -6,11 +6,6 @@
 
 Try Henad on https://henad.micfong.space. Documentation is at https://micfong-z.github.io/henad/.
 
-> [!warning]
-> CPU models run noticably slower on WASM. GPU models appear to have similar performance compared to native builds.
->
-> Consider running Henad natively for maximum performance.
-
 ## Benchmarks
 
 <p align="center">
@@ -36,6 +31,12 @@ https://github.com/user-attachments/assets/7ee3fadb-a8fa-4b79-84fa-7b4cd4099f23
 ## Running Henad
 
 Use any device with a CPU and optionally a GPU, and any OS that can build [wgpu](https://github.com/gfx-rs/wgpu).
+
+
+> [!warning]
+> CPU models run noticably slower on WASM. GPU models appear to have similar performance compared to native builds.
+>
+> Consider running Henad natively for maximum performance.
 
 ### Native
 
