@@ -37,6 +37,29 @@ fn pattern(scenario: &str) -> &'static [(u32, u32)] {
     }
 }
 
+/// Grid and tick count the declaration fixes for a scenario, in `game_of_life_fixture.md`.
+///
+/// The gate runs Henad at these rather than at whatever the candidate's header says. A port that
+/// ran the wrong length would otherwise write a self-consistent fixture and pass.
+fn declared(scenario: &str) -> (u32, u32, u32) {
+    match scenario.split_whitespace().next().unwrap_or_default() {
+        "glider" => (64, 64, 101),
+        "r-pentomino" => (64, 64, 500),
+        other => panic!("fixture declares unknown scenario `{other}`"),
+    }
+}
+
+/// Where the reference fixtures live.
+///
+/// `HENAD_FIXTURE_DIR` points the gate at a directory holding one engine's candidates, so a
+/// failure names that engine and no tracked fixture is written or removed to find out.
+fn fixture_dir(model: &str) -> std::path::PathBuf {
+    match std::env::var_os("HENAD_FIXTURE_DIR") {
+        Some(root) => std::path::PathBuf::from(root).join(model),
+        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(model),
+    }
+}
+
 fn params(width: u32, height: u32) -> Vec<ParamValue> {
     vec![ParamValue::U32(width), ParamValue::U32(height), ParamValue::F32(0.0)]
 }
@@ -144,7 +167,7 @@ fn glider_returns_to_origin_after_full_wrap() {
 /// Henad's final grid against every reference.
 #[test]
 fn matches_every_reference_fixture() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/game_of_life");
+    let dir = fixture_dir("game_of_life");
     let mut checked = Vec::new();
 
     let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
@@ -158,11 +181,19 @@ fn matches_every_reference_fixture() {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {name}: {e}"));
         let fixture = parse_fixture(&text);
 
-        let width = header_u32(&fixture, "width");
-        let height = header_u32(&fixture, "height");
-        let steps = header_u32(&fixture, "steps");
         let engine = fixture.header.get("engine").map_or("?", String::as_str);
         let scenario = fixture.header.get("scenario").map_or("?", String::as_str);
+        let (width, height, steps) = declared(scenario);
+        assert_eq!(
+            (
+                header_u32(&fixture, "width"),
+                header_u32(&fixture, "height"),
+                header_u32(&fixture, "steps")
+            ),
+            (width, height, steps),
+            "{name} was recorded at a configuration `{scenario}` does not declare. Regenerate it \
+             rather than comparing against a run of a different length."
+        );
 
         // Truncated file guard
         assert_eq!(

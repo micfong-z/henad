@@ -63,6 +63,20 @@ impl<A: AgentModel> AgentModelState<A> {
 
     /// Build a state whose agents come from `seed_lanes`, for reproducing a particular run.
     pub fn from_agents(params: &[ParamValue], seed_lanes: impl FnOnce(&mut A::Lanes, Extent)) -> Self {
+        Self::from_agents_and_field(params, None, seed_lanes, |_field, _extent| {})
+    }
+
+    /// As [`Self::from_agents`], with the field layer seeded too and the RNG stream chosen.
+    ///
+    /// A model whose agents read a field needs both halves fixed before its kernel means anything.
+    /// `seed_field` takes the concrete field type, so it reaches whatever that layer offers. The
+    /// seed is what lets a test show a scenario reaches the same answer from any stream.
+    pub fn from_agents_and_field(
+        params: &[ParamValue],
+        seed: Option<u64>,
+        seed_lanes: impl FnOnce(&mut A::Lanes, Extent),
+        seed_field: impl FnOnce(&mut A::Field, Extent),
+    ) -> Self {
         let n = extract_u32(params, NUM_AGENTS, 10_000) as usize;
         let extent = Extent {
             w: extract_f32(params, WORLD_WIDTH, 1_000.0),
@@ -70,7 +84,7 @@ impl<A: AgentModel> AgentModelState<A> {
         };
 
         let mut lanes = A::Lanes::alloc(n);
-        let mut seed = AGENT_INIT_SEED;
+        let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
         let (own, field_params) = split_params::<A>(params);
 
         // Init is still needed to ensure that seed is advanced to the right value for the first step.
@@ -78,7 +92,8 @@ impl<A: AgentModel> AgentModelState<A> {
 
         seed_lanes(&mut lanes, extent);
 
-        let field = A::Field::new(extent, field_params);
+        let mut field = A::Field::new(extent, field_params);
+        seed_field(&mut field, extent);
         let deposits = field.alloc_deposits(n);
         let hot = A::from_params(own, extent);
         let (pos_x, pos_y) = lanes.positions();

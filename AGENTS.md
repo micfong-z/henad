@@ -90,6 +90,21 @@ and the named region is marked in the source with a pair of comments:
 Those two lines are a build directive rather than a comment, and are the one exception to the
 comment rules below. Do not include by line range, which is also supported and drifts silently.
 
+## Cross-engine benchmarks
+
+`benchmarks/` holds one directory per reference engine (Mesa, NetLogo, MASON, Agents.jl,
+krABMaga), each with a harness and one implementation per model. Every implementation is written
+from the same declaration the consistency fixtures use. `scripts/validate_ports.py` checks each
+against Henad and records a verdict per engine, variant and model in `results/compare/validated.json`,
+and `compare_bench.py` reads that file and skips anything whose verdict is not `yes`. `benchmarks/protocol.md` is the
+interface every harness implements, and `henad-cli --json` is Henad's side of it.
+
+Two rules that are easy to break. A port is written the way a competent user of that engine would
+write it, using only its documented API, since the engine is being measured as its users meet it.
+And no engine's stock flocking or foraging example is used: that would compare two simulations, not
+two engines. `benchmarks/krabmaga` is outside the cargo workspace (`exclude` in the root
+`Cargo.toml`), so `./check.sh` never builds it.
+
 ## Writing style
 
 ### Spelling
@@ -247,9 +262,9 @@ Model build failed                                    // yes
   goes in the fixture's doc (e.g. `crates/henad-models/tests/fixtures/docs/`) for the user to run.
   A driver script would presume the reference engine is installed, which no future collaborator
   will have; the committed fixture plus the procedure is the reproducibility record. Never
-  fabricate reference output from Henad itself, which is circular. Where the reference engine is
-  code rather than a GUI (Mesa, MASON, Agents.jl, krABMaga), a small committed program _is_ the
-  procedure, which is fine.
+  fabricate reference output from Henad itself, which is circular. Where a committed program drives
+  the reference engine, that program _is_ the procedure, which is fine. All five cross-engine ports
+  are that shape, NetLogo included, since `NetLogoBench.java` runs it headless.
 - **Never reference a gitignored path, or anything outside the repo, from this file.** Run
   `git check-ignore <path>` before adding one. Several directories here are ignored deliberately.
 
@@ -276,6 +291,9 @@ Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps
 one, `--export-stats` for the time series)
 Sweep every model across the config matrix: `python3 scripts/bench_matrix.py` (grid models scale
 over grid size, agent models over agent count at constant density; `--dry-run` to see the matrix)
+Sweep every installed engine across the cross-engine ladder: `uv run --project scripts
+scripts/compare_bench.py` (`--dry-run` for the matrix, `--smoke` for one small point each); gate the
+ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py`
 Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` writes `site/`)
 
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).

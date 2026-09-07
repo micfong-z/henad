@@ -65,11 +65,11 @@ We compute the difference in means, its 95% confidence interval, and require tha
 
 Margins come from Henad's own measured run-to-run spread. At `beta` 0.08, `gamma` 0.3, 1% initial:
 
-| grid    | seeds | peak I frac             | tick of peak | final R frac            |
-| ------- | ----- | ----------------------- | ------------ | ----------------------- |
-| 128x128 | 30    | 0.0313 ± 0.0038 (12.0%) | 12.9 ± 2.66  | 0.3255 ± 0.0362 (11.1%) |
-| 256x256 | 30    | 0.0303 ± 0.0017 (5.7%)  | 10.8 ± 1.36  | 0.3238 ± 0.0220 (6.8%)  |
-| 512x512 | 15    | 0.0301 ± 0.0007 (2.3%)  | 10.8 ± 0.94  | 0.3251 ± 0.0085 (2.6%)  |
+| grid    | seeds | peak I frac            | tick of peak | final R frac            |
+| ------- | ----- | ---------------------- | ------------ | ----------------------- |
+| 128x128 | 30    | 0.0300 ± 0.0029 (9.5%) | 11.1 ± 2.87  | 0.3222 ± 0.0357 (11.1%) |
+| 256x256 | 30    | 0.0296 ± 0.0025 (8.3%) | 11.2 ± 1.46  | 0.3247 ± 0.0190 (5.8%)  |
+| 512x512 | 15    | 0.0297 ± 0.0007 (2.2%) | 10.9 ± 1.39  | 0.3265 ± 0.0109 (3.3%)  |
 
 We choose 256x256 as a compromise between runtime and margin width.
 
@@ -77,9 +77,9 @@ We choose 256x256 as a compromise between runtime and margin width.
 
 | statistic                | margin     | 95% CI half-width | headroom |
 | ------------------------ | ---------- | ----------------- | -------- |
-| peak infected fraction   | ±0.004     | 0.00067           | 6.0x     |
-| tick of peak             | ±1.5 ticks | 0.53              | 2.8x     |
-| final recovered fraction | ±0.03      | 0.0086            | 3.5x     |
+| peak infected fraction   | ±0.004     | 0.00096           | 4.1x     |
+| tick of peak             | ±1.5 ticks | 0.57              | 2.6x     |
+| final recovered fraction | ±0.03      | 0.0074            | 4.0x     |
 
 CI half-width is $\frac{1.96 \sigma \cdot \sqrt{2}}{\sqrt{50}}$, where $\sqrt{2}$ arises because the difference of two independent means has twice the variance of one.
 
@@ -87,11 +87,11 @@ Each margin is several times the CI half-width, so two correct engines should pa
 
 ## Running the comparison
 
-`scripts/compare_sir.py`. It reads both directories of CSVs, and generates the Henad-side results automatically. The reference side is always produced manually from the procedure above.
+`scripts/compare_sir.py`. It reads both directories of CSVs, and generates the Henad-side results automatically. The NetLogo reference side is produced by hand from the procedure above; every other engine's is produced by `scripts/validate_ports.py`, which drives that engine's own harness.
 
 ```bash
 cargo build --release -p henad-cli
-uv run --project scripts scripts/compare_sir.py --netlogo path/to/netlogo_csvs --generate 50
+uv run --project scripts scripts/compare_sir.py --reference path/to/reference_csvs --generate 50
 ```
 
 The script reports `EQUIVALENT`, `INCONCLUSIVE` or `DIFFERENT` per statistic. `INCONCLUSIVE` indicates that the interval is wider than the margin, so the replicate count is too low to decide, and more runs are needed.
@@ -104,11 +104,44 @@ A two-sample KS test is also printed as a diagnostic, since it could catch shape
 
 | statistic                | Henad             | NetLogo 7.0.4     | difference (95% CI) | margin | verdict    |
 | ------------------------ | ----------------- | ----------------- | ------------------- | ------ | ---------- |
-| peak infected fraction   | 0.03031 ± 0.00171 | 0.03006 ± 0.00194 | 0.00025 ± 0.00073   | ±0.004 | EQUIVALENT |
-| tick of peak             | 10.88 ± 1.44      | 11.12 ± 1.52      | -0.24 ± 0.59        | ±1.5   | EQUIVALENT |
-| final recovered fraction | 0.32485 ± 0.02009 | 0.32319 ± 0.01634 | 0.00166 ± 0.00727   | ±0.03  | EQUIVALENT |
+| peak infected fraction   | 0.02990 ± 0.00250 | 0.03006 ± 0.00194 | -0.00016 ± 0.00089  | ±0.004 | EQUIVALENT |
+| tick of peak             | 11.04 ± 1.78      | 11.12 ± 1.52      | -0.08 ± 0.66        | ±1.5   | EQUIVALENT |
+| final recovered fraction | 0.32560 ± 0.01852 | 0.32319 ± 0.01634 | 0.00242 ± 0.00693   | ±0.03  | EQUIVALENT |
 
-KS diagnostics were unremarkable (`D` 0.12 to 0.18, `p` 0.40 to 0.87).
+KS diagnostics were unremarkable (`D` 0.06 to 0.24, `p` 0.11 to 1.00).
+
+## Other engines
+
+The same comparison, against the ports written for the cross-engine benchmarks. Each is run by
+`scripts/validate_ports.py`, which drives that engine's harness under `benchmarks/<engine>/` and
+then this script.
+
+Mesa 3.5.1, same configuration and replicate count:
+
+| statistic                | Henad             | Mesa 3.5.1        | difference (95% CI) | margin | verdict    |
+| ------------------------ | ----------------- | ----------------- | ------------------- | ------ | ---------- |
+| peak infected fraction   | 0.02990 ± 0.00250 | 0.02969 ± 0.00181 | 0.00021 ± 0.00087   | ±0.004 | EQUIVALENT |
+| tick of peak             | 11.04 ± 1.78      | 10.88 ± 1.64      | 0.16 ± 0.68         | ±1.5   | EQUIVALENT |
+| final recovered fraction | 0.32560 ± 0.01852 | 0.32196 ± 0.01466 | 0.00364 ± 0.00663   | ±0.03  | EQUIVALENT |
+
+KS diagnostics again unremarkable (`D` 0.12 to 0.18, `p` 0.40 to 0.55).
+
+The remaining four, same configuration and replicate count. Every statistic equivalent.
+
+| engine | statistic | reference | difference (95% CI) | margin |
+| --- | --- | --- | --- | --- |
+| NetLogo 7.0.4 | peak infected fraction | 0.03006 ± 0.00194 | -0.00016 ± 0.00089 | 0.004 |
+| NetLogo 7.0.4 | tick of peak | 11.12 ± 1.52 | -0.08 ± 0.66 | 1.5 |
+| NetLogo 7.0.4 | final recovered fraction | 0.32319 ± 0.01634 | 0.00242 ± 0.00693 | 0.03 |
+| MASON 22 | peak infected fraction | 0.02988 ± 0.00187 | 0.00002 ± 0.00088 | 0.004 |
+| MASON 22 | tick of peak | 10.90 ± 1.45 | 0.14 ± 0.64 | 1.5 |
+| MASON 22 | final recovered fraction | 0.32099 ± 0.01851 | 0.00461 ± 0.00735 | 0.03 |
+| Agents.jl 7.0.3 | peak infected fraction | 0.02974 ± 0.00198 | 0.00016 ± 0.00090 | 0.004 |
+| Agents.jl 7.0.3 | tick of peak | 10.84 ± 1.33 | 0.20 ± 0.63 | 1.5 |
+| Agents.jl 7.0.3 | final recovered fraction | 0.32206 ± 0.01920 | 0.00355 ± 0.00749 | 0.03 |
+| krABMaga 0.6.2 | peak infected fraction | 0.02970 ± 0.00180 | 0.00020 ± 0.00087 | 0.004 |
+| krABMaga 0.6.2 | tick of peak | 10.42 ± 1.49 | 0.62 ± 0.65 | 1.5 |
+| krABMaga 0.6.2 | final recovered fraction | 0.31952 ± 0.01767 | 0.00609 ± 0.00718 | 0.03 |
 
 ---
 

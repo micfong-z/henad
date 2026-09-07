@@ -15,6 +15,15 @@ Some major highlights are:
 - It is very fast, and parallelized by default (see [Benchmarks](benchmarks.md) for details).
 - It allows (many) models that previously require expensive compute to run on a laptop, and models that previously require a laptop to run on a phone.
 
+![Game of Life on a 1024² grid](assets/benchmarks/headline_game_of_life-light.svg#only-light){ loading=lazy }
+![Game of Life on a 1024² grid](assets/benchmarks/headline_game_of_life-dark.svg#only-dark){ loading=lazy }
+
+/// caption
+Time taken to run 100 steps of Game of Life on a 1024² grid.
+Multiples are speedups over the slowest engine (\*).
+See [Benchmarks](benchmarks.md) for details.
+///
+
 [Try Henad in your browser](https://henad.micfong.space){ .md-button .md-button--primary }
 [Get started](guide/installation.md){ .md-button }
 

@@ -1,0 +1,6 @@
+[project]
+name = "henad-bench-mesa"
+version = "0.1.0"
+description = "Mesa implementations of Henad's four models, for the cross-engine comparison"
+requires-python = ">=3.12"
+dependencies = ["mesa>=3.3,<4", "numpy>=2", "networkx>=3"]

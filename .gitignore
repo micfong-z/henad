@@ -25,6 +25,9 @@ opencode.json
 results
 .temporary
 
+# reference engine binaries, fetched not committed
+*.jar
+
 # development documentation (may or may not contain sensitive info >:( )
 /dev-docs
 

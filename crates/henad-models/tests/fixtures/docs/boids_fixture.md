@@ -96,3 +96,15 @@ The test's tolerance is 1e-5 absolute.
 ---
 
 This document is assisted with Claude Opus 5, with heavy human edits after generation.
+
+## Other engines
+
+Every engine in the cross-engine benchmarks implements this model from the rules above, and commits
+its own fixture as `<scenario>_<engine>.txt`. `scripts/validate_ports.py` produces them:
+
+```bash
+uv run --project scripts scripts/validate_ports.py --engines <engine>
+```
+
+`consistency_*.rs` then checks Henad against every fixture in the directory, so a port stays checked
+with nothing installed but cargo.

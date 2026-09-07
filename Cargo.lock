@@ -1903,6 +1903,8 @@ dependencies = [
  "henad-models",
  "numfmt",
  "pollster 0.4.0",
+ "rayon",
+ "serde_json",
  "wgpu",
 ]
 

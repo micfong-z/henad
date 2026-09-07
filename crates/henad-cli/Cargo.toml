@@ -22,6 +22,9 @@ anyhow = { workspace = true }
 numfmt = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }
+# `--json` writes the harness protocol lines, `--threads` sizes rayon's global pool.
+serde_json = { workspace = true }
+rayon = { workspace = true }
 
 [lints]
 workspace = true
