@@ -1,5 +1,10 @@
-| engine | 1k | 10k | 50k | 100k | 1M |
-|---|---|---|---|---|---|
-| Henad, 1 thread | 1.00 | 1.00 | 1.00 | 1.00 | over budget |
-| Henad, GPU | 0.08 | 0.01 | 0.01 | 0.02 | no baseline |
-| Henad, all cores | 0.55 | 0.16 | 0.10 | 0.11 | no baseline |
+| engine | 1k | 3k | 10k | 30k | 100k | 300k | 1M |
+|---|---|---|---|---|---|---|---|
+| Agents.jl | 1.33 | 1.64 | 2.10 | 2.48 | over budget | not reached | not reached |
+| Henad, 1 thread | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | over budget | not reached |
+| Henad, GPU | 0.02 | 0.01 | 0.01 | 0.00 | 0.00 | no baseline | no baseline |
+| Henad, all cores | 0.52 | 0.26 | 0.12 | 0.06 | 0.04 | no baseline | no baseline |
+| MASON | 0.72 | 0.73 | 0.92 | 0.98 | 1.36 | over budget | not reached |
+| Mesa | 54.76 | 70.06 | over budget | not reached | not reached | not reached | not reached |
+| NetLogo | 34.28 | 47.89 | over budget | not reached | not reached | not reached | not reached |
+| krABMaga | 0.67 | 0.82 | 0.90 | 0.92 | 0.86 | over budget | not reached |

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import sys
 import tomllib
 from collections import defaultdict
@@ -28,14 +29,17 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FuncFormatter, NullFormatter
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PUBLISH_DIR = REPO_ROOT / "docs" / "assets" / "benchmarks"
 
-TEXT_PRIMARY = "#0b0b0b"
-TEXT_SECONDARY = "#52514e"
-SURFACE = "#fcfcfb"
+# Neutrals per theme. The engine hues below are shared, so a reader tracks an engine across both.
+# Backgrounds stay transparent, letting each figure sit on whatever the page is painted.
+THEMES = {
+    "light": {"text": "#0b0b0b", "muted": "#52514e", "edge": "#d5d4cf", "grid": "#e6e5e0"},
+    "dark": {"text": "#e8e7e3", "muted": "#a3a29d", "edge": "#4b4a46", "grid": "#3a3936"},
+}
 
 # One colour per engine, so a reader tracks an engine across every figure. Henad's variants share
 # its colour and differ by dash, since they are one engine measured three ways.
@@ -125,21 +129,31 @@ def scale_label(scale: int, axis: str) -> str:
     return f"{scale}²" if axis == "grid" else si(scale)
 
 
-def apply_style() -> None:
+def apply_style(theme: dict[str, str]) -> None:
     plt.rcParams.update(
         {
-            "figure.facecolor": SURFACE,
-            "axes.facecolor": SURFACE,
-            "savefig.facecolor": SURFACE,
-            "axes.edgecolor": "#d5d4cf",
-            "axes.labelcolor": TEXT_SECONDARY,
-            "axes.titlecolor": TEXT_PRIMARY,
+            "figure.facecolor": "none",
+            "axes.facecolor": "none",
+            "savefig.facecolor": "none",
+            "savefig.transparent": True,
+            # Text as paths. An SVG in an `img` tag cannot reach the page's own `@font-face`, so
+            # keeping it as text would render in whatever the viewer happens to have.
+            "svg.fonttype": "path",
+            # Legend labels and any bare `text` call read this, not `axes.labelcolor`.
+            "text.color": theme["text"],
+            "axes.edgecolor": theme["edge"],
+            "axes.labelcolor": theme["muted"],
+            "axes.titlecolor": theme["text"],
             "axes.grid": True,
-            "grid.color": "#e6e5e0",
+            "grid.color": theme["grid"],
             "grid.linewidth": 0.6,
-            "xtick.color": TEXT_SECONDARY,
-            "ytick.color": TEXT_SECONDARY,
+            "xtick.color": theme["muted"],
+            "ytick.color": theme["muted"],
             "font.size": 9,
+            # The site's own face. It ships as woff2, which matplotlib cannot read, so this picks up
+            # a system install and falls back rather than failing on a machine without it.
+            "font.family": "sans-serif",
+            "font.sans-serif": ["IBM Plex Sans", "DejaVu Sans"],
             "legend.frameon": False,
         }
     )
@@ -154,6 +168,80 @@ def series_of(rows: list[dict]) -> dict[Series, list[dict]]:
     return grouped
 
 
+# The intro page's one chart: a single rung, every engine that reached it, fastest first.
+HEADLINE = {"model": "game_of_life", "scale": 1024, "stem": "headline_game_of_life"}
+
+
+def human_time(seconds: float) -> str:
+    if seconds < 1.0:
+        return f"{seconds * 1000:.1f} ms" if seconds < 0.01 else f"{seconds * 1000:.0f} ms"
+    return f"{seconds:.1f} s" if seconds < 10 else f"{seconds:.0f} s"
+
+
+def speedup(factor: float) -> str:
+    """A multiple against the slowest bar, at three significant figures.
+
+    Mesa's row is a median over four reps, so the sixth digit of `178171` would be invented.
+    """
+    if factor < 10:
+        return f"{factor:.1f}x"
+    if factor < 1000:
+        return f"{factor:.0f}x"
+    digits = math.floor(math.log10(factor))
+    return f"{round(factor, -(digits - 2)):,.0f}x"
+
+
+def draw_headline(rows: list[dict], out: Path, theme: dict[str, str]) -> bool:
+    """One rung as a sorted bar chart. Log axis, since the rung spans four orders of magnitude."""
+    points = [
+        r
+        for r in rows
+        if r["model"] == HEADLINE["model"] and int(r["scale"]) == HEADLINE["scale"] and number(r, "median_s")
+    ]
+    if not points:
+        return False
+    ranked = sorted(
+        ((number(r, "median_s"), Series(r["engine"], r["variant"]), r["status"]) for r in points),
+        key=lambda p: p[0],
+    )
+
+    apply_style(theme)
+    fig, ax = plt.subplots(figsize=(7.9, 3.4))
+    times = [t for t, _, _ in ranked]
+    ys = list(range(len(ranked) - 1, -1, -1))
+    ax.barh(ys, times, color=[series.style[0] for _, series, _ in ranked], height=0.62)
+
+    floor = 10 ** math.floor(math.log10(min(times)))
+    ax.set_xscale("log")
+    ax.set_xlim(floor, max(times) * 18)
+    ax.set_yticks(ys, [series.label for _, series, _ in ranked])
+    for tick, (_, series, _) in zip(ax.get_yticklabels(), ranked):
+        tick.set_fontweight("bold" if series is ranked[0][1] else "normal")
+    slowest = max(times)
+    for y, (t, _, status) in zip(ys, ranked):
+        star = "" if status == "ok" else " *"
+        ax.text(
+            t * 1.3,
+            y,
+            f"{human_time(t)}{star}  ({speedup(slowest / t)})",
+            va="center",
+            fontsize=8.5,
+            color=theme["text"],
+        )
+
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _p: human_time(v).replace(".0", "")))
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.set_xlabel("time")
+    ax.grid(axis="y", visible=False)
+    for side in ("left", "right", "top"):
+        ax.spines[side].set_visible(False)
+    fig.subplots_adjust(left=0.22, right=0.97, top=0.95, bottom=0.20)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out)
+    plt.close(fig)
+    return True
+
+
 def y_label(metric: str, points: list[dict]) -> str:
     if metric == "steps_per_sec":
         return "steps / second"
@@ -163,12 +251,13 @@ def y_label(metric: str, points: list[dict]) -> str:
     return f"seconds for {steps.pop()} steps" if len(steps) == 1 else "seconds"
 
 
-def draw_model(rows: list[dict], model: str, metric: str, out: Path) -> bool:
+def draw_model(rows: list[dict], model: str, metric: str, out: Path, theme: dict[str, str]) -> bool:
     points = [r for r in rows if r["model"] == model]
     if not points:
         return False
-    apply_style()
-    fig, ax = plt.subplots(figsize=(6.4, 4.0))
+    apply_style(theme)
+    # Wider than the plot needs, since the legend sits outside the axes on the left.
+    fig, ax = plt.subplots(figsize=(7.9, 4.0))
     axis = points[0]["axis"]
 
     drawn = False
@@ -191,7 +280,7 @@ def draw_model(rows: list[dict], model: str, metric: str, out: Path) -> bool:
                 marker=marker,
                 color=color,
                 markersize=7.0,
-                markerfacecolor=SURFACE,
+                markerfacecolor="none",
                 markeredgewidth=1.3,
             )
         drawn = True
@@ -218,10 +307,13 @@ def draw_model(rows: list[dict], model: str, metric: str, out: Path) -> bool:
     ax.set_title(MODEL_TITLES.get(model, model))
     ax.yaxis.set_major_formatter(FuncFormatter(si))
     ax.xaxis.set_major_formatter(FuncFormatter(si))
-    ax.legend(loc="best", fontsize=8)
-    fig.tight_layout()
+    # Outside the axes. Inside, a legend covers data on every figure where a slow engine stops
+    # early and leaves the top-left empty on some models and not others.
+    # Anchored by its right edge, so the gap to the axes holds whatever the labels are.
+    ax.legend(loc="center right", bbox_to_anchor=(-0.15, 0.5), fontsize=8)
+    fig.subplots_adjust(left=0.28, right=0.975, top=0.91, bottom=0.13)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=160)
+    fig.savefig(out)
     plt.close(fig)
     return True
 
@@ -423,6 +515,15 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     (out / "tables").mkdir(exist_ok=True)
 
+    def themed(draw, stem: Path) -> list[Path]:
+        """One figure per theme, named `<stem>-light.svg` and `<stem>-dark.svg`."""
+        written = []
+        for name, theme in THEMES.items():
+            target = stem.with_name(f"{stem.name}-{name}.svg")
+            if draw(target, theme):
+                written.append(target)
+        return written
+
     made = []
     for model in sorted({r["model"] for r in rows}):
         for metric, stem in (
@@ -430,14 +531,17 @@ def main() -> int:
             ("steps_per_sec", "steps_per_sec"),
             ("updates_per_sec", "updates_per_sec"),
         ):
-            target = out / f"{model}_{stem}.png"
-            if draw_model(rows, model, metric, target):
-                made.append(target)
+            made += themed(
+                lambda t, th, m=model, mt=metric: draw_model(rows, m, mt, t, th),
+                out / f"{model}_{stem}",
+            )
         table = ratio_table(rows, model)
         if table:
             path = out / "tables" / f"ratio_{model}.snippet"
             path.write_text(table)
             made.append(path)
+
+    made += themed(lambda t, th: draw_headline(rows, t, th), out / HEADLINE["stem"])
 
     (out / "tables" / "engines.snippet").write_text(engines_table(rows))
     made.append(out / "tables" / "engines.snippet")

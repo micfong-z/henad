@@ -19,36 +19,19 @@ https://github.com/user-attachments/assets/7ee3fadb-a8fa-4b79-84fa-7b4cd4099f23
 
 ## Benchmarks
 
-Benchmarks were run on Ubuntu 20.04.6 LTS x86_64 with AMD Ryzen Threadripper 3960X and NVIDIA GeForce RTX 4090. Each entry was run 3 times and the mean was taken.
+<p align="center">
+  <picture align="center">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/benchmarks/headline_game_of_life-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/benchmarks/headline_game_of_life-light.svg">
+    <img alt="Time taken to run 100 steps of Game of Life on a 1024² grid." src="docs/assets/benchmarks/headline_game_of_life-light.svg">
+  </picture>
+</p>
 
-_Agent-Based Models_
+<p align="center">
+  <i>Time taken to run 100 steps of Game of Life on a 1024&sup2; grid.</i>
+</p>
 
-| #   | Model                | Agents    | Total Steps | Time (s) | Steps / s | Agent Updates / s |
-| --- | -------------------- | --------- | ----------- | -------- | --------- | ----------------- |
-| 1   | [CPU] Ant Foraging   | 1,000     | 1,000       | 1.16     | 862.17    | 862,174.54        |
-| 2   | [CPU] Ant Foraging   | 1,000,000 | 1,000       | 134.20   | 7.45      | 7,451,525.79      |
-| 3   | [CPU] Boids Flocking | 1,000     | 1,000       | 6.99     | 143.15    | 143,147.12        |
-| 4   | [CPU] Boids Flocking | 50,000    | 1,000       | 31.32    | 31.93     | 1,596,674.07      |
-
-_Grid-Based Models_
-
-| #   | Model              | Grid Size | Total Steps | Time (s) | Steps / s | Cell Updates / s  |
-| --- | ------------------ | --------- | ----------- | -------- | --------- | ----------------- |
-| 5   | [CPU] SIR          | 4096x4096 | 1,000       | 1.21     | 824.40    | 13,831,136,521.60 |
-| 6   | [GPU] SIR          | 4096x4096 | 100,000     | 28.91    | 3,458.86  | 58,030,030,537.62 |
-| 7   | [CPU] Game of Life | 4096x4096 | 1,000       | 1.05     | 956.43    | 16,046,254,532.72 |
-| 8   | [GPU] Game of Life | 8192x8192 | 100,000     | 1.61     | 62,158.02 | ~4.17 Trillion    |
-
-_Parameters Used_
-
-1. `{"evaporation": "0.999", "momentum": "0.8", "num_agents": "1000", "random_action": "0.1", "reward": "1", "update_cutdown": "0.9", "world_height": "141.421", "world_width": "141.421"}`
-2. `{"evaporation": "0.999", "momentum": "0.8", "num_agents": "1000000", "random_action": "0.1", "reward": "1", "update_cutdown": "0.9", "world_height": "4472.14", "world_width": "4472.14"}`
-3. `{"alignment": "0.05", "cohesion": "0.0005", "max_speed": "15", "min_speed": "3", "num_agents": "1000", "protected_range": "8", "separation": "0.05", "visual_range": "50", "world_height": "141.421", "world_width": "141.421"}`
-4. `{"alignment": "0.05", "cohesion": "0.0005", "max_speed": "15", "min_speed": "3", "num_agents": "50000", "protected_range": "8", "separation": "0.05", "visual_range": "50", "world_height": "1000", "world_width": "1000"}`
-5. `{"grid_height": "4096", "grid_width": "4096", "infection_rate": "0.3", "initial_infected_pct": "0.01", "recovery_rate": "0.05"}`
-6. `{"grid_height": "8192", "grid_width": "8192", "infection_rate": "0.3", "initial_infected_pct": "0.01", "recovery_rate": "0.05"}`
-7. `{"density": "0.3", "grid_height": "4096", "grid_width": "4096"}`
-8. `{"density": "0.3", "grid_height": "8192", "grid_width": "8192"}`
+See [Benchmarks](https://micfong-z.github.io/henad/benchmarks/) for more details.
 
 ## Running Henad
 
