@@ -11,12 +11,6 @@ Try Henad on https://henad.micfong.space. Documentation is at https://micfong-z.
 >
 > Consider running Henad natively for maximum performance.
 
-## WIP Screen Recording (2026-08-01)
-
-<img width="800" height="450" alt="GIF screen recording" src="https://github.com/user-attachments/assets/a64ffa6d-2d96-4fe7-9351-ee9e7810b751" />
-
-https://github.com/user-attachments/assets/7ee3fadb-a8fa-4b79-84fa-7b4cd4099f23
-
 ## Benchmarks
 
 <p align="center">
@@ -32,6 +26,12 @@ https://github.com/user-attachments/assets/7ee3fadb-a8fa-4b79-84fa-7b4cd4099f23
 </p>
 
 See [Benchmarks](https://micfong-z.github.io/henad/benchmarks/) for more details.
+
+## Screenshots
+
+<img width="800" height="450" alt="GIF screen recording" src="https://github.com/user-attachments/assets/a64ffa6d-2d96-4fe7-9351-ee9e7810b751" />
+
+https://github.com/user-attachments/assets/7ee3fadb-a8fa-4b79-84fa-7b4cd4099f23
 
 ## Running Henad
 
