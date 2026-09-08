@@ -1,5 +1,5 @@
 use crate::authoring::model::field::Extent;
-use crate::authoring::primitives::space::{Boundary, dist_sq};
+use crate::authoring::primitives::space::{Boundary, axis_delta};
 
 /// Cell geometry on its own, for a caller that needs the grid without the buckets. A GPU model
 /// mirrors it into its step uniform so its query walks the same grid as the CPU sort.
@@ -11,13 +11,32 @@ pub struct HashGrid {
     pub cell_h: f32,
 }
 
+/// Cells one index may hold, on either backend.
+///
+/// The grid is `(world / cell_size)^2`, and both are model parameters, so a small cell on a large
+/// world asks for a grid nobody can hold. A coarser cell only makes a query scan candidates it
+/// then rejects, where an unbounded one asks for gigabytes.
+pub const MAX_INDEX_CELLS: u64 = 1 << 22;
+
 impl HashGrid {
-    /// Fits whole cells to the world, same as [`SpatialHash::new`]. A query walks in cell index
-    /// space, so cells all have to span the same distance or the wrap seam gets under-covered.
+    /// Fits whole cells to the world. A query walks in cell index space, so cells all have to span
+    /// the same distance or the wrap seam gets under-covered.
+    ///
+    /// The one place the geometry is decided. [`SpatialHash`] and its GPU counterpart both build
+    /// from here, so neither can walk a grid the other did not sort.
     pub fn new(extent: Extent, cell_size: f32) -> Self {
         let cell_size = if cell_size > 0.0 { cell_size } else { 1.0 };
-        let grid_w = (extent.w / cell_size).floor().max(1.0) as u32;
-        let grid_h = (extent.h / cell_size).floor().max(1.0) as u32;
+        let mut grid_w = (extent.w / cell_size).floor().max(1.0) as u32;
+        let mut grid_h = (extent.h / cell_size).floor().max(1.0) as u32;
+
+        if u64::from(grid_w) * u64::from(grid_h) > MAX_INDEX_CELLS {
+            // Both axes by the same factor, so cells stay as square as the world lets them. Two
+            // floors of the same divisor cannot leave the product above the cap.
+            let scale = (f64::from(grid_w) * f64::from(grid_h) / MAX_INDEX_CELLS as f64).sqrt();
+            grid_w = ((f64::from(grid_w) / scale).floor() as u32).max(1);
+            grid_h = ((f64::from(grid_h) / scale).floor() as u32).max(1);
+        }
+
         Self {
             grid_w,
             grid_h,
@@ -54,13 +73,11 @@ pub struct SpatialHash {
 
 impl SpatialHash {
     pub fn new(cell_size: f32, world_w: f32, world_h: f32) -> Self {
-        // `query_radius` walks a neighborhood in cell index space, so every cell has to span the
-        // same world distance, otherwise the wrap seam gets under-covered. Fit the cells to the
-        // world instead of using `cell_size` directly, rounding the count down so they only grow.
-        let grid_w = (world_w / cell_size).floor().max(1.0) as u32;
-        let grid_h = (world_h / cell_size).floor().max(1.0) as u32;
-        let cell_w = world_w / grid_w as f32;
-        let cell_h = world_h / grid_h as f32;
+        // Through `HashGrid`, which fits whole cells to the world and caps how many there are.
+        // Sharing it is what keeps this sort and the GPU one walking the same grid.
+        let grid = HashGrid::new(Extent { w: world_w, h: world_h }, cell_size);
+        let (grid_w, grid_h) = (grid.grid_w, grid.grid_h);
+        let (cell_w, cell_h) = (grid.cell_w, grid.cell_h);
         let num_cells = grid_w * grid_h;
 
         Self {
@@ -121,6 +138,25 @@ impl SpatialHash {
 
     pub fn query_radius(&self, x: f32, y: f32, r: f32, pos_x: &[f32], pos_y: &[f32], result: &mut Vec<u32>) {
         result.clear();
+        self.for_each_within(x, y, r, pos_x, pos_y, |agent_idx, _dx, _dy, _d2| {
+            result.push(agent_idx);
+        });
+    }
+
+    /// Visits every agent within `r` of `(x, y)`, handing the callback its index, the toroidal
+    /// deltas to it and their squared length.
+    ///
+    /// The deltas come out of the range test either way. A kernel that wants them takes this and
+    /// computes each one once, where a list of indices makes it recompute them all.
+    pub fn for_each_within<F: FnMut(u32, f32, f32, f32)>(
+        &self,
+        x: f32,
+        y: f32,
+        r: f32,
+        pos_x: &[f32],
+        pos_y: &[f32],
+        mut f: F,
+    ) {
         let r2 = r * r;
         let cell_radius_x = (r / self.cell_w).ceil() as i32;
         let cell_radius_y = (r / self.cell_h).ceil() as i32;
@@ -143,21 +179,14 @@ impl SpatialHash {
             for grid_x in x_lo..=x_hi {
                 let wrapped_x = grid_x.rem_euclid(self.grid_w as i32) as u32;
                 let cell_index = wrapped_y * self.grid_w + wrapped_x;
-                let start = self.cell_start[cell_index as usize];
-                let end = self.cell_start[cell_index as usize + 1];
-                for i in start..end {
-                    let agent_idx = self.sorted_agents[i as usize];
-                    let d2 = dist_sq(
-                        x,
-                        y,
-                        pos_x[agent_idx as usize],
-                        pos_y[agent_idx as usize],
-                        self.world_w,
-                        self.world_h,
-                        Boundary::Torus,
-                    );
+                let start = self.cell_start[cell_index as usize] as usize;
+                let end = self.cell_start[cell_index as usize + 1] as usize;
+                for &agent_idx in &self.sorted_agents[start..end] {
+                    let dx = axis_delta(x, pos_x[agent_idx as usize], self.world_w, Boundary::Torus);
+                    let dy = axis_delta(y, pos_y[agent_idx as usize], self.world_h, Boundary::Torus);
+                    let d2 = dx * dx + dy * dy;
                     if d2 <= r2 {
-                        result.push(agent_idx);
+                        f(agent_idx, dx, dy, d2);
                     }
                 }
             }
@@ -196,6 +225,44 @@ impl SpatialHash {
 mod tests {
     use super::*;
     use crate::authoring::primitives::rng::xorshift64;
+
+    /// A cell size the UI admits would otherwise ask for a grid of hundreds of millions of cells.
+    #[test]
+    fn the_index_grid_is_capped() {
+        let extent = Extent {
+            w: 10_000.0,
+            h: 10_000.0,
+        };
+        let grid = HashGrid::new(extent, 1.0);
+        assert!(
+            u64::from(grid.grid_w) * u64::from(grid.grid_h) <= MAX_INDEX_CELLS,
+            "{}x{} is over the cap",
+            grid.grid_w,
+            grid.grid_h
+        );
+        // Cells still tile the world exactly, which is what the wrap in a query relies on.
+        assert!((grid.cell_w * grid.grid_w as f32 - extent.w).abs() < 1e-3);
+        assert!((grid.cell_h * grid.grid_h as f32 - extent.h).abs() < 1e-3);
+    }
+
+    /// Both backends walk one geometry, so a query cannot read cells the other sort never wrote.
+    #[test]
+    fn the_sort_and_the_shared_geometry_agree() {
+        for (w, h, cell) in [
+            (1000.0, 1000.0, 50.0),
+            (1000.0, 1000.0, 47.0),
+            (10_000.0, 10_000.0, 1.0),
+        ] {
+            let hash = SpatialHash::new(cell, w, h);
+            let grid = HashGrid::new(Extent { w, h }, cell);
+            assert_eq!(hash.grid_dims(), (grid.grid_w, grid.grid_h), "dims at cell {cell}");
+            assert_eq!(
+                hash.cell_extents(),
+                (grid.cell_w, grid.cell_h),
+                "extents at cell {cell}"
+            );
+        }
+    }
 
     #[test]
     fn build_and_query_finds_all_close_agents() {

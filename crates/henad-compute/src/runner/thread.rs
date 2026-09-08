@@ -48,10 +48,13 @@ where
     }
 }
 
-fn run<L: SimLoop>(mut sim: L, cmd_rx: &mpsc::Receiver<L::Command>) {
+fn run<L: SimLoop + Send>(mut sim: L, cmd_rx: &mpsc::Receiver<L::Command>) {
     sim.start();
     loop {
-        match sim.pump() {
+        // Pumped from inside the pool. A kernel's parallel passes are otherwise injected from this
+        // thread, which is not a worker, so each one parks the caller and wakes it again. Only the
+        // pump moves, since the waits below would hold a worker while nothing is due.
+        match rayon::scope(|_| sim.pump()) {
             Pace::Idle => {
                 let Ok(cmd) = cmd_rx.recv() else { return };
                 if sim.handle_command(cmd) {

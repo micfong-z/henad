@@ -1,7 +1,7 @@
 ---
 date: 2026-09-05
 title: "Repairing the cross-engine benchmarks after a fourteen-auditor review"
-description: An adversarial audit of the issue 25 branch confirmed forty-four findings, and this session fixes them: the gate now gates, GPU reps stop being process-cold, the lines-of-code table stops counting Henad's own tests, and the published prose stops contradicting the code.
+description: "An adversarial audit of the issue 25 branch confirmed forty-four findings, and this session fixes them: the gate now gates, GPU reps stop being process-cold, the lines-of-code table stops counting Henad's own tests, and the published prose stops contradicting the code."
 icon: material/note-text-outline
 status: ai-generated
 model: claude-opus-5 (Claude Code)
@@ -168,23 +168,3 @@ The six generated table fragments are `.snippet` rather than `.md`, so they stop
      ───────────────────────────────────────────────────────────────────── -->
 
 ## Manual notes (human)
-
-<!-- Seeded by the agent: what the human did this session, from the agent's point of view.
-     Raw material to reframe, not notes. Delete this block once rewritten.
-
-     - Asked for the audit to be run with adversary agents under ultracode, which is what produced
-       the fourteen-auditor fan-out and the three-refuter verification behind every finding here.
-     - Caught that resuming the audit workflow was re-running agents that had already succeeded and
-       burning quota, and asked for it to be restructured so completed work was not repeated. That
-       is why the second run reads its inputs from a file instead of re-deriving them.
-     - Chose code and docs only, no sweep, with the published numbers marked stale rather than
-       regenerated. That decision is what keeps this session bounded and pushes the real comparison
-       to its own run.
-     - Chose to raise the ants step count so the rung reaches the trail-following regime, then
-       reversed to disclosing the regime once the probe showed the first delivery lands at tick 900
-       at the smallest rung and past tick 12000 at the middle one. The measurement changed the
-       decision, which is the reason it was worth taking before editing the ladder.
-     - Chose Henad's obstacle map to move to the declaration rather than the declaration to Henad,
-       which is what kept the four non-Rust ports untouched.
-     - Chose to correct record 22 in place rather than leave it and write a new one.
--->

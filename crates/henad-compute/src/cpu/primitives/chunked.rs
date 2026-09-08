@@ -21,6 +21,25 @@ pub const STATS_CHUNK: usize = 8192;
 /// ```
 #[macro_export]
 macro_rules! for_each_chunk_mut {
+    // A floor on how many chunks one rayon leaf takes. The body still sees one chunk at a time
+    // with its own index, so the floor changes how the work is split and never what it computes.
+    ($items:expr, $chunk:expr, min_leaf $min:expr, |$c:ident, $base:ident, $slice:ident| $body:block) => {{
+        let chunk = ($chunk).max(1);
+        let min_leaf = ($min).max(1);
+
+        {
+            use $crate::cpu::primitives::chunked::__rayon::prelude::*;
+            $items
+                .par_chunks_mut(chunk)
+                .enumerate()
+                .with_min_len(min_leaf)
+                .for_each(|($c, $slice)| {
+                    let $base = $c * chunk;
+                    $body
+                });
+        }
+    }};
+
     ($items:expr, $chunk:expr, |$c:ident, $base:ident, $slice:ident| $body:block) => {{
         let chunk = ($chunk).max(1);
 

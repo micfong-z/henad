@@ -94,6 +94,7 @@ nav = [
             { "#21, 2026-09-02" = "developing/agent-record/20260902-21-third-tone-pass.md" },
             { "#22, 2026-09-04" = "developing/agent-record/20260904-22-cross-engine-benchmarks.md" },
             { "#23, 2026-09-05" = "developing/agent-record/20260905-23-audit-repairs.md" },
+            { "#24, 2026-09-07" = "developing/agent-record/20260907-24-performance-inspection.md" },
         ] },
     ] },
 ]

@@ -348,9 +348,11 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         let mut warm = new_cpu_state(entry, params, args.seed)?;
         eprint!("  #{: >4}: ", 0);
         let start = Instant::now();
-        for _ in 0..args.global_warmup {
-            warm.step();
-        }
+        rayon::scope(|_| {
+            for _ in 0..args.global_warmup {
+                warm.step();
+            }
+        });
         let elapsed = start.elapsed();
         eprintln!("{elapsed:>8.3?}  ({0} global warmup steps)", args.global_warmup);
     }
@@ -364,9 +366,14 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
     for rep in 0..args.reps {
         let seed = rep_seed(args.seed, rep);
         let mut state = new_cpu_state(entry, params, seed)?;
-        for _ in 0..args.warmup {
-            state.step();
-        }
+        // Stepped from inside the pool. This thread is not a rayon worker, so every parallel pass
+        // a kernel runs would otherwise be injected from outside and park the caller until it
+        // finishes. One inject per rep replaces one per pass per step.
+        rayon::scope(|_| {
+            for _ in 0..args.warmup {
+                state.step();
+            }
+        });
         // For grid models `population()` is the total cell count (width×height); for agent models
         // it is the agent count. Either way it is the right denominator for agent-updates/sec.
         population = state.population();
@@ -375,9 +382,11 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
 
         eprint!("  #{: >4}: ", rep + 1);
         let start = Instant::now();
-        for _ in 0..args.steps {
-            state.step();
-        }
+        rayon::scope(|_| {
+            for _ in 0..args.steps {
+                state.step();
+            }
+        });
         let elapsed = start.elapsed();
         eprintln!("{elapsed:>8.3?}");
         samples.push(elapsed);

@@ -71,6 +71,10 @@ impl AgentModel for BoidsModel {
         StatDescriptor::new("Average Speed", PALETTE[1]),
         StatDescriptor::new("Average Velocity", PALETTE[2]),
     ];
+    /// Smaller than the default, since the kernel draws no random numbers and the population can
+    /// be small. 512 gave a thousand boids two chunks, so most of the pool sat idle. Measured: 64
+    /// is 3.3x at a thousand agents and costs 4% at a hundred thousand.
+    const CHUNK: usize = 64;
     const DEFAULT_AGENTS: u32 = 50_000;
     const MAX_AGENTS: u32 = 1_000_000;
     const DEFAULT_EXTENT: Extent = Extent { w: 1_000.0, h: 1_000.0 };
@@ -105,8 +109,11 @@ impl AgentModel for BoidsModel {
         }
     }
 
+    /// A third of the visual range, so the walk covers about twice the disc it needs instead of
+    /// about three times. Measured on one thread: 0.63x the step at ten and thirty thousand
+    /// agents, where a cell of the whole range scans two candidates in three it then rejects.
     fn index_cell_size(params: &BoidParams) -> f32 {
-        params.visual_range
+        params.visual_range / 3.0
     }
 
     fn init(lanes: &mut BoidLanes, extent: Extent, params: &[ParamValue], rng: &mut u64) {

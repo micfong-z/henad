@@ -41,7 +41,7 @@ One tick runs through a fixed sequence.
 3  run_deposit_pass    fills the field's deposit lanes
 4  run_step_pass       moves the agents, returns a tally
 5  merge the tally
-6  field.update        scatter, then decay, then swap
+6  field.update        scatter with the decay folded in, then swap
 7  swap the dual lanes
 8  advance the tick seed
 ```
@@ -81,13 +81,19 @@ The odd-looking `last.min(1)` covers a one-column grid, where both wraps land on
 A model indexes the neighbour slice by position, which makes the gather order published API.
 A test drives a probe model whose cells encode their own offsets and asserts the order inside `step_cell`.
 
+The rows are handed out one per closure call, but not one per rayon leaf.
+`rows_per_leaf` puts a floor under how many rows a leaf takes, from `MIN_LEAF_CELLS` and the grid's width, since a 64 by 64 grid split one row at a time hands 48 workers 64 jobs of 64 cells and costs more to distribute than to run.
+The floor is a scheduling choice only.
+Each row keeps its own index and its own `chunk_seed`, so the grid a tick produces does not depend on how the rows were grouped.
+Only a floor, too: a grid with rows to spare still splits below it, which is what lets rayon balance a model whose rows differ in cost.
+
 ## `for_each_chunk_mut!` is a macro
 
 Rewriting it as a generic function is not an option.
 Written as a generic taking `F: Fn(..)`, the extra closure layer stopped the kernel inlining through it and cost 48% on SIR, and `#[inline]` did not recover the loss.
 Any new hot-loop driver faces the same constraint.
 
-The macro comes in two forms: one over a single mutable slice, and one stepping three together for a pass that writes more than one output lane.
+The macro comes in three forms: one over a single mutable slice, one stepping three together for a pass that writes more than one output lane, and one taking a `min_leaf` floor on how many chunks a rayon leaf takes.
 Ants uses the three-lane form for its deposit pass.
 
 ## Seeding
@@ -106,12 +112,15 @@ That result has never been explained, and both functions stay until someone expl
 ## The scatter
 
 `ScatterGrid` handles the one write pattern the rest of the engine cannot express directly: many agents depositing into the same cell.
-Its two arms and the budget picking between them are covered in [fields](../authoring/fields.md#the-scatter).
+Its three arms, and what picks between them, are covered in [fields](../authoring/fields.md#the-scatter).
 
-The property that matters inside this crate is the choice of arm, which comes from the worker count.
-Both arms must therefore produce identical bits.
+The property that matters inside this crate is the choice of arm, which comes from the worker count and the deposit count.
+All three must therefore produce identical bits.
 Any divergence would make a model's results depend on the machine they ran on.
-A test pins either arm explicitly and compares both against a reference written the obvious way.
+A test pins each arm explicitly and compares them against a reference written the obvious way, in the dense regime and the sparse one.
+
+`scatter_then` carries a closure applied to every combined cell before it is written, which is how a decaying field avoids a second pass over its grid.
+The result is the same because decay is monotone on non-negative values, so decaying a merged cell and merging decayed ones agree bit for bit.
 
 Read the module docs before changing this file.
 The strategy choice rests on measurement (`benches/scatter.rs`), and atomics are not an option under this contention pattern.
@@ -132,6 +141,10 @@ The work and the way it is driven are split across two types.
 :   Decides how to wait.
     On native it spawns an OS thread and blocks on the command channel.
     On the web it runs the loop inline from the host's frame loop and hands the frame back once `PUMP_BUDGET_MS` has been spent, since `wasm32-unknown-unknown` cannot spawn a thread even with atomics.
+
+The native driver pumps inside a `rayon::scope`, so a kernel's parallel passes are injected from a worker rather than from a thread rayon has to park and wake for each one.
+Only the pump moves inside it.
+The waits either side stay outside, since a worker blocked on a command channel is a worker the pool cannot use, and on a one-worker pool it would never come back.
 
 The public API is identical either way, and nothing in `henad-app` needs to know which driver is active.
 rayon still parallelises the kernels in both cases, and no kernel has a sequential twin.

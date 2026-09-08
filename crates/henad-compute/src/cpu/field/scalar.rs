@@ -172,14 +172,11 @@ impl<S: ScalarFieldSpec> FieldLayer for ScalarField<S> {
         for (f, grid) in self.fields.iter_mut().enumerate() {
             {
                 let (current, next) = grid.current_and_next_mut();
-                self.scatter.scatter(&deposits.cell, &deposits.values[f], current, next);
+                // Decay rides the merge, so nothing walks the grid a second time. It lands after
+                // the merge either way, which is what leaves a fresh deposit one step old when read.
+                self.scatter
+                    .scatter_then(&deposits.cell, &deposits.values[f], current, next, |v| S::decay(v, p));
             }
-            // Decay after the merge, so a fresh deposit is already one step old when read.
-            for_each_chunk_mut!(grid.next_mut(), STATS_CHUNK, |_c, _base, cells| {
-                for v in cells.iter_mut() {
-                    *v = S::decay(*v, p);
-                }
-            });
             grid.swap();
         }
     }

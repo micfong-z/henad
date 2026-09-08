@@ -222,6 +222,76 @@ impl ShadowMax {
     }
 }
 
+/// Cells in one contiguous band per worker, deposits bucketed by band. No shadows and no
+/// per-cell fan-in, at the cost of an `O(n)` bucketing pass that only the sparse regime repays.
+struct BandedMax {
+    start: Vec<u32>,
+    write: Vec<u32>,
+    cells: Vec<u32>,
+    values: Vec<f32>,
+}
+
+impl BandedMax {
+    fn new() -> Self {
+        Self {
+            start: Vec::new(),
+            write: Vec::new(),
+            cells: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+
+    fn run(&mut self, cells: &[u32], values: &[f32], base: &[f32], out: &mut [f32]) {
+        let n_cells = base.len();
+        let band_len = n_cells.div_ceil(rayon::current_num_threads().max(1)).max(1);
+        let bands = n_cells.div_ceil(band_len);
+
+        self.start.clear();
+        self.start.resize(bands + 1, 0);
+        for (&c, &v) in cells.iter().zip(values) {
+            if v != 0.0 {
+                self.start[c as usize / band_len + 1] += 1;
+            }
+        }
+        for b in 1..=bands {
+            self.start[b] += self.start[b - 1];
+        }
+        let kept = self.start[bands] as usize;
+        self.write.clear();
+        self.write.extend_from_slice(&self.start);
+        self.cells.clear();
+        self.cells.resize(kept, 0);
+        self.values.clear();
+        self.values.resize(kept, 0.0);
+        for (&c, &v) in cells.iter().zip(values) {
+            if v == 0.0 {
+                continue;
+            }
+            let b = c as usize / band_len;
+            let p = self.write[b] as usize;
+            self.cells[p] = c;
+            self.values[p] = v;
+            self.write[b] = p as u32 + 1;
+        }
+
+        let (starts, bc, bv) = (&self.start, &self.cells, &self.values);
+        out.par_chunks_mut(band_len)
+            .zip(base.par_chunks(band_len))
+            .enumerate()
+            .for_each(|(b, (o, bs))| {
+                o.copy_from_slice(bs);
+                let lo = b * band_len;
+                let (s, e) = (starts[b] as usize, starts[b + 1] as usize);
+                for (&c, &v) in bc[s..e].iter().zip(&bv[s..e]) {
+                    let slot = &mut o[c as usize - lo];
+                    if v > *slot {
+                        *slot = v;
+                    }
+                }
+            });
+    }
+}
+
 /// Without this the timings could be comparing different operations.
 fn assert_strategies_agree() {
     for dist in [Distribution::Uniform, Distribution::Clustered] {
@@ -239,6 +309,10 @@ fn assert_strategies_agree() {
         got.fill(0.0);
         ShadowMax::new(w.n_cells).run(&w.cells, &w.values, &w.base, &mut got);
         assert_bits_eq(&expected, &got, "ShadowMax", dist);
+
+        got.fill(0.0);
+        BandedMax::new().run(&w.cells, &w.values, &w.base, &mut got);
+        assert_bits_eq(&expected, &got, "BandedMax", dist);
 
         AtomicSum::new(w.n_cells).run(&w.cells, &w.values, &w.base, &mut expected);
         got.fill(0.0);
@@ -398,6 +472,15 @@ fn bench_threads(c: &mut Criterion) {
             });
             drop(sort);
 
+            let mut banded = BandedMax::new();
+            group.bench_function(BenchmarkId::new("banded", &id), |b| {
+                b.iter(|| {
+                    pool.install(|| banded.run(&w.cells, &w.values, &w.base, &mut out));
+                    black_box(&out);
+                });
+            });
+            drop(banded);
+
             if n_cells * 4 * threads < 4 << 30 {
                 // Built inside the pool so it sizes its shadow count to *this* pool, not the global one.
                 let mut shadow = pool.install(|| ShadowMax::new(n_cells));
@@ -414,5 +497,80 @@ fn bench_threads(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_max, bench_sum, bench_threads);
+/// The regime a field layer runs in, which the density sweep above never reaches.
+///
+/// A model's grid is sized by its world, not by its population, so the ladder both agent models run
+/// puts twenty cells behind every agent. Half the deposits are the identity, because an agent
+/// writing one of two layers leaves the other lane dense and zero.
+const CELLS_PER_AGENT: usize = 20;
+
+/// Sparse deposits, half of them the identity, over a grid far larger than the population.
+fn sparse_workload(n_agents: usize, seed: u64) -> Workload {
+    let mut w = Workload::new(n_agents, n_agents * CELLS_PER_AGENT, Distribution::Uniform, seed);
+    for (i, v) in w.values.iter_mut().enumerate() {
+        if i % 2 == 1 {
+            *v = 0.0;
+        }
+    }
+    w
+}
+
+/// Scatter arms at a field layer's density, across the populations the agent ladder runs.
+fn bench_sparse(c: &mut Criterion) {
+    let mut thread_counts = vec![1, 4, rayon::current_num_threads()];
+    thread_counts.sort_unstable();
+    thread_counts.dedup();
+
+    let mut group = c.benchmark_group("scatter_sparse");
+    group.sample_size(20);
+
+    for n_agents in [2_000usize, 20_000, 200_000] {
+        let w = sparse_workload(n_agents, 0x51CA_7737_0BEE_F005);
+        let mut out = vec![0.0f32; w.n_cells];
+        group.throughput(Throughput::Elements(n_agents as u64));
+
+        for threads in thread_counts.iter().copied() {
+            let Ok(pool) = rayon::ThreadPoolBuilder::new().num_threads(threads).build() else {
+                continue;
+            };
+            let id = format!("{}k/t{threads}", n_agents / 1000);
+
+            let mut sort = CellSort::new(w.n_cells, n_agents);
+            group.bench_function(BenchmarkId::new("sort", &id), |b| {
+                b.iter(|| {
+                    pool.install(|| {
+                        sort.build(&w.cells, &w.values);
+                        sort.reduce_max(&w.base, &mut out);
+                    });
+                    black_box(&out);
+                });
+            });
+            drop(sort);
+
+            let mut banded = BandedMax::new();
+            group.bench_function(BenchmarkId::new("banded", &id), |b| {
+                b.iter(|| {
+                    pool.install(|| banded.run(&w.cells, &w.values, &w.base, &mut out));
+                    black_box(&out);
+                });
+            });
+            drop(banded);
+
+            if w.n_cells * 4 * threads < 4 << 30 {
+                // Built inside the pool so it sizes its shadow count to *this* pool.
+                let mut shadow = pool.install(|| ShadowMax::new(w.n_cells));
+                group.bench_function(BenchmarkId::new("shadow", &id), |b| {
+                    b.iter(|| {
+                        pool.install(|| shadow.run(&w.cells, &w.values, &w.base, &mut out));
+                        black_box(&out);
+                    });
+                });
+            }
+        }
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_max, bench_sum, bench_threads, bench_sparse);
 criterion_main!(benches);

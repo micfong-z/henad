@@ -109,7 +109,7 @@ Use `i` to read a lane through `read`, and `k` to write one through `chunk`.
 `const CHUNK: usize` sets both the RNG seeding granularity and the parallel load balance.
 It must be a fixed const per model, never a value derived from the thread count, because the chunk index seeds the generator and results must not depend on the machine.
 The value also has to stay small enough that a typical population still splits across every core.
-Boids runs on the default of 512, and ants overrides it to 4096.
+The default is 512, boids overrides it to 64 and ants to 4096.
 
 See [writing fast models](performance.md#chunk) for what happens when the value is set too high.
 

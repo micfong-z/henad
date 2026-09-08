@@ -300,30 +300,6 @@ That is a real property of the engine and the ladder now shows it rather than st
 
 ## Manual notes (human)
 
-<!-- Seeded by the agent: what the human did this session, from the agent's point of view.
-     Raw material to reframe, not notes. Delete this block once rewritten.
-
-     - Set the benchmark run-sizing rule: probe small, raise if reasonable, and treat about 1000
-       seconds per configuration as the ceiling, reporting the cap instead of waiting. Gave the
-       reason as well as the rule, that Mesa can take over 100k seconds where Henad takes a couple,
-       so covering every range on every engine is not the goal. This found a real bug: the budget
-       had been per process, and with one rep per process a 220-second rep never tripped a
-       900-second limit.
-     - Asked for a progress display on the sweep, which is what surfaced the width and wrapping
-       problem in the live block.
-     - Asked whether the sweep was resumable, which is what surfaced three resume bugs, including a
-       fresh run silently truncating an existing sweep.
-     - Called both sets of numbers provisional while the laptop was under load, and said the real
-       ones would come from an idle overnight run.
-
-     - Chose all four models implemented identically in all five engines, over a cheaper split
-       where ants would have been stock MASON and krABMaga code with the differences merely
-       disclosed. That call is what forced the ants gate to be designed rather than skipped, and it
-       removed the vendoring and attribution problem entirely.
-     - Asked to be paused before each milestone so each lands as its own commit.
-     - Installed Julia 1.12.7 and put mason.22.jar in benchmarks/mason while the plan was being
-       reviewed, which took both downloads off the critical path.
-     - Set the direction on the earlier plan questions: Henad reported at one thread and at all
-       cores rather than all cores only, both machines as publication targets, FLAME GPU deferred
-       to its own issue.
--->
+- Reviewed all implementations, suggested fixes, decided on the report format.
+- Also reviewed to avoid unfair comparisons.
+- Note that a typical run takes around 6 hours to run on a 4090 server.

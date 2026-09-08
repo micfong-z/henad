@@ -38,7 +38,7 @@ The mechanics belong to the engine, and your model fills in the rules it cannot 
 | `decay` | One cell's value, one tick on |
 | `quantize` | One cell's palette index, from the terrain and every layer's value |
 
-A tick over the field runs in a fixed order: scatter the deposits, then decay, then swap.
+A tick over the field runs in a fixed order: scatter the deposits with the decay folded into the merge, then swap.
 Decay comes after the merge, and a fresh deposit is therefore already one step old by the time anything reads it.
 
 ### Deposits
@@ -75,18 +75,25 @@ Its `deposit_value` floors at the value the cell already holds, so a maximum rep
 
 ### The scatter
 
-`ScatterGrid` covers the one write pattern the rest of the engine cannot express, many agents depositing into the same cell, and it has two arms behind one API.
+`ScatterGrid` covers the one write pattern the rest of the engine cannot express, many agents depositing into the same cell, and it has three arms behind one API.
+
+**Banded.** The grid is split into one contiguous band per worker, and each band merges only the deposits landing in it.
+Nothing is allocated per worker, and a deposit of the identity is dropped rather than merged.
+This is the arm a field layer normally takes, since a model's grid is sized by its world and its deposits by its population.
 
 **Shadow.** Every rayon worker fills its own private grid without contention, and the grids are then reduced across workers per cell.
-The scratch cost is `n_cells * workers`.
+The scratch cost is `n_cells * workers`, paid whether one agent deposits or a million.
 
 **Sorted.** A counting sort by cell permutes the values, so the reduce reads each cell's run contiguously.
 This arm costs a pass over the agents and needs no per-worker grid.
 
-The arm is picked at construction, from whether the shadow scratch fits a 256 MiB budget.
-That judgement depends on the worker count, which puts a hard requirement on the two arms: **both must produce identical bits**.
-Otherwise a model's results would depend on the machine it ran on.
-A test pins each arm explicitly and checks that the two agree.
+Between the two dense arms the choice is made at construction, from whether the shadow scratch fits a 256 MiB budget.
+Banded takes over per call, whenever there are more cells than deposits.
+Both judgements depend on things that vary with the machine, which puts a hard requirement on the arms: **all three must produce identical bits**.
+Otherwise a model's results would depend on where it ran.
+A test pins each arm explicitly and checks that they agree, in the dense regime and the sparse one.
+
+A field that decays every tick hands its decay to the scatter rather than walking the grid again afterwards.
 
 !!! warning "Atomics scale badly here"
 

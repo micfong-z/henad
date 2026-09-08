@@ -34,14 +34,21 @@ It has to be a fixed const rather than something derived from the thread count, 
 
 It also has to be small enough that a typical population still splits across every core.
 At 4096, 50k boids produced only 13 chunks and cost 20%.
-Boids therefore runs on the default of 512, while ants overrides to 4096, its per-agent kernel being cheap enough that per-chunk overhead dominates.
+The default is 512.
+Boids overrides to 64, since a thousand agents would otherwise be two chunks and most of the pool would sit idle, and its kernel draws no random numbers so the seeding granularity costs it nothing.
+Ants overrides to 4096, its per-agent kernel being cheap enough that per-chunk overhead dominates.
 
 Neither of those numbers is a rule, and if your model has an unusual per-agent cost you should measure both ends.
+Measure with the population you care about: a value that suits a million agents can leave a thousand running on two cores.
 
 ## Never scan every agent
 
 `SpatialHash` is a flat counting-sort grid, rebuilt every tick from the agent positions.
 Declaring `type Index = SpatialHash` and querying through `query_radius` is the single biggest lever for getting an agent model to scale, and boids only scaled in the first place once its naive neighbour search was replaced with this hash.
+
+A kernel that needs the offsets to its neighbours, and not just their indices, should take `for_each_within` instead.
+It walks the same cells in the same order and hands each visit the two toroidal deltas and their squared length, which the range test computed anyway.
+Taking a list of indices back and recomputing the deltas from it measured 10% of the boids step.
 
 ```rust
 hash.query_radius(pos_x[i], pos_y[i], radius, pos_x, pos_y, buf);
@@ -67,7 +74,9 @@ See [parameters](parameters.md#hot-parameters).
 
 Dedicated machinery sits behind one write pattern only, many agents depositing into the same cell, and you reach it through [`ScalarField`](fields.md#the-scatter).
 
-The cost is real, either one private grid per worker in the shadow arm or a counting sort over the whole population in the sorted arm.
+The cost is real, and which cost you pay depends on the shape of the call.
+With more cells than deposits, which is the usual case for a field sized by the world, the banded arm merges each deposit once and touches each cell once.
+The dense arms cost either one private grid per worker or a counting sort over the whole population.
 A model that only needs each agent to write its own slot should use a `plain` lane instead and pay nothing.
 
 Atomics do not help with this pattern.

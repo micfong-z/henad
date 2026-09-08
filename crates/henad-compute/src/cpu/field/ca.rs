@@ -108,20 +108,40 @@ impl<M: GridModel> FieldLayer for CaField<M> {
     }
 }
 
+/// Cells a rayon leaf should be worth taking. Below this the split tree and the wake-up cost more
+/// than the rows do.
+///
+/// Measured across both grid models from 64 squared to 4096 squared. Twice this left a 4096 wide
+/// SIR grid 8% slower than no floor at all, since a row's cost varies with what its cells hold and
+/// coarser leaves stop rayon balancing that by stealing.
+const MIN_LEAF_CELLS: usize = 8_192;
+
+/// Rows one rayon leaf takes.
+///
+/// A leaf of one row hands 48 workers a 64 by 64 grid as 64 jobs of 64 cells, and the tick then
+/// costs more to hand out than to run. Only a floor, so a grid with rows to spare still splits
+/// down to it and rayon balances the rest by stealing. Clamped to the grid, which makes a small
+/// one a single job. Not a function of the worker count, so how the work divides does not change
+/// with the pool.
+fn rows_per_leaf(width: usize, height: usize) -> usize {
+    MIN_LEAF_CELLS.div_ceil(width.max(1)).min(height).max(1)
+}
+
 fn step_grid<M: GridModel>(grid: &mut Grid2D<u8>, hot: &M::Params, seed: u64, tick: u64) {
     let h = grid.height();
     let ws = grid.width() as usize;
+    let leaf = rows_per_leaf(ws, h as usize);
     let (current, next) = grid.current_and_next_mut();
 
     match M::NEIGHBORHOOD {
         NeighborhoodKind::Moore => {
-            for_each_chunk_mut!(next, ws, |y, _base, next_row| {
+            for_each_chunk_mut!(next, ws, min_leaf leaf, |y, _base, next_row| {
                 let mut rng = chunk_seed(seed, tick, y);
                 step_row_moore::<M>(neighbor_rows(current, ws, y, h), next_row, hot, &mut rng);
             });
         }
         NeighborhoodKind::VonNeumann => {
-            for_each_chunk_mut!(next, ws, |y, _base, next_row| {
+            for_each_chunk_mut!(next, ws, min_leaf leaf, |y, _base, next_row| {
                 let mut rng = chunk_seed(seed, tick, y);
                 step_row_vn::<M>(neighbor_rows(current, ws, y, h), next_row, hot, &mut rng);
             });
