@@ -1,10 +1,15 @@
 [package]
 name = "henad-models"
 version.workspace = true
+description = "Henad default models."
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
 
 [dependencies]
 henad-core = { workspace = true }

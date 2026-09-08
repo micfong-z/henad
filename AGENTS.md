@@ -295,6 +295,11 @@ Sweep every installed engine across the cross-engine ladder: `uv run --project s
 scripts/compare_bench.py` (`--dry-run` for the matrix, `--smoke` for one small point each); gate the
 ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py`
 Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` writes `site/`)
+Preview a release's notes: `python3 scripts/changelog_section.py 0.1.0` (what the tag build puts in
+the release body; it refuses a section with no date)
+Regenerate the third-party licence page: `cargo about generate about.hbs -o docs/license.html`
+(needs `cargo-about`, pinned to 0.9.1 in CI; the `lint` job fails when the committed page and the
+dependency tree disagree)
 
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).
 The web build is the exception and runs on nightly, which `scripts/build_web.sh` selects. Threads on

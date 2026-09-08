@@ -10,4 +10,5 @@ cargo fmt --all -- --check
 cargo clippy --quiet --workspace --all-targets --all-features --  -D warnings -W clippy::all
 cargo test --quiet --workspace --all-targets --all-features
 cargo test --quiet --workspace --doc
+python3 -m unittest discover -s scripts -p 'test_*.py'
 ./scripts/build_web.sh build

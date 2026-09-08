@@ -80,3 +80,6 @@ You can also submit bug reports or feature requests via [issues](https://github.
 
 Henad is licensed under [MIT](https://github.com/micfong-z/henad/blob/master/LICENSE-MIT) or
 [Apache-2.0](https://github.com/micfong-z/henad/blob/master/LICENSE-APACHE), at your option.
+
+Compiled distributions additionally carry third-party dependencies under their own terms.
+See the [third-party licences](license.html) page for more information.

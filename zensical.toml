@@ -20,6 +20,7 @@ nav = [
         "index.md",
         "benchmarks.md",
         { "Roadmap" = "https://github.com/users/micfong-z/projects/2" },
+        { "Third-party licences" = "license.html" },
     ] },
     { "Guides" = [
         { "Getting started" = [
@@ -69,6 +70,7 @@ nav = [
         "developing/cpu-backend.md",
         "developing/gpu-backend.md",
         "developing/contributing.md",
+        "developing/releasing.md",
         { "Agent session records" = [
             "developing/agent-record/agent-record.md",
             { "#01, 2026-08-12" = "developing/agent-record/20260812-01-gpu-boids.md" },

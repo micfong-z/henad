@@ -78,6 +78,8 @@ It is built from `docs/` with [Zensical](https://zensical.org):
 uv run zensical serve
 ```
 
+See [CHANGELOG.md](CHANGELOG.md) for changes between versions.
+
 ## License
 
-Henad is licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Bevy has an [excellent explanation](https://github.com/bevyengine/bevy/issues/2373) of what this means. Compiled distributions can additionally include third-party dependencies under their own terms; see [license.html](license.html) for more information.
+Henad is licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Bevy has an [excellent explanation](https://github.com/bevyengine/bevy/issues/2373) of what this means. Compiled distributions can additionally include third-party dependencies under their own terms; see the [third-party licenses](https://micfong-z.github.io/henad/license.html) page for more information.

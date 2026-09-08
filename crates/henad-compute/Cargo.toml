@@ -1,10 +1,15 @@
 [package]
 name = "henad-compute"
 version.workspace = true
+description = "Henad compute and engine library."
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
 
 [dependencies]
 henad-core = { workspace = true }

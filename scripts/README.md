@@ -8,6 +8,10 @@ Analysis and comparison scripts.
 - `compare_bench.py`: sweeps every installed engine across the cross-engine ladder into a CSV
 - `validate_ports.py`: checks each reference implementation against Henad before anything is timed
 - `plot_compare.py`: figures and tables from that CSV, for the benchmarks page
+- `changelog_section.py`: prints one version's `CHANGELOG.md` section, which the release workflow uses as the release body
+
+`changelog_section.py` is the one script needing no dependencies, since a tag build runs it with a bare
+`python3`. Its tests run in CI as `python3 -m unittest discover -s scripts -p 'test_*.py'`.
 
 `progress.py` is a helper rather than a script: the live display the sweep draws while it runs, which falls back to one line per run whenever output is redirected.
 

@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# `gh release create` writes to the repository.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: draft release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # A tag the manifest never reached would announce a version that does not exist.
+      - name: Tag matches the workspace version
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          declared=$(python3 -c \
+            "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
+          if [ "$tagged" != "$declared" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $declared"
+            exit 1
+          fi
+
+      # Refuses an undated or missing section rather than drafting empty notes.
+      - name: Release notes from the changelog
+        run: python3 scripts/changelog_section.py "$GITHUB_REF_NAME" | tee "$RUNNER_TEMP/notes.md"
+
+      # A draft, so the notes are read before anyone outside sees them. Nothing here publishes.
+      # A semver pre-release tag (v0.2.0-rc.1) is marked as one.
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" \
+            --draft $prerelease \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md"

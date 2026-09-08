@@ -1,10 +1,15 @@
 [package]
 name = "henad-core"
 version.workspace = true
+description = "Henad core library."
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
 
 [lints]
 workspace = true

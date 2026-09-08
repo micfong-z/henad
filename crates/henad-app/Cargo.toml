@@ -2,10 +2,15 @@
 name = "henad-app"
 default-run = "henad-app"
 version.workspace = true
+description = "Henad desktop and web GUI application."
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
 
 [features]
 # Lets an external inspector (egui_mcp) drive the app. Off unless asked for, and inert at runtime
