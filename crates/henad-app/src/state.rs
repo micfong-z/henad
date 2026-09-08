@@ -70,6 +70,8 @@ pub struct AppState {
     pub render_ctx: GpuContext,
     /// The fault being shown, cleared when the user dismisses the modal.
     pub fault: Option<Fault>,
+    pub about_open: bool,
+    pub logo_texture: Option<TextureHandle>,
     pub timings: FrameTimings,
     /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
     /// switch. `None` where the adapter cannot run compute shaders.
@@ -129,6 +131,8 @@ impl AppState {
             runtime,
             render_ctx,
             fault: None,
+            about_open: false,
+            logo_texture: None,
             timings: FrameTimings::default(),
             gpu_ctx,
             gpu_adaptive: true,

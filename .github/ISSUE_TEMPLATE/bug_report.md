@@ -25,4 +25,8 @@ Steps to reproduce the behavior:
 <!-- A clear and concise description of what you expected to happen. -->
 
 **Additional context**
-<!-- Add any other context about the problem here, e.g. your OS, browser, or any other information that might be helpful. -->
+<!--
+Add any other context about the problem here, e.g. your OS, browser, or any other information that might be helpful.
+You can paste the build information from the About window here.
+-->
+

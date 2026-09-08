@@ -20,6 +20,7 @@ egui = { workspace = true }
 egui_dock = { workspace = true }
 eframe = { workspace = true }
 egui_plot = { workspace = true }
+image = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }
 wgpu = { workspace = true }

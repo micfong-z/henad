@@ -136,8 +136,9 @@ impl eframe::App for HenadApp {
         let frame_start = web_time::Instant::now();
         self.state.timings.frame_render_ms = 0.0;
 
-        ui::menu_bar::menu_bar_panel(ui, &mut self.dock);
+        ui::menu_bar::menu_bar_panel(ui, &mut self.dock, &mut self.state);
         ui::fault::fault_modal(ui.ctx(), &mut self.state);
+        ui::about::about_modal(ui.ctx(), &mut self.state);
 
         let dock_style = Style::from_egui(ui.style());
         DockArea::new(&mut self.dock)
