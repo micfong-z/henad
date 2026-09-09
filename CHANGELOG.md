@@ -8,7 +8,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 ### Added
 
 - Model metadata in the Model tab in GUI
-- Export tab in the CUI app
+- Export tab in the GUI app
 - Unlimited history setting in the Charts tab
 
 ## [0.1.0] - 2026-09-08
