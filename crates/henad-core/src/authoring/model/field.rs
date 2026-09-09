@@ -28,6 +28,9 @@ pub trait FieldLayer: Send + 'static {
     /// Must agree with what `grid_view` returns.
     const HAS_GRID: bool = true;
 
+    /// Names of this layer in the Model metadata panel.
+    const KIND: &'static str;
+
     /// Hot parameters, rebuilt once per tick.
     type Params: Send + Sync;
     /// The field as an agent kernel sees it.
@@ -61,6 +64,7 @@ pub struct NoField;
 
 impl FieldLayer for NoField {
     const HAS_GRID: bool = false;
+    const KIND: &'static str = "None";
 
     type Params = ();
     type Read<'a> = ();

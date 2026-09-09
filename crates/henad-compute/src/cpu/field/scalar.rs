@@ -126,6 +126,8 @@ impl<'a> ScalarRead<'a> {
 }
 
 impl<S: ScalarFieldSpec> FieldLayer for ScalarField<S> {
+    const KIND: &'static str = "Scalar";
+
     type Params = S::Params;
     type Read<'a> = ScalarRead<'a>;
     type DepositLanes = Deposits;

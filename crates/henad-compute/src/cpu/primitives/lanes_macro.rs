@@ -109,6 +109,19 @@ macro_rules! agent_lanes {
         }
 
         impl $crate::__lanes::AgentLanes for $name {
+            const LANES: &'static [$crate::__lanes::LaneSpec] = &[
+                $($crate::__lanes::LaneSpec {
+                    name: ::std::stringify!($dcur),
+                    ty: ::std::stringify!($dty),
+                    double_buffered: true,
+                },)*
+                $($crate::__lanes::LaneSpec {
+                    name: ::std::stringify!($pname),
+                    ty: ::std::stringify!($pty),
+                    double_buffered: false,
+                },)*
+            ];
+
             fn alloc(n: usize) -> Self {
                 Self {
                     $($dcur: vec![<$dty as Default>::default(); n], $dnext: vec![<$dty as Default>::default(); n],)*
@@ -144,4 +157,5 @@ macro_rules! agent_lanes {
 #[doc(hidden)]
 pub mod __lanes {
     pub use henad_core::authoring::model::agent_model::{AgentLanes, ChunkTally};
+    pub use henad_core::metadata::LaneSpec;
 }

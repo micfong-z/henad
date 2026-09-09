@@ -72,9 +72,9 @@ pub fn default_dock_state() -> DockState<Tab> {
     let surface = dock.main_surface_mut();
 
     let [viewport, model] = surface.split_left(NodeIndex::root(), 0.2, vec![Tab::Model]);
-    let [_, params] = surface.split_below(model, 0.2, vec![Tab::Params]);
-    let [_, playback] = surface.split_below(params, 0.5, vec![Tab::Playback]);
-    surface.split_below(playback, 0.35, vec![Tab::Pacing]);
+    let [_, params] = surface.split_below(model, 0.38, vec![Tab::Params]);
+    let [_, playback] = surface.split_below(params, 0.58, vec![Tab::Playback]);
+    surface.split_below(playback, 0.4, vec![Tab::Pacing]);
 
     let [_, perf] = surface.split_right(viewport, 0.7, vec![Tab::Performance, Tab::System]);
     let [_, stats] = surface.split_below(perf, 0.25, vec![Tab::Stats]);

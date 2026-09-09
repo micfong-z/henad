@@ -6,6 +6,7 @@
 pub mod authoring;
 pub mod grid;
 pub mod helpers;
+pub mod metadata;
 pub mod model;
 pub mod params;
 pub mod send_sync;
