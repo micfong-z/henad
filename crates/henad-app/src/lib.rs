@@ -31,6 +31,7 @@ use crate::init::{setup_custom_fonts, setup_custom_styles};
 
 pub use crate::init::wgpu_configuration;
 
+use crate::sim_runner::SimRunner;
 use crate::state::AppState;
 use crate::ui::dock::{Tab, default_dock_state};
 use henad_compute::fault::{FaultSink, install_panic_hook};
@@ -109,15 +110,16 @@ impl eframe::App for HenadApp {
         }
 
         // --- Poll snapshot from sim thread ---
-        if let Some(thread) = &mut self.state.sim_thread
-            && let Some(snap) = thread.take_snapshot()
-        {
+        let fresh = self.state.sim_thread.as_mut().and_then(SimRunner::take_snapshot);
+        if let Some(snap) = fresh {
             if let Some(history) = &mut self.state.stats_history {
-                let values: Vec<f64> = snap.stats.iter().map(|s| s.value.scalar()).collect();
-                history.push(&values, snap.tick);
+                history.push_entries(&snap.stats, snap.tick);
             }
+            self.state.record(&snap);
             // Handing the outgoing one back lets the sim thread refill it instead of allocating.
-            if let Some(previous) = self.state.snapshot.replace(snap) {
+            if let Some(previous) = self.state.snapshot.replace(snap)
+                && let Some(thread) = &mut self.state.sim_thread
+            {
                 thread.recycle(previous);
             }
         }
@@ -125,6 +127,9 @@ impl eframe::App for HenadApp {
         if let Some(fault) = self.state.render_ctx.faults.take() {
             self.state.report_fault(fault);
         }
+
+        self.state.poll_saves();
+        self.state.poll_capture();
 
         // Request continuous repaint while running.
         if self.state.sim_running {

@@ -13,6 +13,9 @@ use henad_models::registry::{ModelEntry, ModelState, model_registry};
 
 use crate::sim_runner::SimRunner;
 use crate::ui::agent_layer::AgentLayer;
+use crate::ui::export::Recording;
+use crate::ui::export::image::PendingCapture;
+use crate::ui::export::save::{SaveOutcome, spawn_save};
 use henad_compute::runtime_info::RuntimeInfo;
 
 use henad_compute::gpu::GpuContext;
@@ -22,6 +25,9 @@ use henad_compute::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
 
 /// Exponential moving average smoothing factor (0..1, higher = more responsive).
 const EMA_ALPHA: f64 = 0.1;
+
+/// Snapshots the chart history keeps before it starts dropping the oldest.
+pub const DEFAULT_HISTORY_LEN: usize = 10_000;
 
 /// Per-frame timing breakdown, smoothed with EMA.
 #[derive(Default)]
@@ -62,7 +68,10 @@ pub struct AppState {
     pub uncapped: bool,
     pub ticks_per_snapshot: u32,
     pub stats_history: Option<StatsHistory>,
-    pub history_capacity: usize,
+    /// `None` retains every sample, so a whole run can be exported.
+    pub history_capacity: Option<usize>,
+    /// Where the History length slider sits, kept while Unlimited is ticked so unticking restores it.
+    pub history_len: usize,
     /// Fixed for the life of the process, collected once at startup.
     pub runtime: RuntimeInfo,
     /// Device and queue for rendering, present wherever the app runs. Errors are reported into
@@ -76,6 +85,13 @@ pub struct AppState {
     /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
     /// switch. `None` where the adapter cannot run compute shaders.
     pub gpu_ctx: Option<GpuContext>,
+    /// A viewport capture waiting on the GPU.
+    pub capture: Option<PendingCapture>,
+    pub recording: Recording,
+    /// The last export's result, shown in the Export tab.
+    pub export_status: Option<String>,
+    /// Save outcomes come back off the dialog's own thread or task.
+    saves: (flume::Sender<SaveOutcome>, flume::Receiver<SaveOutcome>),
     /// GPU batching controls
     pub gpu_adaptive: bool,
     pub gpu_target_ms: f64,
@@ -127,7 +143,8 @@ impl AppState {
             uncapped: false,
             ticks_per_snapshot: 1,
             stats_history: None,
-            history_capacity: 10_000,
+            history_capacity: Some(DEFAULT_HISTORY_LEN),
+            history_len: DEFAULT_HISTORY_LEN,
             runtime,
             render_ctx,
             fault: None,
@@ -135,6 +152,10 @@ impl AppState {
             logo_texture: None,
             timings: FrameTimings::default(),
             gpu_ctx,
+            capture: None,
+            recording: Recording::Off,
+            export_status: None,
+            saves: flume::unbounded(),
             gpu_adaptive: true,
             gpu_target_ms: DEFAULT_TARGET_MS,
             gpu_batch_size: DEFAULT_BATCH_SIZE,
@@ -142,6 +163,7 @@ impl AppState {
     }
 
     pub fn reset_simulation(&mut self) {
+        self.stop_recording();
         // Drop existing sim thread. For a GPU model this also releases its buffers/pipelines, but any paint callback
         // still in flight this frame holds its own `Arc` to the display, so tearing down mid-frame cannot pull
         // the texture out from under the renderer.
@@ -154,6 +176,7 @@ impl AppState {
         self.density_max = 4.0;
         self.ticks_per_snapshot = 1;
         self.loaded_model = None;
+        self.export_status = None;
         // The next model may have no agents at all.
         if let Some(layer) = &mut self.agent_layer {
             layer.clear();
@@ -231,6 +254,7 @@ impl AppState {
     }
 
     pub fn offload_simulation(&mut self) {
+        self.stop_recording();
         self.sim_thread = None;
         drop(self.render_ctx.faults.take());
         self.snapshot = None;
@@ -266,5 +290,81 @@ impl AppState {
 
     pub fn is_gpu(&self) -> bool {
         self.sim_thread.as_ref().is_some_and(|t| t.gpu_stats().is_some())
+    }
+
+    /// Sends a save request to pull up a file save dialog.
+    ///
+    /// Results can be polled via [`Self::poll_saves`].
+    pub fn save(&mut self, name: &str, bytes: Vec<u8>) {
+        self.export_status = Some(format!("Choose location to save {name}"));
+        spawn_save(name.to_owned(), bytes, self.saves.0.clone());
+    }
+
+    pub fn poll_saves(&mut self) {
+        while let Ok(outcome) = self.saves.1.try_recv() {
+            self.export_status = Some(match outcome {
+                SaveOutcome::Saved(name) => format!("Saved {name}"),
+                SaveOutcome::Failed(err) => format!("Save failed: {err}"),
+                SaveOutcome::Cancelled => "Save cancelled".to_owned(),
+            });
+        }
+    }
+
+    /// Records a snapshot.
+    pub fn record(&mut self, snapshot: &Snapshot) {
+        let Recording::Running { writer, .. } = &mut self.recording else {
+            return;
+        };
+        if let Err(err) = writer.push(snapshot.tick, &snapshot.stats) {
+            self.export_status = Some(format!("Recording stopped: {err}"));
+            self.recording = Recording::Off;
+        }
+    }
+
+    /// Stops recording and closes the CSV file.
+    pub fn stop_recording(&mut self) {
+        let to_tick = self.snapshot.as_ref().map_or(0, |snap| snap.tick);
+        let Recording::Running { writer, from_tick } = std::mem::replace(&mut self.recording, Recording::Off) else {
+            return;
+        };
+        match writer.into_inner() {
+            Ok((csv, rows)) => {
+                self.recording = Recording::Done {
+                    csv,
+                    rows,
+                    from_tick,
+                    to_tick,
+                };
+            }
+            Err(err) => self.export_status = Some(format!("Recording failed: {err}")),
+        }
+    }
+
+    /// Draw the layers into an offscreen target at their own resolution and start reading it back.
+    ///
+    /// Results can be polled via [`Self::poll_capture`].
+    pub fn request_viewport_capture(&mut self, name: String) {
+        match crate::ui::export::image::start(self, name) {
+            Ok(pending) => {
+                self.export_status = Some("Capturing viewport".to_owned());
+                self.capture = Some(pending);
+            }
+            Err(err) => self.export_status = Some(format!("Capture failed: {err}")),
+        }
+    }
+
+    pub fn poll_capture(&mut self) {
+        let Some(pending) = &self.capture else {
+            return;
+        };
+        let Some(result) = pending.poll(&self.render_ctx.device) else {
+            return;
+        };
+        let name = pending.name.clone();
+        self.capture = None;
+        match result {
+            Ok(png) => self.save(&name, png),
+            Err(err) => self.export_status = Some(format!("Capture failed: {err}")),
+        }
     }
 }

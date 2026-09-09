@@ -4,24 +4,34 @@ use crate::state::AppState;
 use henad_core::view::StatValue;
 
 pub fn charts_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    let mut cap = app.history_capacity;
-    if ui
-        .add(
-            egui::Slider::new(&mut cap, 100..=1_000_000)
-                .logarithmic(true)
-                .text("History length"),
-        )
-        .changed()
-    {
-        app.history_capacity = cap;
-        if let Some(history) = &mut app.stats_history {
-            history.resize(cap);
-        }
-    }
+    history_controls(ui, app);
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         stats_chart(ui, app);
     });
+}
+
+/// How much of a run the history keeps. Unlimited retains all of it, which is what an export off
+/// a long run needs, and grows with the run.
+fn history_controls(ui: &mut egui::Ui, app: &mut AppState) {
+    let mut unlimited = app.history_capacity.is_none();
+    let mut changed = ui.checkbox(&mut unlimited, "Unlimited history").changed();
+
+    changed |= ui
+        .add_enabled(
+            !unlimited,
+            egui::Slider::new(&mut app.history_len, 100..=1_000_000)
+                .logarithmic(true)
+                .text("History length"),
+        )
+        .changed();
+
+    if changed {
+        app.history_capacity = (!unlimited).then_some(app.history_len);
+        if let Some(history) = &mut app.stats_history {
+            history.resize(app.history_capacity);
+        }
+    }
 }
 
 fn stats_chart(ui: &mut egui::Ui, app: &AppState) {

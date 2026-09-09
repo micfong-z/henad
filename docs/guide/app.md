@@ -19,7 +19,7 @@ Before we start, make sure you have [installed Henad](installation.md) and can [
 Henad uses a docking UI powered by [egui_dock](https://github.com/anhosh/egui_dock).
 You can resize each panel, collapse or expand them, move them around, and even drag a tab into its own window.
 
-In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists all nine tabs and highlights the open ones, and is the only way to reopen a tab you closed.
+In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists all 10 tabs and highlights the open ones, and is the only way to reopen a tab you closed.
 Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bottom to put everything back to default layout, in case the workspace gets too messy.
 
 | Tab                                                                      | Content                      |
@@ -31,6 +31,7 @@ Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bo
 | <span class="ui" markdown>:material-tune: Parameters</span>              | Model parameters             |
 | <span class="ui" markdown>:material-table: Statistics</span>             | Latest value of each stat    |
 | <span class="ui" markdown>:material-chart-line: Charts</span>            | Statistics history and plots |
+| <span class="ui" markdown>:material-application-export: Export</span>    | Writing results to a file    |
 | <span class="ui" markdown>:material-gauge: Performance</span>            | Performance metrics          |
 | <span class="ui" markdown>:material-chip: System</span>                  | Backend information          |
 
@@ -209,6 +210,41 @@ Drag to pan, scroll to zoom, and click a legend entry to show/hide that series.
 
 **History length** sets how many snapshots are kept.
 Shrinking it deletes the oldest samples.
+
+Tick **Unlimited history** to keep every snapshot instead, which can be helpful for [exporting](#export-tab).
+Be aware that memory usage will increase as a result.
+Check <span class="ui" markdown>:material-gauge: Performance</span> tab frequently to ensure Henad is not accidentally using too much memory.
+
+## :material-application-export: Export tab
+
+The <span class="ui" markdown>:material-application-export: Export</span> tab writes relavent results to files.
+
+### Statistics
+
+<span class="ui" markdown>:material-tray-arrow-down: Save stats</span> writes the recorded history as CSV, one row per snapshot and one column per stat series.
+A vector stat becomes three columns, `.x`, `.y` and `.magnitude`; a histogram becomes one column per bucket plus `.total`.
+
+If Unlimited history is not enabled, a warning will be displayed as oldest snapshots might have been lost over time.
+Turn on **Unlimited history** in the <span class="ui" markdown>:material-chart-line: Charts</span> tab to keep every snapshot.
+
+### Recording
+
+<span class="ui" markdown>:material-record-circle-outline: Record</span> captures every snapshot from the moment it starts, independent of the history length setting in the <span class="ui" markdown>:material-chart-line: Charts</span> tab.
+
+<span class="ui" markdown>:material-stop: Stop</span> will stop recording, and <span class="ui" markdown>:material-tray-arrow-down: Save recording</span> will write the captured snapshots to CSV.
+
+### Current state
+
+<span class="ui" markdown>:material-tray-arrow-down: Save state</span> writes the current cells and agent positions as text, the same format as `henad-cli --export`.
+Due to technical limitations, the current state of a GPU model cannot be exported.
+
+### Viewport
+
+<span class="ui" markdown>:material-tray-arrow-down: Save image</span> writes the layers as a PNG at a specific resolution automatically determined by the engine.
+
+### Run details
+
+<span class="ui" markdown>:material-tray-arrow-down: Save details</span> writes a JSON file about running metadata, including the model, its resolved parameters, the tick reached, and the host and adapter and more entries.
 
 ## :material-gauge: Performance tab
 

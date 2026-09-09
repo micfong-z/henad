@@ -21,7 +21,7 @@
 //!
 //! Two export paths, deliberately separate: `--export` writes the *final state* (the grid or point
 //! cloud at the end of the run), `--export-stats` writes the *time series* (one row per sampled
-//! tick). See [`stats_export`].
+//! tick). Both formats live in `henad_core::export`, which the app writes through too.
 
 #![expect(
     clippy::print_stdout,
@@ -30,7 +30,7 @@
 )]
 
 use std::fs::File;
-use std::io::{BufWriter, Write as _};
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -40,15 +40,13 @@ use clap::Parser;
 use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION};
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
+use henad_core::export::{StatsWriter, state as state_export};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
 use numfmt::{Formatter, Scales};
 
 mod json_report;
-mod stats_export;
-
-use stats_export::StatsWriter;
 
 /// Headless benchmark runner for Henad models.
 #[derive(Parser)]
@@ -706,7 +704,7 @@ fn stats_cpu(
     if !total.is_multiple_of(args.stats_every) {
         writer.push(state.tick(), &state.stats())?;
     }
-    writer.finish()
+    Ok(writer.finish()?)
 }
 
 /// GPU stat sampling. `SimState::stats()` on a GPU state returns whatever the last completed
@@ -728,7 +726,8 @@ fn stats_gpu(
         ctx.queue.submit(Some(encoder.finish()));
         state.begin_stats_readback();
         state.poll_stats_readback(&ctx.device, true);
-        writer.push(state.tick(), &state.stats())
+        writer.push(state.tick(), &state.stats())?;
+        Ok(())
     };
 
     sample(&mut *state, &mut writer)?;
@@ -739,7 +738,7 @@ fn stats_gpu(
         done += chunk;
         sample(&mut *state, &mut writer)?;
     }
-    writer.finish()
+    Ok(writer.finish()?)
 }
 
 /// Serialize a CPU model's view to a simple text format: a grid as comma-separated cell indices
@@ -759,27 +758,11 @@ fn write_state(state: &mut dyn SimState, path: &Path) -> Result<()> {
     let mut out = BufWriter::new(file);
 
     if let Some(grid) = grid {
-        writeln!(out, "# grid {}x{}", grid.width, grid.height)?;
-        for row in grid.cells.chunks(grid.width as usize) {
-            let line = row.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",");
-            writeln!(out, "{line}")?;
-        }
+        state_export::write_grid(&mut out, grid.width, grid.height, grid.cells)?;
     }
 
     if let Some(points) = points {
-        let n = points.pos_x.len();
-        writeln!(out, "# points {n}")?;
-        if let Some(color) = points.color {
-            writeln!(out, "x,y,color")?;
-            for ((x, y), c) in points.pos_x.iter().zip(points.pos_y).zip(color) {
-                writeln!(out, "{x},{y},{c}")?;
-            }
-        } else {
-            writeln!(out, "x,y")?;
-            for (x, y) in points.pos_x.iter().zip(points.pos_y) {
-                writeln!(out, "{x},{y}")?;
-            }
-        }
+        state_export::write_points(&mut out, points.pos_x, points.pos_y, points.color)?;
     }
 
     Ok(())

@@ -36,6 +36,8 @@ henad-cli [OPTIONS] [MODEL]
 | `-h`, `--help` | | Print help |
 | `-V`, `--version` | | Print version |
 
+Both export formats are shared with the app (see [:material-application-export: Export tab](../guide/app.md#export-tab) for details).
+
 ## Examples
 
 Time 500 steps of a 4096² Game of Life across three reps:

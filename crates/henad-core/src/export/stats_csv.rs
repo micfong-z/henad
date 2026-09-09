@@ -1,18 +1,49 @@
 //! Time-series stat output. One row per sampled tick, one column per stat series.
 //!
-//! `StatsHistory` forgets its oldest entries once full, which is exactly wrong for a run whose
-//! output is a data file, so this writes straight through to disk instead. Memory stays flat
-//! regardless of run length.
+//! Generic over the writer, because the two callers want different things from it. The headless
+//! runner streams into a file and keeps memory flat however long a run gets. The app builds the
+//! whole file in memory and hands it to a save dialog, which on the web is the only option there is.
 //!
 //! The column layout is fixed from the *first* sample and reused for every later row, so the
 //! header and every row always agree. A model whose `stats()` shape changes mid-run is a
 //! programming error, and [`StatsWriter::push`] reports it as one.
 
-use std::io::Write;
+use std::fmt;
+use std::io::{self, Write};
 
-use anyhow::{Result, bail};
+use crate::view::{StatEntry, StatValue};
 
-use henad_core::view::{StatEntry, StatValue};
+/// A stat series could not be written.
+#[derive(Debug)]
+pub enum StatsWriteError {
+    Io(io::Error),
+    /// A series changed shape after the first sample fixed the column layout.
+    Shape(String),
+}
+
+impl fmt::Display for StatsWriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "{err}"),
+            Self::Shape(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for StatsWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(err) => Some(err),
+            Self::Shape(_) => None,
+        }
+    }
+}
+
+impl From<io::Error> for StatsWriteError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err)
+    }
+}
 
 /// Separator between a series label and a component suffix, e.g. `Average Velocity.x`.
 const SUFFIX_SEP: char = '.';
@@ -67,7 +98,7 @@ impl<W: Write> StatsWriter<W> {
     ///
     /// # Errors
     /// If writing fails, or if `stats` does not match the layout fixed by the first sample.
-    pub fn push(&mut self, tick: u64, stats: &[StatEntry]) -> Result<()> {
+    pub fn push(&mut self, tick: u64, stats: &[StatEntry]) -> Result<(), StatsWriteError> {
         if self.columns.is_none() {
             let columns = plan_columns(stats);
             write!(self.out, "tick")?;
@@ -82,19 +113,18 @@ impl<W: Write> StatsWriter<W> {
         write!(self.out, "{tick}")?;
         for column in columns {
             let Some(entry) = stats.get(column.series) else {
-                bail!(
+                return Err(StatsWriteError::Shape(format!(
                     "stat series count changed mid-run: column '{}' needs series {} but tick {tick} has {}",
                     column.header,
                     column.series,
                     stats.len()
-                );
+                )));
             };
             let value = extract(&entry.value, column.part).ok_or_else(|| {
-                anyhow::anyhow!(
+                StatsWriteError::Shape(format!(
                     "stat series '{}' changed shape mid-run at tick {tick}: column '{}' no longer applies",
-                    entry.label,
-                    column.header
-                )
+                    entry.label, column.header
+                ))
             })?;
             write!(self.out, ",{}", fmt_f64(value))?;
         }
@@ -110,9 +140,23 @@ impl<W: Write> StatsWriter<W> {
     ///
     /// # Errors
     /// If the final flush fails.
-    pub fn finish(mut self) -> Result<u64> {
+    pub fn finish(self) -> Result<u64, StatsWriteError> {
+        Ok(self.into_inner()?.1)
+    }
+
+    /// Flush and hand back the writer, with the row count. For a caller holding the destination
+    /// itself rather than a file, as an in-memory buffer on its way to a save dialog is.
+    ///
+    /// # Errors
+    /// If the final flush fails.
+    pub fn into_inner(mut self) -> Result<(W, u64), StatsWriteError> {
         self.out.flush()?;
-        Ok(self.rows)
+        Ok((self.out, self.rows))
+    }
+
+    /// Rows written so far, not counting the header.
+    pub fn rows(&self) -> u64 {
+        self.rows
     }
 }
 
@@ -358,5 +402,99 @@ mod tests {
     fn a_model_with_no_stats_still_writes_ticks() {
         let csv = render(&[(0, vec![]), (5, vec![])]);
         assert_eq!(csv, "tick\n0\n5\n");
+    }
+
+    /// The two paths a stat series reaches a file by must produce the same file.
+    ///
+    /// The app writes through a [`StatsWriter`] while recording, and replays
+    /// [`crate::view::StatsHistory`] otherwise. Both claim the column layout the headless runner
+    /// writes, and only one of them holds structured values.
+    mod parity {
+        use super::super::StatsWriter;
+        use crate::view::{StatDescriptor, StatEntry, StatValue, StatsHistory};
+
+        const C: [u8; 4] = [9, 9, 9, 255];
+
+        /// A scalar beside a vector, so the replay has to reach both stores.
+        fn sample(i: u64) -> Vec<StatEntry> {
+            vec![
+                StatEntry {
+                    label: "Alive",
+                    value: StatValue::Scalar(i as f64 * 1.5),
+                    color: C,
+                },
+                StatEntry {
+                    label: "Average Velocity",
+                    value: StatValue::Vector2D {
+                        x: i as f64,
+                        y: -(i as f64) * 0.25,
+                    },
+                    color: C,
+                },
+            ]
+        }
+
+        fn render(samples: &[(u64, Vec<StatEntry>)]) -> String {
+            let mut writer = StatsWriter::new(Vec::new());
+            for (tick, stats) in samples {
+                writer.push(*tick, stats).expect("push should succeed");
+            }
+            let (csv, _) = writer.into_inner().expect("finish should succeed");
+            String::from_utf8(csv).expect("output should be utf8")
+        }
+
+        #[test]
+        fn a_replayed_history_writes_what_a_recording_writes() {
+            let descriptors = vec![
+                StatDescriptor::new("Alive", C),
+                StatDescriptor::new("Average Velocity", C),
+            ];
+            let mut history = StatsHistory::new(descriptors, Some(64));
+            let mut recorded = Vec::new();
+            for tick in 0..20 {
+                let stats = sample(tick);
+                history.push_entries(&stats, tick);
+                recorded.push((tick, stats));
+            }
+
+            let replayed: Vec<(u64, Vec<StatEntry>)> = (0..history.len())
+                .map(|j| (history.tick(j).expect("tick"), history.entries(j).expect("entries")))
+                .collect();
+
+            assert_eq!(render(&replayed), render(&recorded));
+        }
+
+        /// A history that has wrapped writes the tail of what a recording holds, column for column.
+        #[test]
+        fn a_wrapped_history_writes_the_tail_of_the_recording() {
+            let descriptors = vec![
+                StatDescriptor::new("Alive", C),
+                StatDescriptor::new("Average Velocity", C),
+            ];
+            let mut history = StatsHistory::new(descriptors, Some(5));
+            let mut recorded = Vec::new();
+            for tick in 0..20 {
+                let stats = sample(tick);
+                history.push_entries(&stats, tick);
+                recorded.push((tick, stats));
+            }
+
+            let replayed: Vec<(u64, Vec<StatEntry>)> = (0..history.len())
+                .map(|j| (history.tick(j).expect("tick"), history.entries(j).expect("entries")))
+                .collect();
+
+            let full = render(&recorded);
+            let tail = render(&replayed);
+            let header = full.lines().next().expect("a header");
+            assert_eq!(
+                tail.lines().next(),
+                Some(header),
+                "the columns must not depend on the path"
+            );
+            for line in tail.lines().skip(1) {
+                assert!(full.contains(line), "replayed row {line:?} is not in the recording");
+            }
+            assert_eq!(tail.lines().count(), 6, "five samples plus the header");
+        }
     }
 }

@@ -3,8 +3,8 @@
 use egui_dock::{DockState, NodeIndex, TabViewer};
 
 use crate::icons::material_design_icons::{
-    MDI_CHART_LINE, MDI_CHIP, MDI_COG_OUTLINE, MDI_CUBE_OUTLINE, MDI_GAUGE, MDI_PLAY_CIRCLE_OUTLINE, MDI_SPEEDOMETER,
-    MDI_TABLE, MDI_TUNE,
+    MDI_CHART_LINE, MDI_CHIP, MDI_COG_OUTLINE, MDI_CUBE_OUTLINE, MDI_EXPORT, MDI_GAUGE, MDI_PLAY_CIRCLE_OUTLINE,
+    MDI_SPEEDOMETER, MDI_TABLE, MDI_TUNE,
 };
 use crate::state::AppState;
 use crate::ui;
@@ -19,13 +19,14 @@ pub enum Tab {
     Params,
     Stats,
     Charts,
+    Export,
     Performance,
     System,
 }
 
 impl Tab {
     /// Every tab that exists, in View-menu order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Viewport,
         Self::Playback,
         Self::Pacing,
@@ -33,6 +34,7 @@ impl Tab {
         Self::Params,
         Self::Stats,
         Self::Charts,
+        Self::Export,
         Self::Performance,
         Self::System,
     ];
@@ -46,6 +48,7 @@ impl Tab {
             Self::Params => "Parameters",
             Self::Stats => "Statistics",
             Self::Charts => "Charts",
+            Self::Export => "Export",
             Self::Performance => "Performance",
             Self::System => "System",
         }
@@ -60,6 +63,7 @@ impl Tab {
             Self::Params => MDI_TUNE,
             Self::Stats => MDI_TABLE,
             Self::Charts => MDI_CHART_LINE,
+            Self::Export => MDI_EXPORT,
             Self::Performance => MDI_GAUGE,
             Self::System => MDI_CHIP,
         }
@@ -78,7 +82,7 @@ pub fn default_dock_state() -> DockState<Tab> {
 
     let [_, perf] = surface.split_right(viewport, 0.7, vec![Tab::Performance, Tab::System]);
     let [_, stats] = surface.split_below(perf, 0.25, vec![Tab::Stats]);
-    surface.split_below(stats, 0.4, vec![Tab::Charts]);
+    surface.split_below(stats, 0.4, vec![Tab::Charts, Tab::Export]);
 
     dock
 }
@@ -104,6 +108,7 @@ impl TabViewer for AppState {
             Tab::Params => ui::params::params_ui(ui, self),
             Tab::Stats => ui::stats::stats_ui(ui, self),
             Tab::Charts => ui::charts::charts_ui(ui, self),
+            Tab::Export => ui::export::export_ui(ui, self),
             Tab::Performance => ui::performance::performance_ui(ui, self),
             Tab::System => ui::system::system_ui(ui, self),
         }
@@ -136,16 +141,21 @@ mod tests {
         }
     }
 
+    const STACKED: [[Tab; 2]; 2] = [[Tab::Charts, Tab::Export], [Tab::Performance, Tab::System]];
+
     #[test]
-    fn default_layout_hides_nothing_except_system() {
+    fn nothing_shares_a_leaf_except_the_stacked_pairs() {
         let dock = default_dock_state();
         let leaves: Vec<_> = dock.iter_leaves().collect();
 
-        assert_eq!(leaves.len(), Tab::ALL.len() - 1, "expected one leaf per tab bar System");
+        assert_eq!(
+            leaves.len(),
+            Tab::ALL.len() - STACKED.len(),
+            "expected one leaf per tab, bar the stacked pairs"
+        );
         for (_, leaf) in leaves {
-            let shared = leaf.tabs == vec![Tab::Performance, Tab::System];
             assert!(
-                leaf.tabs.len() == 1 || shared,
+                leaf.tabs.len() == 1 || STACKED.iter().any(|pair| leaf.tabs == *pair),
                 "a panel starts out hidden behind a sibling tab: {:?}",
                 leaf.tabs
             );
@@ -153,18 +163,22 @@ mod tests {
     }
 
     #[test]
-    fn system_starts_behind_performance() {
+    fn the_first_of_each_stacked_pair_is_the_one_in_front() {
         let dock = default_dock_state();
-        let (_, leaf) = dock
-            .iter_leaves()
-            .find(|(_, leaf)| leaf.tabs.contains(&Tab::System))
-            .expect("System is in the default layout");
+        for pair in STACKED {
+            let (_, leaf) = dock
+                .iter_leaves()
+                .find(|(_, leaf)| leaf.tabs == pair)
+                .expect("both stacked pairs are in the default layout");
 
-        assert_eq!(
-            leaf.tabs.get(leaf.active.0),
-            Some(&Tab::Performance),
-            "Performance should be the tab in front, not System"
-        );
+            assert_eq!(
+                leaf.tabs.get(leaf.active.0),
+                Some(&pair[0]),
+                "{:?} should be the tab in front of {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
     }
 
     #[test]

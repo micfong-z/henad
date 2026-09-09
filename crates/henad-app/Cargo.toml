@@ -33,6 +33,8 @@ bytemuck = { workspace = true }
 pollster = { workspace = true }
 rayon = { workspace = true }
 flume = { workspace = true }
+rfd = { workspace = true }
+serde_json = { workspace = true }
 web-time = { workspace = true }
 
 # native:
