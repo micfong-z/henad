@@ -62,6 +62,8 @@ impl<M: GridModel> CaField<M> {
 }
 
 impl<M: GridModel> FieldLayer for CaField<M> {
+    const KIND: &'static str = "Cellular automaton";
+
     type Params = M::Params;
     type Read<'a> = &'a [u8];
     type DepositLanes = ();

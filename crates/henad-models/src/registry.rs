@@ -7,10 +7,12 @@ use henad_compute::gpu::capacity::Demand;
 use henad_compute::gpu::fault::catching_on;
 use henad_compute::gpu::grid_engine::{GpuGridModelDescriptor, GpuGridState};
 use henad_compute::gpu::sim_thread::GpuSimState;
-use henad_core::authoring::model::agent_model::AgentModel;
+use henad_core::authoring::model::agent_model::{AgentLanes, AgentModel, NeighborIndex};
+use henad_core::authoring::model::field::FieldLayer;
 use henad_core::authoring::model::gpu_agent_model::GpuAgentModel;
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
 use henad_core::authoring::model::grid_model::GridModel;
+use henad_core::metadata::{Backend, ModelMetadata, Structure};
 use henad_core::model::{Model as _, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::TopologyHint;
@@ -52,6 +54,8 @@ pub struct ModelEntry {
     pub param_descriptors: Vec<ParamDescriptor>,
     pub stat_descriptors: Vec<StatDescriptor>,
     pub topology_hint: TopologyHint,
+    /// Declared facts about the model, derived from its trait consts.
+    pub metadata: ModelMetadata,
     pub create: ModelFactory,
     /// `None` for a CPU model, which allocates on the host and has no device limit to miss.
     pub capacity: Option<CapacityFn>,
@@ -64,6 +68,12 @@ impl ModelEntry {
             .as_ref()
             .map_or_else(Vec::new, |capacity| capacity(params).shortfalls(limits))
     }
+
+    /// Device resources the model would allocate at `params`. `None` for a CPU model, which
+    /// allocates on the host and only knows its footprint once built.
+    pub fn demand(&self, params: &[ParamValue]) -> Option<Demand> {
+        self.capacity.as_ref().map(|capacity| capacity(params))
+    }
 }
 
 /// Create a `ModelEntry` from a `GridModel` implementation.
@@ -75,6 +85,13 @@ fn register_grid_model<M: GridModel>() -> ModelEntry {
         param_descriptors: grid_model_param_descriptors::<M>(),
         stat_descriptors: M::STATS.to_vec(),
         topology_hint: TopologyHint::GRID,
+        metadata: ModelMetadata {
+            backend: Backend::Cpu,
+            palette: Some(M::PALETTE),
+            structure: Structure::Grid {
+                neighborhood: M::NEIGHBORHOOD,
+            },
+        },
         create: Box::new(|params, seed| {
             catching(BUILDING, || {
                 ModelState::Cpu(Box::new(GridModelState::<M>::from_params_seeded(params, seed)))
@@ -93,8 +110,18 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
         param_descriptors: agent_model_param_descriptors::<A>(),
         stat_descriptors: A::STATS.to_vec(),
         topology_hint: TopologyHint {
-            grid: <A::Field as henad_core::authoring::model::field::FieldLayer>::HAS_GRID,
+            grid: <A::Field as FieldLayer>::HAS_GRID,
             agents: true,
+        },
+        metadata: ModelMetadata {
+            backend: Backend::Cpu,
+            palette: Some(A::PALETTE),
+            structure: Structure::Agents {
+                chunk: A::CHUNK,
+                lanes: <A::Lanes as AgentLanes>::LANES,
+                index: <A::Index as NeighborIndex>::KIND,
+                field: <A::Field as FieldLayer>::KIND,
+            },
         },
         create: Box::new(|params, seed| {
             catching(BUILDING, || {
@@ -118,6 +145,14 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
         param_descriptors: model.param_descriptors(),
         stat_descriptors: model.stat_descriptors(),
         topology_hint: model.topology_hint(),
+        metadata: ModelMetadata {
+            backend: Backend::Gpu,
+            palette: Some(M::PALETTE),
+            structure: Structure::GpuGrid {
+                buffers: M::BUFFERS,
+                workgroup: M::WORKGROUP_SIZE,
+            },
+        },
         create: Box::new(move |params, seed| {
             catching_on(&factory_ctx, BUILDING, || {
                 ModelState::Gpu(Box::new(GpuGridState::<M>::new_seeded(&factory_ctx, params, seed)))
@@ -142,6 +177,18 @@ fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
         param_descriptors: model.param_descriptors(),
         stat_descriptors: model.stat_descriptors(),
         topology_hint: model.topology_hint(),
+        metadata: ModelMetadata {
+            backend: Backend::Gpu,
+            // A GPU agent model's shaders write RGBA themselves.
+            palette: None,
+            structure: Structure::GpuAgents {
+                buffers: M::BUFFERS,
+                passes: M::STEP_PASSES,
+                index: M::INDEX,
+                display: M::DISPLAY.is_some(),
+                counters: M::COUNTERS,
+            },
+        },
         create: Box::new(move |params, seed| {
             catching_on(&factory_ctx, BUILDING, || {
                 ModelState::Gpu(Box::new(GpuAgentState::<M>::new_seeded(&factory_ctx, params, seed)))
@@ -281,6 +328,54 @@ mod tests {
                 entry.id,
                 entry.topology_hint.agents
             );
+        }
+    }
+
+    /// Nothing but the Model panel reads the metadata, so a mis-registered entry would show the
+    /// wrong backend for a whole release without anything else noticing.
+    #[test]
+    fn declared_metadata_matches_the_entry_it_describes() {
+        for entry in all_entries() {
+            let (backend, structure) = (entry.metadata.backend, &entry.metadata.structure);
+            let gpu = matches!(backend, Backend::Gpu);
+
+            assert_eq!(
+                gpu,
+                entry.capacity.is_some(),
+                "{}: declares {backend:?} but only a GPU entry carries a capacity",
+                entry.id
+            );
+            assert_eq!(
+                gpu,
+                matches!(build(&entry, &defaults(&entry)), ModelState::Gpu(_)),
+                "{}: declares {backend:?} but its factory returns the other arm",
+                entry.id
+            );
+
+            let hint = entry.topology_hint;
+            let agrees = match structure {
+                Structure::Grid { .. } | Structure::GpuGrid { .. } => hint == TopologyHint::GRID,
+                Structure::Agents { .. } | Structure::GpuAgents { .. } => hint.agents,
+            };
+            assert!(agrees, "{}: declared structure and topology disagree", entry.id);
+
+            assert!(
+                gpu == matches!(structure, Structure::GpuGrid { .. } | Structure::GpuAgents { .. }),
+                "{}: declares {backend:?} but a structure for the other backend",
+                entry.id
+            );
+        }
+    }
+
+    /// Every palette is drawn from, so an empty one would colour a model's cells out of an empty
+    /// slice.
+    #[test]
+    fn a_declared_palette_has_colours_in_it() {
+        for entry in all_entries() {
+            let Some(palette) = entry.metadata.palette else {
+                continue;
+            };
+            assert!(!palette.is_empty(), "{}: declares an empty palette", entry.id);
         }
     }
 

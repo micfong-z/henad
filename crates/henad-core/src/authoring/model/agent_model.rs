@@ -1,6 +1,7 @@
 //! Authoring API for models whose state is a population of agents.
 
 use crate::authoring::model::field::{Extent, FieldLayer};
+use crate::metadata::LaneSpec;
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::spatial_hash::SpatialHash;
 use crate::view::{StatDescriptor, StatValue};
@@ -10,6 +11,9 @@ use crate::view::{StatDescriptor, StatValue};
 /// Written by the `agent_lanes!` macro rather than by hand. The chunked step driver is an inherent
 /// method on the generated type, not a trait method, so its closure can name concrete borrow types.
 pub trait AgentLanes: Send + Sync + 'static {
+    /// Used for the metadata UI.
+    const LANES: &'static [LaneSpec];
+
     fn alloc(n: usize) -> Self;
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
@@ -30,6 +34,9 @@ pub trait AgentLanes: Send + Sync + 'static {
 
 /// Neighbour lookup rebuilt from agent positions each tick.
 pub trait NeighborIndex: Send + Sync + 'static {
+    /// Name of this index for the metadata UI.
+    const KIND: &'static str;
+
     fn new(extent: Extent, cell_size: f32) -> Self;
     fn rebuild(&mut self, pos_x: &[f32], pos_y: &[f32], cell_size: f32);
     fn heap_bytes(&self) -> usize;
@@ -39,6 +46,8 @@ pub trait NeighborIndex: Send + Sync + 'static {
 pub struct NoIndex;
 
 impl NeighborIndex for NoIndex {
+    const KIND: &'static str = "None";
+
     fn new(_extent: Extent, _cell_size: f32) -> Self {
         Self
     }
@@ -51,6 +60,8 @@ impl NeighborIndex for NoIndex {
 }
 
 impl NeighborIndex for SpatialHash {
+    const KIND: &'static str = "Spatial hash";
+
     fn new(extent: Extent, cell_size: f32) -> Self {
         Self::new(cell_size, extent.w, extent.h)
     }

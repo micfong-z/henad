@@ -5,6 +5,10 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 
 ## [Unreleased]
 
+### Added
+
+- Model metadata in the Model panel: backend, topology, declared structure, parameter and statistic counts, palette, and, for a GPU model, the device footprint at the current parameters.
+
 ## [0.1.0] - 2026-09-08
 
 This is the initial release.

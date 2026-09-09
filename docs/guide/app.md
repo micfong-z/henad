@@ -27,7 +27,7 @@ Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bo
 | <span class="ui" markdown>:material-cube-outline: Viewport</span>        | Simulation visualization     |
 | <span class="ui" markdown>:material-play-circle-outline: Playback</span> | Play, step, build, offload   |
 | <span class="ui" markdown>:material-speedometer: Pacing</span>           | Speed control                |
-| <span class="ui" markdown>:material-cog-outline: Model</span>            | Model selection              |
+| <span class="ui" markdown>:material-cog-outline: Model</span>            | Model selection and metadata |
 | <span class="ui" markdown>:material-tune: Parameters</span>              | Model parameters             |
 | <span class="ui" markdown>:material-table: Statistics</span>             | Latest value of each stat    |
 | <span class="ui" markdown>:material-chart-line: Charts</span>            | Statistics history and plots |
@@ -47,6 +47,30 @@ Picking a model also loads its default parameters, discarding parameters set in 
 The GPU model entries only appear when a suitable device is detected.
 
 See the [models reference](../reference/models.md) for more details on each model.
+
+### Metadata
+
+Below the description, the panel displays auto-computed metadata about the model, which is useful for understanding its structure and resource requirements.
+
+<figure markdown="span">
+  ![The Model panel for Ant Foraging on the GPU](../assets/app/model-metadata.png){ width="300" }
+<figcaption>Model metadata for Ant Foraging (GPU).</figcaption>
+</figure>
+
+Identity
+: The model id the [CLI](../reference/cli.md) takes, its backend (CPU or GPU), and which display layers it publishes.
+
+Structure
+: Underlying data structure of the model, which is different for each [authoring trait](../authoring/index.md).
+  For example, a grid model reports its neighbourhood; a CPU agent model its lanes, chunk size, neighbour index and field layer; a GPU model its buffers and passes.
+  Hover over the counts to see the names of each buffer or step pass.
+
+Interface
+: How many parameters and [statistics](../authoring/statistics.md) the model declares, and the palette it uses.
+  Palette information cannot be obtained directly for a GPU model.
+
+Footprint (GPU only)
+: Expected model resource requirements at the parameter values currently in the <span class="ui" markdown>:material-tune: Parameters</span> tab.
 
 ## :material-tune: Parameters tab
 
