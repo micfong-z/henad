@@ -11,7 +11,7 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use serde_json::{Map, Value, json};
 
 /// Emitted once, before any rep.
-pub fn info(model: &str, variant: &str, threads: usize, adapter: Option<&str>) {
+pub fn info(model: &str, variant: &str, threads: usize, parallel_jobs: Option<usize>, adapter: Option<&str>) {
     let line = json!({
         "kind": "info",
         "engine": "henad",
@@ -19,6 +19,7 @@ pub fn info(model: &str, variant: &str, threads: usize, adapter: Option<&str>) {
         "model": model,
         "variant": variant,
         "threads": threads,
+        "parallel_jobs": parallel_jobs,
         "adapter": adapter,
         "debug_build": cfg!(debug_assertions),
     });

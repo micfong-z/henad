@@ -34,4 +34,8 @@ pub trait SimState: WasmNotSend + 'static {
     fn population(&self) -> u64;
     /// Approximate, and only what this state owns.
     fn heap_bytes(&self) -> usize;
+    /// Number of jobs one step splits into. `None` if a backend has no such split.
+    fn parallel_jobs(&self) -> Option<usize> {
+        None
+    }
 }

@@ -32,6 +32,13 @@ impl<M: GridModel> CaField<M> {
         &self.grid
     }
 
+    /// Number of rayon jobs one tick splits into.
+    pub fn parallel_jobs(&self) -> usize {
+        let width = self.grid.width() as usize;
+        let height = self.grid.height() as usize;
+        height.div_ceil(rows_per_leaf(width, height))
+    }
+
     /// Build a field seeded from `seed`, or from [`GRID_INIT_SEED`] when it is `None`.
     pub fn with_seed(extent: Extent, params: &[ParamValue], seed: Option<u64>) -> Self {
         let (width, height) = extent.cells();
@@ -294,5 +301,17 @@ mod tests {
     #[test]
     fn the_gather_order_matches_the_published_von_neumann_table() {
         step_grid::<VonNeumannProbe>(&mut probe_grid(), &(), 1, 0);
+    }
+
+    /// A grid under the leaf floor runs on one worker however wide the pool is, and the benchmark
+    /// CSV carries this number so such a run is not read as a full-width one.
+    #[test]
+    fn a_grid_under_the_leaf_floor_is_one_job() {
+        let small = CaField::<MooreProbe>::with_seed(Extent { w: 64.0, h: 64.0 }, &[], None);
+        assert_eq!(small.parallel_jobs(), 1);
+
+        // 8192 cells is two rows at this width.
+        let wide = CaField::<MooreProbe>::with_seed(Extent { w: 4096.0, h: 100.0 }, &[], None);
+        assert_eq!(wide.parallel_jobs(), 50);
     }
 }

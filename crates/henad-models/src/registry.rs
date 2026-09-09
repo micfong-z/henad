@@ -331,6 +331,21 @@ mod tests {
         }
     }
 
+    /// The benchmark CSV carries the job count beside the thread count, where a blank cell has to
+    /// mean a GPU model rather than a CPU one that reports nothing.
+    #[test]
+    fn only_a_cpu_model_reports_how_far_a_step_splits() {
+        for entry in all_entries() {
+            let values = defaults(&entry);
+            let mut created = build(&entry, &values);
+            let cpu = matches!(created, ModelState::Cpu(_));
+            let jobs = sim_state(&mut created).parallel_jobs();
+
+            assert_eq!(jobs.is_some(), cpu, "{}: reports {jobs:?}", entry.id);
+            assert!(jobs.is_none_or(|n| n > 0), "{}: a step splits into no jobs", entry.id);
+        }
+    }
+
     /// Nothing but the Model panel reads the metadata, so a mis-registered entry would show the
     /// wrong backend for a whole release without anything else noticing.
     #[test]

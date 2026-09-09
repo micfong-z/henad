@@ -32,13 +32,17 @@ One JSON object per line on stdout, nothing else.
 Progress and warnings go to stderr, where the driver captures them for the `error` column.
 
 ```json
-{"kind":"info","engine":"mesa","engine_version":"3.5.1","model":"boids","variant":"default","threads":1}
+{"kind":"info","engine":"mesa","engine_version":"3.5.1","model":"boids","variant":"default","threads":1,"parallel_jobs":null}
 {"kind":"rep","rep":0,"seed":42,"steps":100,"warmup":10,"elapsed_s":1.2345,"population":1000,"heap_bytes":null}
 ```
 
 `info` comes once, before any rep.
 `rep` comes once per timed rep, as soon as that rep finishes, so a run killed by a timeout still reports what it managed.
 `heap_bytes` is optional and null where an engine cannot measure it.
+
+`parallel_jobs` is how many jobs one step splits into, beside `threads`, which is how many workers were available to take them.
+A run with fewer jobs than workers is bounded by the split, and a thread count on its own reads as though the whole pool worked.
+It is optional and null for a single-threaded harness, and for a GPU backend, whose work goes into dispatches rather than jobs.
 
 A `summary` line may follow the reps.
 The driver computes its own statistics from the `rep` lines and uses `summary` only for provenance, so no engine's own arithmetic reaches a published table.

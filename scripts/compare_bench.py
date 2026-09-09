@@ -661,6 +661,7 @@ CSV_FIELDS = [
     "engine_version",
     "variant",
     "threads",
+    "parallel_jobs",
     "model",
     "axis",
     "scale",
@@ -737,6 +738,9 @@ def row_for(
             # What the harness says it used, not what was requested. An engine whose workers
             # serialise reports 1, and recording the request would publish it as "all".
             "threads": (result.info.get("threads", threads) if result and result.info else threads),
+            # How many jobs a step splits into, which bounds a run the thread count says is wide.
+            # Blank for a harness that does not report it, every single-threaded port included.
+            "parallel_jobs": (result.info.get("parallel_jobs") or "") if result and result.info else "",
             "model": point.model,
             "axis": "grid" if point.grid else "agents",
             "scale": point.scale,

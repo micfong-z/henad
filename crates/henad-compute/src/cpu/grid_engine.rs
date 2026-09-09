@@ -100,6 +100,10 @@ impl<M: GridModel> SimState for GridModelState<M> {
     fn heap_bytes(&self) -> usize {
         self.field.heap_bytes()
     }
+
+    fn parallel_jobs(&self) -> Option<usize> {
+        Some(self.field.parallel_jobs())
+    }
 }
 
 #[cfg(test)]

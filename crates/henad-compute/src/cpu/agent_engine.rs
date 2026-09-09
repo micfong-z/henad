@@ -237,4 +237,9 @@ impl<A: AgentModel> SimState for AgentModelState<A> {
     fn heap_bytes(&self) -> usize {
         self.lanes.heap_bytes() + self.field.heap_bytes() + self.index.heap_bytes()
     }
+
+    /// Number of chunks of the step pass.
+    fn parallel_jobs(&self) -> Option<usize> {
+        Some(self.lanes.len().div_ceil(A::CHUNK.max(1)))
+    }
 }

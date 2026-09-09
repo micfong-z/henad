@@ -306,18 +306,19 @@ fn run_benchmark(
     gpu_ctx: Option<&GpuContext>,
     adapter: Option<&str>,
 ) -> Result<()> {
-    // Bound in a statement of its own. As a `match` scrutinee the probe outlived the arm and kept
-    // a second full model alive for the whole run.
-    let is_gpu = matches!((entry.create)(params, args.seed)?, ModelState::Gpu(_));
+    let (is_gpu, jobs) = match (entry.create)(params, args.seed)? {
+        ModelState::Gpu(_) => (true, None),
+        ModelState::Cpu(state) => (false, state.parallel_jobs()),
+    };
     if is_gpu {
         let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
         if args.json {
-            json_report::info(&entry.id, "gpu", rayon::current_num_threads(), adapter);
+            json_report::info(&entry.id, "gpu", rayon::current_num_threads(), jobs, adapter);
         }
         bench_gpu(entry, params, args, ctx)
     } else {
         if args.json {
-            json_report::info(&entry.id, "cpu", rayon::current_num_threads(), None);
+            json_report::info(&entry.id, "cpu", rayon::current_num_threads(), jobs, None);
         }
         bench_cpu(entry, params, args)
     }
