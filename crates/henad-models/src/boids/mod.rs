@@ -2,6 +2,7 @@ mod lanes;
 mod step;
 
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::agent_model::{AgentModel, StepCtx};
 use henad_core::authoring::model::field::{Extent, NoField};
 use henad_core::authoring::primitives::rng::next_float;
@@ -44,7 +45,27 @@ henad_core::params! {
 }
 // --8<-- [end:params]
 
+henad_core::actions! {
+    const RANDOMISE_HEADINGS = ActionDescriptor::new("randomise_headings", "Randomise headings");
+}
+
 pub struct BoidsModel;
+
+/// Turns every boid a fresh way without touching its speed, so a settled flock scatters and
+/// re-forms rather than restarting.
+fn randomise_headings(lanes: &mut BoidLanes, params: &[ParamValue], rng: &mut u64) {
+    let max_speed = extract_f32(params, MAX_SPEED, 15.0);
+    let min_speed = extract_f32(params, MIN_SPEED, 3.0);
+    let stationary = 0.5 * (min_speed + max_speed);
+    for i in 0..lanes.vel_x.len() {
+        let speed = lanes.vel_x[i].hypot(lanes.vel_y[i]);
+        let speed = if speed > 0.0 { speed } else { stationary };
+        let angle = next_float(rng, std::f32::consts::TAU);
+        lanes.vel_x[i] = angle.cos() * speed;
+        lanes.vel_y[i] = angle.sin() * speed;
+        lanes.color[i] = heading_octant(lanes.vel_x[i], lanes.vel_y[i]);
+    }
+}
 
 /// Squared ranges and half extents precomputed, so the inner loop does no setup per neighbour.
 pub struct BoidParams {
@@ -75,6 +96,7 @@ impl AgentModel for BoidsModel {
     /// be small. 512 gave a thousand boids two chunks, so most of the pool sat idle. Measured: 64
     /// is 3.3x at a thousand agents and costs 4% at a hundred thousand.
     const CHUNK: usize = 64;
+    const ACTIONS: &'static [ActionDescriptor] = ACTION_SPECS;
     const DEFAULT_AGENTS: u32 = 50_000;
     const MAX_AGENTS: u32 = 1_000_000;
     const DEFAULT_EXTENT: Extent = Extent { w: 1_000.0, h: 1_000.0 };
@@ -133,6 +155,21 @@ impl AgentModel for BoidsModel {
 
     fn run_step_pass(lanes: &mut BoidLanes, ctx: &StepCtx<'_, Self>, seed: u64, tick: u64) {
         step::run(lanes, ctx, seed, tick);
+    }
+
+    #[expect(clippy::single_match, reason = "for future multi-action extendability")]
+    fn act(
+        action: usize,
+        lanes: &mut BoidLanes,
+        _field: &mut NoField,
+        _extent: Extent,
+        params: &[ParamValue],
+        rng: &mut u64,
+    ) {
+        match action {
+            RANDOMISE_HEADINGS => randomise_headings(lanes, params, rng),
+            _ => {}
+        }
     }
 
     fn stats(lanes: &BoidLanes, _field: &NoField, (): &()) -> Vec<StatValue> {

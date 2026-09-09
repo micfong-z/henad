@@ -31,6 +31,10 @@ pub trait SimState: WasmNotSend + 'static {
     fn prepare_view(&mut self) {}
     fn stats(&self) -> Vec<StatEntry>;
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool;
+    /// Runs the model's action at `index`, between ticks. False when it declares no such one.
+    fn act(&mut self, _index: usize) -> bool {
+        false
+    }
     fn population(&self) -> u64;
     /// Approximate, and only what this state owns.
     fn heap_bytes(&self) -> usize;

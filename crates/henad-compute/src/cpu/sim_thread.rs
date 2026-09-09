@@ -35,7 +35,12 @@ pub enum SimCommand {
     SetTargetTps(f64),
     SetUncapped(bool),
     SetTicksPerSnapshot(u32),
-    SetParam { index: usize, value: ParamValue },
+    SetParam {
+        index: usize,
+        value: ParamValue,
+    },
+    /// Run the model's declared action at this index, once.
+    Act(usize),
     Shutdown,
 }
 
@@ -127,6 +132,14 @@ impl SimLoop for Loop {
             SimCommand::SetParam { index, value } => {
                 if !self.state.set_param(index, &value) {
                     log::warn!("Failed to set param index {index} to {value:?}");
+                }
+            }
+            SimCommand::Act(index) => {
+                if self.state.act(index) {
+                    // The tick has not moved, so nothing else would publish what the action did.
+                    self.force_publish_snapshot();
+                } else {
+                    log::warn!("Model has no action at index {index}");
                 }
             }
             SimCommand::Shutdown => return true,

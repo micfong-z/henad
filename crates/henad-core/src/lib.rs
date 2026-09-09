@@ -3,6 +3,7 @@
 //! [`authoring`] is what a model implements, [`model`] is what the runner drives. The rest are the
 //! shared data structures and the descriptors the UI reads.
 
+pub mod action;
 pub mod authoring;
 pub mod export;
 pub mod grid;

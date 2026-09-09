@@ -1,3 +1,4 @@
+use crate::action::ActionDescriptor;
 use crate::grid::Grid2D;
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::topology::NeighborhoodKind;
@@ -15,6 +16,8 @@ pub trait GridModel: Send + Sync + 'static {
     const NEIGHBORHOOD: NeighborhoodKind;
     /// Stat series for the history chart. Declared once, so `stats` returns bare values.
     const STATS: &'static [StatDescriptor];
+    /// One-off steps the user can trigger. Each gets a button in the Parameters panel.
+    const ACTIONS: &'static [ActionDescriptor] = &[];
 
     /// Pre-extracted hot parameters, rebuilt once per tick. Keeps enum matching out of the inner
     /// loop.
@@ -29,6 +32,12 @@ pub trait GridModel: Send + Sync + 'static {
 
     /// Must be pure beyond the rng. The engine runs rows in parallel.
     fn step_cell(cell: u8, neighbors: &[u8], params: &Self::Params, rng: &mut u64) -> u8;
+
+    /// Runs [`Self::ACTIONS`] entry `action` over the current cells.
+    ///
+    /// Takes what `init` takes, an action being a setup step the user asks for mid run. `rng`
+    /// is a stream of its own, so a press leaves the tick's draws where they were.
+    fn act(_action: usize, _grid: &mut Grid2D<u8>, _params: &[ParamValue], _rng: &mut u64) {}
 
     /// Current statistics, in [`Self::STATS`] order. Called on publish, not every tick.
     fn stats(grid: &Grid2D<u8>) -> Vec<StatValue>;

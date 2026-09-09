@@ -32,6 +32,11 @@ impl<M: GridModel> CaField<M> {
         &self.grid
     }
 
+    /// Write access, for an action that rewrites the cells.
+    pub fn grid_mut(&mut self) -> &mut Grid2D<u8> {
+        &mut self.grid
+    }
+
     /// Number of rayon jobs one tick splits into.
     pub fn parallel_jobs(&self) -> usize {
         let width = self.grid.width() as usize;
