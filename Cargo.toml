@@ -47,6 +47,7 @@ wgpu = { version = "30.0", features = [
     "fragile-send-sync-non-atomic-wasm",
 ] }
 flume = "0.12"
+rfd = "0.17"
 # Build scripts only. Default features off: the default `glam` map would make every generated
 # uniform field a `glam` type, and `RustWgslTypeMap` wants plain arrays.
 wgsl_bindgen = { version = "0.23.3", default-features = false }

@@ -54,11 +54,33 @@ struct AgentPaint {
     draw: Painted<AgentDraw>,
 }
 
-struct AgentDraw {
+pub struct AgentDraw {
     pipeline: Arc<AgentPipeline>,
     positions: PositionSource,
     color: wgpu::Buffer,
     count: u32,
+}
+
+impl AgentDraw {
+    /// Records the population into any pass, egui's or an offscreen one.
+    pub fn record(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        let color_slot = match &self.positions {
+            PositionSource::Split { pos_x, pos_y } => {
+                render_pass.set_pipeline(&self.pipeline.pipeline);
+                render_pass.set_vertex_buffer(0, pos_x.slice(..));
+                render_pass.set_vertex_buffer(1, pos_y.slice(..));
+                2
+            }
+            PositionSource::Interleaved(pos) => {
+                render_pass.set_pipeline(&self.pipeline.interleaved_pipeline);
+                render_pass.set_vertex_buffer(0, pos.slice(..));
+                1
+            }
+        };
+        render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+        render_pass.set_vertex_buffer(color_slot, self.color.slice(..));
+        render_pass.draw(0..4, 0..self.count);
+    }
 }
 
 impl CallbackTrait for AgentPaint {
@@ -68,22 +90,7 @@ impl CallbackTrait for AgentPaint {
         render_pass: &mut wgpu::RenderPass<'static>,
         _callback_resources: &CallbackResources,
     ) {
-        let color_slot = match &self.draw.positions {
-            PositionSource::Split { pos_x, pos_y } => {
-                render_pass.set_pipeline(&self.draw.pipeline.pipeline);
-                render_pass.set_vertex_buffer(0, pos_x.slice(..));
-                render_pass.set_vertex_buffer(1, pos_y.slice(..));
-                2
-            }
-            PositionSource::Interleaved(pos) => {
-                render_pass.set_pipeline(&self.draw.pipeline.interleaved_pipeline);
-                render_pass.set_vertex_buffer(0, pos.slice(..));
-                1
-            }
-        };
-        render_pass.set_bind_group(0, &self.draw.pipeline.bind_group, &[]);
-        render_pass.set_vertex_buffer(color_slot, self.draw.color.slice(..));
-        render_pass.draw(0..4, 0..self.draw.count);
+        self.draw.record(render_pass);
     }
 }
 
@@ -272,22 +279,55 @@ impl AgentLayer {
         );
     }
 
-    fn paint_lanes(
+    /// The population as an offscreen draw, sized to a `target` of that many pixels.
+    ///
+    /// An exported image sizes sprites in its own pixels rather than in the panel's points, so it
+    /// does not change with the panel.
+    pub fn offscreen_draw(
         &self,
-        ui: &egui::Ui,
-        rect: egui::Rect,
+        target: egui::Vec2,
+        points: Option<&PointSnapshot>,
+        agents: Option<&GpuAgents>,
+    ) -> Option<AgentDraw> {
+        match (points, agents) {
+            (_, Some(agents)) => self.prepare(
+                target,
+                (agents.world_w, agents.world_h),
+                PositionSource::Interleaved(agents.pos.clone()),
+                &agents.color,
+                agents.count,
+            ),
+            (Some(points), None) => self.prepare(
+                target,
+                (points.world_w, points.world_h),
+                PositionSource::Split {
+                    pos_x: self.buffers.pos_x.clone(),
+                    pos_y: self.buffers.pos_y.clone(),
+                },
+                &self.buffers.color,
+                self.count,
+            ),
+            (None, None) => None,
+        }
+    }
+
+    /// Writes the uniform for `size` and builds the draw.
+    ///
+    /// Returns `None` when there is nothing to draw.
+    fn prepare(
+        &self,
+        size: egui::Vec2,
         world: (f32, f32),
         positions: PositionSource,
         color: &wgpu::Buffer,
         count: u32,
-    ) {
+    ) -> Option<AgentDraw> {
         let (world_w, world_h) = world;
         if count == 0 || world_w <= 0.0 || world_h <= 0.0 {
-            return;
+            return None;
         }
         // Clip space spans 2.0 across the rect, so half-extent is size over rect. Both sides are
         // logical points, so the scale factor cancels and this is already DPI-correct.
-        let size = rect.size();
         let half_w = (AGENT_SIZE_PT / size.x.max(1.0)).min(1.0);
         let half_h = (AGENT_SIZE_PT / size.y.max(1.0)).min(1.0);
         self.queue.write_buffer(
@@ -298,17 +338,30 @@ impl AgentLayer {
                 half_size: [half_w, half_h],
             }),
         );
+        Some(AgentDraw {
+            pipeline: Arc::clone(&self.pipeline),
+            positions,
+            color: color.clone(),
+            count,
+        })
+    }
+
+    fn paint_lanes(
+        &self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        world: (f32, f32),
+        positions: PositionSource,
+        color: &wgpu::Buffer,
+        count: u32,
+    ) {
+        let Some(draw) = self.prepare(rect.size(), world, positions, color, count) else {
+            return;
+        };
 
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             rect,
-            AgentPaint {
-                draw: painted(AgentDraw {
-                    pipeline: Arc::clone(&self.pipeline),
-                    positions,
-                    color: color.clone(),
-                    count,
-                }),
-            },
+            AgentPaint { draw: painted(draw) },
         ));
     }
 

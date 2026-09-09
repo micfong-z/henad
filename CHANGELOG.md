@@ -7,7 +7,9 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 
 ### Added
 
-- Model metadata in the Model panel: backend, topology, declared structure, parameter and statistic counts, palette, and, for a GPU model, the device footprint at the current parameters.
+- Model metadata in the Model tab in GUI
+- Export tab in the CUI app
+- Unlimited history setting in the Charts tab
 
 ## [0.1.0] - 2026-09-08
 

@@ -4,6 +4,7 @@
 //! shared data structures and the descriptors the UI reads.
 
 pub mod authoring;
+pub mod export;
 pub mod grid;
 pub mod helpers;
 pub mod metadata;
