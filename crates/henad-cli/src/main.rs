@@ -515,9 +515,6 @@ fn bench_gpu(
     schedule: &Schedule,
     ctx: &GpuContext,
 ) -> Result<()> {
-    if !schedule.is_empty() {
-        bail!("--act is not supported for a GPU model yet");
-    }
     eprintln!(
         "benchmarking {} ({}) [GPU]: {} steps x {} reps, {} warmup, {} global-warmup",
         entry.name, entry.id, args.steps, args.reps, args.warmup, args.global_warmup
@@ -545,12 +542,12 @@ fn bench_gpu(
         let seed = rep_seed(args.seed, rep);
         let mut state = new_gpu_state(entry, params, seed)?;
         // Per-rep sim warm-up (untimed), matching the CPU path.
-        run_gpu_steps(&mut *state, ctx, args.warmup)?;
+        run_gpu_steps_acting(&mut *state, ctx, args.warmup, schedule)?;
         population = state.population();
 
         eprint!("  #{: >4}: ", rep + 1);
         let start = Instant::now();
-        run_gpu_steps(&mut *state, ctx, args.steps)?;
+        run_gpu_steps_acting(&mut *state, ctx, args.steps, schedule)?;
         let elapsed = start.elapsed();
         eprintln!("{elapsed:>8.3?}");
         samples.push(elapsed);
@@ -614,6 +611,37 @@ fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
 
     if let Some(fault) = ctx.faults.take() {
         return Err(fault.into());
+    }
+    Ok(())
+}
+
+/// As [`run_gpu_steps`], stopping at each tick the schedule names to encode its actions.
+///
+/// An action goes in a submission of its own, between two batches of steps, since a uniform
+/// written mid-encoder would not be visible until the whole encoder submitted.
+fn run_gpu_steps_acting(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64, schedule: &Schedule) -> Result<()> {
+    if schedule.is_empty() {
+        return run_gpu_steps(state, ctx, count);
+    }
+
+    let end = state.tick() + count;
+    loop {
+        for action in schedule.due(state.tick()) {
+            let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("cli_gpu_action"),
+            });
+            if state.encode_action(&mut encoder, action.index) {
+                ctx.queue.submit(Some(encoder.finish()));
+            } else {
+                eprintln!("note: model refused action '{}' at tick {}", action.id, state.tick());
+            }
+        }
+        if state.tick() >= end {
+            break;
+        }
+        let tick = state.tick();
+        let next = schedule.next_due(tick + 1).unwrap_or(end).min(end);
+        run_gpu_steps(state, ctx, next - tick)?;
     }
     Ok(())
 }
@@ -719,10 +747,7 @@ fn export_stats(
         ModelState::Cpu(state) => stats_cpu(state, args, schedule, total, writer)?,
         ModelState::Gpu(state) => {
             let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
-            if !schedule.is_empty() {
-                bail!("--act is not supported for a GPU model yet");
-            }
-            stats_gpu(state, ctx, args, total, writer)?
+            stats_gpu(state, ctx, args, schedule, total, writer)?
         }
     };
 
@@ -764,6 +789,7 @@ fn stats_gpu(
     mut state: Box<dyn GpuSimState>,
     ctx: &GpuContext,
     args: &Args,
+    schedule: &Schedule,
     total: u64,
     mut writer: StatsWriter<BufWriter<File>>,
 ) -> Result<u64> {
@@ -783,7 +809,7 @@ fn stats_gpu(
     let mut done = 0;
     while done < total {
         let chunk = args.stats_every.min(total - done);
-        run_gpu_steps(&mut *state, ctx, chunk)?;
+        run_gpu_steps_acting(&mut *state, ctx, chunk, schedule)?;
         done += chunk;
         sample(&mut *state, &mut writer)?;
     }

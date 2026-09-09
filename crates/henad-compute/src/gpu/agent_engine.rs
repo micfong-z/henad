@@ -63,6 +63,8 @@ struct EncodedPass {
     pipeline: wgpu::ComputePipeline,
     binds: Sides<wgpu::BindGroup>,
     groups: (u32, u32),
+    /// Kept so an action can reseed it before a press. Unread by every other pass.
+    uniform: wgpu::Buffer,
 }
 
 impl EncodedPass {
@@ -179,6 +181,12 @@ pub struct GpuAgentState<M: GpuAgentModel> {
     reduce_pass: EncodedPass,
     counters: Option<CounterReadback>,
 
+    actions: Vec<EncodedPass>,
+    /// Advanced per press, so pressing twice draws twice.
+    action_seed: u32,
+    /// Kept for the action uniforms, which are rewritten per press.
+    params: Vec<ParamValue>,
+
     agents: Sides<Arc<GpuAgents>>,
 
     _marker: PhantomData<M>,
@@ -241,6 +249,12 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             passes.push((format!("{}_display", M::ID), storage_bindings(spec.bindings)));
         }
         passes.push((format!("{}_reduce_leaf", M::ID), storage_bindings(M::REDUCE.bindings)));
+        for action in M::ACTIONS {
+            passes.push((
+                format!("{}_action_{}", M::ID, action.desc.id),
+                storage_bindings(action.pass.bindings),
+            ));
+        }
         passes
     }
 
@@ -412,6 +426,27 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             reduce_domain,
         );
 
+        // Truncated from the same stream the CPU engines use, since the WGSL generator is 32 bit.
+        let action_seed = henad_core::action::action_seed(seed) as u32;
+        let actions: Vec<EncodedPass> = M::ACTIONS
+            .iter()
+            .enumerate()
+            .map(|(i, action)| {
+                let spec = &action.pass;
+                let invocations = spec.domain.invocations(&geom);
+                build.pass_in_place::<M>(
+                    PassId::Action(i),
+                    &format!("action_{}", action.desc.id),
+                    spec.shader,
+                    spec.bindings,
+                    linear_dispatch(invocations),
+                    invocations,
+                    true,
+                    action_seed,
+                )
+            })
+            .collect();
+
         let make_agents = |a_is_current: bool| {
             let (pos, _) = buffers[M::POS_BUFFER].sides(a_is_current);
             let (color, _) = buffers[M::COLOR_BUFFER].sides(a_is_current);
@@ -443,6 +478,9 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             reduce,
             reduce_pass,
             counters,
+            actions,
+            action_seed,
+            params: params.to_vec(),
             agents,
             _marker: PhantomData,
         }
@@ -548,6 +586,27 @@ impl PassBuilder<'_> {
         groups: (u32, u32),
         invocations: u32,
     ) -> EncodedPass {
+        self.pass_in_place::<M>(id, label, shader, bindings, groups, invocations, false, 0)
+    }
+
+    /// As [`Self::pass`], with `in_place` binding writes to the side that already holds the state.
+    ///
+    /// Nothing swaps after an action, so writing the far side would throw the work away.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one call site, and every argument is a pass fact"
+    )]
+    fn pass_in_place<M: GpuAgentModel>(
+        &self,
+        id: PassId,
+        label: &str,
+        shader: &str,
+        bindings: &[BindingDecl],
+        groups: (u32, u32),
+        invocations: u32,
+        in_place: bool,
+        seed: u32,
+    ) -> EncodedPass {
         let label = format!("{}_{label}", M::ID);
 
         let uniform = uniform_buffer(
@@ -560,6 +619,7 @@ impl PassBuilder<'_> {
                     geom: self.geom,
                     invocations,
                     groups_x: groups.0,
+                    seed,
                 },
                 self.params,
             ),
@@ -581,7 +641,7 @@ impl PassBuilder<'_> {
                 .enumerate()
                 .map(|(i, decl)| wgpu::BindGroupEntry {
                     binding: i as u32,
-                    resource: self.resource::<M>(decl, a_is_current, &uniform),
+                    resource: self.resource::<M>(decl, a_is_current, in_place, &uniform),
                 })
                 .collect();
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -602,6 +662,7 @@ impl PassBuilder<'_> {
             pipeline,
             binds,
             groups,
+            uniform,
         }
     }
 
@@ -613,6 +674,7 @@ impl PassBuilder<'_> {
         &'r self,
         decl: &BindingDecl,
         a_is_current: bool,
+        in_place: bool,
         uniform: &'r wgpu::Buffer,
     ) -> wgpu::BindingResource<'r> {
         if let Some((label, writes)) = buffer_target(decl) {
@@ -621,7 +683,7 @@ impl PassBuilder<'_> {
                 .position(|spec| spec.label == label)
                 .unwrap_or_else(|| panic!("{}: no buffer labelled `{label}`, wanted by `{}`", M::ID, decl.name));
             let (read, write) = self.buffers[k].sides(a_is_current);
-            return if writes { write } else { read }.as_entire_binding();
+            return if writes && !in_place { write } else { read }.as_entire_binding();
         }
         match decl.name {
             "params" => uniform.as_entire_binding(),
@@ -655,6 +717,21 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
     }
 
     /// Resizing or reseeding live is currently unsupported.
+    /// Encodes the action into a submission of its own.
+    ///
+    /// The runner reaches for [`GpuSimState::encode_action`] instead, so it can fold the action
+    /// into the encoder it already snapshots from.
+    fn act(&mut self, index: usize) -> bool {
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("henad_gpu_agent_action"),
+        });
+        if !GpuSimState::encode_action(self, &mut encoder, index) {
+            return false;
+        }
+        self.queue.submit(Some(encoder.finish()));
+        true
+    }
+
     fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
         false
     }
@@ -718,6 +795,31 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
         }
 
         self.tick += u64::from(count);
+    }
+
+    fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
+        let Some(action) = self.actions.get(index) else {
+            return false;
+        };
+        // A fresh seed per press, so pressing twice draws twice. The write is queued before the
+        // encoder is submitted, so the pass reads the new value.
+        self.action_seed = self.action_seed.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+        self.queue.write_buffer(
+            &action.uniform,
+            0,
+            &M::pass_params_bytes(
+                PassId::Action(index),
+                PassCtx {
+                    geom: &self.geom,
+                    invocations: M::ACTIONS[index].pass.domain.invocations(&self.geom),
+                    groups_x: action.groups.0,
+                    seed: self.action_seed,
+                },
+                &self.params,
+            ),
+        );
+        action.encode(encoder, self.current_is_a, None);
+        true
     }
 
     fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {

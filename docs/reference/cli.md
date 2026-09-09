@@ -71,7 +71,7 @@ An action fires when the state reaches that tick, before the step that leaves it
 count towards it.
 It draws from a stream of its own, so pressing one leaves the tick's own draws where they were and
 the run stays reproducible from `--seed`.
-Actions are not supported for a GPU model yet.
+A GPU model runs its action as a compute pass of its own, between two batches of steps.
 
 Pin the worker count, which is how the cross-engine comparison separates its one-thread row from
 its all-cores one. It runs this twice, at `--threads 1` and `--threads 0`:

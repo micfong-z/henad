@@ -73,9 +73,21 @@
 //! - [`Self::buffer_lens`] must return exactly [`Self::BUFFERS.len()`] lengths, and
 //!   [`Self::seed_buffers`] exactly that many vectors, of exactly those lengths.
 
+use crate::action::ActionDescriptor;
 use crate::authoring::model::binding::BindingDecl;
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::view::{StatDescriptor, StatValue};
+
+/// A one-off compute pass the user can trigger.
+///
+/// Dispatched over [`GpuGridModel::step_dims`] like a step, but writing the current side in place,
+/// since nothing ping-pongs afterwards. Its bindings therefore resolve read and write alike to the
+/// side that holds the state now.
+pub struct GpuGridAction {
+    pub desc: ActionDescriptor,
+    pub shader: &'static str,
+    pub bindings: &'static [BindingDecl],
+}
 
 /// A grid model stepped by a compute shader, with its state resident in GPU storage buffers.
 ///
@@ -95,6 +107,9 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// Stat series for the history chart. Its length is how many `u32` counters the reduce shader
     /// accumulates.
     const STATS: &'static [StatDescriptor];
+
+    /// One-off passes the user can trigger. Each gets a button in the Parameters panel.
+    const ACTIONS: &'static [GpuGridAction] = &[];
 
     /// Labels for the buffers ping-ponged per step, which a shader's binding names refer to.
     /// One label for a plain state buffer, two for a model that also carries per-cell RNG state.
@@ -146,6 +161,14 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// their own `#[repr(C)]` struct and hand over `bytemuck::bytes_of(&s).to_vec()`. A model
     /// whose step needs nothing but the dimensions can return the dims themselves.
     fn step_params_bytes(width: u32, height: u32, params: &[ParamValue]) -> Vec<u8>;
+
+    /// An action's uniform block, as raw bytes.
+    ///
+    /// `seed` is fresh on every press, so a shader that draws gets a new stream each time. Defaults
+    /// to the step's block, which is what an action needing nothing but the dimensions wants.
+    fn action_params_bytes(_action: usize, width: u32, height: u32, params: &[ParamValue], _seed: u32) -> Vec<u8> {
+        Self::step_params_bytes(width, height, params)
+    }
 
     /// Turn the counters read back from the reduce shader into values, in [`Self::STATS`] order.
     ///

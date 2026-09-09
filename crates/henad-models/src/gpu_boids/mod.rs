@@ -6,10 +6,11 @@
 use henad_compute::cpu::agent_engine::{
     AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
 };
+use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel as _};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{
-    BufferSpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
+    BufferSpec, Domain, Geometry, GpuAgentAction, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
 use henad_core::authoring::primitives::rng::mix_seed;
 use henad_core::helpers::{extract_f32, extract_u32};
@@ -17,6 +18,7 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::boids::{BoidLanes, BoidsModel, HEADING_PALETTE};
+use crate::shader_bindings::gpu_boids::randomise_headings::Params as ActionParams;
 use crate::shader_bindings::gpu_boids::reduce::Params as ReduceParams;
 use crate::shader_bindings::gpu_boids::step::Params as StepParams;
 
@@ -58,6 +60,16 @@ impl GpuAgentModel for GpuBoids {
         domain: Domain::Agents,
     }];
     // --8<-- [end:passes]
+
+    const ACTIONS: &'static [GpuAgentAction] = &[GpuAgentAction {
+        desc: ActionDescriptor::new("randomise_headings", "Randomise headings"),
+        pass: PassSpec {
+            label: "randomise_headings",
+            shader: crate::shader_bindings::gpu_boids::randomise_headings::SHADER_STRING,
+            bindings: crate::binding_decls::bindings::GPU_BOIDS_RANDOMISE_HEADINGS,
+            domain: Domain::Agents,
+        },
+    }];
 
     /// Speed, x velocity, y velocity.
     const REDUCE: ReduceSpec = ReduceSpec {
@@ -113,6 +125,17 @@ impl GpuAgentModel for GpuBoids {
     }
 
     fn pass_params_bytes(pass: PassId, ctx: PassCtx<'_>, params: &[ParamValue]) -> Vec<u8> {
+        if let PassId::Action(_) = pass {
+            let hot = BoidsModel::from_params(split_params::<BoidsModel>(params).0, Self::dims(params).1);
+            return bytemuck::bytes_of(&ActionParams {
+                num_agents: ctx.geom.num_agents,
+                groups_x: ctx.groups_x,
+                seed: ctx.seed,
+                stationary: 0.5 * (hot.min_speed + hot.max_speed),
+                palette: packed_heading_palette(),
+            })
+            .to_vec();
+        }
         if pass == PassId::Reduce {
             return bytemuck::bytes_of(&ReduceParams {
                 n: ctx.invocations,

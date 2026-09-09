@@ -9,21 +9,23 @@ use henad_compute::cpu::agent_engine::{
     AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
 };
 use henad_compute::cpu::field::scalar::ScalarFieldSpec as _;
+use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel as _};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{
-    BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
+    BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentAction, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
 use henad_core::authoring::primitives::rng::mix_seed;
 use henad_core::helpers::{extract_f32, extract_u32};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
-use crate::ants::field::{CELL_PALETTE, EMPTY, LOW_PHEROMONE, PheromoneField};
+use crate::ants::field::{CELL_PALETTE, EMPTY, LOW_PHEROMONE, PheromoneField, nest_cell};
 use crate::ants::{ANT_PALETTE, AntLanes, AntsModel};
 use crate::shader_bindings::gpu_ants::display::Params as DisplayParams;
 use crate::shader_bindings::gpu_ants::merge::Params as MergeParams;
 use crate::shader_bindings::gpu_ants::reduce::Params as ReduceParams;
+use crate::shader_bindings::gpu_ants::reset_colony::Params as ActionParams;
 use crate::shader_bindings::gpu_ants::step::Params as StepParams;
 
 // The param list is [`agent_model_param_descriptors`] for [`AntsModel`] verbatim, so both backends
@@ -86,6 +88,17 @@ impl GpuAgentModel for GpuAnts {
         bindings: crate::binding_decls::bindings::GPU_ANTS_DISPLAY,
         workgroup: 16,
     });
+
+    const ACTIONS: &'static [GpuAgentAction] = &[GpuAgentAction {
+        desc: ActionDescriptor::new("reset_colony", "Reset colony"),
+        pass: PassSpec {
+            label: "reset_colony",
+            shader: crate::shader_bindings::gpu_ants::reset_colony::SHADER_STRING,
+            bindings: crate::binding_decls::bindings::GPU_ANTS_RESET_COLONY,
+            // Covers the ants and both field layers, so neither half is left short.
+            domain: Domain::AgentsOrCells,
+        },
+    }];
 
     /// Carrying food, total pheromone. Deliveries is an accumulating counter, not a reduction.
     const REDUCE: ReduceSpec = ReduceSpec {
@@ -196,6 +209,16 @@ impl GpuAgentModel for GpuAnts {
                 palette: packed_cell_palette(),
             })
             .to_vec(),
+            PassId::Action(_) => bytemuck::bytes_of(&ActionParams {
+                n: ctx.invocations,
+                groups_x: ctx.groups_x,
+                num_agents: geom.num_agents,
+                n_cells: geom.n_cells,
+                nest: nest_position(geom.width, geom.height).into(),
+                color: packed_ant_palette()[0],
+                _pad: 0,
+            })
+            .to_vec(),
             PassId::Reduce => bytemuck::bytes_of(&ReduceParams {
                 n: ctx.invocations,
                 lanes: Self::REDUCE.lanes as u32,
@@ -242,6 +265,12 @@ fn seed_rng_states(n: usize, seed: u64) -> Vec<u32> {
 }
 
 /// Packed for the step uniform, from the one palette in `ants` so colours cannot drift.
+/// Where `AntsModel::init` puts every ant, in world coordinates.
+fn nest_position(width: u32, height: u32) -> (f32, f32) {
+    let nest = nest_cell(width, height) as u32;
+    ((nest % width) as f32, (nest / width) as f32)
+}
+
 fn packed_ant_palette() -> [u32; 2] {
     [u32::from_le_bytes(ANT_PALETTE[0]), u32::from_le_bytes(ANT_PALETTE[1])]
 }

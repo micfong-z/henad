@@ -57,6 +57,16 @@ impl Schedule {
         self.entries.iter().map(|a| a.tick).max()
     }
 
+    /// Actions due exactly at `tick`, in the order given.
+    pub fn due(&self, tick: u64) -> impl Iterator<Item = &Scheduled> {
+        self.entries.iter().filter(move |a| a.tick == tick)
+    }
+
+    /// The next tick at or after `from` that anything is due at.
+    pub fn next_due(&self, from: u64) -> Option<u64> {
+        self.entries.iter().map(|a| a.tick).filter(|&t| t >= from).min()
+    }
+
     /// Runs whatever is due at the state's current tick.
     ///
     /// Called before each step and once at the end, so a tick the run stops on still fires.
@@ -66,7 +76,7 @@ impl Schedule {
             return;
         }
         let tick = state.tick();
-        for action in self.entries.iter().filter(|a| a.tick == tick) {
+        for action in self.due(tick) {
             if !state.act(action.index) {
                 eprintln!("note: model refused action '{}' at tick {tick}", action.id);
             }

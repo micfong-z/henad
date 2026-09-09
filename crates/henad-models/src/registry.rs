@@ -149,7 +149,7 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
         description: model.description().to_owned(),
         param_descriptors: model.param_descriptors(),
         stat_descriptors: model.stat_descriptors(),
-        action_descriptors: Vec::new(),
+        action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
         topology_hint: model.topology_hint(),
         metadata: ModelMetadata {
             backend: Backend::Gpu,
@@ -182,7 +182,7 @@ fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
         description: model.description().to_owned(),
         param_descriptors: model.param_descriptors(),
         stat_descriptors: model.stat_descriptors(),
-        action_descriptors: Vec::new(),
+        action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
         topology_hint: model.topology_hint(),
         metadata: ModelMetadata {
             backend: Backend::Gpu,

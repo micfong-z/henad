@@ -183,6 +183,8 @@ impl GpuAgentModel for GpuForagingModel {
                 palette: packed_cell_palette(),
             })
             .to_vec(),
+            // The guide's model declares no actions, so the engine never asks for one.
+            PassId::Action(_) => Vec::new(),
             PassId::Reduce => bytemuck::bytes_of(&ReduceParams {
                 n: ctx.invocations,
                 lanes: Self::REDUCE.lanes as u32,
