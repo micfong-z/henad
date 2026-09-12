@@ -1,4 +1,5 @@
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::authoring::primitives::rng::{below, next_bits};
 use henad_core::grid::Grid2D;
@@ -12,6 +13,11 @@ const ALIVE: u8 = 1;
 
 henad_core::params! {
     const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)).on_reload();
+}
+
+henad_core::actions! {
+    const RANDOMISE = ActionDescriptor::new("randomise", "Randomise");
+    const CLEAR = ActionDescriptor::new("clear", "Clear");
 }
 
 /// Cell colours, shared with the GPU Game of Life's stat colour.
@@ -32,6 +38,7 @@ impl GridModel for GameOfLifeModel {
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
     const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
     const STATS: &'static [StatDescriptor] = &[StatDescriptor::new("Alive", PALETTE[1])];
+    const ACTIONS: &'static [ActionDescriptor] = ACTION_SPECS;
     type Params = ();
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
@@ -57,6 +64,15 @@ impl GridModel for GameOfLifeModel {
         }
     }
     // --8<-- [end:step_cell]
+
+    /// Randomise is `init` again, at whatever density the slider now reads.
+    fn act(action: usize, grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
+        match action {
+            RANDOMISE => Self::init(grid, params, rng),
+            CLEAR => grid.current_mut().fill(DEAD),
+            _ => {}
+        }
+    }
 
     fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
         vec![StatValue::Scalar(count_alive(grid.current()) as f64)]

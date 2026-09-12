@@ -7,6 +7,8 @@
 pub mod agent_engine;
 pub mod field;
 pub mod grid_engine;
+pub mod layout;
+pub mod network_engine;
 pub mod primitives;
 pub mod sim_thread;
 

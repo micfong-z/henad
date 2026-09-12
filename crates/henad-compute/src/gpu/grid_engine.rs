@@ -37,6 +37,21 @@ struct BufferPair {
     b: wgpu::Buffer,
 }
 
+/// A built [`GpuGridAction`], with the uniform kept so a press can reseed it.
+struct ActionPass {
+    label: String,
+    pipeline: wgpu::ComputePipeline,
+    bind_a: wgpu::BindGroup,
+    bind_b: wgpu::BindGroup,
+    uniform: wgpu::Buffer,
+}
+
+impl ActionPass {
+    fn bind(&self, a_is_current: bool) -> &wgpu::BindGroup {
+        if a_is_current { &self.bind_a } else { &self.bind_b }
+    }
+}
+
 /// The `Model` half for a [`GpuGridModel`]: metadata plus a state factory.
 ///
 /// Holds a cloned [`GpuContext`], which is how the registry hands a device down to a model without
@@ -119,6 +134,13 @@ pub struct GpuGridState<M: GpuGridModel> {
     reduce_bind_b: wgpu::BindGroup,
     readback: CounterReadback,
 
+    actions: Vec<ActionPass>,
+    /// Advanced per press, so pressing twice draws twice.
+    action_seed: u32,
+    /// Kept for the action uniforms, which are rewritten per press. Never edited, since a GPU grid
+    /// model declares every parameter reload-only.
+    params: Vec<ParamValue>,
+
     /// `true` when the `a` side of every buffer holds the current (latest) state.
     current_is_a: bool,
 
@@ -150,11 +172,18 @@ impl<M: GpuGridModel> GpuGridState<M> {
     /// [`Self::max_storage_bindings`], so the device a host asks for and the shortfall the UI
     /// reports cannot disagree.
     fn declared_passes() -> Vec<(String, u32)> {
-        vec![
+        let mut passes = vec![
             (format!("{}_step", M::ID), storage_bindings(M::STEP_BINDINGS)),
             (format!("{}_display", M::ID), storage_bindings(M::DISPLAY_BINDINGS)),
             (format!("{}_reduce", M::ID), storage_bindings(M::REDUCE_BINDINGS)),
-        ]
+        ];
+        for action in M::ACTIONS {
+            passes.push((
+                format!("{}_action_{}", M::ID, action.desc.id),
+                storage_bindings(action.bindings),
+            ));
+        }
+        passes
     }
 
     /// Independent of params, so a host can ask before it has a device.
@@ -278,7 +307,26 @@ impl<M: GpuGridModel> GpuGridState<M> {
         // --- Pipelines ---
         // Every layout entry and every bind group entry comes from the name its shader gives the
         // binding, so a slot index cannot disagree with the shader that owns it.
-        let resolve = |decl: &BindingDecl, a_is_current: bool| -> wgpu::BindingResource<'_> {
+        // Built before the pipelines, so the resolver below can hand one out by index. Each is
+        // rewritten with a fresh seed on every press.
+        // Truncated from the same stream the CPU engines use, since the WGSL generator is 32 bit.
+        let action_seed = henad_core::action::action_seed(seed) as u32;
+        let action_uniforms: Vec<wgpu::Buffer> = M::ACTIONS
+            .iter()
+            .enumerate()
+            .map(|(i, action)| {
+                uniform_buffer(
+                    device,
+                    queue,
+                    &format!("{}_action_{}_params", M::ID, action.desc.id),
+                    &M::action_params_bytes(i, width, height, params, action_seed),
+                )
+            })
+            .collect();
+
+        // An action writes the side that already holds the state. Nothing swaps after one, so
+        // writing the far side would throw the work away.
+        let resolve = |decl: &BindingDecl, a_is_current: bool, action: Option<usize>| -> wgpu::BindingResource<'_> {
             if let Some((label, writes)) = buffer_target(decl) {
                 let k = M::BUFFERS
                     .iter()
@@ -290,10 +338,13 @@ impl<M: GpuGridModel> GpuGridState<M> {
                 } else {
                     (&pair.b, &pair.a)
                 };
-                return if writes { write } else { read }.as_entire_binding();
+                return if writes && action.is_none() { write } else { read }.as_entire_binding();
             }
             match decl.name {
-                "params" => step_params_buffer.as_entire_binding(),
+                "params" => match action {
+                    Some(i) => action_uniforms[i].as_entire_binding(),
+                    None => step_params_buffer.as_entire_binding(),
+                },
                 "dims" => dims_buffer.as_entire_binding(),
                 "counters" => readback.binding(),
                 "output" => wgpu::BindingResource::TextureView(&display_view),
@@ -301,7 +352,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
             }
         };
 
-        let build = |label: &str, shader: &str, decls: &[BindingDecl]| {
+        let build = |label: &str, shader: &str, decls: &[BindingDecl], action: Option<usize>| {
             let entries: Vec<wgpu::BindGroupLayoutEntry> = decls
                 .iter()
                 .enumerate()
@@ -317,7 +368,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
                     .enumerate()
                     .map(|(i, decl)| wgpu::BindGroupEntry {
                         binding: i as u32,
-                        resource: resolve(decl, a_is_current),
+                        resource: resolve(decl, a_is_current, action),
                     })
                     .collect();
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -331,10 +382,27 @@ impl<M: GpuGridModel> GpuGridState<M> {
             (pipeline, binds)
         };
 
-        let (step_pipeline, (bind_a2b, bind_b2a)) = build("step", M::STEP_SHADER, M::STEP_BINDINGS);
+        let (step_pipeline, (bind_a2b, bind_b2a)) = build("step", M::STEP_SHADER, M::STEP_BINDINGS, None);
         let (display_pipeline, (display_bind_a, display_bind_b)) =
-            build("display", M::DISPLAY_SHADER, M::DISPLAY_BINDINGS);
-        let (reduce_pipeline, (reduce_bind_a, reduce_bind_b)) = build("reduce", M::REDUCE_SHADER, M::REDUCE_BINDINGS);
+            build("display", M::DISPLAY_SHADER, M::DISPLAY_BINDINGS, None);
+        let (reduce_pipeline, (reduce_bind_a, reduce_bind_b)) =
+            build("reduce", M::REDUCE_SHADER, M::REDUCE_BINDINGS, None);
+
+        let actions: Vec<ActionPass> = M::ACTIONS
+            .iter()
+            .enumerate()
+            .map(|(i, action)| {
+                let label = format!("action_{}", action.desc.id);
+                let (pipeline, (bind_a, bind_b)) = build(&label, action.shader, action.bindings, Some(i));
+                ActionPass {
+                    label: format!("{}_{label}", M::ID),
+                    pipeline,
+                    bind_a,
+                    bind_b,
+                    uniform: action_uniforms[i].clone(),
+                }
+            })
+            .collect();
 
         Self {
             width,
@@ -354,6 +422,9 @@ impl<M: GpuGridModel> GpuGridState<M> {
             reduce_bind_a,
             reduce_bind_b,
             readback,
+            actions,
+            action_seed,
+            params: params.to_vec(),
             current_is_a: true,
             _marker: PhantomData,
         }
@@ -414,6 +485,21 @@ impl<M: GpuGridModel> SimState for GpuGridState<M> {
 
     fn stats(&self) -> Vec<StatEntry> {
         stat_entries(M::STATS, M::stats(self.readback.values()))
+    }
+
+    /// Encodes the action into a submission of its own.
+    ///
+    /// The runner reaches for [`GpuSimState::encode_action`] instead, so it can fold the action
+    /// into the encoder it already snapshots from.
+    fn act(&mut self, index: usize) -> bool {
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("henad_gpu_grid_action"),
+        });
+        if !GpuSimState::encode_action(self, &mut encoder, index) {
+            return false;
+        }
+        self.queue.submit(Some(encoder.finish()));
+        true
     }
 
     /// Resizing or reseeding live is currently unsupported.
@@ -480,6 +566,30 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
             self.current_is_a = !self.current_is_a;
         }
         self.tick += u64::from(count);
+    }
+
+    fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
+        let Some(action) = self.actions.get(index) else {
+            return false;
+        };
+        // A fresh seed per press, so pressing twice draws twice. The write is queued before the
+        // encoder is submitted, so the pass reads the new value.
+        self.action_seed = self.action_seed.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+        self.queue.write_buffer(
+            &action.uniform,
+            0,
+            &M::action_params_bytes(index, self.width, self.height, &self.params, self.action_seed),
+        );
+
+        let (groups_x, groups_y) = self.step_workgroups();
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(&action.label),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&action.pipeline);
+        pass.set_bind_group(0, action.bind(self.current_is_a), &[]);
+        pass.dispatch_workgroups(groups_x, groups_y, 1);
+        true
     }
 
     fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {

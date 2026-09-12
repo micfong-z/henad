@@ -8,11 +8,14 @@ use crate::gpu::view::display::GpuDisplay;
 /// Owned data snapshot produced by the sim thread for the UI to consume.
 pub struct Snapshot {
     pub tick: u64,
+    pub serial: u64,
     pub population: u64,
     pub heap_bytes: usize,
     pub actual_tps: f64,
     /// Smoothed engine time per tick in milliseconds.
     pub engine_ms: f64,
+    /// Cost of `prepare_view` in milliseconds.
+    pub view_ms: f64,
     pub view: SnapshotView,
     /// Current stat values (one per stat series).
     pub stats: Vec<StatEntry>,
@@ -31,6 +34,7 @@ pub enum SnapshotView {
 pub struct CpuLayers {
     pub grid: Option<GridSnapshot>,
     pub points: Option<PointSnapshot>,
+    pub edges: Option<Box<EdgeSnapshot>>,
 }
 
 impl CpuLayers {
@@ -66,6 +70,19 @@ pub struct GridSnapshot {
     pub height: u32,
     pub cells: Vec<u8>,
     pub palette: &'static [[u8; 4]],
+}
+
+/// Owned edge list, cloned from the sim state.
+#[derive(Default)]
+pub struct EdgeSnapshot {
+    /// Graph version the list was copied at.
+    pub version: u64,
+    pub src: Vec<u32>,
+    pub dst: Vec<u32>,
+    /// One palette index per edge, or empty for a uniform colour.
+    pub color: Vec<u8>,
+    pub palette: &'static [[u8; 4]],
+    pub directed: bool,
 }
 
 /// Owned point cloud data, cloned from the sim state.

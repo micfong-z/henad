@@ -288,6 +288,7 @@ fn the_gpu_foraging_tutorial_seeds_the_same_buffers() {
         geom: &geom,
         invocations: geom.n_cells * 2,
         groups_x: 7,
+        seed: 0,
     };
     for pass in [PassId::Step(0), PassId::Step(1), PassId::Display, PassId::Reduce] {
         assert_eq!(

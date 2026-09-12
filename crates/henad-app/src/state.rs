@@ -68,6 +68,8 @@ pub struct AppState {
     pub uncapped: bool,
     pub ticks_per_snapshot: u32,
     pub stats_history: Option<StatsHistory>,
+    /// Tick of the last row added to the chart and recording.
+    pub last_series_tick: Option<u64>,
     /// `None` retains every sample, so a whole run can be exported.
     pub history_capacity: Option<usize>,
     /// Where the History length slider sits, kept while Unlimited is ticked so unticking restores it.
@@ -143,6 +145,7 @@ impl AppState {
             uncapped: false,
             ticks_per_snapshot: 1,
             stats_history: None,
+            last_series_tick: None,
             history_capacity: Some(DEFAULT_HISTORY_LEN),
             history_len: DEFAULT_HISTORY_LEN,
             runtime,
@@ -204,6 +207,7 @@ impl AppState {
         }
 
         self.stats_history = Some(stats_history);
+        self.last_series_tick = None;
         self.sim_running = false;
         self.loaded_model = Some(self.selected_model);
         self.pending_reload = vec![false; self.param_values.len()];
@@ -263,6 +267,7 @@ impl AppState {
         self.density_texture = None;
         self.last_rendered_tick = None;
         self.stats_history = None;
+        self.last_series_tick = None;
         self.loaded_model = None;
         if let Some(layer) = &mut self.agent_layer {
             layer.clear();

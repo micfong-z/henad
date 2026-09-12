@@ -70,6 +70,11 @@ impl<S: ScalarFieldSpec> ScalarField<S> {
         &self.fields[i]
     }
 
+    /// Write access, for an action that rewrites a field.
+    pub fn field_mut(&mut self, i: usize) -> &mut Grid2D<f32> {
+        &mut self.fields[i]
+    }
+
     pub fn sites(&self) -> &[u8] {
         &self.sites
     }

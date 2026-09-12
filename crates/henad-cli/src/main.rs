@@ -16,6 +16,7 @@
 //! henad-cli game_of_life --steps 10000 --reps 5
 //! henad-cli sir --set grid_width=512 --steps 2000 --export final.txt
 //! henad-cli sir --steps 2000 --export-stats sir.csv --stats-every 10
+//! henad-cli game_of_life --steps 1000 --act clear@500 --export final.txt
 //! henad-cli gpu_game_of_life --set grid_width=4096 --set grid_height=4096 --steps 10000
 //! ```
 //!
@@ -44,8 +45,11 @@ use henad_core::export::{StatsWriter, state as state_export};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
+
+use crate::actions::Schedule;
 use numfmt::{Formatter, Scales};
 
+mod actions;
 mod json_report;
 
 /// Headless benchmark runner for Henad models.
@@ -80,6 +84,11 @@ struct Args {
     /// Override a model parameter, e.g. `--set grid_size=512`. Repeatable.
     #[arg(long = "set", value_name = "ID=VALUE")]
     set: Vec<String>,
+
+    /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable, and ids come
+    /// from `--params`. Each rep replays the same schedule.
+    #[arg(long = "act", value_name = "ID@TICK")]
+    act: Vec<String>,
 
     /// Write the final state (after warmup + steps) to this path, then exit.
     #[arg(long, value_name = "PATH")]
@@ -185,6 +194,15 @@ fn main() -> Result<()> {
 
     let overrides = parse_overrides(&args.set)?;
     let params = resolve_params(&entry.param_descriptors, &overrides)?;
+    let schedule = Schedule::parse(&args.act, entry)?;
+    if let Some(last) = schedule.last_tick()
+        && last > args.warmup + args.steps
+    {
+        eprintln!(
+            "note: --act at tick {last} is past the {} this run reaches, so it never fires",
+            args.warmup + args.steps
+        );
+    }
 
     // Ahead of the factory. An over-sized run is then refused by name instead of by whichever
     // binding the device happened to reject first.
@@ -196,15 +214,15 @@ fn main() -> Result<()> {
     }
 
     if let Some(path) = &args.export_stats {
-        return export_stats(entry, &params, &args, path, gpu_ctx.as_ref());
+        return export_stats(entry, &params, &args, &schedule, path, gpu_ctx.as_ref());
     }
 
     if let Some(path) = &args.export {
-        return export_final(entry, &params, &args, path);
+        return export_final(entry, &params, &args, &schedule, path);
     }
 
     let adapter = runtime.as_ref().map(|r| r.adapter.name.clone());
-    run_benchmark(entry, &params, &args, gpu_ctx.as_ref(), adapter.as_deref())
+    run_benchmark(entry, &params, &args, &schedule, gpu_ctx.as_ref(), adapter.as_deref())
 }
 
 /// Benchmark provenance. Goes to stdout with the results, not the progress log.
@@ -301,6 +319,7 @@ fn run_benchmark(
     entry: &ModelEntry,
     params: &[ParamValue],
     args: &Args,
+    schedule: &Schedule,
     gpu_ctx: Option<&GpuContext>,
     adapter: Option<&str>,
 ) -> Result<()> {
@@ -313,12 +332,12 @@ fn run_benchmark(
         if args.json {
             json_report::info(&entry.id, "gpu", rayon::current_num_threads(), jobs, adapter);
         }
-        bench_gpu(entry, params, args, ctx)
+        bench_gpu(entry, params, args, schedule, ctx)
     } else {
         if args.json {
             json_report::info(&entry.id, "cpu", rayon::current_num_threads(), jobs, None);
         }
-        bench_cpu(entry, params, args)
+        bench_cpu(entry, params, args, schedule)
     }
 }
 
@@ -332,7 +351,7 @@ fn rep_seed(base: Option<u64>, rep: u64) -> Option<u64> {
 /// CPU benchmark: for each rep, build a fresh state, warm it up untimed, then time `steps` steps.
 /// Timing wraps *only* the step loop, so state construction and warmup allocation stay out of the
 /// measured window.
-fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<()> {
+fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, schedule: &Schedule) -> Result<()> {
     eprintln!(
         "benchmarking {} ({}): {} steps x {} reps, {} warmup, {} global-warmup",
         entry.name, entry.id, args.steps, args.reps, args.warmup, args.global_warmup
@@ -370,6 +389,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         // finishes. One inject per rep replaces one per pass per step.
         rayon::scope(|_| {
             for _ in 0..args.warmup {
+                schedule.run_due(&mut *state);
                 state.step();
             }
         });
@@ -383,10 +403,13 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         let start = Instant::now();
         rayon::scope(|_| {
             for _ in 0..args.steps {
+                schedule.run_due(&mut *state);
                 state.step();
             }
         });
         let elapsed = start.elapsed();
+        // Outside the timer, so an action on the last tick still lands without being measured.
+        schedule.run_due(&mut *state);
         eprintln!("{elapsed:>8.3?}");
         samples.push(elapsed);
         if args.json {
@@ -410,6 +433,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
             grid_dims,
             &entry.param_descriptors,
             params,
+            schedule,
         );
     } else {
         report(&samples, args.steps, population, grid_dims)?;
@@ -484,7 +508,13 @@ fn report(samples: &[Duration], steps_per_rep: u64, population: u64, grid_dims: 
 /// GPU benchmark. GPU state never leaves the device, and `SimState::step()` submits one tiny
 /// command buffer per step without ever waiting. Each rep instead batches `steps` into GPU
 /// submissions and blocks on completion. See [`run_gpu_steps`].
-fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuContext) -> Result<()> {
+fn bench_gpu(
+    entry: &ModelEntry,
+    params: &[ParamValue],
+    args: &Args,
+    schedule: &Schedule,
+    ctx: &GpuContext,
+) -> Result<()> {
     eprintln!(
         "benchmarking {} ({}) [GPU]: {} steps x {} reps, {} warmup, {} global-warmup",
         entry.name, entry.id, args.steps, args.reps, args.warmup, args.global_warmup
@@ -512,12 +542,12 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
         let seed = rep_seed(args.seed, rep);
         let mut state = new_gpu_state(entry, params, seed)?;
         // Per-rep sim warm-up (untimed), matching the CPU path.
-        run_gpu_steps(&mut *state, ctx, args.warmup)?;
+        run_gpu_steps_acting(&mut *state, ctx, args.warmup, schedule)?;
         population = state.population();
 
         eprint!("  #{: >4}: ", rep + 1);
         let start = Instant::now();
-        run_gpu_steps(&mut *state, ctx, args.steps)?;
+        run_gpu_steps_acting(&mut *state, ctx, args.steps, schedule)?;
         let elapsed = start.elapsed();
         eprintln!("{elapsed:>8.3?}");
         samples.push(elapsed);
@@ -537,6 +567,7 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
             grid_dims,
             &entry.param_descriptors,
             params,
+            schedule,
         );
     } else {
         report(&samples, args.steps, population, grid_dims)?;
@@ -580,6 +611,37 @@ fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
 
     if let Some(fault) = ctx.faults.take() {
         return Err(fault.into());
+    }
+    Ok(())
+}
+
+/// As [`run_gpu_steps`], stopping at each tick the schedule names to encode its actions.
+///
+/// An action goes in a submission of its own, between two batches of steps, since a uniform
+/// written mid-encoder would not be visible until the whole encoder submitted.
+fn run_gpu_steps_acting(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64, schedule: &Schedule) -> Result<()> {
+    if schedule.is_empty() {
+        return run_gpu_steps(state, ctx, count);
+    }
+
+    let end = state.tick() + count;
+    loop {
+        for action in schedule.due(state.tick()) {
+            let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("cli_gpu_action"),
+            });
+            if state.encode_action(&mut encoder, action.index) {
+                ctx.queue.submit(Some(encoder.finish()));
+            } else {
+                eprintln!("note: model refused action '{}' at tick {}", action.id, state.tick());
+            }
+        }
+        if state.tick() >= end {
+            break;
+        }
+        let tick = state.tick();
+        let next = schedule.next_due(tick + 1).unwrap_or(end).min(end);
+        run_gpu_steps(state, ctx, next - tick)?;
     }
     Ok(())
 }
@@ -633,11 +695,19 @@ fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
 }
 
 /// Run once (warmup + steps) and write the final state to `path`.
-fn export_final(entry: &ModelEntry, params: &[ParamValue], args: &Args, path: &Path) -> Result<()> {
+fn export_final(
+    entry: &ModelEntry,
+    params: &[ParamValue],
+    args: &Args,
+    schedule: &Schedule,
+    path: &Path,
+) -> Result<()> {
     let mut state = new_cpu_state(entry, params, args.seed)?;
     for _ in 0..(args.warmup + args.steps) {
+        schedule.run_due(&mut *state);
         state.step();
     }
+    schedule.run_due(&mut *state);
     write_state(&mut *state, path)?;
     eprintln!("exported final state (tick {}) to {}", state.tick(), path.display());
     Ok(())
@@ -653,6 +723,7 @@ fn export_stats(
     entry: &ModelEntry,
     params: &[ParamValue],
     args: &Args,
+    schedule: &Schedule,
     path: &Path,
     gpu_ctx: Option<&GpuContext>,
 ) -> Result<()> {
@@ -673,10 +744,10 @@ fn export_stats(
     );
 
     let rows = match (entry.create)(params, args.seed)? {
-        ModelState::Cpu(state) => stats_cpu(state, args, total, writer)?,
+        ModelState::Cpu(state) => stats_cpu(state, args, schedule, total, writer)?,
         ModelState::Gpu(state) => {
             let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
-            stats_gpu(state, ctx, args, total, writer)?
+            stats_gpu(state, ctx, args, schedule, total, writer)?
         }
     };
 
@@ -689,12 +760,15 @@ fn export_stats(
 fn stats_cpu(
     mut state: Box<dyn SimState>,
     args: &Args,
+    schedule: &Schedule,
     total: u64,
     mut writer: StatsWriter<BufWriter<File>>,
 ) -> Result<u64> {
+    schedule.run_due(&mut *state);
     writer.push(state.tick(), &state.stats())?;
     for i in 0..total {
         state.step();
+        schedule.run_due(&mut *state);
         if (i + 1).is_multiple_of(args.stats_every) {
             writer.push(state.tick(), &state.stats())?;
         }
@@ -715,6 +789,7 @@ fn stats_gpu(
     mut state: Box<dyn GpuSimState>,
     ctx: &GpuContext,
     args: &Args,
+    schedule: &Schedule,
     total: u64,
     mut writer: StatsWriter<BufWriter<File>>,
 ) -> Result<u64> {
@@ -734,7 +809,7 @@ fn stats_gpu(
     let mut done = 0;
     while done < total {
         let chunk = args.stats_every.min(total - done);
-        run_gpu_steps(&mut *state, ctx, chunk)?;
+        run_gpu_steps_acting(&mut *state, ctx, chunk, schedule)?;
         done += chunk;
         sample(&mut *state, &mut writer)?;
     }

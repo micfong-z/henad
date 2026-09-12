@@ -40,6 +40,7 @@
 //! - [`GpuAgentModel::STATS`] length must equal the number of values
 //!   [`GpuAgentModel::stats`] returns.
 
+use crate::action::ActionDescriptor;
 use crate::authoring::model::binding::BindingDecl;
 use crate::authoring::model::field::Extent;
 use crate::params::{ParamDescriptor, ParamValue};
@@ -154,12 +155,23 @@ pub struct ReduceSpec {
     pub domain: Domain,
 }
 
+/// A one-off pass the user can trigger.
+///
+/// Dispatched once over its own domain, writing the model's buffers in place, since nothing
+/// ping-pongs afterwards. Its bindings therefore resolve read and write alike to the side that
+/// holds the state now.
+pub struct GpuAgentAction {
+    pub desc: ActionDescriptor,
+    pub pass: PassSpec,
+}
+
 /// The uniform block [`GpuAgentModel::pass_params_bytes`] is being asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PassId {
     Step(usize),
     Display,
     Reduce,
+    Action(usize),
 }
 
 /// The world these params describe, resolved once at construction.
@@ -184,6 +196,8 @@ pub struct PassCtx<'a> {
     pub geom: &'a Geometry,
     pub invocations: u32,
     pub groups_x: u32,
+    /// Fresh on every press of an action, and zero for every other pass.
+    pub seed: u32,
 }
 
 /// A population of agents stepped by compute shaders, with its state resident in GPU buffers.
@@ -212,6 +226,9 @@ pub trait GpuAgentModel: Send + Sync + 'static {
 
     const STEP_PASSES: &'static [PassSpec];
     const DISPLAY: Option<DisplaySpec> = None;
+
+    /// One-off passes the user can trigger. Each gets a button in the Parameters panel.
+    const ACTIONS: &'static [GpuAgentAction] = &[];
 
     const REDUCE: ReduceSpec;
 

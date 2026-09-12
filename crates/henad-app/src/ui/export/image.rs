@@ -36,6 +36,7 @@ pub fn capture_dims(app: &AppState, device_max: u32) -> Option<(u32, u32)> {
             CpuLayers {
                 grid: Some(grid),
                 points,
+                ..
             } => ((grid.width, grid.height), points.is_some()),
             CpuLayers {
                 points: Some(points), ..

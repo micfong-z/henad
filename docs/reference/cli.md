@@ -25,6 +25,7 @@ henad-cli [OPTIONS] [MODEL]
 | `--json` | | Emit one JSON object per line instead of the human report, for a driver to parse |
 | `--threads <N>` | 0 | Worker threads for CPU models. 0 leaves rayon's own choice, one per logical cpu |
 | `--set <ID=VALUE>` | | Override one parameter. Repeatable |
+| `--act <ID@TICK>` | | Run one of the model's actions at that tick. Repeatable |
 | `--steps <N>` | 1000 | Steps to run and time per rep |
 | `--reps <N>` | 1 | Independent timed runs, each on a freshly created state |
 | `--warmup <N>` | 0 | Untimed steps before each rep, on that rep's own state, to reach a steady sim regime |
@@ -58,6 +59,19 @@ Record the per-tick stat series instead of a timing:
 ```bash
 cargo run --release -p henad-cli -- sir --steps 2000 --stats-every 10 --export-stats sir.csv
 ```
+
+Run a model's action part way through, the replayable form of the buttons the app draws.
+Ids come from `--params`, and each rep replays the same schedule:
+
+```bash
+cargo run --release -p henad-cli -- game_of_life --steps 1000 --act clear@500 --export final.txt
+```
+
+An action fires when the state reaches that tick, before the step that leaves it, and warm-up ticks
+count towards it.
+It draws from a stream of its own, so pressing one leaves the tick's own draws where they were and
+the run stays reproducible from `--seed`.
+A GPU model runs its action as a compute pass of its own, between two batches of steps.
 
 Pin the worker count, which is how the cross-engine comparison separates its one-thread row from
 its all-cores one. It runs this twice, at `--threads 1` and `--threads 0`:

@@ -1,3 +1,4 @@
+use henad_core::action::action_seed;
 use henad_core::authoring::model::field::{Extent, FieldLayer as _};
 use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::helpers::{extract_u32, u32_param};
@@ -13,6 +14,8 @@ pub use crate::cpu::field::GRID_INIT_SEED;
 pub struct GridModelState<M: GridModel> {
     field: CaField<M>,
     params: ParamStore,
+    /// The action stream, apart from the one the ticks draw from.
+    action_seed: u64,
     tick: u64,
 }
 
@@ -30,6 +33,7 @@ impl<M: GridModel> GridModelState<M> {
         Self {
             field: CaField::with_seed(extent, own_params(params), seed),
             params: ParamStore::new(&grid_model_param_descriptors::<M>(), params),
+            action_seed: action_seed(seed),
             tick: 0,
         }
     }
@@ -43,6 +47,7 @@ impl<M: GridModel> GridModelState<M> {
         Some(Self {
             field: CaField::from_cells(extent, cells)?,
             params: ParamStore::new(&grid_model_param_descriptors::<M>(), params),
+            action_seed: action_seed(None),
             tick: 0,
         })
     }
@@ -91,6 +96,21 @@ impl<M: GridModel> SimState for GridModelState<M> {
 
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
         self.params.set(index, value)
+    }
+
+    fn act(&mut self, index: usize) -> bool {
+        if index >= M::ACTIONS.len() {
+            return false;
+        }
+        // Destructured, so the params borrow and the grid borrow are of different fields.
+        let Self {
+            field,
+            params,
+            action_seed,
+            ..
+        } = self;
+        M::act(index, field.grid_mut(), own_params(params.values()), action_seed);
+        true
     }
 
     fn population(&self) -> u64 {

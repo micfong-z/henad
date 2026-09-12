@@ -4,6 +4,7 @@ use crate::icons::material_design_icons::{MDI_ALERT, MDI_INFORMATION, MDI_RESTAR
 use crate::state::AppState;
 use crate::ui::banner;
 use henad_compute::cpu::sim_thread::SimCommand;
+use henad_core::action::ActionDescriptor;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 
 pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
@@ -15,6 +16,7 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     if descriptors.is_empty() {
         ui.label("This model has no parameters.");
+        actions_ui(ui, app);
         return;
     }
 
@@ -107,7 +109,49 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     }
 
+    actions_ui(ui, app);
     notice(ui, app, &descriptors, panel_width);
+}
+
+/// A button per action the model declares, under the parameter widgets.
+///
+/// Sent to the running sim rather than remembered, since an action changes state that only exists
+/// once the model is built.
+fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
+    let actions: Vec<ActionDescriptor> = app
+        .registry
+        .get(app.selected_model)
+        .map(|entry| entry.action_descriptors.clone())
+        .unwrap_or_default();
+    if actions.is_empty() {
+        return;
+    }
+
+    let loaded = app.selection_is_loaded();
+    let mut pressed = None;
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        for (i, action) in actions.iter().enumerate() {
+            if ui
+                .add_enabled(loaded, egui::Button::new(action.label))
+                .on_disabled_hover_text(format!(
+                    "Press {MDI_RESTART}\u{a0}Build to run this model, then {}",
+                    action.label.to_lowercase()
+                ))
+                .clicked()
+            {
+                pressed = Some(i);
+            }
+        }
+    });
+
+    if let Some(index) = pressed
+        && let Some(thread) = &mut app.sim_thread
+    {
+        thread.send(SimCommand::Act(index));
+    }
 }
 
 /// True when `index` has been edited to a value the running sim will not pick up on its own.

@@ -46,6 +46,13 @@ pub trait GpuSimState: SimState {
     /// into query indices 0 and 1, so the caller can measure GPU time over `count` steps.
     fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>);
 
+    /// Record the model's declared action at `index`. False when it declares no such one.
+    ///
+    /// Nothing is recorded when it returns false, so the caller drops the encoder unsubmitted.
+    fn encode_action(&mut self, _encoder: &mut wgpu::CommandEncoder, _index: usize) -> bool {
+        false
+    }
+
     /// Record the display pass (state -> display texture) and the stats-reduction pass
     /// (state -> a handful of numbers), at the snapshot cadence rather than every step.
     fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder);
@@ -201,6 +208,8 @@ struct Loop {
     tps_timer: Instant,
     last_snapshot_publish: Instant,
     last_stats_publish: Instant,
+    /// Number of snapshots published.
+    serial: u64,
     /// `None` where the device granted no `TIMESTAMP_QUERY`, which is every browser.
     timestamp_query: Option<TimestampQuery>,
 }
@@ -241,8 +250,21 @@ impl SimLoop for Loop {
             // than a tick count. Accepted (rather than an error) so `HenadApp` can send the same
             // `SimCommand` stream to either backend without special-casing.
             Command::Sim(
-                SimCommand::SetTargetTps(_) | SimCommand::SetUncapped(_) | SimCommand::SetTicksPerSnapshot(_),
+                SimCommand::SetTargetTps(_)
+                | SimCommand::SetUncapped(_)
+                | SimCommand::SetTicksPerSnapshot(_)
+                // No GPU model has a layout.
+                | SimCommand::SetLayout { .. },
             ) => {}
+            Command::Sim(SimCommand::Act(index)) => {
+                let mut encoder = self.encoder("henad_gpu_action");
+                if self.state.encode_action(&mut encoder, index) {
+                    self.ctx.queue.submit(Some(encoder.finish()));
+                    self.snapshot_now();
+                } else {
+                    log::warn!("Model has no action at index {index}");
+                }
+            }
             Command::Sim(SimCommand::Shutdown) => return true,
             Command::Gpu(GpuCommand::SetBatchSize(n)) => {
                 self.fixed_batch_size = n.max(1);
@@ -498,8 +520,12 @@ impl Loop {
         self.tps_timer = now;
     }
 
-    fn publish_snapshot(&self) {
+    fn publish_snapshot(&mut self) {
+        self.serial += 1;
         let snap = Snapshot {
+            serial: self.serial,
+            // No `prepare_view` on the GPU path.
+            view_ms: 0.0,
             tick: self.state.tick(),
             population: self.state.population(),
             heap_bytes: self.state.heap_bytes(),
@@ -573,6 +599,7 @@ impl GpuSimThread {
             tps_timer: now,
             last_snapshot_publish: now,
             last_stats_publish: now,
+            serial: 0,
             timestamp_query,
         };
 

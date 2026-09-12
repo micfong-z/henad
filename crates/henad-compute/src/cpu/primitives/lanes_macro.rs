@@ -146,6 +146,20 @@ macro_rules! agent_lanes {
                 (&self.pos_x, &self.pos_y)
             }
 
+            fn positions_mut(&mut self) -> (&mut [f32], &mut [f32]) {
+                let Self { pos_x, pos_y, .. } = self;
+                (pos_x, pos_y)
+            }
+
+            fn grow(&mut self, n: usize) {
+                if n <= self.len() {
+                    return;
+                }
+                $(self.$dcur.resize(n, <$dty as Default>::default());
+                  self.$dnext.resize(n, <$dty as Default>::default());)*
+                $(self.$pname.resize(n, $pinit);)*
+            }
+
             $(fn colors(&self) -> Option<&[u8]> {
                 Some(&self.$color)
             })?
