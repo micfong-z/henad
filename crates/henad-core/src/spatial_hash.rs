@@ -105,6 +105,14 @@ impl SpatialHash {
     }
 
     pub fn build(&mut self, pos_x: &[f32], pos_y: &[f32]) {
+        self.build_where(pos_x, pos_y, |_| true);
+    }
+
+    /// Like [`Self::build`], but skips agents that `include` rejects. No query finds them.
+    pub fn build_where(&mut self, pos_x: &[f32], pos_y: &[f32], include: impl Fn(usize) -> bool) {
+        /// Cell index marking a skipped agent.
+        const NO_CELL: u32 = u32::MAX;
+
         let num_agents = pos_x.len() as u32;
         let num_cells = self.grid_w * self.grid_h;
         self.agent_cells.clear();
@@ -116,9 +124,15 @@ impl SpatialHash {
 
         // Assign agents to cells and count agents per cell
         for i in 0..num_agents {
-            let cell = self.cell_index(pos_x[i as usize], pos_y[i as usize]);
+            let cell = if include(i as usize) {
+                self.cell_index(pos_x[i as usize], pos_y[i as usize])
+            } else {
+                NO_CELL
+            };
             self.agent_cells.push(cell);
-            self.cell_start[cell as usize + 1] += 1;
+            if cell != NO_CELL {
+                self.cell_start[cell as usize + 1] += 1;
+            }
         }
 
         // Prefix sum to get start index of each cell
@@ -130,6 +144,9 @@ impl SpatialHash {
         let mut write_pos = self.cell_start.clone();
         for i in 0..num_agents {
             let cell = self.agent_cells[i as usize];
+            if cell == NO_CELL {
+                continue;
+            }
             let pos = write_pos[cell as usize];
             self.sorted_agents[pos as usize] = i;
             write_pos[cell as usize] += 1;
@@ -191,6 +208,16 @@ impl SpatialHash {
                 }
             }
         }
+    }
+
+    /// Whether this hash was built with `cell_size`.
+    pub fn cell_size_is(&self, cell_size: f32) -> bool {
+        (self.cell_size - cell_size).abs() <= f32::EPSILON
+    }
+
+    /// Whether this hash was built for that world.
+    pub fn world_is(&self, world_w: f32, world_h: f32) -> bool {
+        (self.world_w - world_w).abs() <= f32::EPSILON && (self.world_h - world_h).abs() <= f32::EPSILON
     }
 
     /// Cells along each axis. Fitted to the world, not derived from `cell_size` directly.

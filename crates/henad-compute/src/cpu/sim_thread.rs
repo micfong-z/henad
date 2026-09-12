@@ -4,6 +4,7 @@ use henad_core::params::ParamValue;
 
 use crate::runner::{Driver, Pace, SharedSlot, SimLoop, SnapshotSlot};
 use crate::snapshot::{CpuLayers, GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
+use std::time::Duration;
 use web_time::Instant;
 
 /// Wall-clock seconds between capped batches.
@@ -41,11 +42,16 @@ pub enum SimCommand {
     },
     /// Run the model's declared action at this index, once.
     Act(usize),
+    /// Turn the layout on or off, with a time budget per publish in milliseconds.
+    SetLayout {
+        on: bool,
+        budget_ms: f32,
+    },
     Shutdown,
 }
 
 /// Publish cadence. Independent of how fast the sim is running.
-const PUBLISH_INTERVAL_MS: u128 = 16;
+const PUBLISH_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Ceiling on a single uncapped pump, so a bad estimate cannot buy a long stall.
 const MAX_UNCAPPED_STEPS: u32 = 4096;
@@ -88,6 +94,10 @@ struct Loop {
     tps_timer: Instant,
     actual_tps: f64,
     last_publish: Instant,
+    /// Number of snapshots published.
+    serial: u64,
+    /// Whether the state has a layout switched on.
+    relaxing: bool,
     /// Smoothed engine time per tick (EMA). `None` until the first step has been timed.
     engine_ms: Option<f64>,
     /// When the next capped batch falls due.
@@ -134,6 +144,10 @@ impl SimLoop for Loop {
                     log::warn!("Failed to set param index {index} to {value:?}");
                 }
             }
+            SimCommand::SetLayout { on, budget_ms } => {
+                self.relaxing = on && self.state.set_layout(on, budget_ms);
+                self.force_publish_snapshot();
+            }
             SimCommand::Act(index) => {
                 if self.state.act(index) {
                     // The tick has not moved, so nothing else would publish what the action did.
@@ -149,7 +163,7 @@ impl SimLoop for Loop {
 
     fn pump(&mut self) -> Pace {
         if !self.running {
-            return Pace::Idle;
+            return self.relax_while_paused();
         }
         if self.uncapped {
             for _ in 0..uncapped_steps_for(self.engine_ms, self.ticks_per_snapshot) {
@@ -188,6 +202,19 @@ impl SimLoop for Loop {
 }
 
 impl Loop {
+    /// Keeps publishing while paused, so a layout can keep relaxing. Idle without a layout.
+    fn relax_while_paused(&mut self) -> Pace {
+        if !self.relaxing {
+            return Pace::Idle;
+        }
+        let since = Instant::now().duration_since(self.last_publish);
+        if since < PUBLISH_INTERVAL {
+            return Pace::After(PUBLISH_INTERVAL.saturating_sub(since));
+        }
+        self.force_publish_snapshot();
+        Pace::After(PUBLISH_INTERVAL)
+    }
+
     fn batch_interval(&self) -> std::time::Duration {
         std::time::Duration::from_secs_f64(capped_batch_interval_secs(self.target_tps, self.ticks_per_snapshot))
     }
@@ -234,7 +261,7 @@ impl Loop {
 
     fn maybe_publish_snapshot(&mut self) {
         let now = Instant::now();
-        if now.duration_since(self.last_publish).as_millis() < PUBLISH_INTERVAL_MS {
+        if now.duration_since(self.last_publish) < PUBLISH_INTERVAL {
             return;
         }
         self.last_publish = now;
@@ -251,7 +278,8 @@ impl Loop {
     fn publish_snapshot(&mut self) {
         let spare = crate::runner::claim_spare(&self.slot);
         let engine_ms = self.engine_ms.unwrap_or(0.0);
-        let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, engine_ms);
+        self.serial += 1;
+        let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, engine_ms, self.serial);
         crate::runner::publish(&self.slot, snap);
         // After the lock, so waking the UI can never make it block on us.
         if let Some(wake) = &self.wake {
@@ -274,7 +302,7 @@ impl SimThread {
     /// the same sink off its `GpuContext`.
     pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
         // So the UI has something to draw before play is pressed.
-        let slot = SnapshotSlot::with_initial(build_snapshot(None, &mut *state, 0.0, 0.0));
+        let slot = SnapshotSlot::with_initial(build_snapshot(None, &mut *state, 0.0, 0.0, 0));
         let now = Instant::now();
         let sim = Loop {
             state,
@@ -288,6 +316,8 @@ impl SimThread {
             tps_timer: now,
             actual_tps: 0.0,
             last_publish: now,
+            serial: 0,
+            relaxing: false,
             engine_ms: None,
             next_step_at: now,
         };
@@ -349,15 +379,24 @@ fn refill<T: Copy>(dst: &mut Vec<T>, src: &[T]) {
 /// allocation. `reuse` comes back from the UI thread via `recycle`.
 ///
 /// Both views are consulted, so a composite model publishes its field and its agents.
-fn build_snapshot(reuse: Option<Snapshot>, state: &mut dyn SimState, actual_tps: f64, engine_ms: f64) -> Snapshot {
+fn build_snapshot(
+    reuse: Option<Snapshot>,
+    state: &mut dyn SimState,
+    actual_tps: f64,
+    engine_ms: f64,
+    serial: u64,
+) -> Snapshot {
     // The model turns its state into something drawable here rather than every tick.
+    let view_started = Instant::now();
     state.prepare_view();
+    let view_ms = view_started.elapsed().as_secs_f64() * 1000.0;
     // Destructured up front so both layers can claim buffers without moving `recycled` twice.
     let recycled = match reuse.map(|s| s.view) {
         Some(SnapshotView::Cpu(layers)) => layers,
         _ => CpuLayers::default(),
     };
     let mut cells = recycled.grid.map(|g| g.cells).unwrap_or_default();
+    let mut spare_edges = recycled.edges;
     let (mut pos_x, mut pos_y, mut color) = match recycled.points {
         Some(p) => (p.pos_x, p.pos_y, p.color),
         None => (Vec::new(), Vec::new(), Vec::new()),
@@ -387,14 +426,30 @@ fn build_snapshot(reuse: Option<Snapshot>, state: &mut dyn SimState, actual_tps:
         }
     });
 
-    let view = SnapshotView::Cpu(CpuLayers { grid, points });
+    let edges = state.edge_view().map(|ev| {
+        let mut snap = spare_edges.take().unwrap_or_default();
+        // Copied only when the version or the length changed.
+        if snap.version != ev.version || snap.src.len() != ev.src.len() {
+            refill(&mut snap.src, ev.src);
+            refill(&mut snap.dst, ev.dst);
+            refill(&mut snap.color, ev.color.unwrap_or(&[]));
+            snap.version = ev.version;
+        }
+        snap.palette = ev.palette;
+        snap.directed = ev.directed;
+        snap
+    });
+
+    let view = SnapshotView::Cpu(CpuLayers { grid, points, edges });
 
     Snapshot {
         tick: state.tick(),
+        serial,
         population: state.population(),
         heap_bytes: state.heap_bytes(),
         actual_tps,
         engine_ms,
+        view_ms,
         view,
         stats: state.stats(),
     }
@@ -663,9 +718,69 @@ mod snapshot_tests {
     use crate::snapshot::SnapshotView;
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
-    use henad_core::view::{GridView, PointView, StatEntry};
+    use henad_core::view::{EdgeView, GridView, PointView, StatEntry};
 
     const PALETTE: &[[u8; 4]] = &[[1, 2, 3, 4], [5, 6, 7, 8]];
+
+    /// Model with nodes and edges.
+    struct Networked {
+        pos: Vec<f32>,
+        src: Vec<u32>,
+        dst: Vec<u32>,
+        color: Vec<u8>,
+        version: u64,
+    }
+
+    impl Networked {
+        fn new(edges: usize, version: u64) -> Self {
+            Self {
+                pos: vec![0.0; 8],
+                src: (0..edges as u32).collect(),
+                dst: (0..edges as u32).map(|i| i + 1).collect(),
+                color: vec![0; edges],
+                version,
+            }
+        }
+    }
+
+    impl SimState for Networked {
+        fn step(&mut self) {}
+        fn tick(&self) -> u64 {
+            0
+        }
+        fn point_view(&self) -> Option<PointView<'_>> {
+            Some(PointView {
+                pos_x: &self.pos,
+                pos_y: &self.pos,
+                world_w: 1.0,
+                world_h: 1.0,
+                color: None,
+                palette: PALETTE,
+            })
+        }
+        fn edge_view(&self) -> Option<EdgeView<'_>> {
+            Some(EdgeView {
+                src: &self.src,
+                dst: &self.dst,
+                color: Some(&self.color),
+                palette: PALETTE,
+                directed: false,
+                version: self.version,
+            })
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            self.pos.len() as u64
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
 
     /// A model with a field and agents, the shape `build_snapshot` used to collapse.
     struct Composite {
@@ -737,7 +852,7 @@ mod snapshot_tests {
     #[test]
     fn a_composite_model_publishes_both_layers() {
         let mut state = Composite::new(3, true);
-        let snap = build_snapshot(None, &mut state, 0.0, 0.0);
+        let snap = build_snapshot(None, &mut state, 0.0, 0.0, 0);
         let layers = layers(&snap.view);
 
         let grid = layers.grid.as_ref().expect("field layer was dropped");
@@ -754,7 +869,7 @@ mod snapshot_tests {
     #[test]
     fn a_model_without_a_color_lane_publishes_an_empty_one() {
         let mut state = Composite::new(2, false);
-        let snap = build_snapshot(None, &mut state, 0.0, 0.0);
+        let snap = build_snapshot(None, &mut state, 0.0, 0.0, 0);
         let points = layers(&snap.view).points.as_ref().expect("agent layer was dropped");
         assert!(points.color.is_empty());
         assert_eq!(points.pos_x.len(), 2);
@@ -764,7 +879,7 @@ mod snapshot_tests {
     #[test]
     fn recycling_reuses_the_color_lane_across_a_length_change() {
         let mut big = Composite::new(64, true);
-        let first = build_snapshot(None, &mut big, 0.0, 0.0);
+        let first = build_snapshot(None, &mut big, 0.0, 0.0, 0);
         let capacity = layers(&first.view)
             .points
             .as_ref()
@@ -773,10 +888,71 @@ mod snapshot_tests {
         assert!(capacity >= 64);
 
         let mut small = Composite::new(5, true);
-        let second = build_snapshot(Some(first), &mut small, 0.0, 0.0);
+        let second = build_snapshot(Some(first), &mut small, 0.0, 0.0, 0);
         let points = layers(&second.view).points.as_ref().expect("agent layer was dropped");
         assert_eq!(points.color, vec![0, 1, 0, 1, 0]);
         assert_eq!(points.color.capacity(), capacity, "the color lane reallocated");
         assert_eq!(points.pos_x.len(), 5);
+    }
+
+    #[test]
+    fn an_unchanged_edge_list_is_handed_back_untouched() {
+        let mut model = Networked::new(500, 7);
+        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1);
+        let ptr = layers(&first.view).edges.as_ref().expect("edges").src.as_ptr();
+
+        // Same version, so nothing is copied.
+        model.src[0] = 999;
+        let second = build_snapshot(Some(first), &mut model, 0.0, 0.0, 2);
+        let edges = layers(&second.view).edges.as_ref().expect("edges");
+        assert_eq!(edges.src.as_ptr(), ptr, "the edge list reallocated");
+        assert_eq!(edges.src[0], 0, "an unchanged version was copied anyway");
+    }
+
+    #[test]
+    fn a_changed_edge_list_is_refilled_into_the_same_room() {
+        let mut model = Networked::new(500, 7);
+        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1);
+        let capacity = layers(&first.view).edges.as_ref().expect("edges").src.capacity();
+
+        model.version = 8;
+        model.src[0] = 999;
+        let second = build_snapshot(Some(first), &mut model, 0.0, 0.0, 2);
+        let edges = layers(&second.view).edges.as_ref().expect("edges");
+        assert_eq!(edges.src[0], 999, "the change did not reach the snapshot");
+        assert_eq!(edges.version, 8);
+        assert_eq!(edges.src.capacity(), capacity, "the edge list reallocated");
+    }
+
+    #[test]
+    fn an_edge_list_that_changed_length_is_refilled() {
+        let mut model = Networked::new(500, 7);
+        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1);
+
+        let mut shorter = Networked::new(3, 7);
+        let second = build_snapshot(Some(first), &mut shorter, 0.0, 0.0, 2);
+        let edges = layers(&second.view).edges.as_ref().expect("edges");
+        assert_eq!(edges.src.len(), 3, "a shorter list was passed through whole");
+    }
+
+    #[test]
+    fn a_model_without_edges_publishes_none() {
+        let mut networked = Networked::new(4, 1);
+        let first = build_snapshot(None, &mut networked, 0.0, 0.0, 1);
+        assert!(layers(&first.view).edges.is_some());
+
+        let mut plain = Composite::new(4, true);
+        let second = build_snapshot(Some(first), &mut plain, 0.0, 0.0, 2);
+        assert!(
+            layers(&second.view).edges.is_none(),
+            "the edge layer outlived its model"
+        );
+    }
+
+    #[test]
+    fn the_serial_is_whatever_the_publish_was_given() {
+        let mut model = Networked::new(2, 1);
+        assert_eq!(build_snapshot(None, &mut model, 0.0, 0.0, 41).serial, 41);
+        assert_eq!(build_snapshot(None, &mut model, 0.0, 0.0, 42).serial, 42);
     }
 }

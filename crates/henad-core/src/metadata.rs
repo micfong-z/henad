@@ -44,6 +44,11 @@ pub enum Structure {
         /// [`crate::authoring::model::field::FieldLayer::KIND`].
         field: &'static str,
     },
+    Network {
+        /// Nodes per chunk in the node pass.
+        chunk: usize,
+        lanes: &'static [LaneSpec],
+    },
     GpuGrid {
         /// Ping-ponged buffer labels.
         buffers: &'static [&'static str],

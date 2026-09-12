@@ -26,6 +26,10 @@ pub trait AgentLanes: Send + Sync + 'static {
 
     /// Every model has positions, so the engine builds the neighbour index and the point view.
     fn positions(&self) -> (&[f32], &[f32]);
+    /// Mutable position lanes.
+    fn positions_mut(&mut self) -> (&mut [f32], &mut [f32]);
+    /// Extends every lane to `n`, filling new slots as [`Self::alloc`] does. Never shrinks.
+    fn grow(&mut self, n: usize);
 
     /// One palette index per agent. `None` colours the whole population `PALETTE[0]`.
     fn colors(&self) -> Option<&[u8]> {

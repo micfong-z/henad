@@ -2,7 +2,7 @@
 
 use henad_compute::gpu::capacity::Demand;
 use henad_core::helpers::fmt_bytes;
-use henad_core::metadata::Structure;
+use henad_core::metadata::{LaneSpec, Structure};
 use henad_core::params::ParamDescriptor;
 use henad_core::topology::{NeighborhoodKind, TopologyHint};
 use henad_models::registry::ModelEntry;
@@ -96,11 +96,13 @@ fn row_listing(ui: &mut egui::Ui, label: &str, value: String, names: &str) {
 }
 
 fn topology_label(hint: TopologyHint) -> &'static str {
-    match (hint.grid, hint.agents) {
-        (true, true) => "Agents and Grid",
-        (true, false) => "Grid",
-        (false, true) => "Agents",
-        (false, false) => "None",
+    match (hint.grid, hint.agents, hint.edges) {
+        (false, true, true) => "Network",
+        (true, true, true) => "Network and Grid",
+        (true, true, false) => "Agents and Grid",
+        (true, false, false) => "Grid",
+        (false, true, false) => "Agents",
+        _ => "None",
     }
 }
 
@@ -124,6 +126,24 @@ fn count_of(n: usize, flagged: usize, flag: &str) -> String {
     }
 }
 
+/// Lane rows, shared by agent and network models.
+fn lane_rows(ui: &mut egui::Ui, lanes: &[LaneSpec]) {
+    let doubled = lanes.iter().filter(|lane| lane.double_buffered).count();
+    let names: Vec<String> = lanes
+        .iter()
+        .map(|lane| {
+            let mark = if lane.double_buffered { " (dual)" } else { "" };
+            format!("{}: {}{mark}", lane.name, lane.ty)
+        })
+        .collect();
+    row_listing(
+        ui,
+        "Lanes",
+        count_of(lanes.len(), doubled, "double-buffered"),
+        &names.join("\n"),
+    );
+}
+
 fn structure_rows(ui: &mut egui::Ui, structure: &Structure) {
     match structure {
         Structure::Grid { neighborhood } => {
@@ -135,23 +155,14 @@ fn structure_rows(ui: &mut egui::Ui, structure: &Structure) {
             index,
             field,
         } => {
-            let doubled = lanes.iter().filter(|lane| lane.double_buffered).count();
-            let names: Vec<String> = lanes
-                .iter()
-                .map(|lane| {
-                    let mark = if lane.double_buffered { " (dual)" } else { "" };
-                    format!("{}: {}{mark}", lane.name, lane.ty)
-                })
-                .collect();
-            row_listing(
-                ui,
-                "Lanes",
-                count_of(lanes.len(), doubled, "double-buffered"),
-                &names.join("\n"),
-            );
+            lane_rows(ui, lanes);
             row(ui, "Chunk size", format!("{chunk} agents"));
             row(ui, "Neighbour index", *index);
             row(ui, "Field layer", *field);
+        }
+        Structure::Network { chunk, lanes } => {
+            lane_rows(ui, lanes);
+            row(ui, "Chunk size", format!("{chunk} nodes"));
         }
         Structure::GpuGrid { buffers, workgroup } => {
             row_listing(ui, "Buffers", buffers.len().to_string(), &buffers.join("\n"));
@@ -276,6 +287,7 @@ mod tests {
         assert_eq!(topology_label(TopologyHint::GRID), "Grid");
         assert_eq!(topology_label(TopologyHint::AGENTS), "Agents");
         assert_eq!(topology_label(TopologyHint::COMPOSITE), "Agents and Grid");
+        assert_eq!(topology_label(TopologyHint::NETWORK), "Network");
         assert_eq!(topology_label(TopologyHint::NONE), "None");
     }
 

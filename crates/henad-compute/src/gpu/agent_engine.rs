@@ -147,6 +147,7 @@ impl<M: GpuAgentModel> Model for GpuAgentModelDescriptor<M> {
         TopologyHint {
             grid: M::DISPLAY.is_some(),
             agents: true,
+            edges: false,
         }
     }
 

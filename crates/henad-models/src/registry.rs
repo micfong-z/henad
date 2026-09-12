@@ -117,6 +117,7 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
         topology_hint: TopologyHint {
             grid: <A::Field as FieldLayer>::HAS_GRID,
             agents: true,
+            edges: false,
         },
         metadata: ModelMetadata {
             backend: Backend::Cpu,
@@ -378,6 +379,7 @@ mod tests {
             let agrees = match structure {
                 Structure::Grid { .. } | Structure::GpuGrid { .. } => hint == TopologyHint::GRID,
                 Structure::Agents { .. } | Structure::GpuAgents { .. } => hint.agents,
+                Structure::Network { .. } => hint.agents && hint.edges,
             };
             assert!(agrees, "{}: declared structure and topology disagree", entry.id);
 

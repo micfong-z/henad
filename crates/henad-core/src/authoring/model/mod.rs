@@ -12,3 +12,4 @@ pub mod field;
 pub mod gpu_agent_model;
 pub mod gpu_grid_model;
 pub mod grid_model;
+pub mod network_model;

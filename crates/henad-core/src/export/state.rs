@@ -40,9 +40,23 @@ pub fn write_points<W: Write>(out: &mut W, pos_x: &[f32], pos_y: &[f32], color: 
     Ok(())
 }
 
+/// Write the edge section: a `# edges N` marker, a header row, then one line per edge.
+///
+/// # Errors
+/// If writing fails.
+pub fn write_edges<W: Write>(out: &mut W, src: &[u32], dst: &[u32], color: &[u8]) -> io::Result<()> {
+    writeln!(out, "# edges {}", src.len())?;
+    writeln!(out, "src,dst,color")?;
+    for (i, (a, b)) in src.iter().zip(dst).enumerate() {
+        let c = color.get(i).copied().unwrap_or(0);
+        writeln!(out, "{a},{b},{c}")?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{write_grid, write_points};
+    use super::{write_edges, write_grid, write_points};
 
     fn render(f: impl FnOnce(&mut Vec<u8>)) -> String {
         let mut buf = Vec::new();
@@ -63,5 +77,17 @@ mod tests {
 
         let colored = render(|out| write_points(out, &[0.5], &[2.0], Some(&[7])).expect("write"));
         assert_eq!(colored, "# points 1\nx,y,color\n0.5,2,7\n");
+    }
+
+    #[test]
+    fn edges_write_their_endpoints_and_colours() {
+        let text = render(|out| write_edges(out, &[0, 2], &[1, 3], &[0, 5]).expect("write"));
+        assert_eq!(text, "# edges 2\nsrc,dst,color\n0,1,0\n2,3,5\n");
+    }
+
+    #[test]
+    fn edges_without_colours_fall_back_to_zero() {
+        let text = render(|out| write_edges(out, &[7], &[8], &[]).expect("write"));
+        assert_eq!(text, "# edges 1\nsrc,dst,color\n7,8,0\n");
     }
 }
