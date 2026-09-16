@@ -159,21 +159,38 @@ These apply everywhere prose does: comments, UI text, markdown, PR bodies.
 
 ### Comments and doc comments
 
-Short and plain. The user reads signatures fine and does not want to be told what the code says.
+Doc comments read like standard Rust API documentation. `crates/henad-core/src/network.rs` is the
+reference, so read it before documenting new code.
 
-- **One line is the target**, two if genuinely needed. A module doc is usually a single `//!` line
-  saying what the file holds.
-- **Only non-obvious _why_.** Never restate what the signature, the function name, or the code
-  below already says. `is_gpu()` needs no doc.
-- **Name the subject, don't wrap it in a relative clause.** Avoid the "what/why/whether" register,
-  where a headless clause circles a thing instead of naming it.
+- **A summary sentence first.** Detail goes in a separate paragraph after a blank `///` line.
+  - A function opens with a third-person verb. "Returns the slice of edge indices for row `i`."
+    "Moves node `i`'s row to the end with double capacity, leaving the old space as stale."
+  - A predicate reads "Returns whether ...". A simple getter can be a noun phrase, as in "Number of
+    nodes." or "Whether slot `i` is occupied by a node."
+  - A field or constant gets a noun phrase with its units and qualifiers. "Length (without slack)
+    of each row." "Time in milliseconds that one publish may spend relaxing the layout."
+  - A type says what it holds, then how it behaves. "When a row is full, [`Csr::relocate`] will be
+    called."
+- **Complete sentences.** Write the subject and the verb out. A clipped note like "Asked first and
+  on its own." becomes "Called before the `&&`. Inside it, a switch-off would short-circuit and
+  never reach the state."
+- **Caveats and contracts are spelled out.** "Note that ..." for a surprise, a `# Panics` section
+  for a panic, `# Errors` for a `Result`, and the meaning of a parameter whose name does not carry
+  it ("`entries` is an iterator over `(row, neighbor, edge)` tuples ...").
+- **Link the items a comment mentions** with intra-doc links, such as [`Self::repack`].
+- **Trivial items can stay undocumented.** An accessor like `directed()` needs nothing.
+- **A comment labelling a group of items is `//`, never `///`.** A doc comment attaches to the next
+  item only, so "Bounds of the global speed" above `MIN_SPEED` and `MAX_SPEED` is a plain comment.
+  A sentence about one member stays a `///` on that member.
+- **A module doc** opens with a noun phrase saying what the file holds, then defines the terms a
+  reader needs. Spell out an acronym on first use, as in "compressed sparse row (CSR) format".
+- **An inline `//` comment** explains a step whose reason the code does not show, in full sentences.
+- **Name the subject in a noun-phrase doc.** Avoid headless "what/why" clauses that circle a thing
+  instead of naming it. "Returns whether ..." on a predicate is fine.
 
   ```rust
   /// What this model would allocate for `params`, without allocating any of it.   // no
   /// Resources that would be allocated for this model based on `params`.          // yes
-
-  /// What counts against `max_storage_buffers_per_shader_stage`.                   // no
-  /// Bindings that count against `max_storage_buffers_per_shader_stage`.           // yes
 
   /// Why this machine cannot build the model.                                      // no
   /// Reasons this machine cannot build the model.                                  // yes
@@ -184,11 +201,10 @@ Short and plain. The user reads signatures fine and does not want to be told wha
   not repeat the same rationale in several files.
 - **No future plans**, no "leaves room for X", no "reserved for a future Y".
 - **No test or benchmark stats.** No "confirmed across sizes", "measured Y", "passing as of".
-- **Punctuation stays plain.** Avoid em dashes, semicolons and colons in comment prose. Use full
-  stops and commas, or split into two sentences. Colons inside code paths (`crate::ui`,
-  `wgpu::Features`) are fine. The register is casual rather than literary. The user's own comments
-  include `/// A real GPU :)`.
-- **Write like a human dropping a note to a colleague**, not like documentation prose.
+- **Punctuation stays plain.** Avoid em dashes and semicolons in comment prose. Use full stops and
+  commas, or split into two sentences. Colons inside code paths (`crate::ui`, `wgpu::Features`) are
+  fine.
+- **Lines stay within the 120-column code width.** A doc paragraph can break between sentences.
 
 Two mechanical notes: `clippy::doc_markdown` inspects `///` lines, so a bare crate name like
 `egui_dock` needs backticks; and when editing an existing file, leave pre-existing comments alone
