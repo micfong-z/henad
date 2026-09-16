@@ -40,7 +40,7 @@ pub const EDGE_PALETTE: [[u8; 4]; 2] = [
     [0x50, 0x50, 0x50, 0x90], // Blocked - dark gray
 ];
 
-/// Options of the `network` parameter.
+// Options of the `network` parameter.
 const NETWORKS: &[&str] = &["Random", "Geometric"];
 const RANDOM: usize = 0;
 const GEOMETRIC: usize = 1;

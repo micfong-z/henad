@@ -53,8 +53,8 @@ impl<M: GridModel> GridModelState<M> {
     }
 }
 
-/// Grid width and height, prepended to the model's own descriptors.
-/// Indices of the params the engine prepends before a model's own.
+// Grid width and height, prepended to the model's own descriptors.
+// Indices of the params the engine prepends before a model's own.
 pub const GRID_WIDTH: usize = 0;
 pub const GRID_HEIGHT: usize = 1;
 

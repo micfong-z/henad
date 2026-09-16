@@ -14,8 +14,8 @@ use crate::display_scale::display_dims;
 /// The `Arc` is what makes teardown safe. An in-flight paint callback keeps the pipeline and
 /// its texture alive even if the sim thread and its state are dropped mid-frame.
 pub struct GpuDisplay {
-    /// Cell dimensions of the underlying grid, which the UI fits the aspect ratio to. The
-    /// texture behind it may be smaller, see [`crate::display_scale`].
+    // Cell dimensions of the underlying grid, which the UI fits the aspect ratio to. The
+    // texture behind it may be smaller, see [`crate::display_scale`].
     pub width: u32,
     pub height: u32,
     pub render_pipeline: wgpu::RenderPipeline,

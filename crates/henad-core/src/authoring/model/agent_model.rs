@@ -133,7 +133,7 @@ pub trait AgentModel: Send + Sync + 'static {
     /// typical population still splits across every core.
     const CHUNK: usize = 512;
 
-    /// Defaults for the three parameters the engine prepends.
+    // Defaults for the three parameters the engine prepends.
     const DEFAULT_AGENTS: u32;
     const MAX_AGENTS: u32 = 10_000_000;
     const DEFAULT_EXTENT: Extent;

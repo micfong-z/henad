@@ -8,8 +8,8 @@ use henad_core::params::ParamValue;
 use henad_core::view::StatValue;
 use henad_models::sir::SirGridModel;
 
-/// Cell encoding. Private to the model, so `encoding_matches_the_models_own_stats` pins these
-/// against what the model itself reports rather than trusting the order.
+// Cell encoding. Private to the model, so `encoding_matches_the_models_own_stats` pins these
+// against what the model itself reports rather than trusting the order.
 const S: u8 = 0;
 const I: u8 = 1;
 const R: u8 = 2;

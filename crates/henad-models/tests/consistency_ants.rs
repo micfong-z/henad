@@ -155,7 +155,7 @@ fn deliveries_never_decrease() {
 // neighbourhoods hold no two equal values, so no draw can change the outcome and the run is the
 // same under any generator. That is what makes another engine's answer comparable at all.
 
-/// Small enough to write out in full, large enough for both obstacle blobs and both sites.
+// Small enough to write out in full, large enough for both obstacle blobs and both sites.
 const GATE_W: u32 = 32;
 const GATE_H: u32 = 32;
 /// Four, because five is already too many.

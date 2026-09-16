@@ -115,12 +115,12 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// One label for a plain state buffer, two for a model that also carries per-cell RNG state.
     const BUFFERS: &'static [&'static str];
 
-    /// Each pass's `@group(0)` declarations, generated from its shader.
+    // Each pass's `@group(0)` declarations, generated from its shader.
     const STEP_BINDINGS: &'static [BindingDecl];
     const DISPLAY_BINDINGS: &'static [BindingDecl];
     const REDUCE_BINDINGS: &'static [BindingDecl];
 
-    /// WGSL source for the compute shaders.
+    // WGSL source for the compute shaders.
     const STEP_SHADER: &'static str;
     const DISPLAY_SHADER: &'static str;
     const REDUCE_SHADER: &'static str;

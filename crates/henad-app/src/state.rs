@@ -106,7 +106,7 @@ pub struct AppState {
     pub export_status: Option<String>,
     /// Save outcomes come back off the dialog's own thread or task.
     saves: (flume::Sender<SaveOutcome>, flume::Receiver<SaveOutcome>),
-    /// GPU batching controls
+    // GPU batching controls
     pub gpu_adaptive: bool,
     pub gpu_target_ms: f64,
     pub gpu_batch_size: u32,

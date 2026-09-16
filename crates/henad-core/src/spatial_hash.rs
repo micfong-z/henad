@@ -54,7 +54,7 @@ impl HashGrid {
 pub struct SpatialHash {
     /// Requested cell size, only kept to detect changes
     cell_size: f32,
-    /// Actual cell extents, which tile the world exactly
+    // Actual cell extents, which tile the world exactly
     cell_w: f32,
     cell_h: f32,
     cell_w_inv: f32,

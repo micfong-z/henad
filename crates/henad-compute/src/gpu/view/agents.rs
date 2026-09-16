@@ -13,7 +13,7 @@ pub struct GpuAgents {
     /// `array<u32>` of packed RGBA, bound as `Unorm8x4`.
     pub color: wgpu::Buffer,
     pub count: u32,
-    /// For the vertex shader's world to clip transform.
+    // For the vertex shader's world to clip transform.
     pub world_w: f32,
     pub world_h: f32,
 }

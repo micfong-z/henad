@@ -133,12 +133,12 @@ impl<A: AgentModel> AgentModelState<A> {
     }
 }
 
-/// The full descriptor list, with population and world extent prepended.
-///
-/// The extent is the engine's, not either layer's, so an agent layer and a field layer cannot
-/// disagree about how big the world is.
-/// Indices of the params the engine prepends before a model's own. A GPU port reads them too,
-/// since it composes the same list.
+// The full descriptor list, with population and world extent prepended.
+//
+// The extent is the engine's, not either layer's, so an agent layer and a field layer cannot
+// disagree about how big the world is.
+// Indices of the params the engine prepends before a model's own. A GPU port reads them too,
+// since it composes the same list.
 pub const NUM_AGENTS: usize = 0;
 pub const WORLD_WIDTH: usize = 1;
 pub const WORLD_HEIGHT: usize = 2;

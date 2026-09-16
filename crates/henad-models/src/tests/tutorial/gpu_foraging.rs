@@ -38,7 +38,7 @@ henad_core::buffers! {
     const SITES = "sites";
 }
 
-/// `state` packs what the CPU model keeps in three lanes. Mirrored in `state.wgsl`.
+// `state` packs what the CPU model keeps in three lanes. Mirrored in `state.wgsl`.
 const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
 const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
 

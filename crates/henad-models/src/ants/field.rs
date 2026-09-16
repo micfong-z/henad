@@ -13,13 +13,13 @@ pub const LOW_PHEROMONE: f32 = 1e-14;
 const DISPLAY_DECADES: f32 = 3.0;
 const RAMP_STEPS: u8 = 6;
 
-/// Site markers. Static for the whole run.
+// Site markers. Static for the whole run.
 pub const EMPTY: u8 = 0;
 pub const OBSTACLE: u8 = 1;
 pub const FOOD: u8 = 2;
 pub const HOME: u8 = 3;
 
-/// Layer indices in the field set.
+// Layer indices in the field set.
 pub const TO_FOOD: usize = 0;
 pub const TO_HOME: usize = 1;
 

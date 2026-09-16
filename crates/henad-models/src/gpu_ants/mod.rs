@@ -45,7 +45,7 @@ henad_core::buffers! {
 /// Domain separated from the ant seeding stream, so the two do not start correlated.
 const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 
-/// `state` packs what the CPU model keeps in three lanes. Mirrored in `step.wgsl`.
+// `state` packs what the CPU model keeps in three lanes. Mirrored in `step.wgsl`.
 const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
 const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
 
