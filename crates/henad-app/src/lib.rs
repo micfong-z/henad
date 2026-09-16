@@ -112,7 +112,7 @@ impl eframe::App for HenadApp {
         // --- Poll snapshot from sim thread ---
         let fresh = self.state.sim_thread.as_mut().and_then(SimRunner::take_snapshot);
         if let Some(snap) = fresh {
-            // Skips repeat publishes at one tick, such as a layout relaxing while paused.
+            // Skips repeated publishes at the same tick, such as those from a layout while paused.
             let advanced = self.state.last_series_tick != Some(snap.tick);
             self.state.last_series_tick = Some(snap.tick);
             if advanced {

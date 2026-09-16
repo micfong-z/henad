@@ -5,7 +5,7 @@ use crate::state::AppState;
 use crate::ui::banner;
 use henad_compute::cpu::sim_thread::SimCommand;
 use henad_core::action::ActionDescriptor;
-use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
+use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 
 pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let descriptors: Vec<_> = app
@@ -58,6 +58,9 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 let mut slider = egui::Slider::new(v, *min..=*max).text(text);
                 if let Some(s) = step {
                     slider = slider.step_by(f64::from(*s));
+                }
+                if desc.format == ParamFormat::Percent {
+                    slider = as_percent(slider, *step);
                 }
                 if with_hint(ui.add(slider), hint).changed() {
                     param_changed.push((i, ParamValue::F32(*v)));
@@ -172,6 +175,31 @@ fn param_text(ui: &egui::Ui, desc: &ParamDescriptor, pending: bool) -> egui::Ric
     }
 }
 
+/// Displays a fraction as a percentage.
+fn as_percent(slider: egui::Slider<'_>, step: Option<f32>) -> egui::Slider<'_> {
+    let decimals = percent_decimals(step);
+    slider
+        .custom_formatter(move |value, _| format!("{:.decimals$}%", value * 100.0))
+        .custom_parser(|text| {
+            let number = text.trim().trim_end_matches('%').trim_end();
+            number.parse::<f64>().ok().map(|percent| percent / 100.0)
+        })
+}
+
+/// Returns the fewest decimals that still show every step as a distinct percentage.
+fn percent_decimals(step: Option<f32>) -> usize {
+    let Some(step) = step else {
+        return 1;
+    };
+    let percent = f64::from(step) * 100.0;
+    (0..4)
+        .find(|&places| {
+            let scaled = percent * 10f64.powi(places);
+            (scaled - scaled.round()).abs() < 1e-6
+        })
+        .map_or(4, |places| places as usize)
+}
+
 fn with_hint(response: egui::Response, hint: Option<&str>) -> egui::Response {
     match hint {
         Some(hint) => response.on_hover_text(hint),
@@ -241,4 +269,18 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
         ui.separator();
         banner(ui, icon, color, title, &detail);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::percent_decimals;
+
+    #[test]
+    fn a_percentage_shows_as_many_decimals_as_its_step_needs() {
+        assert_eq!(percent_decimals(Some(0.01)), 0, "1% steps");
+        assert_eq!(percent_decimals(Some(0.001)), 1, "0.1% steps");
+        assert_eq!(percent_decimals(Some(0.005)), 1, "0.5% steps");
+        assert_eq!(percent_decimals(Some(0.0025)), 2, "0.25% steps");
+        assert_eq!(percent_decimals(None), 1, "no step");
+    }
 }

@@ -1,7 +1,10 @@
-//! Spring layout for a network model's node positions.
+//! Spring layout for the node positions of a network model.
 //!
-//! NetLogo's `layout-spring`, with repulsion cut off at a radius and found through a spatial hash.
+//! This is based on NetLogo's `layout-spring`, with three changes.
+//! An edge's pull levels off as it stretches, repulsion is cut off at a radius found through a spatial hash,
+//! and each node slows down while its force keeps swinging, as in `ForceAtlas2`.
 
+use crate::cpu::primitives::chunked::reduce_chunks;
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::network_model::SpringParams;
 use henad_core::authoring::primitives::rng::{mix_seed, next_float};
@@ -9,17 +12,37 @@ use henad_core::network::Network;
 use henad_core::spatial_hash::SpatialHash;
 use rayon::prelude::*;
 
-/// Nodes per chunk of the force gather.
+/// Number of nodes per chunk of the force gather.
 const CHUNK: usize = 512;
 
-/// Largest step per iteration, as a fraction of the world's half perimeter. NetLogo's limit.
+/// Largest step per iteration, as a fraction of the world's half perimeter. This is NetLogo's limit.
 const MAX_STEP: f32 = 1.0 / 50.0;
 
-/// Buffers reused across iterations, plus the layout's RNG seed.
+/// `ForceAtlas2`'s jitter tolerance.
+///
+/// A lower value settles sooner, but follows a changing graph more slowly.
+const TOLERANCE: f64 = 0.2;
+
+/// Largest rise of the global speed in one iteration, as a fraction of its current value.
+///
+/// This is `ForceAtlas2`'s value.
+const MAX_RISE: f64 = 0.5;
+
+// Bounds of the global speed.
+// They keep the speed finite once every node is still, and let it recover from zero.
+const MIN_SPEED: f64 = 1e-3;
+const MAX_SPEED: f64 = 1e3;
+
+/// Buffers reused across layout iterations, along with the layout's RNG seed and global speed.
 pub struct LayoutScratch {
     hash: Option<SpatialHash>,
     disp_x: Vec<f32>,
     disp_y: Vec<f32>,
+    // Force on each node in the previous iteration, used to measure swing.
+    prev_x: Vec<f32>,
+    prev_y: Vec<f32>,
+    /// Global speed, as in `ForceAtlas2`.
+    speed: f64,
     seed: u64,
     iteration: u32,
 }
@@ -30,31 +53,35 @@ impl LayoutScratch {
             hash: None,
             disp_x: Vec::new(),
             disp_y: Vec::new(),
+            prev_x: Vec::new(),
+            prev_y: Vec::new(),
+            speed: 1.0,
             seed,
             iteration: 0,
         }
     }
 
     pub fn heap_bytes(&self) -> usize {
-        (self.disp_x.capacity() + self.disp_y.capacity()) * size_of::<f32>()
-            + self.hash.as_ref().map_or(0, SpatialHash::heap_bytes)
+        let lanes = self.disp_x.capacity() + self.disp_y.capacity() + self.prev_x.capacity() + self.prev_y.capacity();
+        lanes * size_of::<f32>() + self.hash.as_ref().map_or(0, SpatialHash::heap_bytes)
     }
 }
 
-/// Spring constants scaled to this world, plus the jitter seed.
+/// Spring constants scaled to the current world, along with the jitter seed.
 #[derive(Clone, Copy)]
 struct Forces {
     rest: f32,
     reach: f32,
     push: f32,
     spring: f32,
+    saturation: f32,
     seed: u64,
     iteration: u32,
 }
 
 /// Runs one iteration of the spring layout.
 ///
-/// All forces are gathered before any node moves, so the thread count cannot change results.
+/// All forces are gathered before any node moves, so the result does not depend on the thread count.
 pub fn spring_step(
     pos_x: &mut [f32],
     pos_y: &mut [f32],
@@ -70,13 +97,14 @@ pub fn spring_step(
         return;
     }
 
-    // Mean spacing, the unit of every `SpringParams` constant.
+    // Mean spacing between nodes, which is the unit of every `SpringParams` constant.
     let spacing = (extent.w * extent.h / nodes as f32).sqrt().max(f32::MIN_POSITIVE);
     let forces = Forces {
         rest: params.length * spacing,
         reach: params.cutoff * spacing,
         push: params.repulsion * spacing * spacing * spacing,
         spring: params.spring,
+        saturation: params.saturation * spacing,
         seed: scratch.seed,
         iteration,
     };
@@ -87,8 +115,10 @@ pub fn spring_step(
     scratch.disp_x.resize(n, 0.0);
     scratch.disp_y.clear();
     scratch.disp_y.resize(n, 0.0);
+    scratch.prev_x.resize(n, 0.0);
+    scratch.prev_y.resize(n, 0.0);
 
-    // Reused while the reach and the world stay the same.
+    // The hash is reused as long as the reach and the world stay the same.
     let mut hash = match scratch.hash.take() {
         Some(hash) if hash.cell_size_is(forces.reach) && hash.world_is(extent.w, extent.h) => hash,
         _ => SpatialHash::new(forces.reach, extent.w, extent.h),
@@ -109,25 +139,55 @@ pub fn spring_step(
                     if !graph.contains_node(i) {
                         continue;
                     }
-                    let (fx, fy) = force_on(i, px, py, graph, &hash, forces);
-                    *dx = fx.clamp(-limit, limit);
-                    *dy = fy.clamp(-limit, limit);
+                    (*dx, *dy) = force_on(i, px, py, graph, &hash, forces);
                 }
             });
     }
+
+    // Swing measures how much a node's force changed since the last iteration, and traction how much of it stayed.
+    // Both are weighted by degree plus one and summed in chunk order.
+    let (swing, traction) = {
+        let (fx, fy, px, py) = (&scratch.disp_x, &scratch.disp_y, &scratch.prev_x, &scratch.prev_y);
+        reduce_chunks(
+            n,
+            CHUNK,
+            |range| {
+                range.fold((0.0f64, 0.0f64), |(swing, traction), i| {
+                    let weight = f64::from(graph.degree(i as u32) as f32 + 1.0);
+                    let turned = (fx[i] - px[i]).hypot(fy[i] - py[i]);
+                    let held = (fx[i] + px[i]).hypot(fy[i] + py[i]) * 0.5;
+                    (swing + weight * f64::from(turned), traction + weight * f64::from(held))
+                })
+            },
+            |a, b| (a.0 + b.0, a.1 + b.1),
+            (0.0, 0.0),
+        )
+    };
+    if swing > 0.0 {
+        let target = TOLERANCE * traction / swing;
+        scratch.speed += (target - scratch.speed).min(MAX_RISE * scratch.speed);
+    }
+    scratch.speed = scratch.speed.clamp(MIN_SPEED, MAX_SPEED);
+    let speed = scratch.speed as f32;
 
     for i in 0..n {
         if !graph.contains_node(i as u32) {
             continue;
         }
-        pos_x[i] = (pos_x[i] + scratch.disp_x[i]).clamp(0.0, extent.w);
-        pos_y[i] = (pos_y[i] + scratch.disp_y[i]).clamp(0.0, extent.h);
+        let (fx, fy) = (scratch.disp_x[i], scratch.disp_y[i]);
+        let turned = (fx - scratch.prev_x[i]).hypot(fy - scratch.prev_y[i]) / spacing;
+        let s = speed / (1.0 + speed * turned.sqrt());
+        pos_x[i] = (pos_x[i] + (fx * s).clamp(-limit, limit)).clamp(0.0, extent.w);
+        pos_y[i] = (pos_y[i] + (fy * s).clamp(-limit, limit)).clamp(0.0, extent.h);
     }
 
+    // A retired node's force stays zero, so a slot reused by a new node starts without any swing.
+    std::mem::swap(&mut scratch.disp_x, &mut scratch.prev_x);
+    std::mem::swap(&mut scratch.disp_y, &mut scratch.prev_y);
     scratch.hash = Some(hash);
 }
 
-/// Force on node `i` from its edges and from nodes within reach.
+/// Returns the force on node `i` from its edges and from nodes within reach.
 #[inline]
 fn force_on(i: u32, pos_x: &[f32], pos_y: &[f32], graph: &Network, hash: &SpatialHash, forces: Forces) -> (f32, f32) {
     let Forces {
@@ -135,6 +195,7 @@ fn force_on(i: u32, pos_x: &[f32], pos_y: &[f32], graph: &Network, hash: &Spatia
         reach,
         push,
         spring,
+        saturation,
         seed,
         iteration,
     } = forces;
@@ -151,9 +212,9 @@ fn force_on(i: u32, pos_x: &[f32], pos_y: &[f32], graph: &Network, hash: &Spatia
         if d <= 0.0 {
             return;
         }
-        // Divided by the mean degree of both ends, as NetLogo does.
+        // Divided by the mean degree of both ends, as in NetLogo.
         let div = ((deg_i + graph.degree(j) as f32) * 0.5).max(1.0);
-        let f = spring * (d - rest) / div;
+        let f = spring * saturation * ((d - rest) / saturation).tanh() / div;
         fx += f * ex / d;
         fy += f * ey / d;
     };
@@ -166,7 +227,7 @@ fn force_on(i: u32, pos_x: &[f32], pos_y: &[f32], graph: &Network, hash: &Spatia
         }
     }
 
-    // The hash wraps at the world's edges and the layout does not, so deltas are recomputed.
+    // The hash wraps at the world's edges but the layout does not, so deltas are recomputed here.
     hash.for_each_within(xi, yi, reach, pos_x, pos_y, |j, _wx, _wy, _d2| {
         if j == i {
             return;
@@ -178,7 +239,7 @@ fn force_on(i: u32, pos_x: &[f32], pos_y: &[f32], graph: &Network, hash: &Spatia
         }
         let div = ((deg_i + graph.degree(j) as f32) * 0.5).max(1.0);
         if d2 <= 0.0 {
-            // Coincident, so push along an angle drawn from the node index.
+            // The nodes are coincident, so push along an angle drawn from the node index.
             let angle = jitter_angle(seed, iteration, i);
             fx -= push / div * angle.cos();
             fy -= push / div * angle.sin();
@@ -220,7 +281,7 @@ mod tests {
         (pos.0[a] - pos.0[b]).hypot(pos.1[a] - pos.1[b])
     }
 
-    /// Mean spacing of `nodes` nodes in `EXTENT`.
+    /// Returns the mean spacing of `nodes` nodes in `EXTENT`.
     fn spacing(nodes: usize) -> f32 {
         (EXTENT.w * EXTENT.h / nodes as f32).sqrt()
     }
@@ -297,7 +358,103 @@ mod tests {
         );
     }
 
-    /// Enough nodes to span several chunks.
+    /// Returns the root mean square distance of the nodes from their centroid.
+    fn spread(pos: &(Vec<f32>, Vec<f32>)) -> f32 {
+        let n = pos.0.len() as f32;
+        let (cx, cy) = (pos.0.iter().sum::<f32>() / n, pos.1.iter().sum::<f32>() / n);
+        let sum: f32 = pos
+            .0
+            .iter()
+            .zip(&pos.1)
+            .map(|(x, y)| (x - cx).powi(2) + (y - cy).powi(2))
+            .sum();
+        (sum / n).sqrt()
+    }
+
+    /// Rewired shortcuts span the whole world. Their pull levels off, so a few of them cannot fold a mesh.
+    #[test]
+    fn a_few_long_edges_leave_a_mesh_its_shape() {
+        const SIDE: u32 = 24;
+        let n = SIDE * SIDE;
+        let cell = EXTENT.w / SIDE as f32;
+        let mesh = |shortcuts: u32| {
+            let mut net = Network::new(n as usize, false);
+            for i in 0..n {
+                if i % SIDE + 1 < SIDE {
+                    net.add_edge(i, i + 1, 0);
+                }
+                if i / SIDE + 1 < SIDE {
+                    net.add_edge(i, i + SIDE, 0);
+                }
+            }
+            let mut rng = 0x5407_C075_u64;
+            let mut added = 0;
+            while added < shortcuts {
+                let (a, b) = (next_bits(&mut rng) % n, next_bits(&mut rng) % n);
+                if a != b && !net.has_edge(a, b) {
+                    net.add_edge(a, b, 0);
+                    added += 1;
+                }
+            }
+            net
+        };
+        let grid = || {
+            let at = |k: u32| (k as f32 + 0.5) * cell;
+            (
+                (0..n).map(|i| at(i % SIDE)).collect(),
+                (0..n).map(|i| at(i / SIDE)).collect(),
+            )
+        };
+
+        let (mut plain, mut cut) = (grid(), grid());
+        relax(&mesh(0), &mut plain, 1500);
+        relax(&mesh(30), &mut cut, 1500);
+        let kept = spread(&cut) / spread(&plain);
+        assert!(kept > 0.85, "30 long edges shrank a mesh to {kept} of its spread");
+    }
+
+    /// A random graph has no shape to find, but its layout should still come to rest instead of jittering.
+    #[test]
+    fn a_random_graph_comes_to_rest() {
+        let n = 600u32;
+        let mut net = Network::new(n as usize, false);
+        let mut rng = 0xB0_11_u64;
+        while net.edge_count() < 3 * n as usize {
+            let (a, b) = (next_bits(&mut rng) % n, next_bits(&mut rng) % n);
+            if a != b && !net.has_edge(a, b) {
+                net.add_edge(a, b, 0);
+            }
+        }
+        let mut pos: (Vec<f32>, Vec<f32>) = (
+            (0..n).map(|_| next_float(&mut rng, EXTENT.w)).collect(),
+            (0..n).map(|_| next_float(&mut rng, EXTENT.h)).collect(),
+        );
+        // The same scratch is used throughout. A fresh one would lose the speed it had settled to.
+        let mut scratch = LayoutScratch::new(SEED);
+        let mut step = |pos: &mut (Vec<f32>, Vec<f32>)| {
+            spring_step(
+                &mut pos.0,
+                &mut pos.1,
+                &net,
+                EXTENT,
+                SpringParams::DEFAULT,
+                &mut scratch,
+            );
+        };
+        for _ in 0..600 {
+            step(&mut pos);
+        }
+        let before = pos.clone();
+        step(&mut pos);
+        let moved = (0..n as usize)
+            .map(|i| (pos.0[i] - before.0[i]).hypot(pos.1[i] - before.1[i]))
+            .sum::<f32>()
+            / n as f32;
+        let moved = moved / spacing(n as usize);
+        assert!(moved < 0.02, "a random graph still moves {moved} spacings a step");
+    }
+
+    /// Uses enough nodes to span several chunks.
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
         fn run(threads: usize) -> Vec<u32> {

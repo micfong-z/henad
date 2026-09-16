@@ -4,6 +4,16 @@ pub struct ParamDescriptor {
     pub label: &'static str,
     pub kind: ParamKind,
     pub apply: ParamApply,
+    pub format: ParamFormat,
+}
+
+/// How a parameter value is displayed. The stored value is the same either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParamFormat {
+    #[default]
+    Plain,
+    /// A fraction in `0..=1` displayed as a percentage, so `0.025` reads `2.5%`.
+    Percent,
 }
 
 /// When an edit to a parameter reaches the simulation.
@@ -23,6 +33,12 @@ impl ParamDescriptor {
     /// Builder form, since most parameters are live and only a few are not.
     pub fn on_reload(mut self) -> Self {
         self.apply = ParamApply::OnReload;
+        self
+    }
+
+    /// Builder form, for a fraction displayed as a percentage.
+    pub fn percent(mut self) -> Self {
+        self.format = ParamFormat::Percent;
         self
     }
 
@@ -155,6 +171,7 @@ mod tests {
                     step: None,
                 },
                 apply: ParamApply::Live,
+                format: ParamFormat::Plain,
             },
             ParamDescriptor {
                 id: "reload",
@@ -165,6 +182,7 @@ mod tests {
                     default: 1,
                 },
                 apply: ParamApply::OnReload,
+                format: ParamFormat::Plain,
             },
         ]
     }

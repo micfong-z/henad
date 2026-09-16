@@ -3,17 +3,20 @@
 //! Serves both backends. A CPU model uploads into the buffers owned here, a GPU model's already
 //! live on the device so [`AgentLayer::paint_gpu`] binds those instead. Pipeline, uniform and
 //! sprite size are shared, which keeps the two visually comparable.
+//!
+//! Network edges are drawn under the nodes.
 
 use std::sync::Arc;
 
 use crate::shader_bindings::agents::Uniforms;
+use crate::ui::edge_layer::{EdgeDraw, EdgeLayer, EdgeStyle};
 use crate::ui::painted::{Painted, painted};
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait};
 use henad_compute::gpu::GpuAgents;
-use henad_compute::snapshot::PointSnapshot;
+use henad_compute::snapshot::{EdgeSnapshot, PointSnapshot};
 
 /// Sprite diameter in logical points.
-const AGENT_SIZE_PT: f32 = 3.0;
+pub const AGENT_SIZE_PT: f32 = 3.0;
 
 const POS_X_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32];
 const POS_Y_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![1 => Float32];
@@ -59,11 +62,15 @@ pub struct AgentDraw {
     positions: PositionSource,
     color: wgpu::Buffer,
     count: u32,
+    edges: Option<EdgeDraw>,
 }
 
 impl AgentDraw {
     /// Records the population into any pass, egui's or an offscreen one.
     pub fn record(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(edges) = &self.edges {
+            edges.record(render_pass);
+        }
         let color_slot = match &self.positions {
             PositionSource::Split { pos_x, pos_y } => {
                 render_pass.set_pipeline(&self.pipeline.pipeline);
@@ -108,10 +115,19 @@ pub struct AgentLayer {
     color_scratch: Vec<u32>,
     /// Colour a uniform population was last filled with, so it only widens when that changes.
     uniform_color: Option<u32>,
+    /// Whether a vertex shader can read storage buffers. If so, the position lanes are also bound as storage.
+    vertex_storage: bool,
+    /// Edge renderer, or `None` if edges cannot be drawn.
+    edges: Option<EdgeLayer>,
 }
 
 impl AgentLayer {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+        vertex_storage: bool,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("henad_agents_shader"),
             source: wgpu::ShaderSource::Wgsl(crate::shader_bindings::agents::SHADER_STRING.into()),
@@ -155,17 +171,17 @@ impl AgentLayer {
             }],
         });
 
+        let buffers = AgentBuffers::new(device, 0, vertex_storage);
+        let edges =
+            vertex_storage.then(|| EdgeLayer::new(device, queue, target_format, &buffers.pos_x, &buffers.pos_y));
+
         Self {
             pipeline: Arc::new(AgentPipeline {
                 pipeline,
                 interleaved_pipeline,
                 bind_group,
             }),
-            buffers: Arc::new(AgentBuffers {
-                pos_x: instance_buffer(device, "pos_x", 0),
-                pos_y: instance_buffer(device, "pos_y", 0),
-                color: instance_buffer(device, "color", 0),
-            }),
+            buffers: Arc::new(buffers),
             device: device.clone(),
             queue: queue.clone(),
             uniform,
@@ -173,6 +189,19 @@ impl AgentLayer {
             count: 0,
             color_scratch: Vec::new(),
             uniform_color: None,
+            vertex_storage,
+            edges,
+        }
+    }
+
+    /// Copies network edges to the GPU, or clears the previous model's edges if there are none.
+    pub fn upload_edges(&mut self, edges: Option<&EdgeSnapshot>) {
+        let Some(layer) = &mut self.edges else {
+            return;
+        };
+        match edges {
+            Some(edges) => layer.upload(edges),
+            None => layer.clear(),
         }
     }
 
@@ -201,13 +230,7 @@ impl AgentLayer {
     /// `array_stride % 4 == 0`, and the storage-buffer alternative needs `VERTEX_STORAGE`, which
     /// WebGL2 lacks. Only this last hop widens, the snapshot copy stays one byte per agent.
     fn widen_colors(&mut self, points: &PointSnapshot, n: usize) {
-        // 256 entries so the inner loop indexes unconditionally. A model can hand out an index
-        // past the end of its own palette, and a bounds branch per agent is not worth it.
-        let fallback = points.palette.first().copied().unwrap_or([0xFF; 4]);
-        let mut lut = [0u32; 256];
-        for (i, slot) in lut.iter_mut().enumerate() {
-            *slot = u32::from_le_bytes(points.palette.get(i).copied().unwrap_or(fallback));
-        }
+        let lut = palette_lut(points.palette);
 
         if points.color.is_empty() {
             // Uniform population, so the buffer only changes when the palette or the count does.
@@ -238,20 +261,22 @@ impl AgentLayer {
             return;
         }
         let capacity = n.next_power_of_two();
-        let bytes = capacity as u64 * 4;
-        self.buffers = Arc::new(AgentBuffers {
-            pos_x: instance_buffer(&self.device, "pos_x", bytes),
-            pos_y: instance_buffer(&self.device, "pos_y", bytes),
-            color: instance_buffer(&self.device, "color", bytes),
-        });
+        self.buffers = Arc::new(AgentBuffers::new(
+            &self.device,
+            capacity as u64 * 4,
+            self.vertex_storage,
+        ));
         self.capacity = capacity;
+        if let Some(edges) = &mut self.edges {
+            edges.bind(&self.buffers.pos_x, &self.buffers.pos_y);
+        }
     }
 
     /// Queues the paint callback for `rect`, sizing sprites relative to that rect.
     ///
     /// The uniform is written here rather than in `CallbackTrait::prepare`, which only sees the
     /// whole window. Writes queued while building UI land before egui submits, so this is safe.
-    pub fn paint(&self, ui: &egui::Ui, rect: egui::Rect, world_w: f32, world_h: f32) {
+    pub fn paint(&self, ui: &egui::Ui, rect: egui::Rect, world_w: f32, world_h: f32, edges: EdgeStyle) {
         self.paint_lanes(
             ui,
             rect,
@@ -262,6 +287,7 @@ impl AgentLayer {
             },
             &self.buffers.color,
             self.count,
+            self.edge_draw((world_w, world_h), rect.size(), edges),
         );
     }
 
@@ -276,6 +302,7 @@ impl AgentLayer {
             PositionSource::Interleaved(agents.pos.clone()),
             &agents.color,
             agents.count,
+            None,
         );
     }
 
@@ -288,6 +315,7 @@ impl AgentLayer {
         target: egui::Vec2,
         points: Option<&PointSnapshot>,
         agents: Option<&GpuAgents>,
+        edges: EdgeStyle,
     ) -> Option<AgentDraw> {
         match (points, agents) {
             (_, Some(agents)) => self.prepare(
@@ -296,6 +324,7 @@ impl AgentLayer {
                 PositionSource::Interleaved(agents.pos.clone()),
                 &agents.color,
                 agents.count,
+                None,
             ),
             (Some(points), None) => self.prepare(
                 target,
@@ -306,9 +335,15 @@ impl AgentLayer {
                 },
                 &self.buffers.color,
                 self.count,
+                self.edge_draw((points.world_w, points.world_h), target, edges),
             ),
             (None, None) => None,
         }
+    }
+
+    /// Returns the draw for edges over the CPU position lanes, if network edges have been copied to the GPU.
+    fn edge_draw(&self, world: (f32, f32), size: egui::Vec2, style: EdgeStyle) -> Option<EdgeDraw> {
+        self.edges.as_ref()?.prepare(world, size, style)
     }
 
     /// Writes the uniform for `size` and builds the draw.
@@ -321,6 +356,7 @@ impl AgentLayer {
         positions: PositionSource,
         color: &wgpu::Buffer,
         count: u32,
+        edges: Option<EdgeDraw>,
     ) -> Option<AgentDraw> {
         let (world_w, world_h) = world;
         if count == 0 || world_w <= 0.0 || world_h <= 0.0 {
@@ -343,9 +379,11 @@ impl AgentLayer {
             positions,
             color: color.clone(),
             count,
+            edges,
         })
     }
 
+    #[expect(clippy::too_many_arguments, reason = "the draw's parts, passed through to prepare")]
     fn paint_lanes(
         &self,
         ui: &egui::Ui,
@@ -354,8 +392,9 @@ impl AgentLayer {
         positions: PositionSource,
         color: &wgpu::Buffer,
         count: u32,
+        edges: Option<EdgeDraw>,
     ) {
-        let Some(draw) = self.prepare(rect.size(), world, positions, color, count) else {
+        let Some(draw) = self.prepare(rect.size(), world, positions, color, count, edges) else {
             return;
         };
 
@@ -369,7 +408,39 @@ impl AgentLayer {
     pub fn clear(&mut self) {
         self.count = 0;
         self.uniform_color = None;
+        if let Some(edges) = &mut self.edges {
+            edges.clear();
+        }
     }
+}
+
+impl AgentBuffers {
+    /// Creates the lane buffers. The position lanes also get storage usage if edges need to read them.
+    fn new(device: &wgpu::Device, bytes: u64, vertex_storage: bool) -> Self {
+        let positions = if vertex_storage {
+            wgpu::BufferUsages::STORAGE
+        } else {
+            wgpu::BufferUsages::empty()
+        };
+        Self {
+            pos_x: instance_buffer(device, "pos_x", bytes, positions),
+            pos_y: instance_buffer(device, "pos_y", bytes, positions),
+            color: instance_buffer(device, "color", bytes, wgpu::BufferUsages::empty()),
+        }
+    }
+}
+
+/// Returns a palette widened to packed RGBA, for indexing without a bounds check.
+///
+/// It has 256 entries, so an inner loop can index unconditionally.
+/// A model can use an index past the end of its own palette, and such indices take the first colour.
+pub fn palette_lut(palette: &[[u8; 4]]) -> [u32; 256] {
+    let fallback = palette.first().copied().unwrap_or([0xFF; 4]);
+    let mut lut = [0u32; 256];
+    for (i, slot) in lut.iter_mut().enumerate() {
+        *slot = u32::from_le_bytes(palette.get(i).copied().unwrap_or(fallback));
+    }
+    lut
 }
 
 /// `(split, interleaved)`. They differ only in how the position attributes are fetched.
@@ -449,11 +520,11 @@ fn build_pipelines(
     )
 }
 
-fn instance_buffer(device: &wgpu::Device, lane: &str, bytes: u64) -> wgpu::Buffer {
+fn instance_buffer(device: &wgpu::Device, lane: &str, bytes: u64, extra: wgpu::BufferUsages) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(&format!("henad_agent_{lane}")),
         size: bytes.max(4),
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | extra,
         mapped_at_creation: false,
     })
 }

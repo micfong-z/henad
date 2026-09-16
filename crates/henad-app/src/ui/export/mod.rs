@@ -240,6 +240,13 @@ fn export_state(app: &mut AppState) {
                 let color = (!points.color.is_empty()).then_some(points.color.as_slice());
                 state_export::write_points(&mut out, &points.pos_x, &points.pos_y, color)
             })
+        })
+        .and_then(|()| match (&layers.points, &layers.edges) {
+            (Some(points), Some(edges)) => {
+                let rows = state_export::point_rows(&points.pos_x, &points.pos_y);
+                state_export::write_edges(&mut out, &edges.src, &edges.dst, &edges.color, &rows)
+            }
+            _ => Ok(()),
         });
 
     match written {

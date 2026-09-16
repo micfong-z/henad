@@ -46,6 +46,8 @@ pub struct RuntimeInfo {
     pub available: wgpu::Limits,
     /// Set when the device granted `TIMESTAMP_QUERY`.
     pub timestamp_query: bool,
+    /// Whether a vertex shader can read a storage buffer. Drawing network edges requires this.
+    pub vertex_storage: bool,
 }
 
 impl RuntimeInfo {
@@ -56,6 +58,10 @@ impl RuntimeInfo {
             granted: device.limits(),
             available: adapter.limits(),
             timestamp_query: device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
+            vertex_storage: adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::VERTEX_STORAGE),
         }
     }
 

@@ -286,9 +286,10 @@ fn agent_draw(app: &AppState, width: u32, height: u32) -> Option<AgentDraw> {
     let target = egui::vec2(width as f32, height as f32);
     let layer = app.agent_layer.as_ref()?;
     let snapshot = app.snapshot.as_ref()?;
+    let edges = app.edge_style();
     match &snapshot.view {
-        SnapshotView::Cpu(layers) => layer.offscreen_draw(target, layers.points.as_ref(), None),
-        SnapshotView::Gpu(gpu) => layer.offscreen_draw(target, None, gpu.agents.as_deref()),
+        SnapshotView::Cpu(layers) => layer.offscreen_draw(target, layers.points.as_ref(), None, edges),
+        SnapshotView::Gpu(gpu) => layer.offscreen_draw(target, None, gpu.agents.as_deref(), edges),
     }
 }
 

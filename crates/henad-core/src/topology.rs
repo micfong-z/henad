@@ -1,7 +1,7 @@
 /// Display layers a model presents. A set, not a choice, so a composite model can say so.
 ///
-/// Must match what the state's `grid_view`, `point_view` and `edge_view` return. A registry test
-/// checks it.
+/// This must match what the state's `grid_view`, `point_view` and `edge_view` return.
+/// A registry test checks this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TopologyHint {
     pub grid: bool,

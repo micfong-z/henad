@@ -3,7 +3,7 @@
 use henad_core::network::Network;
 use rayon::prelude::*;
 
-/// Nodes per chunk of a propagation pass.
+/// Number of nodes per chunk of a propagation pass.
 const CHUNK: usize = 4096;
 
 /// Summary of a component labelling.
@@ -17,8 +17,8 @@ pub struct ComponentStats {
 
 /// Labels every node with the lowest node index in its component.
 ///
-/// Min-label propagation with pointer jumping. A retired slot keeps its own index and is not
-/// counted.
+/// Uses min-label propagation with pointer jumping.
+/// A retired slot keeps its own index and is not counted.
 pub fn label_components(graph: &Network, label: &mut Vec<u32>, scratch: &mut Vec<u32>) -> ComponentStats {
     let n = graph.slot_count();
     label.clear();
@@ -32,7 +32,7 @@ pub fn label_components(graph: &Network, label: &mut Vec<u32>, scratch: &mut Vec
         if !changed {
             break;
         }
-        // Two jumps per round shorten the chains propagation leaves behind.
+        // Two jumps per round shorten the label chains that propagation leaves behind.
         for _ in 0..2 {
             jump(label, scratch);
             std::mem::swap(label, scratch);
@@ -42,7 +42,9 @@ pub fn label_components(graph: &Network, label: &mut Vec<u32>, scratch: &mut Vec
     summarize(graph, label)
 }
 
-/// Runs one propagation round. Returns whether any label changed.
+/// Runs one propagation round.
+///
+/// Returns whether any label changed.
 fn propagate(graph: &Network, label: &[u32], out: &mut [u32]) -> bool {
     out.par_chunks_mut(CHUNK)
         .enumerate()
@@ -70,7 +72,7 @@ fn propagate(graph: &Network, label: &[u32], out: &mut [u32]) -> bool {
         .reduce(|| false, |a, b| a || b)
 }
 
-/// Follows every label one step towards its root.
+/// Moves every label one step towards its root.
 fn jump(label: &[u32], out: &mut [u32]) {
     out.par_chunks_mut(CHUNK).enumerate().for_each(|(c, slice)| {
         let base = c * CHUNK;
@@ -99,7 +101,7 @@ mod tests {
     use henad_core::authoring::primitives::rng::next_bits;
     use henad_core::network::Network;
 
-    /// Reference components from a sequential breadth-first search.
+    /// Computes reference components with a sequential breadth-first search.
     fn bfs(graph: &Network) -> ComponentStats {
         let n = graph.slot_count();
         let mut seen = vec![false; n];

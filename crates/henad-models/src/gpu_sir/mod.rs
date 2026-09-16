@@ -40,12 +40,13 @@ henad_core::params! {
     const PARAM_RECOVERY_RATE = f32_param("recovery_rate", "Recovery Rate", DEFAULT_RECOVERY_RATE, 0.0, 1.0, Some(0.01));
     const PARAM_INITIAL_INFECTED_PCT = f32_param(
         "initial_infected_pct",
-        "Initial Infected %",
+        "Initial Infected",
         DEFAULT_INITIAL_INFECTED_PCT,
         0.0,
         1.0,
         Some(0.001),
-    );
+    )
+    .percent();
 }
 
 const DEFAULT_DIM: u32 = 1024;

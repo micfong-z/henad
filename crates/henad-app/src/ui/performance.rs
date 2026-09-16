@@ -69,6 +69,9 @@ pub fn performance_ui(ui: &mut egui::Ui, app: &mut AppState) {
         // 3 integer digits, 1 point, and 1 decimal.
         let engine_ms = app.snapshot.as_ref().map_or(0.0, |s| s.engine_ms);
         padded_row(ui, "Engine", &format!("{engine_ms:05.1} ms"));
+        // Shows the last snapshot's own cost.
+        let view_ms = app.snapshot.as_ref().map_or(0.0, |s| s.view_ms);
+        padded_row(ui, "Prepare view", &format!("{view_ms:05.1} ms"));
 
         padded_row(ui, "Render", &format!("{:05.1} ms", app.timings.render_ms));
         padded_row(ui, "UI", &format!("{:05.1} ms", app.timings.ui_ms));

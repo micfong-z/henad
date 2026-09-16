@@ -1,5 +1,6 @@
 use henad_compute::cpu::agent_engine::{AgentModelState, agent_model_param_descriptors};
 use henad_compute::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
+use henad_compute::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
 use henad_compute::fault::{BUILDING, Fault, catching};
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
@@ -13,6 +14,7 @@ use henad_core::authoring::model::field::FieldLayer;
 use henad_core::authoring::model::gpu_agent_model::GpuAgentModel;
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
 use henad_core::authoring::model::grid_model::GridModel;
+use henad_core::authoring::model::network_model::NetworkModel;
 use henad_core::metadata::{Backend, ModelMetadata, Structure};
 use henad_core::model::{Model as _, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -138,6 +140,34 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
     }
 }
 
+/// Create a `ModelEntry` from a `NetworkModel` implementation.
+fn register_network_model<N: NetworkModel>() -> ModelEntry {
+    ModelEntry {
+        name: N::NAME.to_owned(),
+        id: N::ID.to_owned(),
+        description: N::DESCRIPTION.to_owned(),
+        param_descriptors: network_model_param_descriptors::<N>(),
+        stat_descriptors: N::STATS.to_vec(),
+        action_descriptors: N::ACTIONS.to_vec(),
+        topology_hint: TopologyHint::NETWORK,
+        metadata: ModelMetadata {
+            backend: Backend::Cpu,
+            palette: Some(N::PALETTE),
+            structure: Structure::Network {
+                chunk: N::CHUNK,
+                lanes: <N::Lanes as AgentLanes>::LANES,
+                edge_palette: N::EDGE_PALETTE,
+            },
+        },
+        create: Box::new(|params, seed| {
+            catching(BUILDING, || {
+                ModelState::Cpu(Box::new(NetworkModelState::<N>::from_params_seeded(params, seed)))
+            })
+        }),
+        capacity: None,
+    }
+}
+
 /// Create a `ModelEntry` from a `GpuGridModel` implementation, capturing the injected
 /// device/queue.
 fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
@@ -237,6 +267,7 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
         register_agent_model::<crate::boids::BoidsModel>(),
         register_grid_model::<crate::game_of_life::GameOfLifeModel>(),
         register_agent_model::<crate::ants::AntsModel>(),
+        register_network_model::<crate::virus_network::VirusNetwork>(),
         // --8<-- [end:cpu_entries]
     ];
 
@@ -335,6 +366,13 @@ mod tests {
                 "{}: declares agents={} but point_view() disagrees",
                 entry.id,
                 entry.topology_hint.agents
+            );
+            assert_eq!(
+                state.edge_view().is_some(),
+                entry.topology_hint.edges,
+                "{}: declares edges={} but edge_view() disagrees",
+                entry.id,
+                entry.topology_hint.edges
             );
         }
     }

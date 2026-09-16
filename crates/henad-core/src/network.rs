@@ -145,7 +145,7 @@ impl Csr {
         let mut total = 0;
         for i in 0..n {
             let new_offset = total;
-            let new_capacity = (self.len[i] as usize + self.len[i] as usize / Self::REBUILD_SLACK).max(Self::MIN_ROW);
+            let new_capacity = Self::packed_capacity(self.len[i] as usize);
             self.capacity[i] = new_capacity as u32;
             self.offset[i] = new_offset as u32;
             total += new_capacity;
@@ -165,6 +165,38 @@ impl Csr {
             self.edges[offset] = edge;
             self.len[i] += 1;
         }
+    }
+
+    /// Packs every row in node order, dropping every stale entry.
+    ///
+    /// Unlike [`Self::build`], this copies each row as it is instead of rebuilding from the edge list,
+    /// so the order of entries within a row is preserved.
+    fn repack(&mut self) {
+        let n = self.len.len();
+        let total: usize = self.len.iter().map(|&len| Self::packed_capacity(len as usize)).sum();
+        let mut neighbors = Vec::with_capacity(total);
+        let mut edges = Vec::with_capacity(total);
+        for i in 0..n {
+            let span = self.span(i as u32);
+            let new_offset = neighbors.len();
+            let new_capacity = Self::packed_capacity(span.len());
+            neighbors.extend_from_slice(&self.neighbors[span.clone()]);
+            edges.extend_from_slice(&self.edges[span]);
+            neighbors.resize(new_offset + new_capacity, 0);
+            edges.resize(new_offset + new_capacity, 0);
+            self.offset[i] = new_offset as u32;
+            self.capacity[i] = new_capacity as u32;
+        }
+        self.neighbors = neighbors;
+        self.edges = edges;
+        self.stale_count = 0;
+    }
+
+    /// Returns the capacity given to a row of `len` entries when rows are packed.
+    ///
+    /// This includes slack of 1/[`Self::REBUILD_SLACK`], and is at least [`Self::MIN_ROW`].
+    fn packed_capacity(len: usize) -> usize {
+        (len + len / Self::REBUILD_SLACK).max(Self::MIN_ROW)
     }
 
     /// Sets the CSR empty.
@@ -304,12 +336,14 @@ impl Network {
         (&self.src, &self.dst, &self.color)
     }
 
-    /// Returns a mutable slice of the edge colors.
+    /// Calls `f` with the edge list and a mutable slice of the edge colours, for recolouring edges in bulk.
     ///
-    /// The version is incremented to indicate that the view should be updated.
-    pub fn colors_mut(&mut self) -> &mut [u8] {
-        self.version += 1;
-        &mut self.color
+    /// `f` returns whether it changed any colour. The version is incremented only if it did,
+    /// so a recolour that changes nothing does not make the view copy the edge list again.
+    pub fn update_colors(&mut self, f: impl FnOnce(&[u32], &[u32], &mut [u8]) -> bool) {
+        if f(&self.src, &self.dst, &mut self.color) {
+            self.version += 1;
+        }
     }
 
     /// Sets the color of edge `edge` to `color`.
@@ -427,11 +461,21 @@ impl Network {
         stale > slots / 2 && stale > Csr::MIN_ROW
     }
 
+    /// Packs the rows, reclaiming the stale space left by relocations and retirements.
+    ///
+    /// The order of entries within each row is preserved.
+    pub fn repack(&mut self) {
+        self.in_csr.repack();
+        self.out_csr.repack();
+    }
+
     /// Rebuilds the CSR rows from the edge list, dropping any stale entries.
+    ///
+    /// This is needed when the direction changes. To only reclaim space, use [`Self::repack`], which is cheaper.
     pub fn rebuild(&mut self) {
         let n = self.occupied.len();
         let (src, dst) = (&self.src, &self.dst);
-        // Each edge as `(src, dst, index)`, already the shape of an out-row entry.
+        // Each edge as `(src, dst, index)`, which is already the shape of an out-row entry.
         let edges = || src.iter().zip(dst).enumerate().map(|(e, (&a, &b))| (a, b, e as u32));
         if self.directed {
             self.in_csr.build(n, edges().map(|(a, b, e)| (b, a, e)));
@@ -723,6 +767,31 @@ mod tests {
         assert!(net.version() > after_remove, "the direction changed");
     }
 
+    /// Every publish recolours the edges. A recolour that changes nothing must leave the version alone,
+    /// otherwise every publish would copy the whole edge list again.
+    #[test]
+    fn a_recolour_moves_the_version_only_when_it_changed_something() {
+        let mut net = Network::new(3, false);
+        net.add_edge(0, 1, 0);
+        net.add_edge(1, 2, 0);
+
+        let before = net.version();
+        net.update_colors(|_, _, color| {
+            color.fill(0);
+            false
+        });
+        assert_eq!(net.version(), before, "an unchanged recolour moved the version");
+
+        net.update_colors(|src, _, color| {
+            for (c, &a) in color.iter_mut().zip(src) {
+                *c = a as u8;
+            }
+            true
+        });
+        assert!(net.version() > before, "a real recolour left the version behind");
+        assert_eq!(net.edges().2, &[0, 1]);
+    }
+
     /// Growth alone never asks for a repack. Retiring most nodes does.
     #[test]
     fn retiring_most_of_the_graph_asks_for_a_repack() {
@@ -742,8 +811,38 @@ mod tests {
         }
         assert!(net.should_repack(), "38 cleared rows left nothing to reclaim");
 
-        net.rebuild();
+        net.repack();
         assert!(!net.should_repack(), "the repack did not reclaim it");
         assert_rows_match(&net, "after the repack");
+    }
+
+    /// A repack copies each row instead of rebuilding it, so the order within each row is preserved.
+    #[test]
+    fn a_repack_keeps_every_row_as_it_was() {
+        let mut net = Network::new(30, true);
+        let mut rng = 0x2E9A_u64;
+        for _ in 0..200 {
+            let a = next_bits(&mut rng) % 30;
+            let b = next_bits(&mut rng) % 30;
+            if a != b && !net.has_edge(a, b) {
+                net.add_edge(a, b, 0);
+            }
+        }
+        for e in 0..40 {
+            net.remove_edge(e);
+        }
+        net.retire(3);
+        let rows = |net: &Network| -> Vec<(Vec<u32>, Vec<u32>)> {
+            (0..30)
+                .map(|i| (net.in_neighbors(i).to_vec(), net.out_neighbors(i).to_vec()))
+                .collect()
+        };
+        let before = rows(&net);
+        net.repack();
+        assert_eq!(rows(&net), before, "a repack reordered or lost a row");
+        assert_rows_match(&net, "after a repack");
+
+        net.add_edge(3, 4, 0);
+        assert_rows_match(&net, "after a repack and an insert");
     }
 }

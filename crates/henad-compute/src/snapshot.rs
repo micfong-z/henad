@@ -14,7 +14,7 @@ pub struct Snapshot {
     pub actual_tps: f64,
     /// Smoothed engine time per tick in milliseconds.
     pub engine_ms: f64,
-    /// Cost of `prepare_view` in milliseconds.
+    /// Time spent preparing the view for this snapshot, including any layout, in milliseconds.
     pub view_ms: f64,
     pub view: SnapshotView,
     /// Current stat values (one per stat series).
@@ -75,11 +75,11 @@ pub struct GridSnapshot {
 /// Owned edge list, cloned from the sim state.
 #[derive(Default)]
 pub struct EdgeSnapshot {
-    /// Graph version the list was copied at.
+    /// Graph version at the time the list was copied.
     pub version: u64,
     pub src: Vec<u32>,
     pub dst: Vec<u32>,
-    /// One palette index per edge, or empty for a uniform colour.
+    /// One palette index per edge, or empty if every edge has the same colour.
     pub color: Vec<u8>,
     pub palette: &'static [[u8; 4]],
     pub directed: bool,

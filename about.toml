@@ -13,3 +13,27 @@ accepted = [
     "BSD-3-Clause",
     "MPL-2.0",
 ]
+
+# cargo-about keeps one file per licence per crate, whichever its directory walk finds first. Walk
+# order depends on the filesystem, so each crate below with two such files gets its pick pinned.
+
+# The second file covers a vendored module in the Linux build. Both are listed.
+[rfd.clarify]
+license = "MIT"
+
+[[rfd.clarify.files]]
+path = "LICENSE"
+checksum = "65fc947f4bac882a2cd104ef73c246b1b037059df9f2b3a58b7f77f0b9e56071"
+
+[[rfd.clarify.files]]
+path = "src/backend/xdg_desktop_portal/window_identifier/LICENSE"
+checksum = "ae26bc7b1bc91fb8648f6a298decbb1a77090a56c9d04e2c23b8365e5f54acb5"
+
+# LICENSE and LICENSE-MIT.md are the same notice a blank line apart.
+[miniz_oxide.clarify]
+license = "MIT OR Zlib OR Apache-2.0"
+
+[[miniz_oxide.clarify.files]]
+path = "LICENSE-MIT.md"
+license = "MIT"
+checksum = "799e9ca9d179295ef372f25d3769cdda7d25bb2668add6a6a1e22d1e4c678b8d"

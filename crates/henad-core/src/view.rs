@@ -20,16 +20,16 @@ pub struct PointView<'a> {
     pub palette: &'static [[u8; 4]],
 }
 
-/// Edges for rendering, with endpoints indexing the point view's positions.
+/// Edges for rendering. Endpoints are indices into the point view's positions.
 pub struct EdgeView<'a> {
     pub src: &'a [u32],
     pub dst: &'a [u32],
     /// One palette index per edge. `None` colours every edge `palette[0]`.
     pub color: Option<&'a [u8]>,
     pub palette: &'static [[u8; 4]],
-    /// Whether edges are directed.
+    /// Whether the edges are directed.
     pub directed: bool,
-    /// Changes whenever the edges, their colours or the direction do.
+    /// Used to detect when the edges, their colours or their direction have changed.
     pub version: u64,
 }
 

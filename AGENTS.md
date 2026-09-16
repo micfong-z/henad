@@ -299,7 +299,10 @@ Preview a release's notes: `python3 scripts/changelog_section.py 0.1.0` (what th
 the release body; it refuses a section with no date)
 Regenerate the third-party licence page: `cargo about generate about.hbs -o docs/license.html`
 (needs `cargo-about`, pinned to 0.9.1 in CI; the `lint` job fails when the committed page and the
-dependency tree disagree)
+dependency tree disagree). A crate shipping two files under one licence gets a `clarify` entry in
+`about.toml`, as `rfd` and `miniz_oxide` have. Left alone, cargo-about keeps whichever file its
+directory walk finds first, and walk order depends on the filesystem. A page generated on macOS can
+then fail the check on Linux, or pass it by luck, as `miniz_oxide` did.
 
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).
 The web build is the exception and runs on nightly, which `scripts/build_web.sh` selects. Threads on

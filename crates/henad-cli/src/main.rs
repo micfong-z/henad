@@ -43,7 +43,7 @@ use henad_compute::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION};
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
 use henad_core::export::{StatsWriter, state as state_export};
 use henad_core::model::SimState;
-use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
+use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
 
 use crate::actions::Schedule;
@@ -299,7 +299,12 @@ fn print_params(entry: &ModelEntry) {
                 format!("kind=choice default={default} options={}", options.join("|"))
             }
         };
-        println!("  index={index} id={id} {kind} apply={apply} label=\"{label}\"");
+        // Values are always fractions, whatever the panel shows, so this only describes how to read one.
+        let format = match desc.format {
+            ParamFormat::Plain => "",
+            ParamFormat::Percent => " format=percent",
+        };
+        println!("  index={index} id={id} {kind} apply={apply}{format} label=\"{label}\"");
     }
 }
 
@@ -816,10 +821,12 @@ fn stats_gpu(
     Ok(writer.finish()?)
 }
 
-/// Serialize a CPU model's view to a simple text format: a grid as comma-separated cell indices
-/// per row, a point cloud as `x,y` CSV with a `color` column when the model carries the lane.
+/// Serializes a CPU model's view to a simple text format.
 ///
-/// Both sections are written, so a composite model exports its field and its agents.
+/// A grid is written as comma-separated cell indices per row, a point cloud as `x,y` CSV with a `color` column if
+/// the model carries the lane, and network edges as `src,dst,color` rows that index into the points.
+///
+/// Every section the model has is written, so a composite model exports both its field and its agents.
 fn write_state(state: &mut dyn SimState, path: &Path) -> Result<()> {
     // The display layer is only refreshed on publish, and an export is a publish.
     state.prepare_view();
@@ -836,8 +843,13 @@ fn write_state(state: &mut dyn SimState, path: &Path) -> Result<()> {
         state_export::write_grid(&mut out, grid.width, grid.height, grid.cells)?;
     }
 
-    if let Some(points) = points {
+    if let Some(points) = &points {
         state_export::write_points(&mut out, points.pos_x, points.pos_y, points.color)?;
+    }
+
+    if let (Some(points), Some(edges)) = (&points, state.edge_view()) {
+        let rows = state_export::point_rows(points.pos_x, points.pos_y);
+        state_export::write_edges(&mut out, edges.src, edges.dst, edges.color.unwrap_or(&[]), &rows)?;
     }
 
     Ok(())
@@ -910,7 +922,7 @@ fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue> {
 mod tests {
     use super::{parse_overrides, resolve_params};
     use henad_core::helpers::{f32_param, u32_param};
-    use henad_core::params::{ParamApply, ParamDescriptor, ParamKind, ParamValue};
+    use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 
     const OPTIONS: &[&str] = &["moore", "von_neumann"];
 
@@ -926,6 +938,7 @@ mod tests {
                     default: 0,
                 },
                 apply: ParamApply::Live,
+                format: ParamFormat::Plain,
             },
         ]
     }

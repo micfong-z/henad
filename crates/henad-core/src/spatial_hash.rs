@@ -108,7 +108,9 @@ impl SpatialHash {
         self.build_where(pos_x, pos_y, |_| true);
     }
 
-    /// Like [`Self::build`], but skips agents that `include` rejects. No query finds them.
+    /// Like [`Self::build`], but skips agents that `include` rejects.
+    ///
+    /// Skipped agents are not returned by any query.
     pub fn build_where(&mut self, pos_x: &[f32], pos_y: &[f32], include: impl Fn(usize) -> bool) {
         /// Cell index marking a skipped agent.
         const NO_CELL: u32 = u32::MAX;
@@ -210,12 +212,12 @@ impl SpatialHash {
         }
     }
 
-    /// Whether this hash was built with `cell_size`.
+    /// Returns whether this hash was built with `cell_size`.
     pub fn cell_size_is(&self, cell_size: f32) -> bool {
         (self.cell_size - cell_size).abs() <= f32::EPSILON
     }
 
-    /// Whether this hash was built for that world.
+    /// Returns whether this hash was built for a world of that size.
     pub fn world_is(&self, world_w: f32, world_h: f32) -> bool {
         (self.world_w - world_w).abs() <= f32::EPSILON && (self.world_h - world_h).abs() <= f32::EPSILON
     }

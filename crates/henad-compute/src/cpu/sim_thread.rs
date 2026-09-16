@@ -43,9 +43,12 @@ pub enum SimCommand {
     /// Run the model's declared action at this index, once.
     Act(usize),
     /// Turn the layout on or off, with a time budget per publish in milliseconds.
+    ///
+    /// The layout relaxes after every tick. While paused, it relaxes only if `while_paused` is set.
     SetLayout {
         on: bool,
         budget_ms: f32,
+        while_paused: bool,
     },
     Shutdown,
 }
@@ -96,8 +99,12 @@ struct Loop {
     last_publish: Instant,
     /// Number of snapshots published.
     serial: u64,
-    /// Whether the state has a layout switched on.
-    relaxing: bool,
+    /// Whether the state has a layout that is switched on.
+    layout_on: bool,
+    /// Whether the layout keeps relaxing while paused.
+    relax_paused: bool,
+    /// Whether a tick has run since the last publish.
+    ticked: bool,
     /// Smoothed engine time per tick (EMA). `None` until the first step has been timed.
     engine_ms: Option<f64>,
     /// When the next capped batch falls due.
@@ -144,8 +151,16 @@ impl SimLoop for Loop {
                     log::warn!("Failed to set param index {index} to {value:?}");
                 }
             }
-            SimCommand::SetLayout { on, budget_ms } => {
-                self.relaxing = on && self.state.set_layout(on, budget_ms);
+            SimCommand::SetLayout {
+                on,
+                budget_ms,
+                while_paused,
+            } => {
+                let budget_ms = budget_ms.min(crate::runner::MAX_VIEW_BUDGET_MS);
+                // Called before the `&&`. Inside it, a switch-off would short-circuit and never reach the state.
+                let accepted = self.state.set_layout(on, budget_ms);
+                self.layout_on = on && accepted;
+                self.relax_paused = while_paused;
                 self.force_publish_snapshot();
             }
             SimCommand::Act(index) => {
@@ -202,9 +217,9 @@ impl SimLoop for Loop {
 }
 
 impl Loop {
-    /// Keeps publishing while paused, so a layout can keep relaxing. Idle without a layout.
+    /// Keeps publishing while paused, so the layout can keep relaxing if asked to. Otherwise returns [`Pace::Idle`].
     fn relax_while_paused(&mut self) -> Pace {
-        if !self.relaxing {
+        if !(self.layout_on && self.relax_paused) {
             return Pace::Idle;
         }
         let since = Instant::now().duration_since(self.last_publish);
@@ -236,6 +251,7 @@ impl Loop {
         let t0 = Instant::now();
         self.state.step();
         self.step_count += 1;
+        self.ticked = true;
         let sample = t0.elapsed().as_secs_f64() * 1000.0;
         // EMA with a = 0.1
         self.engine_ms = Some(match self.engine_ms {
@@ -279,7 +295,10 @@ impl Loop {
         let spare = crate::runner::claim_spare(&self.slot);
         let engine_ms = self.engine_ms.unwrap_or(0.0);
         self.serial += 1;
-        let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, engine_ms, self.serial);
+        // Actions and setting changes also publish, and must not move the nodes of a paused network.
+        let relax = self.layout_on && (self.ticked || self.relax_paused);
+        self.ticked = false;
+        let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, engine_ms, self.serial, relax);
         crate::runner::publish(&self.slot, snap);
         // After the lock, so waking the UI can never make it block on us.
         if let Some(wake) = &self.wake {
@@ -302,7 +321,7 @@ impl SimThread {
     /// the same sink off its `GpuContext`.
     pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
         // So the UI has something to draw before play is pressed.
-        let slot = SnapshotSlot::with_initial(build_snapshot(None, &mut *state, 0.0, 0.0, 0));
+        let slot = SnapshotSlot::with_initial(build_snapshot(None, &mut *state, 0.0, 0.0, 0, false));
         let now = Instant::now();
         let sim = Loop {
             state,
@@ -317,7 +336,9 @@ impl SimThread {
             actual_tps: 0.0,
             last_publish: now,
             serial: 0,
-            relaxing: false,
+            layout_on: false,
+            relax_paused: false,
+            ticked: false,
             engine_ms: None,
             next_step_at: now,
         };
@@ -385,10 +406,14 @@ fn build_snapshot(
     actual_tps: f64,
     engine_ms: f64,
     serial: u64,
+    relax: bool,
 ) -> Snapshot {
     // The model turns its state into something drawable here rather than every tick.
     let view_started = Instant::now();
     state.prepare_view();
+    if relax {
+        state.relax_layout();
+    }
     let view_ms = view_started.elapsed().as_secs_f64() * 1000.0;
     // Destructured up front so both layers can claim buffers without moving `recycled` twice.
     let recycled = match reuse.map(|s| s.view) {
@@ -428,7 +453,7 @@ fn build_snapshot(
 
     let edges = state.edge_view().map(|ev| {
         let mut snap = spare_edges.take().unwrap_or_default();
-        // Copied only when the version or the length changed.
+        // Copied only if the version or the length changed.
         if snap.version != ev.version || snap.src.len() != ev.src.len() {
             refill(&mut snap.src, ev.src);
             refill(&mut snap.dst, ev.dst);
@@ -462,8 +487,8 @@ mod pacing_timing_tests {
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
     use henad_core::view::StatEntry;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
 
     struct Counter(Arc<AtomicU64>);
 
@@ -479,6 +504,60 @@ mod pacing_timing_tests {
         }
         fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
             false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    /// Records every layout switch that the loop passes on to the state.
+    struct LayoutSwitches(Arc<Mutex<Vec<bool>>>);
+
+    impl SimState for LayoutSwitches {
+        fn step(&mut self) {}
+        fn tick(&self) -> u64 {
+            0
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn set_layout(&mut self, on: bool, _budget_ms: f32) -> bool {
+            self.0.lock().expect("switch log").push(on);
+            true
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    /// Counts how many times the layout relaxes.
+    struct Relaxes(Arc<AtomicU64>);
+
+    impl SimState for Relaxes {
+        fn step(&mut self) {}
+        fn tick(&self) -> u64 {
+            0
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn set_layout(&mut self, _on: bool, _budget_ms: f32) -> bool {
+            true
+        }
+        fn relax_layout(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
         }
         fn population(&self) -> u64 {
             0
@@ -603,6 +682,63 @@ mod pacing_timing_tests {
         assert_eq!(stepped.actual_tps, 0.0, "one step over a long pause reported a rate");
     }
 
+    /// Switching the layout off must reach the state.
+    /// Otherwise the next publish would still run the layout, and a paused network would keep moving whenever an
+    /// action or a step publishes.
+    #[test]
+    fn switching_the_layout_off_reaches_the_state() {
+        let switches = Arc::new(Mutex::new(Vec::new()));
+        let mut thread = SimThread::new(
+            Box::new(LayoutSwitches(Arc::clone(&switches))),
+            50.0,
+            None,
+            FaultSink::new(),
+        );
+        thread.send(SimCommand::SetLayout {
+            on: true,
+            budget_ms: 1.0,
+            while_paused: false,
+        });
+        thread.send(SimCommand::SetLayout {
+            on: false,
+            budget_ms: 1.0,
+            while_paused: false,
+        });
+        settle();
+        assert_eq!(*switches.lock().expect("switch log"), [true, false]);
+    }
+
+    /// While paused, the layout moves on a step, and otherwise only when asked to relax while paused.
+    #[test]
+    fn a_paused_layout_relaxes_on_a_step_or_when_asked() {
+        let relaxes = Arc::new(AtomicU64::new(0));
+        let count = || relaxes.load(Ordering::Relaxed);
+        let layout = |while_paused| SimCommand::SetLayout {
+            on: true,
+            budget_ms: 1.0,
+            while_paused,
+        };
+        let mut thread = SimThread::new(Box::new(Relaxes(Arc::clone(&relaxes))), 50.0, None, FaultSink::new());
+
+        thread.send(layout(false));
+        settle();
+        assert_eq!(count(), 0, "a paused publish relaxed");
+
+        thread.step_once();
+        settle();
+        assert_eq!(count(), 1, "a step relaxes once and no more");
+
+        thread.send(layout(true));
+        settle();
+        assert!(count() >= 3, "relaxing while paused stopped at {}", count());
+
+        thread.send(layout(false));
+        settle();
+        let stopped = count();
+        settle();
+        assert_eq!(count(), stopped, "the layout kept relaxing once told to stop");
+    }
+
     /// A snapshot nobody is told about is a snapshot nobody draws. Stepping used to only refresh
     /// the viewport once you moved the mouse.
     #[test]
@@ -722,7 +858,7 @@ mod snapshot_tests {
 
     const PALETTE: &[[u8; 4]] = &[[1, 2, 3, 4], [5, 6, 7, 8]];
 
-    /// Model with nodes and edges.
+    /// A model with nodes and edges.
     struct Networked {
         pos: Vec<f32>,
         src: Vec<u32>,
@@ -852,7 +988,7 @@ mod snapshot_tests {
     #[test]
     fn a_composite_model_publishes_both_layers() {
         let mut state = Composite::new(3, true);
-        let snap = build_snapshot(None, &mut state, 0.0, 0.0, 0);
+        let snap = build_snapshot(None, &mut state, 0.0, 0.0, 0, false);
         let layers = layers(&snap.view);
 
         let grid = layers.grid.as_ref().expect("field layer was dropped");
@@ -869,7 +1005,7 @@ mod snapshot_tests {
     #[test]
     fn a_model_without_a_color_lane_publishes_an_empty_one() {
         let mut state = Composite::new(2, false);
-        let snap = build_snapshot(None, &mut state, 0.0, 0.0, 0);
+        let snap = build_snapshot(None, &mut state, 0.0, 0.0, 0, false);
         let points = layers(&snap.view).points.as_ref().expect("agent layer was dropped");
         assert!(points.color.is_empty());
         assert_eq!(points.pos_x.len(), 2);
@@ -879,7 +1015,7 @@ mod snapshot_tests {
     #[test]
     fn recycling_reuses_the_color_lane_across_a_length_change() {
         let mut big = Composite::new(64, true);
-        let first = build_snapshot(None, &mut big, 0.0, 0.0, 0);
+        let first = build_snapshot(None, &mut big, 0.0, 0.0, 0, false);
         let capacity = layers(&first.view)
             .points
             .as_ref()
@@ -888,7 +1024,7 @@ mod snapshot_tests {
         assert!(capacity >= 64);
 
         let mut small = Composite::new(5, true);
-        let second = build_snapshot(Some(first), &mut small, 0.0, 0.0, 0);
+        let second = build_snapshot(Some(first), &mut small, 0.0, 0.0, 0, false);
         let points = layers(&second.view).points.as_ref().expect("agent layer was dropped");
         assert_eq!(points.color, vec![0, 1, 0, 1, 0]);
         assert_eq!(points.color.capacity(), capacity, "the color lane reallocated");
@@ -898,12 +1034,12 @@ mod snapshot_tests {
     #[test]
     fn an_unchanged_edge_list_is_handed_back_untouched() {
         let mut model = Networked::new(500, 7);
-        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1);
+        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1, false);
         let ptr = layers(&first.view).edges.as_ref().expect("edges").src.as_ptr();
 
-        // Same version, so nothing is copied.
+        // The version is unchanged, so nothing is copied.
         model.src[0] = 999;
-        let second = build_snapshot(Some(first), &mut model, 0.0, 0.0, 2);
+        let second = build_snapshot(Some(first), &mut model, 0.0, 0.0, 2, false);
         let edges = layers(&second.view).edges.as_ref().expect("edges");
         assert_eq!(edges.src.as_ptr(), ptr, "the edge list reallocated");
         assert_eq!(edges.src[0], 0, "an unchanged version was copied anyway");
@@ -912,12 +1048,12 @@ mod snapshot_tests {
     #[test]
     fn a_changed_edge_list_is_refilled_into_the_same_room() {
         let mut model = Networked::new(500, 7);
-        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1);
+        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1, false);
         let capacity = layers(&first.view).edges.as_ref().expect("edges").src.capacity();
 
         model.version = 8;
         model.src[0] = 999;
-        let second = build_snapshot(Some(first), &mut model, 0.0, 0.0, 2);
+        let second = build_snapshot(Some(first), &mut model, 0.0, 0.0, 2, false);
         let edges = layers(&second.view).edges.as_ref().expect("edges");
         assert_eq!(edges.src[0], 999, "the change did not reach the snapshot");
         assert_eq!(edges.version, 8);
@@ -927,10 +1063,10 @@ mod snapshot_tests {
     #[test]
     fn an_edge_list_that_changed_length_is_refilled() {
         let mut model = Networked::new(500, 7);
-        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1);
+        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1, false);
 
         let mut shorter = Networked::new(3, 7);
-        let second = build_snapshot(Some(first), &mut shorter, 0.0, 0.0, 2);
+        let second = build_snapshot(Some(first), &mut shorter, 0.0, 0.0, 2, false);
         let edges = layers(&second.view).edges.as_ref().expect("edges");
         assert_eq!(edges.src.len(), 3, "a shorter list was passed through whole");
     }
@@ -938,11 +1074,11 @@ mod snapshot_tests {
     #[test]
     fn a_model_without_edges_publishes_none() {
         let mut networked = Networked::new(4, 1);
-        let first = build_snapshot(None, &mut networked, 0.0, 0.0, 1);
+        let first = build_snapshot(None, &mut networked, 0.0, 0.0, 1, false);
         assert!(layers(&first.view).edges.is_some());
 
         let mut plain = Composite::new(4, true);
-        let second = build_snapshot(Some(first), &mut plain, 0.0, 0.0, 2);
+        let second = build_snapshot(Some(first), &mut plain, 0.0, 0.0, 2, false);
         assert!(
             layers(&second.view).edges.is_none(),
             "the edge layer outlived its model"
@@ -952,7 +1088,7 @@ mod snapshot_tests {
     #[test]
     fn the_serial_is_whatever_the_publish_was_given() {
         let mut model = Networked::new(2, 1);
-        assert_eq!(build_snapshot(None, &mut model, 0.0, 0.0, 41).serial, 41);
-        assert_eq!(build_snapshot(None, &mut model, 0.0, 0.0, 42).serial, 42);
+        assert_eq!(build_snapshot(None, &mut model, 0.0, 0.0, 41, false).serial, 41);
+        assert_eq!(build_snapshot(None, &mut model, 0.0, 0.0, 42, false).serial, 42);
     }
 }

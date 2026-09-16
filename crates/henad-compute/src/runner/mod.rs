@@ -24,6 +24,16 @@ use std::sync::{Arc, Mutex};
 /// batches aims to fill it. Two different numbers would leave a frame running two batches.
 pub const PUMP_BUDGET_MS: f64 = 6.0;
 
+/// Longest time one publish may spend preparing its view, including a network's layout.
+///
+/// In a browser, the view is prepared inside the frame pump, so going past the pump's budget stalls the frame.
+#[cfg(target_arch = "wasm32")]
+pub const MAX_VIEW_BUDGET_MS: f32 = PUMP_BUDGET_MS as f32;
+
+/// Longest time one publish may spend preparing its view, including a network's layout.
+#[cfg(not(target_arch = "wasm32"))]
+pub const MAX_VIEW_BUDGET_MS: f32 = f32::INFINITY;
+
 /// What a loop wants after one [`SimLoop::pump`].
 pub enum Pace {
     /// Nothing until a command arrives.

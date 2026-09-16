@@ -9,7 +9,7 @@ use egui::{ColorImage, RichText, TextureOptions};
 use egui_wgpu::{CallbackResources, CallbackTrait};
 use henad_compute::display_scale::{display_dims, source_row};
 use henad_compute::gpu::GpuDisplay;
-use henad_compute::snapshot::{CpuLayers, GpuSnapshot, GridSnapshot, PointSnapshot, SnapshotView};
+use henad_compute::snapshot::{CpuLayers, EdgeSnapshot, GpuSnapshot, GridSnapshot, PointSnapshot, SnapshotView};
 
 /// Paints a GPU model's display texture straight into the viewport.
 ///
@@ -95,11 +95,24 @@ pub fn viewport_ui(ui: &mut egui::Ui, app: &mut AppState) {
             ui.label("Agents:");
             ui.selectable_value(&mut app.point_render_mode, PointRenderMode::Agents, "Sprites");
             ui.selectable_value(&mut app.point_render_mode, PointRenderMode::Density, "Density");
+
+            // Edges are only drawn along with sprites.
+            if let Some(directed) = edges_directed(app)
+                && app.point_render_mode == PointRenderMode::Agents
+            {
+                ui.separator();
+                ui.checkbox(&mut app.show_edges, "Edges");
+                if app.show_edges {
+                    ui.add_enabled(directed, egui::Checkbox::new(&mut app.edge_arrows, "Arrows"))
+                        .on_hover_text("Show direction with arrowheads")
+                        .on_disabled_hover_text("Only directed edges have arrows");
+                }
+            }
         }
     });
     if app.point_render_mode != mode_before {
-        // The tick has not moved, but what we draw from it has.
-        app.last_rendered_tick = None;
+        // The snapshot is unchanged, but what we draw from it has changed.
+        app.last_rendered_serial = None;
     }
 
     draw_view(ui, app);
@@ -140,8 +153,10 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
         return;
     }
 
-    let current_tick = app.snapshot.as_ref().map_or(0, |s| s.tick);
-    let needs_update = app.last_rendered_tick != Some(current_tick);
+    // Keyed on the serial rather than the tick,
+    // since a layout relaxing while the simulation is paused moves positions without advancing the tick.
+    let current_serial = app.snapshot.as_ref().map_or(0, |s| s.serial);
+    let needs_update = app.last_rendered_serial != Some(current_serial);
 
     // Taken out for the duration to avoid borrow conflicts with the rest of `app`.
     let Some(snapshot) = app.snapshot.take() else {
@@ -165,13 +180,13 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
         }
         if let Some(points) = &layers.points {
             match app.point_render_mode {
-                PointRenderMode::Agents => upload_agents(app, points),
+                PointRenderMode::Agents => upload_agents(app, points, layers.edges.as_deref()),
                 PointRenderMode::Density => {
                     render_density_heatmap(&ctx, app, &points.pos_x, &points.pos_y, points.world_w, points.world_h);
                 }
             }
         }
-        app.last_rendered_tick = Some(current_tick);
+        app.last_rendered_serial = Some(current_serial);
     }
 
     // Both layers share one rect so they stay registered. See `PointView`'s docs.
@@ -192,7 +207,7 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
             match app.point_render_mode {
                 PointRenderMode::Agents => {
                     if let Some(layer) = &app.agent_layer {
-                        layer.paint(ui, rect, world_w, world_h);
+                        layer.paint(ui, rect, world_w, world_h, app.edge_style());
                     }
                 }
                 PointRenderMode::Density => {
@@ -218,6 +233,14 @@ fn layer_extent(layers: &CpuLayers) -> Option<(f32, f32)> {
     }
     let points = layers.points.as_ref()?;
     Some((points.world_w, points.world_h))
+}
+
+/// Returns whether the snapshot's edges are directed, or `None` for a model without edges.
+fn edges_directed(app: &AppState) -> Option<bool> {
+    match app.snapshot.as_ref().map(|s| &s.view) {
+        Some(SnapshotView::Cpu(layers)) => layers.edges.as_ref().map(|edges| edges.directed),
+        _ => None,
+    }
 }
 
 /// The mode selector only applies when there are points to draw.
@@ -278,14 +301,16 @@ fn ensure_agent_layer(app: &mut AppState) {
             &app.render_ctx.device,
             &app.render_ctx.queue,
             app.render_ctx.target_format,
+            app.runtime.vertex_storage,
         ));
     }
 }
 
-fn upload_agents(app: &mut AppState, points: &PointSnapshot) {
+fn upload_agents(app: &mut AppState, points: &PointSnapshot, edges: Option<&EdgeSnapshot>) {
     ensure_agent_layer(app);
     if let Some(layer) = &mut app.agent_layer {
         layer.upload(points);
+        layer.upload_edges(edges);
     }
 }
 
@@ -342,6 +367,9 @@ fn render_density_heatmap(
             .map(|(xs, ys)| {
                 let mut buf = vec![0u32; num_pixels];
                 for (&x, &y) in xs.iter().zip(ys.iter()) {
+                    if !(x.is_finite() && y.is_finite()) {
+                        continue;
+                    }
                     let px = ((x * inv_world_w) as usize).min(DENSITY_W - 1);
                     let py = ((y * inv_world_h) as usize).min(DENSITY_H - 1);
                     buf[py * DENSITY_W + px] += 1;

@@ -3,6 +3,8 @@
 // Positions arrive as two vertex buffers rather than one interleaved one, so the sim's SoA lanes
 // upload with no repacking.
 
+#import world::{HIDDEN, is_placed, to_clip}
+
 struct Uniforms {
     world: vec2<f32>,
     // Half the sprite size in clip units. Precomputed, since it depends on the target rect.
@@ -32,14 +34,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, in: VertexInput) -> VertexO
         f32((vertex_index >> 1u) & 1u),
     ) * 2.0 - 1.0;
 
-    // World to clip. Y is flipped, model row 0 is the top and so is clip +1.
-    let center = vec2<f32>(
-        in.pos_x / u.world.x * 2.0 - 1.0,
-        1.0 - in.pos_y / u.world.y * 2.0,
-    );
+    let pos = vec2<f32>(in.pos_x, in.pos_y);
+    let center = to_clip(pos, u.world);
 
     var out: VertexOutput;
-    out.clip_position = vec4<f32>(center + corner * u.half_size, 0.0, 1.0);
+    out.clip_position = select(HIDDEN, vec4<f32>(center + corner * u.half_size, 0.0, 1.0), is_placed(pos));
     out.color = in.color;
     out.offset = corner;
     return out;

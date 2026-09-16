@@ -524,7 +524,7 @@ impl Loop {
         self.serial += 1;
         let snap = Snapshot {
             serial: self.serial,
-            // No `prepare_view` on the GPU path.
+            // The GPU path has no `prepare_view`.
             view_ms: 0.0,
             tick: self.state.tick(),
             population: self.state.population(),

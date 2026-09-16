@@ -20,18 +20,17 @@ use crate::cpu::primitives::chunked::advance_tick_seed;
 /// Default RNG seed.
 pub const NETWORK_INIT_SEED: u64 = 0x3141_5926_5EED_0001;
 
-/// Salts separating the global and layout RNG streams.
+// Salts that separate the global and layout RNG streams from the node pass stream.
 const GLOBAL_SALT: u64 = 0x53_5897_5EED_0001;
 const LAYOUT_SALT: u64 = 0x93_2384_5EED_0001;
 
-/// Indices of the params the engine prepends to a model's own.
-///
-/// The node count keeps the id `num_agents` for the benchmark scripts.
+// Indices of the params that the engine prepends to a model's own.
+/// The node count keeps the id `num_agents`, which the benchmark scripts rely on.
 pub const NUM_NODES: usize = 0;
 pub const WORLD_WIDTH: usize = 1;
 pub const WORLD_HEIGHT: usize = 2;
 
-/// Number of params the engine prepends.
+/// Number of params that the engine prepends.
 pub const NETWORK_PARAM_BASE: usize = 3;
 
 /// Returns the model's own slice of the full param list.
@@ -50,10 +49,10 @@ pub fn network_model_param_descriptors<N: NetworkModel>() -> Vec<ParamDescriptor
     descs
 }
 
-/// Layout pacing and scratch buffers.
+/// Layout switch, time budget and scratch buffers.
 struct LayoutState {
     on: bool,
-    /// Milliseconds one publish may spend relaxing the layout.
+    /// Time in milliseconds that one publish may spend relaxing the layout.
     budget_ms: f32,
     scratch: LayoutScratch,
 }
@@ -69,9 +68,9 @@ pub struct NetworkModelState<N: NetworkModel> {
     aux: N::Aux,
     params: ParamStore,
     extent: Extent,
-    /// Node pass seed, split per chunk.
+    /// Seed for the node pass, split per chunk.
     seed: u64,
-    /// Global pass RNG stream.
+    /// RNG stream for the global pass.
     global_seed: u64,
     action_seed: u64,
     tick: u64,
@@ -88,7 +87,7 @@ impl<N: NetworkModel> NetworkModelState<N> {
         Self::build(params, seed, |_nodes, _extent| {})
     }
 
-    /// Creates a state, then passes it to `seed_graph` to set up a particular graph.
+    /// Creates a state, then passes it to `seed_graph` to set up a specific graph.
     pub fn from_graph(
         params: &[ParamValue],
         seed: Option<u64>,
@@ -120,8 +119,8 @@ impl<N: NetworkModel> NetworkModelState<N> {
             N::init(&mut nodes, extent, own, &mut rng);
             seed_graph(&mut nodes, extent);
         }
-        // Reclaims the space relocations left during `init`.
-        graph.rebuild();
+        // Reclaims the space left stale by relocations during `init`, and lays the rows out in node order.
+        graph.repack();
 
         Self {
             lanes,
@@ -182,7 +181,7 @@ impl<N: NetworkModel> SimState for NetworkModelState<N> {
 
         self.lanes.swap();
         if self.graph.should_repack() {
-            self.graph.rebuild();
+            self.graph.repack();
         }
         self.seed = advance_tick_seed(self.seed, self.tick);
         self.tick += 1;
@@ -216,14 +215,14 @@ impl<N: NetworkModel> SimState for NetworkModelState<N> {
         })
     }
 
-    /// Runs the model's `prepare_view`, then relaxes the layout within the budget, at least once.
     fn prepare_view(&mut self) {
-        {
-            let Self { lanes, graph, aux, .. } = self;
-            let mut nodes = Nodes::<N> { lanes, graph, aux };
-            N::prepare_view(&mut nodes, self.tick);
-        }
+        let Self { lanes, graph, aux, .. } = self;
+        let mut nodes = Nodes::<N> { lanes, graph, aux };
+        N::prepare_view(&mut nodes, self.tick);
+    }
 
+    /// Relaxes the layout until the time budget is spent, running at least one iteration.
+    fn relax_layout(&mut self) {
         if !self.layout.on {
             return;
         }
@@ -283,7 +282,7 @@ impl<N: NetworkModel> SimState for NetworkModelState<N> {
         self.lanes.heap_bytes() + self.graph.heap_bytes() + self.layout.scratch.heap_bytes()
     }
 
-    /// Number of node pass chunks, counted over every slot.
+    /// Number of node pass chunks, counted over every slot including retired ones.
     fn parallel_jobs(&self) -> Option<usize> {
         Some(self.graph.slot_count().div_ceil(N::CHUNK.max(1)))
     }
@@ -315,7 +314,7 @@ mod tests {
         color = state;
     }
 
-    /// Ring where a lit node lights its neighbours each tick.
+    /// A ring in which a lit node lights its neighbours each tick.
     struct Ring;
 
     impl NetworkModel for Ring {
@@ -380,7 +379,7 @@ mod tests {
         }
     }
 
-    /// Spawns one node and retires another every tick.
+    /// A model that spawns one node and retires another every tick.
     struct Churn;
 
     impl NetworkModel for Churn {
@@ -453,7 +452,7 @@ mod tests {
     fn the_node_pass_reads_its_neighbours() {
         let mut state = ring(9);
         assert_eq!(lit(&state), 1.0, "one node starts lit");
-        // Two more per tick, one each way.
+        // Two more nodes are lit per tick, one in each direction.
         state.step();
         assert_eq!(lit(&state), 3.0);
         state.step();
@@ -490,45 +489,32 @@ mod tests {
         assert!(!state.act(1), "there is no second action");
     }
 
+    /// A publish that the runner does not relax on must leave the nodes where they are.
+    /// Otherwise a paused network would move whenever an action publishes.
     #[test]
-    fn the_layout_is_accepted_and_moves_nodes() {
+    fn only_a_relax_moves_nodes() {
+        fn xs(state: &NetworkModelState<Ring>) -> Vec<u32> {
+            state
+                .point_view()
+                .expect("points")
+                .pos_x
+                .iter()
+                .map(|v| v.to_bits())
+                .collect()
+        }
         let mut state = ring(12);
         assert!(state.set_layout(true, 4.0), "a network state paces its own layout");
 
-        let before: Vec<u32> = state
-            .point_view()
-            .expect("points")
-            .pos_x
-            .iter()
-            .map(|v| v.to_bits())
-            .collect();
+        let before = xs(&state);
         state.prepare_view();
-        let after: Vec<u32> = state
-            .point_view()
-            .expect("points")
-            .pos_x
-            .iter()
-            .map(|v| v.to_bits())
-            .collect();
-        assert_ne!(before, after, "the layout ran but nothing moved");
+        assert_eq!(before, xs(&state), "preparing the view moved nodes");
+        state.relax_layout();
+        assert_ne!(before, xs(&state), "the layout ran but nothing moved");
 
         state.set_layout(false, 4.0);
-        let held: Vec<u32> = state
-            .point_view()
-            .expect("points")
-            .pos_x
-            .iter()
-            .map(|v| v.to_bits())
-            .collect();
-        state.prepare_view();
-        let still: Vec<u32> = state
-            .point_view()
-            .expect("points")
-            .pos_x
-            .iter()
-            .map(|v| v.to_bits())
-            .collect();
-        assert_eq!(held, still, "the layout kept running once switched off");
+        let held = xs(&state);
+        state.relax_layout();
+        assert_eq!(held, xs(&state), "the layout kept running once switched off");
     }
 
     #[test]

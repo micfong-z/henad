@@ -126,7 +126,7 @@ fn count_of(n: usize, flagged: usize, flag: &str) -> String {
     }
 }
 
-/// Lane rows, shared by agent and network models.
+/// Shows the lane rows, shared by agent and network models.
 fn lane_rows(ui: &mut egui::Ui, lanes: &[LaneSpec]) {
     let doubled = lanes.iter().filter(|lane| lane.double_buffered).count();
     let names: Vec<String> = lanes
@@ -160,7 +160,7 @@ fn structure_rows(ui: &mut egui::Ui, structure: &Structure) {
             row(ui, "Neighbour index", *index);
             row(ui, "Field layer", *field);
         }
-        Structure::Network { chunk, lanes } => {
+        Structure::Network { chunk, lanes, .. } => {
             lane_rows(ui, lanes);
             row(ui, "Chunk size", format!("{chunk} nodes"));
         }
@@ -222,6 +222,15 @@ fn interface_rows(ui: &mut egui::Ui, entry: &ModelEntry) {
         }
     }
     ui.end_row();
+
+    if let Structure::Network { edge_palette, .. } = &entry.metadata.structure {
+        ui.label("Edge palette");
+        ui.horizontal(|ui| {
+            ui.label(edge_palette.len().to_string());
+            swatches(ui, edge_palette.iter().copied());
+        });
+        ui.end_row();
+    }
 }
 
 /// Expected footprint of the model.

@@ -26,7 +26,7 @@ pub trait SimState: WasmNotSend + 'static {
     fn point_view(&self) -> Option<PointView<'_>> {
         None
     }
-    /// Edges drawn between [`SimState::point_view`]'s positions.
+    /// Returns the edges to draw between the positions from [`SimState::point_view`].
     fn edge_view(&self) -> Option<EdgeView<'_>> {
         None
     }
@@ -41,10 +41,14 @@ pub trait SimState: WasmNotSend + 'static {
     }
     /// Turns the layout on or off, with a time budget per publish in milliseconds.
     ///
-    /// Returns false when the state has no layout.
+    /// Returns false if the state has no layout.
     fn set_layout(&mut self, _on: bool, _budget_ms: f32) -> bool {
         false
     }
+    /// Runs the layout for one time budget, if it is on.
+    ///
+    /// The runner decides which publishes call this.
+    fn relax_layout(&mut self) {}
     fn population(&self) -> u64;
     /// Approximate, and only what this state owns.
     fn heap_bytes(&self) -> usize;
