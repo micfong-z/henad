@@ -154,4 +154,11 @@ pub trait NetworkModel: Send + Sync + 'static {
     ///
     /// A stat that needs a walk of the graph should be computed in [`Self::prepare_view`] and kept in `aux`.
     fn stats(lanes: &Self::Lanes, graph: &Network, aux: &Self::Aux) -> Vec<StatValue>;
+
+    /// Returns the heap memory held by `aux`, in bytes.
+    ///
+    /// The count is approximate, like [`crate::model::SimState::heap_bytes`].
+    fn aux_heap_bytes(_aux: &Self::Aux) -> usize {
+        0
+    }
 }

@@ -39,7 +39,7 @@ pub fn label_components(graph: &Network, label: &mut Vec<u32>, scratch: &mut Vec
         }
     }
 
-    summarize(graph, label)
+    summarize(graph, label, scratch)
 }
 
 /// Runs one propagation round.
@@ -82,8 +82,10 @@ fn jump(label: &[u32], out: &mut [u32]) {
     });
 }
 
-fn summarize(graph: &Network, label: &[u32]) -> ComponentStats {
-    let mut size = vec![0u32; label.len()];
+/// Counts the components and the size of the largest, using `size` as scratch.
+fn summarize(graph: &Network, label: &[u32], size: &mut Vec<u32>) -> ComponentStats {
+    size.clear();
+    size.resize(label.len(), 0);
     for (i, &root) in label.iter().enumerate() {
         if graph.contains_node(i as u32) {
             size[root as usize] += 1;
@@ -101,8 +103,8 @@ mod tests {
     use henad_core::authoring::primitives::rng::next_bits;
     use henad_core::network::Network;
 
-    /// Computes reference components with a sequential breadth-first search.
-    fn bfs(graph: &Network) -> ComponentStats {
+    /// Computes reference components with a sequential depth-first search.
+    fn dfs(graph: &Network) -> ComponentStats {
         let n = graph.slot_count();
         let mut seen = vec![false; n];
         let mut stats = ComponentStats::default();
@@ -110,15 +112,15 @@ mod tests {
             if seen[start as usize] || !graph.contains_node(start) {
                 continue;
             }
-            let mut queue = vec![start];
+            let mut stack = vec![start];
             seen[start as usize] = true;
             let mut size = 0;
-            while let Some(i) = queue.pop() {
+            while let Some(i) = stack.pop() {
                 size += 1;
                 let mut visit = |j: u32| {
                     if !seen[j as usize] {
                         seen[j as usize] = true;
-                        queue.push(j);
+                        stack.push(j);
                     }
                 };
                 for &j in graph.in_neighbors(i) {
@@ -169,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn labels_match_a_breadth_first_search() {
+    fn labels_match_a_depth_first_search() {
         for &directed in &[false, true] {
             for seed in 0..6u64 {
                 let mut net = Network::new(120, directed);
@@ -181,7 +183,7 @@ mod tests {
                         net.add_edge(a, b, 0);
                     }
                 }
-                assert_eq!(run(&net), bfs(&net), "directed={directed} seed={seed}");
+                assert_eq!(run(&net), dfs(&net), "directed={directed} seed={seed}");
             }
         }
     }

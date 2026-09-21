@@ -181,7 +181,9 @@ pub fn spring_step(
         pos_y[i] = (pos_y[i] + (fy * s).clamp(-limit, limit)).clamp(0.0, extent.h);
     }
 
-    // A retired node's force stays zero, so a slot reused by a new node starts without any swing.
+    // A slot left empty through an iteration ends it with zero force, so the next node in it swings by its whole force
+    // on its first step. A slot retired and taken again between two iterations keeps the old node's force instead,
+    // and the new node's first swing is measured against it.
     std::mem::swap(&mut scratch.disp_x, &mut scratch.prev_x);
     std::mem::swap(&mut scratch.disp_y, &mut scratch.prev_y);
     scratch.hash = Some(hash);

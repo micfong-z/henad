@@ -268,6 +268,7 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
         register_grid_model::<crate::game_of_life::GameOfLifeModel>(),
         register_agent_model::<crate::ants::AntsModel>(),
         register_network_model::<crate::virus_network::VirusNetwork>(),
+        register_network_model::<crate::team_assembly::TeamAssembly>(),
         // --8<-- [end:cpu_entries]
     ];
 

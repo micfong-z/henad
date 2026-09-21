@@ -305,8 +305,9 @@ Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `T
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
 one, `--export-stats` for the time series)
-Sweep every model across the config matrix: `python3 scripts/bench_matrix.py` (grid models scale
-over grid size, agent models over agent count at constant density; `--dry-run` to see the matrix)
+Sweep the models across the config matrix: `python3 scripts/bench_matrix.py` (grid models scale
+over grid size, agent models over agent count at constant density, `team_assembly` skipped unless
+named with `--models`; `--dry-run` to see the matrix)
 Sweep every installed engine across the cross-engine ladder: `uv run --project scripts
 scripts/compare_bench.py` (`--dry-run` for the matrix, `--smoke` for one small point each); gate the
 ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py`

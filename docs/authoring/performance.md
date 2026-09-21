@@ -106,7 +106,7 @@ cargo run --release -p henad-cli -- boids --steps 1000 --reps 3
 `--export-stats` writes out the time series.
 See [the command line](../reference/cli.md).
 
-To sweep every model across the configuration matrix:
+To sweep the models across the configuration matrix:
 
 ```bash
 python3 scripts/bench_matrix.py

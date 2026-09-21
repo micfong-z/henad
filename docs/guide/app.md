@@ -189,11 +189,11 @@ The latest values are shown in the <span class="ui" markdown>:material-table: St
 
 There are three types of statistics available:
 
-| Icon                                                | Kind      | Shown as                         |
-| --------------------------------------------------- | --------- | -------------------------------- |
-| :material-circle-small:{ title="Scalar" }           | Scalar    | A single rounded number          |
-| :material-arrow-top-right-thin:{ title="Vector2D" } | Vector2D  | `(x, y)` and its magnitude       |
-| :material-chart-histogram:{ title="Histogram" }     | Histogram | `n=` the total count across bins |
+| Icon                                                | Kind      | Shown as                            |
+| --------------------------------------------------- | --------- | ----------------------------------- |
+| :material-circle-small:{ title="Scalar" }           | Scalar    | A number, with up to three decimals |
+| :material-arrow-top-right-thin:{ title="Vector2D" } | Vector2D  | `(x, y)` and its magnitude          |
+| :material-chart-histogram:{ title="Histogram" }     | Histogram | `n=` the total count across bins    |
 
 ## :material-chart-line: Charts tab
 

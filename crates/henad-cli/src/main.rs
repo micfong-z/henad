@@ -400,6 +400,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, schedule: &
         });
         // For grid models `population()` is the total cell count (width×height); for agent models
         // it is the agent count. Either way it is the right denominator for agent-updates/sec.
+        // A network model's population can change as it runs, so it is read again after the timed steps.
         population = state.population();
         let heap_bytes = state.heap_bytes();
         grid_dims = state.grid_view().map(|g| (g.width, g.height));
@@ -416,6 +417,16 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, schedule: &
         // Outside the timer, so an action on the last tick still lands without being measured.
         schedule.run_due(&mut *state);
         eprintln!("{elapsed:>8.3?}");
+        // A population that fluctuates at steady state moves by about its square root, which is not worth a note.
+        let after = state.population();
+        let noise = (3.0 * (population as f64).sqrt()) as u64;
+        if after.abs_diff(population) > (population / 10).max(noise) {
+            eprintln!(
+                "  note: the population went from {population} to {after} during the timed steps. \
+                 Updates per second are computed from the population after warmup. \
+                 A longer --warmup can reach a steady population first."
+            );
+        }
         samples.push(elapsed);
         if args.json {
             json_report::rep(
@@ -762,26 +773,32 @@ fn export_stats(
 
 /// CPU stat sampling: step and sample in one loop. Tick 0 (the initial state, before any step) is
 /// recorded so the series starts from the model's initial conditions.
-fn stats_cpu(
+fn stats_cpu<W: std::io::Write>(
     mut state: Box<dyn SimState>,
     args: &Args,
     schedule: &Schedule,
     total: u64,
-    mut writer: StatsWriter<BufWriter<File>>,
+    mut writer: StatsWriter<W>,
 ) -> Result<u64> {
+    // A sample is taken as a publish would take it. A stat that walks the graph is computed in `prepare_view`.
+    let sample = |state: &mut dyn SimState, writer: &mut StatsWriter<W>| -> Result<()> {
+        state.prepare_view();
+        writer.push(state.tick(), &state.stats())?;
+        Ok(())
+    };
     schedule.run_due(&mut *state);
-    writer.push(state.tick(), &state.stats())?;
+    sample(&mut *state, &mut writer)?;
     for i in 0..total {
         state.step();
         schedule.run_due(&mut *state);
         if (i + 1).is_multiple_of(args.stats_every) {
-            writer.push(state.tick(), &state.stats())?;
+            sample(&mut *state, &mut writer)?;
         }
     }
     // The final tick always lands in the file even off a sampling boundary. The end state of a
     // run is the one value a reader is most likely to want.
     if !total.is_multiple_of(args.stats_every) {
-        writer.push(state.tick(), &state.stats())?;
+        sample(&mut *state, &mut writer)?;
     }
     Ok(writer.finish()?)
 }
@@ -920,9 +937,12 @@ fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_overrides, resolve_params};
+    use super::{Args, Schedule, parse_overrides, resolve_params, stats_cpu};
+    use clap::Parser as _;
+    use henad_core::export::stats_csv::StatsWriter;
     use henad_core::helpers::{f32_param, u32_param};
     use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+    use henad_models::registry::{ModelState, model_registry};
 
     const OPTIONS: &[&str] = &["moore", "von_neumann"];
 
@@ -1004,5 +1024,45 @@ mod tests {
             parse_overrides(&["num_agents".to_owned()]).is_err(),
             "no '=' in the pair"
         );
+    }
+
+    /// Each exported sample is prepared as a publish would be, so a stat computed in `prepare_view` is current.
+    /// Team Assembly's component stats are computed there.
+    ///
+    /// With `p` at zero every tick adds a separate clique of four newcomers, and nothing retires yet.
+    /// Rows land at tick 0, at tick 2 on the sampling boundary, and at the final tick 3 off it.
+    #[test]
+    fn exported_stats_are_prepared_like_a_publish() {
+        let entry = model_registry(None)
+            .into_iter()
+            .find(|e| e.id == "team_assembly")
+            .expect("team_assembly is registered");
+        let overrides =
+            parse_overrides(&["num_agents=4".to_owned(), "team_size=4".to_owned(), "p=0".to_owned()]).expect("valid");
+        let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
+        let args = Args::parse_from(["henad-cli", "team_assembly", "--stats-every", "2"]);
+        let schedule = Schedule::parse(&[], &entry).expect("no actions");
+        let Ok(ModelState::Cpu(state)) = (entry.create)(&params, Some(1)) else {
+            panic!("team_assembly builds as a CPU model");
+        };
+
+        let mut out = Vec::new();
+        let rows = stats_cpu(state, &args, &schedule, 3, StatsWriter::new(&mut out)).expect("writes");
+        assert_eq!(rows, 3);
+        let text = String::from_utf8(out).expect("utf-8");
+        let mut lines = text.lines();
+        let header: Vec<&str> = lines.next().expect("a header").split(',').collect();
+        let at = |name: &str| header.iter().position(|h| *h == name).expect("the column is exported");
+        let (tick, share, size) = (at("tick"), at("Giant Component Share"), at("Mean Component Size"));
+        for (line, cliques) in lines.zip([1.0, 3.0, 4.0]) {
+            let row: Vec<f64> = line.split(',').map(|v| v.parse().expect("a number")).collect();
+            assert!(
+                (row[share] - 1.0 / cliques).abs() < 1e-9,
+                "tick {}: giant share {}",
+                row[tick],
+                row[share]
+            );
+            assert_eq!(row[size], 4.0, "tick {}", row[tick]);
+        }
     }
 }

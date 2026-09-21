@@ -429,18 +429,25 @@ impl Network {
         }
     }
 
+    /// Returns the index of an edge from `a` to `b` in the edge list, if there is one.
+    ///
+    /// On undirected graphs, an edge in either direction counts, and the shorter of the two rows is searched.
+    /// On directed graphs, the out-row of `a` is searched.
+    pub fn edge_between(&self, a: u32, b: u32) -> Option<u32> {
+        let (csr, a, b) = if self.directed {
+            (&self.out_csr, a, b)
+        } else if self.degree(a) <= self.degree(b) {
+            (&self.in_csr, a, b)
+        } else {
+            (&self.in_csr, b, a)
+        };
+        let offset = csr.row(a).iter().position(|&n| n == b)?;
+        Some(csr.row_edges(a)[offset])
+    }
+
     /// Returns whether there is an edge from `a` to `b`.
     pub fn has_edge(&self, a: u32, b: u32) -> bool {
-        if self.directed {
-            self.out_csr.row(a).contains(&b)
-        } else {
-            let (a, b) = if self.degree(a) <= self.degree(b) {
-                (a, b)
-            } else {
-                (b, a)
-            };
-            self.in_csr.row(a).contains(&b)
-        }
+        self.edge_between(a, b).is_some()
     }
 
     pub fn set_directed(&mut self, directed: bool) {
@@ -723,6 +730,34 @@ mod tests {
                 net.edge_count() > 0,
                 "the churn removed everything, so it proved little"
             );
+        }
+    }
+
+    #[test]
+    fn edge_between_returns_the_index_in_the_edge_list() {
+        for directed in [false, true] {
+            let mut net = Network::new(6, directed);
+            let mut rng = 0xED6E_u64;
+            for _ in 0..20 {
+                let a = next_bits(&mut rng) % 6;
+                let b = next_bits(&mut rng) % 6;
+                if a != b && !net.has_edge(a, b) {
+                    net.add_edge(a, b, 0);
+                }
+            }
+            net.remove_edge(0);
+            let (src, dst, _) = net.edges();
+            for a in 0..6u32 {
+                for b in 0..6u32 {
+                    let listed = (0..src.len())
+                        .find(|&e| (src[e], dst[e]) == (a, b) || (!directed && (src[e], dst[e]) == (b, a)));
+                    assert_eq!(
+                        net.edge_between(a, b),
+                        listed.map(|e| e as u32),
+                        "directed={directed} edge_between({a}, {b})"
+                    );
+                }
+            }
         }
     }
 

@@ -279,7 +279,10 @@ impl<N: NetworkModel> SimState for NetworkModelState<N> {
     }
 
     fn heap_bytes(&self) -> usize {
-        self.lanes.heap_bytes() + self.graph.heap_bytes() + self.layout.scratch.heap_bytes()
+        self.lanes.heap_bytes()
+            + self.graph.heap_bytes()
+            + self.layout.scratch.heap_bytes()
+            + N::aux_heap_bytes(&self.aux)
     }
 
     /// Number of node pass chunks, counted over every slot including retired ones.

@@ -2,7 +2,7 @@
 
 Analysis and comparison scripts.
 
-- `bench_matrix.py`: sweeps every registered model across the configuration matrix into a CSV
+- `bench_matrix.py`: sweeps the registered models across the configuration matrix into a CSV, skipping `team_assembly` unless asked
 - `plot_bench_history.py`: figures from that CSV
 - `compare_sir.py`: cross-engine SIR comparison, Henad against a reference engine
 - `compare_bench.py`: sweeps every installed engine across the cross-engine ladder into a CSV

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Benchmark every registered model across a configuration matrix, into a CSV.
+"""Benchmark the registered models across a configuration matrix, into a CSV.
+
+Every model is swept except those in ``DEFAULT_EXCLUDED_MODELS``, which ``--models`` can still name.
 
 Each model is swept along whichever scaling axis it actually has, read from its own
 ``henad-cli <model> --params`` output:
@@ -70,7 +72,10 @@ STEPS_GPU_ONLY: list[int] = [100000]
 # Model ids carrying this prefix are GPU-backed (matches the registry convention).
 GPU_PREFIX = "gpu_"
 
-DEFAULT_EXCLUDED_MODELS: list[str] = []
+# team_assembly is left out because its num_agents is only the initial population. The setup cohort retires after
+# max_downtime + 1 ticks, and the steady-state population is set by max_downtime, team_size and p, not by num_agents,
+# so the agent axis would sweep the same steady state at every rung. Pass --models team_assembly to run it anyway.
+DEFAULT_EXCLUDED_MODELS: list[str] = ["team_assembly"]
 
 _DURATION_UNITS = {
     "s": 1.0,
@@ -606,19 +611,20 @@ def load_done_keys(path: Path) -> set[tuple]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Benchmark all Henad models across a configuration matrix.",
+        description="Benchmark Henad models across a configuration matrix.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--binary", type=Path, default=DEFAULT_BINARY, help="path to henad-cli")
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "results" / "bench_matrix.csv", help="CSV output path")
     parser.add_argument("--reps", type=int, default=3, help="timed reps per configuration")
     parser.add_argument("--timeout", type=float, default=900.0, help="per-run timeout in seconds")
-    parser.add_argument("--models", nargs="*", help="only these model ids (default: all)")
+    parser.add_argument("--models", nargs="*", help="only these model ids (default: all but --exclude)")
     parser.add_argument(
         "--exclude",
         nargs="*",
         default=list(DEFAULT_EXCLUDED_MODELS),
-        help="model ids to skip; ignored when --models is given. Pass --exclude with no values to run everything",
+        help="model ids to skip, replacing the default list; ignored when --models is given. "
+        "Pass --exclude with no values to run everything",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the matrix and exit")
     parser.add_argument("--resume", action="store_true", help="skip configs already in the output CSV")
