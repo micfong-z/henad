@@ -204,7 +204,7 @@ The controls for CPU and GPU models are different due to the different ways they
 
 A model with both a [field](../authoring/fields.md) and a population draws the field first and the agents over the top.
 
-In **Sprites** mode, a network model adds two more checkboxes.
+In **Sprites** mode, on a GPU that can draw edges, a network model adds two more checkboxes.
 **Edges** draws the edges between the nodes, under the nodes themselves.
 **Arrows** appears once **Edges** is ticked, and puts an arrowhead at the target end of each edge.
 It can only be ticked when the model's edges are directed.

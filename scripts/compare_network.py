@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics as st
 import subprocess
 import sys
@@ -35,7 +36,7 @@ from pathlib import Path
 import numpy as np
 from scipy import stats
 
-from compare_sir import ArgumentParser, Verdict, difference_interval, fail, verdict
+from compare_sir import ArgumentParser, Verdict, check_ticks, difference_interval, fail, verdict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -160,7 +161,8 @@ def read_run(path: Path, model: Model, steps: int) -> dict[str, float]:
     """Summarise one replicate.
 
     Both engines write the model's stat columns after a `tick` column, and NetLogo prefixes `#` provenance lines,
-    which are skipped. A run of the wrong length is refused, so a mismatched `--steps` cannot pass silently.
+    which are skipped. The ticks must run 0, 1, ..., `steps` with one row each. Otherwise a mismatched `--steps`, or
+    a dropped or repeated row, would pass silently. A statistic that comes out as `nan` or infinite is refused too.
     """
     with path.open() as handle:
         reader = csv.DictReader(line for line in handle if not line.startswith("#"))
@@ -171,12 +173,14 @@ def read_run(path: Path, model: Model, steps: int) -> dict[str, float]:
     if not rows:
         fail(f"{path}: no data rows")
     try:
-        last = int(rows[-1]["tick"])
-        if last != steps:
-            fail(f"{path}: ends at tick {last}, expected {steps}")
-        return model.summarise(rows)
+        check_ticks(path, [int(r["tick"]) for r in rows], steps)
+        run = model.summarise(rows)
     except (TypeError, ValueError) as exc:
         fail(f"{path}: {exc}")
+    non_finite = [s.label for s in model.statistics if not math.isfinite(run[s.key])]
+    if non_finite:
+        fail(f"{path}: non-finite {', '.join(non_finite)}")
+    return run
 
 
 def read_dir(directory: Path, model: Model, steps: int) -> list[dict[str, float]]:
@@ -220,6 +224,8 @@ def generate_henad(out_dir: Path, count: int, name: str, model: Model, args: arg
             )
         except subprocess.CalledProcessError as exc:
             fail(f"\nhenad-cli failed on seed {seed}:\n{exc.stderr.decode(errors='replace').strip()}")
+        except OSError as exc:
+            fail(f"\ncannot run henad-cli on seed {seed}: {exc}")
         print(f"\r  generated {seed}/{count}", end="", file=sys.stderr, flush=True)
     print(file=sys.stderr)
 
@@ -231,7 +237,7 @@ def main() -> int:
     parser.add_argument("--henad", type=Path, help="directory of Henad CSVs (default: <reference>/../henad_<model>)")
     parser.add_argument("--generate", type=int, metavar="N", help="produce N Henad replicates first")
     parser.add_argument("--binary", type=Path, default=REPO_ROOT / "target" / "release" / "henad-cli")
-    parser.add_argument("--steps", type=int, help="ticks per run (default: the fixture's)")
+    parser.add_argument("--steps", type=int, help="ticks per run, and the tick every CSV must end on (default: the fixture's)")
     args = parser.parse_args()
 
     model = MODELS[args.model]

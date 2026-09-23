@@ -57,6 +57,7 @@ Edges are drawn only in Sprites mode.
 They also need vertex shaders that can read storage buffers.
 Some GPUs lack that support, and no GPU has it under WebGL2.
 Without it, the Network edges row of the [System tab](../guide/app.md#system-tab) reads Unavailable, and a network model runs with its edges undrawn.
+The Edges and Arrows checkboxes are hidden there too.
 
 ## Colouring agents
 

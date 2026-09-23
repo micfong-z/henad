@@ -96,9 +96,10 @@ pub fn viewport_ui(ui: &mut egui::Ui, app: &mut AppState) {
             ui.selectable_value(&mut app.point_render_mode, PointRenderMode::Agents, "Sprites");
             ui.selectable_value(&mut app.point_render_mode, PointRenderMode::Density, "Density");
 
-            // Edges are only drawn along with sprites.
+            // Edges are only drawn along with sprites, and only on a GPU that can build the edge layer.
             if let Some(directed) = edges_directed(app)
                 && app.point_render_mode == PointRenderMode::Agents
+                && app.runtime.vertex_storage
             {
                 ui.separator();
                 ui.checkbox(&mut app.show_edges, "Edges");

@@ -92,7 +92,7 @@ fn stats(lanes: &Self::Lanes, graph: &Network, aux: &Self::Aux) -> Vec<StatValue
 
 `stats` borrows `aux` immutably and cannot store anything in it.
 A stat that needs a walk of the graph, such as a count of connected components, is computed in `prepare_view` and kept in `aux` for `stats` to read.
-Team Assembly keys its cached components by the graph's version, and labels them again only when the version has moved.
+Team Assembly keys its cached components by the graph's version and node count, and labels them again only when either has changed.
 
 ```rust
 --8<-- "crates/henad-models/src/team_assembly/mod.rs:components"

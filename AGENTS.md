@@ -96,9 +96,9 @@ comment rules below. Do not include by line range, which is also supported and d
 krABMaga), each with a harness and one implementation per grid and agent model. Every
 implementation is written from the same declaration the consistency fixtures use.
 `scripts/validate_ports.py` checks each against Henad and records a verdict per engine, variant and
-model in `results/compare/validated.json`, and `compare_bench.py` reads that file and skips
-anything whose verdict is not `yes`. `benchmarks/protocol.md` is the interface every harness
-implements, and `henad-cli --json` is Henad's side of it.
+model in a JSON file, and `compare_bench.py` reads that file and skips anything whose verdict is
+not `yes`. `benchmarks/protocol.md` is the interface every harness implements, and
+`henad-cli --json` is Henad's side of it.
 
 Two rules that are easy to break. A port is written the way a competent user of that engine would
 write it, using only its documented API, since the engine is being measured as its users meet it.
@@ -312,7 +312,7 @@ skipped unless named with `--models`; `--dry-run` to see the matrix)
 Sweep every installed engine across the cross-engine ladder: `uv run --project scripts
 scripts/compare_bench.py` (`--dry-run` for the matrix, `--smoke` for one small point each); gate the
 ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py`
-Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` writes `site/`)
+Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` builds without serving)
 Preview a release's notes: `python3 scripts/changelog_section.py 0.1.0` (what the tag build puts in
 the release body; it refuses a section with no date)
 Regenerate the third-party licence page: `cargo about generate about.hbs -o docs/license.html`
@@ -521,9 +521,10 @@ and the whole `SimState` impl.
    Nodes come and go through `Nodes::spawn` and `Nodes::retire`. Both keep the lanes and the graph
    the same length. A retired node sits at `NaN`, and a reused slot keeps the old node's lane
    values. `stats` sees `Aux` immutably. A stat that walks the graph (Team Assembly's components)
-   is computed in `prepare_view`, cached in `Aux` against `Network::version()` and counted by
-   `aux_heap_bytes`. `directed` is read every tick, and a flip rebuilds the rows. `EDGE_PALETTE`
-   colours each edge by its colour byte, and `LAYOUT` tunes the spring layout.
+   is computed in `prepare_view`, cached in `Aux` against `Network::version()` and the node count
+   (a spawn leaves the version alone), and counted by `aux_heap_bytes`. `directed` is read every
+   tick, and a flip rebuilds the rows. `EDGE_PALETTE` colours each edge by its colour byte, and
+   `LAYOUT` tunes the spring layout.
 
 Every trait can declare one-off actions, drawn as buttons in the Parameters panel and named by
 `henad-cli --act ID@TICK`. A CPU trait lists them in `ACTIONS` and runs them in `act`, and

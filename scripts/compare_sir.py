@@ -94,12 +94,29 @@ class ArgumentParser(argparse.ArgumentParser):
         fail(f"{self.prog}: error: {message}")
 
 
-def read_run(path: Path) -> Run:
+def check_ticks(path: Path, ticks: list[int], steps: int) -> None:
+    """Exits with status 3 unless `ticks` is exactly 0, 1, ..., `steps`.
+
+    `ticks` holds each data row's tick in file order. Both engines write a row for tick 0.
+    """
+    for expected, tick in enumerate(ticks):
+        if tick != expected:
+            if expected == 0:
+                fail(f"{path}: starts at tick {tick}, expected 0")
+            fail(f"{path}: tick {tick} follows tick {ticks[expected - 1]}, expected {expected}")
+    if len(ticks) != steps + 1:
+        fail(f"{path}: ends at tick {len(ticks) - 1}, expected {steps}")
+
+
+def read_run(path: Path, steps: int) -> Run:
     """Summarise one replicate.
 
     Both engines write `tick,Susceptible,Infected,Recovered`; NetLogo prefixes `#` provenance lines
     which are skipped. The cell count is taken from the first row rather than a flag, so a
     mismatched `--grid` cannot silently rescale one side's fractions.
+
+    The ticks must run 0, 1, ..., `steps` with one row each. The tick of the peak is the peak's
+    row index, and a dropped or repeated row would shift it. A mismatched `--steps` is refused too.
     """
     with path.open() as handle:
         rows = list(csv.DictReader(line for line in handle if not line.startswith("#")))
@@ -107,11 +124,13 @@ def read_run(path: Path) -> Run:
         fail(f"{path}: no data rows")
 
     try:
+        ticks = [int(r["tick"]) for r in rows]
         counts = [(int(r["Susceptible"]), int(r["Infected"]), int(r["Recovered"])) for r in rows]
     except KeyError as exc:
         fail(f"{path}: missing column {exc}")
     except (TypeError, ValueError) as exc:
         fail(f"{path}: {exc}")
+    check_ticks(path, ticks, steps)
 
     total = sum(counts[0])
     if total == 0:
@@ -126,11 +145,11 @@ def read_run(path: Path) -> Run:
     )
 
 
-def read_dir(directory: Path) -> list[Run]:
+def read_dir(directory: Path, steps: int) -> list[Run]:
     paths = sorted(directory.glob("*.csv"))
     if len(paths) < 2:
         fail(f"{directory}: need >= 2 .csv replicates to compute variance")
-    return [read_run(p) for p in paths]
+    return [read_run(p, steps) for p in paths]
 
 
 def generate_henad(out_dir: Path, count: int, args: argparse.Namespace) -> None:
@@ -160,6 +179,8 @@ def generate_henad(out_dir: Path, count: int, args: argparse.Namespace) -> None:
             )
         except subprocess.CalledProcessError as exc:
             fail(f"\nhenad-cli failed on seed {seed}:\n{exc.stderr.decode(errors='replace').strip()}")
+        except OSError as exc:
+            fail(f"\ncannot run henad-cli on seed {seed}: {exc}")
         print(f"\r  generated {seed}/{count}", end="", file=sys.stderr, flush=True)
     print(file=sys.stderr)
 
@@ -208,7 +229,9 @@ def main() -> int:
     parser.add_argument("--beta", type=float, default=DEFAULT_BETA)
     parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
     parser.add_argument("--initial", type=float, default=DEFAULT_INITIAL)
-    parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
+    parser.add_argument(
+        "--steps", type=int, default=DEFAULT_STEPS, help="ticks per run, and the tick every CSV must end on"
+    )
     args = parser.parse_args()
 
     henad_dir = args.henad or args.reference.parent / "henad"
@@ -216,8 +239,8 @@ def main() -> int:
         print(f"generating {args.generate} Henad replicates into {henad_dir}", file=sys.stderr)
         generate_henad(henad_dir, args.generate, args)
 
-    reference = read_dir(args.reference)
-    henad = read_dir(henad_dir)
+    reference = read_dir(args.reference, args.steps)
+    henad = read_dir(henad_dir, args.steps)
 
     print(f"\nHenad n={len(henad)}   reference n={len(reference)}")
     print(f"grid {args.grid}x{args.grid}, beta {args.beta}, gamma {args.gamma}, "

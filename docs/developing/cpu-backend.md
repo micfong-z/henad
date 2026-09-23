@@ -238,7 +238,7 @@ The result is identical on any number of threads.
 The labelling ignores direction and walks a directed graph's in-rows and out-rows alike.
 A retired slot keeps its own label and is not counted.
 
-Team Assembly calls it from `prepare_view`, at most once per publish, and caches the result in its aux against the graph's version.
+Team Assembly calls it from `prepare_view`, at most once per publish, and caches the result in its aux against the graph's version and node count.
 
 ## The runner
 

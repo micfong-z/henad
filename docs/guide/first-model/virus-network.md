@@ -155,6 +155,9 @@ pub struct VirusModel;
 impl NetworkModel for VirusModel {}
 ```
 
+This won't compile yet.
+We'll fill in that empty `impl` over the rest of this tutorial.
+
 ### Identity and metadata
 
 ``` { .rust .annotate title="crates/henad-models/src/virus.rs" }

@@ -49,6 +49,10 @@ pub trait GpuSimState: SimState {
     /// Record the model's declared action at `index`. False when it declares no such one.
     ///
     /// Nothing is recorded when it returns false, so the caller drops the encoder unsubmitted.
+    ///
+    /// Note that the action's seed is written through the queue, and the write lands when the next
+    /// submission starts. Two presses of one action recorded into one encoder would both read the
+    /// second seed, so each press needs a submission of its own.
     fn encode_action(&mut self, _encoder: &mut wgpu::CommandEncoder, _index: usize) -> bool {
         false
     }

@@ -121,12 +121,23 @@ impl StatsHistory {
         }
     }
 
-    /// Record one sample.
+    /// Record one sample, replacing the newest entry if it has the same tick.
+    ///
+    /// A publish repeats a tick when nothing stepped, as after an action or while a paused layout
+    /// relaxes. The replacement keeps one entry per tick, holding the latest stats for it.
     ///
     /// The first sample fixes which series keep a full value, the same way it fixes a CSV column
     /// layout. A series that changes kind later is a model bug, and
     /// [`crate::export::StatsWriter`] already reports it as one.
     pub fn push_entries(&mut self, stats: &[StatEntry], tick: u64) {
+        let newest = self.len().checked_sub(1).and_then(|j| self.buf_index(j));
+        if let Some(idx) = newest
+            && self.ticks[idx] == tick
+        {
+            self.write_at(idx, stats, tick);
+            return;
+        }
+
         if self.write_count == 0 {
             for (slot, entry) in self.full.iter_mut().zip(stats) {
                 if !matches!(entry.value, StatValue::Scalar(_)) {
@@ -138,16 +149,7 @@ impl StatsHistory {
         match self.capacity {
             Some(capacity) if self.write_count >= capacity => {
                 // Full, so overwrite the oldest.
-                let idx = self.write_count % capacity;
-                for (col, entry) in self.columns.iter_mut().zip(stats) {
-                    col[idx] = entry.value.scalar();
-                }
-                for (slot, entry) in self.full.iter_mut().zip(stats) {
-                    if let Some(values) = slot {
-                        values[idx] = entry.value.clone();
-                    }
-                }
-                self.ticks[idx] = tick;
+                self.write_at(self.write_count % capacity, stats, tick);
             }
             _ => {
                 for (col, entry) in self.columns.iter_mut().zip(stats) {
@@ -162,6 +164,19 @@ impl StatsHistory {
             }
         }
         self.write_count += 1;
+    }
+
+    /// Writes a sample over buffer slot `idx`.
+    fn write_at(&mut self, idx: usize, stats: &[StatEntry], tick: u64) {
+        for (col, entry) in self.columns.iter_mut().zip(stats) {
+            col[idx] = entry.value.scalar();
+        }
+        for (slot, entry) in self.full.iter_mut().zip(stats) {
+            if let Some(values) = slot {
+                values[idx] = entry.value.clone();
+            }
+        }
+        self.ticks[idx] = tick;
     }
 
     pub fn descriptors(&self) -> &[StatDescriptor] {
@@ -325,6 +340,27 @@ mod tests {
         assert_eq!(h.get(0, 0), Some((2.0, 2)));
         assert_eq!(h.get(0, 2), Some((4.0, 4)));
         assert_eq!(h.get(0, 3), None);
+    }
+
+    /// An action publishes at the tick it was pressed on. Its stats replace that tick's entry
+    /// rather than adding a second one, whether or not a bounded history has wrapped.
+    #[test]
+    fn a_sample_at_the_newest_tick_replaces_it() {
+        for (capacity, ticks) in [(None, 3u32), (Some(2), 2), (Some(2), 5)] {
+            let mut h = history(capacity, &["v"]);
+            for tick in 0..ticks {
+                h.push_entries(&vec2(f64::from(tick), 0.0), u64::from(tick));
+            }
+            let newest = u64::from(ticks - 1);
+            let (len, writes) = (h.len(), h.write_count());
+            h.push_entries(&vec2(3.0, 4.0), newest);
+
+            assert_eq!((h.len(), h.write_count()), (len, writes), "a second entry was added");
+            assert_eq!(h.get(0, len - 1), Some((5.0, newest)));
+            let sample = h.entries(len - 1).expect("the newest entry exists");
+            assert!(matches!(sample[0].value, StatValue::Vector2D { x, y } if x == 3.0 && y == 4.0));
+            assert_eq!(h.tick(len - 2), Some(newest - 1), "an older entry changed");
+        }
     }
 
     #[test]

@@ -717,11 +717,10 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
         stat_entries(M::STATS, M::stats(&self.reduce.sums(), counters, &self.geom))
     }
 
-    /// Resizing or reseeding live is currently unsupported.
     /// Encodes the action into a submission of its own.
     ///
-    /// The runner reaches for [`GpuSimState::encode_action`] instead, so it can fold the action
-    /// into the encoder it already snapshots from.
+    /// The GPU runner calls [`GpuSimState::encode_action`] instead, and submits the action before
+    /// its snapshot.
     fn act(&mut self, index: usize) -> bool {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("henad_gpu_agent_action"),
@@ -733,6 +732,7 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
         true
     }
 
+    /// Resizing or reseeding live is currently unsupported.
     fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
         false
     }

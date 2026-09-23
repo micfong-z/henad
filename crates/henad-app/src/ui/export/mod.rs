@@ -5,7 +5,8 @@ pub mod metadata;
 pub mod save;
 
 use henad_compute::snapshot::SnapshotView;
-use henad_core::export::{StatsWriter, state as state_export};
+use henad_core::export::{StatsWriteError, StatsWriter, state as state_export};
+use henad_core::view::StatEntry;
 
 use crate::icons::material_design_icons::{
     MDI_ALERT, MDI_CHART_LINE, MDI_RECORD_CIRCLE_OUTLINE, MDI_STOP, MDI_TRAY_ARROW_DOWN,
@@ -18,6 +19,8 @@ pub enum Recording {
     Running {
         writer: StatsWriter<Vec<u8>>,
         from_tick: u64,
+        /// Newest row with its tick, held back until a later tick arrives or the recording stops.
+        held: Option<(u64, Vec<StatEntry>)>,
     },
     Done {
         csv: Vec<u8>,
@@ -25,6 +28,71 @@ pub enum Recording {
         from_tick: u64,
         to_tick: u64,
     },
+}
+
+impl Recording {
+    /// Starts a recording at `from_tick`.
+    pub fn start(from_tick: u64) -> Self {
+        Self::Running {
+            writer: StatsWriter::new(Vec::new()),
+            from_tick,
+            held: None,
+        }
+    }
+
+    /// Takes one published sample, replacing the held row if it has the same tick.
+    ///
+    /// A publish repeats a tick when nothing stepped, as after an action. The held row then takes
+    /// the action's stats, and the CSV keeps one row per tick. Does nothing unless a recording is
+    /// running.
+    ///
+    /// # Errors
+    /// If the row it writes out does not match the layout fixed by the first row.
+    pub fn push(&mut self, tick: u64, stats: &[StatEntry]) -> Result<(), StatsWriteError> {
+        let Self::Running { writer, held, .. } = self else {
+            return Ok(());
+        };
+        match held {
+            Some((held_tick, held_stats)) => {
+                if *held_tick != tick {
+                    writer.push(*held_tick, held_stats)?;
+                    *held_tick = tick;
+                }
+                held_stats.clear();
+                held_stats.extend_from_slice(stats);
+            }
+            None => *held = Some((tick, stats.to_vec())),
+        }
+        Ok(())
+    }
+
+    /// Writes out the held row and finishes a running recording, which ends at `to_tick`.
+    ///
+    /// Anything but a running recording comes back unchanged.
+    ///
+    /// # Errors
+    /// If the held row does not match the layout fixed by the first row, or the final flush fails.
+    pub fn stop(self, to_tick: u64) -> Result<Self, StatsWriteError> {
+        match self {
+            Self::Running {
+                mut writer,
+                from_tick,
+                held,
+            } => {
+                if let Some((tick, stats)) = held {
+                    writer.push(tick, &stats)?;
+                }
+                let (csv, rows) = writer.into_inner()?;
+                Ok(Self::Done {
+                    csv,
+                    rows,
+                    from_tick,
+                    to_tick,
+                })
+            }
+            other => Ok(other),
+        }
+    }
 }
 
 pub fn export_ui(ui: &mut egui::Ui, app: &mut AppState) {
@@ -96,15 +164,17 @@ fn recording_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
                 .clicked()
             {
                 let from_tick = app.snapshot.as_ref().map_or(0, |snap| snap.tick);
-                app.recording = Recording::Running {
-                    writer: StatsWriter::new(Vec::new()),
-                    from_tick,
-                };
+                app.recording = Recording::start(from_tick);
                 app.export_status = None;
             }
         }
-        Recording::Running { writer, from_tick } => {
-            let rows = writer.rows();
+        Recording::Running {
+            writer,
+            from_tick,
+            held,
+        } => {
+            // The held row counts, since stopping writes it.
+            let rows = writer.rows() + u64::from(held.is_some());
             ui.label(format!("{rows} row{} since tick {from_tick}", plural(rows)));
             if ui.button(format!("{MDI_STOP} Stop")).clicked() {
                 app.stop_recording();
@@ -253,5 +323,41 @@ fn export_state(app: &mut AppState) {
         Ok(()) if out.is_empty() => app.export_status = Some("Model exposes no view to export".to_owned()),
         Ok(()) => app.save(&file_name(app, "state", "txt"), out),
         Err(err) => app.export_status = Some(format!("Export failed: {err}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use henad_core::view::{StatEntry, StatValue};
+
+    use super::Recording;
+
+    fn row(value: f64) -> Vec<StatEntry> {
+        vec![StatEntry {
+            label: "a",
+            value: StatValue::Scalar(value),
+            color: [0, 0, 0, 255],
+        }]
+    }
+
+    /// An action publishes at the tick it was pressed on. The recording keeps one row for that
+    /// tick, holding the action's stats, and stopping writes the last row out.
+    #[test]
+    fn a_publish_at_the_same_tick_replaces_the_held_row() {
+        let mut recording = Recording::start(5);
+        for (tick, value) in [(5, 1.0), (5, 2.0), (6, 3.0), (6, 3.0), (7, 4.0), (7, 5.0)] {
+            recording.push(tick, &row(value)).expect("one series throughout");
+        }
+        let Ok(Recording::Done {
+            csv,
+            rows,
+            from_tick,
+            to_tick,
+        }) = recording.stop(7)
+        else {
+            panic!("a running recording did not stop cleanly");
+        };
+        assert_eq!(String::from_utf8(csv).expect("CSV is UTF-8"), "tick,a\n5,2\n6,3\n7,5\n");
+        assert_eq!((rows, from_tick, to_tick), (3, 5, 7));
     }
 }

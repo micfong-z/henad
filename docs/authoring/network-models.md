@@ -15,7 +15,7 @@ You declare the node lanes with `agent_lanes!`, then implement `init`, the passe
 An agent model that reads its neighbours finds them by distance, through a spatial hash rebuilt from the positions every tick.
 A network model reads them from its graph, and the graph changes only when the model changes it.
 Nodes still have positions, but those belong to a layout the engine runs for drawing.
-Nothing a tick decides should depend on them.
+Nothing a tick decides should depend on them, apart from where a new node is placed.
 A network is also the one topology whose population can change during a run, as the model spawns and retires nodes.
 
 `virus_network/` and `team_assembly/` are the two implementations to read alongside this page.

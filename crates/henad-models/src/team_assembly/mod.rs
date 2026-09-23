@@ -98,8 +98,8 @@ pub struct TeamAux {
     eligible: Vec<u32>,
     /// Nodes retiring this tick.
     retiring: Vec<u32>,
-    /// Component stats, along with the graph version they were computed at.
-    components: Option<(u64, ComponentStats)>,
+    /// Component stats, along with the graph version and node count they were computed at.
+    components: Option<((u64, usize), ComponentStats)>,
     // Buffers for the component labelling.
     labels: Vec<u32>,
     label_scratch: Vec<u32>,
@@ -174,11 +174,12 @@ impl NetworkModel for TeamAssembly {
         });
 
         // --8<-- [start:components]
-        let version = nodes.graph.version();
+        // A spawn leaves the version alone, and a new node with no edges is a component of its own.
+        let key = (nodes.graph.version(), nodes.graph.node_count());
         let aux = &mut *nodes.aux;
-        if aux.components.is_none_or(|(labeled, _)| labeled != version) {
+        if aux.components.is_none_or(|(labeled, _)| labeled != key) {
             let components = label_components(nodes.graph, &mut aux.labels, &mut aux.label_scratch);
-            aux.components = Some((version, components));
+            aux.components = Some((key, components));
         }
         // --8<-- [end:components]
     }
@@ -244,6 +245,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use henad_compute::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
+    use henad_core::authoring::model::agent_model::AgentLanes as _;
     use henad_core::model::SimState as _;
 
     type State = NetworkModelState<TeamAssembly>;
@@ -359,6 +361,36 @@ mod tests {
 
         never.prepare_view();
         assert_eq!(every.lanes().color, never.lanes().color, "the node colors disagree");
+    }
+
+    /// A node spawned with no edges is a component of its own.
+    /// The next publish counts it, although the spawn left the graph's version where it was.
+    #[test]
+    fn a_node_spawned_with_no_edges_is_counted_at_the_next_publish() {
+        let mut lanes = TeamLanes::alloc(4);
+        let mut graph = Network::new(4, false);
+        let mut aux = TeamAux::default();
+        let mut nodes = Nodes::<TeamAssembly> {
+            lanes: &mut lanes,
+            graph: &mut graph,
+            aux: &mut aux,
+        };
+        nodes.graph.add_edge(0, 1, INCUMBENT_INCUMBENT);
+        TeamAssembly::prepare_view(&mut nodes, 0);
+
+        let version = nodes.graph.version();
+        nodes.spawn();
+        assert_eq!(
+            nodes.graph.version(),
+            version,
+            "the spawn moved the version, so this proved little"
+        );
+        TeamAssembly::prepare_view(&mut nodes, 0);
+        assert_eq!(
+            nodes.aux.components.map(|(_, components)| components),
+            Some(ComponentStats { count: 4, largest: 2 }),
+            "the new node was left out of the components"
+        );
     }
 
     /// NetLogo's setup builds one team whose members are all shown as newcomers, linked as incumbents.

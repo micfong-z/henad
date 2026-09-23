@@ -336,6 +336,9 @@ pub struct ForagingModel;
 impl AgentModel for ForagingModel {}
 ```
 
+This won't compile yet.
+We'll fill in that empty `impl` over the rest of this tutorial.
+
 ### Identity and Metadata
 
 ``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }

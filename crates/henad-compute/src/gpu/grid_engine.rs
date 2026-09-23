@@ -489,8 +489,8 @@ impl<M: GpuGridModel> SimState for GpuGridState<M> {
 
     /// Encodes the action into a submission of its own.
     ///
-    /// The runner reaches for [`GpuSimState::encode_action`] instead, so it can fold the action
-    /// into the encoder it already snapshots from.
+    /// The GPU runner calls [`GpuSimState::encode_action`] instead, and submits the action before
+    /// its snapshot.
     fn act(&mut self, index: usize) -> bool {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("henad_gpu_grid_action"),

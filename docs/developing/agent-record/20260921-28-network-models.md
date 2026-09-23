@@ -67,7 +67,7 @@ crates/henad-core/src/
 ├── model.rs                                     ~ SimState: act, edge_view, set_layout, relax_layout
 ├── spatial_hash.rs                              ~ build_where
 ├── topology.rs                                  ~ TopologyHint.edges, NETWORK
-├── view.rs                                      ~ EdgeView
+├── view.rs                                      ~ EdgeView, a sample at the newest tick replaces it
 └── lib.rs                                       ~ modules
 
 crates/henad-compute/src/
@@ -111,7 +111,7 @@ crates/henad-models/
 crates/henad-app/
 ├── build.rs                                     ~ edges.wgsl entry point
 └── src/
-    ├── lib.rs                                   ~ chart and recording rows only when the tick moves
+    ├── lib.rs                                   ~ one chart and recording row per tick, the latest publish's
     ├── state.rs                                 ~ layout and edge settings, SetLayout on build
     └── ui/
         ├── mod.rs                               ~ mod edge_layer
@@ -125,7 +125,7 @@ crates/henad-app/
         │                                          as tall as the window
         ├── performance.rs, system.rs            ~ Prepare view, Network edges
         ├── stats.rs                             ~ three decimals for a fraction
-        └── export/                              ~ edges in the state export and the image
+        └── export/                              ~ edges in the state export and the image, a held-back recording row
 
 crates/henad-cli/src/
 ├── actions.rs                                   + --act schedule, the ticks a run fires (Fire)
@@ -135,7 +135,7 @@ crates/henad-cli/src/
 
 scripts/
 ├── compare_network.py                           + distributional comparison for both models
-├── compare_sir.py                               ~ exit code 3 for bad input
+├── compare_sir.py                               ~ exit code 3 for bad input, whole tick sequence checked
 ├── validate_ports.py                            ~ reads exit code 2 only with a verdict
 ├── bench_matrix.py                              ~ team_assembly skipped by default
 └── README.md                                    ~
@@ -334,6 +334,24 @@ Seeds 1 to 500 flagged the newcomer-newcomer share instead, and seeds 501 to 200
 Neither gap persisted on fresh seeds.
 The replicate CSVs are not committed, as SIR's are not.
 
+After the maintainer committed the branch and opened the pull request, CodeRabbit left eleven comments, and the maintainer asked for them to be resolved.
+Five agents, one per group of files, checked each against the code, and a reviewer per group checked their verdicts.
+Nine are fixed.
+The chart and the recording had kept one row per tick by dropping any publish at a tick already recorded.
+A press while paused publishes at the same tick, so its effect missed that tick's row, where `henad-cli --export-stats` samples the tick after the action.
+The newest row is now replaced instead: `StatsHistory` overwrites its newest entry when a sample repeats its tick, and the recording holds its last row back until the tick moves or it stops.
+Team Assembly keyed its component cache on the graph's version alone, and a spawn leaves the version where it is.
+The shipped parameters always add an edge in the same tick, but a `team_size` of 1 read stale components, and the key is now the version and the node count.
+The Edges and Arrows checkboxes are hidden on a GPU without the edge layer.
+The comparison scripts check that the ticks run 0 to `--steps` one row at a time, refuse a non-finite statistic, and exit 3 when `henad-cli` cannot start.
+`compare_sir.py` had never read the tick column, and a dropped row before the peak moved its tick of the peak.
+The docs now say a tick may read positions to place a new node, and the Virus and ants tutorials say the empty `impl` is filled in below.
+`AGENTS.md` no longer names the ignored `results/` and `site/` paths.
+Two needed no code change.
+No shipped GPU action binds one buffer both read-only and read-write, and wgpu reports such a binding as a validation error at dispatch.
+The fault modal shows it.
+No caller records two presses of one action into one encoder, and `GpuSimState::encode_action` now states that contract.
+
 ## State after
 
 `./check.sh` is green after phase 8, the web build included.
@@ -399,10 +417,13 @@ The first wrong NetLogo engine for Virus reads different on the tick of the peak
    A GPU state's construction queues work without waiting for it, and the first timed wait pays for it.
    The CPU keeps construction out of the timer.
    Draining the queue before the timer would change what the GPU numbers measure, and is left for a decision.
-8. **A button press in the app is not recorded.**
+8. **A GPU pass that binds one buffer both read-only and read-write is caught only at dispatch.**
+   An in-place action, or a step pass over a buffer that is not double-buffered, resolves both bindings to one buffer.
+   No model does this, and the validation error reaches the fault modal, but `capacity.rs` does not check it before the build.
+9. **A button press in the app is not recorded.**
    `--act` replays presses in the CLI, but nothing writes the app's presses into an export.
    A GUI session cannot yet be replayed headless.
-9. **Left for follow-up issues.**
+10. **Left for follow-up issues.**
    Ports of both models to Mesa, MASON, Agents.jl and krABMaga, with their `LADDER` and `GATES` entries, and the sweep.
    Zoom and pan in the viewport, a size per node, and a GPU twin of `NetworkModel`.
    The row layout already has the shape a shader wants.

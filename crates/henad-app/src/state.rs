@@ -80,8 +80,6 @@ pub struct AppState {
     pub layout_budget_ms: f32,
     pub layout_while_paused: bool,
     pub stats_history: Option<StatsHistory>,
-    /// Tick of the last row added to the chart and the recording.
-    pub last_series_tick: Option<u64>,
     /// `None` retains every sample, so a whole run can be exported.
     pub history_capacity: Option<usize>,
     /// Where the History length slider sits, kept while Unlimited is ticked so unticking restores it.
@@ -162,7 +160,6 @@ impl AppState {
             layout_budget_ms: DEFAULT_LAYOUT_BUDGET_MS,
             layout_while_paused: false,
             stats_history: None,
-            last_series_tick: None,
             history_capacity: Some(DEFAULT_HISTORY_LEN),
             history_len: DEFAULT_HISTORY_LEN,
             runtime,
@@ -224,7 +221,6 @@ impl AppState {
         }
 
         self.stats_history = Some(stats_history);
-        self.last_series_tick = None;
         self.sim_running = false;
         self.loaded_model = Some(self.selected_model);
         self.pending_reload = vec![false; self.param_values.len()];
@@ -287,7 +283,6 @@ impl AppState {
         self.density_texture = None;
         self.last_rendered_serial = None;
         self.stats_history = None;
-        self.last_series_tick = None;
         self.loaded_model = None;
         if let Some(layer) = &mut self.agent_layer {
             layer.clear();
@@ -352,10 +347,7 @@ impl AppState {
 
     /// Records a snapshot.
     pub fn record(&mut self, snapshot: &Snapshot) {
-        let Recording::Running { writer, .. } = &mut self.recording else {
-            return;
-        };
-        if let Err(err) = writer.push(snapshot.tick, &snapshot.stats) {
+        if let Err(err) = self.recording.push(snapshot.tick, &snapshot.stats) {
             self.export_status = Some(format!("Recording stopped: {err}"));
             self.recording = Recording::Off;
         }
@@ -364,18 +356,8 @@ impl AppState {
     /// Stops recording and closes the CSV file.
     pub fn stop_recording(&mut self) {
         let to_tick = self.snapshot.as_ref().map_or(0, |snap| snap.tick);
-        let Recording::Running { writer, from_tick } = std::mem::replace(&mut self.recording, Recording::Off) else {
-            return;
-        };
-        match writer.into_inner() {
-            Ok((csv, rows)) => {
-                self.recording = Recording::Done {
-                    csv,
-                    rows,
-                    from_tick,
-                    to_tick,
-                };
-            }
+        match std::mem::replace(&mut self.recording, Recording::Off).stop(to_tick) {
+            Ok(recording) => self.recording = recording,
             Err(err) => self.export_status = Some(format!("Recording failed: {err}")),
         }
     }
