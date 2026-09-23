@@ -371,11 +371,11 @@ impl AgentModel for ForagingModel {
 6. The hot parameters, extracted once per tick.
 7. A per-chunk reduction, merged in chunk order and accumulated across ticks. Use `()` for a model with nothing to count.
 
-Here are the imports that `impl` relies on:
+Here are the other imports that `impl` relies on:
 
 ``` rust title="crates/henad-models/src/foraging/mod.rs"
 use henad_compute::cpu::field::scalar::ScalarField;
-use henad_core::authoring::model::agent_model::{AgentModel, NoIndex, StepCtx};
+use henad_core::authoring::model::agent_model::{NoIndex, StepCtx};
 use henad_core::authoring::model::field::Extent;
 use henad_core::view::{StatDescriptor, StatValue};
 
@@ -788,7 +788,7 @@ A single-pass model can omit `run_deposit_pass` entirely.
 These imports should now all be in place:
 
 ``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_compute::cpu::field::scalar::{Deposits, ScalarField, ScalarRead};
+use henad_compute::cpu::field::scalar::{Deposits, ScalarRead};
 use henad_compute::for_each_chunk_mut;
 use henad_core::authoring::primitives::rng::{choice3, next_bits, next_float, reservoir_accept};
 use henad_core::authoring::primitives::space::{Boundary, MOORE_COLUMN_MAJOR, cell_index, offset_cell};
@@ -904,6 +904,7 @@ The actual default model is at [`crates/henad-models/src/ants/`](https://github.
 
 ## Next
 
-- [Writing a GPU grid model](gpu-game-of-life.md) and [writing a GPU agent model](gpu-ants.md) take the two CPU models into GPU models.
+- [Writing a CPU network model](virus-network.md) builds a virus that spreads over a graph, where every agent is a node and nodes are joined by edges.
+- [Writing a GPU grid model](gpu-game-of-life.md) and [writing a GPU agent model](gpu-ants.md) take Game of Life and Ant Foraging onto the GPU.
 - [Choosing a trait](../../authoring/index.md) introduces the two GPU traits, for carrying a model like this one into compute shaders.
 - [Authoring primitives](../../reference/primitives.md) is a reference of authoring primitives.

@@ -54,11 +54,11 @@ The core of the Game of Life model looks like this:
 
 -   **[The models](reference/models.md)**
     
-    Eight models ship with the engine, four on the CPU and four on the GPU.
+    Ten models ship with the engine, six on the CPU and four on the GPU.
 
 -   **[Authoring](authoring/index.md)**
   
-    The four traits a model implements, and how to pick between them.
+    The five traits a model implements, and how to pick between them.
 
 -   **[Benchmarks](benchmarks.md)**
   

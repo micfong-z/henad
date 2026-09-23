@@ -6,7 +6,7 @@ icon: material/speedometer
 
 # Benchmarks
 
-Here are the performance of Henad measured against other ABM frameworks, on the [default models](reference/models.md) shipped with Henad.
+Here is the performance of Henad measured against other ABM frameworks, on the grid and agent [models](reference/models.md) shipped with Henad.
 The following common frameworks for ABM are compared:
 
 - [MASON 22](https://people.cs.gmu.edu/~eclab/projects/mason/) - a multiagent simulation library written in Java

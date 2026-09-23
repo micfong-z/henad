@@ -7,7 +7,9 @@ icon: material/function-variant
 # Authoring primitives
 
 Primitives are the small vocabulary a model kernel calls for world geometry, neighbourhoods and random draws.
-Every one of them exists twice, once in Rust for CPU models and once in WGSL for GPU models.
+Most of them exist twice, once in Rust for CPU models and once in WGSL for GPU models.
+`offsets`, `for_each_neighbor`, `mix_seed` and `next_index` are Rust only, and `neighbor_count` and `neighbor_offset` are WGSL only.
+The two generators, `xorshift64` and `pcg_hash`, fill the same role under different names.
 
 ```rust
 use henad_core::authoring::primitives::space::{Boundary, dist_sq, offset_cell};
@@ -19,7 +21,7 @@ use henad_core::authoring::primitives::rng::{next_bits, random_float};
 #import shared::rng::{next_bits, random_float}
 ```
 
-Names match across the two languages.
+Where a primitive exists in both languages, the names match.
 Each entry below gives the Rust signature, and calls out the WGSL one wherever it differs.
 
 ## Index
@@ -28,7 +30,7 @@ Each entry below gives the Rust signature, and calls out the WGSL one wherever i
 |---|---|
 | [Space](#space) | [`Boundary`](#boundary), [`wrap_index`](#wrap_index), [`wrap_coord`](#wrap_coord), [`cell_index`](#cell_index), [`offset_cell`](#offset_cell), [`axis_delta`](#axis_delta), [`dist_sq`](#dist_sq), [`heading_octant`](#heading_octant) |
 | [Neighbourhoods](#neighbourhoods) | [`MOORE_ROW_MAJOR`](#moore_row_major), [`MOORE_COLUMN_MAJOR`](#moore_column_major), [`VON_NEUMANN`](#von_neumann), [`offsets`](#offsets), [`for_each_neighbor`](#for_each_neighbor), [`neighbor_count`](#neighbor_count), [`neighbor_offset`](#neighbor_offset) |
-| [Random](#random) | [`xorshift64`](#xorshift64), [`pcg_hash`](#pcg_hash), [`mix_seed`](#mix_seed), [`next_bits`](#next_bits), [`random_float`](#random_float), [`next_float`](#next_float), [`below`](#below), [`choice3`](#choice3), [`reservoir_accept`](#reservoir_accept) |
+| [Random](#random) | [`xorshift64`](#xorshift64), [`pcg_hash`](#pcg_hash), [`mix_seed`](#mix_seed), [`next_bits`](#next_bits), [`random_float`](#random_float), [`next_float`](#next_float), [`next_index`](#next_index), [`below`](#below), [`choice3`](#choice3), [`reservoir_accept`](#reservoir_accept) |
 
 ## Space
 
@@ -278,6 +280,9 @@ The table for a `NeighborhoodKind`, in `step_cell` order.
 
 `NeighborhoodKind` comes from `henad_core::topology`.
 
+Rust only.
+A shader names a table by its id instead, as in [`neighbor_count`](#neighbor_count).
+
 See also: [`for_each_neighbor`](#for_each_neighbor).
 
 ### `for_each_neighbor`
@@ -446,6 +451,32 @@ The two backends draw from different streams, since the generators differ.
 
 See also: [`random_float`](#random_float), [`next_bits`](#next_bits).
 
+### `next_index`
+
+```rust
+fn next_index(rng: &mut u64, n: u32) -> u32
+```
+
+Advances `rng` and returns a uniform integer in `[0, n)`, like NetLogo's `random n`.
+Returns 0 when `n` is 0.
+
+```rust
+next_index(&mut rng, 10)   // one of 0 to 9
+next_index(&mut rng, 1)    // 0
+```
+
+Every result is equally likely for any `n`.
+The draw multiplies a fresh word by `n` and keeps the top 32 bits (Lemire's method), then redraws the few words that would favour some results over the rest.
+A plain `next_bits(rng) % n` favours the low results.
+
+Unlike [`next_float`](#next_float), it has no pure form taking a raw word.
+A rejected word needs another draw from the generator.
+
+Rust only.
+The redraw needs a 64-bit product, and WGSL has none.
+
+See also: [`next_bits`](#next_bits), [`next_float`](#next_float).
+
 ### `below`
 
 ```rust
@@ -521,6 +552,9 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 | World size | `henad_core::Extent`. The engine prepends world size to every agent model's params |
 | A per-chunk RNG seed | `chunk_seed(base, tick, chunk_index)`, in `henad-compute`'s `cpu/primitives/chunked.rs` |
 | Counting cells | `reduce_chunks`, in the same file |
+| A node's neighbours | `Network::in_neighbors` and `Network::out_neighbors`, in `henad_core::network`. Each returns a slice of node indices without allocating. On an undirected graph the two return the same list |
+| Whether two nodes are joined | `Network::has_edge`, or `Network::edge_between` for the edge's index, in the same file. A lookup walks one node's neighbours, the shorter list on an undirected graph. On a directed graph it looks only for an edge from the first node to the second |
+| Connected components | `label_components`, in `henad-compute`'s `cpu/primitives/components.rs`. Labels every node with the lowest node index in its component, into a caller-provided buffer, and returns the number of components and the size of the largest. On a directed graph it finds weakly connected components |
 | Arithmetic, trigonometry, `min`, `max`, `clamp` | Rust and WGSL both provide these already |
 
 ## Not provided
@@ -529,7 +563,9 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 - **Global ordering.** Nothing sorts agents or picks a global maximum across them.
 - **A per-cell list of agents.** Nothing keeps a second copy of where each agent stands. `SpatialHash` is rebuilt from positions each tick and answers the same queries.
 - **A global RNG seed.** A chunk's RNG comes from `chunk_seed(base, tick, chunk_index)`. A run is then independent of the thread count.
-- **Dynamic populations.** Agents are neither created nor removed mid-run.
+  A network model's global pass is sequential and draws from one stream of its own.
+- **Dynamic populations of agents.** An agent model's agents are neither created nor removed mid-run.
+  A network model can add and remove nodes through `Nodes::spawn` and `Nodes::retire`.
 - **Non-uniform activation.** Every agent steps every tick. A model wanting less carries its own phase counter.
 - **Dynamic evaluation.** Both backends compile ahead of time.
 

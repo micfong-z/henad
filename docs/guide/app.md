@@ -38,8 +38,8 @@ Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bo
 ## :material-cog-outline: Model tab
 
 <figure markdown="span">
-  ![The model dropdown, listing eight models](../assets/app/model-select.png){ width="240" }
-<figcaption>Eight default Henad models.</figcaption>
+  ![The model dropdown, listing the ten models](../assets/app/model-select.png){ width="240" }
+<figcaption>The ten default Henad models.</figcaption>
 </figure>
 
 Use the dropdown to pick a model.
@@ -60,15 +60,18 @@ Below the description, the panel displays auto-computed metadata about the model
 
 Identity
 : The model id the [CLI](../reference/cli.md) takes, its backend (CPU or GPU), and which display layers it publishes.
+  A network model's topology reads Network.
 
 Structure
 : Underlying data structure of the model, which is different for each [authoring trait](../authoring/index.md).
   For example, a grid model reports its neighbourhood; a CPU agent model its lanes, chunk size, neighbour index and field layer; a GPU model its buffers and passes.
+  A network model reports its lanes and its chunk size.
   Hover over the counts to see the names of each buffer or step pass.
 
 Interface
 : How many parameters and [statistics](../authoring/statistics.md) the model declares, and the palette it uses.
   Palette information cannot be obtained directly for a GPU model.
+  A network model adds an **Edge palette** row with the colours its edges can take.
 
 Footprint (GPU only)
 : Expected model resource requirements at the parameter values currently in the <span class="ui" markdown>:material-tune: Parameters</span> tab.
@@ -76,6 +79,8 @@ Footprint (GPU only)
 ## :material-tune: Parameters tab
 
 This tab shows the parameters of the selected model, and you can change them using the sliders or text boxes.
+A parameter that is either on or off shows as a checkbox, and one with a fixed set of options shows as a dropdown.
+Some parameters, such as chances, are shown as percentages, and you can type a value with or without the `%` sign.
 
 <figure markdown="span">
   ![The Parameters panel for Ant Foraging on the GPU](../assets/app/params.png){ width="370" }
@@ -105,6 +110,13 @@ There are 4 possible banners:
 | :material-alert: Selected model not loaded  | A model different from the running one is selected.                    |
 | :material-alert: Reload needed              | Some reload parameters have been edited but not applied.               |
 | :material-alert: Too large for this device  | The selected parameters require too much resources. Try lowering them. |
+
+### Actions
+
+Some models declare actions, one-off changes to the state, such as **Randomise** and **Clear** in Game of Life or **Rewire a link** in Virus on a Network.
+Each action gets a button below the parameters.
+Pressing it runs the action once, between ticks, and it also works while the simulation is paused.
+The buttons are disabled until the selected model is built.
 
 ## :material-play-circle-outline: Playback tab
 
@@ -142,6 +154,21 @@ The controls for CPU and GPU models are different due to the different ways they
     **Ticks/snapshot** sets how many ticks pass between published snapshots.
     This controls how frequently the viewport and the statistics are updated.
 
+    When a network model is loaded, three layout controls follow.
+
+    **Layout** arranges the nodes with a spring layout while the simulation runs, and is on by default.
+    Node positions are only for drawing, and the layout never changes the statistics.
+
+    **Layout while paused** keeps the layout running while the simulation is paused.
+    Without it, pausing freezes the picture.
+
+    **Layout budget** sets the time the layout spends on each snapshot.
+    The layout always runs at least one iteration, and on a large network one iteration can take longer than the budget.
+    The layout shares time with the simulation, so a larger budget moves the layout further per snapshot but leaves less time for ticks.
+    The **Prepare view** row in the <span class="ui" markdown>:material-gauge: Performance</span> tab includes the time the layout took.
+
+    **Layout while paused** and **Layout budget** can only be changed while **Layout** is on.
+
 === "GPU model"
 
     The GPU is also needed to render the UI, so more complex pacing controls is required.
@@ -176,6 +203,14 @@ The controls for CPU and GPU models are different due to the different ways they
     ![The same 800,000 ants drawn as a density heatmap](../assets/app/viewport-density.png){ width="620" }
 
 A model with both a [field](../authoring/fields.md) and a population draws the field first and the agents over the top.
+
+In **Sprites** mode, a network model adds two more checkboxes.
+**Edges** draws the edges between the nodes, under the nodes themselves.
+**Arrows** appears once **Edges** is ticked, and puts an arrowhead at the target end of each edge.
+It can only be ticked when the model's edges are directed.
+Without arrowheads, a directed edge fades towards its source.
+
+A node the model has retired, such as a Team Assembly member left too long without a team, is hidden, and its edges are removed with it.
 
 ## :material-table: Statistics tab
 
@@ -236,11 +271,13 @@ Turn on **Unlimited history** in the <span class="ui" markdown>:material-chart-l
 ### Current state
 
 <span class="ui" markdown>:material-tray-arrow-down: Save state</span> writes the current cells and agent positions as text, the same format as `henad-cli --export`.
+For a network model it also writes the edges, giving each endpoint as that node's row in the file, and leaves retired nodes out.
 Due to technical limitations, the current state of a GPU model cannot be exported.
 
 ### Viewport
 
 <span class="ui" markdown>:material-tray-arrow-down: Save image</span> writes the layers as a PNG at a specific resolution automatically determined by the engine.
+A network's edges are drawn as the **Edges** and **Arrows** checkboxes in the <span class="ui" markdown>:material-cube-outline: Viewport</span> tab have them.
 
 ### Run details
 
@@ -261,6 +298,7 @@ TPS
 
 Population
 : Number of agents for an agent model, number of cells for a grid model.
+  For a network model, the number of nodes, not counting retired ones.
 
 Sim memory
 : Memory used by the simulation.
@@ -271,6 +309,10 @@ FPS
 
 Engine
 : Time for one tick inside the engine.
+
+Prepare view
+: Time the last snapshot spent turning the model's state into something drawable, including a network model's layout.
+  Reads zero for a GPU model.
 
 Render
 : Time spent drawing the simulation this frame.
@@ -292,6 +334,9 @@ UI
 
 Information in the <span class="ui" markdown>:material-chip: System</span> tab are generally technical information used for debugging purposes.
 It can also be used to check if the correct GPU adapter is being used, and if the device has enough resources to run a model.
+
+The **Network edges** row shows whether the GPU can draw the edges of a network model.
+When it reads Unavailable, network models still run, but their edges are not drawn.
 
 A banner at the top appears when there are potential compatibility issues with the GPU, and can be one of the following:
 
@@ -320,6 +365,7 @@ When such an error occurs, a modal dialog appears with the error message.
 Although Henad is designed so that the web app runs identically to the native app, there are some differences due to the limitations of the web platform:
 
 - **GPU time/step** reads `N/A` due to backend limitations.
+- **Layout budget** is capped at 6 ms, the time the simulation gets in each frame.
 - Device limits can be lower than the native app as broswers may not expose the full capabilities of the GPU.
 - Append `?threads=N` to the URL to cap the worker pool.
 

@@ -330,11 +330,11 @@ impl GpuAgentModel for GpuForagingModel {
 `INDEX` keeps its default of `false`.
 Our ants read the field and never each other, so the engine builds no neighbour index, just as `NoIndex` told it on the CPU.
 
-Here are the imports that `impl` relies on, the whole of the trait's vocabulary included, since we meet the rest of it further down:
+Here are the other imports that `impl` relies on, the whole of the trait's vocabulary included, since we meet the rest of it further down:
 
 ``` rust title="crates/henad-models/src/gpu_foraging/mod.rs"
 use henad_core::authoring::model::gpu_agent_model::{
-    BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
+    BufferSpec, DisplaySpec, Domain, Geometry, PassCtx, PassId, PassSpec, ReduceSpec,
 };
 use henad_core::view::{StatDescriptor, StatValue};
 
@@ -1155,9 +1155,9 @@ On top of everything the grid page listed, batching, capacity, error handling an
 
 ## Next
 
-That is both tutorials done, on both backends.
+That is every tutorial done, with the grid and agent models on both backends.
 From here:
 
-- [Choosing a trait](../../authoring/index.md) is the map of the four authoring paths you have now seen all of.
+- [Choosing a trait](../../authoring/index.md) is the map of the five traits you have now seen all of.
 - [Porting a model to the GPU](../../authoring/porting.md) condenses this page and the last into a checklist for your own port.
 - `gpu_boids/` is the other shipped `GpuAgentModel`: one pass, three double buffered lanes and a neighbour index, the structural opposite of ants.

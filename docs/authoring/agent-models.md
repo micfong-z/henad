@@ -11,6 +11,7 @@ _See [Writing a CPU agent model](../guide/first-model/ants.md) for a tutorial._
 `AgentModel` is the authoring trait for a population of agents, optionally sitting over a [field](fields.md).
 Pick it when your individuals move around and react to each other.
 You declare the lanes with `agent_lanes!`, then implement `init`, `run_step_pass` and `stats`.
+A model can also declare `ACTIONS`, one-off changes to the state with a button each, and implement `act` to run them, as [actions](parameters.md#actions) describes.
 
 `boids/` and `ants/` are the two implementations to read alongside this page.
 Boids is the smaller of the pair: its agents live in empty space, run a single pass, use no field, and read each other through a `SpatialHash`.

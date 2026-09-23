@@ -93,11 +93,12 @@ comment rules below. Do not include by line range, which is also supported and d
 ## Cross-engine benchmarks
 
 `benchmarks/` holds one directory per reference engine (Mesa, NetLogo, MASON, Agents.jl,
-krABMaga), each with a harness and one implementation per model. Every implementation is written
-from the same declaration the consistency fixtures use. `scripts/validate_ports.py` checks each
-against Henad and records a verdict per engine, variant and model in `results/compare/validated.json`,
-and `compare_bench.py` reads that file and skips anything whose verdict is not `yes`. `benchmarks/protocol.md` is the
-interface every harness implements, and `henad-cli --json` is Henad's side of it.
+krABMaga), each with a harness and one implementation per grid and agent model. Every
+implementation is written from the same declaration the consistency fixtures use.
+`scripts/validate_ports.py` checks each against Henad and records a verdict per engine, variant and
+model in `results/compare/validated.json`, and `compare_bench.py` reads that file and skips
+anything whose verdict is not `yes`. `benchmarks/protocol.md` is the interface every harness
+implements, and `henad-cli --json` is Henad's side of it.
 
 Two rules that are easy to break. A port is written the way a competent user of that engine would
 write it, using only its documented API, since the engine is being measured as its users meet it.
@@ -306,8 +307,8 @@ Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
 one, `--export-stats` for the time series)
 Sweep the models across the config matrix: `python3 scripts/bench_matrix.py` (grid models scale
-over grid size, agent models over agent count at constant density, `team_assembly` skipped unless
-named with `--models`; `--dry-run` to see the matrix)
+over grid size, agent and network models over `num_agents` at constant density, `team_assembly`
+skipped unless named with `--models`; `--dry-run` to see the matrix)
 Sweep every installed engine across the cross-engine ladder: `uv run --project scripts
 scripts/compare_bench.py` (`--dry-run` for the matrix, `--smoke` for one small point each); gate the
 ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py`
@@ -331,9 +332,9 @@ build` produces a binary whose thread pool cannot start.
 
 - `HENAD_REQUIRE_GPU=1` turns "no adapter on this machine" from a silent test skip into a failure.
   CI sets it on all three platforms, so run the GPU tests with it before calling them green.
-- `HENAD_DUMP_WGSL=<dir>` writes every shader the engine compiles to `<dir>/<label>.wgsl`. Some
-  shaders are assembled at runtime (see `gpu/primitives/wgsl.rs`), so this is how a validation
-  error against a generated source gets read as text.
+- `HENAD_DUMP_WGSL=<dir>` writes every shader the engine compiles to `<dir>/<label>.wgsl`. Each
+  file holds the module composed from a shader's `#import`s and re-emitted by naga. A validation
+  error quotes that text, and its line numbers do not match the shader as written.
 - `EGUI_INSPECTION=1` with `--features inspection` opens the app's inspection port on 5719, which
   the egui MCP server drives.
 
@@ -358,23 +359,34 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
 - **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
   GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
   abstractions everything else builds on. `authoring/` is the model authoring API and splits in two.
-  `authoring/model/` holds the four traits a model implements,
+  `authoring/model/` holds the five traits a model implements,
   one per (topology × backend): `GridModel` (`authoring/model/grid_model.rs`) for cellular automata,
-  `AgentModel` (`authoring/model/agent_model.rs`) for agent populations, `GpuGridModel`
+  `AgentModel` (`authoring/model/agent_model.rs`) for agent populations, `NetworkModel`
+  (`authoring/model/network_model.rs`) for nodes joined by edges, `GpuGridModel`
   (`authoring/model/gpu_grid_model.rs`) for shader-resident grids and `GpuAgentModel`
   (`authoring/model/gpu_agent_model.rs`) for shader-resident populations, plus `FieldLayer`
   (`authoring/model/field.rs`),
   the grid slot an `AgentModel` sits over. `authoring/primitives/` is the primitive vocabulary those
-  kernels call — wrapping, neighbourhoods, distances, random draws — each paired with a WGSL twin
-  under `henad-compute/src/gpu/shared/` and pinned to it by a parity test. `docs/reference/primitives.md`
-  is the index and records what is deliberately absent.
+  kernels call — wrapping, neighbourhoods, distances, random draws — most paired with a WGSL twin
+  under `henad-compute/src/gpu/shared/`, and each pure one pinned to its twin by a parity test.
+  `space::offsets`, `space::for_each_neighbor`, `rng::mix_seed` and `rng::next_index` are Rust
+  only. `next_index`'s redraw needs a 64-bit product, and WGSL has no 64-bit integers.
+  `docs/reference/primitives.md` is the index, marks each Rust-only and WGSL-only entry, and
+  records what is deliberately absent.
   `Model`/`SimState` (`model.rs`) are the _runner_
   interface the sim thread drives, not an authoring API — that split is why the traits live under
   `authoring/model/` and this one does not. Also the `Grid2D<T>` double-buffered SoA grid (`grid.rs`),
   the counting-sort `SpatialHash` and the `HashGrid` cell geometry both backends share
-  (`spatial_hash.rs`), param descriptors and `ParamStore`
-  (`params.rs`), stat/view types consumed by the UI (`view.rs`), and small shared helpers
-  including `xorshift64` (`helpers.rs`). `Extent` is re-exported at the crate root.
+  (`spatial_hash.rs`), the `Network` graph a `NetworkModel` works on (`network.rs`), param
+  descriptors and `ParamStore` (`params.rs`), `ActionDescriptor`, the `actions!` macro and
+  `action_seed` (`action.rs`), stat/view types consumed by the UI (`view.rs`), and small shared
+  helpers such as the param and stat builders (`helpers.rs`). `xorshift64` sits with the random
+  draws in `authoring/primitives/rng.rs`. `Extent` is re-exported at the crate root.
+  `Network` keeps its adjacency rows in compressed sparse row (CSR) form with slack, beside an edge
+  list the view draws. A full row relocates to the end, the engine repacks after a tick once
+  `should_repack()` finds too much stale space, and a full `rebuild()` runs only when the graph
+  changes direction. `version()` goes up whenever the edges, their colours or their direction
+  change.
 - **henad-compute**: the engine machinery that turns an authoring impl into something runnable.
   `cpu/` and `gpu/` are **siblings**, not a base and a specialisation, and mirror each other:
   each has its own `sim_thread.rs` (runner), its `*_engine.rs` (authoring trait → runnable state)
@@ -383,25 +395,32 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
   which owns how a sim loop gets driven and the one place the two ways of driving one differ:
   `runner/mod.rs` holds the `SimLoop` trait, `Pace` and the `SnapshotSlot`, with `runner/thread.rs`
   the native driver and `runner/frame.rs` the wasm one.
-  - `cpu/grid_engine.rs` (`GridModelState`) and `cpu/agent_engine.rs` (`AgentModelState`) each
-    implement the whole `SimState` for their trait. `cpu/field/ca.rs` (`CaField`, a `GridModel` as
+  - `cpu/grid_engine.rs` (`GridModelState`), `cpu/agent_engine.rs` (`AgentModelState`) and
+    `cpu/network_engine.rs` (`NetworkModelState`) each implement the whole `SimState` for their
+    trait. `cpu/field/ca.rs` (`CaField`, a `GridModel` as
     a field layer) and `cpu/field/scalar.rs` (`ScalarField`, scatter-plus-decay `f32` layers) are
-    the two `FieldLayer` impls. `cpu/primitives/` holds `lanes_macro.rs` (`agent_lanes!`),
-    `chunked.rs` (chunk drivers and RNG seeding) and `scatter.rs` (the many-agents-one-cell write
-    path). `cpu/sim_thread.rs` is the sim runner, a `SimLoop` with play/pause/TPS-capping, driven by
-    whichever `runner::Driver` the target has.
+    the two `FieldLayer` impls. `cpu/layout.rs` is the spring layout for a network's node
+    positions, NetLogo's `layout-spring` with three changes. An edge's pull levels off as it
+    stretches, repulsion is cut off at a radius found through a `SpatialHash`, and a node slows
+    down while its force keeps swinging, as in `ForceAtlas2`. Every `SpringParams` constant is in
+    units of the mean spacing between nodes. `cpu/primitives/` holds `lanes_macro.rs`
+    (`agent_lanes!`, for node lanes too), `chunked.rs` (chunk drivers and RNG seeding), `scatter.rs`
+    (the many-agents-one-cell write path) and `components.rs` (connected components by min-label
+    propagation). `cpu/sim_thread.rs` is the sim runner, a `SimLoop` with play/pause/TPS-capping,
+    driven by whichever `runner::Driver` the target has.
   - `gpu/grid_engine.rs` (`GpuGridState`) and `gpu/agent_engine.rs` (`GpuAgentState`) are the
     engines for the two GPU traits, mirroring their `cpu/` namesakes. `gpu/sim_thread.rs` is the
     batching GPU runner and `gpu/timing.rs` its adaptive-batch controller. `gpu/view/` is what a
     model hands the UI (`display.rs` for a texture layer, `agents.rs` for lane buffers drawn in
     place). `gpu/primitives/` holds the GPU counterparts of henad-core's data structures —
-    `spatial_hash.rs`, `prefix_scan.rs`, `reduce.rs`, `readback.rs` — plus `dispatch.rs`,
-    `pipeline.rs` and `wgsl.rs` (the shader prelude every pass gets, and the generated reduce leaf).
+    `spatial_hash.rs`, `prefix_scan.rs`, `reduce.rs`, `readback.rs` — plus `dispatch.rs` and
+    `pipeline.rs`. The prelude a pass imports and the `reduce_tree` fold a reduce leaf repeats are
+    WGSL in `gpu/shared/`.
     `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`
     is what asks whether a model fits the device before anything is allocated.
     A shared file name always means _counterpart_, never coincidence: `cpu/sim_thread.rs` and
-    `gpu/sim_thread.rs`, `cpu/agent_engine.rs` and `gpu/agent_engine.rs`, `ants/step.rs` and
-    `boids/step.rs`, `henad-core/src/spatial_hash.rs` and its
+    `gpu/sim_thread.rs`, `cpu/agent_engine.rs` and `gpu/agent_engine.rs`, `ants/step.rs`,
+    `boids/step.rs` and `virus_network/step.rs`, `henad-core/src/spatial_hash.rs` and its
     GPU twin. Two unrelated things must not share a basename.
     The one name carrying three meanings is `primitives`, so keep them straight: `cpu/primitives/`
     and `gpu/primitives/` are engine internals and are counterparts of each other, while
@@ -410,29 +429,51 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
 
 - **henad-models**: concrete simulations — `sir.rs` and `game_of_life.rs` (`GridModel`), `boids/`
   (`AgentModel` over `NoField`), `ants/` (`AgentModel` over `ScalarField`, the one composite
-  model), `gpu_game_of_life/` and `gpu_sir/` (`GpuGridModel`), `gpu_boids/` and `gpu_ants/`
+  model), `virus_network/` and `team_assembly/` (`NetworkModel`), `gpu_game_of_life/` and
+  `gpu_sir/` (`GpuGridModel`), `gpu_boids/` and `gpu_ants/`
   (`GpuAgentModel`). A CPU agent model is split into
   `lanes.rs` (the `agent_lanes!` declaration), `mod.rs` (metadata, params, stats) and `step.rs`
-  (the kernels); ants adds `field.rs` for its pheromone layer. A GPU model is one `mod.rs` of
+  (the kernels); ants adds `field.rs` for its pheromone layer. A network model has the same
+  `lanes.rs` and `mod.rs`. `virus_network/` adds `step.rs` (the node pass) and `wiring.rs` (the
+  initial edges and the rewire). `team_assembly/` has no node pass and no `step.rs`. It adds
+  `assembly.rs` (the global pass and the setup teams), `ring.rs` (`RetirementRing`, a bucket queue
+  that finds the nodes due to retire without a scan) and `live.rs` (`LiveSet`, a dense list of the
+  live nodes for uniform draws). A GPU model is one `mod.rs` of
   declarations next to its `.wgsl` files. Each GPU port seeds itself through its CPU counterpart's
   `init`, which is what keeps tick 0 bit identical between the two backends and makes them fair to
   compare — that call is confined to `seed_buffers`. `registry.rs` type-erases every
   model behind `ModelEntry` so the UI can list/instantiate models without knowing their concrete
   type.
 - **henad-app**: eframe/egui desktop+web GUI. `HenadApp` (`lib.rs`) owns the `SimThread` and
-  polls snapshots each frame; `ui/` has one file per panel (`menu_bar.rs`, `model.rs`, `params.rs`,
-  `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`, `charts.rs`, `performance.rs`,
-  `system.rs`, `fault.rs`). `dock.rs` holds the tab definitions, the default layout and the
+  polls snapshots each frame; `ui/` has one file per panel or window (`menu_bar.rs`, `model.rs`,
+  `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`, `charts.rs`,
+  `performance.rs`, `system.rs`, `fault.rs`, `about.rs`). The Export tab lives in a directory,
+  `export/`. Its `mod.rs` draws the tab and writes the stat series and final state, `image.rs`
+  captures the viewport, `metadata.rs` builds the run details and `save.rs` hands the bytes to a
+  save dialog. `dock.rs` holds the tab definitions, the default layout and the
   dispatch to each panel. `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer
   drawn over the grid layer, and `painted.rs` carries a paint callback's wgpu handles past
-  `CallbackTrait`'s `Send + Sync` bound.
+  `CallbackTrait`'s `Send + Sync` bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
+  edges under the nodes. It reads both ends from the agent layer's position buffers, bound as
+  storage, and uploads the edge list only when its version or length changes. That binding
+  needs `DownlevelFlags::VERTEX_STORAGE`, and WebGL2 lacks it. Without that flag there is no edge
+  layer, and a network model runs with its edges undrawn. `world.wgsl` holds the helpers both
+  shaders `#import`, including `is_placed`, the finiteness test that hides a retired node.
 - **henad-cli**: headless benchmark runner. Steps a state in a bare loop with no rendering, no
-  `SimThread` and no pacing, so a measurement times nothing but `step()`.
+  `SimThread` and no pacing, so a measurement times nothing but `step()`. `--act ID@TICK`
+  (`actions.rs`) runs a declared action before the step at that tick. An action due from the end
+  of warm-up up to, but not including, the tick the run stops on is timed with the steps, and one
+  due on that tick runs after the timer stops. The GPU path fires the same ticks. The GPU
+  benchmark fires before the step and the GPU stats export after it, one `actions::Fire` rule per
+  run, as the two CPU loops do. Otherwise two runs back to back both fire the tick they share. The
+  CLI never publishes and never lays out a network.
+  `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
+  publish would.
 
 ### Adding a new model
 
-Pick the trait matching the topology and the backend. All four are const metadata plus pure
-functions; the engine owns allocation, buffering, chunking, RNG seeding, param storage, the views,
+Pick the trait matching the topology and the backend. All five are const metadata plus pure
+functions. The engine owns allocation, buffering, chunking, RNG seeding, param storage, the views,
 and the whole `SimState` impl.
 
 1. **`GridModel`** (`henad-core/src/authoring/model/grid_model.rs`) — cellular automata over `u8` cells.
@@ -456,26 +497,51 @@ and the whole `SimState` impl.
 
 3. **`GpuGridModel`** (`henad-core/src/authoring/model/gpu_grid_model.rs`) — a grid stepped by a compute
    shader. Three WGSL sources (step, display, reduce), buffer lengths, seeds and a uniform block.
-   All `K` buffers ping-pong together; display and reduce see buffer 0 only.
+   All `K` buffers ping-pong together. Each pass binds buffers by label, and the shipped display
+   and reduce shaders read only the first.
 4. **`GpuAgentModel`** (`henad-core/src/authoring/model/gpu_agent_model.rs`) — a population stepped by
    compute shaders. Unlike a grid, a step is a _list_ of passes, because the two real models
    disagree about almost everything structural: boids rebuilds a neighbour index and runs one pass
    over three ping-ponged lanes, ants runs two passes over seven in-place buffers with a display
-   pass and a persistent counter. So a model declares `BUFFERS`, `STEP_PASSES`, an optional
-   `DISPLAY`, and a `&[Binding]` per pass whose **slice index is the `@binding` index**. The engine
-   builds a second buffer side only when some `BufferSpec` asks for it, so a model that writes in
-   place pays nothing for double buffering. `Domain` has exactly three variants because those are
+   pass and a persistent counter. So a model declares `BUFFERS`, `STEP_PASSES` and an optional
+   `DISPLAY`, and each pass points at its shader's generated declarations,
+   `crate::binding_decls::bindings::<SHADER>`. The engine builds a second buffer side only when
+   some `BufferSpec` asks for it, so a model that writes in place pays nothing for double
+   buffering. `Domain` has exactly three variants because those are
    the three the two models use — do not add speculative ones.
+5. **`NetworkModel`** (`henad-core/src/authoring/model/network_model.rs`) is a population of nodes
+   joined by edges, on the CPU only. Declare node lanes with `agent_lanes!` as for an agent model,
+   then implement `init`, `stats` and whichever passes the model needs. `init` gets a graph holding
+   every node and no edges. A tick runs the sequential `run_global_pass` first, the only pass of
+   the tick that can change the graph. The parallel `run_node_pass` follows, over every slot,
+   retired ones included. The node pass is normally one `lanes.run_pass(..)` call, as in
+   `virus_network/step.rs::run`, and Team Assembly has none. `num_agents` (the node count),
+   `world_width` and `world_height` are prepended at indices 0, 1 and 2. `Params` are hot params
+   as for an agent model, and `Aux` is the model's own state outside the lanes and the graph.
+   Nodes come and go through `Nodes::spawn` and `Nodes::retire`. Both keep the lanes and the graph
+   the same length. A retired node sits at `NaN`, and a reused slot keeps the old node's lane
+   values. `stats` sees `Aux` immutably. A stat that walks the graph (Team Assembly's components)
+   is computed in `prepare_view`, cached in `Aux` against `Network::version()` and counted by
+   `aux_heap_bytes`. `directed` is read every tick, and a flip rebuilds the rows. `EDGE_PALETTE`
+   colours each edge by its colour byte, and `LAYOUT` tunes the spring layout.
 
-`Model`/`SimState` are the runner interface, not a fifth authoring path — implement one of the
+Every trait can declare one-off actions, drawn as buttons in the Parameters panel and named by
+`henad-cli --act ID@TICK`. A CPU trait lists them in `ACTIONS` and runs them in `act`, and
+`henad_core::actions!` declares the list and numbers each entry by its position. A GPU trait's
+`ACTIONS` lists `GpuGridAction` or `GpuAgentAction` passes instead, and the seed passed to build
+its uniform block is fresh on every press. An action runs between ticks (`SimCommand::Act` in the
+runner) and draws from its own stream (`action::action_seed`). Otherwise a press would draw the
+numbers the next tick would have.
+
+`Model`/`SimState` are the runner interface, not a sixth authoring path. Implement one of the
 traits above rather than `SimState` directly.
 
 Either way, register the new model in `henad-models/src/registry.rs::model_registry()` via the
 `register_*` generic for its trait, so it's type-erased into a `ModelEntry` and shows up in the UI.
-Nothing about an entry should be written by hand — name, params, stats and `topology_hint` are all
-derived from the trait. The registry tests are the safety net that a model's declared params,
-topology and stat series match what its state actually does, and they cover GPU entries too when a
-device is available.
+Nothing about an entry should be written by hand. Name, params, stats, actions and
+`topology_hint` are all derived from the trait. The registry tests are the safety net that a
+model's declared params, topology, actions and stat series match what its state actually does, and
+they cover GPU entries too when a device is available.
 
 ### Performance-critical paths — read before touching
 
@@ -486,7 +552,7 @@ device is available.
   workers a 64 by 64 grid as 64 jobs of 64 cells, and the floor turns that into one job. Measured
   together at 13x on the smallest grid rungs.
 - `henad-compute/src/cpu/field/ca.rs::step_row_moore`/`step_row_vn` and
-  `henad-models/src/*/step.rs` (the per-agent kernels) are the hot inner loops. The x-wrap is
+  `henad-models/src/*/step.rs` (the agent and node kernels) are the hot inner loops. The x-wrap is
   peeled off both row loops so the interior runs without a per-cell modulo; keep that shape,
   including the `enumerate()` interior loop.
 - **rayon runs on every target, web included, and no kernel has a sequential twin.** There are no
@@ -500,7 +566,9 @@ device is available.
   the web too, where the pool width is whatever `navigator.hardwareConcurrency` reported. `base` is advanced once
   per tick on the sequential path by `advance_tick_seed` — folding the tick in only through
   `chunk_seed` measured 14% slower on SIR with identical content, and that was never explained.
-  Both agent models have a `results_do_not_depend_on_the_thread_count` test; keep them.
+  Boids, ants, Virus on a Network and Team Assembly each have a
+  `results_do_not_depend_on_the_thread_count` test, as do `cpu/grid_engine.rs`, `cpu/layout.rs`
+  and `cpu/primitives/components.rs`. Keep them.
 - `AgentModel::CHUNK` is per-model on purpose. It sets both the RNG seeding granularity and the
   parallel load balance, so it must be a fixed const (not derived from the thread count) but still
   small enough to split across every core — 4096 gave only 13 chunks for 50k boids and cost 20%.
@@ -589,17 +657,19 @@ is about not undoing them.
 - **Two clocks that must be reset together.** `gpu/sim_thread.rs` gates its stats refresh on
   `last_stats_publish` but divides by `tps_timer`; resetting one without the other reports a whole
   batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.
-- **Uniform layouts are generated, the binding correspondence is not.** A `build.rs` in
-  henad-compute, henad-models and henad-app runs `wgsl_bindgen` over that crate's shaders, and the
-  output lands in `OUT_DIR` behind a `shader_bindings` module. Uniform structs, workgroup sizes and
-  bind group layouts therefore come from the WGSL, and each model asserts its own struct against the
-  generated one. Shared WGSL lives in `henad-compute/src/gpu/shared/` and is reached with `#import`,
-  resolved at build time, so no shader is assembled at runtime any more.
-  What stays hand-maintained is the `&[Binding]` slice per pass, whose position is the `@binding`
-  index. Routing that through the generated bind groups was tried and reverted, since it added 248
-  lines across the models and henad-core to remove an error wgpu already reported loudly at model
-  construction, and left the buffer indices exactly as hand-written as before.
-  Generation also cannot reach a type no shader in the crate uses (hence the hand-written `Dims` in
+- **Uniform layouts and a model's binding slots are generated.** A `build.rs` in henad-compute,
+  henad-models and henad-app runs `wgsl_bindgen` over that crate's shaders, and the output lands
+  in `OUT_DIR` behind a `shader_bindings` module. Uniform structs, workgroup sizes and bind group
+  layouts therefore come from the WGSL, and each model asserts its own struct against the
+  generated one. Shared WGSL lives in `henad-compute/src/gpu/shared/` and is reached with
+  `#import`, resolved at build time, so no shader is assembled at runtime any more.
+  henad-models' `build.rs` also reads each shader's `@group(0)` lines into `binding_decls`, in
+  `@binding` order, and fails the build on a line it cannot parse or a gap in the indices. The
+  engine resolves each name itself. `params`, `dims`, `output`, `cell_start`, `sorted`, `counters`
+  and `partials` are reserved, and any other name is a `BufferSpec` label with an optional `_in`
+  or `_out` suffix. The access mode picks the side.
+  `henad-core/src/authoring/model/binding.rs` is the reference.
+  Generation cannot reach a type no shader in the crate uses (hence the hand-written `Dims` in
   `grid_engine.rs`) or a constant arriving through an `#import`, since naga keeps only what an entry
   point references.
 
@@ -628,3 +698,13 @@ instead means the next publish allocates.
 something drawable — ants quantises its `f32` pheromone field into palette indices there. That
 runs on publish, not every tick, so anything a view needs but a step doesn't belongs in
 `prepare_view` rather than in `step`.
+
+A network model's layout relaxes next, in `SimState::relax_layout`, and stats come last. The layout
+runs at least one iteration and keeps going until the budget from `SimCommand::SetLayout` is spent.
+The budget is capped at `runner::MAX_VIEW_BUDGET_MS` on wasm, where the view is prepared inside the
+frame pump. The layout moves nodes only on a publish that follows a tick, or on every publish while
+paused if `while_paused` is set. An action publishes without a tick, and leaves a paused network
+where it is unless `while_paused` is set. The layout never runs inside `step()`, so node positions
+are not a function of the tick. The edge list is copied into the snapshot only when
+`Network::version()` or the edge count changes. A recolour through `Network::update_colors` that
+changes nothing leaves the version alone. The GPU runner accepts `SetLayout` and ignores it.

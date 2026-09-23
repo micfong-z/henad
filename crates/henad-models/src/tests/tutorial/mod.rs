@@ -17,5 +17,6 @@ pub mod foraging;
 pub mod gpu_foraging;
 pub mod gpu_life;
 pub mod life;
+pub mod virus;
 
 mod parity;

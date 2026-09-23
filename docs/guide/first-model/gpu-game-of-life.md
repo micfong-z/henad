@@ -32,11 +32,11 @@ flowchart LR
 `step.wgsl`, `display.wgsl`, `reduce.wgsl` and the declarations in `mod.rs` are the pieces we need to write ourselves.
 The three shaders differ in how they are dispatched:
 
-| Shader         | Dispatched                       | Runs                             |
-| -------------- | -------------------------------- | -------------------------------- |
-| `step.wgsl`    | one invocation per unit of state | every step                       |
-| `display.wgsl` | one invocation per display texel | on publish, a few times a second |
-| `reduce.wgsl`  | one invocation per cell          | on publish, alongside display    |
+| Shader         | Dispatched                       | Runs                                      |
+| -------------- | -------------------------------- | ----------------------------------------- |
+| `step.wgsl`    | one invocation per unit of state | every step                                |
+| `display.wgsl` | one invocation per display texel | on publish, up to about 60 times a second |
+| `reduce.wgsl`  | one invocation per cell          | on publish, alongside display             |
 
 The Henad engine handles the rest of the simulation, such as allocating both sides of the state buffer and swapping them after every step, building every pipeline and bind group from the shaders, batching steps into submissions, the display texture, and the snapshot the UI draws.
 
@@ -83,7 +83,7 @@ The shader binds the two sides of the state buffer and a small uniform:
 @group(0) @binding(2) var<uniform> params: vec2<u32>; // (2)!
 ```
 
-1. The binding layout of a grid model is fixed by the trait: an interleaved read and write pair per buffer, then the uniform. With one buffer that comes out as `state_in` at `0`, `state_out` at `1` and the uniform at `2`.
+1. The engine binds each declaration by its name. `state_in` and `state_out` are the two sides of the buffer labelled `state`, and `params` is the uniform. The order is up to the shader, and a read and write pair per buffer followed by the uniform is the shape every shipped step shader uses.
 2. The uniform holds the content `mod.rs` decides to send, and Life needs nothing but the grid dimensions.
 
 ### SWAR counting
@@ -283,7 +283,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 ```
 
 1. Shared WGSL lives in `henad-compute/src/gpu/shared/` and can be reached with `#import`, resolved at build time. `shared::dims` holds the `Dims` struct every grid model's display and reduce shader reads.
-2. Display and reduce see buffer 0 only, and get a `Dims` uniform of their own, carrying the grid size and the texture size. Our step uniform never reaches them.
+2. Display and reduce bind `state` and a `Dims` uniform of their own, carrying the grid size and the texture size. Our step uniform never reaches them.
 3. The shader writes RGBA directly, so it carries its own copy of the two palette colours as WGSL constants. It is recommended to maintain consistency with the CPU palette.
 4. The pass dispatches one invocation per _texel_, never per cell. The texture is capped at 4096 a side, so a big grid is sampled, and `cell_at` reads the cell at `texel * grid / tex`. Nothing special happens if this cap is not reached.
 
@@ -468,7 +468,7 @@ use henad_core::authoring::model::binding::BindingDecl;
     --8<-- "crates/henad-models/src/gpu_sir/step.wgsl:bindings"
     ```
 
-    Display and reduce see only buffer 0 in either case.
+    The shipped display and reduce shaders bind only `state` in either case.
 
 ### Sizes
 

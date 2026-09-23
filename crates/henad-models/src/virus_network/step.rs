@@ -5,12 +5,14 @@ use henad_core::network::Network;
 use crate::virus_network::lanes::{VirusChunk, VirusLanes, VirusRead};
 use crate::virus_network::{INFECTED, RESISTANT, SUSCEPTIBLE, VirusNetwork, VirusParams};
 
+// --8<-- [start:node_pass]
 pub(crate) fn run(lanes: &mut VirusLanes, ctx: &NodeCtx<'_, VirusNetwork>, seed: u64, tick: u64) {
     let (graph, params) = (ctx.graph, ctx.params);
     lanes.run_pass(VirusNetwork::CHUNK, seed, tick, |i, k, read, out, rng| {
         step_node(i, k, read, out, graph, params, rng);
     });
 }
+// --8<-- [end:node_pass]
 
 // --8<-- [start:step_node]
 #[inline]

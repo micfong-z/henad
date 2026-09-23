@@ -7,15 +7,17 @@ icon: material/code-braces
 # Shaders and bindings
 
 Both GPU traits hand the engine WGSL as a `&'static str`, because `henad-core` depends on nothing, not even wgpu, and therefore cannot name wgpu types.
-Everything that surrounds that string is generated at build time, and this page covers the generated part along with the part that remains yours to maintain.
+Most of what surrounds that string is generated at build time, and this page covers the generated part.
 
 ## Generated from the WGSL
 
-A `build.rs` in `henad-compute`, `henad-models` and `henad-app` runs `wgsl_bindgen` over that crate's shaders, and the output lands behind a `shader_bindings` module.
+A `build.rs` in `henad-compute`, `henad-models` and `henad-app` runs `wgsl_bindgen` over the shaders it lists as entry points, and the output lands behind a `shader_bindings` module.
 
 Uniform structs, workgroup sizes and bind group layouts therefore come from the WGSL instead of being retyped in Rust.
-Your model keeps its own `#[repr(C)]` struct and asserts it against the generated one.
-Adding a field to a WGSL `struct Params` without touching its Rust twin then fails the build, and the model never reaches the point of misreading memory at runtime.
+Your model fills in the generated struct and hands back its bytes, and declares no uniform struct of its own.
+A uniform declared as a bare vector, as GPU Game of Life's step uniform is, has no struct, and the model hands back the values themselves.
+The generated struct always has the shader's layout.
+An initialiser that names every field also stops compiling when the WGSL `struct Params` gains one, while one ending in `..bytemuck::Zeroable::zeroed()` leaves the new field at zero.
 
 ```rust
 use crate::shader_bindings::gpu_boids::step::Params as StepParams;
@@ -42,18 +44,25 @@ Shared code lives in `henad-compute/src/gpu/shared/` and is reached with `#impor
 | `shared::dims` | The `Dims` struct a grid model's display and reduce shaders read |
 | `shared::reduce_tree` | `block_sum`, the workgroup fold a reduce leaf repeats |
 
-Every primitive here pairs with a Rust function under `henad_core::authoring::primitives`, and a parity test pins each pair to the other.
-[Authoring primitives](../reference/primitives.md) is the index, and it also records what is deliberately absent.
+Most primitives here pair with a Rust function under `henad_core::authoring::primitives`, and a parity test pins each pair of pure functions together.
+[Authoring primitives](../reference/primitives.md) is the index.
+It names the WGSL-only primitives and records what is deliberately absent.
 
 ## Bindings
 
-For a [GPU grid model](gpu-grid-models.md) the binding layout is fixed by the trait itself: interleaved read/write pairs, then the uniform.
-
-A [GPU agent model](gpu-agent-models.md) resolves its layout by name instead.
-Each shader's `@group(0)` declarations are read off the source at build time in `@binding` order, and the engine matches each name to a resource on its own, which stops a slot index disagreeing with the shader that owns it.
+The `build.rs` in `henad-models` reads the `@group(0)` lines of every shader in its `ENTRY_POINTS` list into a `binding_decls` module, in `@binding` order.
+Every pass of either GPU trait points at one of its constants, named after the shader's path, as `crate::binding_decls::bindings::GPU_SIR_STEP` is for `gpu_sir/step.wgsl`.
+A new shader has to be added to `ENTRY_POINTS` before `shader_bindings` or `binding_decls` knows about it.
+The engine resolves each name itself.
+Otherwise a slot index could disagree with the shader that owns it.
 
 Seven names are reserved for resources the engine owns, and anything else names one of the model's own buffers by its label.
 The full list is in [GPU agent models](gpu-agent-models.md#bindings).
+A [GPU grid model](gpu-grid-models.md) has a resource for four of them, `params`, `dims`, `output` and `counters`.
+
+The shipped grid models name each buffer twice in the step shader, `<label>_in` for reading and `<label>_out` for writing, and bind `params` after the last pair.
+That suffix is a naming convention.
+The access mode decides which side a name resolves to.
 
 !!! note "Names are read, not typechecked"
 
@@ -88,11 +97,6 @@ HENAD_DUMP_WGSL=/tmp/wgsl cargo run --release -p henad-app
 
 With that variable set, every shader the engine compiles lands in `<dir>/<label>.wgsl`, which lets you read a validation error against the composed source as ordinary text.
 See [environment variables](../reference/environment.md).
-
-## The hand-written half
-
-Only the `&[Binding]` correspondence itself is still written by hand.
-Routing it through the generated bind groups was tried and reverted: the attempt added 248 lines across the models and `henad-core` to remove an error wgpu already reports loudly at model construction, and it left the buffer indices exactly as hand-written as before.
 
 ## Next
 

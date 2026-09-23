@@ -46,7 +46,7 @@ use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
 
-use crate::actions::Schedule;
+use crate::actions::{BENCH_FIRE, Fire, Schedule};
 use numfmt::{Formatter, Scales};
 
 mod actions;
@@ -85,8 +85,8 @@ struct Args {
     #[arg(long = "set", value_name = "ID=VALUE")]
     set: Vec<String>,
 
-    /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable, and ids come
-    /// from `--params`. Each rep replays the same schedule.
+    /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable. An unknown id is
+    /// refused, and the error lists the ids the model declares. Each rep replays the same schedule.
     #[arg(long = "act", value_name = "ID@TICK")]
     act: Vec<String>,
 
@@ -523,7 +523,7 @@ fn report(samples: &[Duration], steps_per_rep: u64, population: u64, grid_dims: 
 
 /// GPU benchmark. GPU state never leaves the device, and `SimState::step()` submits one tiny
 /// command buffer per step without ever waiting. Each rep instead batches `steps` into GPU
-/// submissions and blocks on completion. See [`run_gpu_steps`].
+/// submissions and blocks on completion. See [`run_gpu_rep`].
 fn bench_gpu(
     entry: &ModelEntry,
     params: &[ParamValue],
@@ -557,15 +557,9 @@ fn bench_gpu(
     for rep in 0..args.reps {
         let seed = rep_seed(args.seed, rep);
         let mut state = new_gpu_state(entry, params, seed)?;
-        // Per-rep sim warm-up (untimed), matching the CPU path.
-        run_gpu_steps_acting(&mut *state, ctx, args.warmup, schedule)?;
-        population = state.population();
-
-        eprint!("  #{: >4}: ", rep + 1);
-        let start = Instant::now();
-        run_gpu_steps_acting(&mut *state, ctx, args.steps, schedule)?;
-        let elapsed = start.elapsed();
-        eprintln!("{elapsed:>8.3?}");
+        let (after_warmup, elapsed) = run_gpu_rep(&mut *state, ctx, args.warmup, args.steps, schedule)?;
+        population = after_warmup;
+        eprintln!("  #{: >4}: {elapsed:>8.3?}", rep + 1);
         samples.push(elapsed);
         if args.json {
             json_report::rep(rep, seed, args.steps, args.warmup, elapsed, population, None);
@@ -599,18 +593,21 @@ fn new_gpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -
     }
 }
 
-/// Run `count` steps on the GPU, blocking until the GPU has actually finished all of them.
-///
-/// This is the one spot where GPU benchmarking is easy to get *wrong*: `queue.submit()` returns
-/// before the GPU has executed anything, so a timer wrapped around submission alone measures
-/// CPU-side dispatch cost and reports throughput that looks fantastic and is fiction. The work has
-/// to reach the GPU and complete inside the timed window.
+/// Runs `count` steps on the GPU and blocks until the GPU has finished them.
 fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> Result<()> {
     if count == 0 {
         return Ok(());
     }
+    submit_gpu_steps(state, ctx, count);
+    wait_gpu(ctx)
+}
+
+/// Submits `count` steps on the GPU without waiting for them.
+///
+/// Each command buffer holds at most [`MAX_STEPS_PER_SUBMISSION`] steps.
+fn submit_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) {
     // Submissions to one queue run in order, so batch N+1 still reads batch N's output. They all
-    // queue up and one wait drains them, letting the CPU encode ahead of the GPU.
+    // queue up and the caller's one wait drains them, letting the CPU encode ahead of the GPU.
     let mut remaining = count;
     while remaining > 0 {
         let n = remaining.min(u64::from(MAX_STEPS_PER_SUBMISSION)) as u32;
@@ -621,9 +618,41 @@ fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
         ctx.queue.submit(Some(encoder.finish()));
         remaining -= u64::from(n);
     }
+}
+
+/// Runs one GPU benchmark rep on `state` and returns its population after warm-up and the time its timed steps took.
+///
+/// The rep runs `warmup` untimed steps and then `steps` timed ones, both under [`BENCH_FIRE`]. An action due from the
+/// end of warm-up up to, but not including, the tick the rep stops on is timed with the steps. One due on the tick the
+/// rep stops on fires after the timer stops. It is waited for there. Otherwise its work would land in the next rep,
+/// inside the timer when that rep has no warm-up, and a fault it raised would be reported late or not at all.
+fn run_gpu_rep(
+    state: &mut dyn GpuSimState,
+    ctx: &GpuContext,
+    warmup: u64,
+    steps: u64,
+    schedule: &Schedule,
+) -> Result<(u64, Duration)> {
+    run_gpu_steps_acting(state, ctx, warmup, schedule, BENCH_FIRE)?;
+    let population = state.population();
+
+    let start = Instant::now();
+    run_gpu_steps_acting(state, ctx, steps, schedule, BENCH_FIRE)?;
+    let elapsed = start.elapsed();
+    run_due_gpu(state, ctx, schedule);
+    wait_gpu(ctx)?;
+    Ok((population, elapsed))
+}
+
+/// Blocks until the GPU has finished everything submitted, then reports any fault it raised.
+///
+/// Note that `queue.submit()` returns before the GPU has executed anything. A timer around submission alone measures
+/// the CPU's dispatch cost, and the throughput it reports is fiction. A timed run has to end in this wait inside the
+/// timer.
+fn wait_gpu(ctx: &GpuContext) -> Result<()> {
     ctx.device
         .poll(wgpu::PollType::wait_indefinitely())
-        .context("GPU failed to complete steps")?;
+        .context("GPU failed to finish the submitted work")?;
 
     if let Some(fault) = ctx.faults.take() {
         return Err(fault.into());
@@ -633,33 +662,48 @@ fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
 
 /// As [`run_gpu_steps`], stopping at each tick the schedule names to encode its actions.
 ///
+/// `fire` picks the side of the step an action fires on, as [`Schedule::fire_ticks`] spells out.
+/// [`Fire::BeforeStep`] leaves the tick the run stops on to the caller, and [`Fire::AfterStep`] leaves
+/// the tick it starts on. Back-to-back runs under one rule then fire each tick once.
+///
+/// Every batch of steps and every action is submitted before one wait at the end, and a run of no steps waits for
+/// nothing. Under [`Fire::AfterStep`] that wait covers an action on the tick the run stops on.
+fn run_gpu_steps_acting(
+    state: &mut dyn GpuSimState,
+    ctx: &GpuContext,
+    count: u64,
+    schedule: &Schedule,
+    fire: Fire,
+) -> Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+    let end = state.tick() + count;
+    for tick in schedule.fire_ticks(state.tick(), count, fire) {
+        let now = state.tick();
+        submit_gpu_steps(state, ctx, tick - now);
+        run_due_gpu(state, ctx, schedule);
+    }
+    let now = state.tick();
+    submit_gpu_steps(state, ctx, end - now);
+    wait_gpu(ctx)
+}
+
+/// Encodes whatever is due at the state's current tick.
+///
 /// An action goes in a submission of its own, between two batches of steps, since a uniform
 /// written mid-encoder would not be visible until the whole encoder submitted.
-fn run_gpu_steps_acting(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64, schedule: &Schedule) -> Result<()> {
-    if schedule.is_empty() {
-        return run_gpu_steps(state, ctx, count);
-    }
-
-    let end = state.tick() + count;
-    loop {
-        for action in schedule.due(state.tick()) {
-            let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("cli_gpu_action"),
-            });
-            if state.encode_action(&mut encoder, action.index) {
-                ctx.queue.submit(Some(encoder.finish()));
-            } else {
-                eprintln!("note: model refused action '{}' at tick {}", action.id, state.tick());
-            }
+fn run_due_gpu(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &Schedule) {
+    for action in schedule.due(state.tick()) {
+        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("cli_gpu_action"),
+        });
+        if state.encode_action(&mut encoder, action.index) {
+            ctx.queue.submit(Some(encoder.finish()));
+        } else {
+            eprintln!("note: model refused action '{}' at tick {}", action.id, state.tick());
         }
-        if state.tick() >= end {
-            break;
-        }
-        let tick = state.tick();
-        let next = schedule.next_due(tick + 1).unwrap_or(end).min(end);
-        run_gpu_steps(state, ctx, next - tick)?;
     }
-    Ok(())
 }
 
 /// Best-effort grid dimensions from the resolved params, for GPU models whose state exposes no
@@ -807,15 +851,15 @@ fn stats_cpu<W: std::io::Write>(
 /// readback produced, so each sample needs the full encode-reduce-readback round trip and a
 /// blocking poll, or every row would repeat a stale value. That makes the sampling interval the
 /// dominant cost here, and `--stats-every` is how you buy it back.
-fn stats_gpu(
+fn stats_gpu<W: std::io::Write>(
     mut state: Box<dyn GpuSimState>,
     ctx: &GpuContext,
     args: &Args,
     schedule: &Schedule,
     total: u64,
-    mut writer: StatsWriter<BufWriter<File>>,
+    mut writer: StatsWriter<W>,
 ) -> Result<u64> {
-    let sample = |state: &mut dyn GpuSimState, writer: &mut StatsWriter<BufWriter<File>>| -> Result<()> {
+    let sample = |state: &mut dyn GpuSimState, writer: &mut StatsWriter<W>| -> Result<()> {
         let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("cli_stats_snapshot"),
         });
@@ -827,14 +871,17 @@ fn stats_gpu(
         Ok(())
     };
 
+    run_due_gpu(&mut *state, ctx, schedule);
     sample(&mut *state, &mut writer)?;
     let mut done = 0;
     while done < total {
         let chunk = args.stats_every.min(total - done);
-        run_gpu_steps_acting(&mut *state, ctx, chunk, schedule)?;
+        run_gpu_steps_acting(&mut *state, ctx, chunk, schedule, Fire::AfterStep)?;
         done += chunk;
         sample(&mut *state, &mut writer)?;
     }
+    // A fault raised by the last sample is reported here. No later wait would report it.
+    wait_gpu(ctx)?;
     Ok(writer.finish()?)
 }
 
@@ -937,12 +984,13 @@ fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Schedule, parse_overrides, resolve_params, stats_cpu};
+    use super::{Args, Schedule, acquire_gpu, parse_overrides, resolve_params, run_gpu_rep, stats_cpu, stats_gpu};
     use clap::Parser as _;
+    use henad_compute::gpu::{GpuContext, GpuSimState};
     use henad_core::export::stats_csv::StatsWriter;
     use henad_core::helpers::{f32_param, u32_param};
     use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
-    use henad_models::registry::{ModelState, model_registry};
+    use henad_models::registry::{ModelEntry, ModelState, model_registry};
 
     const OPTIONS: &[&str] = &["moore", "von_neumann"];
 
@@ -1063,6 +1111,112 @@ mod tests {
                 row[share]
             );
             assert_eq!(row[size], 4.0, "tick {}", row[tick]);
+        }
+    }
+
+    /// Returns whether `HENAD_REQUIRE_GPU` turns a missing device into a failure. Empty and `0` read as unset.
+    fn gpu_required() -> bool {
+        std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|v| !v.is_empty() && v != "0")
+    }
+
+    /// A 64 by 64 GPU grid model and the device it runs on.
+    struct SmallGpuGrid {
+        ctx: GpuContext,
+        entry: ModelEntry,
+        params: Vec<ParamValue>,
+    }
+
+    impl SmallGpuGrid {
+        /// Returns model `id` on a fresh device, or `None` to skip the test when this machine has no device.
+        ///
+        /// # Panics
+        ///
+        /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
+        fn new(id: &str) -> Option<Self> {
+            let ctx = match acquire_gpu() {
+                Ok((ctx, _)) => ctx,
+                Err(err) => {
+                    assert!(
+                        !gpu_required(),
+                        "HENAD_REQUIRE_GPU is set but no device is available: {err:#}"
+                    );
+                    return None;
+                }
+            };
+            let entry = model_registry(Some(ctx.clone()))
+                .into_iter()
+                .find(|e| e.id == id)
+                .expect("the model is registered");
+            let overrides = parse_overrides(&["grid_width=64".to_owned(), "grid_height=64".to_owned()]).expect("valid");
+            let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
+            Some(Self { ctx, entry, params })
+        }
+
+        fn schedule(&self, raw: &[&str]) -> Schedule {
+            let raw: Vec<String> = raw.iter().map(|&s| s.to_owned()).collect();
+            Schedule::parse(&raw, &self.entry).expect("declared actions")
+        }
+
+        fn state(&self) -> Box<dyn GpuSimState> {
+            let Ok(ModelState::Gpu(state)) = (self.entry.create)(&self.params, Some(1)) else {
+                panic!("{} builds as a GPU model", self.entry.id);
+            };
+            state
+        }
+
+        /// Returns the stats export's rows for `total` ticks of `state`, without the header.
+        fn rows(&self, state: Box<dyn GpuSimState>, every: u64, schedule: &Schedule, total: u64) -> Vec<String> {
+            let every = every.to_string();
+            let args = Args::parse_from(["henad-cli", self.entry.id.as_str(), "--stats-every", every.as_str()]);
+            let mut out = Vec::new();
+            stats_gpu(state, &self.ctx, &args, schedule, total, StatsWriter::new(&mut out)).expect("writes");
+            let text = String::from_utf8(out).expect("utf-8");
+            text.lines().skip(1).map(str::to_owned).collect()
+        }
+    }
+
+    /// Checks that a GPU action on a sampling boundary fires once. It used to fire at the end of one run of
+    /// steps and again at the start of the next, so the series changed with `--stats-every`.
+    ///
+    /// `randomise` draws a fresh board on every press. At `--stats-every 1` tick 2 is a boundary, and a
+    /// second press there changed every later row. At `--stats-every 3` it is inside a run.
+    #[test]
+    fn a_gpu_action_fires_once_whatever_the_sampling_interval() {
+        let Some(life) = SmallGpuGrid::new("gpu_game_of_life") else {
+            return;
+        };
+        let schedule = life.schedule(&["randomise@2"]);
+        let every_tick = life.rows(life.state(), 1, &schedule, 6);
+        let every_third = life.rows(life.state(), 3, &schedule, 6);
+        assert_eq!(every_tick.len(), 7, "ticks 0 to 6");
+        let shared = [0, 3, 6].map(|tick| every_tick[tick].clone());
+        assert_eq!(every_third, shared, "rows at ticks 0, 3 and 6");
+    }
+
+    /// Checks that a GPU benchmark rep fires each action once and on its own tick, the tick the rep stops on
+    /// included.
+    ///
+    /// The rep is [`run_gpu_rep`], the one `bench_gpu` runs. Its counts have to match the last row of a stats
+    /// export over the same ticks. `seed_outbreak` infects a share of the cells still susceptible, so a press
+    /// missed, repeated or moved to another tick changes the counts.
+    #[test]
+    fn a_gpu_benchmark_rep_fires_every_action_once() {
+        let Some(sir) = SmallGpuGrid::new("gpu_sir") else {
+            return;
+        };
+        let schedule = sir.schedule(&[
+            "seed_outbreak@0",
+            "seed_outbreak@2",
+            "seed_outbreak@3",
+            "seed_outbreak@5",
+        ]);
+        let no_actions = sir.schedule(&[]);
+        for (warmup, steps) in [(0, 0), (0, 3), (2, 0), (2, 3)] {
+            let mut rep = sir.state();
+            run_gpu_rep(&mut *rep, &sir.ctx, warmup, steps, &schedule).expect("a rep");
+            let after_rep = sir.rows(rep, 1, &no_actions, 0);
+            let exported = sir.rows(sir.state(), 1, &schedule, warmup + steps);
+            assert_eq!(after_rep.last(), exported.last(), "--warmup {warmup} --steps {steps}");
         }
     }
 }

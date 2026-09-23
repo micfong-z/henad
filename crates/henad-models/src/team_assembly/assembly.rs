@@ -59,8 +59,8 @@ pub(super) fn setup(nodes: &mut Nodes<'_, TeamAssembly>, extent: Extent, team_si
 /// Assembles one team, links its members and retires the nodes that have been idle for too long.
 ///
 /// This follows NetLogo's `go`. Each member is a newcomer with probability `1 - p`.
-/// Otherwise it is an incumbent. With probability `q` it is a previous collaborator of the team so far,
-/// if there is one, and any incumbent outside the team if not.
+/// Otherwise it is an incumbent. With probability `q` it is drawn uniformly from the previous collaborators of the team
+/// so far. Otherwise, or when the team has none, it is drawn uniformly from the incumbents outside the team.
 pub(super) fn assemble(
     nodes: &mut Nodes<'_, TeamAssembly>,
     params: &TeamParams,

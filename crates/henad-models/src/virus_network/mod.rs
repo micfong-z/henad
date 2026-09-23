@@ -35,10 +35,12 @@ pub const PALETTE: [[u8; 4]; 3] = [
     [0x80, 0x80, 0x80, 0xFF], // Resistant - gray
 ];
 
+// --8<-- [start:edge_palette]
 pub const EDGE_PALETTE: [[u8; 4]; 2] = [
     [0xC8, 0xC8, 0xC8, 0xB0], // Open - light gray
     [0x50, 0x50, 0x50, 0x90], // Blocked - dark gray
 ];
+// --8<-- [end:edge_palette]
 
 // Options of the `network` parameter.
 const NETWORKS: &[&str] = &["Random", "Geometric"];
@@ -70,9 +72,11 @@ henad_core::params! {
 }
 // --8<-- [end:params]
 
+// --8<-- [start:actions]
 henad_core::actions! {
     const REWIRE = ActionDescriptor::new("rewire", "Rewire a link");
 }
+// --8<-- [end:actions]
 
 pub struct VirusNetwork;
 
@@ -160,11 +164,13 @@ impl NetworkModel for VirusNetwork {
         infect_distinct(&mut lanes.state, extract_u32(params, INITIAL_OUTBREAK_SIZE, 3), rng);
     }
 
+    // --8<-- [start:global_pass]
     fn run_global_pass(nodes: &mut Nodes<'_, Self>, params: &VirusParams, _extent: Extent, rng: &mut u64, _tick: u64) {
         if params.keep_rewiring {
             wiring::rewire(nodes.graph, &nodes.lanes.state, rng);
         }
     }
+    // --8<-- [end:global_pass]
 
     fn run_node_pass(lanes: &mut VirusLanes, ctx: &NodeCtx<'_, Self>, seed: u64, tick: u64) {
         step::run(lanes, ctx, seed, tick);
@@ -178,12 +184,14 @@ impl NetworkModel for VirusNetwork {
         }
     }
 
+    // --8<-- [start:prepare_view]
     fn prepare_view(nodes: &mut Nodes<'_, Self>, _tick: u64) {
         let state = &nodes.lanes.state;
         nodes
             .graph
             .update_colors(|src, dst, color| recolor(src, dst, color, state));
     }
+    // --8<-- [end:prepare_view]
 
     fn stats(lanes: &VirusLanes, _graph: &Network, (): &()) -> Vec<StatValue> {
         count_states(&lanes.state)
@@ -207,8 +215,8 @@ fn infect_distinct(state: &mut [u8], count: u32, rng: &mut u64) {
 
 /// Greys every edge that touches a resistant node.
 ///
-/// Returns whether any edge changed. Each edge is checked before it is written,
-/// since most publishes find nothing to change, and a write would make the snapshot copy every edge again.
+/// Returns whether any edge changed. Each edge is checked before any is written. A publish while paused, or after the
+/// outbreak has died out, finds nothing to change, and a write would make the snapshot copy every edge again.
 fn recolor(src: &[u32], dst: &[u32], color: &mut [u8], state: &[u8]) -> bool {
     let wanted = |e: usize| edge_color(state[src[e] as usize], state[dst[e] as usize]);
     let stale = {

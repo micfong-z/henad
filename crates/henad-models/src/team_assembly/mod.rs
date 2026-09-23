@@ -173,12 +173,14 @@ impl NetworkModel for TeamAssembly {
             }
         });
 
+        // --8<-- [start:components]
         let version = nodes.graph.version();
         let aux = &mut *nodes.aux;
         if aux.components.is_none_or(|(labeled, _)| labeled != version) {
             let components = label_components(nodes.graph, &mut aux.labels, &mut aux.label_scratch);
             aux.components = Some((version, components));
         }
+        // --8<-- [end:components]
     }
 
     /// Returns the link counts by colour, the share of nodes in the giant component and the mean component size.

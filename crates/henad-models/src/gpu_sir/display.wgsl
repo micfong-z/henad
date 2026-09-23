@@ -1,8 +1,10 @@
 
 #import shared::dims::{Dims, cell_at}
+// --8<-- [start:bindings]
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> dims: Dims;
+// --8<-- [end:bindings]
 
 // Matches `henad_models::sir::PALETTE`.
 const S_COLOR: vec4<f32> = vec4<f32>(0.0 / 255.0, 122.0 / 255.0, 245.0 / 255.0, 1.0);

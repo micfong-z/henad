@@ -17,10 +17,17 @@ The call type-erases the model into a `ModelEntry`, and from there it appears in
 |---|---|
 | [`GridModel`](grid-models.md) | `register_grid_model::<M>()` |
 | [`AgentModel`](agent-models.md) | `register_agent_model::<M>()` |
+| [`NetworkModel`](network-models.md) | `register_network_model::<M>()` |
 | [`GpuGridModel`](gpu-grid-models.md) | `register_gpu_grid_model::<M>(&ctx)` |
 | [`GpuAgentModel`](gpu-agent-models.md) | `register_gpu_agent_model::<M>(&ctx)` |
 
-You never write any part of an entry by hand, because the name, parameters, statistics and topology all derive from the trait impl.
+You never write any part of an entry by hand, because the name, parameters, statistics, actions and topology all derive from the trait impl.
+
+## Network entries
+
+`register_network_model` gives the entry the `TopologyHint::NETWORK` hint, for nodes drawn as agents with edges between them and no grid.
+The Model tab shows that topology as Network.
+The entry's metadata is a `Structure::Network` carrying the chunk size, the node lanes and the edge palette, and the Model tab lists all three.
 
 ## GPU entries
 
@@ -32,11 +39,17 @@ The app asks it whether the current parameters fit the device, and if they do no
 See [porting a model to the GPU](porting.md#ask-before-you-allocate).
 
 Adding a GPU model can raise how many storage buffers per shader stage the engine has to request.
-`gpu_storage_bindings_needed()` works that number out by walking every model's declared passes, and a test enforces that its list stays in step with the registry's.
+`gpu_storage_bindings_needed()` works that number out by walking every model's declared passes, action passes included.
+A test enforces that its list stays in step with the registry's.
 
 ## Tests that come with it
 
 The [registry tests](determinism.md#tests-the-registry-brings) confirm that a model's declared parameters, topology and stat series match what its state actually does, and they cover GPU entries too when a device is available.
+
+Every CPU entry's state has to return a grid, point or edge view exactly when the entry's hint says the model draws one.
+A `Structure::Network` has to come with a hint that has both agents and edges.
+Every entry's declared actions are pressed as well.
+The state has to accept each one and refuse an index past the last, and no two actions of one model can share an id.
 
 To check the entry landed:
 

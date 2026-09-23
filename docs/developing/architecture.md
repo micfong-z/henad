@@ -20,13 +20,15 @@ The layers are easiest to follow from the bottom up, since each one depends only
 
 **henad-core** sits at the bottom and depends on no other crate, not even wgpu or bytemuck.
 With those dependencies absent, the two GPU traits describe their shaders as `&'static str` strings and their buffers as plain bytes.
-Alongside the authoring API, the crate holds the `Grid2D<T>` double-buffered grid, the counting-sort `SpatialHash`, parameter descriptors, and the stat and view types the UI reads.
+Alongside the authoring API, the crate holds the `Grid2D<T>` double-buffered grid, the counting-sort `SpatialHash`, the `Network` graph, parameter and action descriptors, and the stat and view types the UI reads.
 
 **henad-compute** turns an authoring impl into something runnable.
 Its `cpu/` and `gpu/` halves are siblings rather than a base class and a specialisation, and they mirror each other file by file: each half has its own runner, its own engines and its own primitives.
 A file name shared across the halves always marks a counterpart, never a coincidence.
+Network models are the exception to the mirroring.
+They run on the CPU only, and their engine has no counterpart in `gpu/`.
 
-**henad-models** holds the eight simulations that ship with the engine.
+**henad-models** holds the ten simulations that ship with the engine.
 **henad-app** and **henad-cli** are the two front ends, one graphical and one headless.
 
 ## Data layout
@@ -54,15 +56,29 @@ Simulation stepping never blocks rendering, on any platform.
 The public API is identical on both paths, and nothing in `henad-app` needs to know which backend is active.
 rayon still parallelises the kernels either way.
 
+Commands from the UI are handled between ticks.
+They include the actions a model declares, such as clearing the Game of Life grid.
+An action is a one-off change to the state.
+It leaves the tick where it is, and the runner publishes a snapshot straight away.
+A network model's layout runs when a snapshot is published, outside any tick.
+
 A GPU model is driven differently again.
 Its runner encodes many steps into a single submission, capped at 64 steps per submission.
 The cap exists because enough passes in one command buffer trips the OS GPU watchdog, which raises no error and no panic and leaves every later readback silently reading zero.
+An action on a GPU model goes out in a submission of its own.
 
 ## Snapshots and views
 
 When the sim thread publishes, `build_snapshot` calls `prepare_view` first.
 Inside that call a model turns its state into something drawable, and ants uses it to quantise its `f32` pheromone field into palette indices.
-Publishing happens a few times a second rather than thousands of times, so anything a view needs but a step does not belongs in `prepare_view`.
+While a model runs, the runner publishes at most once every 16 ms, about 60 times a second.
+A fast model steps thousands of times in that second.
+Anything a view needs but a step does not belongs in `prepare_view`.
+
+A network model publishes its edges alongside its nodes, and the app draws them under the nodes.
+The edge list is copied only when the graph's version or the list's length differs from the recycled snapshot's.
+
+After `prepare_view`, `build_snapshot` runs a network's layout for a time budget, and [the CPU backend](cpu-backend.md#the-runner) covers which publishes move the nodes.
 
 For a GPU grid, the display is a sampled texture rather than a mirror of the grid.
 A texture with one texel per cell would cap the grid at the device's maximum texture dimension and cost four bytes per cell, which at 16384² comes to over a gigabyte of RGBA for something drawn into a panel roughly a thousand pixels wide.

@@ -65,6 +65,48 @@ To run a single test by name:
 cargo test -p henad-models results_do_not_depend_on_the_thread_count
 ```
 
+## Network models
+
+After `init`, a [network model](network-models.md) draws random numbers in three places, and each has a stream of its own.
+
+The node pass is seeded like an agent pass.
+The engine hands it a per-tick seed, and `run_pass` splits that seed per chunk through `chunk_seed`.
+The global pass runs on one thread and draws from a single stream, in the order the model asks for numbers.
+That stream carries over from one tick to the next.
+An [action](parameters.md#actions) draws from a third stream, seeded apart from the other two.
+A press advances neither the node pass's seed nor the global pass's stream.
+
+Node positions are outside the contract.
+The layout runs when a snapshot is published, under a time budget, and never inside `step`.
+How far it has moved the nodes by a given tick depends on how many publishes there were and how many iterations each one fitted in.
+Neither is a function of the tick.
+The layout itself is deterministic for a fixed number of iterations, and `layout.rs` carries a thread-count test of its own.
+Keep positions out of anything a tick decides.
+Team Assembly reads one in its global pass to place newcomers next to their team's first incumbent, and that placement only changes the picture.
+
+The order of neighbours inside a row is deterministic.
+It follows from the sequence of edits made to the graph and from nothing else, and a repack keeps every row in order.
+The order carries no meaning, though.
+Removing an edge moves the last entry of each affected row into the gap, and flipping the direction rebuilds every row in edge-list order.
+A kernel can walk a row in order, but it must not give an entry a meaning by where it sits, for example by reading the first entry as the oldest edge.
+
+Each network model carries two tests.
+If yours draws random numbers or writes anything in `prepare_view`, write both for it too.
+
+`results_do_not_depend_on_the_thread_count` runs a busy configuration at 1 and at 7 threads, calls `prepare_view` after every tick, and compares the two runs bit for bit.
+The population spans several chunks, and a parameter changes halfway through.
+Virus on a Network runs with `keep_rewiring` on and switches `directed` on at the midpoint.
+It compares the `state` and `timer` lanes, the edge list and the edge colours.
+Team Assembly lowers `max_downtime` at the midpoint.
+It compares the occupied slots, the spawn and team ticks, the positions, the edge list with its colours, the node colours and the bits of every stat.
+
+`results_do_not_depend_on_the_publish_cadence` runs the same configuration twice, calling `prepare_view` after every tick in one run and never in the other, and asserts that both end in the same state.
+The second run then calls `prepare_view` once, and the colours it paints have to match the first run's.
+`prepare_view` can write to the graph and the lanes, and the test pins that nothing it writes feeds back into a tick.
+
+Virus on a Network leaves positions out of both comparisons.
+Team Assembly keeps them in, since its own tick places newcomers and neither test runs the layout.
+
 ## Tests the registry brings
 
 Registering a model brings a set of tests with it for free, and they cover GPU entries too when a device is available.
@@ -72,7 +114,9 @@ Registering a model brings a set of tests with it for free, and they cover GPU e
 | Test | Pins |
 |---|---|
 | `declared_apply_mode_matches_what_the_state_accepts` | A live parameter is accepted and a reload one is rejected, exactly as declared |
-| `declared_topology_matches_the_views_the_state_returns` | A model that says it draws a grid actually publishes one |
+| `declared_topology_matches_the_views_the_state_returns` | A CPU state returns a grid, point or edge view exactly when the entry's topology hint says the model draws one |
+| `every_declared_action_is_accepted_by_the_state` | Every declared action is accepted and an index past the last is refused |
+| `action_ids_are_unique_within_a_model` | No two actions of one model share an id |
 | `every_declared_stat_series_gets_a_value` | `STATS.len()` matches what `stats` returns |
 | `every_gpu_model_builds_on_a_baseline_device` | Every GPU model builds on a stock WebGPU device |
 | `every_gpu_entry_reports_its_capacity` | The capacity check agrees with what actually builds |
@@ -112,6 +156,13 @@ Where the reference engine is code rather than a GUI, a small committed program 
 
 For a stochastic model the two engines draw from different generators, and a fixture cannot then be compared point by point.
 `scripts/compare_sir.py` instead compares the distribution of summary statistics over many replicates, against margins derived from Henad's own measured run-to-run spread.
+
+The two network models are compared with NetLogo the same way.
+Their procedures are `virus_network_fixture.md` and `team_assembly_fixture.md` in `crates/henad-models/tests/fixtures/docs/`.
+`scripts/compare_network.py` judges their runs as `compare_sir.py` judges SIR's.
+On the Henad side, `crates/henad-models/tests/consistency_virus_network.rs` and `consistency_team_assembly.rs` hold the consistency tests, and they need no reference engine.
+The Virus on a Network tests check every rate against the edge list instead of the model's own rows, and a row that drifted from the list fails them too.
+The Team Assembly tests compare the lanes and the graph with a scan or a closed form instead of the model's own bookkeeping.
 
 ## Before calling it green
 

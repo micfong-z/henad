@@ -10,6 +10,7 @@ use crate::network::Network;
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::view::{StatDescriptor, StatValue};
 
+// --8<-- [start:spring_params]
 /// Constants for the spring layout, in units of the mean spacing between nodes.
 #[derive(Clone, Copy, Debug)]
 pub struct SpringParams {
@@ -39,7 +40,9 @@ impl SpringParams {
         saturation: 1.0,
     };
 }
+// --8<-- [end:spring_params]
 
+// --8<-- [start:nodes]
 /// Mutable access to the lanes, the graph and the model's own state.
 ///
 /// Nodes should be added and removed through [`Self::spawn`] and [`Self::retire`],
@@ -49,6 +52,7 @@ pub struct Nodes<'a, N: NetworkModel + ?Sized> {
     pub graph: &'a mut Network,
     pub aux: &'a mut N::Aux,
 }
+// --8<-- [end:nodes]
 
 impl<N: NetworkModel + ?Sized> Nodes<'_, N> {
     /// Spawns a new node and returns its index, growing every lane to fit.
@@ -73,12 +77,14 @@ impl<N: NetworkModel + ?Sized> Nodes<'_, N> {
     }
 }
 
+// --8<-- [start:node_ctx]
 /// The graph, hot parameters and extent, shared by every node kernel.
 pub struct NodeCtx<'a, N: NetworkModel + ?Sized> {
     pub graph: &'a Network,
     pub params: &'a N::Params,
     pub extent: Extent,
 }
+// --8<-- [end:node_ctx]
 
 /// A population of nodes joined by edges.
 pub trait NetworkModel: Send + Sync + 'static {

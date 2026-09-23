@@ -50,10 +50,11 @@ Then, clone the repository and run:
 cargo run --release --bin henad-app
 ```
 
-Or if you wish to run in headless mode:
+Alternatively, if you wish to run in headless mode, use a model id from `--list` and run:
 
 ```bash
-cargo run --release --bin henad-cli
+cargo run --release --bin henad-cli -- --list
+cargo run --release --bin henad-cli -- boids --steps 100 --reps 3
 ```
 
 ### In a browser

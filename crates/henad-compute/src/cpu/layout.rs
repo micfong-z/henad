@@ -82,6 +82,8 @@ struct Forces {
 /// Runs one iteration of the spring layout.
 ///
 /// All forces are gathered before any node moves, so the result does not depend on the thread count.
+/// A live node without a finite position, such as a spawn into a reused slot that the model has not placed yet, stays
+/// where it is and exerts no force on any other node.
 pub fn spring_step(
     pos_x: &mut [f32],
     pos_y: &mut [f32],
@@ -123,7 +125,7 @@ pub fn spring_step(
         Some(hash) if hash.cell_size_is(forces.reach) && hash.world_is(extent.w, extent.h) => hash,
         _ => SpatialHash::new(forces.reach, extent.w, extent.h),
     };
-    hash.build_where(pos_x, pos_y, |i| graph.contains_node(i as u32));
+    hash.build_where(pos_x, pos_y, |i| is_placed(graph, pos_x, pos_y, i));
 
     {
         let (px, py) = (&*pos_x, &*pos_y);
@@ -135,11 +137,11 @@ pub fn spring_step(
             .for_each(|(c, (xs, ys))| {
                 let base = c * CHUNK;
                 for (k, (dx, dy)) in xs.iter_mut().zip(ys.iter_mut()).enumerate() {
-                    let i = (base + k) as u32;
-                    if !graph.contains_node(i) {
+                    let i = base + k;
+                    if !is_placed(graph, px, py, i) {
                         continue;
                     }
-                    (*dx, *dy) = force_on(i, px, py, graph, &hash, forces);
+                    (*dx, *dy) = force_on(i as u32, px, py, graph, &hash, forces);
                 }
             });
     }
@@ -171,7 +173,7 @@ pub fn spring_step(
     let speed = scratch.speed as f32;
 
     for i in 0..n {
-        if !graph.contains_node(i as u32) {
+        if !is_placed(graph, pos_x, pos_y, i) {
             continue;
         }
         let (fx, fy) = (scratch.disp_x[i], scratch.disp_y[i]);
@@ -181,12 +183,18 @@ pub fn spring_step(
         pos_y[i] = (pos_y[i] + (fy * s).clamp(-limit, limit)).clamp(0.0, extent.h);
     }
 
-    // A slot left empty through an iteration ends it with zero force, so the next node in it swings by its whole force
-    // on its first step. A slot retired and taken again between two iterations keeps the old node's force instead,
-    // and the new node's first swing is measured against it.
+    // A slot left empty or unplaced through an iteration ends it with zero force, so the next node placed in it swings
+    // by its whole force on its first step. A slot retired and taken again between two iterations keeps the old node's
+    // force instead, and the new node's first swing is measured against it.
     std::mem::swap(&mut scratch.disp_x, &mut scratch.prev_x);
     std::mem::swap(&mut scratch.disp_y, &mut scratch.prev_y);
     scratch.hash = Some(hash);
+}
+
+/// Returns whether slot `i` holds a live node with a finite position.
+#[inline]
+fn is_placed(graph: &Network, pos_x: &[f32], pos_y: &[f32], i: usize) -> bool {
+    graph.contains_node(i as u32) && pos_x[i].is_finite() && pos_y[i].is_finite()
 }
 
 /// Returns the force on node `i` from its edges and from nodes within reach.
@@ -211,7 +219,8 @@ fn force_on(i: u32, pos_x: &[f32], pos_y: &[f32], graph: &Network, hash: &Spatia
         }
         let (ex, ey) = (pos_x[j as usize] - xi, pos_y[j as usize] - yi);
         let d = ex.hypot(ey);
-        if d <= 0.0 {
+        // A neighbour without a finite position is skipped. Otherwise its `NaN` would spread along the edges.
+        if !d.is_finite() || d <= 0.0 {
             return;
         }
         // Divided by the mean degree of both ends, as in NetLogo.
@@ -357,6 +366,50 @@ mod tests {
         assert!(
             pos.0[0].is_finite() && pos.1[0].is_finite() && pos.0[1].is_finite(),
             "a retired node's position leaked into a live one"
+        );
+    }
+
+    #[test]
+    fn an_unplaced_node_leaves_its_neighbours_alone() {
+        // Node 1 is live but has no position yet, as a spawn into a reused slot would be before the model places it.
+        let mut net = Network::new(4, false);
+        for i in 1..4u32 {
+            net.add_edge(i - 1, i, 0);
+        }
+        let mut pos = (vec![20.0, f32::NAN, 60.0, 80.0], vec![50.0, f32::NAN, 40.0, 60.0]);
+        relax(&net, &mut pos, 30);
+
+        assert!(pos.0[1].is_nan() && pos.1[1].is_nan(), "the unplaced node was moved");
+        for i in [0, 2, 3] {
+            assert!(
+                pos.0[i].is_finite() && pos.1[i].is_finite(),
+                "node {i} caught the unplaced node's NaN"
+            );
+        }
+    }
+
+    /// Checks that the layout never reads a retired node's position.
+    ///
+    /// A node pass runs over retired slots too, so a model can leave a finite position in one. If the layout read it,
+    /// the node would feel the others' push, and its force would change the global speed that every live node moves at.
+    #[test]
+    fn a_retired_node_is_ignored_wherever_it_sits() {
+        let run = |x: f32, y: f32| {
+            let mut net = Network::new(3, false);
+            net.add_edge(0, 1, 0);
+            net.retire(2);
+            let mut pos = (vec![40.0, 60.0, x], vec![50.0, 50.0, y]);
+            relax(&net, &mut pos, 30);
+            pos
+        };
+        let unplaced = run(f32::NAN, f32::NAN);
+        let placed = run(45.0, 58.0);
+
+        assert_eq!((placed.0[2], placed.1[2]), (45.0, 58.0), "a retired node was moved");
+        assert_eq!(
+            (&placed.0[..2], &placed.1[..2]),
+            (&unplaced.0[..2], &unplaced.1[..2]),
+            "a retired node's position changed how the live ones moved"
         );
     }
 

@@ -85,7 +85,7 @@ The choice of strategy rests on measurement, so if you want to change it, re-run
 
 ## Move work to publish
 
-`stats` and `prepare_view` run on publish, at a snapshot cadence of a few times a second, while `step` runs thousands of times a second.
+`stats` and `prepare_view` run on publish, at most about 60 times a second, while `step` runs as often as the model can tick.
 
 Anything a readout or a picture needs, but a step does not, belongs in `prepare_view`.
 Ants quantises its whole pheromone field there, which would be unaffordable per tick but is nearly free per snapshot.

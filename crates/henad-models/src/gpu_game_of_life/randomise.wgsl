@@ -1,4 +1,4 @@
-// Refills the grid at the density slider, one invocation per packed word.
+// Refills the grid at the density the model was built with, one invocation per packed word.
 //
 // Draws per cell as `GameOfLifeModel::init` does, but from `pcg_hash` over the cell index rather
 // than a walked xorshift64 stream. An action is no part of the tick-0 oracle, so the two backends

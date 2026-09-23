@@ -6,10 +6,14 @@
 use henad_compute::cpu::agent_engine::AgentModelState;
 use henad_compute::cpu::field::scalar::{ScalarField, ScalarFieldSpec};
 use henad_compute::cpu::grid_engine::GridModelState;
+use henad_compute::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
 use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel};
 use henad_core::authoring::model::grid_model::GridModel;
+use henad_core::authoring::model::network_model::NetworkModel;
 use henad_core::model::SimState as _;
 use henad_core::params::{ParamDescriptor, ParamValue};
+use henad_core::view::StatDescriptor;
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 
 const SEED: u64 = 0x5EED_0DE5_0DE5_5EED;
 
@@ -167,6 +171,276 @@ fn the_ants_tutorial_declares_the_same_parameters() {
         super::foraging::ForagingModel::CHUNK,
         crate::ants::AntsModel::CHUNK,
         "CHUNK sets the rng seeding granularity, so a mismatch changes results"
+    );
+}
+
+// --- Virus on a Network ---
+
+/// A change made to a running network state before one of its ticks.
+enum Nudge {
+    /// Sets the parameter with this id.
+    Set(&'static str, ParamValue),
+    /// Presses the action with this id.
+    Press(&'static str),
+}
+
+struct NetworkSnapshot {
+    states: Vec<u8>,
+    timers: Vec<u32>,
+    positions: Vec<u32>,
+    src: Vec<u32>,
+    dst: Vec<u32>,
+    edge_colors: Vec<u8>,
+    /// Hash of the edge list and its colours after every tick, taken before that tick's recolour.
+    trail: u64,
+    directed: bool,
+    version: u64,
+    stats: Vec<u64>,
+}
+
+/// Returns `N`'s full parameter list at its defaults, apart from `overrides`.
+///
+/// `overrides` names parameters by id. Each side builds its own list, since the taught model declares one
+/// parameter fewer.
+fn network_params<N: NetworkModel>(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
+    let descs = network_model_param_descriptors::<N>();
+    for (id, _) in overrides {
+        assert!(descs.iter().any(|d| d.id == *id), "{} has no parameter '{id}'", N::ID);
+    }
+    descs
+        .iter()
+        .map(|d| {
+            overrides
+                .iter()
+                .find(|(id, _)| *id == d.id)
+                .map_or_else(|| d.kind.default_value(), |(_, v)| v.clone())
+        })
+        .collect()
+}
+
+/// Everything a network model produces after `steps` ticks, floats as raw bits.
+///
+/// `nudges` are applied before the tick they name. `timers` reads the one lane that no trait exposes.
+fn run_network<N: NetworkModel>(
+    overrides: &[(&str, ParamValue)],
+    steps: u64,
+    nudges: &[(u64, Nudge)],
+    timers: fn(&N::Lanes) -> &[u32],
+) -> NetworkSnapshot {
+    let descs = network_model_param_descriptors::<N>();
+    let mut state = NetworkModelState::<N>::from_params_seeded(&network_params::<N>(overrides), Some(SEED));
+    let mut trail = DefaultHasher::new();
+    for tick in 0..steps {
+        for (_, nudge) in nudges.iter().filter(|(at, _)| *at == tick) {
+            match nudge {
+                Nudge::Set(id, value) => {
+                    let index = descs
+                        .iter()
+                        .position(|d| d.id == *id)
+                        .unwrap_or_else(|| panic!("{} has no parameter '{id}'", N::ID));
+                    assert!(state.set_param(index, value), "'{id}' is not a live parameter");
+                }
+                Nudge::Press(id) => {
+                    let index = N::ACTIONS
+                        .iter()
+                        .position(|a| a.id == *id)
+                        .unwrap_or_else(|| panic!("{} has no action '{id}'", N::ID));
+                    assert!(state.act(index), "the engine refused action '{id}'");
+                }
+            }
+        }
+        state.step();
+        // Hashed before any recolour. A later recolour would paint over an edge that a rewire added in the wrong
+        // colour.
+        state.graph().edges().hash(&mut trail);
+        // An uneven cadence, so some recolours land between edge moves and some wait through several.
+        if tick % 7 == 0 {
+            state.prepare_view();
+        }
+    }
+    state.prepare_view();
+
+    let (pos_x, pos_y) = state.lanes().positions();
+    let (src, dst, edge_colors) = state.graph().edges();
+    NetworkSnapshot {
+        states: state.lanes().colors().expect("nodes colour by state").to_vec(),
+        timers: timers(state.lanes()).to_vec(),
+        positions: pos_x.iter().chain(pos_y).map(|v| v.to_bits()).collect(),
+        src: src.to_vec(),
+        dst: dst.to_vec(),
+        edge_colors: edge_colors.to_vec(),
+        trail: trail.finish(),
+        directed: state.graph().directed(),
+        version: state.graph().version(),
+        stats: state.stats().iter().map(|e| e.value.scalar().to_bits()).collect(),
+    }
+}
+
+/// Runs the taught and shipped models side by side and demands the same bits from both.
+///
+/// Returns the shipped model's snapshots at tick 0 and at the end, for the caller's own checks.
+fn assert_virus_parity(
+    overrides: &[(&str, ParamValue)],
+    steps: u64,
+    nudges: &[(u64, Nudge)],
+) -> (NetworkSnapshot, NetworkSnapshot) {
+    type Taught = super::virus::VirusModel;
+    type Shipped = crate::virus_network::VirusNetwork;
+
+    let taught = run_network::<Taught>(overrides, steps, nudges, |lanes| &lanes.timer);
+    let shipped = run_network::<Shipped>(overrides, steps, nudges, |lanes| &lanes.timer);
+
+    assert_eq!(
+        taught.states, shipped.states,
+        "docs/guide/first-model/virus-network.md no longer spreads the virus the way the shipped model does"
+    );
+    assert_eq!(taught.timers, shipped.timers, "the taught check timer has drifted");
+    assert_eq!(
+        taught.positions, shipped.positions,
+        "the taught node placement has drifted"
+    );
+    assert_eq!(
+        (&taught.src, &taught.dst),
+        (&shipped.src, &shipped.dst),
+        "the taught random graph or rewire has drifted"
+    );
+    assert_eq!(
+        taught.edge_colors, shipped.edge_colors,
+        "the taught edge recolour has drifted"
+    );
+    assert_eq!(
+        taught.trail, shipped.trail,
+        "the taught edges or their colours drifted on some tick before a recolour"
+    );
+    assert_eq!(
+        taught.directed, shipped.directed,
+        "the taught graph's direction has drifted"
+    );
+    assert_eq!(
+        taught.version, shipped.version,
+        "the taught model changes the graph a different number of times"
+    );
+    assert_eq!(taught.stats, shipped.stats, "the taught stats reduction has drifted");
+
+    let start = run_network::<Shipped>(overrides, 0, &[], |lanes| &lanes.timer);
+    (start, shipped)
+}
+
+/// Enough nodes to cross several chunks, and a virus lively enough to leave resistant nodes behind.
+const BUSY_VIRUS: [(&str, ParamValue); 5] = [
+    ("num_agents", ParamValue::U32(3_000)),
+    ("initial_outbreak_size", ParamValue::U32(60)),
+    ("virus_spread_chance", ParamValue::F32(0.08)),
+    ("virus_check_frequency", ParamValue::U32(3)),
+    ("gain_resistance_chance", ParamValue::F32(0.3)),
+];
+
+#[test]
+fn the_virus_tutorial_matches_the_shipped_model_while_rewiring() {
+    let mut overrides = BUSY_VIRUS.to_vec();
+    overrides.push(("keep_rewiring", ParamValue::Bool(true)));
+    let nudges = [
+        (100, Nudge::Set("directed", ParamValue::Bool(true))),
+        (200, Nudge::Set("directed", ParamValue::Bool(false))),
+    ];
+
+    let (start, end) = assert_virus_parity(&overrides, 300, &nudges);
+
+    assert!(
+        end.states.contains(&super::virus::RESISTANT) && end.edge_colors.contains(&super::virus::EDGE_BLOCKED),
+        "no edge was greyed, so the recolour went untested"
+    );
+    assert_ne!(
+        (start.src, start.dst),
+        (end.src, end.dst),
+        "no edge moved, so the rewire went untested"
+    );
+}
+
+#[test]
+fn the_virus_tutorial_matches_the_shipped_model_when_directed_and_pressed() {
+    let mut overrides = BUSY_VIRUS.to_vec();
+    overrides.push(("directed", ParamValue::Bool(true)));
+    let nudges: Vec<(u64, Nudge)> = (0..300)
+        .step_by(10)
+        .map(|tick| (tick, Nudge::Press("rewire")))
+        .collect();
+
+    let (start, end) = assert_virus_parity(&overrides, 300, &nudges);
+
+    assert!(end.directed, "the graph was never directed");
+    // Only an infection takes a node out of the susceptible state.
+    assert!(
+        start
+            .states
+            .iter()
+            .zip(&end.states)
+            .any(|(&s, &e)| s == super::virus::SUSCEPTIBLE && e != super::virus::SUSCEPTIBLE),
+        "the virus never spread, so the node pass went untested"
+    );
+    assert_ne!(
+        (start.src, start.dst),
+        (end.src, end.dst),
+        "no press moved an edge, so the action went untested"
+    );
+}
+
+#[test]
+fn the_virus_tutorial_declares_the_same_parameters_and_actions() {
+    type Taught = super::virus::VirusModel;
+    type Shipped = crate::virus_network::VirusNetwork;
+
+    // Kinds are compared through `Debug`. It carries the ranges and the slider step.
+    let shape = |descs: Vec<ParamDescriptor>| -> Vec<_> {
+        descs
+            .into_iter()
+            .filter(|d| d.id != "network")
+            .map(|d| (d.id, d.label, format!("{:?}", d.kind), d.apply, d.format))
+            .collect()
+    };
+    assert_eq!(
+        shape(network_model_param_descriptors::<Taught>()),
+        shape(network_model_param_descriptors::<Shipped>()),
+        "the page declares its parameters differently, apart from the generator choice it leaves out"
+    );
+
+    let network = network_model_param_descriptors::<Shipped>()
+        .into_iter()
+        .find(|d| d.id == "network")
+        .expect("the shipped model offers a generator choice");
+    assert_eq!(
+        network.kind.default_value(),
+        ParamValue::Choice(0),
+        "the page builds the random graph, so the shipped default has to be the random one"
+    );
+
+    assert_eq!(Taught::ACTIONS, Shipped::ACTIONS);
+    assert_eq!(Taught::PALETTE, Shipped::PALETTE);
+    assert_eq!(Taught::EDGE_PALETTE, Shipped::EDGE_PALETTE);
+    let stats =
+        |descs: &[StatDescriptor]| -> Vec<(&str, [u8; 4])> { descs.iter().map(|d| (d.label, d.color)).collect() };
+    assert_eq!(stats(Taught::STATS), stats(Shipped::STATS));
+    assert_eq!(
+        Taught::CHUNK,
+        Shipped::CHUNK,
+        "CHUNK sets the rng seeding granularity, so a mismatch changes results"
+    );
+    assert_eq!(Taught::DEFAULT_NODES, Shipped::DEFAULT_NODES);
+    assert_eq!(Taught::MAX_NODES, Shipped::MAX_NODES);
+    assert_eq!(
+        (Taught::DEFAULT_EXTENT.w, Taught::DEFAULT_EXTENT.h),
+        (Shipped::DEFAULT_EXTENT.w, Shipped::DEFAULT_EXTENT.h)
+    );
+    // The page has the reader pick the model by name, next to the shipped one.
+    assert_eq!(
+        (Taught::NAME, Taught::DESCRIPTION),
+        (Shipped::NAME, Shipped::DESCRIPTION)
+    );
+    // No run above lays out, so the springs are compared here. `SpringParams` has no `PartialEq`.
+    assert_eq!(
+        format!("{:?}", Taught::LAYOUT),
+        format!("{:?}", Shipped::LAYOUT),
+        "the taught layout springs have drifted"
     );
 }
 

@@ -44,11 +44,13 @@ impl GridModel for SirGridModel {
     const DESCRIPTION: &'static str = "Classic SIR compartmental model on a 2D grid with Moore neighborhood";
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
     const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
+    // --8<-- [start:stat_descriptors]
     const STATS: &'static [StatDescriptor] = &[
         StatDescriptor::new("Susceptible", PALETTE[0]),
         StatDescriptor::new("Infected", PALETTE[1]),
         StatDescriptor::new("Recovered", PALETTE[2]),
     ];
+    // --8<-- [end:stat_descriptors]
     const ACTIONS: &'static [ActionDescriptor] = ACTION_SPECS;
     type Params = SirParams;
 
@@ -105,6 +107,7 @@ impl GridModel for SirGridModel {
         }
     }
 
+    // --8<-- [start:stats]
     fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
         let (s, i, r) = count_sir(grid.current());
         vec![
@@ -113,6 +116,7 @@ impl GridModel for SirGridModel {
             StatValue::Scalar(r as f64),
         ]
     }
+    // --8<-- [end:stats]
 }
 
 /// Count S/I/R in a single pass over a contiguous slice.
@@ -128,8 +132,7 @@ fn count_sir_seq(cells: &[u8]) -> (u64, u64, u64) {
     (s, i, r)
 }
 
-/// Chunked over the grid, folded in index order.
-/// Infects that fraction of the cells still susceptible, so a run that has burnt out can be
+/// Infects each susceptible cell with probability `initial_infected_pct`, so a run that has burnt out can be
 /// restarted without losing the recovered ones.
 fn seed_outbreak(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
     let initial_pct = extract_f32(params, INITIAL_INFECTED_PCT, 0.01);
@@ -141,6 +144,7 @@ fn seed_outbreak(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
     }
 }
 
+/// Counts S, I and R over the grid in chunks, folded in index order.
 fn count_sir(cells: &[u8]) -> (u64, u64, u64) {
     reduce_chunks(
         cells.len(),

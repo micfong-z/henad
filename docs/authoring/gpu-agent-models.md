@@ -10,6 +10,7 @@ _See [Writing a GPU agent model](../guide/first-model/gpu-ants.md) for a tutoria
 
 `GpuAgentModel` is a population whose state lives in GPU buffers.
 You declare your buffers, your passes and your bindings as plain data, and the engine derives every wgpu object, the neighbour index, the ping-pong, the stat reduction and the whole runner interface from them.
+A model can also declare `ACTIONS`, a list of one-off `GpuAgentAction` passes with a button each, and [actions on the GPU](parameters.md#actions-on-the-gpu) covers them.
 
 Unlike a grid, a step here is a *list* of passes, because the two real models disagree about almost everything structural.
 Boids rebuilds a neighbour index and runs one pass over three ping-ponged lanes.
@@ -118,7 +119,8 @@ As with a GPU grid model, nothing is prepended to the parameter list, and you sp
 Both ports reuse their CPU counterpart's composed list verbatim, which lets both backends take the same vector and be driven from the same UI state.
 
 `Geometry` is resolved once at construction and carries the population, the extent, the cell grid, the display size and the index geometry.
-Once per pass, identified by `PassId`, the engine then asks `pass_params_bytes` for that pass's uniform block, and you hand back raw bytes from your own `#[repr(C)]` struct.
+Once per pass, identified by `PassId`, the engine then asks `pass_params_bytes` for that pass's uniform block.
+You hand back the bytes of the `Params` struct generated from that pass's shader, as `bytemuck::bytes_of(&Params { .. })`.
 
 ## Seeding
 

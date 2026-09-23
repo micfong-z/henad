@@ -17,6 +17,8 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     egui::ComboBox::from_label("Select Model")
         .selected_text(model_names.get(app.selected_model).copied().unwrap_or("None"))
+        // As tall as the window allows. The model list outgrows egui's default of 200 points.
+        .height(ui.ctx().content_rect().height())
         .show_ui(ui, |ui| {
             for (i, name) in model_names.iter().enumerate() {
                 if ui.selectable_value(&mut app.selected_model, i, *name).changed() {
