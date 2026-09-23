@@ -36,6 +36,7 @@ Each derives every buffer, layout, pipeline and bind group from what its model d
 | Method | Role |
 |---|---|
 | `encode_steps` | Records `count` steps into an encoder, advancing the tick counter |
+| `encode_action` | Records one declared action's pass, without advancing the tick counter |
 | `encode_snapshot_passes` | Records the display and reduce passes, at snapshot cadence |
 | `begin_stats_readback` | Starts the async readback, right after the submission |
 | `poll_stats_readback` | Completes one without waiting on the GPU |
@@ -106,7 +107,7 @@ The baseline caps a storage binding at 128 MiB and a texture side at 8192, where
 The size a run can reach is a property of the hardware, and a fixed baseline would only get in the way.
 
 **Binding counts come from the models.**
-`max_storage_buffers_per_shader_stage` sits at 8 in the baseline, and `raise` asks for precisely the number `registry::gpu_storage_bindings_needed()` derives by walking every model's declared passes.
+`max_storage_buffers_per_shader_stage` sits at 8 in the baseline, and `raise` asks for precisely the number `registry::gpu_storage_bindings_needed()` derives by walking every model's declared passes, action passes included.
 Today that comes to 8, from `gpu_ants`'s step pass.
 wgpu's own advice is to request only what you need, and a constant would end up either short of a future model or carrying dead headroom.
 

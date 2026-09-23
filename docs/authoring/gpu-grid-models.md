@@ -10,6 +10,7 @@ _See [Writing a GPU grid model](../guide/first-model/gpu-game-of-life.md) for a 
 
 `GpuGridModel` is a grid whose state lives in GPU storage buffers and never round-trips to the CPU.
 You declare three shaders, the buffer lengths, the seed data and a uniform block, and the engine derives every wgpu object and the whole runner interface from those declarations.
+A model can also declare `ACTIONS`, a list of one-off `GpuGridAction` passes with a button each, and [actions on the GPU](parameters.md#actions-on-the-gpu) covers them.
 
 `gpu_game_of_life/` and `gpu_sir/` are the two grid models shipping with the engine.
 Each is a single `mod.rs` of declarations sitting next to its `.wgsl` files, so a complete GPU grid model amounts to one Rust file and its shaders.
@@ -22,25 +23,24 @@ Each is a single `mod.rs` of declarations sitting next to its `.wgsl` files, so 
 | `DISPLAY_SHADER` | One invocation per display texel | Writes RGBA into the display texture |
 | `REDUCE_SHADER` | One invocation per cell | Accumulates the stat counters |
 
-Display and reduce only ever see buffer 0, the primary state buffer.
-Any auxiliary buffer, a per-cell RNG for example, is visible to the step shader alone.
+The shipped display and reduce shaders read only buffer 0, the primary state buffer.
+An auxiliary buffer, a per-cell RNG for example, is left to the step shader.
 
 ## Buffers
 
 `BUFFERS` declares one label per ping-ponged buffer.
-Game of Life needs only one, while SIR declares two, its cell state and its per-cell RNG.
+Game of Life needs only one, `state`, while SIR declares two, `state` for its cells and `rng` for its per-cell RNG.
 
 All `K` buffers ping-pong together in lockstep.
 A step reads every buffer's current side and writes every buffer's next side, and a model keeping per-cell RNG state therefore advances it in the same pass that advances the cell.
 
-The step shader's bindings run `0..2K` as interleaved read/write pairs, with the uniform at `2K`.
+The engine resolves each binding by the name the shader gives it, as for a [GPU agent model](gpu-agent-models.md#bindings).
+A buffer is bound by its label, with an optional `_in` or `_out` suffix, and the access mode decides which side the name resolves to.
+Four reserved names cover the resources the engine owns for a grid model: `params`, `dims`, `output` and `counters`.
+Each shipped step shader binds a read/write pair per buffer and then the uniform, and SIR's has two pairs.
 
-```wgsl
-@group(0) @binding(0) var<storage, read>       buf0_in;   // buffer 0, current
-@group(0) @binding(1) var<storage, read_write> buf0_out;  // buffer 0, next
-@group(0) @binding(2) var<storage, read>       buf1_in;   // buffer 1, current  (K >= 2)
-@group(0) @binding(3) var<storage, read_write> buf1_out;  // buffer 1, next     (K >= 2)
-@group(0) @binding(4) var<uniform>             params;    // at binding 2K
+``` wgsl title="crates/henad-models/src/gpu_sir/step.wgsl"
+--8<-- "crates/henad-models/src/gpu_sir/step.wgsl:bindings"
 ```
 
 ## Buffer length and dispatch domain
@@ -63,22 +63,15 @@ A texture with one texel per cell would bound the grid at the device's maximum t
 The display pass instead dispatches one invocation per *texel* and reads the cell at `texel * grid / tex`.
 Both pairs of dimensions arrive in a shared `Dims` uniform, and they stay equal until the grid outgrows the cap.
 
-```wgsl
-struct Dims {
-    grid: vec2<u32>,
-    tex: vec2<u32>,
-}
-
-// display.wgsl
-@group(0) @binding(0) var<storage, read> state: array<u32>;
-@group(0) @binding(1) var out_tex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(2) var<uniform> dims: Dims;
-
-// reduce.wgsl
-@group(0) @binding(0) var<storage, read> state: array<u32>;
-@group(0) @binding(1) var<storage, read_write> totals: array<atomic<u32>, STAT_COUNT>;
-@group(0) @binding(2) var<uniform> dims: Dims;
+``` wgsl title="crates/henad-models/src/gpu_sir/display.wgsl"
+--8<-- "crates/henad-models/src/gpu_sir/display.wgsl:bindings"
 ```
+
+``` wgsl title="crates/henad-models/src/gpu_sir/reduce.wgsl"
+--8<-- "crates/henad-models/src/gpu_sir/reduce.wgsl:bindings"
+```
+
+`Dims` comes from `shared::dims` in `henad-compute/src/gpu/shared/dims.wgsl`, and holds `grid` and `tex`, each a `vec2<u32>`.
 
 The display shader writes RGBA directly, and it therefore carries its own copy of the palette colours in WGSL.
 Only the stats UI reads `PALETTE`, so keeping the two in agreement is your responsibility as the model author.
@@ -107,7 +100,8 @@ Shaders are opaque strings as far as Rust is concerned, and none of the contract
 Getting one wrong surfaces as a wgpu validation error when the model is first constructed, and knowing the list in advance makes that error much quicker to place.
 
 - `WORKGROUP_SIZE` must equal the `@workgroup_size(N, N)` that all three shaders declare.
-- `STATS.len()` must equal both the length of the reduce shader's `atomic<u32>` array and the number of entries `stats` returns.
+- `STATS.len()` must equal both the number of entries `stats` returns and the number of `atomic<u32>` in the reduce shader's `counters` binding.
+  GPU Game of Life binds one bare `atomic<u32>` there, and GPU SIR an array of three.
 - `buffer_lens` must return exactly `BUFFERS.len()` lengths, and `seed_buffers` must return exactly that many vectors, each of exactly the declared length.
 
 Sizes and per-pass binding counts are checked before anything is allocated, and a model over the device's limit is refused with a readable message rather than a panic.

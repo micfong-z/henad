@@ -17,7 +17,7 @@ pub fn stats_ui(ui: &mut egui::Ui, app: &mut AppState) {
             ui.colored_label(color, stat.label);
             ui.horizontal(|ui| {
                 let (text, data_type) = match &stat.value {
-                    StatValue::Scalar(v) => (format!("{v:.0}"), "Scalar"),
+                    StatValue::Scalar(v) => (format_scalar(*v), "Scalar"),
                     StatValue::Vector2D { x, y } => {
                         let mag = x.hypot(*y);
                         (format!("({x:.1}, {y:.1}) |{mag:.1}|"), "Vector2D")
@@ -39,4 +39,14 @@ pub fn stats_ui(ui: &mut egui::Ui, app: &mut AppState) {
             ui.end_row();
         }
     });
+}
+
+/// Formats a whole value without decimals, and any other value with up to three.
+fn format_scalar(v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("{v:.0}")
+    } else {
+        let text = format!("{v:.3}");
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    }
 }

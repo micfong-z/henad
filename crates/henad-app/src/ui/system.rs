@@ -96,6 +96,16 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 "Unavailable"
             });
             ui.end_row();
+
+            ui.label("Network edges");
+            if info.vertex_storage {
+                ui.label("Supported");
+            } else {
+                ui.label("Unavailable").on_hover_text(
+                    "Drawing edges is unsupported on this GPU. Network models should still run normally.",
+                );
+            }
+            ui.end_row();
         });
 
         ui.add_space(8.0);

@@ -1,5 +1,6 @@
 use henad_compute::cpu::agent_engine::{AgentModelState, agent_model_param_descriptors};
 use henad_compute::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
+use henad_compute::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
 use henad_compute::fault::{BUILDING, Fault, catching};
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
@@ -7,11 +8,13 @@ use henad_compute::gpu::capacity::Demand;
 use henad_compute::gpu::fault::catching_on;
 use henad_compute::gpu::grid_engine::{GpuGridModelDescriptor, GpuGridState};
 use henad_compute::gpu::sim_thread::GpuSimState;
+use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::agent_model::{AgentLanes, AgentModel, NeighborIndex};
 use henad_core::authoring::model::field::FieldLayer;
 use henad_core::authoring::model::gpu_agent_model::GpuAgentModel;
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
 use henad_core::authoring::model::grid_model::GridModel;
+use henad_core::authoring::model::network_model::NetworkModel;
 use henad_core::metadata::{Backend, ModelMetadata, Structure};
 use henad_core::model::{Model as _, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -53,6 +56,8 @@ pub struct ModelEntry {
     pub description: String,
     pub param_descriptors: Vec<ParamDescriptor>,
     pub stat_descriptors: Vec<StatDescriptor>,
+    /// One-off steps the model offers, in the order the Parameters panel draws their buttons.
+    pub action_descriptors: Vec<ActionDescriptor>,
     pub topology_hint: TopologyHint,
     /// Declared facts about the model, derived from its trait consts.
     pub metadata: ModelMetadata,
@@ -84,6 +89,7 @@ fn register_grid_model<M: GridModel>() -> ModelEntry {
         description: M::DESCRIPTION.to_owned(),
         param_descriptors: grid_model_param_descriptors::<M>(),
         stat_descriptors: M::STATS.to_vec(),
+        action_descriptors: M::ACTIONS.to_vec(),
         topology_hint: TopologyHint::GRID,
         metadata: ModelMetadata {
             backend: Backend::Cpu,
@@ -109,9 +115,11 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
         description: A::DESCRIPTION.to_owned(),
         param_descriptors: agent_model_param_descriptors::<A>(),
         stat_descriptors: A::STATS.to_vec(),
+        action_descriptors: A::ACTIONS.to_vec(),
         topology_hint: TopologyHint {
             grid: <A::Field as FieldLayer>::HAS_GRID,
             agents: true,
+            edges: false,
         },
         metadata: ModelMetadata {
             backend: Backend::Cpu,
@@ -132,6 +140,34 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
     }
 }
 
+/// Create a `ModelEntry` from a `NetworkModel` implementation.
+fn register_network_model<N: NetworkModel>() -> ModelEntry {
+    ModelEntry {
+        name: N::NAME.to_owned(),
+        id: N::ID.to_owned(),
+        description: N::DESCRIPTION.to_owned(),
+        param_descriptors: network_model_param_descriptors::<N>(),
+        stat_descriptors: N::STATS.to_vec(),
+        action_descriptors: N::ACTIONS.to_vec(),
+        topology_hint: TopologyHint::NETWORK,
+        metadata: ModelMetadata {
+            backend: Backend::Cpu,
+            palette: Some(N::PALETTE),
+            structure: Structure::Network {
+                chunk: N::CHUNK,
+                lanes: <N::Lanes as AgentLanes>::LANES,
+                edge_palette: N::EDGE_PALETTE,
+            },
+        },
+        create: Box::new(|params, seed| {
+            catching(BUILDING, || {
+                ModelState::Cpu(Box::new(NetworkModelState::<N>::from_params_seeded(params, seed)))
+            })
+        }),
+        capacity: None,
+    }
+}
+
 /// Create a `ModelEntry` from a `GpuGridModel` implementation, capturing the injected
 /// device/queue.
 fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
@@ -144,6 +180,7 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
         description: model.description().to_owned(),
         param_descriptors: model.param_descriptors(),
         stat_descriptors: model.stat_descriptors(),
+        action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
         topology_hint: model.topology_hint(),
         metadata: ModelMetadata {
             backend: Backend::Gpu,
@@ -176,6 +213,7 @@ fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
         description: model.description().to_owned(),
         param_descriptors: model.param_descriptors(),
         stat_descriptors: model.stat_descriptors(),
+        action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
         topology_hint: model.topology_hint(),
         metadata: ModelMetadata {
             backend: Backend::Gpu,
@@ -229,6 +267,8 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
         register_agent_model::<crate::boids::BoidsModel>(),
         register_grid_model::<crate::game_of_life::GameOfLifeModel>(),
         register_agent_model::<crate::ants::AntsModel>(),
+        register_network_model::<crate::virus_network::VirusNetwork>(),
+        register_network_model::<crate::team_assembly::TeamAssembly>(),
         // --8<-- [end:cpu_entries]
     ];
 
@@ -328,6 +368,13 @@ mod tests {
                 entry.id,
                 entry.topology_hint.agents
             );
+            assert_eq!(
+                state.edge_view().is_some(),
+                entry.topology_hint.edges,
+                "{}: declares edges={} but edge_view() disagrees",
+                entry.id,
+                entry.topology_hint.edges
+            );
         }
     }
 
@@ -371,6 +418,7 @@ mod tests {
             let agrees = match structure {
                 Structure::Grid { .. } | Structure::GpuGrid { .. } => hint == TopologyHint::GRID,
                 Structure::Agents { .. } | Structure::GpuAgents { .. } => hint.agents,
+                Structure::Network { .. } => hint.agents && hint.edges,
             };
             assert!(agrees, "{}: declared structure and topology disagree", entry.id);
 
@@ -379,6 +427,44 @@ mod tests {
                 "{}: declares {backend:?} but a structure for the other backend",
                 entry.id
             );
+        }
+    }
+
+    /// The panel draws a button per declared action and the state decides what it runs, so the
+    /// two disagreeing means a button that quietly does nothing.
+    #[test]
+    fn every_declared_action_is_accepted_by_the_state() {
+        for entry in all_entries() {
+            let values = defaults(&entry);
+            let mut created = build(&entry, &values);
+            let declared = entry.action_descriptors.len();
+            let state = sim_state(&mut created);
+
+            for (i, action) in entry.action_descriptors.iter().enumerate() {
+                assert!(
+                    state.act(i),
+                    "{}: declares action '{}' at index {i} but the state refuses it",
+                    entry.id,
+                    action.id
+                );
+            }
+            assert!(
+                !state.act(declared),
+                "{}: accepts an action past the {declared} it declares",
+                entry.id
+            );
+        }
+    }
+
+    /// Ids reach the CLI through `--act`, where two the same would be ambiguous.
+    #[test]
+    fn action_ids_are_unique_within_a_model() {
+        for entry in all_entries() {
+            let mut ids: Vec<&str> = entry.action_descriptors.iter().map(|a| a.id).collect();
+            let declared = ids.len();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), declared, "{}: declares the same action id twice", entry.id);
         }
     }
 

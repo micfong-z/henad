@@ -3,6 +3,9 @@
 use crate::sim_runner::SimRunner;
 use crate::state::AppState;
 use henad_compute::cpu::sim_thread::SimCommand;
+use henad_compute::runner::MAX_VIEW_BUDGET_MS;
+
+const LAYOUT_BUDGET_MAX_MS: f32 = 50.0;
 
 pub fn pacing_ui(ui: &mut egui::Ui, app: &mut AppState) {
     // A GPU model paces itself with the batch-size controller below and has no notion of a TPS cap
@@ -47,6 +50,47 @@ fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
         app.ticks_per_snapshot = max as u32;
         if let Some(thread) = &mut app.sim_thread {
             thread.send(SimCommand::SetTicksPerSnapshot(app.ticks_per_snapshot));
+        }
+    }
+
+    let network = app
+        .loaded_model
+        .and_then(|i| app.registry.get(i))
+        .is_some_and(|entry| entry.topology_hint.edges);
+    if network {
+        layout_controls(ui, app);
+    }
+}
+
+fn layout_controls(ui: &mut egui::Ui, app: &mut AppState) {
+    ui.separator();
+    let mut changed = ui
+        .checkbox(&mut app.layout_on, "Layout")
+        .on_hover_text("Arrange network nodes with a spring layout when running")
+        .changed();
+    changed |= ui
+        .add_enabled(
+            app.layout_on,
+            egui::Checkbox::new(&mut app.layout_while_paused, "Layout while paused"),
+        )
+        .on_hover_text("Keep arranging nodes while paused")
+        .changed();
+    changed |= ui
+        .add_enabled(
+            app.layout_on,
+            egui::Slider::new(
+                &mut app.layout_budget_ms,
+                1.0..=LAYOUT_BUDGET_MAX_MS.min(MAX_VIEW_BUDGET_MS),
+            )
+            .text("Layout budget")
+            .suffix(" ms"),
+        )
+        .on_hover_text("Maximum time for layout per snapshot")
+        .changed();
+    if changed {
+        let command = app.layout_command();
+        if let Some(thread) = &mut app.sim_thread {
+            thread.send(command);
         }
     }
 }

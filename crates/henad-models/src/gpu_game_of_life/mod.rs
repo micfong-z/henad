@@ -28,14 +28,16 @@
 //! what `tests::gpu_alive_count_matches_cpu_model` checks.
 
 use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::binding::BindingDecl;
-use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
+use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
 use henad_core::authoring::primitives::rng::{mix_seed, xorshift64};
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::game_of_life::PALETTE;
+use crate::shader_bindings::gpu_game_of_life::randomise::Params as ActionParams;
 
 // The whole list, matching what the CPU engine composes for `GameOfLifeModel`, so this model is a
 // drop-in comparison against it.
@@ -97,6 +99,19 @@ impl GpuGridModel for GpuGameOfLife {
     const DISPLAY_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::display::SHADER_STRING;
     const REDUCE_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::reduce::SHADER_STRING;
 
+    const ACTIONS: &'static [GpuGridAction] = &[
+        GpuGridAction {
+            desc: ActionDescriptor::new("randomise", "Randomise"),
+            shader: crate::shader_bindings::gpu_game_of_life::randomise::SHADER_STRING,
+            bindings: crate::binding_decls::bindings::GPU_GAME_OF_LIFE_RANDOMISE,
+        },
+        GpuGridAction {
+            desc: ActionDescriptor::new("clear", "Clear"),
+            shader: crate::shader_bindings::gpu_game_of_life::clear::SHADER_STRING,
+            bindings: crate::binding_decls::bindings::GPU_GAME_OF_LIFE_CLEAR,
+        },
+    ];
+
     fn param_descriptors() -> Vec<ParamDescriptor> {
         descriptors()
     }
@@ -130,6 +145,17 @@ impl GpuGridModel for GpuGameOfLife {
     /// `step.wgsl` reads nothing but `dims: vec2<u32>`.
     fn step_params_bytes(width: u32, height: u32, _params: &[ParamValue]) -> Vec<u8> {
         bytemuck::cast_slice(&[width, height]).to_vec()
+    }
+
+    fn action_params_bytes(_action: usize, width: u32, height: u32, params: &[ParamValue], seed: u32) -> Vec<u8> {
+        let density = extract_f32(params, PARAM_DENSITY, DEFAULT_DENSITY);
+        bytemuck::bytes_of(&ActionParams {
+            width,
+            height,
+            threshold: (density * u32::MAX as f32) as u32,
+            seed,
+        })
+        .to_vec()
     }
 
     fn stats(counts: &[u32]) -> Vec<StatValue> {

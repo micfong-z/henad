@@ -44,6 +44,13 @@ pub enum Structure {
         /// [`crate::authoring::model::field::FieldLayer::KIND`].
         field: &'static str,
     },
+    Network {
+        /// Number of nodes per chunk in the node pass.
+        chunk: usize,
+        lanes: &'static [LaneSpec],
+        /// Edge colours, indexed by each edge's colour byte.
+        edge_palette: &'static [[u8; 4]],
+    },
     GpuGrid {
         /// Ping-ponged buffer labels.
         buffers: &'static [&'static str],

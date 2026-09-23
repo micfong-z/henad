@@ -13,6 +13,7 @@ use henad_models::registry::{ModelEntry, ModelState, model_registry};
 
 use crate::sim_runner::SimRunner;
 use crate::ui::agent_layer::AgentLayer;
+use crate::ui::edge_layer::EdgeStyle;
 use crate::ui::export::Recording;
 use crate::ui::export::image::PendingCapture;
 use crate::ui::export::save::{SaveOutcome, spawn_save};
@@ -28,6 +29,9 @@ const EMA_ALPHA: f64 = 0.1;
 
 /// Snapshots the chart history keeps before it starts dropping the oldest.
 pub const DEFAULT_HISTORY_LEN: usize = 10_000;
+
+/// Default time in milliseconds that a snapshot can spend on a network's layout.
+const DEFAULT_LAYOUT_BUDGET_MS: f32 = 4.0;
 
 /// Per-frame timing breakdown, smoothed with EMA.
 #[derive(Default)]
@@ -60,13 +64,21 @@ pub struct AppState {
     pub density_texture: Option<TextureHandle>,
     pub density_max: f32,
     pub point_render_mode: PointRenderMode,
+    // Edge toggles from the Viewport toolbar, for network models.
+    pub show_edges: bool,
+    pub edge_arrows: bool,
     /// Built on first use and kept across model switches, the pipeline is not tied to a model.
     pub agent_layer: Option<AgentLayer>,
-    pub last_rendered_tick: Option<u64>,
+    /// Serial of the snapshot whose data the viewport last copied to the GPU.
+    pub last_rendered_serial: Option<u64>,
     pub rendering_enabled: bool,
     pub target_tps: f64,
     pub uncapped: bool,
     pub ticks_per_snapshot: u32,
+    // Spring layout settings for network models, sent to each model when it is built.
+    pub layout_on: bool,
+    pub layout_budget_ms: f32,
+    pub layout_while_paused: bool,
     pub stats_history: Option<StatsHistory>,
     /// `None` retains every sample, so a whole run can be exported.
     pub history_capacity: Option<usize>,
@@ -92,7 +104,7 @@ pub struct AppState {
     pub export_status: Option<String>,
     /// Save outcomes come back off the dialog's own thread or task.
     saves: (flume::Sender<SaveOutcome>, flume::Receiver<SaveOutcome>),
-    /// GPU batching controls
+    // GPU batching controls
     pub gpu_adaptive: bool,
     pub gpu_target_ms: f64,
     pub gpu_batch_size: u32,
@@ -136,12 +148,17 @@ impl AppState {
             density_texture: None,
             density_max: 4.0,
             point_render_mode: PointRenderMode::default(),
+            show_edges: true,
+            edge_arrows: false,
             agent_layer: None,
-            last_rendered_tick: None,
+            last_rendered_serial: None,
             rendering_enabled: true,
             target_tps: 30.0,
             uncapped: false,
             ticks_per_snapshot: 1,
+            layout_on: true,
+            layout_budget_ms: DEFAULT_LAYOUT_BUDGET_MS,
+            layout_while_paused: false,
             stats_history: None,
             history_capacity: Some(DEFAULT_HISTORY_LEN),
             history_len: DEFAULT_HISTORY_LEN,
@@ -170,7 +187,7 @@ impl AppState {
         self.sim_thread = None;
         drop(self.render_ctx.faults.take());
         self.snapshot = None;
-        self.last_rendered_tick = None;
+        self.last_rendered_serial = None;
         self.grid_texture = None;
         self.density_texture = None;
         self.density_max = 4.0;
@@ -226,6 +243,9 @@ impl AppState {
                 if self.uncapped {
                     thread.send(SimCommand::SetUncapped(true));
                 }
+                if entry.topology_hint.edges {
+                    thread.send(self.layout_command());
+                }
                 SimRunner::Cpu(thread)
             }),
             ModelState::Gpu(state) => {
@@ -261,7 +281,7 @@ impl AppState {
         self.sim_running = false;
         self.grid_texture = None;
         self.density_texture = None;
-        self.last_rendered_tick = None;
+        self.last_rendered_serial = None;
         self.stats_history = None;
         self.loaded_model = None;
         if let Some(layer) = &mut self.agent_layer {
@@ -275,6 +295,21 @@ impl AppState {
         };
         self.param_values = entry.param_descriptors.iter().map(|p| p.kind.default_value()).collect();
         self.pending_reload = vec![false; self.param_values.len()];
+    }
+
+    pub fn layout_command(&self) -> SimCommand {
+        SimCommand::SetLayout {
+            on: self.layout_on,
+            budget_ms: self.layout_budget_ms,
+            while_paused: self.layout_while_paused,
+        }
+    }
+
+    pub fn edge_style(&self) -> EdgeStyle {
+        EdgeStyle {
+            visible: self.show_edges,
+            arrows: self.edge_arrows,
+        }
     }
 
     pub fn selection_is_loaded(&self) -> bool {
@@ -312,10 +347,7 @@ impl AppState {
 
     /// Records a snapshot.
     pub fn record(&mut self, snapshot: &Snapshot) {
-        let Recording::Running { writer, .. } = &mut self.recording else {
-            return;
-        };
-        if let Err(err) = writer.push(snapshot.tick, &snapshot.stats) {
+        if let Err(err) = self.recording.push(snapshot.tick, &snapshot.stats) {
             self.export_status = Some(format!("Recording stopped: {err}"));
             self.recording = Recording::Off;
         }
@@ -324,18 +356,8 @@ impl AppState {
     /// Stops recording and closes the CSV file.
     pub fn stop_recording(&mut self) {
         let to_tick = self.snapshot.as_ref().map_or(0, |snap| snap.tick);
-        let Recording::Running { writer, from_tick } = std::mem::replace(&mut self.recording, Recording::Off) else {
-            return;
-        };
-        match writer.into_inner() {
-            Ok((csv, rows)) => {
-                self.recording = Recording::Done {
-                    csv,
-                    rows,
-                    from_tick,
-                    to_tick,
-                };
-            }
+        match std::mem::replace(&mut self.recording, Recording::Off).stop(to_tick) {
+            Ok(recording) => self.recording = recording,
             Err(err) => self.export_status = Some(format!("Recording failed: {err}")),
         }
     }

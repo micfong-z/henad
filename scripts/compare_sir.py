@@ -10,6 +10,9 @@ measured run-to-run spread.
 Usage:
 
     uv run scripts/compare_sir.py --reference DIR --generate 50
+
+The exit status is 0 when every statistic is equivalent, 1 when one differs, and 2 when one is
+inconclusive and none differs. A missing or malformed input, or a failed `henad-cli` run, exits 3.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from enum import Enum
+from typing import NoReturn
 
 import numpy as np
 from scipy import stats
@@ -70,26 +74,67 @@ class Verdict(Enum):
     INCONCLUSIVE = "INCONCLUSIVE"
 
 
-def read_run(path: Path) -> Run:
+def fail(message: str) -> NoReturn:
+    """Prints `message` and exits with status 3. No verdict uses that status.
+
+    A bare `SystemExit` carrying a message exits 1, the status of `DIFFERENT`.
+    """
+    print(message, file=sys.stderr)
+    raise SystemExit(3)
+
+
+class ArgumentParser(argparse.ArgumentParser):
+    """Argument parser whose usage errors go through `fail`.
+
+    argparse's own status for them is 2, the status of `INCONCLUSIVE`.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        fail(f"{self.prog}: error: {message}")
+
+
+def check_ticks(path: Path, ticks: list[int], steps: int) -> None:
+    """Exits with status 3 unless `ticks` is exactly 0, 1, ..., `steps`.
+
+    `ticks` holds each data row's tick in file order. Both engines write a row for tick 0.
+    """
+    for expected, tick in enumerate(ticks):
+        if tick != expected:
+            if expected == 0:
+                fail(f"{path}: starts at tick {tick}, expected 0")
+            fail(f"{path}: tick {tick} follows tick {ticks[expected - 1]}, expected {expected}")
+    if len(ticks) != steps + 1:
+        fail(f"{path}: ends at tick {len(ticks) - 1}, expected {steps}")
+
+
+def read_run(path: Path, steps: int) -> Run:
     """Summarise one replicate.
 
     Both engines write `tick,Susceptible,Infected,Recovered`; NetLogo prefixes `#` provenance lines
     which are skipped. The cell count is taken from the first row rather than a flag, so a
     mismatched `--grid` cannot silently rescale one side's fractions.
+
+    The ticks must run 0, 1, ..., `steps` with one row each. The tick of the peak is the peak's
+    row index, and a dropped or repeated row would shift it. A mismatched `--steps` is refused too.
     """
     with path.open() as handle:
         rows = list(csv.DictReader(line for line in handle if not line.startswith("#")))
     if not rows:
-        raise SystemExit(f"{path}: no data rows")
+        fail(f"{path}: no data rows")
 
     try:
+        ticks = [int(r["tick"]) for r in rows]
         counts = [(int(r["Susceptible"]), int(r["Infected"]), int(r["Recovered"])) for r in rows]
     except KeyError as exc:
-        raise SystemExit(f"{path}: missing column {exc}") from exc
+        fail(f"{path}: missing column {exc}")
+    except (TypeError, ValueError) as exc:
+        fail(f"{path}: {exc}")
+    check_ticks(path, ticks, steps)
 
     total = sum(counts[0])
     if total == 0:
-        raise SystemExit(f"{path}: first row sums to zero cells")
+        fail(f"{path}: first row sums to zero cells")
 
     infected = [c[1] for c in counts]
     peak = max(infected)
@@ -100,11 +145,11 @@ def read_run(path: Path) -> Run:
     )
 
 
-def read_dir(directory: Path) -> list[Run]:
+def read_dir(directory: Path, steps: int) -> list[Run]:
     paths = sorted(directory.glob("*.csv"))
     if len(paths) < 2:
-        raise SystemExit(f"{directory}: need >= 2 .csv replicates to compute variance")
-    return [read_run(p) for p in paths]
+        fail(f"{directory}: need >= 2 .csv replicates to compute variance")
+    return [read_run(p, steps) for p in paths]
 
 
 def generate_henad(out_dir: Path, count: int, args: argparse.Namespace) -> None:
@@ -112,25 +157,30 @@ def generate_henad(out_dir: Path, count: int, args: argparse.Namespace) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     binary = args.binary
     if not binary.exists():
-        raise SystemExit(f"{binary} not found; run `cargo build --release -p henad-cli` first")
+        fail(f"{binary} not found; run `cargo build --release -p henad-cli` first")
 
     for seed in range(1, count + 1):
         dest = out_dir / f"henad_{seed:03d}.csv"
-        subprocess.run(
-            [
-                str(binary), "sir",
-                "--set", f"grid_width={args.grid}",
-                "--set", f"grid_height={args.grid}",
-                "--set", f"infection_rate={args.beta}",
-                "--set", f"recovery_rate={args.gamma}",
-                "--set", f"initial_infected_pct={args.initial}",
-                "--steps", str(args.steps),
-                "--seed", str(seed),
-                "--export-stats", str(dest),
-            ],
-            capture_output=True,
-            check=True,
-        )
+        try:
+            subprocess.run(
+                [
+                    str(binary), "sir",
+                    "--set", f"grid_width={args.grid}",
+                    "--set", f"grid_height={args.grid}",
+                    "--set", f"infection_rate={args.beta}",
+                    "--set", f"recovery_rate={args.gamma}",
+                    "--set", f"initial_infected_pct={args.initial}",
+                    "--steps", str(args.steps),
+                    "--seed", str(seed),
+                    "--export-stats", str(dest),
+                ],
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            fail(f"\nhenad-cli failed on seed {seed}:\n{exc.stderr.decode(errors='replace').strip()}")
+        except OSError as exc:
+            fail(f"\ncannot run henad-cli on seed {seed}: {exc}")
         print(f"\r  generated {seed}/{count}", end="", file=sys.stderr, flush=True)
     print(file=sys.stderr)
 
@@ -167,7 +217,7 @@ def verdict(diff: float, half_width: float, margin: float) -> Verdict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     # `--netlogo` is the old name, kept because the fixture docs give it.
     parser.add_argument(
         "--reference", "--netlogo", dest="reference", type=Path, required=True, help="directory of reference CSVs"
@@ -179,7 +229,9 @@ def main() -> int:
     parser.add_argument("--beta", type=float, default=DEFAULT_BETA)
     parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
     parser.add_argument("--initial", type=float, default=DEFAULT_INITIAL)
-    parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
+    parser.add_argument(
+        "--steps", type=int, default=DEFAULT_STEPS, help="ticks per run, and the tick every CSV must end on"
+    )
     args = parser.parse_args()
 
     henad_dir = args.henad or args.reference.parent / "henad"
@@ -187,8 +239,8 @@ def main() -> int:
         print(f"generating {args.generate} Henad replicates into {henad_dir}", file=sys.stderr)
         generate_henad(henad_dir, args.generate, args)
 
-    reference = read_dir(args.reference)
-    henad = read_dir(henad_dir)
+    reference = read_dir(args.reference, args.steps)
+    henad = read_dir(henad_dir, args.steps)
 
     print(f"\nHenad n={len(henad)}   reference n={len(reference)}")
     print(f"grid {args.grid}x{args.grid}, beta {args.beta}, gamma {args.gamma}, "

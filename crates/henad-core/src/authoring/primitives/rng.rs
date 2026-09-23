@@ -98,6 +98,41 @@ pub fn next_float(rng: &mut u64, max: f32) -> f32 {
     random_float(next_bits(rng), max)
 }
 
+/// Advances `rng` and returns a uniform integer in `[0, n)`, like NetLogo's `random n`.
+///
+/// Returns 0 when `n` is 0.
+///
+/// The result is exactly uniform for any `n`. This uses Lemire's multiply-and-shift method,
+/// redrawing the few words that would otherwise favour some results over others.
+/// Note that a plain `% n` favours low values by up to 0.2% when `n` is ten million.
+///
+/// # Examples
+///
+/// ```
+/// use henad_core::authoring::primitives::rng::next_index;
+///
+/// let mut rng = 0x1234_5678_9ABC_DEF0;
+/// assert!(next_index(&mut rng, 10) < 10);
+/// assert_eq!(next_index(&mut rng, 1), 0);
+/// ```
+///
+/// # WGSL counterpart
+///
+/// None. The redraw needs a 64-bit product, which WGSL does not have.
+///
+/// See also: [`next_bits`], [`next_float`].
+#[inline]
+pub fn next_index(rng: &mut u64, n: u32) -> u32 {
+    let mut wide = u64::from(next_bits(rng)) * u64::from(n);
+    if (wide as u32) < n {
+        let floor = n.wrapping_neg() % n;
+        while (wide as u32) < floor {
+            wide = u64::from(next_bits(rng)) * u64::from(n);
+        }
+    }
+    (wide >> 32) as u32
+}
+
 /// A Bernoulli trial, true for `threshold` of the 2^32 possible words.
 ///
 /// Pass `(p * u32::MAX as f32) as u32` for probability `p`. Integer comparison rather than a float
@@ -319,6 +354,57 @@ mod tests {
         let mut rng = 0x5EED_5EED_5EED_5EED;
         for _ in 0..10_000 {
             assert!(!below(next_bits(&mut rng), 0), "a zero threshold fired");
+        }
+    }
+
+    #[test]
+    fn an_index_stays_in_range() {
+        let mut rng = 0x1DE7_5EED;
+        for n in [1, 2, 3, 7, 100, 1 << 20, u32::MAX] {
+            for _ in 0..1_000 {
+                assert!(next_index(&mut rng, n) < n, "an index escaped [0, {n})");
+            }
+        }
+        assert_eq!(next_index(&mut rng, 0), 0);
+    }
+
+    /// Uses seven buckets, since a power of two would pass even if the bias were left in.
+    #[test]
+    fn every_index_is_equally_likely() {
+        const N: u32 = 7;
+        const TRIALS: u32 = 700_000;
+        let mut rng = 0xB1A5_0000_0000_0001;
+        let mut hits = [0u32; N as usize];
+        for _ in 0..TRIALS {
+            hits[next_index(&mut rng, N) as usize] += 1;
+        }
+        let expected = f64::from(TRIALS / N);
+        for (k, &h) in hits.iter().enumerate() {
+            let ratio = f64::from(h) / expected;
+            assert!(
+                (ratio - 1.0).abs() < 0.01,
+                "index {k} came up {h} times, expected about {expected}"
+            );
+        }
+    }
+
+    /// At `n = 3 * 2^30`, a bare multiply-and-shift sends half of all words to multiples of three
+    /// and a quarter to each other residue. Only the redraw evens this out, by a margin far beyond noise.
+    #[test]
+    fn a_large_range_is_even_too() {
+        const TRIALS: u32 = 30_000;
+        let n = 3 << 30;
+        let mut rng = 0xFACE_0000_0000_0001;
+        let mut residues = [0u32; 3];
+        for _ in 0..TRIALS {
+            residues[(next_index(&mut rng, n) % 3) as usize] += 1;
+        }
+        for (r, &count) in residues.iter().enumerate() {
+            let share = f64::from(count) / f64::from(TRIALS);
+            assert!(
+                (share - 1.0 / 3.0).abs() < 0.02,
+                "residue {r} took {share} of the draws"
+            );
         }
     }
 }

@@ -64,8 +64,8 @@ pub const SINE_42: [(f32, f32, f32, f32); 42] = [
     (93.75, 47.75, 6.75, -8.375),
 ];
 
-/// `visual_range`, `protected_range`, `separation`, `alignment`, `cohesion`, `max_speed`,
-/// `min_speed`, shared by both boids scenarios.
+// `visual_range`, `protected_range`, `separation`, `alignment`, `cohesion`, `max_speed`,
+// `min_speed`, shared by both boids scenarios.
 pub const BOIDS_WORLD: f32 = 100.0;
 pub const BOIDS_VISUAL_RANGE: f32 = 20.0;
 pub const BOIDS_PROTECTED_RANGE: f32 = 5.0;
@@ -105,12 +105,12 @@ pub fn ants_field(x: i32, y: i32, to_food: bool) -> f32 {
     ((a * x + b * y).rem_euclid(m) + 1) as f32 / (m + 1) as f32
 }
 
-/// Cells alive at the start, as `(x, y)` offsets placed at the origin of a 64 by 64 torus.
+// Cells alive at the start, as `(x, y)` offsets placed at the origin of a 64 by 64 torus.
 pub const GLIDER: [(i32, i32); 5] = [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)];
 pub const R_PENTOMINO: [(i32, i32); 5] = [(1, 0), (2, 0), (0, 1), (1, 1), (1, 2)];
 pub const LIFE_WORLD: i32 = 64;
 
-/// SIR runs at the declaration's parameters rather than Henad's defaults. See `sir_fixture.md`.
+// SIR runs at the declaration's parameters rather than Henad's defaults. See `sir_fixture.md`.
 pub const SIR_WORLD: i32 = 256;
 pub const SIR_INFECTION_RATE: f64 = 0.08;
 pub const SIR_RECOVERY_RATE: f64 = 0.3;

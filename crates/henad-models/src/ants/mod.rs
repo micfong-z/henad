@@ -6,6 +6,7 @@ pub use crate::ants::lanes::{AntLanes, NO_STEP};
 
 use henad_compute::cpu::field::scalar::{Deposits, ScalarField};
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::agent_model::{AgentModel, StepCtx};
 use henad_core::authoring::model::field::Extent;
 use henad_core::grid::Grid2D;
@@ -33,6 +34,10 @@ henad_core::params! {
     const REWARD = f32_param("reward", "Site Reward", 1.0, 0.1, 10.0, Some(0.1));
     const MOMENTUM = f32_param("momentum", "Momentum Probability", 0.8, 0.0, 1.0, Some(0.01));
     const RANDOM_ACTION = f32_param("random_action", "Random Action Probability", 0.1, 0.0, 1.0, Some(0.01));
+}
+
+henad_core::actions! {
+    const RESET_COLONY = ActionDescriptor::new("reset_colony", "Reset colony");
 }
 
 /// Ant foraging, ported from krABMaga's `antsforaging`.
@@ -68,6 +73,7 @@ impl AgentModel for AntsModel {
         StatDescriptor::new("Total Pheromone", STAT_PALETTE[2]),
     ];
     const CHUNK: usize = 4096;
+    const ACTIONS: &'static [ActionDescriptor] = ACTION_SPECS;
     const DEFAULT_AGENTS: u32 = 2_000;
     const MAX_AGENTS: u32 = 5_000_000;
     const DEFAULT_EXTENT: Extent = Extent { w: 200.0, h: 200.0 };
@@ -117,6 +123,21 @@ impl AgentModel for AntsModel {
         step::advect(lanes, ctx, seed, tick)
     }
 
+    #[expect(clippy::single_match, reason = "for future multi-action extendability")]
+    fn act(
+        action: usize,
+        lanes: &mut AntLanes,
+        field: &mut ScalarField<PheromoneField>,
+        extent: Extent,
+        params: &[ParamValue],
+        rng: &mut u64,
+    ) {
+        match action {
+            RESET_COLONY => reset_colony(lanes, field, extent, params, rng),
+            _ => {}
+        }
+    }
+
     fn stats(lanes: &AntLanes, field: &ScalarField<PheromoneField>, tally: &u64) -> Vec<StatValue> {
         let carrying = lanes.has_food.iter().filter(|&&f| f != 0).count();
         vec![
@@ -125,6 +146,26 @@ impl AgentModel for AntsModel {
             StatValue::Scalar(total_pheromone(field.field(TO_FOOD), field.field(TO_HOME))),
         ]
     }
+}
+
+/// Wipes both trails and puts the ants back on the nest, holding a reward.
+///
+/// Wiping the trails alone would end the run. A deposit is the neighbourhood's best value lifted by
+/// the ant's reward, and only a site grants one, so from an empty field ants that are not standing
+/// on a site lay nothing and nothing ever grows back.
+fn reset_colony(
+    lanes: &mut AntLanes,
+    field: &mut ScalarField<PheromoneField>,
+    extent: Extent,
+    params: &[ParamValue],
+    rng: &mut u64,
+) {
+    for layer in [TO_FOOD, TO_HOME] {
+        field.field_mut(layer).current_mut().fill(0.0);
+    }
+    AntsModel::init(lanes, extent, params, rng);
+    lanes.has_food.fill(0);
+    lanes.last_step.fill(NO_STEP);
 }
 
 /// Summed chunk by chunk in index order, so rayon's scheduling cannot change the total.

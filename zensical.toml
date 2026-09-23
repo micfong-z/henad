@@ -31,6 +31,7 @@ nav = [
         { "Writing your first model" = [
             "guide/first-model/game-of-life.md",
             "guide/first-model/ants.md",
+            "guide/first-model/virus-network.md",
             "guide/first-model/gpu-game-of-life.md",
             "guide/first-model/gpu-ants.md",
         ] },
@@ -40,6 +41,7 @@ nav = [
         { "Model traits" = [
             "authoring/grid-models.md",
             "authoring/agent-models.md",
+            "authoring/network-models.md",
             "authoring/gpu-grid-models.md",
             "authoring/gpu-agent-models.md",
         ] },
@@ -100,6 +102,7 @@ nav = [
             { "#25, 2026-09-08" = "developing/agent-record/20260908-25-about-window.md" },
             { "#26, 2026-09-09" = "developing/agent-record/20260909-26-model-metadata.md" },
             { "#27, 2026-09-09" = "developing/agent-record/20260909-27-result-export.md" },
+            { "#28, 2026-09-21" = "developing/agent-record/20260921-28-network-models.md" },
         ] },
     ] },
 ]

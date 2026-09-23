@@ -16,6 +16,7 @@
 //! henad-cli game_of_life --steps 10000 --reps 5
 //! henad-cli sir --set grid_width=512 --steps 2000 --export final.txt
 //! henad-cli sir --steps 2000 --export-stats sir.csv --stats-every 10
+//! henad-cli game_of_life --steps 1000 --act clear@500 --export final.txt
 //! henad-cli gpu_game_of_life --set grid_width=4096 --set grid_height=4096 --steps 10000
 //! ```
 //!
@@ -42,10 +43,13 @@ use henad_compute::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION};
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
 use henad_core::export::{StatsWriter, state as state_export};
 use henad_core::model::SimState;
-use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
+use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
+
+use crate::actions::{BENCH_FIRE, Fire, Schedule};
 use numfmt::{Formatter, Scales};
 
+mod actions;
 mod json_report;
 
 /// Headless benchmark runner for Henad models.
@@ -80,6 +84,11 @@ struct Args {
     /// Override a model parameter, e.g. `--set grid_size=512`. Repeatable.
     #[arg(long = "set", value_name = "ID=VALUE")]
     set: Vec<String>,
+
+    /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable. An unknown id is
+    /// refused, and the error lists the ids the model declares. Each rep replays the same schedule.
+    #[arg(long = "act", value_name = "ID@TICK")]
+    act: Vec<String>,
 
     /// Write the final state (after warmup + steps) to this path, then exit.
     #[arg(long, value_name = "PATH")]
@@ -185,6 +194,15 @@ fn main() -> Result<()> {
 
     let overrides = parse_overrides(&args.set)?;
     let params = resolve_params(&entry.param_descriptors, &overrides)?;
+    let schedule = Schedule::parse(&args.act, entry)?;
+    if let Some(last) = schedule.last_tick()
+        && last > args.warmup + args.steps
+    {
+        eprintln!(
+            "note: --act at tick {last} is past the {} this run reaches, so it never fires",
+            args.warmup + args.steps
+        );
+    }
 
     // Ahead of the factory. An over-sized run is then refused by name instead of by whichever
     // binding the device happened to reject first.
@@ -196,15 +214,15 @@ fn main() -> Result<()> {
     }
 
     if let Some(path) = &args.export_stats {
-        return export_stats(entry, &params, &args, path, gpu_ctx.as_ref());
+        return export_stats(entry, &params, &args, &schedule, path, gpu_ctx.as_ref());
     }
 
     if let Some(path) = &args.export {
-        return export_final(entry, &params, &args, path);
+        return export_final(entry, &params, &args, &schedule, path);
     }
 
     let adapter = runtime.as_ref().map(|r| r.adapter.name.clone());
-    run_benchmark(entry, &params, &args, gpu_ctx.as_ref(), adapter.as_deref())
+    run_benchmark(entry, &params, &args, &schedule, gpu_ctx.as_ref(), adapter.as_deref())
 }
 
 /// Benchmark provenance. Goes to stdout with the results, not the progress log.
@@ -281,7 +299,12 @@ fn print_params(entry: &ModelEntry) {
                 format!("kind=choice default={default} options={}", options.join("|"))
             }
         };
-        println!("  index={index} id={id} {kind} apply={apply} label=\"{label}\"");
+        // Values are always fractions, whatever the panel shows, so this only describes how to read one.
+        let format = match desc.format {
+            ParamFormat::Plain => "",
+            ParamFormat::Percent => " format=percent",
+        };
+        println!("  index={index} id={id} {kind} apply={apply}{format} label=\"{label}\"");
     }
 }
 
@@ -301,6 +324,7 @@ fn run_benchmark(
     entry: &ModelEntry,
     params: &[ParamValue],
     args: &Args,
+    schedule: &Schedule,
     gpu_ctx: Option<&GpuContext>,
     adapter: Option<&str>,
 ) -> Result<()> {
@@ -313,12 +337,12 @@ fn run_benchmark(
         if args.json {
             json_report::info(&entry.id, "gpu", rayon::current_num_threads(), jobs, adapter);
         }
-        bench_gpu(entry, params, args, ctx)
+        bench_gpu(entry, params, args, schedule, ctx)
     } else {
         if args.json {
             json_report::info(&entry.id, "cpu", rayon::current_num_threads(), jobs, None);
         }
-        bench_cpu(entry, params, args)
+        bench_cpu(entry, params, args, schedule)
     }
 }
 
@@ -332,7 +356,7 @@ fn rep_seed(base: Option<u64>, rep: u64) -> Option<u64> {
 /// CPU benchmark: for each rep, build a fresh state, warm it up untimed, then time `steps` steps.
 /// Timing wraps *only* the step loop, so state construction and warmup allocation stay out of the
 /// measured window.
-fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<()> {
+fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, schedule: &Schedule) -> Result<()> {
     eprintln!(
         "benchmarking {} ({}): {} steps x {} reps, {} warmup, {} global-warmup",
         entry.name, entry.id, args.steps, args.reps, args.warmup, args.global_warmup
@@ -370,11 +394,13 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         // finishes. One inject per rep replaces one per pass per step.
         rayon::scope(|_| {
             for _ in 0..args.warmup {
+                schedule.run_due(&mut *state);
                 state.step();
             }
         });
         // For grid models `population()` is the total cell count (width×height); for agent models
         // it is the agent count. Either way it is the right denominator for agent-updates/sec.
+        // A network model's population can change as it runs, so it is read again after the timed steps.
         population = state.population();
         let heap_bytes = state.heap_bytes();
         grid_dims = state.grid_view().map(|g| (g.width, g.height));
@@ -383,11 +409,24 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
         let start = Instant::now();
         rayon::scope(|_| {
             for _ in 0..args.steps {
+                schedule.run_due(&mut *state);
                 state.step();
             }
         });
         let elapsed = start.elapsed();
+        // Outside the timer, so an action on the last tick still lands without being measured.
+        schedule.run_due(&mut *state);
         eprintln!("{elapsed:>8.3?}");
+        // A population that fluctuates at steady state moves by about its square root, which is not worth a note.
+        let after = state.population();
+        let noise = (3.0 * (population as f64).sqrt()) as u64;
+        if after.abs_diff(population) > (population / 10).max(noise) {
+            eprintln!(
+                "  note: the population went from {population} to {after} during the timed steps. \
+                 Updates per second are computed from the population after warmup. \
+                 A longer --warmup can reach a steady population first."
+            );
+        }
         samples.push(elapsed);
         if args.json {
             json_report::rep(
@@ -410,6 +449,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args) -> Result<(
             grid_dims,
             &entry.param_descriptors,
             params,
+            schedule,
         );
     } else {
         report(&samples, args.steps, population, grid_dims)?;
@@ -483,8 +523,14 @@ fn report(samples: &[Duration], steps_per_rep: u64, population: u64, grid_dims: 
 
 /// GPU benchmark. GPU state never leaves the device, and `SimState::step()` submits one tiny
 /// command buffer per step without ever waiting. Each rep instead batches `steps` into GPU
-/// submissions and blocks on completion. See [`run_gpu_steps`].
-fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuContext) -> Result<()> {
+/// submissions and blocks on completion. See [`run_gpu_rep`].
+fn bench_gpu(
+    entry: &ModelEntry,
+    params: &[ParamValue],
+    args: &Args,
+    schedule: &Schedule,
+    ctx: &GpuContext,
+) -> Result<()> {
     eprintln!(
         "benchmarking {} ({}) [GPU]: {} steps x {} reps, {} warmup, {} global-warmup",
         entry.name, entry.id, args.steps, args.reps, args.warmup, args.global_warmup
@@ -511,15 +557,9 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
     for rep in 0..args.reps {
         let seed = rep_seed(args.seed, rep);
         let mut state = new_gpu_state(entry, params, seed)?;
-        // Per-rep sim warm-up (untimed), matching the CPU path.
-        run_gpu_steps(&mut *state, ctx, args.warmup)?;
-        population = state.population();
-
-        eprint!("  #{: >4}: ", rep + 1);
-        let start = Instant::now();
-        run_gpu_steps(&mut *state, ctx, args.steps)?;
-        let elapsed = start.elapsed();
-        eprintln!("{elapsed:>8.3?}");
+        let (after_warmup, elapsed) = run_gpu_rep(&mut *state, ctx, args.warmup, args.steps, schedule)?;
+        population = after_warmup;
+        eprintln!("  #{: >4}: {elapsed:>8.3?}", rep + 1);
         samples.push(elapsed);
         if args.json {
             json_report::rep(rep, seed, args.steps, args.warmup, elapsed, population, None);
@@ -537,6 +577,7 @@ fn bench_gpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, ctx: &GpuCo
             grid_dims,
             &entry.param_descriptors,
             params,
+            schedule,
         );
     } else {
         report(&samples, args.steps, population, grid_dims)?;
@@ -552,18 +593,21 @@ fn new_gpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -
     }
 }
 
-/// Run `count` steps on the GPU, blocking until the GPU has actually finished all of them.
-///
-/// This is the one spot where GPU benchmarking is easy to get *wrong*: `queue.submit()` returns
-/// before the GPU has executed anything, so a timer wrapped around submission alone measures
-/// CPU-side dispatch cost and reports throughput that looks fantastic and is fiction. The work has
-/// to reach the GPU and complete inside the timed window.
+/// Runs `count` steps on the GPU and blocks until the GPU has finished them.
 fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> Result<()> {
     if count == 0 {
         return Ok(());
     }
+    submit_gpu_steps(state, ctx, count);
+    wait_gpu(ctx)
+}
+
+/// Submits `count` steps on the GPU without waiting for them.
+///
+/// Each command buffer holds at most [`MAX_STEPS_PER_SUBMISSION`] steps.
+fn submit_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) {
     // Submissions to one queue run in order, so batch N+1 still reads batch N's output. They all
-    // queue up and one wait drains them, letting the CPU encode ahead of the GPU.
+    // queue up and the caller's one wait drains them, letting the CPU encode ahead of the GPU.
     let mut remaining = count;
     while remaining > 0 {
         let n = remaining.min(u64::from(MAX_STEPS_PER_SUBMISSION)) as u32;
@@ -574,14 +618,92 @@ fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
         ctx.queue.submit(Some(encoder.finish()));
         remaining -= u64::from(n);
     }
+}
+
+/// Runs one GPU benchmark rep on `state` and returns its population after warm-up and the time its timed steps took.
+///
+/// The rep runs `warmup` untimed steps and then `steps` timed ones, both under [`BENCH_FIRE`]. An action due from the
+/// end of warm-up up to, but not including, the tick the rep stops on is timed with the steps. One due on the tick the
+/// rep stops on fires after the timer stops. It is waited for there. Otherwise its work would land in the next rep,
+/// inside the timer when that rep has no warm-up, and a fault it raised would be reported late or not at all.
+fn run_gpu_rep(
+    state: &mut dyn GpuSimState,
+    ctx: &GpuContext,
+    warmup: u64,
+    steps: u64,
+    schedule: &Schedule,
+) -> Result<(u64, Duration)> {
+    run_gpu_steps_acting(state, ctx, warmup, schedule, BENCH_FIRE)?;
+    let population = state.population();
+
+    let start = Instant::now();
+    run_gpu_steps_acting(state, ctx, steps, schedule, BENCH_FIRE)?;
+    let elapsed = start.elapsed();
+    run_due_gpu(state, ctx, schedule);
+    wait_gpu(ctx)?;
+    Ok((population, elapsed))
+}
+
+/// Blocks until the GPU has finished everything submitted, then reports any fault it raised.
+///
+/// Note that `queue.submit()` returns before the GPU has executed anything. A timer around submission alone measures
+/// the CPU's dispatch cost, and the throughput it reports is fiction. A timed run has to end in this wait inside the
+/// timer.
+fn wait_gpu(ctx: &GpuContext) -> Result<()> {
     ctx.device
         .poll(wgpu::PollType::wait_indefinitely())
-        .context("GPU failed to complete steps")?;
+        .context("GPU failed to finish the submitted work")?;
 
     if let Some(fault) = ctx.faults.take() {
         return Err(fault.into());
     }
     Ok(())
+}
+
+/// As [`run_gpu_steps`], stopping at each tick the schedule names to encode its actions.
+///
+/// `fire` picks the side of the step an action fires on, as [`Schedule::fire_ticks`] spells out.
+/// [`Fire::BeforeStep`] leaves the tick the run stops on to the caller, and [`Fire::AfterStep`] leaves
+/// the tick it starts on. Back-to-back runs under one rule then fire each tick once.
+///
+/// Every batch of steps and every action is submitted before one wait at the end, and a run of no steps waits for
+/// nothing. Under [`Fire::AfterStep`] that wait covers an action on the tick the run stops on.
+fn run_gpu_steps_acting(
+    state: &mut dyn GpuSimState,
+    ctx: &GpuContext,
+    count: u64,
+    schedule: &Schedule,
+    fire: Fire,
+) -> Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+    let end = state.tick() + count;
+    for tick in schedule.fire_ticks(state.tick(), count, fire) {
+        let now = state.tick();
+        submit_gpu_steps(state, ctx, tick - now);
+        run_due_gpu(state, ctx, schedule);
+    }
+    let now = state.tick();
+    submit_gpu_steps(state, ctx, end - now);
+    wait_gpu(ctx)
+}
+
+/// Encodes whatever is due at the state's current tick.
+///
+/// An action goes in a submission of its own, between two batches of steps, since a uniform
+/// written mid-encoder would not be visible until the whole encoder submitted.
+fn run_due_gpu(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &Schedule) {
+    for action in schedule.due(state.tick()) {
+        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("cli_gpu_action"),
+        });
+        if state.encode_action(&mut encoder, action.index) {
+            ctx.queue.submit(Some(encoder.finish()));
+        } else {
+            eprintln!("note: model refused action '{}' at tick {}", action.id, state.tick());
+        }
+    }
 }
 
 /// Best-effort grid dimensions from the resolved params, for GPU models whose state exposes no
@@ -633,11 +755,19 @@ fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
 }
 
 /// Run once (warmup + steps) and write the final state to `path`.
-fn export_final(entry: &ModelEntry, params: &[ParamValue], args: &Args, path: &Path) -> Result<()> {
+fn export_final(
+    entry: &ModelEntry,
+    params: &[ParamValue],
+    args: &Args,
+    schedule: &Schedule,
+    path: &Path,
+) -> Result<()> {
     let mut state = new_cpu_state(entry, params, args.seed)?;
     for _ in 0..(args.warmup + args.steps) {
+        schedule.run_due(&mut *state);
         state.step();
     }
+    schedule.run_due(&mut *state);
     write_state(&mut *state, path)?;
     eprintln!("exported final state (tick {}) to {}", state.tick(), path.display());
     Ok(())
@@ -653,6 +783,7 @@ fn export_stats(
     entry: &ModelEntry,
     params: &[ParamValue],
     args: &Args,
+    schedule: &Schedule,
     path: &Path,
     gpu_ctx: Option<&GpuContext>,
 ) -> Result<()> {
@@ -673,10 +804,10 @@ fn export_stats(
     );
 
     let rows = match (entry.create)(params, args.seed)? {
-        ModelState::Cpu(state) => stats_cpu(state, args, total, writer)?,
+        ModelState::Cpu(state) => stats_cpu(state, args, schedule, total, writer)?,
         ModelState::Gpu(state) => {
             let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
-            stats_gpu(state, ctx, args, total, writer)?
+            stats_gpu(state, ctx, args, schedule, total, writer)?
         }
     };
 
@@ -686,23 +817,32 @@ fn export_stats(
 
 /// CPU stat sampling: step and sample in one loop. Tick 0 (the initial state, before any step) is
 /// recorded so the series starts from the model's initial conditions.
-fn stats_cpu(
+fn stats_cpu<W: std::io::Write>(
     mut state: Box<dyn SimState>,
     args: &Args,
+    schedule: &Schedule,
     total: u64,
-    mut writer: StatsWriter<BufWriter<File>>,
+    mut writer: StatsWriter<W>,
 ) -> Result<u64> {
-    writer.push(state.tick(), &state.stats())?;
+    // A sample is taken as a publish would take it. A stat that walks the graph is computed in `prepare_view`.
+    let sample = |state: &mut dyn SimState, writer: &mut StatsWriter<W>| -> Result<()> {
+        state.prepare_view();
+        writer.push(state.tick(), &state.stats())?;
+        Ok(())
+    };
+    schedule.run_due(&mut *state);
+    sample(&mut *state, &mut writer)?;
     for i in 0..total {
         state.step();
+        schedule.run_due(&mut *state);
         if (i + 1).is_multiple_of(args.stats_every) {
-            writer.push(state.tick(), &state.stats())?;
+            sample(&mut *state, &mut writer)?;
         }
     }
     // The final tick always lands in the file even off a sampling boundary. The end state of a
     // run is the one value a reader is most likely to want.
     if !total.is_multiple_of(args.stats_every) {
-        writer.push(state.tick(), &state.stats())?;
+        sample(&mut *state, &mut writer)?;
     }
     Ok(writer.finish()?)
 }
@@ -711,14 +851,15 @@ fn stats_cpu(
 /// readback produced, so each sample needs the full encode-reduce-readback round trip and a
 /// blocking poll, or every row would repeat a stale value. That makes the sampling interval the
 /// dominant cost here, and `--stats-every` is how you buy it back.
-fn stats_gpu(
+fn stats_gpu<W: std::io::Write>(
     mut state: Box<dyn GpuSimState>,
     ctx: &GpuContext,
     args: &Args,
+    schedule: &Schedule,
     total: u64,
-    mut writer: StatsWriter<BufWriter<File>>,
+    mut writer: StatsWriter<W>,
 ) -> Result<u64> {
-    let sample = |state: &mut dyn GpuSimState, writer: &mut StatsWriter<BufWriter<File>>| -> Result<()> {
+    let sample = |state: &mut dyn GpuSimState, writer: &mut StatsWriter<W>| -> Result<()> {
         let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("cli_stats_snapshot"),
         });
@@ -730,21 +871,26 @@ fn stats_gpu(
         Ok(())
     };
 
+    run_due_gpu(&mut *state, ctx, schedule);
     sample(&mut *state, &mut writer)?;
     let mut done = 0;
     while done < total {
         let chunk = args.stats_every.min(total - done);
-        run_gpu_steps(&mut *state, ctx, chunk)?;
+        run_gpu_steps_acting(&mut *state, ctx, chunk, schedule, Fire::AfterStep)?;
         done += chunk;
         sample(&mut *state, &mut writer)?;
     }
+    // A fault raised by the last sample is reported here. No later wait would report it.
+    wait_gpu(ctx)?;
     Ok(writer.finish()?)
 }
 
-/// Serialize a CPU model's view to a simple text format: a grid as comma-separated cell indices
-/// per row, a point cloud as `x,y` CSV with a `color` column when the model carries the lane.
+/// Serializes a CPU model's view to a simple text format.
 ///
-/// Both sections are written, so a composite model exports its field and its agents.
+/// A grid is written as comma-separated cell indices per row, a point cloud as `x,y` CSV with a `color` column if
+/// the model carries the lane, and network edges as `src,dst,color` rows that index into the points.
+///
+/// Every section the model has is written, so a composite model exports both its field and its agents.
 fn write_state(state: &mut dyn SimState, path: &Path) -> Result<()> {
     // The display layer is only refreshed on publish, and an export is a publish.
     state.prepare_view();
@@ -761,8 +907,13 @@ fn write_state(state: &mut dyn SimState, path: &Path) -> Result<()> {
         state_export::write_grid(&mut out, grid.width, grid.height, grid.cells)?;
     }
 
-    if let Some(points) = points {
+    if let Some(points) = &points {
         state_export::write_points(&mut out, points.pos_x, points.pos_y, points.color)?;
+    }
+
+    if let (Some(points), Some(edges)) = (&points, state.edge_view()) {
+        let rows = state_export::point_rows(points.pos_x, points.pos_y);
+        state_export::write_edges(&mut out, edges.src, edges.dst, edges.color.unwrap_or(&[]), &rows)?;
     }
 
     Ok(())
@@ -833,9 +984,13 @@ fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_overrides, resolve_params};
+    use super::{Args, Schedule, acquire_gpu, parse_overrides, resolve_params, run_gpu_rep, stats_cpu, stats_gpu};
+    use clap::Parser as _;
+    use henad_compute::gpu::{GpuContext, GpuSimState};
+    use henad_core::export::stats_csv::StatsWriter;
     use henad_core::helpers::{f32_param, u32_param};
-    use henad_core::params::{ParamApply, ParamDescriptor, ParamKind, ParamValue};
+    use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+    use henad_models::registry::{ModelEntry, ModelState, model_registry};
 
     const OPTIONS: &[&str] = &["moore", "von_neumann"];
 
@@ -851,6 +1006,7 @@ mod tests {
                     default: 0,
                 },
                 apply: ParamApply::Live,
+                format: ParamFormat::Plain,
             },
         ]
     }
@@ -916,5 +1072,151 @@ mod tests {
             parse_overrides(&["num_agents".to_owned()]).is_err(),
             "no '=' in the pair"
         );
+    }
+
+    /// Each exported sample is prepared as a publish would be, so a stat computed in `prepare_view` is current.
+    /// Team Assembly's component stats are computed there.
+    ///
+    /// With `p` at zero every tick adds a separate clique of four newcomers, and nothing retires yet.
+    /// Rows land at tick 0, at tick 2 on the sampling boundary, and at the final tick 3 off it.
+    #[test]
+    fn exported_stats_are_prepared_like_a_publish() {
+        let entry = model_registry(None)
+            .into_iter()
+            .find(|e| e.id == "team_assembly")
+            .expect("team_assembly is registered");
+        let overrides =
+            parse_overrides(&["num_agents=4".to_owned(), "team_size=4".to_owned(), "p=0".to_owned()]).expect("valid");
+        let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
+        let args = Args::parse_from(["henad-cli", "team_assembly", "--stats-every", "2"]);
+        let schedule = Schedule::parse(&[], &entry).expect("no actions");
+        let Ok(ModelState::Cpu(state)) = (entry.create)(&params, Some(1)) else {
+            panic!("team_assembly builds as a CPU model");
+        };
+
+        let mut out = Vec::new();
+        let rows = stats_cpu(state, &args, &schedule, 3, StatsWriter::new(&mut out)).expect("writes");
+        assert_eq!(rows, 3);
+        let text = String::from_utf8(out).expect("utf-8");
+        let mut lines = text.lines();
+        let header: Vec<&str> = lines.next().expect("a header").split(',').collect();
+        let at = |name: &str| header.iter().position(|h| *h == name).expect("the column is exported");
+        let (tick, share, size) = (at("tick"), at("Giant Component Share"), at("Mean Component Size"));
+        for (line, cliques) in lines.zip([1.0, 3.0, 4.0]) {
+            let row: Vec<f64> = line.split(',').map(|v| v.parse().expect("a number")).collect();
+            assert!(
+                (row[share] - 1.0 / cliques).abs() < 1e-9,
+                "tick {}: giant share {}",
+                row[tick],
+                row[share]
+            );
+            assert_eq!(row[size], 4.0, "tick {}", row[tick]);
+        }
+    }
+
+    /// Returns whether `HENAD_REQUIRE_GPU` turns a missing device into a failure. Empty and `0` read as unset.
+    fn gpu_required() -> bool {
+        std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|v| !v.is_empty() && v != "0")
+    }
+
+    /// A 64 by 64 GPU grid model and the device it runs on.
+    struct SmallGpuGrid {
+        ctx: GpuContext,
+        entry: ModelEntry,
+        params: Vec<ParamValue>,
+    }
+
+    impl SmallGpuGrid {
+        /// Returns model `id` on a fresh device, or `None` to skip the test when this machine has no device.
+        ///
+        /// # Panics
+        ///
+        /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
+        fn new(id: &str) -> Option<Self> {
+            let ctx = match acquire_gpu() {
+                Ok((ctx, _)) => ctx,
+                Err(err) => {
+                    assert!(
+                        !gpu_required(),
+                        "HENAD_REQUIRE_GPU is set but no device is available: {err:#}"
+                    );
+                    return None;
+                }
+            };
+            let entry = model_registry(Some(ctx.clone()))
+                .into_iter()
+                .find(|e| e.id == id)
+                .expect("the model is registered");
+            let overrides = parse_overrides(&["grid_width=64".to_owned(), "grid_height=64".to_owned()]).expect("valid");
+            let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
+            Some(Self { ctx, entry, params })
+        }
+
+        fn schedule(&self, raw: &[&str]) -> Schedule {
+            let raw: Vec<String> = raw.iter().map(|&s| s.to_owned()).collect();
+            Schedule::parse(&raw, &self.entry).expect("declared actions")
+        }
+
+        fn state(&self) -> Box<dyn GpuSimState> {
+            let Ok(ModelState::Gpu(state)) = (self.entry.create)(&self.params, Some(1)) else {
+                panic!("{} builds as a GPU model", self.entry.id);
+            };
+            state
+        }
+
+        /// Returns the stats export's rows for `total` ticks of `state`, without the header.
+        fn rows(&self, state: Box<dyn GpuSimState>, every: u64, schedule: &Schedule, total: u64) -> Vec<String> {
+            let every = every.to_string();
+            let args = Args::parse_from(["henad-cli", self.entry.id.as_str(), "--stats-every", every.as_str()]);
+            let mut out = Vec::new();
+            stats_gpu(state, &self.ctx, &args, schedule, total, StatsWriter::new(&mut out)).expect("writes");
+            let text = String::from_utf8(out).expect("utf-8");
+            text.lines().skip(1).map(str::to_owned).collect()
+        }
+    }
+
+    /// Checks that a GPU action on a sampling boundary fires once. It used to fire at the end of one run of
+    /// steps and again at the start of the next, so the series changed with `--stats-every`.
+    ///
+    /// `randomise` draws a fresh board on every press. At `--stats-every 1` tick 2 is a boundary, and a
+    /// second press there changed every later row. At `--stats-every 3` it is inside a run.
+    #[test]
+    fn a_gpu_action_fires_once_whatever_the_sampling_interval() {
+        let Some(life) = SmallGpuGrid::new("gpu_game_of_life") else {
+            return;
+        };
+        let schedule = life.schedule(&["randomise@2"]);
+        let every_tick = life.rows(life.state(), 1, &schedule, 6);
+        let every_third = life.rows(life.state(), 3, &schedule, 6);
+        assert_eq!(every_tick.len(), 7, "ticks 0 to 6");
+        let shared = [0, 3, 6].map(|tick| every_tick[tick].clone());
+        assert_eq!(every_third, shared, "rows at ticks 0, 3 and 6");
+    }
+
+    /// Checks that a GPU benchmark rep fires each action once and on its own tick, the tick the rep stops on
+    /// included.
+    ///
+    /// The rep is [`run_gpu_rep`], the one `bench_gpu` runs. Its counts have to match the last row of a stats
+    /// export over the same ticks. `seed_outbreak` infects a share of the cells still susceptible, so a press
+    /// missed, repeated or moved to another tick changes the counts.
+    #[test]
+    fn a_gpu_benchmark_rep_fires_every_action_once() {
+        let Some(sir) = SmallGpuGrid::new("gpu_sir") else {
+            return;
+        };
+        let schedule = sir.schedule(&[
+            "seed_outbreak@0",
+            "seed_outbreak@2",
+            "seed_outbreak@3",
+            "seed_outbreak@5",
+        ]);
+        let no_actions = sir.schedule(&[]);
+        for (warmup, steps) in [(0, 0), (0, 3), (2, 0), (2, 3)] {
+            let mut rep = sir.state();
+            run_gpu_rep(&mut *rep, &sir.ctx, warmup, steps, &schedule).expect("a rep");
+            let after_rep = sir.rows(rep, 1, &no_actions, 0);
+            let exported = sir.rows(sir.state(), 1, &schedule, warmup + steps);
+            assert_eq!(after_rep.last(), exported.last(), "--warmup {warmup} --steps {steps}");
+        }
     }
 }

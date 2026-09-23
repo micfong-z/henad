@@ -10,25 +10,14 @@ Every curve on the charts tab starts as a declaration on the model.
 You declare the series once as a const and then return bare values in the same order, which keeps the labels and the values from drifting apart.
 
 ```rust
-const STATS: &'static [StatDescriptor] = &[
-    StatDescriptor::new("Susceptible", PALETTE[0]),
-    StatDescriptor::new("Infected", PALETTE[1]),
-    StatDescriptor::new("Recovered", PALETTE[2]),
-];
+--8<-- "crates/henad-models/src/sir.rs:stat_descriptors"
 ```
 
 A descriptor is just a label and a colour.
 Take the colour from the model's own palette, and each chart line then keeps the same colour as the thing it counts.
 
 ```rust
-fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
-    let (s, i, r) = count_sir(grid.current());
-    vec![
-        StatValue::Scalar(s as f64),
-        StatValue::Scalar(i as f64),
-        StatValue::Scalar(r as f64),
-    ]
-}
+--8<-- "crates/henad-models/src/sir.rs:stats"
 ```
 
 When a snapshot is published, the engine zips the two lists together.
@@ -45,30 +34,28 @@ pub enum StatValue {
 ```
 
 The stats panel shows each variant in full.
+A whole `Scalar` shows without decimals, and a fractional one with up to three.
 The history chart plots one number per series, so a `Vector2D` is charted as its magnitude and a `Histogram` as its total count.
 Boids reports average velocity as a `Vector2D`, which reads as a direction in the panel and doubles as a measure of flock coherence on the chart.
 
 ## When it runs
 
 `stats` runs when a snapshot is published rather than on every tick.
-Snapshots go out on a fixed cadence while the simulation runs as fast as it can, so a reduction over ten million agents happens a few times a second instead of thousands of times.
+Snapshots go out at most once every 16 ms, about 60 a second, however fast the simulation runs.
+A model ticking faster than that runs its reduction on only some of its ticks.
 
 If a value is needed for the readout but not by the step itself, compute it here.
+
+A publish calls [`prepare_view`](views.md#prepare_view) before `stats`, and a value cached there is current when `stats` reads it.
+`henad-cli --export-stats` samples a CPU model the same way and calls `prepare_view` before each row.
+An exported series matches what the app shows.
 
 ## Reducing in parallel
 
 To fold up a whole grid or population, run the reduction in chunks through `reduce_chunks`.
 
 ```rust
-fn count_alive(cells: &[u8]) -> u64 {
-    reduce_chunks(
-        cells.len(),
-        STATS_CHUNK,
-        |r| cells[r].iter().filter(|&&c| c == ALIVE).count() as u64,
-        |a, b| a + b,
-        0,
-    )
-}
+--8<-- "crates/henad-models/src/game_of_life.rs:count_alive"
 ```
 
 `reduce_chunks` takes a length rather than a slice, so a single closure can read several lanes per chunk.
@@ -93,6 +80,30 @@ Ants counts deliveries this way, since a delivered item leaves no trace in the p
 
 The default is `()`, meaning there is nothing to count.
 `u32` and `u64` already implement the merge as a sum.
+
+## Network models
+
+A [`NetworkModel`](network-models.md) has no tally.
+Its `stats` receives the lanes, the graph and the model's `Aux`, the state it keeps outside the lanes and the graph.
+
+```rust
+fn stats(lanes: &Self::Lanes, graph: &Network, aux: &Self::Aux) -> Vec<StatValue>;
+```
+
+`stats` borrows `aux` immutably and cannot store anything in it.
+A stat that needs a walk of the graph, such as a count of connected components, is computed in `prepare_view` and kept in `aux` for `stats` to read.
+Team Assembly keys its cached components by the graph's version and node count, and labels them again only when either has changed.
+
+```rust
+--8<-- "crates/henad-models/src/team_assembly/mod.rs:components"
+```
+
+`label_components`, from `henad_compute::cpu::primitives::components`, labels the components in parallel and returns their count and the size of the largest.
+It reads a directed graph as undirected.
+
+`stats` can be called before any `prepare_view` has run, and it still has to return a value for every series.
+The registry test that counts the series calls it on a freshly built state.
+Team Assembly reports both component stats as zero until the first labelling.
 
 ## On the GPU
 

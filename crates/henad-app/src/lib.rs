@@ -112,6 +112,8 @@ impl eframe::App for HenadApp {
         // --- Poll snapshot from sim thread ---
         let fresh = self.state.sim_thread.as_mut().and_then(SimRunner::take_snapshot);
         if let Some(snap) = fresh {
+            // A publish at the newest row's tick replaces that row. After an action it carries the
+            // action's effect, and after a paused layout step the same stats again.
             if let Some(history) = &mut self.state.stats_history {
                 history.push_entries(&snap.stats, snap.tick);
             }

@@ -2,9 +2,11 @@
 
 #import shared::dims::Dims
 
+// --8<-- [start:bindings]
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var<storage, read_write> counters: array<atomic<u32>, 3>;
 @group(0) @binding(2) var<uniform> dims: Dims;
+// --8<-- [end:bindings]
 
 var<workgroup> partial: array<atomic<u32>, 3>;
 

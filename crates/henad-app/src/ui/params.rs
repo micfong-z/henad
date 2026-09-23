@@ -4,7 +4,8 @@ use crate::icons::material_design_icons::{MDI_ALERT, MDI_INFORMATION, MDI_RESTAR
 use crate::state::AppState;
 use crate::ui::banner;
 use henad_compute::cpu::sim_thread::SimCommand;
-use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
+use henad_core::action::ActionDescriptor;
+use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 
 pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let descriptors: Vec<_> = app
@@ -15,6 +16,7 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     if descriptors.is_empty() {
         ui.label("This model has no parameters.");
+        actions_ui(ui, app);
         return;
     }
 
@@ -56,6 +58,9 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 let mut slider = egui::Slider::new(v, *min..=*max).text(text);
                 if let Some(s) = step {
                     slider = slider.step_by(f64::from(*s));
+                }
+                if desc.format == ParamFormat::Percent {
+                    slider = as_percent(slider, *step);
                 }
                 if with_hint(ui.add(slider), hint).changed() {
                     param_changed.push((i, ParamValue::F32(*v)));
@@ -107,7 +112,49 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     }
 
+    actions_ui(ui, app);
     notice(ui, app, &descriptors, panel_width);
+}
+
+/// A button per action the model declares, under the parameter widgets.
+///
+/// Sent to the running sim rather than remembered, since an action changes state that only exists
+/// once the model is built.
+fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
+    let actions: Vec<ActionDescriptor> = app
+        .registry
+        .get(app.selected_model)
+        .map(|entry| entry.action_descriptors.clone())
+        .unwrap_or_default();
+    if actions.is_empty() {
+        return;
+    }
+
+    let loaded = app.selection_is_loaded();
+    let mut pressed = None;
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        for (i, action) in actions.iter().enumerate() {
+            if ui
+                .add_enabled(loaded, egui::Button::new(action.label))
+                .on_disabled_hover_text(format!(
+                    "Press {MDI_RESTART}\u{a0}Build to run this model, then {}",
+                    action.label.to_lowercase()
+                ))
+                .clicked()
+            {
+                pressed = Some(i);
+            }
+        }
+    });
+
+    if let Some(index) = pressed
+        && let Some(thread) = &mut app.sim_thread
+    {
+        thread.send(SimCommand::Act(index));
+    }
 }
 
 /// True when `index` has been edited to a value the running sim will not pick up on its own.
@@ -126,6 +173,31 @@ fn param_text(ui: &egui::Ui, desc: &ParamDescriptor, pending: bool) -> egui::Ric
     } else {
         text
     }
+}
+
+/// Displays a fraction as a percentage.
+fn as_percent(slider: egui::Slider<'_>, step: Option<f32>) -> egui::Slider<'_> {
+    let decimals = percent_decimals(step);
+    slider
+        .custom_formatter(move |value, _| format!("{:.decimals$}%", value * 100.0))
+        .custom_parser(|text| {
+            let number = text.trim().trim_end_matches('%').trim_end();
+            number.parse::<f64>().ok().map(|percent| percent / 100.0)
+        })
+}
+
+/// Returns the fewest decimals that still show every step as a distinct percentage.
+fn percent_decimals(step: Option<f32>) -> usize {
+    let Some(step) = step else {
+        return 1;
+    };
+    let percent = f64::from(step) * 100.0;
+    (0..4)
+        .find(|&places| {
+            let scaled = percent * 10f64.powi(places);
+            (scaled - scaled.round()).abs() < 1e-6
+        })
+        .map_or(4, |places| places as usize)
 }
 
 fn with_hint(response: egui::Response, hint: Option<&str>) -> egui::Response {
@@ -197,4 +269,18 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
         ui.separator();
         banner(ui, icon, color, title, &detail);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::percent_decimals;
+
+    #[test]
+    fn a_percentage_shows_as_many_decimals_as_its_step_needs() {
+        assert_eq!(percent_decimals(Some(0.01)), 0, "1% steps");
+        assert_eq!(percent_decimals(Some(0.001)), 1, "0.1% steps");
+        assert_eq!(percent_decimals(Some(0.005)), 1, "0.5% steps");
+        assert_eq!(percent_decimals(Some(0.0025)), 2, "0.25% steps");
+        assert_eq!(percent_decimals(None), 1, "no step");
+    }
 }

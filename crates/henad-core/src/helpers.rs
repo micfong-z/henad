@@ -1,4 +1,4 @@
-use crate::params::{ParamApply, ParamDescriptor, ParamKind, ParamValue};
+use crate::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 use crate::view::{StatEntry, StatValue};
 
 pub fn fmt_bytes(bytes: u64) -> String {
@@ -33,6 +33,7 @@ pub fn f32_param(
             step,
         },
         apply: ParamApply::Live,
+        format: ParamFormat::Plain,
     }
 }
 
@@ -42,6 +43,32 @@ pub fn u32_param(id: &'static str, label: &'static str, default: u32, min: u32, 
         label,
         kind: ParamKind::U32 { min, max, default },
         apply: ParamApply::Live,
+        format: ParamFormat::Plain,
+    }
+}
+
+pub fn bool_param(id: &'static str, label: &'static str, default: bool) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        label,
+        kind: ParamKind::Bool { default },
+        apply: ParamApply::Live,
+        format: ParamFormat::Plain,
+    }
+}
+
+pub fn choice_param(
+    id: &'static str,
+    label: &'static str,
+    options: &'static [&'static str],
+    default: usize,
+) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        label,
+        kind: ParamKind::Choice { options, default },
+        apply: ParamApply::Live,
+        format: ParamFormat::Plain,
     }
 }
 
@@ -57,6 +84,21 @@ pub fn extract_f32(params: &[ParamValue], index: usize, default: f32) -> f32 {
 pub fn extract_u32(params: &[ParamValue], index: usize, default: u32) -> u32 {
     match params.get(index) {
         Some(ParamValue::U32(v)) => *v,
+        _ => default,
+    }
+}
+
+pub fn extract_bool(params: &[ParamValue], index: usize, default: bool) -> bool {
+    match params.get(index) {
+        Some(ParamValue::Bool(v)) => *v,
+        _ => default,
+    }
+}
+
+/// Returns the index of the chosen option, or `default` if the value is not a choice.
+pub fn extract_choice(params: &[ParamValue], index: usize, default: usize) -> usize {
+    match params.get(index) {
+        Some(ParamValue::Choice(v)) => *v,
         _ => default,
     }
 }

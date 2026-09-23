@@ -191,8 +191,9 @@ def validate_sir(engine, variant: str, timeout: float, refresh: bool, binary: Pa
     if code == 0:
         return "yes", ""
     verdict = next((l.strip() for l in stdout.splitlines() if "DIFFERENT" in l or "INCONCLUSIVE" in l), "")
-    # 2 is undecided rather than wrong, and the answer to it is more replicates.
-    outcome = "inconclusive" if code == 2 else "no"
+    # 2 is undecided rather than wrong, and the answer to it is more replicates. uv exits 2 on its own failures
+    # too, and then no verdict is printed.
+    outcome = "inconclusive" if code == 2 and "INCONCLUSIVE" in stdout else "no"
     return outcome, verdict or (stderr.strip().splitlines()[-1] if stderr.strip() else "compare_sir.py failed")
 
 

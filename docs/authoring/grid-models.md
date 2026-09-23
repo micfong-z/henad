@@ -29,11 +29,13 @@ Everything in the table below comes out of your impl.
 | `PALETTE` | One RGBA colour per cell value. See [palettes and views](views.md) |
 | `NEIGHBORHOOD` | `Moore` or `VonNeumann`, deciding the neighbours `step_cell` receives |
 | `STATS` | The series the history chart plots. See [statistics](statistics.md) |
+| `ACTIONS` | One-off changes to the state, one button each, empty by default. See [actions](parameters.md#actions) |
 | `type Params` | Hot parameters, rebuilt once a tick |
 | `param_descriptors` | This model's own parameters. See [parameters](parameters.md) |
 | `from_params` | Extracts `Params` from a value slice |
 | `init` | Fills the grid, given the parameters and a seed |
 | `step_cell` | The rule |
+| `act` | Runs one entry of `ACTIONS` |
 | `stats` | The reduction, in `STATS` order |
 
 ## The rule

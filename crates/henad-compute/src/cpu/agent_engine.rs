@@ -1,3 +1,4 @@
+use henad_core::action::action_seed;
 use henad_core::authoring::model::agent_model::{
     AgentLanes as _, AgentModel, ChunkTally as _, NeighborIndex as _, StepCtx,
 };
@@ -20,6 +21,8 @@ pub struct AgentModelState<A: AgentModel> {
     extent: Extent,
     tally: A::Tally,
     seed: u64,
+    /// The action stream, apart from the one the ticks draw from.
+    action_seed: u64,
     tick: u64,
 }
 
@@ -38,6 +41,7 @@ impl<A: AgentModel> AgentModelState<A> {
 
         let (own, field_params) = split_params::<A>(params);
         let mut lanes = A::Lanes::alloc(n);
+        let actions = action_seed(seed);
         let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
         A::init(&mut lanes, extent, own, &mut seed);
 
@@ -57,6 +61,7 @@ impl<A: AgentModel> AgentModelState<A> {
             extent,
             tally: A::Tally::default(),
             seed,
+            action_seed: actions,
             tick: 0,
         }
     }
@@ -84,6 +89,7 @@ impl<A: AgentModel> AgentModelState<A> {
         };
 
         let mut lanes = A::Lanes::alloc(n);
+        let actions = action_seed(seed);
         let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
         let (own, field_params) = split_params::<A>(params);
 
@@ -109,6 +115,7 @@ impl<A: AgentModel> AgentModelState<A> {
             extent,
             tally: A::Tally::default(),
             seed,
+            action_seed: actions,
             tick: 0,
         }
     }
@@ -126,12 +133,12 @@ impl<A: AgentModel> AgentModelState<A> {
     }
 }
 
-/// The full descriptor list, with population and world extent prepended.
-///
-/// The extent is the engine's, not either layer's, so an agent layer and a field layer cannot
-/// disagree about how big the world is.
-/// Indices of the params the engine prepends before a model's own. A GPU port reads them too,
-/// since it composes the same list.
+// The full descriptor list, with population and world extent prepended.
+//
+// The extent is the engine's, not either layer's, so an agent layer and a field layer cannot
+// disagree about how big the world is.
+// Indices of the params the engine prepends before a model's own. A GPU port reads them too,
+// since it composes the same list.
 pub const NUM_AGENTS: usize = 0;
 pub const WORLD_WIDTH: usize = 1;
 pub const WORLD_HEIGHT: usize = 2;
@@ -228,6 +235,24 @@ impl<A: AgentModel> SimState for AgentModelState<A> {
 
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
         self.params.set(index, value)
+    }
+
+    fn act(&mut self, index: usize) -> bool {
+        if index >= A::ACTIONS.len() {
+            return false;
+        }
+        // Destructured, so the params borrow and the lane borrows are of different fields.
+        let Self {
+            lanes,
+            field,
+            params,
+            extent,
+            action_seed,
+            ..
+        } = self;
+        let (own, _) = split_params::<A>(params.values());
+        A::act(index, lanes, field, *extent, own, action_seed);
+        true
     }
 
     fn population(&self) -> u64 {

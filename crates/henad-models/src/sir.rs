@@ -1,4 +1,5 @@
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::authoring::primitives::rng::{below, next_bits, next_float};
 use henad_core::grid::Grid2D;
@@ -15,7 +16,13 @@ henad_core::params! {
     const INFECTION_RATE = f32_param("infection_rate", "Infection Rate", 0.3, 0.0, 1.0, Some(0.01));
     const RECOVERY_RATE = f32_param("recovery_rate", "Recovery Rate", 0.05, 0.0, 1.0, Some(0.01));
     const INITIAL_INFECTED_PCT =
-        f32_param("initial_infected_pct", "Initial Infected %", 0.01, 0.0, 1.0, Some(0.001)).on_reload();
+        f32_param("initial_infected_pct", "Initial Infected", 0.01, 0.0, 1.0, Some(0.001))
+            .on_reload()
+            .percent();
+}
+
+henad_core::actions! {
+    const SEED_OUTBREAK = ActionDescriptor::new("seed_outbreak", "Seed outbreak");
 }
 
 pub const PALETTE: [[u8; 4]; 3] = [
@@ -37,11 +44,14 @@ impl GridModel for SirGridModel {
     const DESCRIPTION: &'static str = "Classic SIR compartmental model on a 2D grid with Moore neighborhood";
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
     const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
+    // --8<-- [start:stat_descriptors]
     const STATS: &'static [StatDescriptor] = &[
         StatDescriptor::new("Susceptible", PALETTE[0]),
         StatDescriptor::new("Infected", PALETTE[1]),
         StatDescriptor::new("Recovered", PALETTE[2]),
     ];
+    // --8<-- [end:stat_descriptors]
+    const ACTIONS: &'static [ActionDescriptor] = ACTION_SPECS;
     type Params = SirParams;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
@@ -89,6 +99,15 @@ impl GridModel for SirGridModel {
         }
     }
 
+    #[expect(clippy::single_match, reason = "for future multi-action extendability")]
+    fn act(action: usize, grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
+        match action {
+            SEED_OUTBREAK => seed_outbreak(grid, params, rng),
+            _ => {}
+        }
+    }
+
+    // --8<-- [start:stats]
     fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
         let (s, i, r) = count_sir(grid.current());
         vec![
@@ -97,6 +116,7 @@ impl GridModel for SirGridModel {
             StatValue::Scalar(r as f64),
         ]
     }
+    // --8<-- [end:stats]
 }
 
 /// Count S/I/R in a single pass over a contiguous slice.
@@ -112,7 +132,19 @@ fn count_sir_seq(cells: &[u8]) -> (u64, u64, u64) {
     (s, i, r)
 }
 
-/// Chunked over the grid, folded in index order.
+/// Infects each susceptible cell with probability `initial_infected_pct`, so a run that has burnt out can be
+/// restarted without losing the recovered ones.
+fn seed_outbreak(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
+    let initial_pct = extract_f32(params, INITIAL_INFECTED_PCT, 0.01);
+    let threshold = (initial_pct * u32::MAX as f32) as u32;
+    for cell in grid.current_mut().iter_mut() {
+        if *cell == S && below(next_bits(rng), threshold) {
+            *cell = I;
+        }
+    }
+}
+
+/// Counts S, I and R over the grid in chunks, folded in index order.
 fn count_sir(cells: &[u8]) -> (u64, u64, u64) {
     reduce_chunks(
         cells.len(),

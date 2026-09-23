@@ -14,13 +14,15 @@
 //! and reduce shaders.
 
 use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::binding::BindingDecl;
-use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
+use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
 use henad_core::authoring::primitives::rng::{mix_seed, xorshift64};
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
+use crate::shader_bindings::gpu_sir::seed_outbreak::Params as ActionParams;
 use crate::shader_bindings::gpu_sir::step::Params as StepParams;
 use crate::sir::PALETTE;
 
@@ -38,12 +40,13 @@ henad_core::params! {
     const PARAM_RECOVERY_RATE = f32_param("recovery_rate", "Recovery Rate", DEFAULT_RECOVERY_RATE, 0.0, 1.0, Some(0.01));
     const PARAM_INITIAL_INFECTED_PCT = f32_param(
         "initial_infected_pct",
-        "Initial Infected %",
+        "Initial Infected",
         DEFAULT_INITIAL_INFECTED_PCT,
         0.0,
         1.0,
         Some(0.001),
-    );
+    )
+    .percent();
 }
 
 const DEFAULT_DIM: u32 = 1024;
@@ -105,6 +108,12 @@ impl GpuGridModel for GpuSir {
     const DISPLAY_SHADER: &'static str = crate::shader_bindings::gpu_sir::display::SHADER_STRING;
     const REDUCE_SHADER: &'static str = crate::shader_bindings::gpu_sir::reduce::SHADER_STRING;
 
+    const ACTIONS: &'static [GpuGridAction] = &[GpuGridAction {
+        desc: ActionDescriptor::new("seed_outbreak", "Seed outbreak"),
+        shader: crate::shader_bindings::gpu_sir::seed_outbreak::SHADER_STRING,
+        bindings: crate::binding_decls::bindings::GPU_SIR_SEED_OUTBREAK,
+    }];
+
     fn param_descriptors() -> Vec<ParamDescriptor> {
         descriptors()
     }
@@ -134,6 +143,17 @@ impl GpuGridModel for GpuSir {
             height,
             infection_rate: extract_f32(params, PARAM_INFECTION_RATE, DEFAULT_INFECTION_RATE),
             recovery_rate: extract_f32(params, PARAM_RECOVERY_RATE, DEFAULT_RECOVERY_RATE),
+        })
+        .to_vec()
+    }
+
+    fn action_params_bytes(_action: usize, width: u32, height: u32, params: &[ParamValue], seed: u32) -> Vec<u8> {
+        let pct = extract_f32(params, PARAM_INITIAL_INFECTED_PCT, DEFAULT_INITIAL_INFECTED_PCT);
+        bytemuck::bytes_of(&ActionParams {
+            width,
+            height,
+            threshold: (pct * u32::MAX as f32) as u32,
+            seed,
         })
         .to_vec()
     }

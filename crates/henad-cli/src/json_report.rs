@@ -82,6 +82,7 @@ pub fn summary(
     grid_dims: Option<(u32, u32)>,
     descriptors: &[ParamDescriptor],
     params: &[ParamValue],
+    schedule: &crate::actions::Schedule,
 ) {
     let mut sorted = samples.to_vec();
     sorted.sort_unstable();
@@ -108,8 +109,20 @@ pub fn summary(
         "grid_w": grid_dims.map(|(w, _)| w),
         "grid_h": grid_dims.map(|(_, h)| h),
         "params": params_object(descriptors, params),
+        "actions": actions_array(schedule),
     });
     emit(&line);
+}
+
+/// The `--act` schedule this run replayed, so a row says what was done to it.
+fn actions_array(schedule: &crate::actions::Schedule) -> Value {
+    Value::Array(
+        schedule
+            .entries()
+            .iter()
+            .map(|a| json!({ "id": a.id, "tick": a.tick }))
+            .collect(),
+    )
 }
 
 /// Resolved parameters keyed by id, so a row stays interpretable after a model's defaults change.

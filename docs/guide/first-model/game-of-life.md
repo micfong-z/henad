@@ -281,7 +281,7 @@ First we declare the module,
 pub mod life;
 ```
 
-then we add a line to the registry, next to the four entries already there:
+then we add a line to the registry, next to the entries already there:
 
 ``` rust title="crates/henad-models/src/registry.rs"
 register_grid_model::<crate::life::LifeModel>(),

@@ -10,15 +10,20 @@ const ENTRY_POINTS: &[&str] = &[
     "gpu_game_of_life/step.wgsl",
     "gpu_game_of_life/display.wgsl",
     "gpu_game_of_life/reduce.wgsl",
+    "gpu_game_of_life/randomise.wgsl",
+    "gpu_game_of_life/clear.wgsl",
     "gpu_sir/step.wgsl",
     "gpu_sir/display.wgsl",
     "gpu_sir/reduce.wgsl",
+    "gpu_sir/seed_outbreak.wgsl",
     "gpu_boids/step.wgsl",
     "gpu_boids/reduce.wgsl",
+    "gpu_boids/randomise_headings.wgsl",
     "gpu_ants/step.wgsl",
     "gpu_ants/merge.wgsl",
     "gpu_ants/display.wgsl",
     "gpu_ants/reduce.wgsl",
+    "gpu_ants/reset_colony.wgsl",
 ];
 // --8<-- [end:entry_points]
 

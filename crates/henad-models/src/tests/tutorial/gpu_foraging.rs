@@ -38,7 +38,7 @@ henad_core::buffers! {
     const SITES = "sites";
 }
 
-/// `state` packs what the CPU model keeps in three lanes. Mirrored in `state.wgsl`.
+// `state` packs what the CPU model keeps in three lanes. Mirrored in `state.wgsl`.
 const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
 const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
 
@@ -183,6 +183,8 @@ impl GpuAgentModel for GpuForagingModel {
                 palette: packed_cell_palette(),
             })
             .to_vec(),
+            // The guide's model declares no actions, so the engine never asks for one.
+            PassId::Action(_) => Vec::new(),
             PassId::Reduce => bytemuck::bytes_of(&ReduceParams {
                 n: ctx.invocations,
                 lanes: Self::REDUCE.lanes as u32,

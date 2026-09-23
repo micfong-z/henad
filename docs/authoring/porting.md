@@ -16,6 +16,8 @@ Pick the GPU trait matching the topology you already have.
 | [`GridModel`](grid-models.md) | [`GpuGridModel`](gpu-grid-models.md) |
 | [`AgentModel`](agent-models.md) | [`GpuAgentModel`](gpu-agent-models.md) |
 
+Network models have no GPU trait, so a [`NetworkModel`](network-models.md) stays on the CPU.
+
 ## Reuse the parameter list
 
 Neither GPU trait prepends anything to your parameter list.

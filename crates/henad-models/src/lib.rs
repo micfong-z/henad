@@ -32,6 +32,8 @@ pub mod gpu_game_of_life;
 pub mod gpu_sir;
 pub mod registry;
 pub mod sir;
+pub mod team_assembly;
+pub mod virus_network;
 
 #[cfg(test)]
 mod tests;

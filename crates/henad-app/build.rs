@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     WgslBindgenOptionBuilder::default()
         .workspace_root(&ui)
         .add_entry_point(ui.join("agents.wgsl").to_string_lossy().into_owned())
+        .add_entry_point(ui.join("edges.wgsl").to_string_lossy().into_owned())
         .serialization_strategy(WgslTypeSerializeStrategy::Bytemuck)
         .type_map(RustWgslTypeMap)
         .shader_source_type(WgslShaderSourceType::EmbedSource)
