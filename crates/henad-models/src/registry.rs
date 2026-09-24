@@ -238,6 +238,38 @@ fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
     }
 }
 
+/// Create the `ModelEntry` for the hand-written GPU Virus on a Network, capturing the injected device/queue.
+fn register_gpu_virus_network(ctx: &GpuContext) -> ModelEntry {
+    use crate::gpu_virus_network::{self as gpu_virus, GpuVirusNetwork};
+    use crate::virus_network::{PALETTE, VirusNetwork};
+
+    let factory_ctx = ctx.clone();
+    ModelEntry {
+        name: gpu_virus::NAME.to_owned(),
+        id: gpu_virus::ID.to_owned(),
+        description: gpu_virus::DESCRIPTION.to_owned(),
+        param_descriptors: gpu_virus::param_descriptors(),
+        stat_descriptors: VirusNetwork::STATS.to_vec(),
+        action_descriptors: Vec::new(),
+        topology_hint: TopologyHint::NETWORK,
+        metadata: ModelMetadata {
+            backend: Backend::Gpu,
+            palette: Some(&PALETTE),
+            structure: Structure::GpuNetwork {
+                buffers: gpu_virus::BUFFERS,
+                passes: gpu_virus::PASSES,
+                edge_palette: VirusNetwork::EDGE_PALETTE,
+            },
+        },
+        create: Box::new(move |params, seed| {
+            catching_on(&factory_ctx, BUILDING, || {
+                ModelState::Gpu(Box::new(GpuVirusNetwork::new(&factory_ctx, params, seed)))
+            })
+        }),
+        capacity: Some(Box::new(GpuVirusNetwork::demand)),
+    }
+}
+
 /// Storage buffers the widest pass of any GPU model binds.
 ///
 /// Needed before a device exists, so before there is a [`GpuContext`] to build a registry with.
@@ -249,6 +281,7 @@ pub fn gpu_storage_bindings_needed() -> u32 {
         GpuGridState::<crate::gpu_sir::GpuSir>::max_storage_bindings(),
         GpuAgentState::<crate::gpu_boids::GpuBoids>::max_storage_bindings(),
         GpuAgentState::<crate::gpu_ants::GpuAnts>::max_storage_bindings(),
+        crate::gpu_virus_network::GpuVirusNetwork::max_storage_bindings(),
     ]
     .into_iter()
     .max()
@@ -272,6 +305,8 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
         // --8<-- [end:cpu_entries]
     ];
 
+    // Outside the markers, since the GPU tutorial includes that block.
+    let gpu_virus_network = gpu.as_ref().map(register_gpu_virus_network);
     // --8<-- [start:gpu_entries]
     if let Some(ctx) = gpu {
         entries.push(register_gpu_grid_model::<crate::gpu_game_of_life::GpuGameOfLife>(&ctx));
@@ -280,6 +315,7 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
         entries.push(register_gpu_agent_model::<crate::gpu_ants::GpuAnts>(&ctx));
     }
     // --8<-- [end:gpu_entries]
+    entries.extend(gpu_virus_network);
 
     entries
 }
@@ -418,12 +454,15 @@ mod tests {
             let agrees = match structure {
                 Structure::Grid { .. } | Structure::GpuGrid { .. } => hint == TopologyHint::GRID,
                 Structure::Agents { .. } | Structure::GpuAgents { .. } => hint.agents,
-                Structure::Network { .. } => hint.agents && hint.edges,
+                Structure::Network { .. } | Structure::GpuNetwork { .. } => hint.agents && hint.edges,
             };
             assert!(agrees, "{}: declared structure and topology disagree", entry.id);
 
             assert!(
-                gpu == matches!(structure, Structure::GpuGrid { .. } | Structure::GpuAgents { .. }),
+                gpu == matches!(
+                    structure,
+                    Structure::GpuGrid { .. } | Structure::GpuAgents { .. } | Structure::GpuNetwork { .. }
+                ),
                 "{}: declares {backend:?} but a structure for the other backend",
                 entry.id
             );
@@ -524,6 +563,13 @@ mod tests {
                 entry.id,
                 entry.topology_hint.agents
             );
+            assert_eq!(
+                view.edges.is_some(),
+                entry.topology_hint.edges,
+                "{}: declares edges={} but its snapshot disagrees",
+                entry.id,
+                entry.topology_hint.edges
+            );
         }
     }
 
@@ -566,7 +612,7 @@ mod tests {
     fn registry_without_gpu_context_offers_no_gpu_models() {
         let entries = model_registry(None);
         assert!(
-            !entries.iter().any(|e| e.id == "gpu_game_of_life" || e.id == "gpu_sir"),
+            !entries.iter().any(|e| e.id.starts_with("gpu_")),
             "a GPU model must not appear in the dropdown when there is no device to run it on"
         );
         assert!(

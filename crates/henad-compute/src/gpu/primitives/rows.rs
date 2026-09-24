@@ -6,8 +6,9 @@
 //!
 //! Not stable, unlike the CPU rows. Membership matches, but a row comes out in whatever order the atomics resolve in.
 
+use crate::gpu::capacity::storage_in_layout;
 use crate::gpu::primitives::dispatch::linear_dispatch;
-use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
+use crate::gpu::primitives::pipeline::{bind_group, compute_pipeline, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::prefix_scan::PrefixScan;
 use crate::shader_bindings::primitives::rows_count::RowsParams;
 use crate::shader_bindings::shared::graph::Edge;
@@ -97,11 +98,15 @@ impl GpuRows {
             crate::shader_bindings::primitives::rows_count::SHADER_STRING,
             &count_layout,
         );
-        let count_bind = bind_in_order(
+        let count_bind = bind_group(
             device,
             &format!("{label}_rows_count_bind"),
             &count_layout,
-            &[edges, &counts, &params],
+            &[
+                edges.as_entire_binding(),
+                counts.as_entire_binding(),
+                params.as_entire_binding(),
+            ],
         );
 
         let scatter_layout = device.create_bind_group_layout(
@@ -113,11 +118,16 @@ impl GpuRows {
             crate::shader_bindings::primitives::rows_scatter::SHADER_STRING,
             &scatter_layout,
         );
-        let scatter_bind = bind_in_order(
+        let scatter_bind = bind_group(
             device,
             &format!("{label}_rows_scatter_bind"),
             &scatter_layout,
-            &[edges, &cursor, &entries, &params],
+            &[
+                edges.as_entire_binding(),
+                cursor.as_entire_binding(),
+                entries.as_entire_binding(),
+                params.as_entire_binding(),
+            ],
         );
 
         Self {
@@ -169,6 +179,20 @@ impl GpuRows {
         }
     }
 
+    /// Storage buffers each of the rebuild's passes binds, labelled as in [`crate::gpu::capacity::Demand`].
+    pub fn storage_bindings() -> [(&'static str, u32); 2] {
+        [
+            (
+                "rows_count",
+                storage_in_layout(&crate::shader_bindings::primitives::rows_count::WgpuBindGroup0::LAYOUT_DESCRIPTOR),
+            ),
+            (
+                "rows_scatter",
+                storage_in_layout(&crate::shader_bindings::primitives::rows_scatter::WgpuBindGroup0::LAYOUT_DESCRIPTOR),
+            ),
+        ]
+    }
+
     /// Bind as `array<u32>` of `2n + 1` offsets.
     pub fn row_start_binding(&self) -> wgpu::BindingResource<'_> {
         self.row_start.as_entire_binding()
@@ -195,28 +219,6 @@ impl GpuRows {
         // Three tables plus the entries. The scan's intermediates are a rounding error.
         3 * self.table_bytes() as usize + 2 * self.num_edges as usize * size_of::<u32>()
     }
-}
-
-/// Binds each of `buffers` whole, at the binding index of its position.
-fn bind_in_order(
-    device: &wgpu::Device,
-    label: &str,
-    layout: &wgpu::BindGroupLayout,
-    buffers: &[&wgpu::Buffer],
-) -> wgpu::BindGroup {
-    let entries: Vec<wgpu::BindGroupEntry<'_>> = buffers
-        .iter()
-        .enumerate()
-        .map(|(binding, buffer)| wgpu::BindGroupEntry {
-            binding: binding as u32,
-            resource: buffer.as_entire_binding(),
-        })
-        .collect();
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some(label),
-        layout,
-        entries: &entries,
-    })
 }
 
 #[cfg(test)]

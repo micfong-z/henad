@@ -4,6 +4,7 @@ use henad_core::view::StatEntry;
 
 use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::GpuDisplay;
+use crate::gpu::view::edges::GpuEdges;
 
 /// Owned data snapshot produced by the sim thread for the UI to consume.
 pub struct Snapshot {
@@ -56,11 +57,13 @@ pub struct GpuSnapshot {
     pub display: Option<Arc<GpuDisplay>>,
     /// The model's own lane buffers, drawn in place.
     pub agents: Option<Arc<GpuAgents>>,
+    /// The model's edge list, drawn in place under the agents.
+    pub edges: Option<Arc<GpuEdges>>,
 }
 
 impl GpuSnapshot {
     pub fn is_empty(&self) -> bool {
-        self.display.is_none() && self.agents.is_none()
+        self.display.is_none() && self.agents.is_none() && self.edges.is_none()
     }
 }
 

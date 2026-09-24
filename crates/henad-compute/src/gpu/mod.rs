@@ -28,6 +28,7 @@ pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 pub use sim_thread::{GpuSimState, GpuStats};
 pub use view::agents::GpuAgents;
 pub use view::display::{DisplayTarget, GpuDisplay};
+pub use view::edges::GpuEdges;
 
 #[cfg(test)]
 use tests::support::headless_context;

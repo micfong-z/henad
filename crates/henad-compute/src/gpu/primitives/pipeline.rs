@@ -71,6 +71,28 @@ pub fn compute_pipeline(
     })
 }
 
+/// A bind group holding each of `resources` at the binding index of its position.
+pub fn bind_group(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::BindGroupLayout,
+    resources: &[wgpu::BindingResource<'_>],
+) -> wgpu::BindGroup {
+    let entries: Vec<wgpu::BindGroupEntry<'_>> = resources
+        .iter()
+        .enumerate()
+        .map(|(binding, resource)| wgpu::BindGroupEntry {
+            binding: binding as u32,
+            resource: resource.clone(),
+        })
+        .collect();
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &entries,
+    })
+}
+
 /// A storage buffer of `len` `u32`-sized elements.
 ///
 /// `len` is floored at one, since wgpu rejects a zero-sized buffer.

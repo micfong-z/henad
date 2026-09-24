@@ -728,10 +728,7 @@ mod tests {
         }
 
         fn view(&self) -> GpuSnapshot {
-            GpuSnapshot {
-                display: None,
-                agents: None,
-            }
+            GpuSnapshot::default()
         }
     }
 

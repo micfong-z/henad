@@ -835,6 +835,7 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
         GpuSnapshot {
             display: self.display.as_ref().map(|(_, display)| Arc::clone(display)),
             agents: Some(Arc::clone(self.agents.pick(self.current_is_a))),
+            edges: None,
         }
     }
 }

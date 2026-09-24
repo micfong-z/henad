@@ -63,6 +63,13 @@ pub enum Structure {
         display: bool,
         counters: usize,
     },
+    GpuNetwork {
+        buffers: &'static [&'static str],
+        /// Passes a step runs, in order.
+        passes: &'static [&'static str],
+        /// Edge colours, packed into the edge list by a shader.
+        edge_palette: &'static [[u8; 4]],
+    },
 }
 
 /// Model metadata to be displayed in the UI,

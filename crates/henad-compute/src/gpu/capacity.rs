@@ -15,6 +15,23 @@ pub(crate) fn storage_bindings(decls: &[BindingDecl]) -> u32 {
     decls.iter().filter(|d| d.kind.is_storage_buffer()).count() as u32
 }
 
+/// Storage buffers a bind group layout holds, for a pass whose shader is not declared through [`BindingDecl`]s.
+pub fn storage_in_layout(layout: &wgpu::BindGroupLayoutDescriptor<'_>) -> u32 {
+    layout
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.ty,
+                wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { .. },
+                    ..
+                }
+            )
+        })
+        .count() as u32
+}
+
 /// The layout entry a declaration asks for.
 pub(crate) fn layout_entry(i: u32, decl: &BindingDecl) -> wgpu::BindGroupLayoutEntry {
     match decl.kind {
@@ -82,6 +99,15 @@ impl Demand {
         for name in ["agent_cell", "sorted"] {
             self.push(format!("{label}_hash_{name}"), num_agents as usize);
         }
+    }
+
+    /// The four tables [`crate::gpu::GpuRows`] builds from an edge list.
+    pub fn push_rows(&mut self, label: &str, num_nodes: u32, num_edges: u32) {
+        let table = 2 * num_nodes as usize + 1;
+        for name in ["counts", "row_start", "cursor"] {
+            self.push(format!("{label}_rows_{name}"), table);
+        }
+        self.push(format!("{label}_rows_entries"), 2 * num_edges as usize);
     }
 
     /// Caps the texture for `limits` first, so the recorded size is the one that would be created.

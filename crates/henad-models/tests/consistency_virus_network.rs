@@ -210,6 +210,49 @@ fn recovery_and_resistance_match_the_parameters() {
     assert_rate("I -> R", to_r, trials, RECOVERY * RESISTANCE);
 }
 
+/// A node infected this tick is checked for recovery in the same tick, as in NetLogo.
+///
+/// With a check every tick and certain resistance, `P(S -> R | k) = (1 - 0.9^k) 0.3`.
+#[test]
+fn a_node_infected_this_tick_can_recover_this_tick() {
+    const SPREAD: f64 = 0.1;
+    const RECOVERY: f64 = 0.3;
+    let mut state = build(&[
+        ("num_agents", U32(NODES)),
+        ("initial_outbreak_size", U32(OUTBREAK)),
+        ("virus_spread_chance", F32(SPREAD as f32)),
+        ("virus_check_frequency", U32(1)),
+        ("recovery_chance", F32(RECOVERY as f32)),
+        ("gain_resistance_chance", F32(1.0)),
+    ]);
+    let before = states(&state);
+    let sources = infected_sources(&state, &before, false);
+    state.step();
+    let after = states(&state);
+
+    let mut trials = [0u64; 32];
+    let mut recoveries = [0u64; 32];
+    for i in 0..before.len() {
+        if before[i] != SUSCEPTIBLE || sources[i] >= trials.len() {
+            continue;
+        }
+        trials[sources[i]] += 1;
+        if after[i] == RESISTANT {
+            recoveries[sources[i]] += 1;
+        }
+    }
+    let mut checked = 0;
+    for k in 1..trials.len() {
+        if trials[k] < MIN_TRIALS {
+            continue;
+        }
+        let expected = (1.0 - (1.0 - SPREAD).powi(k as i32)) * RECOVERY;
+        assert_rate(&format!("k={k}"), recoveries[k], trials[k], expected);
+        checked += 1;
+    }
+    assert!(checked >= 3, "only {checked} buckets had enough samples");
+}
+
 /// With a check every `F` ticks, each node is checked once per `F` ticks, at its own phase.
 /// Certain recovery and resistance make every check visible as a node turning resistant.
 #[test]

@@ -47,6 +47,7 @@ pub fn capture_dims(app: &AppState, device_max: u32) -> Option<(u32, u32)> {
             GpuSnapshot {
                 display: Some(display),
                 agents,
+                ..
             } => ((display.width, display.height), agents.is_some()),
             GpuSnapshot {
                 agents: Some(agents), ..

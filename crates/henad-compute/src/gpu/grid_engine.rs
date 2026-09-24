@@ -642,6 +642,7 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
         GpuSnapshot {
             display: Some(Arc::clone(&self.display)),
             agents: None,
+            edges: None,
         }
     }
 }

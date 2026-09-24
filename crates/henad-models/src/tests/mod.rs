@@ -2,5 +2,6 @@
 //! crate.
 
 pub mod broken;
+mod gpu_virus_network;
 pub mod support;
 pub mod tutorial;

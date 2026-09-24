@@ -193,6 +193,10 @@ fn structure_rows(ui: &mut egui::Ui, structure: &Structure) {
                 row(ui, "Counters", counters.to_string());
             }
         }
+        Structure::GpuNetwork { buffers, passes, .. } => {
+            row_listing(ui, "Buffers", buffers.len().to_string(), &buffers.join("\n"));
+            row_listing(ui, "Step passes", passes.len().to_string(), &passes.join("\n"));
+        }
     }
 }
 
@@ -225,7 +229,9 @@ fn interface_rows(ui: &mut egui::Ui, entry: &ModelEntry) {
     }
     ui.end_row();
 
-    if let Structure::Network { edge_palette, .. } = &entry.metadata.structure {
+    if let Structure::Network { edge_palette, .. } | Structure::GpuNetwork { edge_palette, .. } =
+        &entry.metadata.structure
+    {
         ui.label("Edge palette");
         ui.horizontal(|ui| {
             ui.label(edge_palette.len().to_string());
