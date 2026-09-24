@@ -8,4 +8,5 @@ pub mod pipeline;
 pub mod prefix_scan;
 pub mod readback;
 pub mod reduce;
+pub mod rows;
 pub mod spatial_hash;

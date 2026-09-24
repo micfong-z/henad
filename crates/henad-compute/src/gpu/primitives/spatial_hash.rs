@@ -256,6 +256,7 @@ mod tests {
     use crate::gpu::headless_context;
     use crate::gpu::primitives::dispatch::WORKGROUP;
     use crate::gpu::primitives::pipeline::storage_buffer;
+    use crate::gpu::primitives::readback::read_words;
     use henad_core::authoring::model::field::Extent;
     use henad_core::authoring::primitives::rng::xorshift64;
     use henad_core::spatial_hash::SpatialHash;
@@ -300,37 +301,6 @@ mod tests {
         (0..n).map(|_| (unit() * w, unit() * h)).unzip()
     }
 
-    /// Reads a `u32` storage buffer back through a staging copy.
-    fn read_u32(ctx: &crate::gpu::GpuContext, buffer: &wgpu::Buffer, len: usize) -> Vec<u32> {
-        let size = (len * std::mem::size_of::<u32>()) as u64;
-        let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hash_test_staging"),
-            size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
-        ctx.queue.submit(Some(encoder.finish()));
-
-        let (tx, rx) = flume::bounded(1);
-        staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |r| drop(tx.send(r)));
-        ctx.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("device poll");
-        rx.recv().expect("map channel").expect("map");
-
-        let data = staging.slice(..).get_mapped_range().expect("map range");
-        let out = bytemuck::cast_slice::<u8, u32>(&data)[..len].to_vec();
-        drop(data);
-        staging.unmap();
-        out
-    }
-
     /// Builds the hash for one set of positions and reads back `(cell_start, sorted)`.
     fn build(
         ctx: &crate::gpu::GpuContext,
@@ -357,8 +327,8 @@ mod tests {
 
         let cells = hash.grid().num_cells() as usize + 1;
         (
-            read_u32(ctx, hash.cell_start_buffer(), cells),
-            read_u32(ctx, hash.sorted_buffer(), n as usize),
+            read_words(&ctx.device, &ctx.queue, hash.cell_start_buffer())[..cells].to_vec(),
+            read_words(&ctx.device, &ctx.queue, hash.sorted_buffer())[..n as usize].to_vec(),
         )
     }
 

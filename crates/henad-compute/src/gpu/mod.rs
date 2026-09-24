@@ -23,6 +23,7 @@ mod tests;
 pub use agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
 pub use capacity::Demand;
 pub use grid_engine::{GpuGridModelDescriptor, GpuGridState};
+pub use primitives::rows::GpuRows;
 pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 pub use sim_thread::{GpuSimState, GpuStats};
 pub use view::agents::GpuAgents;

@@ -98,13 +98,41 @@ pub fn next_float(rng: &mut u64, max: f32) -> f32 {
     random_float(next_bits(rng), max)
 }
 
+/// Returns the index in `[0, n)` that `bits` maps to, or `None` if the word must be redrawn.
+///
+/// This is one step of Lemire's multiply-and-shift method. The index is the top half of `bits * n`, and the few words
+/// whose bottom half falls under `2^32 mod n` are rejected, since keeping them would favour some indices over others.
+/// Returns `Some(0)` when `n` is 0.
+///
+/// # Examples
+///
+/// ```
+/// use henad_core::authoring::primitives::rng::index_from_bits;
+///
+/// assert_eq!(index_from_bits(u32::MAX, 10), Some(9));
+/// // A zero word lands under the rejection floor of any `n` that does not divide 2^32.
+/// assert_eq!(index_from_bits(0, 3), None);
+/// assert_eq!(index_from_bits(0, 4), Some(0));
+/// ```
+///
+/// See also: [`next_index`].
+#[inline]
+pub fn index_from_bits(bits: u32, n: u32) -> Option<u32> {
+    let wide = u64::from(bits) * u64::from(n);
+    let low = wide as u32;
+    // The floor is always under `n`, so the modulo only runs for the rare word that could be rejected.
+    if low < n && low < n.wrapping_neg() % n {
+        return None;
+    }
+    Some((wide >> 32) as u32)
+}
+
 /// Advances `rng` and returns a uniform integer in `[0, n)`, like NetLogo's `random n`.
 ///
 /// Returns 0 when `n` is 0.
 ///
-/// The result is exactly uniform for any `n`. This uses Lemire's multiply-and-shift method,
-/// redrawing the few words that would otherwise favour some results over others.
-/// Note that a plain `% n` favours low values by up to 0.2% when `n` is ten million.
+/// The result is exactly uniform for any `n`. Each word goes through [`index_from_bits`], and a rejected word is
+/// redrawn. Note that a plain `% n` favours low values by up to 0.2% when `n` is ten million.
 ///
 /// # Examples
 ///
@@ -118,19 +146,17 @@ pub fn next_float(rng: &mut u64, max: f32) -> f32 {
 ///
 /// # WGSL counterpart
 ///
-/// None. The redraw needs a 64-bit product, which WGSL does not have.
+/// `rng::next_index` takes a `ptr<function, u32>` and advances it with `pcg_hash`, so it draws from a different
+/// stream. Only [`index_from_bits`] is held to bit equality.
 ///
 /// See also: [`next_bits`], [`next_float`].
 #[inline]
 pub fn next_index(rng: &mut u64, n: u32) -> u32 {
-    let mut wide = u64::from(next_bits(rng)) * u64::from(n);
-    if (wide as u32) < n {
-        let floor = n.wrapping_neg() % n;
-        while (wide as u32) < floor {
-            wide = u64::from(next_bits(rng)) * u64::from(n);
+    loop {
+        if let Some(index) = index_from_bits(next_bits(rng), n) {
+            return index;
         }
     }
-    (wide >> 32) as u32
 }
 
 /// A Bernoulli trial, true for `threshold` of the 2^32 possible words.
@@ -386,6 +412,59 @@ mod tests {
                 "index {k} came up {h} times, expected about {expected}"
             );
         }
+    }
+
+    /// Every seeded CPU run depends on this sequence, so it is pinned against a direct Lemire loop.
+    #[test]
+    fn next_index_matches_a_direct_lemire_loop() {
+        fn lemire_loop(rng: &mut u64, n: u32) -> u32 {
+            let mut wide = u64::from(next_bits(rng)) * u64::from(n);
+            if (wide as u32) < n {
+                let floor = n.wrapping_neg() % n;
+                while (wide as u32) < floor {
+                    wide = u64::from(next_bits(rng)) * u64::from(n);
+                }
+            }
+            (wide >> 32) as u32
+        }
+
+        for n in [
+            0,
+            1,
+            2,
+            3,
+            7,
+            100,
+            1 << 24,
+            (1 << 24) + 1,
+            (1 << 31) + 1,
+            3 << 30,
+            u32::MAX,
+        ] {
+            let (mut rng, mut reference_rng) = (
+                0x5A3E_0000_0000_0001 ^ u64::from(n),
+                0x5A3E_0000_0000_0001 ^ u64::from(n),
+            );
+            for _ in 0..2_000 {
+                assert_eq!(next_index(&mut rng, n), lemire_loop(&mut reference_rng, n), "n = {n}");
+            }
+            assert_eq!(
+                rng, reference_rng,
+                "the two consumed different numbers of words for n = {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rejected_word_is_one_that_would_bias_the_index() {
+        // For `n = 3` the floor is `2^32 mod 3 = 1`, and only the zero word falls under it.
+        assert_eq!(index_from_bits(0, 3), None);
+        assert_eq!(index_from_bits(1, 3), Some(0));
+        // A power of two divides 2^32 and never rejects.
+        for bits in [0, 1, u32::MAX / 2, u32::MAX] {
+            assert!(index_from_bits(bits, 1 << 20).is_some());
+        }
+        assert_eq!(index_from_bits(u32::MAX, 0), Some(0));
     }
 
     /// At `n = 3 * 2^30`, a bare multiply-and-shift sends half of all words to multiples of three

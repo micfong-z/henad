@@ -17,7 +17,7 @@ use crate::display_scale::display_dims;
 use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
 use crate::gpu::primitives::dispatch::linear_dispatch;
 use crate::gpu::primitives::pipeline::{compute_pipeline, lane_buffer, storage_buffer, uniform_buffer};
-use crate::gpu::primitives::readback::CounterReadback;
+use crate::gpu::primitives::readback::{CounterReadback, read_words};
 use crate::gpu::primitives::reduce::GpuLaneReduce;
 use crate::gpu::primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 use crate::gpu::sim_thread::GpuSimState;
@@ -516,32 +516,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
     /// The current side of buffer `index`, as raw words. Blocks on the GPU.
     pub fn read_buffer(&self, index: usize) -> Vec<u32> {
         let (buffer, _) = self.buffers[index].sides(self.current_is_a);
-        let size = buffer.size();
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("henad_gpu_agent_readback"),
-            size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("henad_gpu_agent_readback"),
-        });
-        encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
-        self.queue.submit(Some(encoder.finish()));
-
-        let (tx, rx) = flume::bounded(1);
-        staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |r| drop(tx.send(r)));
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("readback poll");
-        rx.recv().expect("readback channel").expect("readback map");
-        let data = staging.slice(..).get_mapped_range().expect("readback range");
-        let out = bytemuck::cast_slice::<u8, u32>(&data).to_vec();
-        drop(data);
-        staging.unmap();
-        out
+        read_words(&self.device, &self.queue, buffer)
     }
 
     pub fn geometry(&self) -> &Geometry {

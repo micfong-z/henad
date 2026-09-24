@@ -1,6 +1,6 @@
-//! Async readback of some `u32` counters reduced on the GPU.
+//! Async readback of some `u32` counters reduced on the GPU, plus a blocking copy of a whole buffer for tests.
 //!
-//! Lets a GPU model answer `SimState::stats()` without ever copying the grid back to the CPU.
+//! [`CounterReadback`] lets a GPU model answer `SimState::stats()` without ever copying the grid back to the CPU.
 //! Reducing on-GPU and reading back a few bytes costs nothing next to a full grid readback.
 //!
 //! # Why the map is asynchronous
@@ -180,4 +180,38 @@ impl CounterReadback {
     pub fn values_f32(&self) -> impl Iterator<Item = f32> + '_ {
         self.values.iter().copied().map(f32::from_bits)
     }
+}
+
+/// Returns the contents of `buffer` as `u32` words, blocking until the copy lands.
+///
+/// Note that nothing can block in a browser, so this is for tests and native tools only.
+///
+/// # Panics
+///
+/// If the device is lost before the copy is mapped.
+pub fn read_words(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<u32> {
+    let size = buffer.size();
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("henad_read_words_staging"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("henad_read_words"),
+    });
+    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+    queue.submit(Some(encoder.finish()));
+
+    let (tx, rx) = flume::bounded(1);
+    staging
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |r| drop(tx.send(r)));
+    device.poll(wgpu::PollType::wait_indefinitely()).expect("readback poll");
+    rx.recv().expect("readback channel").expect("readback map");
+    let data = staging.slice(..).get_mapped_range().expect("readback range");
+    let words = bytemuck::cast_slice::<u8, u32>(&data).to_vec();
+    drop(data);
+    staging.unmap();
+    words
 }

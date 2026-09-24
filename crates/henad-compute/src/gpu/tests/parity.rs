@@ -12,9 +12,9 @@ use henad_core::authoring::primitives::space::{self, Boundary, MOORE_COLUMN_MAJO
 use crate::gpu::headless_context;
 use crate::gpu::primitives::pipeline::compute_pipeline;
 use crate::shader_bindings::shared::parity::{
-    Case, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT, OP_NEIGHBOR_COUNT,
-    OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD, OP_WRAP_INDEX, Out,
-    SHADER_STRING, WgpuBindGroup0,
+    Case, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT, OP_INDEX_FROM_BITS,
+    OP_MUL_WIDE, OP_NEIGHBOR_COUNT, OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT,
+    OP_WRAP_COORD, OP_WRAP_INDEX, Out, SHADER_STRING, WgpuBindGroup0,
 };
 use crate::shader_bindings::shared::space as codes;
 
@@ -294,6 +294,47 @@ fn rng_checks(out: &mut Vec<Check>) {
     }
 }
 
+/// Index ranges around the ends of each word width and the 24 bits a float draw can resolve.
+const RANGES: [u32; 10] = [
+    0,
+    1,
+    2,
+    3,
+    7,
+    (1 << 24) + 1,
+    (1 << 31) + 1,
+    3 << 30,
+    u32::MAX - 1,
+    u32::MAX,
+];
+
+fn index_checks(out: &mut Vec<Check>) {
+    for bits in WORDS {
+        for n in RANGES {
+            let wide = u64::from(bits) * u64::from(n);
+            let (low, high) = (wide as u32, (wide >> 32) as u32);
+
+            let mut case = blank(OP_MUL_WIDE);
+            case.u = [bits, n, 0, 0];
+            out.push(Check {
+                case,
+                expected: ints([low as i32, high as i32, 0, 0]),
+                call: format!("mul_wide({bits}, {n})"),
+            });
+
+            // A rejected word still reports the top half of its product, so the index is compared either way.
+            let draw = rng::index_from_bits(bits, n);
+            let mut case = blank(OP_INDEX_FROM_BITS);
+            case.u = [bits, n, 0, 0];
+            out.push(Check {
+                case,
+                expected: ints([draw.unwrap_or(high) as i32, i32::from(draw.is_some()), 0, 0]),
+                call: format!("index_from_bits({bits}, {n})"),
+            });
+        }
+    }
+}
+
 fn all_checks() -> Vec<Check> {
     let mut out = Vec::new();
     wrap_index_checks(&mut out);
@@ -305,6 +346,7 @@ fn all_checks() -> Vec<Check> {
     neighbor_checks(&mut out);
     heading_octant_checks(&mut out);
     rng_checks(&mut out);
+    index_checks(&mut out);
     out
 }
 

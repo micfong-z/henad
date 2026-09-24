@@ -9,6 +9,8 @@ use wgsl_bindgen::{RustWgslTypeMap, WgslBindgenOptionBuilder, WgslShaderSourceTy
 const ENTRY_POINTS: &[&str] = &[
     "primitives/hash_count.wgsl",
     "primitives/hash_scatter.wgsl",
+    "primitives/rows_count.wgsl",
+    "primitives/rows_scatter.wgsl",
     "primitives/scan.wgsl",
     "primitives/scan_add.wgsl",
     "primitives/reduce.wgsl",

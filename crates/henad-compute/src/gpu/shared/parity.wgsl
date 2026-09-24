@@ -8,7 +8,7 @@
 
 #import shared::space::{wrap_index, wrap_coord, cell_index, offset_cell, axis_delta, dist_sq}
 #import shared::space::{neighbor_count, neighbor_offset, heading_octant}
-#import shared::rng::{random_float, below, choice3, reservoir_accept}
+#import shared::rng::{random_float, below, choice3, reservoir_accept, mul_wide, index_from_bits}
 
 const OP_WRAP_INDEX: u32 = 0u;
 const OP_WRAP_COORD: u32 = 1u;
@@ -23,6 +23,8 @@ const OP_RANDOM_FLOAT: u32 = 9u;
 const OP_BELOW: u32 = 10u;
 const OP_CHOICE3: u32 = 11u;
 const OP_RESERVOIR_ACCEPT: u32 = 12u;
+const OP_MUL_WIDE: u32 = 13u;
+const OP_INDEX_FROM_BITS: u32 = 14u;
 
 struct Case {
     op: u32,
@@ -95,6 +97,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         case 12u: {
             out.i.x = i32(reservoir_accept(c.u.x, c.u.y));
+        }
+        // Results past `i32::MAX` travel as their bit pattern.
+        case 13u: {
+            let wide = mul_wide(c.u.x, c.u.y);
+            out.i = vec4<i32>(bitcast<i32>(wide.x), bitcast<i32>(wide.y), 0, 0);
+        }
+        case 14u: {
+            let draw = index_from_bits(c.u.x, c.u.y);
+            out.i = vec4<i32>(bitcast<i32>(draw.index), i32(draw.accepted), 0, 0);
         }
         default: {}
     }

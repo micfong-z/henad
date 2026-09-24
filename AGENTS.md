@@ -369,8 +369,8 @@ henad-core  →  henad-compute  →  henad-models  →  henad-app
   the grid slot an `AgentModel` sits over. `authoring/primitives/` is the primitive vocabulary those
   kernels call — wrapping, neighbourhoods, distances, random draws — most paired with a WGSL twin
   under `henad-compute/src/gpu/shared/`, and each pure one pinned to its twin by a parity test.
-  `space::offsets`, `space::for_each_neighbor`, `rng::mix_seed` and `rng::next_index` are Rust
-  only. `next_index`'s redraw needs a 64-bit product, and WGSL has no 64-bit integers.
+  `space::offsets`, `space::for_each_neighbor` and `rng::mix_seed` are Rust only. WGSL has no
+  64-bit integers, so `rng::index_from_bits` builds its product with the WGSL-only `mul_wide`.
   `docs/reference/primitives.md` is the index, marks each Rust-only and WGSL-only entry, and
   records what is deliberately absent.
   `Model`/`SimState` (`model.rs`) are the _runner_

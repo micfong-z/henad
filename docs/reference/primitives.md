@@ -8,7 +8,7 @@ icon: material/function-variant
 
 Primitives are the small vocabulary a model kernel calls for world geometry, neighbourhoods and random draws.
 Most of them exist twice, once in Rust for CPU models and once in WGSL for GPU models.
-`offsets`, `for_each_neighbor`, `mix_seed` and `next_index` are Rust only, and `neighbor_count` and `neighbor_offset` are WGSL only.
+`offsets`, `for_each_neighbor` and `mix_seed` are Rust only, and `neighbor_count`, `neighbor_offset` and `mul_wide` are WGSL only.
 The two generators, `xorshift64` and `pcg_hash`, fill the same role under different names.
 
 ```rust
@@ -30,7 +30,7 @@ Each entry below gives the Rust signature, and calls out the WGSL one wherever i
 |---|---|
 | [Space](#space) | [`Boundary`](#boundary), [`wrap_index`](#wrap_index), [`wrap_coord`](#wrap_coord), [`cell_index`](#cell_index), [`offset_cell`](#offset_cell), [`axis_delta`](#axis_delta), [`dist_sq`](#dist_sq), [`heading_octant`](#heading_octant) |
 | [Neighbourhoods](#neighbourhoods) | [`MOORE_ROW_MAJOR`](#moore_row_major), [`MOORE_COLUMN_MAJOR`](#moore_column_major), [`VON_NEUMANN`](#von_neumann), [`offsets`](#offsets), [`for_each_neighbor`](#for_each_neighbor), [`neighbor_count`](#neighbor_count), [`neighbor_offset`](#neighbor_offset) |
-| [Random](#random) | [`xorshift64`](#xorshift64), [`pcg_hash`](#pcg_hash), [`mix_seed`](#mix_seed), [`next_bits`](#next_bits), [`random_float`](#random_float), [`next_float`](#next_float), [`next_index`](#next_index), [`below`](#below), [`choice3`](#choice3), [`reservoir_accept`](#reservoir_accept) |
+| [Random](#random) | [`xorshift64`](#xorshift64), [`pcg_hash`](#pcg_hash), [`mix_seed`](#mix_seed), [`next_bits`](#next_bits), [`random_float`](#random_float), [`next_float`](#next_float), [`index_from_bits`](#index_from_bits), [`next_index`](#next_index), [`mul_wide`](#mul_wide), [`below`](#below), [`choice3`](#choice3), [`reservoir_accept`](#reservoir_accept) |
 
 ## Space
 
@@ -451,6 +451,31 @@ The two backends draw from different streams, since the generators differ.
 
 See also: [`random_float`](#random_float), [`next_bits`](#next_bits).
 
+### `index_from_bits`
+
+```rust
+fn index_from_bits(bits: u32, n: u32) -> Option<u32>
+```
+
+The index in `[0, n)` that `bits` maps to, or `None` when the word has to be redrawn.
+The index is the top 32 bits of `bits * n` (Lemire's method).
+The few words whose bottom 32 bits fall under `2^32 mod n` are rejected, since keeping them would favour some indices over the rest.
+Returns `Some(0)` when `n` is 0.
+
+```rust
+index_from_bits(u32::MAX, 10)   // Some(9)
+index_from_bits(0, 3)           // None
+```
+
+The WGSL twin returns a struct in place of the `Option`, and the two are bit-equal.
+
+```wgsl
+struct IndexDraw { index: u32, accepted: bool }
+fn index_from_bits(bits: u32, n: u32) -> IndexDraw
+```
+
+See also: [`next_index`](#next_index), [`mul_wide`](#mul_wide).
+
 ### `next_index`
 
 ```rust
@@ -466,16 +491,30 @@ next_index(&mut rng, 1)    // 0
 ```
 
 Every result is equally likely for any `n`.
-The draw multiplies a fresh word by `n` and keeps the top 32 bits (Lemire's method), then redraws the few words that would favour some results over the rest.
-A plain `next_bits(rng) % n` favours the low results.
+Each word goes through [`index_from_bits`](#index_from_bits), and a rejected word is redrawn.
+A plain `next_bits(rng) % n` favours the low results, and a [`random_float`](#random_float) scaled by `n` resolves only 2^24 values.
 
-Unlike [`next_float`](#next_float), it has no pure form taking a raw word.
-A rejected word needs another draw from the generator.
+```wgsl
+fn next_index(r: ptr<function, u32>, n: u32) -> u32
+```
 
-Rust only.
-The redraw needs a 64-bit product, and WGSL has none.
+The two backends draw from different streams, since the generators differ.
 
 See also: [`next_bits`](#next_bits), [`next_float`](#next_float).
+
+### `mul_wide`
+
+```wgsl
+fn mul_wide(a: u32, b: u32) -> vec2<u32>
+```
+
+The 64-bit product `a * b` as its `(low, high)` words, built from 16-bit halves.
+WGSL has no 64-bit integers, and [`index_from_bits`](#index_from_bits) needs both halves of the product.
+
+WGSL only.
+Rust multiplies in `u64`.
+
+See also: [`index_from_bits`](#index_from_bits).
 
 ### `below`
 
