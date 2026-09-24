@@ -250,7 +250,7 @@ fn register_gpu_virus_network(ctx: &GpuContext) -> ModelEntry {
         description: gpu_virus::DESCRIPTION.to_owned(),
         param_descriptors: gpu_virus::param_descriptors(),
         stat_descriptors: VirusNetwork::STATS.to_vec(),
-        action_descriptors: Vec::new(),
+        action_descriptors: VirusNetwork::ACTIONS.to_vec(),
         topology_hint: TopologyHint::NETWORK,
         metadata: ModelMetadata {
             backend: Backend::Gpu,

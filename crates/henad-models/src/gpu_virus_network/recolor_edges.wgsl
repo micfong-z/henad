@@ -2,7 +2,7 @@
 
 #import shared::prelude::linear_index
 #import shared::graph::Edge
-#import gpu_virus_network::node_state::RESISTANT
+#import gpu_virus_network::node_state::{RESISTANT, STATE_BITS, STATES_PER_WORD}
 
 struct EdgeColorParams {
     num_edges: u32,
@@ -12,9 +12,13 @@ struct EdgeColorParams {
     blocked: u32,
 }
 
-@group(0) @binding(0) var<storage, read>       state: array<u32>;
+@group(0) @binding(0) var<storage, read>       state_bits: array<u32>;
 @group(0) @binding(1) var<storage, read_write> edges: array<Edge>;
 @group(0) @binding(2) var<uniform>             params: EdgeColorParams;
+
+fn state_of(i: u32) -> u32 {
+    return (state_bits[i / STATES_PER_WORD] >> (STATE_BITS * (i % STATES_PER_WORD))) & 3u;
+}
 
 @compute
 @workgroup_size(256)
@@ -28,6 +32,6 @@ fn main(
     }
 
     let edge = edges[e];
-    let blocked = state[edge.src] == RESISTANT || state[edge.dst] == RESISTANT;
+    let blocked = state_of(edge.src) == RESISTANT || state_of(edge.dst) == RESISTANT;
     edges[e].color = select(params.open, params.blocked, blocked);
 }

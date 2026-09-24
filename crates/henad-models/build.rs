@@ -27,6 +27,8 @@ const ENTRY_POINTS: &[&str] = &[
     "gpu_virus_network/step.wgsl",
     "gpu_virus_network/recolor_nodes.wgsl",
     "gpu_virus_network/recolor_edges.wgsl",
+    "gpu_virus_network/rewire.wgsl",
+    "gpu_virus_network/pack.wgsl",
 ];
 // --8<-- [end:entry_points]
 

@@ -18,6 +18,7 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
 pub use crate::virus_network::lanes::{VirusChunk, VirusLanes, VirusRead};
+pub(crate) use crate::virus_network::wiring::REWIRE_TRIES;
 
 // Node states, which are also indices into `PALETTE`.
 pub const SUSCEPTIBLE: u8 = 0;
@@ -89,7 +90,7 @@ pub struct VirusParams {
     pub(crate) recovery_chance: f32,
     pub(crate) resistance_chance: f32,
     directed: bool,
-    keep_rewiring: bool,
+    pub(crate) keep_rewiring: bool,
 }
 
 /// Returns the colour of an edge between nodes in states `a` and `b`.

@@ -2,6 +2,8 @@
 //!
 //! The GPU draws from its own streams after tick 0, so every check past the first tick is statistical or an invariant.
 
+use std::collections::HashSet;
+
 use henad_compute::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
 use henad_compute::gpu::{GpuContext, GpuSimState as _, MAX_STEPS_PER_SUBMISSION};
 use henad_core::authoring::model::network_model::Nodes;
@@ -68,6 +70,11 @@ fn busy(directed: bool) -> Vec<(&'static str, ParamValue)> {
     ]
 }
 
+/// [`busy`], rewiring an edge every tick if `rewiring` is set.
+fn busy_rewiring(directed: bool, rewiring: bool) -> Vec<(&'static str, ParamValue)> {
+    [busy(directed), vec![("keep_rewiring", Bool(rewiring))]].concat()
+}
+
 /// Steps `ticks` ticks, one submission per entry of `batches`.
 fn run_batches(ctx: &GpuContext, state: &mut GpuVirusNetwork, batches: &[u32]) {
     for &count in batches {
@@ -108,9 +115,14 @@ fn states(state: &GpuVirusNetwork) -> Vec<u8> {
     state.read_states().into_iter().map(|s| s as u8).collect()
 }
 
-/// Everything a tick decides. The edges stay fixed without rewiring.
-fn outcome(state: &GpuVirusNetwork) -> (Vec<u32>, Vec<u32>) {
-    (state.read_states(), state.read_timers())
+/// Everything a tick decides, apart from edge colours, which only a publish paints.
+fn outcome(state: &GpuVirusNetwork) -> (Vec<u32>, Vec<u32>, Vec<[u32; 2]>) {
+    let edges = state
+        .read_edges()
+        .into_iter()
+        .map(|[source, dest, _]| [source, dest])
+        .collect();
+    (state.read_states(), state.read_timers(), edges)
 }
 
 fn band(expected: f64, trials: u64) -> f64 {
@@ -235,12 +247,16 @@ fn a_run_replays_bit_for_bit() {
     let Some(ctx) = context() else {
         return;
     };
-    for directed in [false, true] {
-        let mut first = build(&ctx, &busy(directed));
-        let mut second = build(&ctx, &busy(directed));
+    for (directed, rewiring) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut first = build(&ctx, &busy_rewiring(directed, rewiring));
+        let mut second = build(&ctx, &busy_rewiring(directed, rewiring));
         run(&ctx, &mut first, 100);
         run(&ctx, &mut second, 100);
-        assert_eq!(outcome(&first), outcome(&second), "directed={directed}");
+        assert_eq!(
+            outcome(&first),
+            outcome(&second),
+            "directed={directed} rewiring={rewiring}"
+        );
     }
 }
 
@@ -250,18 +266,19 @@ fn results_do_not_depend_on_how_steps_are_batched() {
     let Some(ctx) = context() else {
         return;
     };
-    for directed in [false, true] {
+    for (directed, rewiring) in [(false, false), (true, false), (false, true), (true, true)] {
+        let what = format!("directed={directed} rewiring={rewiring}");
         let outcomes: Vec<_> = [vec![64, 36], vec![1, 63, 36], [vec![7; 14], vec![2]].concat()]
             .iter()
             .map(|batches| {
-                let mut state = build(&ctx, &busy(directed));
+                let mut state = build(&ctx, &busy_rewiring(directed, rewiring));
                 run_batches(&ctx, &mut state, batches);
                 assert_eq!(state.tick(), 100);
                 outcome(&state)
             })
             .collect();
-        assert_eq!(outcomes[0], outcomes[1], "directed={directed}: 64+36 against 1+63+36");
-        assert_eq!(outcomes[0], outcomes[2], "directed={directed}: 64+36 against sevens");
+        assert_eq!(outcomes[0], outcomes[1], "{what}: 64+36 against 1+63+36");
+        assert_eq!(outcomes[0], outcomes[2], "{what}: 64+36 against sevens");
     }
 }
 
@@ -271,15 +288,33 @@ fn results_do_not_depend_on_the_publish_cadence() {
     let Some(ctx) = context() else {
         return;
     };
-    for directed in [false, true] {
-        let mut every = build(&ctx, &busy(directed));
-        let mut never = build(&ctx, &busy(directed));
+    for (directed, rewiring) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut every = build(&ctx, &busy_rewiring(directed, rewiring));
+        let mut never = build(&ctx, &busy_rewiring(directed, rewiring));
         for _ in 0..60 {
             run(&ctx, &mut every, 1);
             counts(&ctx, &mut every);
         }
         run(&ctx, &mut never, 60);
-        assert_eq!(outcome(&every), outcome(&never), "directed={directed}");
+        assert_eq!(
+            outcome(&every),
+            outcome(&never),
+            "directed={directed} rewiring={rewiring}"
+        );
+    }
+}
+
+/// The node pass reads every state from the packed copy, which must hold what the states say after each tick.
+#[test]
+fn the_packed_states_follow_the_states() {
+    let Some(ctx) = context() else {
+        return;
+    };
+    // An odd count, so the last word is only partly used.
+    let mut state = build(&ctx, &[busy(false), vec![("num_agents", U32(6_007))]].concat());
+    for tick in 0..40 {
+        assert_eq!(state.read_state_bits(), state.read_states(), "tick {tick}");
+        run(&ctx, &mut state, 1);
     }
 }
 
@@ -312,7 +347,11 @@ fn a_publish_paints_nodes_and_edges_from_the_states() {
     for directed in [false, true] {
         let mut state = build(
             &ctx,
-            &[busy(directed), vec![("gain_resistance_chance", F32(0.5))]].concat(),
+            &[
+                busy_rewiring(directed, true),
+                vec![("gain_resistance_chance", F32(0.5))],
+            ]
+            .concat(),
         );
         run(&ctx, &mut state, 80);
         counts(&ctx, &mut state);
@@ -651,19 +690,232 @@ fn clear_edges(nodes: &mut Nodes<'_, VirusNetwork>) {
     }
 }
 
-/// A single node, and two nodes with no edge between them, build and step with empty rows.
+/// A single node, and two nodes with no edge between them, build, step and rewire with empty rows.
 #[test]
-fn a_graph_without_edges_steps() {
+fn a_graph_without_edges_steps_and_rewires() {
     let Some(ctx) = context() else {
         return;
     };
-    let mut single = build(&ctx, &[("num_agents", U32(1)), ("initial_outbreak_size", U32(1))]);
+    let mut single = build(
+        &ctx,
+        &[
+            ("num_agents", U32(1)),
+            ("initial_outbreak_size", U32(1)),
+            ("keep_rewiring", Bool(true)),
+        ],
+    );
     run(&ctx, &mut single, 10);
+    assert!(single.act(0), "Rewire a link was refused");
     assert_eq!(counts(&ctx, &mut single).iter().sum::<u64>(), 1);
 
-    let values = params(&[("num_agents", U32(2)), ("network", Choice(GEOMETRIC))]);
+    let values = params(&[
+        ("num_agents", U32(2)),
+        ("network", Choice(GEOMETRIC)),
+        ("keep_rewiring", Bool(true)),
+    ]);
     let mut pair = GpuVirusNetwork::from_graph(&ctx, &values, Some(SEED), |nodes, _extent| clear_edges(nodes));
     assert!(pair.read_edges().is_empty());
     run(&ctx, &mut pair, 10);
+    assert!(pair.act(0), "Rewire a link was refused");
+    assert!(pair.read_edges().is_empty(), "a rewire made an edge from nothing");
     assert_eq!(counts(&ctx, &mut pair).iter().sum::<u64>(), 2);
+}
+
+/// Returns the unordered pairs in the edge list, after checking that none repeats and none is a loop.
+fn simple_pairs(edges: &[[u32; 3]]) -> HashSet<(u32, u32)> {
+    let mut pairs = HashSet::new();
+    for &[a, b, _] in edges {
+        assert_ne!(a, b, "a self loop");
+        assert!(pairs.insert((a.min(b), a.max(b))), "{a} and {b} are joined twice");
+    }
+    pairs
+}
+
+/// Compares every row with the rows the edge list implies, as multisets.
+fn assert_rows_follow_the_edge_list(state: &GpuVirusNetwork, directed: bool, what: &str) {
+    let (row_start, entries) = state.read_rows();
+    let nodes = (row_start.len() - 1) / 2;
+    let mut expected = vec![Vec::new(); 2 * nodes];
+    for [source, dest, _] in state.read_edges() {
+        expected[2 * dest as usize].push(source);
+        expected[2 * source as usize + usize::from(directed)].push(dest);
+    }
+    for (k, wanted) in expected.iter().enumerate() {
+        let row = &entries[row_start[k] as usize..row_start[k + 1] as usize];
+        assert_eq!(sorted(row), sorted(wanted), "{what}: row {k}");
+    }
+}
+
+#[test]
+fn rewiring_keeps_the_edge_count_and_the_graph_simple() {
+    let Some(ctx) = context() else {
+        return;
+    };
+    for directed in [false, true] {
+        let mut state = build(
+            &ctx,
+            &[
+                ("num_agents", U32(2_000)),
+                ("directed", Bool(directed)),
+                ("keep_rewiring", Bool(true)),
+            ],
+        );
+        let before = simple_pairs(&state.read_edges());
+        let edges = before.len();
+
+        for _ in 0..3_000 {
+            assert!(state.act(0), "Rewire a link was refused");
+        }
+        run(&ctx, &mut state, 200);
+        let listed = state.read_edges();
+        assert_eq!(listed.len(), edges, "directed={directed}: rewiring changed the count");
+        assert_rows_follow_the_edge_list(&state, directed, &format!("directed={directed}"));
+
+        // Each rewire moves a uniformly chosen edge, so an original edge survives with probability (1 - 1/m)^3200.
+        let after = simple_pairs(&listed);
+        let kept = before.intersection(&after).count() as f64 / edges as f64;
+        let expected = (1.0 - 1.0 / edges as f64).powi(3_200);
+        assert!(
+            (kept - expected).abs() < 0.05,
+            "directed={directed}: {kept} of the edges stayed put, expected about {expected}"
+        );
+    }
+}
+
+/// One press removes one pair and adds one the graph did not have.
+#[test]
+fn a_press_moves_exactly_one_edge() {
+    let Some(ctx) = context() else {
+        return;
+    };
+    for directed in [false, true] {
+        let mut state = build(&ctx, &[("num_agents", U32(2_000)), ("directed", Bool(directed))]);
+        for press in 0..20 {
+            let what = format!("directed={directed} press {press}");
+            let listed_before = state.read_edges();
+            assert!(state.act(0), "Rewire a link was refused");
+            let listed_after = state.read_edges();
+            let (before, after) = (simple_pairs(&listed_before), simple_pairs(&listed_after));
+            assert_eq!(
+                before.difference(&after).count(),
+                1,
+                "{what}: removed other than one pair"
+            );
+            assert_eq!(
+                after.difference(&before).count(),
+                1,
+                "{what}: added other than one pair"
+            );
+            assert_rows_follow_the_edge_list(&state, directed, &what);
+
+            // The CPU's order, `remove_edge` then `add_edge`: the last edge fills the removed slot and the new edge
+            // goes last.
+            let pair = |[a, b, _]: [u32; 3]| (a.min(b), a.max(b));
+            let last = listed_before.len() - 1;
+            let removed = (0..listed_before.len())
+                .find(|&e| !after.contains(&pair(listed_before[e])))
+                .expect("one pair was removed");
+            assert!(
+                !before.contains(&pair(listed_after[last])),
+                "{what}: the new edge is not last"
+            );
+            for e in 0..last {
+                let wanted = if e == removed {
+                    listed_before[last]
+                } else {
+                    listed_before[e]
+                };
+                assert_eq!(pair(listed_after[e]), pair(wanted), "{what}: edge {e} moved");
+            }
+        }
+    }
+}
+
+/// The action's RNG word lives on the GPU, so two presses in one encoder draw twice, as two submissions do.
+#[test]
+fn two_presses_in_one_encoder_match_two_submissions() {
+    let Some(ctx) = context() else {
+        return;
+    };
+    let mut apart = build(&ctx, &busy(false));
+    let mut together = build(&ctx, &busy(false));
+    assert!(apart.act(0) && apart.act(0));
+
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    assert!(together.encode_action(&mut encoder, 0) && together.encode_action(&mut encoder, 0));
+    ctx.queue.submit(Some(encoder.finish()));
+
+    assert_eq!(outcome(&apart), outcome(&together));
+    assert_ne!(
+        outcome(&apart).2,
+        outcome(&build(&ctx, &busy(false))).2,
+        "the presses moved nothing"
+    );
+    assert!(!apart.act(1), "an action past the one declared was accepted");
+}
+
+/// Rewiring adds a rewire and a rows rebuild to every step, and a full submission of them must still run.
+#[test]
+fn a_full_submission_of_rewiring_steps_executes() {
+    let Some(ctx) = context() else {
+        return;
+    };
+    // A `2n + 1` row table past 256² entries needs three scan levels, the longest rebuild.
+    let nodes = 50_000;
+    let mut state = build(
+        &ctx,
+        &[
+            ("num_agents", U32(nodes)),
+            ("initial_outbreak_size", U32(nodes / 10)),
+            ("keep_rewiring", Bool(true)),
+        ],
+    );
+    let before = simple_pairs(&state.read_edges());
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    state.encode_steps(&mut encoder, MAX_STEPS_PER_SUBMISSION, None);
+    state.encode_snapshot_passes(&mut encoder);
+    ctx.queue.submit(Some(encoder.finish()));
+    state.begin_stats_readback();
+    state.poll_stats_readback(&ctx.device, true);
+
+    let total: f64 = state.stats().iter().map(|stat| stat.value.scalar()).sum();
+    assert_eq!(
+        total,
+        f64::from(nodes),
+        "the submission was dropped, or a node went uncounted"
+    );
+    let moved = before.difference(&simple_pairs(&state.read_edges())).count();
+    assert!(
+        moved > (MAX_STEPS_PER_SUBMISSION / 2) as usize,
+        "only {moved} edges moved over {MAX_STEPS_PER_SUBMISSION} rewiring steps"
+    );
+    assert_rows_follow_the_edge_list(&state, false, "after a full submission");
+}
+
+/// Each rewire draws from a word of its own, and advances only that word.
+#[test]
+fn each_rewire_advances_only_its_own_stream() {
+    let Some(ctx) = context() else {
+        return;
+    };
+    let mut state = build(&ctx, &busy_rewiring(false, true));
+    let [tick, action] = state.read_streams();
+    assert_ne!(tick, action, "the two streams start on the same word");
+
+    assert!(state.act(0));
+    let [tick_after_press, action_after_press] = state.read_streams();
+    assert_eq!(tick_after_press, tick, "a press drew from the tick's stream");
+    assert_ne!(action_after_press, action, "a press left its own stream where it was");
+
+    run(&ctx, &mut state, 1);
+    let [tick_after_step, action_after_step] = state.read_streams();
+    assert_ne!(tick_after_step, tick, "a rewiring tick left its stream where it was");
+    assert_eq!(
+        action_after_step, action_after_press,
+        "a tick drew from the action's stream"
+    );
 }

@@ -16,7 +16,7 @@ const PAIR_CHUNK: usize = 4096;
 /// Number of draws a rewire makes before giving up.
 ///
 /// A nearly complete graph has almost nowhere to move an edge to.
-const REWIRE_TRIES: u32 = 64;
+pub(crate) const REWIRE_TRIES: u32 = 64;
 
 /// Draws two distinct nodes uniformly at random.
 fn random_pair(n: u32, rng: &mut u64) -> (u32, u32) {

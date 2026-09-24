@@ -65,7 +65,7 @@ pub enum Structure {
     },
     GpuNetwork {
         buffers: &'static [&'static str],
-        /// Passes a step runs, in order.
+        /// Passes a step can run, in order.
         passes: &'static [&'static str],
         /// Edge colours, packed into the edge list by a shader.
         edge_palette: &'static [[u8; 4]],

@@ -103,6 +103,7 @@ nav = [
             { "#26, 2026-09-09" = "developing/agent-record/20260909-26-model-metadata.md" },
             { "#27, 2026-09-09" = "developing/agent-record/20260909-27-result-export.md" },
             { "#28, 2026-09-21" = "developing/agent-record/20260921-28-network-models.md" },
+            { "#29, 2026-09-24" = "developing/agent-record/20260924-29-gpu-virus-network.md" },
         ] },
     ] },
 ]
