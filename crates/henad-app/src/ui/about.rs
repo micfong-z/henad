@@ -55,11 +55,11 @@ pub fn about_modal(ctx: &Context, app: &mut AppState) {
                     });
 
                     ui.add_space(12.0);
-                    kv_grid(ui, "about_grid").show(ui, |ui| {
+                    kv_grid(ui, "about_grid").show(ui, |ui, rows| {
                         for (label, value) in &info {
                             ui.label(*label);
                             ui.add(Label::new(value).selectable(true));
-                            ui.end_row();
+                            rows.end_row(ui);
                         }
                     });
                 });

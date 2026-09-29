@@ -51,6 +51,8 @@ pub enum FaultKind {
     },
     /// The host refused to build the model, usually because it is not compatible with the device.
     Refused(String),
+    /// A failed wait for the GPU to finish its submitted work.
+    Poll(wgpu::PollError),
 }
 
 impl Fault {
@@ -66,6 +68,11 @@ impl Fault {
             during,
             kind: FaultKind::Refused(message.into()),
         }
+    }
+
+    /// Returns whether the device ran out of memory.
+    pub fn is_out_of_memory(&self) -> bool {
+        matches!(self.kind, FaultKind::Device(wgpu::Error::OutOfMemory { .. }))
     }
 }
 
@@ -85,6 +92,7 @@ impl fmt::Display for Fault {
                 write!(f, "the simulation panicked: {message}")
             }
             FaultKind::Refused(message) => write!(f, "{message}"),
+            FaultKind::Poll(error) => write!(f, "the GPU failed to finish the submitted work: {error}"),
         }
     }
 }
@@ -93,6 +101,7 @@ impl std::error::Error for Fault {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.kind {
             FaultKind::Device(error) => Some(error),
+            FaultKind::Poll(error) => Some(error),
             FaultKind::Panic { .. } | FaultKind::Refused(_) => None,
         }
     }
@@ -199,7 +208,7 @@ impl fmt::Debug for FaultSink {
 
 #[cfg(test)]
 mod tests {
-    use super::{Fault, FaultKind, FaultSink, catching, install_panic_hook};
+    use super::{Fault, FaultKind, FaultSink, STEPPING, catching, install_panic_hook};
 
     fn panic_message(fault: &Fault) -> &str {
         match &fault.kind {
@@ -279,6 +288,44 @@ mod tests {
             panic!("expected a panic fault");
         };
         assert!(location.is_some(), "the second panic lost its own location");
+    }
+
+    #[test]
+    fn a_failed_wait_names_the_unfinished_work() {
+        let fault = Fault {
+            during: STEPPING,
+            kind: FaultKind::Poll(wgpu::PollError::Timeout),
+        };
+        let shown = fault.to_string();
+        assert!(
+            shown.starts_with("while stepping the simulation, the GPU failed to finish the submitted work: "),
+            "{shown}"
+        );
+        assert!(
+            std::error::Error::source(&fault).is_some(),
+            "the poll error is the source"
+        );
+    }
+
+    #[test]
+    fn only_a_device_out_of_memory_error_is_out_of_memory() {
+        let out_of_memory = Fault::device(
+            STEPPING,
+            wgpu::Error::OutOfMemory {
+                source: Box::new(std::fmt::Error),
+            },
+        );
+        assert!(out_of_memory.is_out_of_memory());
+
+        let validation = Fault::device(
+            STEPPING,
+            wgpu::Error::Validation {
+                source: Box::new(std::fmt::Error),
+                description: "a validation error".to_owned(),
+            },
+        );
+        assert!(!validation.is_out_of_memory());
+        assert!(!Fault::refused(STEPPING, "too large").is_out_of_memory());
     }
 
     /// A device error cascades. Only the first fault is worth reporting.

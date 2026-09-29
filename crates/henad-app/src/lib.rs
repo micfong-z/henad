@@ -33,8 +33,9 @@ pub use crate::init::wgpu_configuration;
 
 use crate::sim_runner::SimRunner;
 use crate::state::AppState;
-use crate::ui::dock::{Tab, default_dock_state};
+use crate::ui::dock::{Tab, default_dock_state, focus_tab};
 use henad_compute::fault::{FaultSink, install_panic_hook};
+use henad_compute::runner::CAN_SPAWN_THREADS;
 use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
 /// Re-exported so wasm-bindgen emits the worker glue `wasm_bindgen_rayon` builds its pool from.
 #[cfg(target_arch = "wasm32")]
@@ -56,6 +57,9 @@ pub fn requested_threads(search: &str, available: usize) -> usize {
 }
 
 use crate::state::FrameTimings;
+
+/// Longest time between two repaints while a sweep runs on a thread of its own.
+const SWEEP_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub struct HenadApp {
     dock: DockState<Tab>,
@@ -99,6 +103,13 @@ impl HenadApp {
             ),
         }
     }
+
+    /// Reads the results a sweep wrote to `folder`, and shows them in the Results tab once read.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_results(&mut self, folder: std::path::PathBuf) {
+        ui::results::open_folder(&mut self.state, folder);
+        self.state.focus_request = Some(Tab::Results);
+    }
 }
 
 impl eframe::App for HenadApp {
@@ -108,10 +119,20 @@ impl eframe::App for HenadApp {
         if let Some(thread) = &mut self.state.sim_thread {
             thread.update(dt);
         }
+        ui::sweep::update(&mut self.state, dt);
 
         // --- Poll snapshot from sim thread ---
         let fresh = self.state.sim_thread.as_mut().and_then(SimRunner::take_snapshot);
         if let Some(snap) = fresh {
+            // The loop can be past the target by the time it handles `RunTo`, and then pauses where it is. A second
+            // run to the target sees this snapshot's tick, rebuilds, and stops there.
+            let passed_target = self
+                .state
+                .run_to_target
+                .filter(|&target| snap.tick > target && self.state.selection_is_loaded());
+            if self.state.run_to_target.is_some_and(|target| snap.tick >= target) {
+                self.state.run_to_target = None;
+            }
             // A publish at the newest row's tick replaces that row. After an action it carries the
             // action's effect, and after a paused layout step the same stats again.
             if let Some(history) = &mut self.state.stats_history {
@@ -124,18 +145,33 @@ impl eframe::App for HenadApp {
             {
                 thread.recycle(previous);
             }
+            if let Some(target) = passed_target {
+                self.state.run_to(target);
+            }
         }
 
         if let Some(fault) = self.state.render_ctx.faults.take() {
+            // A sweep's GPU work shares the device, and its uncaught errors land here too.
+            self.state.sweep.pause_after_gpu_fault();
             self.state.report_fault(fault);
         }
 
         self.state.poll_saves();
+        self.state.poll_opens();
+        ui::results::poll(&mut self.state);
         self.state.poll_capture();
 
-        // Request continuous repaint while running.
-        if self.state.sim_running {
+        // Request continuous repaint while running. A run to a tick wakes the UI on each publish, and needs the
+        // repaint only where the frame steps the sim.
+        let frame_drives_sim = !CAN_SPAWN_THREADS;
+        if self.state.sim_running || (frame_drives_sim && self.state.run_to_target.is_some()) {
             ctx.request_repaint_after(std::time::Duration::ZERO);
+        }
+        // A sweep wakes the UI on each finished run. Between runs only the clock and the ticks move.
+        if frame_drives_sim && self.state.sweep.is_stepping() {
+            ctx.request_repaint_after(std::time::Duration::ZERO);
+        } else if self.state.sweep.is_running() {
+            ctx.request_repaint_after(SWEEP_REPAINT_INTERVAL);
         }
     }
 
@@ -147,12 +183,22 @@ impl eframe::App for HenadApp {
         ui::fault::fault_modal(ui.ctx(), &mut self.state);
         ui::about::about_modal(ui.ctx(), &mut self.state);
 
-        let dock_style = Style::from_egui(ui.style());
+        let mut dock_style = Style::from_egui(ui.style());
+        // `from_egui` adds 2 to the widget radius for the tab bar's top corners.
+        dock_style.tab_bar.corner_radius = egui::CornerRadius::ZERO;
+        // `egui_dock` draws an overflowing tab bar's scroll bar as a pill. The wheel still scrolls the bar without it.
+        dock_style.tab_bar.show_scroll_bar_on_overflow = false;
         DockArea::new(&mut self.dock)
             .style(dock_style)
             .show_close_buttons(true)
             .show_leaf_close_all_buttons(true)
             .show_inside(ui, &mut self.state);
+
+        // Applied after the dock has drawn. The panels draw while it is borrowed.
+        if let Some(tab) = self.state.focus_request.take() {
+            focus_tab(&mut self.dock, tab);
+            ui.ctx().request_repaint();
+        }
 
         // The viewport tab times itself. Whatever is left over is UI.
         let total_ms = frame_start.elapsed().as_secs_f64() * 1000.0;

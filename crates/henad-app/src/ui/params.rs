@@ -1,11 +1,24 @@
 //! Parameter widgets generated from the model's `ParamDescriptor`s.
 
-use crate::icons::material_design_icons::{MDI_ALERT, MDI_INFORMATION, MDI_RESTART};
+use std::num::ParseIntError;
+
+use crate::icons::material_design_icons::{
+    MDI_ALERT, MDI_DELETE_OUTLINE, MDI_DICE_5, MDI_INFORMATION, MDI_PLUS, MDI_RESTART,
+};
 use crate::state::AppState;
 use crate::ui::banner;
 use henad_compute::cpu::sim_thread::SimCommand;
-use henad_core::action::ActionDescriptor;
+use henad_core::action::{ActionDescriptor, Schedule, Scheduled};
+use henad_core::authoring::primitives::rng::mix_seed;
+use henad_core::explore::value::format_value;
 use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+use web_time::{SystemTime, UNIX_EPOCH};
+
+/// Line shown under the Seed field while its text is not a seed.
+pub const INVALID_SEED: &str = "Seed must be an integer from 0 to 18446744073709551615.";
+
+/// Space between the Seed field's frame and its text, egui's default for a text field.
+const SEED_FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(4, 2);
 
 pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let descriptors: Vec<_> = app
@@ -14,15 +27,18 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
         .map(|m| m.param_descriptors.clone())
         .unwrap_or_default();
 
-    if descriptors.is_empty() {
-        ui.label("This model has no parameters.");
-        actions_ui(ui, app);
-        return;
-    }
-
     // Before the sliders draw: a long slider label widens the region behind it, and the footer
     // would then wrap against that width and be clipped.
     let panel_width = ui.available_width();
+
+    seed_row(ui, app);
+
+    if descriptors.is_empty() {
+        ui.label("This model has no parameters.");
+        actions_ui(ui, app);
+        notice(ui, app, &descriptors, panel_width);
+        return;
+    }
 
     let pending: Vec<bool> = descriptors
         .iter()
@@ -55,14 +71,13 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
         match (&desc.kind, val) {
             (ParamKind::F32 { min, max, step, .. }, ParamValue::F32(v)) => {
-                let mut slider = egui::Slider::new(v, *min..=*max).text(text);
-                if let Some(s) = step {
-                    slider = slider.step_by(f64::from(*s));
-                }
+                let before = *v;
+                let mut slider = f32_slider(v, *min, *max, *step).text(text);
                 if desc.format == ParamFormat::Percent {
                     slider = as_percent(slider, *step);
                 }
-                if with_hint(ui.add(slider), hint).changed() {
+                with_hint(ui.add(slider), hint);
+                if *v != before {
                     param_changed.push((i, ParamValue::F32(*v)));
                 }
             }
@@ -95,6 +110,7 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     }
 
+    let mut sent_live = false;
     for (idx, val) in &param_changed {
         // Reload-only parameters are rejected by the running state anyway, so remember the edit
         // instead of sending it and having the runner complain.
@@ -109,11 +125,89 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 index: *idx,
                 value: val.clone(),
             });
+            sent_live = true;
         }
+    }
+    if sent_live {
+        app.mark_opened_run_modified();
     }
 
     actions_ui(ui, app);
     notice(ui, app, &descriptors, panel_width);
+}
+
+/// Draws the Seed field and its dice button, with an error line while [`parse_seed`] refuses the field's text.
+fn seed_row(ui: &mut egui::Ui, app: &mut AppState) {
+    let pending = app.seed_pending();
+    let hint = if pending {
+        format!("Seed changed. Press {MDI_RESTART}\u{a0}Build to apply.")
+    } else {
+        "Seed for random number generation.".to_owned()
+    };
+    let mut label = egui::RichText::new(format!("Seed {MDI_RESTART}"));
+    if pending {
+        label = label.color(ui.visuals().warn_fg_color);
+    }
+    let width = seed_field_width(ui);
+
+    ui.horizontal(|ui| {
+        let field = egui::TextEdit::singleline(&mut app.seed_text)
+            .hint_text("Default")
+            .margin(SEED_FIELD_MARGIN)
+            .desired_width(width);
+        let field = ui.add(field).on_hover_text(hint.as_str());
+        if field.changed()
+            && let Ok(seed) = parse_seed(&app.seed_text)
+        {
+            app.seed = seed;
+        }
+        if ui.button(MDI_DICE_5).on_hover_text("Generate random seed").clicked() {
+            let seed = draw_seed(app.seed);
+            app.seed = Some(seed);
+            app.seed_text = seed.to_string();
+        }
+        let label = ui.label(label).on_hover_text(hint.as_str());
+        field.labelled_by(label.id);
+    });
+
+    if parse_seed(&app.seed_text).is_err() {
+        ui.colored_label(ui.visuals().error_fg_color, INVALID_SEED);
+    }
+}
+
+/// Returns the width of a Seed field that shows every digit of the largest seed.
+pub(crate) fn seed_field_width(ui: &egui::Ui) -> f32 {
+    let font = egui::FontSelection::Default.resolve(ui.style());
+    let digits = ui.fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap(u64::MAX.to_string(), font, egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    });
+    digits + SEED_FIELD_MARGIN.sum().x + ui.visuals().text_cursor.stroke.width
+}
+
+/// Returns the seed in the Seed field's `text`, `None` for an empty field.
+///
+/// `None` stands for the model's default seed. No number equals it.
+///
+/// # Errors
+///
+/// Returns the parse error for text that is not a whole number from 0 to `u64::MAX`.
+pub fn parse_seed(text: &str) -> Result<Option<u64>, ParseIntError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    text.parse().map(Some)
+}
+
+/// Returns a seed drawn from the clock, mixed with `previous` so two draws in one clock tick differ.
+pub(crate) fn draw_seed(previous: Option<u64>) -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos() as u64);
+    mix_seed(nanos ^ previous.unwrap_or(0))
 }
 
 /// A button per action the model declares, under the parameter widgets.
@@ -154,7 +248,98 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
         && let Some(thread) = &mut app.sim_thread
     {
         thread.send(SimCommand::Act(index));
+        app.mark_opened_run_modified();
     }
+
+    schedule_ui(ui, app, &actions);
+}
+
+/// Draws the actions each build runs at their ticks, with a row to add one.
+fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[ActionDescriptor]) {
+    let pending = app.schedule_pending();
+    let mut heading = egui::RichText::new("Scheduled actions").strong();
+    let hint = if pending {
+        heading = heading.color(ui.visuals().warn_fg_color);
+        format!("Schedule changed. Press {MDI_RESTART}\u{a0}Build to apply.")
+    } else {
+        "Each action runs after the step on the corresponding tick.".to_owned()
+    };
+
+    ui.add_space(4.0);
+    ui.label(heading).on_hover_text(hint);
+
+    let mut removed = None;
+    for (position, entry) in app.schedule.entries().iter().enumerate() {
+        let label = actions
+            .get(entry.index)
+            .map_or(entry.id.as_str(), |action| action.label);
+        ui.horizontal(|ui| {
+            if ui
+                .small_button(MDI_DELETE_OUTLINE)
+                .on_hover_text("Remove action")
+                .clicked()
+            {
+                removed = Some(position);
+            }
+            ui.label(format!("{label} at tick {}", entry.tick));
+        });
+    }
+    if let Some(position) = removed {
+        app.schedule = without_entry(&app.schedule, position);
+    }
+
+    let mut added = false;
+    ui.horizontal(|ui| {
+        let selected = actions.get(app.schedule_action_input).map_or("", |action| action.label);
+        egui::ComboBox::from_id_salt("scheduled_action")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for (index, action) in actions.iter().enumerate() {
+                    ui.selectable_value(&mut app.schedule_action_input, index, action.label);
+                }
+            });
+        let tick_label = ui.label("at tick");
+        ui.add(egui::DragValue::new(&mut app.schedule_tick_input))
+            .labelled_by(tick_label.id);
+        added = ui
+            .button(format!("{MDI_PLUS} Add"))
+            .on_hover_text("Schedule this action at this tick")
+            .clicked();
+    });
+    if added && let Some(action) = actions.get(app.schedule_action_input) {
+        let entry = Scheduled {
+            index: app.schedule_action_input,
+            id: action.id.to_owned(),
+            tick: app.schedule_tick_input,
+        };
+        app.schedule = with_entry(&app.schedule, entry);
+    }
+
+    if !app.schedule.is_empty()
+        && ui
+            .button("Clear schedule")
+            .on_hover_text("Remove all scheduled actions")
+            .clicked()
+    {
+        app.schedule = Schedule::default();
+    }
+}
+
+/// Returns `schedule` with `entry` after every entry due at or before its tick.
+fn with_entry(schedule: &Schedule, entry: Scheduled) -> Schedule {
+    let mut entries = schedule.entries().to_vec();
+    let position = entries.partition_point(|existing| existing.tick <= entry.tick);
+    entries.insert(position, entry);
+    Schedule::from_entries(entries)
+}
+
+/// Returns `schedule` without the entry at `position`.
+fn without_entry(schedule: &Schedule, position: usize) -> Schedule {
+    let mut entries = schedule.entries().to_vec();
+    if position < entries.len() {
+        entries.remove(position);
+    }
+    Schedule::from_entries(entries)
 }
 
 /// True when `index` has been edited to a value the running sim will not pick up on its own.
@@ -175,11 +360,53 @@ fn param_text(ui: &egui::Ui, desc: &ParamDescriptor, pending: bool) -> egui::Ric
     }
 }
 
+/// Returns a slider over `value` from `min` to `max`, snapping to `step`.
+///
+/// Note that the slider snaps `value` only when the user edits it. Drawing it leaves a value set by a spec or an
+/// opened run as it is.
+fn f32_slider(value: &mut f32, min: f32, max: f32, step: Option<f32>) -> egui::Slider<'_> {
+    let range = decimal_value(min)..=decimal_value(max);
+    let slider = egui::Slider::from_get_set(range, move |edited| {
+        if let Some(edited) = edited {
+            *value = edited as f32;
+        }
+        f64::from(*value)
+    })
+    .clamping(egui::SliderClamping::Edits);
+    match step {
+        Some(step) => slider.step_by(decimal_value(step)),
+        None => slider,
+    }
+}
+
+/// Returns `value` as the decimal it is written as.
+///
+/// A slider snaps to multiples of its step in `f64`. A step of `0.01_f32` widened in binary would snap 0.05 to the
+/// `f32` below it.
+fn decimal_value(value: f32) -> f64 {
+    value.to_string().parse().unwrap_or(f64::from(value))
+}
+
+/// Returns `value` as the Parameters panel shows it, a fraction as a percentage.
+pub(crate) fn display_value(descriptor: &ParamDescriptor, value: &ParamValue) -> String {
+    match (&descriptor.kind, value) {
+        (ParamKind::F32 { step, .. }, ParamValue::F32(number)) if descriptor.format == ParamFormat::Percent => {
+            percent_text(f64::from(*number), percent_decimals(*step))
+        }
+        _ => format_value(&descriptor.kind, value),
+    }
+}
+
+/// Returns the fraction `fraction` as a percentage with `decimals` decimals.
+fn percent_text(fraction: f64, decimals: usize) -> String {
+    format!("{:.decimals$}%", fraction * 100.0)
+}
+
 /// Displays a fraction as a percentage.
 fn as_percent(slider: egui::Slider<'_>, step: Option<f32>) -> egui::Slider<'_> {
     let decimals = percent_decimals(step);
     slider
-        .custom_formatter(move |value, _| format!("{:.decimals$}%", value * 100.0))
+        .custom_formatter(move |value, _| percent_text(value, decimals))
         .custom_parser(|text| {
             let number = text.trim().trim_end_matches('%').trim_end();
             number.parse::<f64>().ok().map(|percent| percent / 100.0)
@@ -213,7 +440,9 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
         .iter()
         .enumerate()
         .filter(|(i, desc)| is_pending_reload(app, *i, desc))
-        .count();
+        .count()
+        + usize::from(app.seed_pending())
+        + usize::from(app.schedule_pending());
     let shortfalls = app.selection_shortfalls();
 
     let error = ui.visuals().error_fg_color;
@@ -257,7 +486,7 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
             MDI_ALERT,
             warn,
             "Reload needed",
-            format!("{pending_count} changed parameter{plural} {verb} effect after {MDI_RESTART}\u{a0}Build."),
+            format!("{pending_count} change{plural} {verb} effect after {MDI_RESTART}\u{a0}Build."),
         )
     } else {
         return;
@@ -273,7 +502,187 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
 
 #[cfg(test)]
 mod tests {
-    use super::percent_decimals;
+    use henad_core::action::{Schedule, Scheduled};
+    use henad_core::explore::value::parse_value;
+    use henad_core::params::{ParamKind, ParamValue};
+    use henad_models::registry::model_registry;
+
+    use super::{
+        INVALID_SEED, decimal_value, display_value, f32_slider, parse_seed, percent_decimals, with_entry, without_entry,
+    };
+
+    /// Draws the slider of an F32 parameter of `kind` over `value` for one frame of `context`, focused and pressed
+    /// with `keys`, and returns whether it reports a change.
+    fn draw_slider(context: &egui::Context, kind: &ParamKind, value: &mut f32, keys: &[egui::Key]) -> bool {
+        let ParamKind::F32 { min, max, step, .. } = *kind else {
+            panic!("an F32 parameter");
+        };
+        let events = keys
+            .iter()
+            .map(|&key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+            .collect();
+        let input = egui::RawInput {
+            events,
+            ..egui::RawInput::default()
+        };
+        let mut changed = false;
+        let output = context.run_ui(input, |ui| {
+            let response = ui.add(f32_slider(value, min, max, step));
+            // A request resets the focus lock that keeps the arrow keys on the slider.
+            if !response.has_focus() {
+                response.request_focus();
+            }
+            changed |= response.changed();
+        });
+        output.drop_without_applying_deltas();
+        changed
+    }
+
+    #[test]
+    fn a_slider_leaves_a_value_alone_until_it_is_edited() {
+        let registry = model_registry(None);
+        let sliders = registry.iter().flat_map(|entry| {
+            entry
+                .param_descriptors
+                .iter()
+                .map(move |descriptor| (entry.id.as_str(), descriptor))
+        });
+        let mut checked = 0;
+        for (model, descriptor) in sliders {
+            let ParamKind::F32 {
+                default,
+                min,
+                max,
+                step,
+            } = descriptor.kind
+            else {
+                continue;
+            };
+            let context = egui::Context::default();
+            let mut value = default;
+            for _ in 0..2 {
+                let changed = draw_slider(&context, &descriptor.kind, &mut value, &[]);
+                assert!(!changed, "{model} {}: drawing reports a change", descriptor.id);
+                assert_eq!(value.to_bits(), default.to_bits(), "{model} {}: drawn", descriptor.id);
+            }
+            let Some(step) = step else {
+                continue;
+            };
+            // A step there and back lands on the value it left, when that value is on the slider's grid.
+            let offset = (decimal_value(default) - decimal_value(min)) / decimal_value(step);
+            if (offset - offset.round()).abs() > 1e-9 {
+                continue;
+            }
+            let (there, back) = if default + step <= max {
+                (egui::Key::ArrowRight, egui::Key::ArrowLeft)
+            } else {
+                (egui::Key::ArrowLeft, egui::Key::ArrowRight)
+            };
+            assert!(draw_slider(&context, &descriptor.kind, &mut value, &[there]));
+            assert_ne!(value, default, "{model} {}: the key moves the slider", descriptor.id);
+            assert!(draw_slider(&context, &descriptor.kind, &mut value, &[back]));
+            assert_eq!(
+                value.to_bits(),
+                default.to_bits(),
+                "{model} {}: {value} after a step there and back",
+                descriptor.id
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "no model declares a stepped F32 parameter");
+    }
+
+    #[test]
+    fn a_stepped_value_is_the_one_a_spec_writes() {
+        let registry = model_registry(None);
+        let sir = registry
+            .iter()
+            .find(|entry| entry.id == "sir")
+            .expect("SIR is registered");
+        let descriptor = sir
+            .param_descriptors
+            .iter()
+            .find(|descriptor| descriptor.id == "recovery_rate")
+            .expect("SIR declares a recovery rate");
+        let context = egui::Context::default();
+        let mut value = 0.04;
+        for keys in [&[][..], &[], &[egui::Key::ArrowRight]] {
+            draw_slider(&context, &descriptor.kind, &mut value, keys);
+        }
+        assert_eq!(
+            Ok(ParamValue::F32(value)),
+            parse_value(&descriptor.kind, "0.05"),
+            "0.04 and one step is 0.05"
+        );
+    }
+
+    #[test]
+    fn a_percentage_shows_as_the_panel_writes_it() {
+        let registry = model_registry(None);
+        let sir = registry
+            .iter()
+            .find(|entry| entry.id == "sir")
+            .expect("SIR is registered");
+        let percent = sir
+            .param_descriptors
+            .iter()
+            .find(|descriptor| descriptor.id == "initial_infected_pct")
+            .expect("SIR declares its initially infected share");
+        let rate = sir
+            .param_descriptors
+            .iter()
+            .find(|descriptor| descriptor.id == "infection_rate")
+            .expect("SIR declares an infection rate");
+        assert_eq!(display_value(percent, &ParamValue::F32(0.01)), "1.0%");
+        assert_eq!(display_value(rate, &ParamValue::F32(0.3)), "0.3");
+    }
+
+    #[test]
+    fn an_empty_seed_field_is_the_default_and_anything_else_a_whole_number() {
+        assert_eq!(parse_seed(""), Ok(None), "empty");
+        assert_eq!(parse_seed("  "), Ok(None), "blank");
+        assert_eq!(parse_seed(" 42 "), Ok(Some(42)), "padded");
+        assert_eq!(parse_seed("0"), Ok(Some(0)), "zero parses as seed 0");
+        assert_eq!(parse_seed("18446744073709551615"), Ok(Some(u64::MAX)), "max u64");
+        assert!(parse_seed("-1").is_err(), "negative");
+        assert!(parse_seed("abc").is_err(), "text");
+        assert!(parse_seed("1.5").is_err(), "fraction");
+        assert!(parse_seed("18446744073709551616").is_err(), "overflow");
+        assert!(
+            INVALID_SEED.contains(&u64::MAX.to_string()),
+            "the error names the largest seed"
+        );
+    }
+
+    #[test]
+    fn an_added_action_follows_every_entry_due_at_or_before_its_tick() {
+        let entry = |id: &str, tick| Scheduled {
+            index: 0,
+            id: id.to_owned(),
+            tick,
+        };
+        let ids = |schedule: &Schedule| -> Vec<String> { schedule.entries().iter().map(|e| e.id.clone()).collect() };
+
+        let mut schedule = Schedule::default();
+        for (id, tick) in [("a", 5), ("b", 1), ("c", 5), ("d", 0)] {
+            schedule = with_entry(&schedule, entry(id, tick));
+        }
+        assert_eq!(ids(&schedule), ["d", "b", "a", "c"], "by tick, then in the order added");
+
+        let schedule = without_entry(&schedule, 1);
+        assert_eq!(ids(&schedule), ["d", "a", "c"]);
+        assert_eq!(
+            without_entry(&schedule, 3),
+            schedule,
+            "a position past the end removes nothing"
+        );
+    }
 
     #[test]
     fn a_percentage_shows_as_many_decimals_as_its_step_needs() {

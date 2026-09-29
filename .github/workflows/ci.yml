@@ -41,7 +41,7 @@ jobs:
       # out because `wasm-bindgen-rayon` refuses to compile without them, and the `web` job builds
       # it the way it actually ships.
       - name: wasm typecheck
-        run: cargo check --locked -p henad-core -p henad-compute -p henad-models --all-features --lib --target wasm32-unknown-unknown
+        run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-explore --all-features --lib --target wasm32-unknown-unknown
 
       # The release workflow runs this extractor on a tag push, where a parsing bug would surface
       # at the worst possible moment.

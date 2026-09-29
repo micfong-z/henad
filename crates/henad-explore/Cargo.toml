@@ -1,0 +1,29 @@
+[package]
+name = "henad-explore"
+version.workspace = true
+description = "Henad parameter sweeps and searches."
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+
+[dependencies]
+henad-core = { workspace = true }
+henad-compute = { workspace = true }
+henad-models = { workspace = true }
+wgpu = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+web-time = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = { workspace = true }
+
+[lints]
+workspace = true

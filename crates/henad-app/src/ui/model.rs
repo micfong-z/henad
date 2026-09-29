@@ -1,6 +1,7 @@
 //! Model selection, and what the selected model declares about itself.
 
 use henad_compute::gpu::capacity::Demand;
+use henad_core::action::Schedule;
 use henad_core::helpers::fmt_bytes;
 use henad_core::metadata::{LaneSpec, Structure};
 use henad_core::params::ParamDescriptor;
@@ -9,7 +10,7 @@ use henad_models::registry::ModelEntry;
 
 use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE};
 use crate::state::AppState;
-use crate::ui::kv_grid;
+use crate::ui::{KvGridRows, kv_grid};
 
 pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let model_names: Vec<&str> = app.registry.iter().map(|m| m.name.as_str()).collect();
@@ -29,6 +30,9 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     if changed_model {
         app.load_default_params();
+        // Entries index the previous model's actions.
+        app.schedule = Schedule::default();
+        app.schedule_action_input = 0;
     }
 
     let Some(entry) = app.registry.get(app.selected_model) else {
@@ -52,26 +56,26 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     scroll.show(ui, |ui| {
         section(ui, "Identity");
-        kv_grid(ui, "model_identity_grid").show(ui, |ui| {
-            row(ui, "Id", entry.id.as_str());
-            row(ui, "Backend", entry.metadata.backend.label());
-            row(ui, "Topology", topology_label(entry.topology_hint));
+        kv_grid(ui, "model_identity_grid").show(ui, |ui, rows| {
+            row(ui, rows, "Id", entry.id.as_str());
+            row(ui, rows, "Backend", entry.metadata.backend.label());
+            row(ui, rows, "Topology", topology_label(entry.topology_hint));
         });
 
         ui.add_space(8.0);
         section(ui, "Structure");
-        kv_grid(ui, "model_structure_grid").show(ui, |ui| structure_rows(ui, &entry.metadata.structure));
+        kv_grid(ui, "model_structure_grid").show(ui, |ui, rows| structure_rows(ui, rows, &entry.metadata.structure));
 
         ui.add_space(8.0);
         section(ui, "Interface");
-        kv_grid(ui, "model_interface_grid").show(ui, |ui| interface_rows(ui, entry));
+        kv_grid(ui, "model_interface_grid").show(ui, |ui, rows| interface_rows(ui, rows, entry));
 
         // A CPU model allocates on the host, and the Performance tab already reports that.
         if let Some(demand) = &demand {
             ui.add_space(8.0);
             section(ui, "Footprint");
-            kv_grid(ui, "model_footprint_grid").show(ui, |ui| {
-                footprint_rows(ui, entry.id.as_str(), demand, storage_limit);
+            kv_grid(ui, "model_footprint_grid").show(ui, |ui, rows| {
+                footprint_rows(ui, rows, entry.id.as_str(), demand, storage_limit);
             });
         }
     });
@@ -82,19 +86,19 @@ fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(2.0);
 }
 
-fn row(ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
+fn row(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: impl Into<egui::WidgetText>) {
     ui.label(label);
     ui.label(value);
-    ui.end_row();
+    rows.end_row(ui);
 }
 
 /// A row whose cells both carry the names behind the count they report.
 ///
 /// Both, since a value as short as "7" is barely a pointer wide on its own.
-fn row_listing(ui: &mut egui::Ui, label: &str, value: String, names: &str) {
+fn row_listing(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: String, names: &str) {
     ui.label(label).on_hover_text(names);
     ui.label(value).on_hover_text(names);
-    ui.end_row();
+    rows.end_row(ui);
 }
 
 fn topology_label(hint: TopologyHint) -> &'static str {
@@ -129,7 +133,7 @@ fn count_of(n: usize, flagged: usize, flag: &str) -> String {
 }
 
 /// Shows the lane rows, shared by agent and network models.
-fn lane_rows(ui: &mut egui::Ui, lanes: &[LaneSpec]) {
+fn lane_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, lanes: &[LaneSpec]) {
     let doubled = lanes.iter().filter(|lane| lane.double_buffered).count();
     let names: Vec<String> = lanes
         .iter()
@@ -140,16 +144,17 @@ fn lane_rows(ui: &mut egui::Ui, lanes: &[LaneSpec]) {
         .collect();
     row_listing(
         ui,
+        rows,
         "Lanes",
         count_of(lanes.len(), doubled, "double-buffered"),
         &names.join("\n"),
     );
 }
 
-fn structure_rows(ui: &mut egui::Ui, structure: &Structure) {
+fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structure) {
     match structure {
         Structure::Grid { neighborhood } => {
-            row(ui, "Neighbourhood", neighborhood_label(*neighborhood));
+            row(ui, rows, "Neighbourhood", neighborhood_label(*neighborhood));
         }
         Structure::Agents {
             chunk,
@@ -157,18 +162,18 @@ fn structure_rows(ui: &mut egui::Ui, structure: &Structure) {
             index,
             field,
         } => {
-            lane_rows(ui, lanes);
-            row(ui, "Chunk size", format!("{chunk} agents"));
-            row(ui, "Neighbour index", *index);
-            row(ui, "Field layer", *field);
+            lane_rows(ui, rows, lanes);
+            row(ui, rows, "Chunk size", format!("{chunk} agents"));
+            row(ui, rows, "Neighbour index", *index);
+            row(ui, rows, "Field layer", *field);
         }
         Structure::Network { chunk, lanes, .. } => {
-            lane_rows(ui, lanes);
-            row(ui, "Chunk size", format!("{chunk} nodes"));
+            lane_rows(ui, rows, lanes);
+            row(ui, rows, "Chunk size", format!("{chunk} nodes"));
         }
         Structure::GpuGrid { buffers, workgroup } => {
-            row_listing(ui, "Buffers", buffers.len().to_string(), &buffers.join("\n"));
-            row(ui, "Workgroup", format!("{workgroup} × {workgroup}"));
+            row_listing(ui, rows, "Buffers", buffers.len().to_string(), &buffers.join("\n"));
+            row(ui, rows, "Workgroup", format!("{workgroup} × {workgroup}"));
         }
         Structure::GpuAgents {
             buffers,
@@ -182,31 +187,43 @@ fn structure_rows(ui: &mut egui::Ui, structure: &Structure) {
             let pass_names: Vec<&str> = passes.iter().map(|pass| pass.label).collect();
             row_listing(
                 ui,
+                rows,
                 "Buffers",
                 count_of(buffers.len(), doubled, "double-buffered"),
                 &buffer_names.join("\n"),
             );
-            row_listing(ui, "Step passes", passes.len().to_string(), &pass_names.join("\n"));
-            row(ui, "Neighbour index", if *index { "Spatial hash" } else { "None" });
-            row(ui, "Display pass", yes_no(*display));
+            row_listing(
+                ui,
+                rows,
+                "Step passes",
+                passes.len().to_string(),
+                &pass_names.join("\n"),
+            );
+            row(
+                ui,
+                rows,
+                "Neighbour index",
+                if *index { "Spatial hash" } else { "None" },
+            );
+            row(ui, rows, "Display pass", yes_no(*display));
             if *counters > 0 {
-                row(ui, "Counters", counters.to_string());
+                row(ui, rows, "Counters", counters.to_string());
             }
         }
     }
 }
 
-fn interface_rows(ui: &mut egui::Ui, entry: &ModelEntry) {
+fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) {
     let descs: &[ParamDescriptor] = &entry.param_descriptors;
     let reload = descs.iter().filter(|desc| !desc.is_live()).count();
-    row(ui, "Parameters", count_of(descs.len(), reload, "reload"));
+    row(ui, rows, "Parameters", count_of(descs.len(), reload, "reload"));
 
     ui.label("Statistics");
     ui.horizontal(|ui| {
         ui.label(entry.stat_descriptors.len().to_string());
         swatches(ui, entry.stat_descriptors.iter().map(|stat| stat.color));
     });
-    ui.end_row();
+    rows.end_row(ui);
 
     ui.label("Palette");
     match entry.metadata.palette {
@@ -223,7 +240,7 @@ fn interface_rows(ui: &mut egui::Ui, entry: &ModelEntry) {
             );
         }
     }
-    ui.end_row();
+    rows.end_row(ui);
 
     if let Structure::Network { edge_palette, .. } = &entry.metadata.structure {
         ui.label("Edge palette");
@@ -231,17 +248,18 @@ fn interface_rows(ui: &mut egui::Ui, entry: &ModelEntry) {
             ui.label(edge_palette.len().to_string());
             swatches(ui, edge_palette.iter().copied());
         });
-        ui.end_row();
+        rows.end_row(ui);
     }
 }
 
 /// Expected footprint of the model.
-fn footprint_rows(ui: &mut egui::Ui, id: &str, demand: &Demand, storage_limit: u32) {
-    row(ui, "Expected memory", fmt_bytes(demand.bytes()));
+fn footprint_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, id: &str, demand: &Demand, storage_limit: u32) {
+    row(ui, rows, "Expected memory", fmt_bytes(demand.bytes()));
 
     if let Some(largest) = demand.buffers.iter().max_by_key(|alloc| alloc.bytes) {
         row_listing(
             ui,
+            rows,
             "Largest buffer",
             format!("{}, {}", strip_id(&largest.label, id), fmt_bytes(largest.bytes)),
             &largest.label,
@@ -249,7 +267,7 @@ fn footprint_rows(ui: &mut egui::Ui, id: &str, demand: &Demand, storage_limit: u
     }
 
     if let Some((w, h)) = demand.texture {
-        row(ui, "Display texture", format!("{w} × {h}"));
+        row(ui, rows, "Display texture", format!("{w} × {h}"));
     }
 
     if let Some(widest) = demand.passes.iter().max_by_key(|pass| pass.storage) {
@@ -260,7 +278,7 @@ fn footprint_rows(ui: &mut egui::Ui, id: &str, demand: &Demand, storage_limit: u
             ui.label(widest.storage.to_string()).on_hover_text(&hint);
             ui.weak(format!(" of {storage_limit}")).on_hover_text(&hint);
         });
-        ui.end_row();
+        rows.end_row(ui);
     }
 }
 

@@ -6,8 +6,12 @@
 
 use std::time::Duration;
 
+use henad_compute::gpu::GpuContext;
 use henad_compute::runtime_info::{HostInfo, RuntimeInfo};
 use henad_core::params::{ParamDescriptor, ParamValue};
+use henad_explore::probe::ProbeReport;
+use henad_explore::schema::schema_json;
+use henad_models::registry::ModelEntry;
 use serde_json::{Map, Value, json};
 
 /// Emitted once, before any rep.
@@ -82,7 +86,7 @@ pub fn summary(
     grid_dims: Option<(u32, u32)>,
     descriptors: &[ParamDescriptor],
     params: &[ParamValue],
-    schedule: &crate::actions::Schedule,
+    schedule: &henad_core::action::Schedule,
 ) {
     let mut sorted = samples.to_vec();
     sorted.sort_unstable();
@@ -115,7 +119,7 @@ pub fn summary(
 }
 
 /// The `--act` schedule this run replayed, so a row says what was done to it.
-fn actions_array(schedule: &crate::actions::Schedule) -> Value {
+fn actions_array(schedule: &henad_core::action::Schedule) -> Value {
     Value::Array(
         schedule
             .entries()
@@ -140,6 +144,32 @@ fn params_object(descriptors: &[ParamDescriptor], params: &[ParamValue]) -> Valu
     Value::Object(map)
 }
 
-fn emit(line: &Value) {
+/// Returns the `--params --json` line: the parameters, stats and actions of `entry`.
+///
+/// The line carries `stat_columns` from a build at the defaults, and leaves them out when that build fails.
+pub fn params(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Value {
+    let defaults: Vec<ParamValue> = entry
+        .param_descriptors
+        .iter()
+        .map(|descriptor| descriptor.kind.default_value())
+        .collect();
+    let probe = match ProbeReport::build(entry, gpu, &defaults, None) {
+        Ok(probe) => Some(probe),
+        Err(error) => {
+            let error = anyhow::Error::new(error);
+            eprintln!(
+                "note: '{}' failed to build with default parameters ({error:#}), so stat_columns is omitted",
+                entry.id
+            );
+            None
+        }
+    };
+    let mut line = schema_json(entry, probe.as_ref());
+    line["kind"] = json!("params");
+    line
+}
+
+/// Writes `line` to stdout as one line.
+pub fn emit(line: &Value) {
     println!("{line}");
 }

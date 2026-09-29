@@ -5,7 +5,7 @@
 
 use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
 use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
-use crate::gpu::primitives::readback::CounterReadback;
+use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::shader_bindings::primitives::reduce::ReduceParams;
 
 struct Level {
@@ -152,11 +152,11 @@ impl GpuLaneReduce {
         self.readback.is_pending()
     }
 
-    pub fn poll_readback(&mut self, device: &wgpu::Device, block: bool) {
+    pub fn poll_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
         if block {
-            self.readback.poll_blocking(device);
+            self.readback.poll_blocking(device)
         } else {
-            self.readback.poll(device);
+            self.readback.poll(device)
         }
     }
 

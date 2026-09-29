@@ -17,7 +17,7 @@ use crate::display_scale::display_dims;
 use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
 use crate::gpu::primitives::dispatch::linear_dispatch;
 use crate::gpu::primitives::pipeline::{compute_pipeline, lane_buffer, storage_buffer, uniform_buffer};
-use crate::gpu::primitives::readback::CounterReadback;
+use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::gpu::primitives::reduce::GpuLaneReduce;
 use crate::gpu::primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 use crate::gpu::sim_thread::GpuSimState;
@@ -827,6 +827,10 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
         if let Some((pass, _)) = &self.display {
             pass.encode(encoder, self.current_is_a, None);
         }
+        self.encode_stats_passes(encoder);
+    }
+
+    fn encode_stats_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
         self.reduce_pass.encode(encoder, self.current_is_a, None);
         self.reduce.encode(encoder);
         if let Some(counters) = &mut self.counters {
@@ -841,14 +845,17 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
         }
     }
 
-    fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) {
-        self.reduce.poll_readback(device, block);
-        if let Some(counters) = &mut self.counters {
-            if block {
-                counters.poll_blocking(device);
-            } else {
-                counters.poll(device);
-            }
+    fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
+        let sums_poll = self.reduce.poll_readback(device, block);
+        let counters_poll = match &mut self.counters {
+            Some(readback) if block => readback.poll_blocking(device),
+            Some(readback) => readback.poll(device),
+            None => StatsPoll::Landed,
+        };
+        match (sums_poll, counters_poll) {
+            (StatsPoll::Pending, _) | (_, StatsPoll::Pending) => StatsPoll::Pending,
+            (StatsPoll::Failed, _) | (_, StatsPoll::Failed) => StatsPoll::Failed,
+            (StatsPoll::Landed, StatsPoll::Landed) => StatsPoll::Landed,
         }
     }
 

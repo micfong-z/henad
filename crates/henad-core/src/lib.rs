@@ -5,6 +5,7 @@
 
 pub mod action;
 pub mod authoring;
+pub mod explore;
 pub mod export;
 pub mod grid;
 pub mod helpers;

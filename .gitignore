@@ -22,7 +22,7 @@ CLAUDE.md
 opencode.json
 
 # benchmark
-results
+/results
 .temporary
 
 # reference engine binaries, fetched not committed

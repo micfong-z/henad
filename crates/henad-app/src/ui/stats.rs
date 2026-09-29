@@ -10,7 +10,7 @@ pub fn stats_ui(ui: &mut egui::Ui, app: &mut AppState) {
         return;
     };
 
-    crate::ui::kv_grid(ui, "stats_grid").show(ui, |ui| {
+    crate::ui::kv_grid(ui, "stats_grid").show(ui, |ui, rows| {
         for stat in &snap.stats {
             let [r, g, b, _] = stat.color;
             let color = egui::Color32::from_rgb(r, g, b);
@@ -36,7 +36,7 @@ pub fn stats_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 ui.colored_label(egui::Color32::GRAY, icon).on_hover_text(data_type);
                 ui.colored_label(color, text);
             });
-            ui.end_row();
+            rows.end_row(ui);
         }
     });
 }

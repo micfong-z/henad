@@ -5,10 +5,10 @@
 //! measurement times nothing but `state.step()`.
 //!
 //! Both CPU and GPU models run. GPU support needs a `wgpu::Device`, which `henad-compute` never
-//! creates itself, so this binary acquires one headlessly (see [`acquire_gpu`]) and hands the
+//! creates itself, so this binary acquires one headlessly (see [`acquire_headless`]) and hands the
 //! resulting [`GpuContext`] to [`model_registry`]. Without a device the registry falls back to
 //! CPU-only. GPU stepping does *not* go through `SimState::step()`, which would leave one
-//! unwaited submission per step. See [`run_gpu_steps`].
+//! unwaited submission per step. See [`stepping::run_steps`].
 //!
 //! ```text
 //! henad-cli --list
@@ -18,11 +18,17 @@
 //! henad-cli sir --steps 2000 --export-stats sir.csv --stats-every 10
 //! henad-cli game_of_life --steps 1000 --act clear@500 --export final.txt
 //! henad-cli gpu_game_of_life --set grid_width=4096 --set grid_height=4096 --steps 10000
+//! henad-cli sir --vary infection_rate=0.1:0.5:0.1 --reps 5 --steps 500 --out sir-sweep
+//! henad-cli --spec crates/henad-explore/specs/sir_sweep.toml --out sir-sweep
+//! henad-cli --merge shard-0 shard-1 --out sir-sweep
 //! ```
 //!
 //! Two export paths, deliberately separate: `--export` writes the *final state* (the grid or point
 //! cloud at the end of the run), `--export-stats` writes the *time series* (one row per sampled
 //! tick). Both formats live in `henad_core::export`, which the app writes through too.
+//!
+//! `--out`, `--spec` or `--dry-run` runs a sweep instead, many runs over a grid of parameter values written to a
+//! directory, and `--merge` joins the directories of a sweep's shards. See [`explore`].
 
 #![expect(
     clippy::print_stdout,
@@ -33,34 +39,46 @@
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result, bail, ensure};
-use clap::Parser;
+use anyhow::{Context as _, Result, bail};
+use clap::{ArgGroup, Parser};
 
-use henad_compute::fault::{FaultSink, install_panic_hook};
-use henad_compute::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION};
+use henad_compute::fault::install_panic_hook;
+use henad_compute::gpu::{GpuContext, GpuSimState, stepping};
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
+use henad_core::action::{Fire, Schedule};
+use henad_core::explore::value::{ValueError, parse_overrides, resolve_params};
 use henad_core::export::{StatsWriter, state as state_export};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+use henad_explore::device::acquire_headless;
 use henad_models::registry::{ModelEntry, ModelState, model_registry};
 
-use crate::actions::{BENCH_FIRE, Fire, Schedule};
+use crate::actions::{BENCH_FIRE, note_refused};
+use crate::explore::{ExploreArgs, LoadedSpec};
 use numfmt::{Formatter, Scales};
 
 mod actions;
+mod explore;
 mod json_report;
 
 /// Headless benchmark runner for Henad models.
 #[derive(Parser)]
 #[command(name = "henad-cli", version, about)]
+#[command(group(
+    ArgGroup::new("explore")
+        .args(["out", "spec", "dry_run"])
+        .multiple(true)
+        .conflicts_with_all(["export", "export_stats", "global_warmup"])
+))]
 struct Args {
-    /// Model id to benchmark (see `--list`).
-    #[arg(required_unless_present_any = ["list", "info"])]
+    /// Model id to run (see `--list`). Optional with `--spec`.
+    #[arg(required_unless_present_any = ["list", "info", "spec", "merge"])]
     model: Option<String>,
 
-    /// Steps to run (and time) per rep.
+    /// Steps to run (and time) per rep, or per run of a sweep.
     #[arg(long, default_value_t = 1000)]
     steps: u64,
 
@@ -73,11 +91,12 @@ struct Args {
     #[arg(long = "global-warmup", default_value_t = 0)]
     global_warmup: u64,
 
-    /// RNG seed used.
+    /// RNG seed used. A sweep derives each run's seed from it and uses 0 by default.
     #[arg(long)]
     seed: Option<u64>,
 
-    /// Independent timed runs to collect, each on a freshly created state.
+    /// Independent timed runs to collect, each on a freshly created state. A sweep runs this many replicates of
+    /// each config.
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
     reps: u64,
 
@@ -86,7 +105,8 @@ struct Args {
     set: Vec<String>,
 
     /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable. An unknown id is
-    /// refused, and the error lists the ids the model declares. Each rep replays the same schedule.
+    /// refused, and the error lists the ids the model declares. Each rep and each run of a sweep replays the same
+    /// schedule. A sweep names the action by its id, or `ID_2` for the second `--act` of an id.
     #[arg(long = "act", value_name = "ID@TICK")]
     act: Vec<String>,
 
@@ -99,7 +119,7 @@ struct Args {
     #[arg(long = "export-stats", value_name = "PATH")]
     export_stats: Option<PathBuf>,
 
-    /// Sample stats every N ticks when using `--export-stats`. 1 records every tick.
+    /// Sample stats every N ticks when using `--export-stats` or sweeping. 1 records every tick.
     #[arg(long = "stats-every", default_value_t = 1, value_name = "N")]
     stats_every: u64,
 
@@ -107,8 +127,9 @@ struct Args {
     #[arg(long)]
     list: bool,
 
-    /// Print the model's parameters (the ids `--set` takes, with kinds and defaults) and exit.
-    #[arg(long)]
+    /// Print the model's parameters (the ids `--set` takes, with kinds and defaults) and exit. With `--json`,
+    /// print them as one JSON object with the model's stats and actions.
+    #[arg(long, conflicts_with_all = ["out", "dry_run"])]
     params: bool,
 
     /// Print host and GPU information. With no model given it prints and exits, with one it
@@ -123,12 +144,54 @@ struct Args {
     /// Worker threads for CPU models. 0 leaves rayon's own choice, which is one per logical cpu.
     #[arg(long, default_value_t = 0, value_name = "N")]
     threads: usize,
+
+    #[command(flatten)]
+    explore: ExploreArgs,
 }
 
-fn main() -> Result<()> {
+/// Work one command line asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    List,
+    /// `--merge`. Joins the directories of a sweep's shards, with no model and no device.
+    Merge,
+    /// `--info` with no model. Prints the runtime and exits.
+    InfoOnly,
+    Params,
+    Explore,
+    ExportStats,
+    ExportFinal,
+    Benchmark,
+}
+
+impl Mode {
+    /// Returns the mode of `args`, taking the first that applies in the order the variants are declared.
+    fn of(args: &Args) -> Self {
+        if args.list {
+            Self::List
+        } else if !args.explore.merge.is_empty() {
+            Self::Merge
+        } else if args.info && args.model.is_none() && args.explore.spec.is_none() {
+            Self::InfoOnly
+        } else if args.params {
+            Self::Params
+        } else if args.explore.is_sweep() {
+            Self::Explore
+        } else if args.export_stats.is_some() {
+            Self::ExportStats
+        } else if args.export.is_some() {
+            Self::ExportFinal
+        } else {
+            Self::Benchmark
+        }
+    }
+}
+
+fn main() -> Result<ExitCode> {
     install_panic_hook();
 
     let args = Args::parse();
+    let mode = Mode::of(&args);
 
     // Before anything builds a state. Rayon's global pool is set once per process, and
     // `HostInfo::worker_threads` reads back whatever it ends up with.
@@ -138,10 +201,13 @@ fn main() -> Result<()> {
             .build_global()
             .context("cannot size the worker pool")?;
     }
+    if mode == Mode::Merge {
+        return explore::merge_shards(&args);
+    }
 
     // Best-effort headless GPU: acquire a device so GPU models can be listed and run. If none is
     // available (e.g. CI with no GPU), fall back to a CPU-only registry rather than failing.
-    let (gpu_ctx, runtime) = match acquire_gpu() {
+    let (gpu_ctx, runtime) = match acquire_headless() {
         Ok((ctx, runtime)) => (Some(ctx), Some(runtime)),
         Err(err) => {
             eprintln!("note: no GPU available ({err}); GPU models disabled");
@@ -171,30 +237,49 @@ fn main() -> Result<()> {
 
     let registry = model_registry(gpu_ctx.clone());
 
-    if args.list {
-        print_models(&registry);
-        return Ok(());
+    match mode {
+        Mode::List => {
+            print_models(&registry);
+            return Ok(ExitCode::SUCCESS);
+        }
+        Mode::InfoOnly => return Ok(ExitCode::SUCCESS),
+        _ => {}
     }
 
-    let Some(model_id) = args.model.as_deref() else {
-        if args.info {
-            return Ok(());
+    let spec = args.explore.spec.as_deref().map(LoadedSpec::load).transpose()?;
+    let model_id = match (args.model.as_deref(), spec.as_ref()) {
+        (Some(id), Some(spec)) if id != spec.model() => {
+            bail!("model '{id}' does not match the spec's model '{}'", spec.model())
         }
-        bail!("a model id is required (try --list)");
+        (Some(id), _) => id,
+        (None, Some(spec)) => spec.model(),
+        (None, None) => bail!("a model id is required (try --list)"),
     };
     let entry = registry
         .iter()
         .find(|e| e.id == model_id)
         .with_context(|| format!("unknown model '{model_id}' (try --list)"))?;
 
-    if args.params {
-        print_params(entry);
-        return Ok(());
+    match mode {
+        Mode::Params if args.json => json_report::emit(&json_report::params(entry, gpu_ctx.as_ref())),
+        Mode::Params => print!("{}", params_text(entry)),
+        Mode::Explore => return explore::run(&args, entry, gpu_ctx.as_ref(), runtime.as_ref(), spec),
+        _ => return run_single(entry, &args, mode, gpu_ctx.as_ref(), runtime.as_ref()).map(|()| ExitCode::SUCCESS),
     }
+    Ok(ExitCode::SUCCESS)
+}
 
+/// Runs one configuration of `entry` for `--export-stats`, `--export` or a benchmark, as `mode` says.
+fn run_single(
+    entry: &ModelEntry,
+    args: &Args,
+    mode: Mode,
+    gpu_ctx: Option<&GpuContext>,
+    runtime: Option<&RuntimeInfo>,
+) -> Result<()> {
     let overrides = parse_overrides(&args.set)?;
-    let params = resolve_params(&entry.param_descriptors, &overrides)?;
-    let schedule = Schedule::parse(&args.act, entry)?;
+    let params = resolve_params(&entry.param_descriptors, &overrides).map_err(set_error)?;
+    let schedule = Schedule::parse(&args.act, &entry.id, &entry.action_descriptors)?;
     if let Some(last) = schedule.last_tick()
         && last > args.warmup + args.steps
     {
@@ -206,23 +291,21 @@ fn main() -> Result<()> {
 
     // Ahead of the factory. An over-sized run is then refused by name instead of by whichever
     // binding the device happened to reject first.
-    if let Some(ctx) = gpu_ctx.as_ref() {
+    if let Some(ctx) = gpu_ctx {
         let shortfalls = entry.shortfalls(&params, &ctx.device.limits());
         if !shortfalls.is_empty() {
             bail!("'{}' does not fit this device: {}", entry.id, shortfalls.join("; "));
         }
     }
 
-    if let Some(path) = &args.export_stats {
-        return export_stats(entry, &params, &args, &schedule, path, gpu_ctx.as_ref());
+    match (mode, &args.export_stats, &args.export) {
+        (Mode::ExportStats, Some(path), _) => export_stats(entry, &params, args, &schedule, path, gpu_ctx),
+        (Mode::ExportFinal, _, Some(path)) => export_final(entry, &params, args, &schedule, path),
+        _ => {
+            let adapter = runtime.map(|r| r.adapter.name.as_str());
+            run_benchmark(entry, &params, args, &schedule, gpu_ctx, adapter)
+        }
     }
-
-    if let Some(path) = &args.export {
-        return export_final(entry, &params, &args, &schedule, path);
-    }
-
-    let adapter = runtime.as_ref().map(|r| r.adapter.name.clone());
-    run_benchmark(entry, &params, &args, &schedule, gpu_ctx.as_ref(), adapter.as_deref())
 }
 
 /// Benchmark provenance. Goes to stdout with the results, not the progress log.
@@ -280,14 +363,14 @@ fn print_models(registry: &[ModelEntry]) {
     }
 }
 
-/// Print one model's parameter descriptors: the ids `--set` accepts, with kinds, defaults and
+/// Returns one model's parameter descriptors: the ids `--set` accepts, with kinds, defaults and
 /// bounds.
 ///
 /// Emitted as `key=value` fields rather than a formatted table so `scripts/bench_matrix.py` can
 /// read a model's axes (does it have `grid_width`? `num_agents`? at what default?) instead of
 /// hard-coding per-model knowledge or probing with throwaway runs.
-fn print_params(entry: &ModelEntry) {
-    println!("parameters for {} ({}):", entry.id, entry.name);
+fn params_text(entry: &ModelEntry) -> String {
+    let mut text = format!("parameters for {} ({}):\n", entry.id, entry.name);
     for (index, desc) in entry.param_descriptors.iter().enumerate() {
         let (id, label) = (desc.id, desc.label);
         let apply = if desc.is_live() { "live" } else { "reload" };
@@ -304,8 +387,11 @@ fn print_params(entry: &ModelEntry) {
             ParamFormat::Plain => "",
             ParamFormat::Percent => " format=percent",
         };
-        println!("  index={index} id={id} {kind} apply={apply}{format} label=\"{label}\"");
+        text.push_str(&format!(
+            "  index={index} id={id} {kind} apply={apply}{format} label=\"{label}\"\n"
+        ));
     }
+    text
 }
 
 /// Create a fresh CPU state from a registry entry. Errors on a GPU-backed model, for which
@@ -394,7 +480,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, schedule: &
         // finishes. One inject per rep replaces one per pass per step.
         rayon::scope(|_| {
             for _ in 0..args.warmup {
-                schedule.run_due(&mut *state);
+                note_refused(schedule.run_due(&mut *state));
                 state.step();
             }
         });
@@ -409,13 +495,13 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, schedule: &
         let start = Instant::now();
         rayon::scope(|_| {
             for _ in 0..args.steps {
-                schedule.run_due(&mut *state);
+                note_refused(schedule.run_due(&mut *state));
                 state.step();
             }
         });
         let elapsed = start.elapsed();
         // Outside the timer, so an action on the last tick still lands without being measured.
-        schedule.run_due(&mut *state);
+        note_refused(schedule.run_due(&mut *state));
         eprintln!("{elapsed:>8.3?}");
         // A population that fluctuates at steady state moves by about its square root, which is not worth a note.
         let after = state.population();
@@ -546,7 +632,7 @@ fn bench_gpu(
         let mut warm = new_gpu_state(entry, params, args.seed)?;
         eprint!("  #{: >4}: ", 0);
         let start = Instant::now();
-        run_gpu_steps(&mut *warm, ctx, args.global_warmup)?;
+        stepping::run_steps(&mut *warm, ctx, args.global_warmup)?;
         let elapsed = start.elapsed();
         eprintln!("{elapsed:>8.3?}  ({0} global warmup steps)", args.global_warmup);
     }
@@ -593,33 +679,6 @@ fn new_gpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -
     }
 }
 
-/// Runs `count` steps on the GPU and blocks until the GPU has finished them.
-fn run_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> Result<()> {
-    if count == 0 {
-        return Ok(());
-    }
-    submit_gpu_steps(state, ctx, count);
-    wait_gpu(ctx)
-}
-
-/// Submits `count` steps on the GPU without waiting for them.
-///
-/// Each command buffer holds at most [`MAX_STEPS_PER_SUBMISSION`] steps.
-fn submit_gpu_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) {
-    // Submissions to one queue run in order, so batch N+1 still reads batch N's output. They all
-    // queue up and the caller's one wait drains them, letting the CPU encode ahead of the GPU.
-    let mut remaining = count;
-    while remaining > 0 {
-        let n = remaining.min(u64::from(MAX_STEPS_PER_SUBMISSION)) as u32;
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("cli_gpu_steps"),
-        });
-        state.encode_steps(&mut encoder, n, None);
-        ctx.queue.submit(Some(encoder.finish()));
-        remaining -= u64::from(n);
-    }
-}
-
 /// Runs one GPU benchmark rep on `state` and returns its population after warm-up and the time its timed steps took.
 ///
 /// The rep runs `warmup` untimed steps and then `steps` timed ones, both under [`BENCH_FIRE`]. An action due from the
@@ -633,77 +692,16 @@ fn run_gpu_rep(
     steps: u64,
     schedule: &Schedule,
 ) -> Result<(u64, Duration)> {
-    run_gpu_steps_acting(state, ctx, warmup, schedule, BENCH_FIRE)?;
+    note_refused(stepping::run_steps_acting(state, ctx, warmup, schedule, BENCH_FIRE)?);
     let population = state.population();
 
     let start = Instant::now();
-    run_gpu_steps_acting(state, ctx, steps, schedule, BENCH_FIRE)?;
+    let refused = stepping::run_steps_acting(state, ctx, steps, schedule, BENCH_FIRE)?;
     let elapsed = start.elapsed();
-    run_due_gpu(state, ctx, schedule);
-    wait_gpu(ctx)?;
+    note_refused(refused);
+    note_refused(stepping::run_due(state, ctx, schedule));
+    stepping::wait(ctx)?;
     Ok((population, elapsed))
-}
-
-/// Blocks until the GPU has finished everything submitted, then reports any fault it raised.
-///
-/// Note that `queue.submit()` returns before the GPU has executed anything. A timer around submission alone measures
-/// the CPU's dispatch cost, and the throughput it reports is fiction. A timed run has to end in this wait inside the
-/// timer.
-fn wait_gpu(ctx: &GpuContext) -> Result<()> {
-    ctx.device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .context("GPU failed to finish the submitted work")?;
-
-    if let Some(fault) = ctx.faults.take() {
-        return Err(fault.into());
-    }
-    Ok(())
-}
-
-/// As [`run_gpu_steps`], stopping at each tick the schedule names to encode its actions.
-///
-/// `fire` picks the side of the step an action fires on, as [`Schedule::fire_ticks`] spells out.
-/// [`Fire::BeforeStep`] leaves the tick the run stops on to the caller, and [`Fire::AfterStep`] leaves
-/// the tick it starts on. Back-to-back runs under one rule then fire each tick once.
-///
-/// Every batch of steps and every action is submitted before one wait at the end, and a run of no steps waits for
-/// nothing. Under [`Fire::AfterStep`] that wait covers an action on the tick the run stops on.
-fn run_gpu_steps_acting(
-    state: &mut dyn GpuSimState,
-    ctx: &GpuContext,
-    count: u64,
-    schedule: &Schedule,
-    fire: Fire,
-) -> Result<()> {
-    if count == 0 {
-        return Ok(());
-    }
-    let end = state.tick() + count;
-    for tick in schedule.fire_ticks(state.tick(), count, fire) {
-        let now = state.tick();
-        submit_gpu_steps(state, ctx, tick - now);
-        run_due_gpu(state, ctx, schedule);
-    }
-    let now = state.tick();
-    submit_gpu_steps(state, ctx, end - now);
-    wait_gpu(ctx)
-}
-
-/// Encodes whatever is due at the state's current tick.
-///
-/// An action goes in a submission of its own, between two batches of steps, since a uniform
-/// written mid-encoder would not be visible until the whole encoder submitted.
-fn run_due_gpu(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &Schedule) {
-    for action in schedule.due(state.tick()) {
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("cli_gpu_action"),
-        });
-        if state.encode_action(&mut encoder, action.index) {
-            ctx.queue.submit(Some(encoder.finish()));
-        } else {
-            eprintln!("note: model refused action '{}' at tick {}", action.id, state.tick());
-        }
-    }
 }
 
 /// Best-effort grid dimensions from the resolved params, for GPU models whose state exposes no
@@ -719,41 +717,6 @@ fn grid_dims_from_params(descriptors: &[ParamDescriptor], params: &[ParamValue])
     Some((find("grid_width")?, find("grid_height")?))
 }
 
-/// Acquire a headless GPU device, the same thing eframe does for henad-app minus any window or
-/// surface. `henad-compute` never creates a device, so a non-GUI runner must.
-///
-/// The adapter is dropped here, so `RuntimeInfo` has to be captured.
-fn acquire_gpu() -> Result<(GpuContext, RuntimeInfo)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        ..Default::default()
-    }))
-    .context("no suitable GPU adapter found")?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("henad-cli"),
-        required_features: wgpu::Features::empty(),
-        required_limits: henad_compute::gpu::limits::raise(
-            &adapter,
-            &wgpu::Limits::default(),
-            henad_models::registry::gpu_storage_bindings_needed(),
-        ),
-        memory_hints: wgpu::MemoryHints::Performance,
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        trace: wgpu::Trace::Off,
-    }))
-    .context("failed to create GPU device")?;
-    let runtime = RuntimeInfo::collect(&adapter, &device);
-    // No surface exists, so `target_format` is arbitrary: the models' display texture is an
-    // offscreen Rgba8Unorm target, never a swapchain, and the benchmark never reads it back.
-    Ok((
-        GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, FaultSink::new()),
-        runtime,
-    ))
-}
-
 /// Run once (warmup + steps) and write the final state to `path`.
 fn export_final(
     entry: &ModelEntry,
@@ -764,10 +727,10 @@ fn export_final(
 ) -> Result<()> {
     let mut state = new_cpu_state(entry, params, args.seed)?;
     for _ in 0..(args.warmup + args.steps) {
-        schedule.run_due(&mut *state);
+        note_refused(schedule.run_due(&mut *state));
         state.step();
     }
-    schedule.run_due(&mut *state);
+    note_refused(schedule.run_due(&mut *state));
     write_state(&mut *state, path)?;
     eprintln!("exported final state (tick {}) to {}", state.tick(), path.display());
     Ok(())
@@ -795,7 +758,7 @@ fn export_stats(
     }
 
     let total = args.warmup + args.steps;
-    let file = File::create(path).with_context(|| format!("could not create '{}'", path.display()))?;
+    let file = File::create(path).with_context(|| format!("cannot create '{}'", path.display()))?;
     let writer = StatsWriter::new(BufWriter::new(file));
 
     eprintln!(
@@ -830,11 +793,11 @@ fn stats_cpu<W: std::io::Write>(
         writer.push(state.tick(), &state.stats())?;
         Ok(())
     };
-    schedule.run_due(&mut *state);
+    note_refused(schedule.run_due(&mut *state));
     sample(&mut *state, &mut writer)?;
     for i in 0..total {
         state.step();
-        schedule.run_due(&mut *state);
+        note_refused(schedule.run_due(&mut *state));
         if (i + 1).is_multiple_of(args.stats_every) {
             sample(&mut *state, &mut writer)?;
         }
@@ -860,28 +823,23 @@ fn stats_gpu<W: std::io::Write>(
     mut writer: StatsWriter<W>,
 ) -> Result<u64> {
     let sample = |state: &mut dyn GpuSimState, writer: &mut StatsWriter<W>| -> Result<()> {
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("cli_stats_snapshot"),
-        });
-        state.encode_snapshot_passes(&mut encoder);
-        ctx.queue.submit(Some(encoder.finish()));
-        state.begin_stats_readback();
-        state.poll_stats_readback(&ctx.device, true);
-        writer.push(state.tick(), &state.stats())?;
+        let stats = stepping::sample_stats(state, ctx);
+        writer.push(state.tick(), &stats)?;
         Ok(())
     };
 
-    run_due_gpu(&mut *state, ctx, schedule);
+    note_refused(stepping::run_due(&mut *state, ctx, schedule));
     sample(&mut *state, &mut writer)?;
     let mut done = 0;
     while done < total {
         let chunk = args.stats_every.min(total - done);
-        run_gpu_steps_acting(&mut *state, ctx, chunk, schedule, Fire::AfterStep)?;
+        let refused = stepping::run_steps_acting(&mut *state, ctx, chunk, schedule, Fire::AfterStep)?;
+        note_refused(refused);
         done += chunk;
         sample(&mut *state, &mut writer)?;
     }
     // A fault raised by the last sample is reported here. No later wait would report it.
-    wait_gpu(ctx)?;
+    stepping::wait(ctx)?;
     Ok(writer.finish()?)
 }
 
@@ -900,7 +858,7 @@ fn write_state(state: &mut dyn SimState, path: &Path) -> Result<()> {
         bail!("model exposes no CPU-side view to export");
     }
 
-    let file = File::create(path).with_context(|| format!("could not create '{}'", path.display()))?;
+    let file = File::create(path).with_context(|| format!("cannot create '{}'", path.display()))?;
     let mut out = BufWriter::new(file);
 
     if let Some(grid) = grid {
@@ -919,159 +877,434 @@ fn write_state(state: &mut dyn SimState, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Split each raw `--set ID=VALUE` string into an `(id, value)` pair.
-fn parse_overrides(raw: &[String]) -> Result<Vec<(String, String)>> {
-    raw.iter()
-        .map(|s| {
-            let (id, value) = s
-                .split_once('=')
-                .with_context(|| format!("bad --set '{s}', expected ID=VALUE"))?;
-            Ok((id.to_owned(), value.to_owned()))
-        })
-        .collect()
-}
-
-/// Start from every parameter's default, then apply the overrides by id.
-fn resolve_params(descriptors: &[ParamDescriptor], overrides: &[(String, String)]) -> Result<Vec<ParamValue>> {
-    let mut values: Vec<ParamValue> = descriptors.iter().map(|d| d.kind.default_value()).collect();
-
-    for (id, raw) in overrides {
-        let index = descriptors
-            .iter()
-            .position(|d| d.id == *id)
-            .with_context(|| format!("model has no parameter '{id}'"))?;
-        values[index] = parse_value(&descriptors[index].kind, raw).with_context(|| format!("--set {id}"))?;
+/// Converts an error from resolving `--set` into the one the command line reports, naming the flag.
+fn set_error(error: ValueError) -> anyhow::Error {
+    match error {
+        ValueError::Param { id, source } => anyhow::Error::new(*source).context(format!("--set {id}")),
+        other => other.into(),
     }
-
-    Ok(values)
-}
-
-/// Parse a raw string into a [`ParamValue`] matching the descriptor's kind, and refuse whatever the
-/// descriptor's own range does not allow.
-///
-/// The GUI cannot produce an out-of-range value, since it edits every parameter through a widget
-/// built from this range. `--set` reaches the same parameter with nothing between it and `init`,
-/// where a model sizes its buffers from the number it is given.
-fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue> {
-    let value = match kind {
-        ParamKind::F32 { min, max, .. } => {
-            let value: f32 = raw.parse().with_context(|| format!("'{raw}' is not a number"))?;
-            ensure!(value >= *min && value <= *max, "{value} is outside {min}..={max}");
-            ParamValue::F32(value)
-        }
-        ParamKind::U32 { min, max, .. } => {
-            let value: u32 = raw.parse().with_context(|| format!("'{raw}' is not an integer"))?;
-            ensure!(value >= *min && value <= *max, "{value} is outside {min}..={max}");
-            ParamValue::U32(value)
-        }
-        ParamKind::Bool { .. } => ParamValue::Bool(raw.parse().with_context(|| format!("'{raw}' is not a bool"))?),
-        ParamKind::Choice { options, .. } => {
-            // Accept either a numeric index or one of the option labels.
-            let index = if let Ok(index) = raw.parse::<usize>() {
-                ensure!(index < options.len(), "index {index} is not one of {options:?}");
-                index
-            } else {
-                options
-                    .iter()
-                    .position(|o| *o == raw)
-                    .with_context(|| format!("'{raw}' is not one of {options:?}"))?
-            };
-            ParamValue::Choice(index)
-        }
-    };
-    Ok(value)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Schedule, acquire_gpu, parse_overrides, resolve_params, run_gpu_rep, stats_cpu, stats_gpu};
+    use std::path::{Path, PathBuf};
+    use std::process::ExitCode;
+
+    use super::{Args, Mode, params_text, rep_seed, run_gpu_rep, stats_cpu, stats_gpu};
+    use crate::explore::{self, ExploreArgs};
+    use crate::json_report;
     use clap::Parser as _;
     use henad_compute::gpu::{GpuContext, GpuSimState};
+    use henad_core::action::Schedule;
+    use henad_core::explore::seed::run_seed;
+    use henad_core::explore::value::{parse_overrides, resolve_params};
+    use henad_core::export::csv::parse_records;
     use henad_core::export::stats_csv::StatsWriter;
-    use henad_core::helpers::{f32_param, u32_param};
-    use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+    use henad_core::params::ParamValue;
+    use henad_explore::device::acquire_headless;
     use henad_models::registry::{ModelEntry, ModelState, model_registry};
+    use serde_json::json;
 
-    const OPTIONS: &[&str] = &["moore", "von_neumann"];
-
-    fn descriptors() -> Vec<ParamDescriptor> {
-        vec![
-            u32_param("num_agents", "Agents", 1000, 1, 5_000_000),
-            f32_param("cohesion", "Cohesion", 0.5, 0.0, 1.0, None),
-            ParamDescriptor {
-                id: "neighborhood",
-                label: "Neighborhood",
-                kind: ParamKind::Choice {
-                    options: OPTIONS,
-                    default: 0,
-                },
-                apply: ParamApply::Live,
-                format: ParamFormat::Plain,
-            },
-        ]
+    /// Directory under the system's temporary directory, unique to one test, removed with its contents on drop.
+    struct ScratchDir {
+        path: PathBuf,
     }
 
-    fn resolve(raw: &str) -> anyhow::Result<Vec<ParamValue>> {
-        let overrides = parse_overrides(&[raw.to_owned()])?;
-        resolve_params(&descriptors(), &overrides)
+    impl ScratchDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("henad-cli-{name}-{}", std::process::id()));
+            if path.exists() {
+                std::fs::remove_dir_all(&path).expect("an earlier run's directory can be removed");
+            }
+            Self { path }
+        }
+
+        fn arg(&self) -> &str {
+            self.path.to_str().expect("the temporary directory is UTF-8")
+        }
+
+        fn read(&self, file: &str) -> String {
+            std::fs::read_to_string(self.path.join(file)).expect("the sweep wrote the file")
+        }
     }
 
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.path).ok();
+        }
+    }
+
+    fn cpu_entry(id: &str) -> ModelEntry {
+        model_registry(None)
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .expect("the model is registered")
+    }
+
+    /// Returns the lines of a sweep's `series.csv`, header included, without the `run_id` column.
+    fn series_without_run_id(dir: &ScratchDir) -> Vec<String> {
+        dir.read("series.csv")
+            .lines()
+            .map(|line| line.split_once(',').expect("a run_id column").1.to_owned())
+            .collect()
+    }
+
+    /// Checks that every `:final` reducer of the one run in `dir` equals the value of its column in `last_row`.
+    ///
+    /// `header` names the columns of `last_row`, as a stats export writes them.
+    fn assert_final_reducers(dir: &ScratchDir, header: &str, last_row: &str) {
+        let runs = parse_records(&dir.read("runs.csv")).expect("runs.csv is CSV");
+        assert_eq!(runs.len(), 2, "a header and one run");
+        for (column, value) in header.split(',').zip(last_row.split(',')).skip(1) {
+            let final_column = runs[0]
+                .iter()
+                .position(|name| *name == format!("{column}:final"))
+                .expect("every stat column has a final reducer");
+            let reduced: f64 = runs[1][final_column].parse().expect("a number");
+            let exported: f64 = value.parse().expect("a number");
+            assert_eq!(reduced, exported, "{column}");
+        }
+    }
+
+    /// Checks that a sweep of one run writes the series `--export-stats` writes for the run's seed.
+    ///
+    /// 31 steps sampled every 3 ticks end off the sampling boundary, so the final tick is a row of its own.
     #[test]
-    fn an_override_replaces_one_default_and_leaves_the_rest() {
-        let values = resolve("num_agents=2500").expect("2500 agents is in range");
-        assert_eq!(values[0], ParamValue::U32(2500));
-        assert_eq!(values[1], ParamValue::F32(0.5));
-        assert_eq!(values[2], ParamValue::Choice(0));
+    fn a_single_point_sweep_matches_export_stats() {
+        let entry = cpu_entry("sir");
+        let dir = ScratchDir::new("single-point");
+        let args = Args::parse_from([
+            "henad-cli",
+            "sir",
+            "--set",
+            "grid_width=32",
+            "--set",
+            "grid_height=32",
+            "--steps",
+            "31",
+            "--stats-every",
+            "3",
+            "--seed",
+            "7",
+            "--out",
+            dir.arg(),
+        ]);
+        let status = explore::run(&args, &entry, None, None, None).expect("the sweep runs");
+        assert_eq!(status, ExitCode::SUCCESS);
+
+        let overrides = parse_overrides(&args.set).expect("valid");
+        let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
+        let Ok(ModelState::Cpu(state)) = (entry.create)(&params, Some(run_seed(7, 0))) else {
+            panic!("sir builds as a CPU model");
+        };
+        let schedule = Schedule::parse(&[], &entry.id, &entry.action_descriptors).expect("no actions");
+        let mut exported_bytes = Vec::new();
+        stats_cpu(state, &args, &schedule, 31, StatsWriter::new(&mut exported_bytes)).expect("writes");
+        let exported = String::from_utf8(exported_bytes).expect("utf-8");
+        let exported: Vec<&str> = exported.lines().collect();
+
+        assert_eq!(series_without_run_id(&dir), exported);
+        assert_eq!(exported.len(), 1 + 12, "a header, ticks 0 to 30 every 3, and tick 31");
+        assert_final_reducers(&dir, exported[0], exported[exported.len() - 1]);
     }
 
-    /// The regression. A slider cannot ask for four billion agents, `--set` used to be able to, and
-    /// the number went straight to `init`.
+    /// Checks that a sweep fires each `--act` as `--export-stats` fires it, the tick the run ends on included.
     #[test]
-    fn a_value_outside_the_descriptor_range_is_refused() {
-        let err = resolve("num_agents=4000000000").expect_err("4e9 agents is over the maximum");
-        assert!(format!("{err:#}").contains("5000000"), "{err:#}");
+    fn a_sweep_fires_its_actions_as_export_stats_does() {
+        let entry = cpu_entry("sir");
+        let dir = ScratchDir::new("single-point-actions");
+        let args = Args::parse_from([
+            "henad-cli",
+            "sir",
+            "--set",
+            "grid_width=32",
+            "--set",
+            "grid_height=32",
+            "--steps",
+            "20",
+            "--stats-every",
+            "2",
+            "--seed",
+            "7",
+            "--act",
+            "seed_outbreak@0",
+            "--act",
+            "seed_outbreak@5",
+            "--act",
+            "seed_outbreak@20",
+            "--out",
+            dir.arg(),
+        ]);
+        let status = explore::run(&args, &entry, None, None, None).expect("the sweep runs");
+        assert_eq!(status, ExitCode::SUCCESS);
 
-        let err = resolve("num_agents=0").expect_err("0 agents is under the minimum");
-        assert!(format!("{err:#}").contains("num_agents"), "{err:#}");
-
-        assert!(resolve("cohesion=1.5").is_err(), "1.5 is over the maximum");
-        assert!(resolve("cohesion=-0.5").is_err(), "-0.5 is under the minimum");
-        assert!(resolve("cohesion=nan").is_err(), "NaN is in no range");
+        let overrides = parse_overrides(&args.set).expect("valid");
+        let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
+        let Ok(ModelState::Cpu(state)) = (entry.create)(&params, Some(run_seed(7, 0))) else {
+            panic!("sir builds as a CPU model");
+        };
+        let schedule = Schedule::parse(&args.act, &entry.id, &entry.action_descriptors).expect("declared actions");
+        let mut exported_bytes = Vec::new();
+        stats_cpu(state, &args, &schedule, 20, StatsWriter::new(&mut exported_bytes)).expect("writes");
+        let exported = String::from_utf8(exported_bytes).expect("utf-8");
+        assert_eq!(series_without_run_id(&dir), exported.lines().collect::<Vec<_>>());
     }
 
-    /// Both ends of the range are allowed.
+    /// Returns the records of `runs.csv` in `dir`, header included, without the columns that time a run.
+    fn runs_without_timing(dir: &Path) -> Vec<Vec<String>> {
+        let text = std::fs::read_to_string(dir.join("runs.csv")).expect("the sweep wrote runs.csv");
+        let mut records = parse_records(&text).expect("runs.csv is CSV");
+        let timing: Vec<usize> = records[0]
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| matches!(name.as_str(), "build_ms" | "wall_ms" | "steps_per_s"))
+            .map(|(column, _)| column)
+            .collect();
+        assert_eq!(timing.len(), 3, "runs.csv times each run in three columns");
+        for record in &mut records {
+            for &column in timing.iter().rev() {
+                record.remove(column);
+            }
+        }
+        records
+    }
+
+    /// Checks that two shards of a sampled sweep, merged, hold the files of the sweep run in one go.
+    ///
+    /// The sweep samples a parameter and an action's tick, and stops a run once nobody is infected. Some runs stop
+    /// before their last tick, so their series end early.
     #[test]
-    fn the_limits_themselves_are_accepted() {
-        assert_eq!(resolve("cohesion=0").expect("the minimum")[1], ParamValue::F32(0.0));
-        assert_eq!(resolve("cohesion=1").expect("the maximum")[1], ParamValue::F32(1.0));
+    fn sharded_sweeps_merge_into_the_unsharded_files() {
+        let entry = cpu_entry("sir");
+        let dir = ScratchDir::new("shards");
+        std::fs::create_dir_all(&dir.path).expect("the scratch directory can be made");
+        let sweep = |dest: &Path, shard: Option<&str>| {
+            let dest = dest.to_str().expect("the temporary directory is UTF-8");
+            let mut line = vec![
+                "henad-cli",
+                "sir",
+                "--set",
+                "grid_width=16",
+                "--set",
+                "grid_height=16",
+                "--set",
+                "initial_infected_pct=0.02",
+                "--set",
+                "recovery_rate=0.3",
+                "--steps",
+                "24",
+                "--stats-every",
+                "3",
+                "--series-every",
+                "6",
+                "--reps",
+                "2",
+                "--seed",
+                "11",
+                "--vary",
+                "infection_rate=0.05:0.6",
+                "--act",
+                "seed_outbreak@6",
+                "--vary",
+                "action.seed_outbreak=2:20",
+                "--sample",
+                "lhs:3",
+                "--stop",
+                "Infected <= 0",
+                "--reduce",
+                "Infected:argmax",
+                "--reduce",
+                "Infected:first<=1",
+                "--out",
+                dest,
+            ];
+            line.extend(shard.map(|shard| ["--shard", shard]).into_iter().flatten());
+            let args = Args::parse_from(line);
+            explore::run(&args, &entry, None, None, None).expect("the sweep runs")
+        };
+        let whole = dir.path.join("whole");
+        assert_eq!(sweep(&whole, None), ExitCode::SUCCESS);
+        let shards = [dir.path.join("shard-0"), dir.path.join("shard-1")];
+        for (shard_dir, shard) in shards.iter().zip(["0/2", "1/2"]) {
+            assert_eq!(sweep(shard_dir, Some(shard)), ExitCode::SUCCESS, "shard {shard}");
+            assert_eq!(
+                runs_without_timing(shard_dir).len(),
+                1 + 3,
+                "a header and every other run of 6"
+            );
+        }
+
+        let path = |dir: &Path| dir.to_str().expect("the temporary directory is UTF-8").to_owned();
+        let merged = dir.path.join("merged");
+        let args = Args::parse_from([
+            "henad-cli".to_owned(),
+            "--merge".to_owned(),
+            path(&shards[1]),
+            path(&shards[0]),
+            "--out".to_owned(),
+            path(&merged),
+        ]);
+        assert_eq!(Mode::of(&args), Mode::Merge);
         assert_eq!(
-            resolve("num_agents=5000000").expect("the maximum")[0],
-            ParamValue::U32(5_000_000)
+            explore::merge_shards(&args).expect("the shards merge"),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(runs_without_timing(&merged), runs_without_timing(&whole));
+        for file in ["series.csv", "summary.csv"] {
+            let read = |dir: &Path| std::fs::read_to_string(dir.join(file)).expect("the table is written");
+            assert_eq!(read(&merged), read(&whole), "{file}");
+        }
+
+        let partial = dir.path.join("partial");
+        let args = Args::parse_from([
+            "henad-cli".to_owned(),
+            "--merge".to_owned(),
+            path(&shards[0]),
+            "--out".to_owned(),
+            path(&partial),
+        ]);
+        let status = explore::merge_shards(&args).expect("one shard merges");
+        assert_eq!(
+            status,
+            ExitCode::from(explore::SOME_RUNS_NOT_OK),
+            "half the runs are missing"
         );
     }
 
-    /// A choice is an index into the option list, by number or by label.
+    /// Checks that `--params` prints what it printed before sweeps, byte for byte.
     #[test]
-    fn a_choice_index_is_checked_against_the_options() {
-        assert_eq!(
-            resolve("neighborhood=1").expect("index 1 exists")[2],
-            ParamValue::Choice(1)
-        );
-        assert_eq!(
-            resolve("neighborhood=von_neumann").expect("a label")[2],
-            ParamValue::Choice(1)
-        );
-        assert!(resolve("neighborhood=2").is_err(), "there is no third option");
-        assert!(resolve("neighborhood=hexagonal").is_err(), "no such label");
+    fn params_text_output_is_unchanged() {
+        let expected = "\
+parameters for virus_network (Virus on a Network):
+  index=0 id=num_agents kind=u32 default=10000 min=1 max=10000000 apply=reload label=\"Number of Nodes\"
+  index=1 id=world_width kind=f32 default=1000 min=1 max=10000 apply=reload label=\"World Width\"
+  index=2 id=world_height kind=f32 default=1000 min=1 max=10000 apply=reload label=\"World Height\"
+  index=3 id=average_node_degree kind=u32 default=6 min=1 max=20 apply=reload label=\"Average Node Degree\"
+  index=4 id=initial_outbreak_size kind=u32 default=3 min=1 max=10000 apply=reload label=\"Initial Outbreak Size\"
+  index=5 id=virus_spread_chance kind=f32 default=0.025 min=0 max=1 apply=live format=percent label=\"Virus Spread Chance\"
+  index=6 id=virus_check_frequency kind=u32 default=1 min=1 max=20 apply=live label=\"Virus Check Frequency\"
+  index=7 id=recovery_chance kind=f32 default=0.05 min=0 max=1 apply=live format=percent label=\"Recovery Chance\"
+  index=8 id=gain_resistance_chance kind=f32 default=0.05 min=0 max=1 apply=live format=percent label=\"Gain Resistance Chance\"
+  index=9 id=directed kind=bool default=false apply=live label=\"Directed\"
+  index=10 id=network kind=choice default=0 options=Random|Geometric apply=reload label=\"Network\"
+  index=11 id=keep_rewiring kind=bool default=false apply=live label=\"Keep Rewiring\"
+";
+        assert_eq!(params_text(&cpu_entry("virus_network")), expected);
     }
 
     #[test]
-    fn an_unknown_parameter_is_refused() {
-        assert!(resolve("no_such_param=1").is_err());
+    fn params_json_lists_every_descriptor() {
+        for entry in model_registry(None) {
+            let line = json_report::params(&entry, None);
+            assert_eq!(line["kind"], json!("params"), "{}", entry.id);
+            assert_eq!(line["model"], json!(entry.id));
+            let params = line["params"].as_array().expect("params is a list");
+            let ids: Vec<&str> = params.iter().filter_map(|param| param["id"].as_str()).collect();
+            let declared: Vec<&str> = entry.param_descriptors.iter().map(|d| d.id).collect();
+            assert_eq!(ids, declared, "{}", entry.id);
+            for param in params {
+                assert!(param["kind"].is_string() && !param["default"].is_null(), "{param}");
+            }
+            let columns = line["stat_columns"]
+                .as_array()
+                .expect("the model builds at its defaults");
+            assert!(columns.len() >= entry.stat_descriptors.len(), "{}", entry.id);
+            let actions = line["actions"].as_array().expect("actions is a list");
+            assert_eq!(actions.len(), entry.action_descriptors.len(), "{}", entry.id);
+        }
+    }
+
+    /// Returns the mode a command line had before sweeps existed.
+    fn legacy_mode(args: &Args) -> Mode {
+        if args.list {
+            Mode::List
+        } else if args.model.is_none() {
+            Mode::InfoOnly
+        } else if args.params {
+            Mode::Params
+        } else if args.export_stats.is_some() {
+            Mode::ExportStats
+        } else if args.export.is_some() {
+            Mode::ExportFinal
+        } else {
+            Mode::Benchmark
+        }
+    }
+
+    /// Returns every `henad-cli` command line in `text`, without the program name.
+    ///
+    /// A line is one that starts `henad-cli` or `cargo run --release -p henad-cli --`, after any `//!`, with a
+    /// trailing `\` joining it to the next. The usage line, `henad-cli [OPTIONS] [MODEL]`, is left out.
+    fn command_lines(text: &str) -> Vec<Vec<String>> {
+        let mut lines = Vec::new();
+        let mut pending = String::new();
+        for raw in text.lines() {
+            let raw = raw.trim_start().trim_start_matches("//!").trim();
+            if let Some(start) = raw.strip_suffix('\\') {
+                pending.push_str(start);
+                continue;
+            }
+            pending.push_str(raw);
+            let line = std::mem::take(&mut pending);
+            let rest = line
+                .strip_prefix("cargo run --release -p henad-cli -- ")
+                .or_else(|| line.strip_prefix("henad-cli "));
+            if let Some(rest) = rest.filter(|rest| !rest.starts_with('[')) {
+                lines.push(rest.split_whitespace().map(str::to_owned).collect());
+            }
+        }
+        lines
+    }
+
+    /// Checks that every command line the docs and scripts pass keeps the mode it had before sweeps.
+    ///
+    /// The script lines are written the way `scripts/compare_bench.py`, `bench_matrix.py`, `compare_sir.py` and
+    /// `compare_network.py` build them. A documented sweep line enters explore mode, and a merge line merge mode.
+    #[test]
+    fn existing_invocations_keep_their_mode() {
+        let mut lines = command_lines(include_str!("../../../docs/reference/cli.md"));
+        lines.extend(command_lines(include_str!("main.rs")));
+        let documented = lines.len();
+        let scripts = [
+            "boids --json --steps 100 --warmup 10 --reps 5 --seed 42 --threads 1 --set num_agents=10000",
+            "sir --json --steps 100 --warmup 10 --reps 5 --seed 42 --threads 0 --set grid_width=256 \
+             --set grid_height=256",
+            "gpu_boids --json --steps 100 --warmup 10 --reps 5 --seed 42 --threads 0 --global-warmup 1000 \
+             --set num_agents=10000",
+            "sir --params",
+            "--list",
+            "--info --json",
+            "sir --set grid_width=100 --set grid_height=100 --set infection_rate=0.3 --set recovery_rate=0.05 \
+             --set initial_infected_pct=0.01 --steps 200 --seed 1 --export-stats sir_henad_001.csv",
+            "virus_network --set num_agents=150 --steps 200 --seed 1 --export-stats virus_henad_001.csv",
+        ];
+        lines.extend(
+            scripts
+                .iter()
+                .map(|line| line.split_whitespace().map(str::to_owned).collect()),
+        );
+
+        let mut sweeps = 0;
+        for line in &lines {
+            let argv = std::iter::once("henad-cli").chain(line.iter().map(String::as_str));
+            let args = Args::try_parse_from(argv).unwrap_or_else(|error| panic!("{line:?} parses: {error}"));
+            if args.explore == ExploreArgs::default() {
+                assert_eq!(Mode::of(&args), legacy_mode(&args), "{line:?}");
+            } else {
+                let mode = if args.explore.merge.is_empty() {
+                    Mode::Explore
+                } else {
+                    Mode::Merge
+                };
+                assert_eq!(Mode::of(&args), mode, "{line:?}");
+                sweeps += 1;
+            }
+        }
         assert!(
-            parse_overrides(&["num_agents".to_owned()]).is_err(),
-            "no '=' in the pair"
+            documented - sweeps >= 12,
+            "found {documented} documented lines, {sweeps} of them sweeps"
         );
+        assert_eq!(rep_seed(Some(40), 2), Some(42), "a benchmark rep's seed stays base + i");
     }
 
     /// Each exported sample is prepared as a publish would be, so a stat computed in `prepare_view` is current.
@@ -1089,7 +1322,7 @@ mod tests {
             parse_overrides(&["num_agents=4".to_owned(), "team_size=4".to_owned(), "p=0".to_owned()]).expect("valid");
         let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
         let args = Args::parse_from(["henad-cli", "team_assembly", "--stats-every", "2"]);
-        let schedule = Schedule::parse(&[], &entry).expect("no actions");
+        let schedule = Schedule::parse(&[], &entry.id, &entry.action_descriptors).expect("no actions");
         let Ok(ModelState::Cpu(state)) = (entry.create)(&params, Some(1)) else {
             panic!("team_assembly builds as a CPU model");
         };
@@ -1133,12 +1366,12 @@ mod tests {
         ///
         /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
         fn new(id: &str) -> Option<Self> {
-            let ctx = match acquire_gpu() {
+            let ctx = match acquire_headless() {
                 Ok((ctx, _)) => ctx,
                 Err(err) => {
                     assert!(
                         !gpu_required(),
-                        "HENAD_REQUIRE_GPU is set but no device is available: {err:#}"
+                        "HENAD_REQUIRE_GPU is set but no device is available: {err:?}"
                     );
                     return None;
                 }
@@ -1154,11 +1387,15 @@ mod tests {
 
         fn schedule(&self, raw: &[&str]) -> Schedule {
             let raw: Vec<String> = raw.iter().map(|&s| s.to_owned()).collect();
-            Schedule::parse(&raw, &self.entry).expect("declared actions")
+            Schedule::parse(&raw, &self.entry.id, &self.entry.action_descriptors).expect("declared actions")
         }
 
         fn state(&self) -> Box<dyn GpuSimState> {
-            let Ok(ModelState::Gpu(state)) = (self.entry.create)(&self.params, Some(1)) else {
+            self.seeded(1)
+        }
+
+        fn seeded(&self, seed: u64) -> Box<dyn GpuSimState> {
+            let Ok(ModelState::Gpu(state)) = (self.entry.create)(&self.params, Some(seed)) else {
                 panic!("{} builds as a GPU model", self.entry.id);
             };
             state
@@ -1218,5 +1455,36 @@ mod tests {
             let exported = sir.rows(sir.state(), 1, &schedule, warmup + steps);
             assert_eq!(after_rep.last(), exported.last(), "--warmup {warmup} --steps {steps}");
         }
+    }
+    /// Checks that a GPU sweep of one run writes the series `--export-stats` writes for the run's seed.
+    #[test]
+    fn a_gpu_single_point_sweep_matches_export_stats() {
+        let Some(sir) = SmallGpuGrid::new("gpu_sir") else {
+            return;
+        };
+        let dir = ScratchDir::new("gpu-single-point");
+        let args = Args::parse_from([
+            "henad-cli",
+            "gpu_sir",
+            "--set",
+            "grid_width=64",
+            "--set",
+            "grid_height=64",
+            "--steps",
+            "13",
+            "--stats-every",
+            "4",
+            "--seed",
+            "7",
+            "--out",
+            dir.arg(),
+        ]);
+        let status = explore::run(&args, &sir.entry, Some(&sir.ctx), None, None).expect("the sweep runs");
+        assert_eq!(status, ExitCode::SUCCESS);
+
+        let exported = sir.rows(sir.seeded(run_seed(7, 0)), 4, &sir.schedule(&[]), 13);
+        let series = series_without_run_id(&dir);
+        assert_eq!(series[1..], exported, "rows at ticks 0, 4, 8, 12 and 13");
+        assert_final_reducers(&dir, &series[0], &exported[exported.len() - 1]);
     }
 }

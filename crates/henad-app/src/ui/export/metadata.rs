@@ -1,5 +1,6 @@
 //! Exported metadata about a run.
 
+use henad_core::action::Schedule;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use serde_json::{Map, Value, json};
 
@@ -20,6 +21,9 @@ pub fn run_details(app: &AppState) -> String {
         "backend": entry.map(|e| e.metadata.backend.label()),
         "params": entry.map(|e| params_object(&e.param_descriptors, &app.param_values)),
         "params_match_running_model": app.selection_is_loaded() && !app.pending_reload.iter().any(|p| *p),
+        // Null with a model loaded is the model's default seed.
+        "seed": entry.and(app.loaded_seed),
+        "scheduled_actions": entry.map(|_| scheduled_actions(&app.loaded_schedule)),
         "tick": app.snapshot.as_ref().map(|snap| snap.tick),
         "population": app.snapshot.as_ref().map(|snap| snap.population),
         "ticks_per_snapshot": app.ticks_per_snapshot,
@@ -35,6 +39,14 @@ pub fn run_details(app: &AppState) -> String {
     });
 
     format!("{details:#}\n")
+}
+
+fn scheduled_actions(schedule: &Schedule) -> Value {
+    schedule
+        .entries()
+        .iter()
+        .map(|entry| json!({ "id": entry.id, "tick": entry.tick }))
+        .collect()
 }
 
 fn params_object(descriptors: &[ParamDescriptor], params: &[ParamValue]) -> Value {

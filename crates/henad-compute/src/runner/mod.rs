@@ -15,6 +15,9 @@ pub use frame::Driver;
 #[cfg(not(target_arch = "wasm32"))]
 pub use thread::Driver;
 
+/// Whether the target can spawn an OS thread. A browser cannot, even with atomics.
+pub const CAN_SPAWN_THREADS: bool = cfg!(not(target_arch = "wasm32"));
+
 use crate::snapshot::Snapshot;
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +26,11 @@ use std::sync::{Arc, Mutex};
 /// The frame driver stops pumping once a frame has spent this much, and a loop that sizes its own
 /// batches aims to fill it. Two different numbers would leave a frame running two batches.
 pub const PUMP_BUDGET_MS: f64 = 6.0;
+
+/// Time between two publishes while a loop runs to a tick.
+///
+/// Longer than the interval while playing. Each publish copies the whole view.
+pub const RUN_TO_PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Longest time one publish may spend preparing its view, including a network's layout.
 ///

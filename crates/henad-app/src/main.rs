@@ -19,11 +19,33 @@ fn main() -> eframe::Result {
             ),
         ..Default::default()
     };
+    let results_folder = results_folder(std::env::args_os().skip(1));
     eframe::run_native(
         "Henad Engine",
         native_options,
-        Box::new(|cc| Ok(Box::new(henad_app::HenadApp::new(cc)))),
+        Box::new(|cc| {
+            let mut app = henad_app::HenadApp::new(cc);
+            if let Some(folder) = results_folder {
+                app.open_results(folder);
+            }
+            Ok(Box::new(app))
+        }),
     )
+}
+
+/// Returns the folder `--open DIR` or `--open=DIR` names in `arguments`, the command line without the program.
+#[cfg(not(target_arch = "wasm32"))]
+fn results_folder(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        if argument == "--open" {
+            return arguments.next().map(std::path::PathBuf::from);
+        }
+        if let Some(folder) = argument.to_str().and_then(|text| text.strip_prefix("--open=")) {
+            return Some(std::path::PathBuf::from(folder));
+        }
+    }
+    None
 }
 
 // When compiling to web using trunk:
@@ -80,4 +102,34 @@ fn main() {
             }
         }
     });
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::results_folder;
+
+    fn arguments(raw: &[&str]) -> Vec<OsString> {
+        raw.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn open_names_the_folder_after_it_in_either_form() {
+        assert_eq!(
+            results_folder(arguments(&["--open", "runs/sir"])),
+            Some(PathBuf::from("runs/sir"))
+        );
+        assert_eq!(
+            results_folder(arguments(&["--open=runs/sir"])),
+            Some(PathBuf::from("runs/sir"))
+        );
+        assert_eq!(
+            results_folder(arguments(&["--open"])),
+            None,
+            "a flag without its folder"
+        );
+        assert_eq!(results_folder(arguments(&[])), None);
+    }
 }
