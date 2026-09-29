@@ -436,6 +436,7 @@ The field takes values the way `henad-cli --vary` does:
 | `0.1:0.5`       | Every value between 0.1 and 0.5, for a sampled design to draw from |
 | `all`           | Every option of a checkbox or a dropdown                           |
 
+Outside a sampled design, an integer range or a range of ticks can leave out its step, as in `1:5`, and then steps by 1.
 The line under the field lists the values, as in **5 values: 0.1, 0.2, 0.3, 0.4, 0.5**, and shows the first three and the last of a longer list.
 A newly ticked field starts empty, and its line reads **Enter values** with an example, as in **Enter values, such as 0:1:0.2**.
 
@@ -443,7 +444,7 @@ A newly ticked field starts empty, and its line reads **Enter values** with an e
 In the editor, **Values**, **Range** and **Range to draw from** pick a list, a range from **Minimum** to **Maximum** a **Step** apart, or a whole range for the design to draw from.
 Only **Latin hypercube** and **Uniform random** enable **Range to draw from**.
 <span class="ui" markdown>Whole range</span>, <span class="ui" markdown>Both ends</span>, <span class="ui" markdown>Around current</span> and <span class="ui" markdown>Current value</span> fill in the whole range, its two ends, half, one and one and a half times the parameter's value in the <span class="ui" markdown>:material-tune: Parameters</span> tab, or that value alone.
-The editor writes into the field as you edit.
+The editor writes into the field as you edit, and writes a list without spaces, as in `1,16384`.
 A checkbox or dropdown parameter takes a menu of its options in place of the field, and writes `all` or the options ticked.
 The menu's button reads **All options**, or names the options ticked.
 
@@ -458,6 +459,7 @@ A parameter the table sets carries :material-table-column: and reads **From desi
 Press <span class="ui" markdown>:material-plus: Add action</span>, pick the action in the **Action** dropdown and set its **Tick**.
 Tick **Vary tick** to try the action at several ticks, typed into the field that takes the tick's place, as a parameter's values are.
 <span class="ui" markdown>:material-delete-outline:</span> removes the action.
+With a **Design table** that has a column for the action, the table sets its tick, and the Plan reads as in **Seed outbreak, tick from design table**.
 An action fires after the step that reaches its tick, as a [scheduled action](#scheduled-actions) does.
 An action due past the last tick of a run shows a warning, since it never fires there.
 
@@ -469,12 +471,15 @@ The sweeps guide explains the [seed scheme](sweeps.md#replicates-and-seeds).
 
 **Steps** is the number of ticks each run measures, after **Warm-up** ticks that the outputs skip.
 The line beside **Steps** counts both, as in **1100 ticks per run**.
+At 0 steps, a run measures only the last tick of its warm-up.
 
 Tick **Stop when** to end a run at the first sample where a stat passes a threshold, as `--stop` does.
 Pick the **Stat**, the comparison and the threshold under **Condition**, and set **From tick** to the first tick at which the condition can end a run.
-The comparison's dropdown gives each comparison in words, then its symbol: **below** `<`, **at most** `<=`, **equal to** `=`, **not equal to** `!=`, **at least** `>=` and **above** `>`.
+The comparison's dropdown gives each comparison in words, then its symbol: **below** `<`, **at most** `<=`, **equal to** `==`, **not equal to** `!=`, **at least** `>=` and **above** `>`.
 The line under them spells the condition out, as in **Runs will end at the first sample where Infected is at most 0, from tick 0.**
 Tick **Timeout** to end a run once it has stepped for **Seconds per run**, 600 to begin with.
+The field takes 1 s or more, and a shorter timeout from a loaded spec file stays as written.
+With several GPU runs at once, a run's time is its share of the time the sweep spends on them, as the sweeps guide describes under [concurrency](sweeps.md#concurrency).
 The ticks a run reaches in that time depend on the machine, and a sweep with a timed-out run is not reproducible.
 
 ### Outputs and execution
@@ -493,6 +498,8 @@ The sweeps guide describes each as a [reducer](sweeps.md#measuring-a-run).
 **Concurrent runs** sets how many runs step at once.
 **Auto** picks a number from the size of the model when the sweep starts, as `henad-cli` does, and **Fixed** steps the number beside it.
 Each run in progress holds its own memory, and a large model runs fastest alone.
+A spec file loaded with `memory` or `gpu_memory` in its `[execution]` table adds a **Memory budget** row, as in **4.0 GB, GPU 2.0 GB**, with the note **From loaded spec file**.
+The sweep then runs under those budgets, as `--memory` and `--gpu-memory` set them, and <span class="ui" markdown>:material-close:</span> beside them returns to the automatic budgets.
 
 **Results** keeps the results **In memory** until you save them, or writes them **In a folder** as the runs finish, as `--out` does.
 Picking **In a folder** opens a dialog to pick the folder, and the **Folder** field then holds its path.
@@ -507,6 +514,7 @@ Its rows give the totals and the settings that shape the runs, such as **Configu
 A total reads **Unknown** while any problem remains.
 **Runs** and **Series** turn orange from half the app's [limits](#starting-a-sweep).
 Under the rows, **Varied** lists the values of each varied parameter or action tick, and **Fixed** gives the value of every other parameter.
+A spec file loaded with memory budgets adds a **Memory budget** or **GPU memory budget** row for each budget it sets.
 **Problems** and **Warnings** follow when the sweep has any.
 A click on a row's label opens the section that sets it, and a click on a problem opens its row.
 
@@ -548,7 +556,7 @@ Starting a sweep then opens a **Replace results?** dialog first.
 </figure>
 
 Once the sweep starts, its progress takes the place of the settings, and <span class="ui" markdown>:material-pause: Pause</span> takes the place of <span class="ui" markdown>:material-play: Start</span>.
-The top of the tab names the sweep, as in **Sweep of SIR Epidemic**, beside its state: **Planning**, **Running**, **Paused** or **Paused after GPU error**.
+The top of the tab names the sweep, as in **Sweep of SIR Epidemic**, beside its state: **Planning**, **Running** or **Paused**.
 The tab's title shows the share of the runs finished, as in **Sweep 20%**, or **Sweep paused** while the sweep is paused.
 The progress then stays in view behind another tab.
 
@@ -575,7 +583,8 @@ The <span class="ui" markdown>:material-chart-box-outline: Results</span> tab fi
 
 A run that fails, for example when its model panics, is recorded with its status, and the sweep carries on with the next run.
 <span class="ui" markdown>Show failed runs</span> beside the **Failed** count lists the failed runs in the **Runs** view of the Results tab.
-On a GPU model, a device error that no run can be tied to pauses the sweep, and the top of the tab reads **Paused after GPU error**.
+A sweep of a GPU model runs on a GPU device of its own, and a GPU error in the live simulation leaves the sweep alone.
+A device error that no run can be tied to fails every run in progress at the time.
 Closing the app aborts a running sweep.
 An aborted sweep with an output folder keeps the runs it wrote, and <span class="ui" markdown>:material-play: Resume sweep</span> in the [Results tab](#opening-results) finishes it later.
 
@@ -586,7 +595,7 @@ The time leaves out pauses.
 The state at the top of the tab reads **Finished**, **Aborted**, **Stopped** after the GPU device is lost, or **Failed**.
 The tab's title reads **Sweep done**, **Sweep stopped** or **Sweep failed**.
 A **Result** grid takes the place of **Status**, with the runs written, the failed runs, the time and where the results are.
-Under an aborted sweep, a line says whether the runs it did not write can run later.
+Under an aborted or stopped sweep, a line says whether the runs it did not write can run later, or reads **Every run finished before the sweep ended.** when it wrote them all.
 Under the bar, <span class="ui" markdown>:material-pencil-outline: Edit sweep</span> sits on the left, and <span class="ui" markdown>:material-tray-arrow-down: Save results</span> and <span class="ui" markdown>:material-chart-box-outline: Show results</span> on the right.
 
 <span class="ui" markdown>:material-pencil-outline: Edit sweep</span>
@@ -608,16 +617,17 @@ Under the bar, <span class="ui" markdown>:material-pencil-outline: Edit sweep</s
 ### Spec files
 
 <span class="ui" markdown>:material-tray-arrow-down: Save spec</span> in the <span class="ui" markdown>:material-file-cog-outline: Spec</span> menu saves the sweep as a TOML [spec file](sweeps.md#spec-files), named like `henad-sir-sweep.toml`.
-The file holds every setting that changes a result, each parameter the sweep does not vary at its value in the <span class="ui" markdown>:material-tune: Parameters</span> tab, and **Concurrent runs**.
+The file holds every setting that changes a result, each parameter the sweep does not vary at its value in the <span class="ui" markdown>:material-tune: Parameters</span> tab, **Concurrent runs**, and the memory budgets of a loaded spec file.
 It leaves out where the results go.
 `henad-cli --spec FILE --out DIR` runs the same sweep from the command line.
-When a setting cannot go into a spec, such as a value that is not a number, the save fails and the top of the tab reads **Spec save failed** with the reasons.
+When a setting cannot go into a spec, such as a value that is not a number or a **Mean over window** that ends before it starts, the save fails and the top of the tab reads **Spec save failed** with the reasons.
 The first row at fault then opens.
 While a sweep runs, and after it ends, <span class="ui" markdown>:material-tray-arrow-down: Save spec</span> saves the spec that started it.
 For a sweep resumed from the Results tab it is disabled, since the folder's `manifest.json` holds the spec.
 
 <span class="ui" markdown>:material-tray-arrow-up: Load spec</span> reads a spec file back.
 It selects the model the spec names, puts the spec's fixed values into the <span class="ui" markdown>:material-tune: Parameters</span> tab, and fills in the Sweep tab, with the results **In memory**.
+A loaded value outside the range of its field stays as written, and a value the sweep refuses, such as 0 replicates, shows as a problem under its row.
 The tab edits a spec with one block, or with the blocks **One at a time** writes.
 A spec with any other blocks, such as `crates/henad-explore/specs/sir_sweep.toml`, runs from the command line only.
 A spec with a `[search]` table opens in Search mode.
@@ -643,6 +653,7 @@ The tab keeps the settings of every method, and switching between them loses non
 **Objective** picks the output that scores each configuration, and **Goal** picks **Maximize** or **Minimize**.
 **Across replicates** folds the replicates of a configuration into one value, their **Median** or their **Mean**.
 The **Objective** list offers the outputs the **Outputs** section records, then each stat's other common outputs under **Not recorded yet**.
+A vector stat is offered by its parts, as in **Average Velocity.x, maximum**.
 Picking one of those adds it to **Outputs**, where its row reads **Used by Objective** and cannot be removed while the objective reads it.
 A loaded spec whose objective the runs do not record shows the problem under the field, beside <span class="ui" markdown>Add to Outputs</span>.
 Pattern Space Exploration has no objective.
@@ -725,6 +736,8 @@ Random search and hill climbing
 Genetic algorithm
 : Plots the **Best**, **Median** and **Worst** fitness of each generation.
   The best can fall when a re-evaluation shows that a leader was lucky, as [noise](search.md#noise) describes.
+  Before the first generation finishes, the view reads **First generation is still running.**, or **Search ended before its first generation finished.** once the search has ended.
+  Results opened without `generations.csv` read **Generations unavailable. These results have no generations.csv.**
 
 For these three methods, a line above the plot counts the evaluations and gives the best candidate.
 <span class="ui" markdown>Select run</span> selects the candidate's first run, ready to [open](#opening-a-run).
@@ -732,7 +745,7 @@ For these three methods, a line above the plot counts the evaluations and gives 
 Pattern Space Exploration
 : Draws the grid of its two axes and fills it in as the batches finish, with a line counting the cells filled and the evaluations.
   With an automatic range, the grid appears once the initial samples finish.
-  A filled cell is coloured by its hits on a log scale, given above the grid, and an empty cell stays blank.
+  A filled cell is coloured by its hits on a log scale, given above the grid, and an empty cell is grey.
   An evaluation with an output outside the axes lands in an edge cell, and a warning counts those evaluations, as in **12 evaluations outside the axes, counted in the edge cells**.
   Hover over a cell to read its ranges and its hits, and click a filled cell to select the first run of its exemplar.
   A grid of more than 65,536 cells is not drawn.
@@ -807,7 +820,7 @@ A cell pools only the blocks that vary either axis, and a configuration that two
 
 The **Runs** view lists every run in a table: **Run**, **Config**, **Rep**, **Seed**, **Status**, **Ticks** and **Time**, then a column for each axis and one for each output.
 Click a header to sort by it, and click it again to reverse the order.
-**Show** lists **All runs**, the **Failed runs**, or the runs of the **Selected configurations**.
+**Show** lists **All runs**, the **Failed runs**, or the runs of the **Selected configurations**, **Selected candidates** for a search.
 The Series view's **Configurations** menu and a clicked heatmap cell set that same selection.
 Under **Selected configurations**, <span class="ui" markdown>Clear selection</span> empties it, in the Series view too.
 Hover over a status to read the run's note, such as a panic message, or the tick a stop condition ended it at.
@@ -829,6 +842,8 @@ A strip at the bottom of the tab then names the run and its configuration, with 
 
 <span class="ui" markdown>:material-content-copy: Copy command</span>
 : Copies a `henad-cli` command that replays the run and writes its stats to a CSV file.
+  The command samples from tick 0, every `--stats-every` ticks.
+  The run's series samples from the end of its warm-up, and with a warm-up the two files can hold different ticks.
 
 For run 6 of the [first sweep](sweeps.md#a-first-sweep) in the sweeps guide, the command reads:
 
@@ -852,6 +867,7 @@ A warning shows when the model's parameters changed after the sweep ran, and the
 In a browser, choose `manifest.json` and `runs.csv` in the folder, and `series.csv` for the series.
 For the Search view of a search, choose `evaluations.csv`, `batches.csv` and, from a genetic algorithm, `generations.csv` as well.
 The files are known by their contents, so a repeated download that a browser renamed, such as `runs (1).csv`, still opens.
+The tab reads **Reading results** while it reads the picked files.
 The desktop app can also open a folder at start:
 
 ``` bash
@@ -861,7 +877,7 @@ cargo run --release --bin henad-app -- --open sir-sweep
 The results replace the ones shown.
 When those are unsaved results in memory, a **Replace results?** dialog asks first, and <span class="ui" markdown>Open anyway</span> drops them.
 
-A folder a stopped sweep left behind opens with the runs it wrote.
+A folder a stopped sweep left behind opens with the runs it wrote, even when it wrote none.
 In the desktop app, <span class="ui" markdown>:material-play: Resume sweep</span> runs the runs the folder lacks, as `henad-cli --resume` does.
 For a search the button reads <span class="ui" markdown>:material-play: Resume search</span>, and it [replays the search](search.md#resuming-a-search) up to where it stopped before running the rest.
 The progress shows in the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab, and the folder is read again once the sweep ends.

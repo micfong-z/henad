@@ -125,7 +125,7 @@ A `u32` parameter and an action tick take the integers in it.
 The search treats such a factor as ordered.
 A change moves its value a short way up or down, and the search can close in on a good value.
 
-A list of `values`, `levels = "all"` and a range with a `step` each give a set of values.
+A list of `values`, `levels = "all"` and a range with a `step` each give a set of values, and a value listed twice counts once.
 The search ignores their order, and a change draws another value from the set at random.
 Leave out the step of a range whose neighbouring values behave alike, and keep a list for values that do not, such as the options of a choice.
 
@@ -216,9 +216,10 @@ A neighbour moves every ordered factor of the incumbent by up to `mutation_scale
 The climb moves to the best neighbour when it beats the incumbent outright.
 After `patience` batches in a row without a move, the climb starts over from a new batch of random candidates.
 
-A neighbour always has a config no earlier candidate has.
-A neighbour whose config repeats an earlier one is drawn again, up to 16 times.
-When every draw repeats, the batch re-evaluates the earlier candidate in its place, and a re-evaluation never moves the climb.
+No two new candidates share a config.
+A random candidate or a neighbour whose config repeats an earlier one is drawn again, up to 16 times.
+When every draw repeats, the batch re-evaluates the earlier candidate in its place.
+A re-evaluated random candidate competes for the start like the others, and a re-evaluated neighbour never moves the climb.
 Over a few integers or options, a climb that has tried every nearby config stalls this way and starts over.
 
 | Key | Default | Effect |
@@ -251,9 +252,9 @@ Each factor of the child then changes with chance `mutation_rate`, by a step of 
 
 | Key | Default | Effect |
 |---|---|---|
-| `population` | 32 | Members of each generation |
+| `population` | 32 | Members of each generation, at most 65536 |
 | `elite_count` | 2 | Best members carried unchanged into the next generation, fewer than `population` |
-| `tournament_size` | 3 | Members drawn for each tournament |
+| `tournament_size` | 3 | Members drawn for each tournament, at most 65536 |
 | `crossover_rate` | 0.9 | Chance that a child has a second parent |
 | `mutation_rate` | 0.2 | Chance that each factor of a child changes |
 | `mutation_scale` | 0.1 | Longest step of a changed factor, as a share of its range |
@@ -270,6 +271,7 @@ Each generation first re-evaluates the best `reevaluate_fraction` of the one bef
 A member's **fitness** is its objective over every replicate it has, re-evaluations included.
 A member that stays near the top keeps gathering runs, and its value settles.
 The elites are chosen once the re-evaluations are in, and a leader that was lucky loses its place.
+The parents of the generation's children are picked before then, from the values the members had when the last generation ended.
 
 The example shows it happen.
 Candidate 290 scored 125 on its first four runs, the best of the search at the time.
@@ -318,7 +320,7 @@ The search holds its evaluations until the first `initial_samples` of them are t
 Each automatic axis then spans the smallest to the largest value those evaluations gave, widened by 5% of that span at each end.
 A single value `v` gets a span of 1 around it, or of `|v|` when that is wider.
 The range stays fixed for the rest of the search, and the evaluations held so far land in their cells.
-Until then the archive is empty, every candidate is drawn at random, and `evaluations.csv` gives each evaluation its values but no cell.
+Until then the archive is empty, each batch holds initial samples alone, and `evaluations.csv` gives each evaluation its values but no cell.
 An axis takes both bounds or neither, and an automatic range needs at least one initial sample.
 The manifest records the range of each axis as `axis_ranges`, and `archive.csv` gives the bounds of every cell.
 `aggregate` folds the replicates into one value per axis, and leaves failed replicates out.
@@ -326,10 +328,12 @@ An evaluation with no value left on an axis lands in no cell.
 
 The **archive** keeps every filled cell with its **exemplar**, the first candidate to land in it.
 It also counts the cell's **hits**, every candidate that landed there.
-The first `initial_samples` candidates are drawn at random.
-Each later candidate comes from the archive.
+The first `initial_samples` candidates are drawn at random, and a batch that reaches the last of them stops there.
+Once every one of them is told, each later candidate comes from the archive.
 The search draws two filled cells at random, keeps the one with fewer hits, and mutates its exemplar, moving every factor by up to `mutation_scale`.
 The exemplars of rarely hit cells become parents more often, and the search spreads outward from the edges of the archive.
+With `initial_samples = 0`, the first candidate is drawn at random, alone in its batch.
+Until a candidate lands in a cell, the archive has nothing to breed from, and each later batch is drawn at random in full.
 
 | Key | Default | Effect |
 |---|---|---|

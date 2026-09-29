@@ -30,7 +30,7 @@ A sweep or search read from `--spec` takes the model from the spec file, and `MO
 |---|---|---|
 | `--list` | | Print the available model ids and exit |
 | `--params` | | Print the model's parameters, with kinds, defaults and ranges, and exit. With `--json`, print them as [one JSON line](#parameters-as-json) |
-| `--info` | | Print host and GPU details. Without a model, prints and exits. With a model, prints as a provenance header |
+| `--info` | | Print host and GPU details. Without a model or a sweep, prints and exits. Otherwise, prints as a provenance header |
 | `--json` | | Emit one JSON object per line instead of the human report, for a driver to parse |
 | `--threads <N>` | 0 | Worker threads for CPU models. 0 leaves rayon's own choice, one per logical cpu |
 | `--set <ID=VALUE>` | | Override one parameter. Repeatable |
@@ -166,7 +166,7 @@ A spec file with a `[search]` table runs a [search](#searches) instead.
 |---|---|---|
 | `--out <DIR>` | | Run the sweep and write its results to this directory. With `--merge`, write the merged shards to this directory |
 | `--spec <FILE>` | | Read the sweep from a TOML spec file, or run the [search](#searches) of one with a `[search]` table |
-| `--dry-run` | | Print the sweep's plan and write nothing. The first and last configs are built as a check |
+| `--dry-run` | | Print the sweep's plan and write nothing. The first config that builds without a fault and the last config are built as a check |
 | `--vary <ID=LEVELS>` | | Vary one parameter over [its levels](#levels), or the tick of an action with `action.NAME=LEVELS`. Repeatable |
 | `--zip` | | Pair the levels of every `--vary` by position |
 | `--sample <lhs:N\|random:N>` | | Draw `N` configs from the `--vary` levels and ranges, spread as a Latin hypercube or drawn uniformly. See [designs](#designs) |
@@ -186,14 +186,14 @@ A spec file with a `[search]` table runs a [search](#searches) instead.
 | `--retry-failed` | | With `--resume`, also rerun failed runs |
 | `--merge <DIR>...` | | Merge the directories of a sweep's shards into the `--out` directory. Takes no model |
 
-Every flag in this table apart from `--merge` needs `--out`, `--spec` or `--dry-run`.
+`--out`, `--spec` and `--dry-run` each ask for a sweep, and every other flag in this table apart from `--merge` needs one of them.
 `--resume` needs `--out`, and `--retry-failed` needs `--resume`.
 `--zip` and `--sample` need `--vary` and cannot be combined, and `--design-seed` needs `--sample`.
 `--design` cannot be combined with `--vary`, `--zip` or `--sample`.
 A dry run with `--out` checks the directory and still writes nothing.
 
 `--set`, `--act`, `--steps`, `--warmup`, `--reps`, `--seed`, `--stats-every`, `--threads` and `--json` from the main table apply to a sweep too.
-`--export`, `--export-stats` and `--global-warmup` cannot be combined with a sweep, and `--params` cannot be combined with `--out` or `--dry-run`.
+`--list`, `--export`, `--export-stats` and `--global-warmup` cannot be combined with a sweep, and `--params` cannot be combined with `--out` or `--dry-run`.
 `--merge` takes `--out` and `--json`, and refuses every flag that plans or runs a sweep.
 
 `--spec` refuses every flag that changes a result, and the spec file is then the whole record of the sweep.
@@ -214,6 +214,7 @@ The guide describes [the spec file](../guide/sweeps.md#spec-files).
 | `min:max` | `infection_rate=0.05:0.95` | Under `--sample`, every value from `min` to `max`. Elsewhere, the integers from `min` to `max` for a `u32` parameter or an action tick, and refused for an `f32` |
 | `all` | `directed=all` | Every value of a `bool` or `choice` parameter |
 
+Spaces around the levels and around each listed value are ignored.
 Value `i` of a range is `min + i * step`, computed from `i` alone.
 Rounding errors do not build up along the range, and `0:1:0.1` gives 11 values ending at exactly 1.
 A range stops at the last value not past `max`, and a last value within rounding error of `max` is `max` itself.
@@ -223,7 +224,7 @@ A range over a `bool` or `choice` parameter is refused, and so is `all` over a n
 
 The levels of an action are whole ticks from 0.
 `action.NAME` names an action that `--act` adds.
-An action is named by its id, a second `--act` with the same id by `ID_2`, a third by `ID_3`, and so on.
+An action is named by its id, a second `--act` with the same id by `ID_2`, a third by `ID_3`, and so on, skipping any name an earlier `--act` has taken.
 
 ### Designs
 
@@ -264,6 +265,7 @@ Values are written as `--set` takes them: a number, `true` or `false`, or an opt
 Spaces around a field, blank lines and a leading byte order mark are ignored.
 A parameter or action the table leaves out keeps its `--set` value, its default or its `--act` tick.
 In a spec file, a `table` block names its table with `file`, relative to the spec file, or holds its text in `table_text`, and takes no factors.
+The path cannot be absolute or hold `..`, and the table sits in the spec file's directory or below it.
 
 ### Checks before the first run
 
@@ -275,7 +277,7 @@ Each of these refuses it, with an error that names the cause:
 - a parameter fixed with `--set` and varied too, or varied twice
 - `--zip` over levels of different lengths
 - an `f32` range with no step, outside `--sample`
-- a sampled design with no samples or no factors
+- a sampled design with no samples or no factors, or a factor with an empty list of `values`
 - a design table with a column that names nothing, a column named twice, a row of another width than the header, a value its column refuses, or no rows
 - an action the model does not declare, two actions with one name, or `--vary action.NAME` for an action no `--act` adds
 - an action tick that is not a non-negative integer
@@ -353,7 +355,7 @@ The command line has no flag for it.
 `--act ID@TICK` fires an action in every run of a sweep, and each `[[action]]` table of a spec file does the same with its `id` and `tick`.
 A sweep names each action, and names are unique.
 A spec file's `name` is the id when left out.
-On the command line the name is the id, then `ID_2` for a second `--act` with the same id, `ID_3` for a third, and so on.
+On the command line the name is the id, then `ID_2` for a second `--act` with the same id, `ID_3` for a third, and so on, skipping any name an earlier `--act` has taken.
 `--vary action.NAME=LEVELS`, or a factor with `action = "NAME"`, varies that action's tick.
 `runs.csv` and `summary.csv` hold a column `action.NAME` per action, after the parameters, with the action's tick in the config.
 
@@ -369,7 +371,7 @@ A refused action is noted in the `note` column as `model refused action 'ID' at 
 `--timeout SECONDS`, or `timeout_s` in a spec file's `[run]`, limits the wall-clock time of each run.
 The seconds can be fractional.
 The clock counts stepping and sampling, leaves out the build, and is read between slices of steps.
-On a GPU track it also counts the time the sweep spends on the other tracks, as [concurrency](#concurrency) describes.
+On a GPU track it counts the run's share of the time the sweep spends on the tracks, as [concurrency](#concurrency) describes.
 A run ends after the first slice that takes it past its limit, with status `timed_out`, stop reason `timeout`, the tick it reached in `ticks`, and a note such as `timed out after 600 s at tick 4096`.
 A timed-out run depends on the machine and its load, and none of the promises of identical files on this page covers it.
 The timeout is not part of the plan hash, and a [resume](#resuming) runs a timed-out run again, under any timeout.
@@ -415,7 +417,8 @@ The runs written before the loss stay, the manifest reads `incomplete`, `explore
 No run that failed because of the loss is written, and `--resume` runs those with the rest.
 
 A GPU run's clock starts once its model is built and stops at its last sample.
-It leaves out the builds of other runs and every pause, and with several tracks it counts the time the sweep spends on the other runs.
+It leaves out the builds of other runs and every pause.
+With several tracks, the time the sweep spends visiting them is split evenly between their runs, and the clock counts the run's share.
 `wall_ms`, `steps_per_s` and the timeout all read that clock, and `--concurrent 1` times each run on its own.
 A GPU run that times out gives the tick of its last sample in `ticks`.
 
@@ -430,6 +433,8 @@ A run that timed out ends wherever the clock caught it.
 
 `--out` creates the directory and any missing parents.
 A directory that holds `runs.csv`, `series.csv`, `summary.csv`, `manifest.json` or one of the [search tables](#search-tables) is refused unless `--resume` is given, and other files in it are left alone.
+A file ending in `.staged` counts as well.
+A [resume](#resuming) or a [merge](#shards-and-merging) that stopped while replacing its tables leaves one behind.
 
 | File | Content |
 |---|---|
@@ -684,9 +689,9 @@ Random search takes no settings.
 | `[search.hill_climb]` | `mutation_scale` | 0.1 | Above 0 |
 | | `patience` | 5 | At least 1 |
 | | `reevaluate` | `false` | `true` or `false` |
-| `[search.genetic]` | `population` | 32 | At least 1 |
+| `[search.genetic]` | `population` | 32 | 1 to 65536 |
 | | `elite_count` | 2 | Below `population` |
-| | `tournament_size` | 3 | At least 1 |
+| | `tournament_size` | 3 | 1 to 65536 |
 | | `crossover_rate` | 0.9 | 0 to 1 |
 | | `mutation_rate` | 0.2 | 0 to 1 |
 | | `mutation_scale` | 0.1 | Above 0 |
@@ -756,7 +761,9 @@ A Pattern Space Exploration leaves failed replicates out of each axis, and an ev
   After `patience` batches in a row without a move, the next batch draws new random candidates, with origin `restart`, and the climb starts again from the best of them.
   A neighbour whose config an earlier candidate or another neighbour of the batch has is drawn again, up to 16 times.
   When every draw repeats, the neighbour becomes a re-evaluation of the earlier candidate the first draw matched, at most one per candidate in a batch, or is left out when the first draw matched another neighbour.
-  A batch can then hold fewer than `batch_size` candidates, and a re-evaluation never moves the incumbent.
+  A batch can then hold fewer than `batch_size` candidates, and a re-evaluation in place of a neighbour never moves the incumbent.
+  A `random` or `restart` candidate is drawn again the same way, and one whose draws all repeat becomes a re-evaluation of the earlier candidate.
+  That candidate then counts among the candidates the climb starts from.
 
 `genetic`
 : Generation 0 holds `population` random candidates.
@@ -780,7 +787,9 @@ A Pattern Space Exploration leaves failed replicates out of each axis, and an ev
   The evaluations told before the range was taken land in their cells then, in candidate order.
   Until then the archive is empty, and every candidate is random.
   The first candidate to land in a cell is its exemplar, and every candidate to land there counts as a hit.
-  The first `initial_samples` candidates are random, and so is every candidate while the archive is empty.
+  The first `min(initial_samples, max_evaluations)` candidates are random, and a batch that reaches the last of them ends there.
+  With `initial_samples = 0`, the first candidate is random and alone in its batch.
+  A batch asked while the archive is empty is random in full.
   Every other candidate draws two filled cells with replacement, keeps the one with fewer hits or the first on a tie, and mutates its exemplar.
   A batch breeds from the archive as it stood when the batch was asked for.
 
@@ -881,6 +890,8 @@ A search's manifest reads `search` in `mode`.
 | `best_candidate_id`, `best_objective` | Best candidate at the end and its objective, `null` for `pse` |
 | `filled_cells` | Filled cells at the end, `null` for any other algorithm |
 | `axis_ranges` | `x_min`, `x_max`, `y_min` and `y_max` of the grid, an automatic range as the initial samples set it. `null` for any other algorithm, or while an automatic range waits for the initial samples |
+
+A search that fails records its standing at the failure, and zeros when it fails before its first batch is told.
 
 ### Search progress
 

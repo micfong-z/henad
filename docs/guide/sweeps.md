@@ -59,6 +59,8 @@ A list takes the values separated by commas, written the way `--set` takes them:
 --vary recovery_rate=0.02,0.05,0.1
 ```
 
+Spaces around each value are ignored.
+
 `all` takes every value of a parameter that the app shows as a checkbox or a dropdown, such as `--vary network=all` for Virus on a Network.
 
 `--set` still fixes a parameter for every config.
@@ -94,12 +96,15 @@ cargo run --release -p henad-cli -- sir \
 
 A range written `min:max`, with no step, stands for every value between its ends.
 `lhs:40` draws 40 configs as a **Latin hypercube**.
-The range of each parameter is cut into 40 equal strata, and each stratum holds exactly one config, at a random point inside it.
+The range of each parameter is cut into 40 equal strata, and each stratum holds exactly one config.
+An `f32` range places that config at a random point inside its stratum.
 Each parameter shuffles its strata on its own, and the configs spread over the whole space without lining up along a grid.
 `random:40` draws every value of every config on its own, uniformly over its range.
 
 A list, `all` or a range with a step gives a parameter a set of values to sample from.
-A random design picks among them with equal chances, and a Latin hypercube takes each one equally often, to within one config.
+A random design picks among them with equal chances.
+A Latin hypercube gives each stratum the lowest value it covers, and takes each value equally often, to within one config.
+The values a parameter takes then depend on the number of configs alone, and the design seed only decides which configs take them.
 An integer range with no step is the set of every integer in it, such as `--vary initial_outbreak_size=1:50` for Virus on a Network.
 
 The draws come from a **design seed**, and the plan prints it beside the block:
@@ -114,7 +119,8 @@ Unless you give one, it is derived from the root seed of the [next section](#rep
 
 ### Checking a sweep first
 
-`--dry-run` plans the sweep, builds its first and last configs to size it, prints the plan and stops:
+`--dry-run` plans the sweep and sizes it from two builds, of the first config that builds without a fault and of the last config.
+It then prints the plan and stops:
 
 ``` bash
 cargo run --release -p henad-cli -- sir \
@@ -123,7 +129,7 @@ cargo run --release -p henad-cli -- sir \
 
 It catches the mistakes a real sweep would catch before its first run, such as an unknown parameter or a value out of range, and writes nothing.
 The plan also tells you how much memory the runs will hold and how many rows `series.csv` will get.
-Of the two configs it builds, the one that holds more memory sets the figure.
+Of those two builds, the one that holds more memory sets the figure.
 
 ## Replicates and seeds
 
@@ -331,6 +337,7 @@ cargo run --release -p henad-cli -- sir \
 ```
 
 The clock counts the time a run spends stepping and sampling, and leaves out its build.
+With several GPU runs at once, it counts a run's share of that time, as [concurrency](#concurrency) describes.
 It is read between slices of steps, and a run ends a little after its limit.
 A run past its limit gets the status `timed_out` and the stop reason `timeout`, and its note gives the tick it reached.
 It counts as failed, and its reducers cover only the ticks it stepped.
@@ -363,7 +370,8 @@ An action's tick can be a factor too.
 
 The levels take the same forms as a parameter's, in whole ticks, and a sampled design draws ticks from a range with no step.
 An action added with `--act` is named by its id.
-A second `--act` with the same id is named `ID_2`, a third `ID_3`, and so on, and each can be varied on its own.
+A second `--act` with the same id is named `ID_2`, a third `ID_3`, and so on, skipping any name an earlier `--act` has taken.
+Each can be varied on its own.
 In a spec file, factors and columns call an `[[action]]` by its `name`.
 An `[[action]]` without a `name` goes by its id.
 The factorial block [above](#blocks) varies `second_wave` that way.
@@ -412,6 +420,7 @@ cargo run --release -p henad-cli -- \
   --spec crates/henad-explore/specs/sir_table.toml --out sir-table
 ```
 
+`file` is relative to the spec file, and cannot be absolute or hold `..`.
 The manifest records the table's path and a hash of its text.
 Its copy of the spec holds the table itself under `table_text`, a key that a spec file can also use in place of `file`.
 
@@ -499,7 +508,7 @@ The command then exits with status 3 in place of 0, for a script to check.
 ## Concurrency
 
 A sweep steps several runs at once, and the `layout` line of the plan shows how many.
-Henad builds the first and last configs, and picks the layout from the one that holds more memory.
+Henad picks the layout from the first config that builds without a fault and the last config, whichever of the two holds more memory.
 
 The layout never changes a result.
 All three CSV files come out the same byte for byte at any `--concurrent`, apart from the `build_ms`, `wall_ms` and `steps_per_s` columns.
@@ -552,8 +561,8 @@ A run that fits beside no other run steps alone.
 The graphics API reports no total for a GPU's memory, and without `--gpu-memory` the largest buffer the GPU allows stands in for the cap.
 A run that still finds the GPU out of memory waits for another run to finish, and the sweep runs one track fewer from then on.
 
-With several tracks, a run's `wall_ms` counts the whole time it was on a track, the time spent on the other tracks included.
-Its `steps_per_s` then reads lower than the run would step alone, and the run reaches its `--timeout` sooner.
+With several tracks, the time the sweep spends visiting them is split evenly between their runs.
+A run's `wall_ms`, its `steps_per_s` and its `--timeout` all read its share.
 Pass `--concurrent 1` when the time of each run matters.
 
 A fault in one run ends that run alone, and the other tracks carry on.

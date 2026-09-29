@@ -582,7 +582,8 @@ The maintainer asked for no rounded corners anywhere, chips and progress bars in
 Dock tabs have square corners too (`lib.rs`), and the tab bar no longer shows a scroll bar when it overflows.
 
 The maintainer then supplied the Micfong Colour System (MCS), seven hues in eleven steps, which they have used across their work for about five years.
-`ui/mcs.rs` holds all 77 entries as constants, and every UI chrome colour now comes from it.
+`ui/mcs.rs` holds all 77 entries as constants, and every colour chosen for a badge, a fill or a coloured text now comes from it.
+The theme's neutral surfaces and strokes predate the palette and stay as they were.
 The rule maps a state to a hue:
 - blue for running and for the primary action;
 - orange for paused, ended early and warnings;
@@ -609,6 +610,101 @@ docs/assets/app/*.png          ~ 14 screenshots retaken
 .gitignore                     ~ /results anchored
 AGENTS.md                      ~ square corners, the MCS rule
 ```
+
+### PR #47 review
+
+An agent audited PR #47 and reported 128 findings: 5 major, 81 minor and 42 nits.
+The maintainer decided two questions it raised.
+A GPU run's timeout counts the run's share of the device.
+Before, it counted the whole time the run was on a track, the other tracks' turns included.
+A spec file's memory budgets apply to a sweep started from the app, and the Plan shows them.
+
+The fixes ran as 13 groups, each in a worktree of its own: the search methods, the rest of `henad-core`, `henad-compute` with the app's loose ends, `henad-explore`'s output, execution, results, pumped sweeps and tests, and the app's sweep draft, sweep form, sweep device, results store and result views.
+Each group was verified once and repaired once, then merged.
+
+Modified files marked **~**, relative to the end of the colour pass.
+
+```
+AGENTS.md, docs/guide/, docs/reference/     ~ the behaviour below
+crates/henad-core/src/
+├── explore/search/pse.rs                   ~ initial samples in batches of their own, batch_count, NaN outside
+├── explore/search/hill_climb.rs            ~ starting points drawn through draw_config
+├── explore/search/genetic.rs               ~ MAX_POPULATION, MAX_TOURNAMENT_SIZE
+├── explore/search/genome.rs                ~ a repeated listed level kept once
+├── explore/measure.rs, stop.rs, reducer.rs ~ a threshold that is not finite refused at plan time
+├── explore/design.rs, factor.rs, value.rs  ~ DesignError::NoLevels, trimmed levels, an option's name before its index
+└── helpers.rs                              ~ choice_param refuses an option named like an index or named twice
+crates/henad-compute/src/
+├── cpu/sim_thread.rs, gpu/sim_thread.rs    ~ fired_through: no tick fires twice
+├── gpu/stepping.rs                         ~ sample_stats collects a readback still in flight
+└── gpu/primitives/readback.rs              ~ a map given up unmaps its staging buffer
+crates/henad-explore/src/
+├── handle.rs                               ~ BoundModel: a GPU sweep on a device of its own, gpu_memory,
+│                                             SearchBatchTold carries an Arc
+├── device.rs                               ~ the WebGPU baseline, DeviceError::BelowBaseline
+├── exec/gpu.rs                             ~ each round split evenly between the live tracks
+├── probe.rs, pumped.rs                     ~ PlanProbe, one probe build per pump, a pause holding the runs alone
+├── output/summary_csv.rs, read.rs          ~ the summary streamed from runs.csv, RecordScan
+├── output/mod.rs, search_tables.rs         ~ staged files refused, search columns found by position
+├── result_set.rs, spec_file.rs             ~ run keys in replays, series headers checked, TablePath
+└── tests/support.rs                        ~ OutputTables (was Tables) compares bytes, CommitLimit, ticks_seen
+crates/henad-app/src/ui/
+├── sweep/mod.rs, session.rs                ~ ColumnsBuild, SessionExecution, no fault pause
+├── sweep/draft.rs, builder.rs, plan.rs     ~ stat columns, TickSource, Save spec refusals, the budget rows
+├── sweep/parameters.rs                     ~ lists without spaces, a values field per model and parameter
+├── results/store.rs                        ~ batches extend the axes in place, SeriesBand (was Band), run keys
+├── results/plot.rs, response.rs            ~ HeatmapTiles, Whiskers
+└── results/mod.rs, search.rs, table.rs     ~ Reading results, the generation messages, Selected candidates
+crates/henad-cli/src/main.rs, explore.rs    ~ --list and --info beside a sweep, the names of a repeated --act
+```
+
+The decisions, those two included:
+
+- **GPU timeout.** Each interleaver round is split evenly between the live tracks, and a run's `--timeout`, `wall_ms` and `steps_per_s` read its share.
+- **Loaded budgets.** A spec file's `[execution] memory` and `gpu_memory` are kept, written back by Save spec, and passed to `SweepRunOptions` through `SessionExecution`. The Plan lists them as Memory budget and GPU memory budget. The Execution section shows a read-only Memory budget row, noted "From loaded spec file", with a button that clears both.
+- **Pattern Space Exploration.** The initial samples fill batches of their own. With `initial_samples = 0` the first candidate is alone in its batch, and after the random phase an ask on an empty archive draws a whole random batch.
+- **Timeout field.** Its minimum of 1 s only limits editing. A loaded spec with a shorter timeout, 0 included, is kept and not refused, since `henad-cli` accepts it.
+- **Stat columns.** The Sweep tab learns a model's stat columns from one build at its default values, on a thread of its own. A GPU model builds there on a headless device of its own, never on the app's device.
+- **Replays.** `ResultSet::replay` and the app's store compare a run's `run_key` only while the model's schema matches the one the sweep ran with. After a model change a replay opens under the store's existing warning.
+- **Headless devices.** `acquire_headless` starts from the WebGPU baseline, and an adapter below it gets `DeviceError::BelowBaseline`.
+- **The results store (A-02).** A search batch extends the store's configs and axes in place. A continuous axis still costs time linear in its levels per batch, measured at about 0.5 ms per batch on average up to 100,000 unique values in a release build.
+- **The Latin hypercube (C-08).** A stratum of a discrete factor takes the lowest level it covers. The lattice stays, since it balances the levels exactly.
+- **This record and the CHANGELOG.** The human section of this record stays removed, and `CHANGELOG.md` keeps unreleased features at the level of detail the maintainer trimmed it to.
+
+Among the other fixes:
+
+- A GPU sweep started from the app acquires a device of its own, so a fault in the live model or the renderer no longer pauses it, and a fault in the sweep no longer offloads the live model. The Paused after GPU error state is gone.
+- A second `SetSchedule` no longer fires the actions of the tick the loop sits at.
+- An untraced GPU fault no longer rewrites a run that ended earlier in the same round as `gpu_error` (E-04).
+- A stray quote in a table fails its record, where it used to hide every record after it.
+- A directory holding a staged table or the `tables.staged` marker counts as holding results.
+- A search table's trailing columns are found by position, and a parameter named like one of them no longer shadows it.
+- A browser sweep makes one probe build per pump, and a sweep or search paused after its last run still ends.
+- Save spec refuses what Load spec would refuse, and the Objective and axis lists offer a vector's parts.
+- `--list` refuses the sweep flags, `--info` no longer drops a sweep, and a repeated `--act` takes the first free name.
+
+A second review read the merged diff by area, with a verifier on each finding.
+It confirmed 18 of 20 findings, 2 minor and 16 nits, and all 18 are fixed:
+
+- Start stays disabled with **Reading model outputs** in the Outputs section until the model's stat-column build reports. After a failed build, a watched part column is accepted for the sweep's own probe to check.
+- A timeout that `Duration` cannot hold, such as a loaded `timeout_s = inf`, is an issue on the timeout row.
+- An action's tick row follows its tick source under a design table.
+- A frame's search batches reach the results store in one pass.
+- A CSV error from `runs.csv` or a search table gives its line in the file.
+- The rest were wording and small checks: the `--act` help, the timeout docs, a table path that starts with `./`, a choice option with spaces at an end, and the genetic bounds the app now takes from the core.
+
+Skipped findings:
+
+- D-03 and X-09 asked for the human section of this record. The maintainer removed it on purpose.
+- A-25 and A-26 needed no change.
+- A-28 came from a misreading of egui's `Sides`.
+- C-08 is kept by design, as above.
+
+Checking:
+
+- **Summary bytes.** The streamed rebuild of `summary.csv` was checked byte for byte against the original implementation with a temporary differential test. Tests of the new code against itself could not show that the bytes stayed the same.
+- **Result views.** A live check ran the release app on the maintainer's second monitor through the egui MCP. The Heatmap's new tiles, the Response view's whiskers (hidden with their line from the legend), the Pattern Space grid's grey empty cells, the vector part columns of GPU boids and a GPU sweep on its own device all behaved as intended. The maintainer chose to keep the grey empty cells.
+- **Screenshots.** `sweep.png` was retaken for the new Parameters hint, at a window 18 points taller so the Execution section still fits, and `results-search.png` for the grey empty cells. The tour's search gave the same 76 filled cells as before, since its 64 initial samples fill whole batches.
 
 ## State after
 
@@ -646,28 +742,28 @@ A GPU sweep runs up to four runs on one device at a time, with outputs identical
   - The EMA Workbench recipe the plan mentions is not written yet.
 - **Open after M3.**
   - After Run to tick, the Charts panel holds only the snapshots the UI received, often just the build tick and the target, so a fast run draws as a straight line.
-  - Sending `SetSchedule` again mid-run fires the current tick's actions a second time. The app only sends it on a build, and a schedule edit waits for the next Build.
+  - Sending `SetSchedule` again mid-run fires the current tick's actions a second time. The app only sends it on a build, and a schedule edit waits for the next Build. The PR #47 review fixed it: both loops record the ticks that have fired, and no tick fires twice.
   - The replay label is built in `henad-core`, although the app shows it.
 - **Open after M4.**
   - The builder had one text field per parameter in the `--vary` syntax. The redesign adds a values editor with Range fields and quick fills beside it, and an options menu for checkbox and dropdown parameters.
-  - The Estimate button (a probe build of the first and last configs, with a time estimate) is not built. It needs a probe API on `SweepRun`.
+  - The Estimate button (a probe build of the first config that builds and of the last config, with a time estimate) is not built. It needs a probe API on `SweepRun`.
   - Some UI strings said "panel" where the dock and the docs say "tab". M6 changed them to "tab".
   - Load spec only reads a spec the builder can edit: one block, or the blocks One at a time writes. Any other spec, the shipped `sir_sweep.toml` included, is refused and runs from the command line only, as the app guide says.
   - The Response and Heatmap views pool over the axes not pinned to a level.
   - The benchmark ignore rule `results` was unanchored and caught `ui/results/`. It now reads `/results`, the one folder the benchmark scripts write.
   - Neither the Sweep nor the Results section of the app guide had a screenshot. Eight were taken from the redesigned tab and added.
 - **Open after M5.**
-  - A GPU run's timeout counts wall time, so with N tracks a run reaches its timeout about N times sooner.
-  - In the app, the interleaver and the UI thread take faults from one `FaultSink`, so a fault outside every scope can be blamed on the wrong side.
+  - A GPU run's timeout counts wall time, so with N tracks a run reaches its timeout about N times sooner. The PR #47 review fixed it: a run's clock counts its share of each round.
+  - In the app, the interleaver and the UI thread take faults from one `FaultSink`, so a fault outside every scope can be blamed on the wrong side. The PR #47 review fixed it: a GPU sweep started from the app runs on a device of its own.
   - A suspected device loss is confirmed with a blocking device-wide poll. That runs only on a failure path.
-  - The app's builder has no GPU memory field. It uses the device's largest buffer as the budget.
+  - The app's builder has no GPU memory field. It uses the device's largest buffer as the budget. Since the PR #47 review, a loaded spec's `gpu_memory` applies, and the tab still has no field to set one.
   - `GpuSimState::poll_stats_readback` now returns `StatsPoll`, a breaking change for an implementation outside the workspace. The CHANGELOG lists it.
 - **Open after M6.**
   - The genetic algorithm ranks by the objective's aggregate, so `aggregate = "mean"` gives mean fitness where the plan named the median.
   - Pattern Space Exploration leaves a failed replicate out of an axis rather than counting it as the worst value, since an axis has no direction.
   - Random search and Pattern Space Exploration do not skip a configuration already evaluated, so in a small discrete space they can rerun it.
   - Hill climbing resamples a categorical gene on every neighbour and has no mutation rate of its own.
-  - The objective and axis pickers in the app list stat labels, not the vector and histogram columns behind them.
+  - The objective and axis pickers in the app list stat labels, not the vector and histogram columns behind them. The PR #47 review fixed it: the lists offer a vector's parts and a histogram's total, from a build of the model at its default values.
   - With `reevaluate` on, hill climbing's best-so-far line can move against the goal when a re-evaluation lowers the incumbent's aggregate.
 - **Departures from the plan.** A final audit compared the plan with the tree. Every planned file, type, flag, spec key, CSV column and manifest field is present. These differ:
   - The plan asked for one record per milestone. All seven milestones ran in one session, so this one record covers them, a section each.
@@ -687,6 +783,12 @@ A GPU sweep runs up to four runs on one device at a time, with outputs identical
 - **Open after the colour pass.**
   - Error text is red 500, which falls below the WCAG AA ratio of 4.5:1 for small text: 3.79:1 on a tab body, 2.59:1 in a section header, and 1.96:1 in a selected Runs row. Red 400 would reach 5.0:1 on a tab body. It is a theme change, left to the maintainer.
   - Some shapes are still round: the legend markers, the Response view's points, radio buttons and the web loading ring.
+- **Open after the PR #47 review.**
+  - The search batches of a frame cost the results store time linear in the levels of a continuous axis, about 0.5 ms per batch on average up to 100,000 unique values in a release build. A new level moves every level above it.
+  - A `first` reducer whose threshold is not finite is refused through `ReducerError::Comparison`, whose message now names the threshold. It has no variant of its own, unlike a stop condition's `StopError::NonFiniteThreshold`.
+  - A search directory written before the Pattern Space Exploration fix, whose initial samples ended inside a batch, is refused on `--resume` through the run-key check, since its trajectory differs.
+  - A quote that opens a field and never closes still hides the rest of a table from its readers. `RecordScan`'s doc says so. Refusing that tail would also refuse a directory whose process died inside a multi-line note, which resume has to repair.
+  - A stat-column build that fails is not tried again in the same session, and the model's draft keeps counting each stat as one column.
 - **Next.** Review and commit, and open F5, batched multi-world GPU dispatch, as its own research issue. M5's measurement is its baseline.
 
 <!-- ─────────────────────────────────────────────────────────────────────────

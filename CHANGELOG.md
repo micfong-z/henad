@@ -25,7 +25,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 
 - `henad-cli --export-stats` prepares each sample as the GUI does, so derived statistics match between the two.
 - `FaultKind` and `SimCommand` have new variants, and an exhaustive `match` on either needs new arms.
-- `GpuSimState::poll_stats_readback` returns a `StatsPoll`, `ModelFactory` is thread-safe, and `GpuContext` is built through `GpuContext::new` only.
+- The GPU stats readback polls return a `StatsPoll` (`GpuSimState::poll_stats_readback` and the `poll` and `poll_blocking` of the readback primitives), `ModelFactory` is thread-safe, and `GpuContext` is built through `GpuContext::new` only.
 
 ## [0.1.0] - 2026-09-08
 
