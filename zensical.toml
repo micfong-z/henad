@@ -26,6 +26,8 @@ nav = [
         { "Getting started" = [
             "guide/installation.md",
             "guide/running.md",
+            "guide/sweeps.md",
+            "guide/search.md",
             "guide/app.md",
         ] },
         { "Writing your first model" = [
@@ -103,6 +105,7 @@ nav = [
             { "#26, 2026-09-09" = "developing/agent-record/20260909-26-model-metadata.md" },
             { "#27, 2026-09-09" = "developing/agent-record/20260909-27-result-export.md" },
             { "#28, 2026-09-21" = "developing/agent-record/20260921-28-network-models.md" },
+            { "#29, 2026-09-27" = "developing/agent-record/20260927-29-parameter-sweeps.md" },
         ] },
     ] },
 ]

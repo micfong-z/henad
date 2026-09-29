@@ -64,6 +64,7 @@ cargo run --release -p henad-cli -- --help
 ```
 
 See [the Henad CLI reference](../reference/cli.md) for more details.
+See [parameter sweeps](sweeps.md) for running a model over many parameter values and seeds at once, and [searching a model](search.md) for letting Henad pick the values.
 
 *[CLI]: Command-line interface
 *[UI]: User interface
