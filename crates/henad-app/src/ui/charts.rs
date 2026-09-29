@@ -57,8 +57,8 @@ fn stats_chart(ui: &mut egui::Ui, app: &AppState) {
 
             let points: Vec<[f64; 2]> = (0..filled)
                 .filter_map(|j| {
-                    let (val, tick) = history.get(col, j)?;
-                    Some([(tick) as f64, val])
+                    let (value, tick) = history.get(col, j)?;
+                    Some([(tick) as f64, value])
                 })
                 .collect();
 

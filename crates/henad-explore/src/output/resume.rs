@@ -82,11 +82,12 @@ impl ResumeScan {
         let mut finished = BTreeSet::new();
         // Current id of each kept run, by the id it was written with.
         let mut written_ids = BTreeMap::new();
-        let mut seen = BTreeSet::new();
+        // Ids of every record, as written and in the current plan. Series rows name a run by its written id alone.
+        let (mut seen_written, mut seen_current) = (BTreeSet::new(), BTreeSet::new());
         let mut counts = ResultCounts::default();
         for record in &runs.records {
             let run_id = current_id(plan, shard, record.config_id, record.rep, record.run_key, record.run_id)?;
-            if !seen.insert(run_id) {
+            if !seen_written.insert(record.run_id) || !seen_current.insert(run_id) {
                 return Err(ResumeError::DuplicateRun { run_id: record.run_id });
             }
             let keep = match record.status {
@@ -272,7 +273,8 @@ fn current_id(
     let run = config_id
         .checked_mul(replicates)
         .filter(|_| rep < replicates)
-        .and_then(|first| plan.run(first + rep))
+        .and_then(|first| first.checked_add(rep))
+        .and_then(|run_id| plan.run(run_id))
         .filter(|run| plan.run_key(run) == run_key)
         .ok_or(ResumeError::UnknownRun { run_id: written_id })?;
     if !shard.contains(run.run_id) {
@@ -390,5 +392,81 @@ impl std::error::Error for ResumeError {
             | Self::SearchRunChanged { .. }
             | Self::SeriesOutOfOrder => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use henad_core::explore::design::DesignKind;
+    use henad_core::explore::factor::{FactorSpec, LevelSpec};
+    use henad_core::explore::plan::Shard;
+    use henad_core::explore::spec::{BlockSpec, SweepSpec};
+
+    use super::{ResumeError, current_id};
+    use crate::exec::Concurrency;
+    use crate::output::RUNS_FILE;
+    use crate::progress::NoProgress;
+    use crate::sweep::ExploreError;
+    use crate::tests::support::{ScratchDir, entry, planned, sweep, sweep_options, sweep_with};
+
+    /// Returns 2 configs of Game of Life, 8 and 12 cells wide, with `replicates` replicates of 4 steps.
+    fn life_spec(replicates: u64) -> SweepSpec {
+        let mut spec = SweepSpec::new("game_of_life");
+        spec.fixed = vec![("grid_height".to_owned(), "8".to_owned())];
+        spec.run.steps = 4;
+        spec.run.replicates = replicates;
+        spec.blocks = vec![BlockSpec {
+            design: DesignKind::Factorial,
+            factors: vec![FactorSpec::param(
+                "grid_width",
+                LevelSpec::Values(vec!["8".to_owned(), "12".to_owned()]),
+            )],
+            design_seed: None,
+        }];
+        spec
+    }
+
+    #[test]
+    fn a_run_past_the_largest_id_is_unknown() {
+        let (plan, _) = planned(&entry("game_of_life", None), None, &life_spec(3));
+        let config_id = u64::MAX / 3;
+        assert_eq!(
+            config_id.checked_mul(3),
+            Some(u64::MAX),
+            "the product fits, and adding a replicate does not"
+        );
+        let result = current_id(&plan, Shard::WHOLE, config_id, 1, 0, 9);
+        assert!(
+            matches!(result, Err(ResumeError::UnknownRun { run_id: 9 })),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_run_id_written_twice_is_refused() {
+        let life = entry("game_of_life", None);
+        let spec = life_spec(2);
+        let scratch = ScratchDir::new("duplicate-run-id");
+        sweep(&life, None, &spec, scratch.path(), Concurrency::Auto);
+        let runs_path = scratch.path().join(RUNS_FILE);
+        let runs = fs::read_to_string(&runs_path).expect("runs.csv is written");
+        // Run 1 is replicate 1 of config 0. Written as run 0, it shares its id with replicate 0.
+        let duplicated = runs.replacen("\n1,0,0,1,", "\n0,0,0,1,", 1);
+        assert_ne!(duplicated, runs);
+        fs::write(&runs_path, duplicated).expect("runs.csv is written again");
+        let error = sweep_with(
+            &life,
+            None,
+            &spec,
+            &sweep_options(scratch.path(), true),
+            &mut NoProgress,
+        )
+        .expect_err("a run id written twice");
+        assert!(
+            matches!(error, ExploreError::Resume(ResumeError::DuplicateRun { run_id: 0 })),
+            "{error:?}"
+        );
     }
 }

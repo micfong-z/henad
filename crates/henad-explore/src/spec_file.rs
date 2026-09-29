@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use serde::de::{self, Deserializer, Visitor};
@@ -67,7 +67,8 @@ pub struct RunTable {
     pub replicates: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<StopTable>,
-    /// Seconds of wall-clock time after which a run is abandoned.
+    /// Seconds of wall-clock time after which a run is abandoned. On a GPU track, a run's clock counts its share of the
+    /// time the sweep spends on the tracks, so the run can take longer than this in real time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_s: Option<f64>,
 }
@@ -993,6 +994,8 @@ impl<'de> Deserialize<'de> for SpecValue {
 pub enum SpecFileError {
     /// Reading the file at `path` failed.
     Read { path: PathBuf, source: io::Error },
+    /// Table path `path` of block `block`, absolute or holding a component other than a name, such as `..`.
+    TablePath { block: usize, path: PathBuf },
     /// Text that is not a spec file, for the reason in `source`.
     Parse { source: Box<toml::de::Error> },
     /// JSON that is not a spec file, for the reason in `source`.
@@ -1023,6 +1026,11 @@ impl fmt::Display for SpecFileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Read { path, .. } => write!(f, "cannot read '{}'", path.display()),
+            Self::TablePath { block, path } => write!(
+                f,
+                "block {block}: table file '{}' must be a relative path without '..'",
+                path.display()
+            ),
             Self::Parse { .. } | Self::Json { .. } => f.write_str("not a valid spec file"),
             Self::FactorTarget { block } => {
                 write!(f, "a factor of block {block} needs exactly one of param and action")
@@ -1055,7 +1063,8 @@ impl std::error::Error for SpecFileError {
             Self::Json { source } => Some(source),
             Self::Reducer(error) => Some(error),
             Self::Stop(error) => Some(error),
-            Self::FactorTarget { .. }
+            Self::TablePath { .. }
+            | Self::FactorTarget { .. }
             | Self::FactorLevels { .. }
             | Self::Design { .. }
             | Self::Timeout { .. }
@@ -1070,11 +1079,12 @@ impl SpecFile {
     /// Reads the spec file at `path`, and the design tables its blocks name, and returns it with its text as
     /// written.
     ///
-    /// A table's path is relative to the directory of `path`.
+    /// A table's path is relative to the directory of `path` and cannot leave it. Only a table design's `file` is read.
     ///
     /// # Errors
     ///
-    /// Returns [`SpecFileError::Read`] when the file or a table cannot be read, and the errors of [`Self::parse`].
+    /// Returns [`SpecFileError::Read`] when the file or a table cannot be read, [`SpecFileError::TablePath`] for a
+    /// table path that is absolute or holds a component other than a name, and the errors of [`Self::parse`].
     pub fn load(path: &Path) -> Result<(Self, String), SpecFileError> {
         let read = |path: &Path| {
             std::fs::read_to_string(path).map_err(|source| SpecFileError::Read {
@@ -1085,10 +1095,21 @@ impl SpecFile {
         let text = read(path)?;
         let mut file = Self::parse(&text)?;
         let directory = path.parent().unwrap_or_else(|| Path::new(""));
-        for block in &mut file.blocks {
-            if let Some(table) = &block.file {
-                block.file_text = Some(read(&directory.join(table))?);
+        for (index, block) in file.blocks.iter_mut().enumerate() {
+            // Any other design refuses a file in `into_spec`. Read here, a missing file would be reported in its place.
+            let Some(table) = block.file.as_ref().filter(|_| block.design == DesignKindFile::Table) else {
+                continue;
+            };
+            if table
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+            {
+                return Err(SpecFileError::TablePath {
+                    block: index,
+                    path: table.clone(),
+                });
             }
+            block.file_text = Some(read(&directory.join(table))?);
         }
         Ok((file, text))
     }
@@ -1279,7 +1300,8 @@ impl From<&SweepSpec> for SpecFile {
 }
 
 impl From<&BlockSpec> for BlockTable {
-    /// Writes a table design's text in [`BlockTable::table_text`].
+    /// Writes a table design's text in [`BlockTable::table_text`], and a design seed for a random or Latin hypercube
+    /// design alone.
     fn from(block: &BlockSpec) -> Self {
         let factors = block.factors.iter().map(FactorTable::from).collect();
         let (samples, table_text) = match &block.design {
@@ -1290,7 +1312,7 @@ impl From<&BlockSpec> for BlockTable {
         Self {
             design: (&block.design).into(),
             samples,
-            design_seed: block.design_seed.map(TomlSeed),
+            design_seed: block.design_seed.filter(|_| block.design.is_sampled()).map(TomlSeed),
             file: None,
             table_text,
             factors,
@@ -1302,6 +1324,7 @@ impl From<&BlockSpec> for BlockTable {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
+    use std::path::Path;
 
     use std::time::Duration;
 
@@ -1315,6 +1338,7 @@ mod tests {
     use super::{DesignTableFile, ExecutionTable, SpecFile, SpecFileError, SpecValue};
     use crate::exec::Concurrency;
     use crate::schema::model_schema;
+    use crate::tests::support::ScratchDir;
 
     const SWEEP: &str = r#"
 model = "sir"
@@ -1729,6 +1753,81 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
             .and_then(SpecFile::into_spec)
             .expect_err("a table read from nowhere");
         assert!(matches!(unread, SpecFileError::Design { block: 0, .. }), "{unread:?}");
+    }
+
+    #[test]
+    fn a_table_path_cannot_leave_the_spec_directory() {
+        let scratch = ScratchDir::new("spec-table-path");
+        let specs = scratch.path().join("specs");
+        std::fs::create_dir_all(&specs).expect("a scratch directory");
+        let table = scratch.path().join("design.csv");
+        std::fs::write(&table, "infection_rate\n0.2\n").expect("the table writes");
+        let spec_path = specs.join("sweep.toml");
+        std::fs::write(specs.join("design.csv"), "infection_rate\n0.2\n").expect("the table writes");
+        std::fs::write(
+            &spec_path,
+            "model = \"sir\"\n[[block]]\ndesign = \"table\"\nfile = './design.csv'\n",
+        )
+        .expect("the spec writes");
+        SpecFile::load(&spec_path).expect("a table beside the spec, written with a leading './'");
+        for path in [
+            "../design.csv",
+            table.to_str().expect("a UTF-8 path"),
+            "tables/../../design.csv",
+        ] {
+            let text = format!("model = \"sir\"\n[[block]]\ndesign = \"table\"\nfile = '{path}'\n");
+            std::fs::write(&spec_path, text).expect("the spec writes");
+            let error = SpecFile::load(&spec_path).expect_err("a table outside the spec's directory");
+            let SpecFileError::TablePath {
+                block: 0,
+                path: refused,
+            } = &error
+            else {
+                panic!("{path} gave {error:?}");
+            };
+            assert_eq!(refused, Path::new(path));
+            assert!(error.to_string().contains(path), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_file_on_another_design_is_refused_without_reading_it() {
+        let scratch = ScratchDir::new("spec-stray-file");
+        std::fs::create_dir_all(scratch.path()).expect("a scratch directory");
+        let spec_path = scratch.path().join("sweep.toml");
+        for path in ["missing.csv", "../missing.csv"] {
+            let text = format!("model = \"sir\"\n[[block]]\ndesign = \"factorial\"\nfile = '{path}'\n");
+            std::fs::write(&spec_path, text).expect("the spec writes");
+            let (file, _) = SpecFile::load(&spec_path).expect("a factorial design reads no file");
+            assert_eq!(file.tables(), [], "{path}");
+            let error = file.into_spec().expect_err("a file on a factorial design");
+            assert!(
+                matches!(error, SpecFileError::Design { block: 0, .. }),
+                "{path} gave {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_design_seed_is_written_for_a_sampled_design_alone() {
+        let mut spec = SweepSpec::new("sir");
+        spec.blocks = vec![BlockSpec {
+            design: DesignKind::Factorial,
+            factors: vec![FactorSpec::param("infection_rate", text(&["0.2", "0.4"]))],
+            design_seed: Some(9),
+        }];
+        let text = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
+        let back = parse(&text)
+            .and_then(SpecFile::into_spec)
+            .expect("the written file reads back");
+        assert_eq!(back.blocks[0].design_seed, None, "{text}");
+        let registry = henad_models::registry::model_registry(None);
+        let sir = registry
+            .iter()
+            .find(|entry| entry.id == "sir")
+            .expect("sir is registered");
+        let plan_hash = |spec: &SweepSpec| spec.plan(&model_schema(sir)).expect("the spec plans").plan_hash();
+        assert_eq!(plan_hash(&back), plan_hash(&spec), "a factorial design draws nothing");
     }
 
     #[test]

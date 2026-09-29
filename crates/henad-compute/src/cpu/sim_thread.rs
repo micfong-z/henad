@@ -51,9 +51,10 @@ pub enum SimCommand {
         budget_ms: f32,
         while_paused: bool,
     },
-    /// Replace the actions fired at their ticks, and fire those due at the current tick at once.
+    /// Replace the actions fired at their ticks, and fire those due at the current tick at once unless it has fired.
     ///
-    /// Each later action fires once, after the step that reaches its tick.
+    /// Each later action fires once, after the step that reaches its tick. A tick has fired once a step has reached
+    /// it or an earlier schedule has fired it. No tick fires twice.
     SetSchedule(Schedule),
     /// Step as fast as possible to this tick, then pause and publish.
     ///
@@ -120,6 +121,8 @@ struct Loop {
     next_step_at: Instant,
     /// Actions fired after the step that reaches their tick.
     schedule: Schedule,
+    /// Highest tick whose actions have had their turn to fire. `None` until the first step or schedule.
+    fired_through: Option<u64>,
     /// Tick a pending [`SimCommand::RunTo`] stops at.
     run_to_target: Option<u64>,
 }
@@ -189,7 +192,9 @@ impl SimLoop for Loop {
             }
             SimCommand::SetSchedule(schedule) => {
                 self.schedule = schedule;
-                self.fire_due();
+                if self.fired_through.is_none_or(|through| through < self.state.tick()) {
+                    self.fire_due();
+                }
                 self.force_publish_snapshot();
             }
             SimCommand::RunTo(target) => {
@@ -310,8 +315,9 @@ impl Loop {
         self.fire_due();
     }
 
-    /// Fires the scheduled actions due at the state's current tick.
+    /// Fires the scheduled actions due at the state's current tick, and records that tick as fired.
     fn fire_due(&mut self) {
+        self.fired_through = Some(self.state.tick());
         for refused in self.schedule.run_due(&mut *self.state) {
             log::warn!("Model refused action '{}' at tick {}", refused.id, refused.tick);
         }
@@ -399,6 +405,7 @@ impl SimThread {
             engine_ms: None,
             next_step_at: now,
             schedule: Schedule::default(),
+            fired_through: None,
             run_to_target: None,
         };
 
@@ -558,6 +565,25 @@ mod pacing_timing_tests {
     use henad_core::view::StatEntry;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use web_time::Instant;
+
+    /// Longest a test waits for the loop to show what it waits for.
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    /// Polls `condition` until it holds, and returns whether it held before [`DEADLINE`].
+    fn wait_until(condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            if condition() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     struct Counter(Arc<AtomicU64>);
 
@@ -639,13 +665,34 @@ mod pacing_timing_tests {
         }
     }
 
-    /// Counts how many times the layout relaxes.
-    struct Relaxes(Arc<AtomicU64>);
+    /// Counts its steps as its tick, and how many times the layout is switched and relaxes.
+    struct Relaxes {
+        ticks: u64,
+        switches: Arc<AtomicU64>,
+        relaxes: Arc<AtomicU64>,
+    }
+
+    impl Relaxes {
+        /// Returns a thread over a new state, with its count of layout switches and its count of relaxes.
+        fn spawn() -> (SimThread, Arc<AtomicU64>, Arc<AtomicU64>) {
+            let switches = Arc::new(AtomicU64::new(0));
+            let relaxes = Arc::new(AtomicU64::new(0));
+            let state = Self {
+                ticks: 0,
+                switches: Arc::clone(&switches),
+                relaxes: Arc::clone(&relaxes),
+            };
+            let thread = SimThread::new(Box::new(state), 50.0, None, FaultSink::new());
+            (thread, switches, relaxes)
+        }
+    }
 
     impl SimState for Relaxes {
-        fn step(&mut self) {}
+        fn step(&mut self) {
+            self.ticks += 1;
+        }
         fn tick(&self) -> u64 {
-            0
+            self.ticks
         }
         fn stats(&self) -> Vec<StatEntry> {
             Vec::new()
@@ -654,10 +701,12 @@ mod pacing_timing_tests {
             false
         }
         fn set_layout(&mut self, _on: bool, _budget_ms: f32) -> bool {
+            // Released, so a test that sees the switch also sees every relax before it.
+            self.switches.fetch_add(1, Ordering::Release);
             true
         }
         fn relax_layout(&mut self) {
-            self.0.fetch_add(1, Ordering::Relaxed);
+            self.relaxes.fetch_add(1, Ordering::Relaxed);
         }
         fn population(&self) -> u64 {
             0
@@ -748,7 +797,9 @@ mod pacing_timing_tests {
         wakes.load(Ordering::Relaxed)
     }
 
-    /// Long enough that nothing else can publish. Both callers have already stopped the loop.
+    /// Waits out a window in which a loop that has stopped has to stay still.
+    ///
+    /// Only a check that nothing happens needs it, and each caller has already seen the loop stop.
     fn settle() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -762,23 +813,20 @@ mod pacing_timing_tests {
 
         thread.play();
         // A TPS window is a second wide, and nothing is reported until one closes.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        let running = thread.take_snapshot().expect("a running sim publishes");
         assert!(
-            running.actual_tps > 0.0,
+            snapshot_where(&mut thread, |snap| snap.actual_tps > 0.0).is_some(),
             "the window never closed, so the test proves nothing"
         );
 
         thread.pause();
-        settle();
-        let paused = thread.take_snapshot().expect("pause publishes a final snapshot");
-        assert_eq!(paused.actual_tps, 0.0, "a paused sim reported a rate");
+        // Every snapshot of the running sim since the window closed reports a rate. The first without one is the
+        // pause's own.
+        let paused = snapshot_where(&mut thread, |snap| snap.actual_tps == 0.0).expect("a paused sim reported a rate");
 
         // The stale window a single step used to be divided by.
         std::thread::sleep(std::time::Duration::from_millis(1100));
         thread.step_once();
-        settle();
-        let stepped = thread.take_snapshot().expect("a step publishes");
+        let stepped = snapshot_at(&mut thread, paused.tick + 1).expect("a step publishes");
         assert_eq!(stepped.actual_tps, 0.0, "one step over a long pause reported a rate");
     }
 
@@ -804,36 +852,50 @@ mod pacing_timing_tests {
             budget_ms: 1.0,
             while_paused: false,
         });
-        settle();
-        assert_eq!(*switches.lock().expect("switch log"), [true, false]);
+        let log = || switches.lock().expect("switch log").clone();
+        assert!(wait_until(|| log().len() >= 2), "only {:?} reached the state", log());
+        assert_eq!(log(), [true, false]);
     }
 
     /// While paused, the layout moves on a step, and otherwise only when asked to relax while paused.
     #[test]
     fn a_paused_layout_relaxes_on_a_step_or_when_asked() {
-        let relaxes = Arc::new(AtomicU64::new(0));
+        let (mut thread, switches, relaxes) = Relaxes::spawn();
         let count = || relaxes.load(Ordering::Relaxed);
         let layout = |while_paused| SimCommand::SetLayout {
             on: true,
             budget_ms: 1.0,
             while_paused,
         };
-        let mut thread = SimThread::new(Box::new(Relaxes(Arc::clone(&relaxes))), 50.0, None, FaultSink::new());
+        assert!(
+            thread.take_snapshot().is_some(),
+            "a new thread publishes its first state"
+        );
 
         thread.send(layout(false));
-        settle();
+        assert!(
+            snapshot_where(&mut thread, |_| true).is_some(),
+            "a layout switch publishes"
+        );
         assert_eq!(count(), 0, "a paused publish relaxed");
 
         thread.step_once();
-        settle();
+        assert!(snapshot_at(&mut thread, 1).is_some(), "a step publishes");
         assert_eq!(count(), 1, "a step relaxes once and no more");
 
         thread.send(layout(true));
-        settle();
-        assert!(count() >= 3, "relaxing while paused stopped at {}", count());
+        assert!(
+            wait_until(|| count() >= 3),
+            "relaxing while paused stopped at {}",
+            count()
+        );
 
         thread.send(layout(false));
-        settle();
+        // The switch reaches the state while the loop handles the command, and no relax runs after it.
+        assert!(
+            wait_until(|| switches.load(Ordering::Acquire) == 3),
+            "the switch never reached the state"
+        );
         let stopped = count();
         settle();
         assert_eq!(count(), stopped, "the layout kept relaxing once told to stop");
@@ -842,21 +904,25 @@ mod pacing_timing_tests {
     /// A run to a tick ends paused, and a paused layout relaxes after it as it does after Pause.
     #[test]
     fn a_paused_layout_keeps_relaxing_after_a_run_to() {
-        let relaxes = Arc::new(AtomicU64::new(0));
+        let (mut thread, _, relaxes) = Relaxes::spawn();
         let count = || relaxes.load(Ordering::Relaxed);
-        let mut thread = SimThread::new(Box::new(Relaxes(Arc::clone(&relaxes))), 50.0, None, FaultSink::new());
 
         thread.send(SimCommand::SetLayout {
             on: true,
             budget_ms: 1.0,
             while_paused: true,
         });
-        settle();
-        thread.run_to(0);
-        settle();
+        thread.run_to(5);
+        // The target's snapshot is published after the run has stopped, so every relax from here on is a paused one.
+        assert!(
+            snapshot_at(&mut thread, 5).is_some(),
+            "the run never published its target"
+        );
         let reached = count();
-        settle();
-        assert!(count() > reached, "the layout stopped relaxing at the run's target");
+        assert!(
+            wait_until(|| count() > reached),
+            "the layout stopped relaxing at the run's target"
+        );
     }
 
     /// A snapshot nobody is told about is a snapshot nobody draws. Stepping used to only refresh
@@ -891,17 +957,23 @@ mod pacing_timing_tests {
         );
     }
 
-    /// Takes snapshots until one reports `tick`, or gives up after five seconds.
-    fn snapshot_at(thread: &mut SimThread, tick: u64) -> Option<Snapshot> {
-        for _ in 0..500 {
+    /// Takes snapshots until one satisfies `wanted`, or gives up after [`DEADLINE`].
+    fn snapshot_where(thread: &mut SimThread, wanted: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
+        let deadline = Instant::now() + DEADLINE;
+        while Instant::now() < deadline {
             if let Some(snap) = thread.take_snapshot()
-                && snap.tick == tick
+                && wanted(&snap)
             {
                 return Some(snap);
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(10));
         }
         None
+    }
+
+    /// Takes snapshots until one reports `tick`, or gives up after [`DEADLINE`].
+    fn snapshot_at(thread: &mut SimThread, tick: u64) -> Option<Snapshot> {
+        snapshot_where(thread, |snap| snap.tick == tick)
     }
 
     /// Returns a schedule of one action at each of `ticks`, in the order given.
@@ -976,15 +1048,12 @@ mod pacing_timing_tests {
         );
 
         thread.play();
-        for _ in 0..500 {
-            if ticks.load(Ordering::Relaxed) >= 30 {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        thread.pause();
-        settle();
-        let end = ticks.load(Ordering::Relaxed).max(80);
+        assert!(
+            wait_until(|| ticks.load(Ordering::Relaxed) >= 30),
+            "the sim never played"
+        );
+        // Ten seconds ahead at 1000 TPS. The run to it stops Play long before the sim gets there.
+        let end = ticks.load(Ordering::Relaxed) + 10_000;
         thread.run_to(end);
         assert!(snapshot_at(&mut thread, end).is_some());
         assert_eq!(fired_ticks(&fired), [1, 3, 3, 9, 10, 25, 60]);
@@ -1006,19 +1075,42 @@ mod pacing_timing_tests {
         );
         assert_eq!(ticks.load(Ordering::Relaxed), 0);
 
-        thread.run_to(5);
-        assert!(snapshot_at(&mut thread, 5).is_some());
-        thread.set_schedule(schedule_at(&[5, 6]));
-        assert!(snapshot_at(&mut thread, 5).is_some());
+        thread.step_once();
+        assert!(snapshot_at(&mut thread, 1).is_some());
+        assert_eq!(fired_ticks(&fired), [0, 0, 1]);
+    }
+
+    /// The regression. A second schedule used to fire the actions of the tick the loop sat at. That tick had fired
+    /// already.
+    #[test]
+    fn a_replaced_schedule_never_fires_a_tick_again() {
+        let (mut thread, _, fired) = action_recorder();
+        thread.set_schedule(schedule_at(&[0, 4]));
+        thread.set_schedule(schedule_at(&[0, 4, 9]));
+        thread.run_to(4);
+        assert!(snapshot_at(&mut thread, 4).is_some());
         assert_eq!(
             fired_ticks(&fired),
-            [0, 0, 1, 5],
-            "a replaced schedule fires the reached tick at once"
+            [0, 4],
+            "a second schedule at tick 0 fired it again"
         );
 
+        thread.set_schedule(schedule_at(&[4, 9]));
+        thread.run_to(9);
+        assert!(snapshot_at(&mut thread, 9).is_some());
+        assert_eq!(
+            fired_ticks(&fired),
+            [0, 4, 9],
+            "a schedule at a tick a step reached fired it again"
+        );
+
+        // Tick 12 fired nothing, and has had its turn all the same.
+        thread.run_to(12);
+        assert!(snapshot_at(&mut thread, 12).is_some());
+        thread.set_schedule(schedule_at(&[12, 13]));
         thread.step_once();
-        assert!(snapshot_at(&mut thread, 6).is_some());
-        assert_eq!(fired_ticks(&fired), [0, 0, 1, 5, 6]);
+        assert!(snapshot_at(&mut thread, 13).is_some());
+        assert_eq!(fired_ticks(&fired), [0, 4, 9, 13]);
     }
 
     #[test]
@@ -1026,18 +1118,18 @@ mod pacing_timing_tests {
         let ticks = Arc::new(AtomicU64::new(0));
         let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 20.0, None, FaultSink::new());
         thread.run_to(u64::MAX);
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        thread.play();
-        settle();
-        let resumed = ticks.load(Ordering::Relaxed);
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let played = ticks.load(Ordering::Relaxed) - resumed;
-        thread.pause();
+        // A thousand ticks take 50 s at the cap, so reaching them within the deadline means the run is uncapped.
         assert!(
-            resumed > 1000,
-            "the run to a tick stepped {resumed} ticks, and never ran uncapped"
+            wait_until(|| ticks.load(Ordering::Relaxed) > 1000),
+            "the run to a tick never ran uncapped"
         );
-        assert!((1..=30).contains(&played), "played {played} ticks in 0.5 s at 20 TPS");
+
+        thread.play();
+        // Once Play resets the TPS window, the next rate measured is the capped one. An uncapped run would report
+        // thousands of ticks per second.
+        let playing = snapshot_where(&mut thread, |snap| snap.actual_tps > 0.0 && snap.actual_tps <= 60.0);
+        thread.pause();
+        assert!(playing.is_some(), "Play never brought the sim back to its 20 TPS cap");
     }
 }
 

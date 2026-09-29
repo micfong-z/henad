@@ -1088,6 +1088,41 @@ mod tests {
         ));
     }
 
+    /// The regression. A comparison built without the parser, as a form builds one, planned with an infinite
+    /// threshold.
+    #[test]
+    fn a_threshold_that_is_not_finite_is_refused_at_plan_time() {
+        let mut spec = SweepSpec::new("sir");
+        let mut stop = StopSpec::parse("Infected <= 0", 0).expect("a well-formed condition");
+        stop.comparison.threshold = f64::INFINITY;
+        spec.run.stop = Some(stop);
+        let error = plan(&spec).expect_err("an infinite threshold");
+        assert!(
+            matches!(
+                error,
+                PlanError::Measure(MeasureError::Stop(StopError::NonFiniteThreshold { .. }))
+            ),
+            "{error:?}"
+        );
+
+        spec.run.stop = None;
+        let mut first = "Infected:first>=10"
+            .parse::<ReducerSpec>()
+            .expect("a well-formed reducer");
+        if let ReducerKind::FirstCrossing(comparison) = &mut first.kind {
+            comparison.threshold = f64::NEG_INFINITY;
+        }
+        spec.measure.reducers = vec![first];
+        let error = plan(&spec).expect_err("an infinite threshold");
+        assert!(
+            matches!(
+                error,
+                PlanError::Measure(MeasureError::Reducer(ReducerError::Comparison { .. }))
+            ),
+            "{error:?}"
+        );
+    }
+
     #[test]
     fn a_sampled_block_records_its_design_seed() {
         let mut spec = spec_with_actions();

@@ -53,7 +53,7 @@ pub struct ProgressUpdate {
     pub total: u64,
     /// Finished runs that ended on a fault or a timeout.
     pub failed: u64,
-    /// Seconds since the first run started.
+    /// Seconds since the [`ProgressMeter`] started. The meter starts before the first run is built.
     pub elapsed_s: f64,
     /// Seconds left at the mean pace of the finished runs, `None` before the first one.
     pub remaining_s: Option<f64>,

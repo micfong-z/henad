@@ -1,8 +1,8 @@
 //! Sweeps and searches stepped from a host's frames, one CPU run at a time, for a target that cannot spawn a thread.
 //!
-//! A pumped sweep holds its files in memory. Each pump probes the sweep, builds a run, or steps the run in progress by
-//! a slice of about half the frame budget. A search also asks for a batch, or tells the searcher a finished one, in a
-//! pump of its own.
+//! A pumped sweep holds its files in memory. Each pump makes one probe build, prepares the sweep, builds a run, or
+//! steps the run in progress by a slice of about half the frame budget. A search also asks for a batch, or tells the
+//! searcher a finished one, in a pump of its own.
 
 use std::sync::Arc;
 
@@ -21,6 +21,7 @@ use crate::handle::{SweepChannel, SweepRunOptions, SweepStartError};
 use crate::output::OutputWriter;
 use crate::output::manifest::{Manifest, ManifestRuntime};
 use crate::output::memory::{SweepFiles, memory_writer};
+use crate::probe::{PlanProbe, TimedProbe};
 use crate::progress::{Progress as _, ProgressEvent};
 use crate::search_run::{AskedBatch, SearchPlan, SearchPreparation, SearchWriters, watched_values};
 use crate::sweep::{
@@ -72,12 +73,21 @@ impl SweepSetup {
             options: &self.options,
         }
     }
+
+    /// Plan the probe builds, the plan of a search's fixed values for a search.
+    fn probed_plan(&self) -> &Plan {
+        self.search_plan
+            .as_ref()
+            .map_or(&self.plan, |search_plan| search_plan.base())
+    }
 }
 
 /// Stage of a pumped sweep.
 enum PumpStage {
-    /// Planned, with the probe still to build.
-    Probing,
+    /// Planned, with the probe building one config per pump until one builds.
+    Probing(PlanProbe),
+    /// Probed, with the sweep to prepare at the next pump.
+    Probed(Box<TimedProbe>),
     Running(Box<RunQueue>),
     Searching(Box<SearchQueue>),
     Ended,
@@ -157,7 +167,7 @@ impl PumpedSweep {
             output_dir: None,
             concurrency: Concurrency::Fixed(std::num::NonZeroUsize::MIN),
             memory_budget: options.memory_budget,
-            gpu_memory: None,
+            gpu_memory: options.gpu_memory,
             dry_run: false,
             control: SweepControl::new(),
             shard: Shard::WHOLE,
@@ -178,7 +188,7 @@ impl PumpedSweep {
                 active_runs,
             },
             channel,
-            stage: PumpStage::Probing,
+            stage: PumpStage::Probing(PlanProbe::new()),
         })
     }
 
@@ -192,14 +202,14 @@ impl PumpedSweep {
         &self.setup.active_runs
     }
 
-    /// Plans and probes the sweep, reports its outline and opens its files.
-    fn probe(&mut self) {
-        install_panic_hook();
+    /// Prepares the sweep from `probe`, the report of its first config that builds, reports its outline and opens
+    /// its files.
+    fn prepare(&mut self, probe: TimedProbe) {
         if let Some(search_plan) = &self.setup.search_plan {
-            return self.probe_search(Arc::clone(search_plan));
+            return self.prepare_search(Arc::clone(search_plan), probe);
         }
         let inputs = self.setup.inputs();
-        let preparation = match SweepPreparation::new(&inputs, Some(Arc::clone(&self.setup.plan))) {
+        let preparation = match SweepPreparation::new(&inputs, Some(Arc::clone(&self.setup.plan)), Some(probe)) {
             Ok(preparation) => preparation,
             Err(error) => return self.fail(&error),
         };
@@ -226,10 +236,11 @@ impl PumpedSweep {
         }
     }
 
-    /// Probes the search of `search_plan`, reports its outline and opens its files.
-    fn probe_search(&mut self, search_plan: Arc<SearchPlan>) {
+    /// Prepares the search of `search_plan` from `probe`, the report of its fixed values, reports its outline and
+    /// opens its files.
+    fn prepare_search(&mut self, search_plan: Arc<SearchPlan>, probe: TimedProbe) {
         let inputs = self.setup.inputs();
-        let preparation = match SearchPreparation::new(&inputs, Some(search_plan)) {
+        let preparation = match SearchPreparation::new(&inputs, Some(search_plan), Some(probe)) {
             Ok(preparation) => preparation,
             Err(error) => return self.fail(&error),
         };
@@ -341,6 +352,13 @@ impl RunQueue {
 }
 
 impl SearchQueue {
+    /// Returns whether the next pump builds a run or steps the run in progress.
+    fn runs_next(&self) -> bool {
+        self.batch
+            .as_ref()
+            .is_some_and(|pumped| pumped.current.is_some() || pumped.batch.request(pumped.next_position).is_some())
+    }
+
     /// Asks for the next batch, builds the next run, steps the run in progress by one slice, writes it once it
     /// finishes, or tells the searcher a finished batch.
     fn pump(&mut self, setup: &SweepSetup, channel: &mut SweepChannel) -> Result<PumpWork, ExploreError> {
@@ -417,21 +435,36 @@ impl SimLoop for PumpedSweep {
     }
 
     fn pump(&mut self) -> Pace {
+        let control = &self.setup.options.control;
         let pumped = match &mut self.stage {
             PumpStage::Ended => return Pace::Idle,
-            PumpStage::Probing => {
-                self.probe();
+            PumpStage::Probing(probe) => {
+                install_panic_hook();
+                match probe.step(&self.setup.entry, None, self.setup.probed_plan()) {
+                    Ok(None) => return Pace::Now,
+                    Ok(Some(timed)) => {
+                        self.stage = PumpStage::Probed(Box::new(timed));
+                        return Pace::Now;
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
+            PumpStage::Probed(_) => {
+                if let PumpStage::Probed(timed) = std::mem::replace(&mut self.stage, PumpStage::Ended) {
+                    self.prepare(*timed);
+                }
                 return Pace::Now;
             }
-            PumpStage::Running(runs) if self.setup.options.control.is_aborted() => Ok(if runs.is_drained() {
+            PumpStage::Running(runs) if control.is_aborted() => Ok(if runs.is_drained() {
                 PumpWork::Drained
             } else {
                 PumpWork::Aborted
             }),
-            PumpStage::Running(_) if self.setup.options.control.is_paused() => return Pace::Idle,
+            // A pause holds the runs alone. A sweep paused after its last run still ends.
+            PumpStage::Running(runs) if control.is_paused() && !runs.is_drained() => return Pace::Idle,
             PumpStage::Running(runs) => runs.pump(&self.setup, &mut self.channel),
-            PumpStage::Searching(_) if self.setup.options.control.is_aborted() => Ok(PumpWork::Aborted),
-            PumpStage::Searching(_) if self.setup.options.control.is_paused() => return Pace::Idle,
+            PumpStage::Searching(_) if control.is_aborted() => Ok(PumpWork::Aborted),
+            PumpStage::Searching(search) if control.is_paused() && search.runs_next() => return Pace::Idle,
             PumpStage::Searching(search) => search.pump(&self.setup, &mut self.channel),
         };
         match pumped {
@@ -449,5 +482,217 @@ impl SimLoop for PumpedSweep {
                 Pace::Idle
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::mpsc::Receiver;
+    use std::time::Duration;
+
+    use henad_compute::fault::install_panic_hook;
+    use henad_compute::runner::{Pace, SimLoop as _};
+    use henad_core::explore::design::DesignKind;
+    use henad_core::explore::factor::{FactorSpec, LevelSpec};
+    use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, SearchSpec};
+    use henad_core::explore::spec::{BlockSpec, SweepSpec};
+    use henad_models::registry::{ModelEntry, register_grid_model};
+
+    use super::{PumpedSweep, SweepCommand};
+    use crate::handle::{SweepChannel, SweepEvent, SweepRunOptions};
+    use crate::output::manifest::now_unix_ms;
+    use crate::probe::MAX_PROBED_CONFIGS;
+    use crate::schema::model_schema;
+    use crate::search_run::SearchPlan;
+    use crate::sweep::SweepEnd;
+    use crate::tests::broken::DividesByParam;
+    use crate::tests::support::{entry, provenance};
+
+    /// Most pumps a test makes before it gives up on the sweep.
+    const MAX_PUMPS: usize = 10_000;
+
+    fn options() -> SweepRunOptions {
+        SweepRunOptions {
+            provenance: provenance(),
+            ..SweepRunOptions::default()
+        }
+    }
+
+    fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|&(id, value)| (id.to_owned(), value.to_owned()))
+            .collect()
+    }
+
+    /// Returns a pumped sweep of `spec` over `entry`, a search when `spec` has one, and the receiver of its events.
+    fn pumped(entry: ModelEntry, spec: SweepSpec) -> (PumpedSweep, Receiver<SweepEvent>) {
+        let schema = model_schema(&entry);
+        let (plan, search_plan) = if spec.search.is_some() {
+            let search_plan = Arc::new(SearchPlan::new(&spec, &schema).expect("a valid search"));
+            (Arc::clone(search_plan.base()), Some(search_plan))
+        } else {
+            (Arc::new(spec.plan(&schema).expect("a valid spec")), None)
+        };
+        let (channel, events, _) = SweepChannel::open(&options());
+        let sweep = PumpedSweep::new(entry, spec, plan, search_plan, channel, options()).expect("a CPU model pumps");
+        (sweep, events)
+    }
+
+    /// Returns a sweep over `DividesByParam` on an 8 by 8 grid, varying `init_divisor` over `levels`.
+    fn init_divisors(levels: &[&str]) -> SweepSpec {
+        let mut spec = SweepSpec::new("divides_by_param");
+        spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
+        spec.run.steps = 4;
+        spec.blocks = vec![BlockSpec {
+            design: DesignKind::Factorial,
+            factors: vec![FactorSpec::param(
+                "init_divisor",
+                LevelSpec::Values(levels.iter().map(|&level| level.to_owned()).collect()),
+            )],
+            design_seed: None,
+        }];
+        spec
+    }
+
+    /// Pumps `sweep` until `events` has received `count` runs, and returns every event received.
+    fn pump_until_runs(sweep: &mut PumpedSweep, events: &Receiver<SweepEvent>, count: usize) -> Vec<SweepEvent> {
+        let mut received = Vec::new();
+        for _ in 0..MAX_PUMPS {
+            let runs = received
+                .iter()
+                .filter(|event| matches!(event, SweepEvent::RunFinished { .. }))
+                .count();
+            if runs == count {
+                return received;
+            }
+            assert!(matches!(sweep.pump(), Pace::Now), "the sweep ended before its last run");
+            received.extend(events.try_iter());
+        }
+        panic!("the sweep did not write {count} runs in {MAX_PUMPS} pumps");
+    }
+
+    /// Pumps `sweep` until it has nothing due, and returns the events `events` received meanwhile.
+    fn pump_until_idle(sweep: &mut PumpedSweep, events: &Receiver<SweepEvent>) -> Vec<SweepEvent> {
+        for _ in 0..MAX_PUMPS {
+            if matches!(sweep.pump(), Pace::Idle) {
+                return events.try_iter().collect();
+            }
+        }
+        panic!("the sweep never went idle in {MAX_PUMPS} pumps");
+    }
+
+    fn finished_end(events: &[SweepEvent]) -> Option<SweepEnd> {
+        match events.last() {
+            Some(SweepEvent::Finished(record)) => Some(record.report.end),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn each_pump_makes_one_probe_build() {
+        install_panic_hook();
+        let divides_by_param = || register_grid_model::<DividesByParam>();
+        let (mut sweep, events) = pumped(divides_by_param(), init_divisors(&["0", "0", "0", "1"]));
+        for config_id in 0..4 {
+            assert!(matches!(sweep.pump(), Pace::Now));
+            assert!(
+                events.try_iter().next().is_none(),
+                "config {config_id} is the one build of its pump"
+            );
+        }
+        assert!(matches!(sweep.pump(), Pace::Now));
+        assert!(
+            matches!(events.try_iter().next(), Some(SweepEvent::Planned(_))),
+            "the sweep is prepared in a pump of its own"
+        );
+
+        let zeros = vec!["0"; MAX_PROBED_CONFIGS + 1];
+        let (mut sweep, events) = pumped(divides_by_param(), init_divisors(&zeros));
+        for _ in 1..MAX_PROBED_CONFIGS {
+            assert!(matches!(sweep.pump(), Pace::Now));
+        }
+        assert!(events.try_iter().next().is_none(), "one config is left to try");
+        assert!(matches!(sweep.pump(), Pace::Idle));
+        assert!(matches!(events.try_iter().last(), Some(SweepEvent::Failed(_))));
+    }
+
+    #[test]
+    fn the_start_time_comes_before_the_probe() {
+        let mut spec = SweepSpec::new("game_of_life");
+        spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
+        spec.run.steps = 4;
+        let (mut sweep, events) = pumped(entry("game_of_life", None), spec);
+        let created_unix_ms = now_unix_ms();
+        let delay = Duration::from_millis(20);
+        std::thread::sleep(delay);
+        let ended = pump_until_idle(&mut sweep, &events);
+        let Some(SweepEvent::Finished(record)) = ended.last() else {
+            panic!("the sweep did not finish: {:?}", ended.last());
+        };
+        assert!(record.manifest.timestamps.started_unix_ms <= created_unix_ms);
+        assert!(record.report.elapsed >= delay, "{:?}", record.report.elapsed);
+    }
+
+    #[test]
+    fn a_sweep_paused_after_its_last_run_ends() {
+        let mut spec = SweepSpec::new("game_of_life");
+        spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
+        spec.run.steps = 4;
+        spec.run.replicates = 2;
+        let (mut sweep, events) = pumped(entry("game_of_life", None), spec);
+        let received = pump_until_runs(&mut sweep, &events, 2);
+        assert_eq!(
+            finished_end(&received),
+            None,
+            "the last run is written and the sweep has not ended"
+        );
+
+        sweep.handle_command(SweepCommand::Pause);
+        let ended = pump_until_idle(&mut sweep, &events);
+        assert_eq!(finished_end(&ended), Some(SweepEnd::Complete));
+    }
+
+    #[test]
+    fn a_search_paused_after_its_last_run_ends() {
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
+        spec.run.steps = 4;
+        spec.measure.default_reducers = false;
+        spec.measure.reducers = vec!["Infected:max".parse().expect("a valid reducer")];
+        spec.search = Some(SearchSpec {
+            algorithm: SearchAlgorithm::Random,
+            max_evaluations: 2,
+            batch_size: 2,
+            objective: Some(Objective {
+                column: "Infected:max".to_owned(),
+                goal: Goal::Minimize,
+                aggregate: Aggregate::Median,
+            }),
+            space: vec![FactorSpec::param(
+                "infection_rate",
+                LevelSpec::Range {
+                    min: 0.1,
+                    max: 0.9,
+                    step: None,
+                },
+            )],
+        });
+        let (mut sweep, events) = pumped(entry("sir", None), spec);
+        let received = pump_until_runs(&mut sweep, &events, 2);
+        assert_eq!(
+            finished_end(&received),
+            None,
+            "the last run is written and the search has not ended"
+        );
+
+        sweep.handle_command(SweepCommand::Pause);
+        let ended = pump_until_idle(&mut sweep, &events);
+        assert!(
+            matches!(ended.first(), Some(SweepEvent::SearchBatchTold(_))),
+            "a pause leaves the searcher to be told"
+        );
+        assert_eq!(finished_end(&ended), Some(SweepEnd::Complete));
     }
 }

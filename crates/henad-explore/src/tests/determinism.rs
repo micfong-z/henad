@@ -18,7 +18,9 @@ use crate::exec::Concurrency;
 use crate::output::OutputWriter;
 use crate::output::runs_csv::RunsWriter;
 use crate::output::series_csv::SeriesWriter;
-use crate::tests::support::{Collected, ScratchDir, Tables, entry, lanes, planned, run_plan, sweep, without_timing};
+use crate::tests::support::{
+    Collected, OutputTables, ScratchDir, entry, lanes, planned, run_plan, sweep, without_timing,
+};
 
 fn values(raw: &[&str]) -> LevelSpec {
     LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
@@ -62,14 +64,14 @@ fn a_sweep_writes_the_same_files_at_any_concurrency() {
     }];
 
     let scratch = ScratchDir::new("any-concurrency");
-    let tables: Vec<Tables> = [1, 3, 4]
+    let tables: Vec<OutputTables> = [1, 3, 4]
         .into_iter()
         .map(|count| {
             let output_dir = scratch.path().join(format!("lanes-{count}"));
             let report = sweep(&sir, None, &spec, &output_dir, lane_count(count));
             assert_eq!(report.outline.layout.cpu_lanes, count);
             assert_eq!((report.counts.rows, report.counts.ok), (18, 18));
-            Tables::read(&output_dir)
+            OutputTables::read(&output_dir)
         })
         .collect();
     let first = &tables[0];
@@ -120,23 +122,26 @@ fn a_sampled_design_sweep_writes_the_same_files_at_any_concurrency() {
     }];
 
     let scratch = ScratchDir::new("sampled-any-concurrency");
-    let tables: Vec<Tables> = [1, 3]
+    let tables: Vec<OutputTables> = [1, 3]
         .into_iter()
         .map(|count| {
             let output_dir = scratch.path().join(format!("lanes-{count}"));
             let report = sweep(&sir, None, &spec, &output_dir, lane_count(count));
             assert_eq!(report.outline.layout.cpu_lanes, count);
             assert_eq!(report.counts.rows, 12);
-            Tables::read(&output_dir)
+            OutputTables::read(&output_dir)
         })
         .collect();
-    let waves = tables[0].run_column("action.wave");
-    assert!(
-        waves
-            .iter()
-            .all(|tick| tick.parse::<u64>().is_ok_and(|tick| (5..=50).contains(&tick))),
-        "{waves:?}"
-    );
+    // The wave's range holds 46 whole ticks. Stratum `s` of the 6 takes tick 5 + s * 46 / 6, and each config appears
+    // once per replicate.
+    let mut waves: Vec<u64> = tables[0]
+        .run_column("action.wave")
+        .iter()
+        .map(|tick| tick.parse().expect("a tick"))
+        .collect();
+    waves.sort_unstable();
+    let strata: Vec<u64> = (0..6).flat_map(|stratum| [5 + stratum * 46 / 6; 2]).collect();
+    assert_eq!(waves, strata, "one config in each stratum of the wave's ticks");
     assert_eq!(tables[0].summary.len(), 1 + 6);
     assert_eq!(tables[0], tables[1]);
 }
@@ -206,7 +211,7 @@ fn common_random_numbers_share_seeds_across_configs() {
     let scratch = ScratchDir::new("common-random-numbers");
     let common = sweep(&sir, None, &spec, &scratch.path().join("common"), lane_count(2));
     assert_eq!(common.counts.rows, 9);
-    let common = Tables::read(&scratch.path().join("common"));
+    let common = OutputTables::read(&scratch.path().join("common"));
     let seeds = common.run_column("seed");
     let expected: Vec<String> = (0..3).map(|rep| run_seed(21, rep).to_string()).collect();
     for config in seeds.chunks(3) {
@@ -220,7 +225,7 @@ fn common_random_numbers_share_seeds_across_configs() {
 
     spec.seeds.scheme = SeedScheme::Independent;
     sweep(&sir, None, &spec, &scratch.path().join("independent"), lane_count(2));
-    let independent = Tables::read(&scratch.path().join("independent"));
+    let independent = OutputTables::read(&scratch.path().join("independent"));
     let seeds = independent.run_column("seed");
     assert_ne!(seeds[3..6], seeds[6..], "every run has a seed of its own");
     assert_ne!(seeds[..3], seeds[3..6]);

@@ -56,6 +56,8 @@ pub struct SweepRunOptions {
     pub concurrency: Concurrency,
     /// Bytes of host memory the live runs can hold together, `None` for no limit.
     pub memory_budget: Option<u64>,
+    /// Bytes of GPU memory the live runs of a GPU model can hold together, `None` for the device's largest buffer.
+    pub gpu_memory: Option<u64>,
     /// Whether a resume runs again the runs that ended on a fault.
     pub retry_failed: bool,
     /// Bytes of series the [`SweepEvent::RunFinished`] events carry in all.
@@ -68,6 +70,8 @@ pub struct SweepRunOptions {
     /// Build of the host, for the manifest.
     pub provenance: Provenance,
     /// Host and device the manifest records, this host alone when `None`.
+    ///
+    /// A GPU model on a device the sweep acquires records that device in its place.
     pub runtime: Option<ManifestRuntime>,
     /// Called after each event, so an idle host comes to collect it. It must not block.
     pub wake: Option<WakeFn>,
@@ -78,6 +82,7 @@ impl Default for SweepRunOptions {
         Self {
             concurrency: Concurrency::Auto,
             memory_budget: None,
+            gpu_memory: None,
             retry_failed: false,
             series_budget: DEFAULT_SERIES_BUDGET,
             source: SpecSource::default(),
@@ -103,7 +108,7 @@ pub enum SweepEvent {
         series_dropped: bool,
     },
     /// A search was told the evaluations of one batch, after the runs of the batch.
-    SearchBatchTold(Box<SearchUpdate>),
+    SearchBatchTold(Arc<SearchUpdate>),
     /// The sweep ran to its end or was aborted, as its record says. Nothing follows.
     Finished(Box<SweepRecord>),
     /// The sweep ended on an error of its own, outside any run, with the error and its causes. Nothing follows.
@@ -226,13 +231,19 @@ impl SweepRun {
     /// Plans `spec` against `entry` and starts the sweep, or the search a `spec` with a search runs, writing its
     /// files to `output`.
     ///
+    /// `gpu` is a device the host shares with the sweep. Note that a fault the device reports outside every error
+    /// scope then ends every live run, whichever side raised it. Handed no device, the sweep acquires one on its own
+    /// thread for a GPU model, and builds the model on it from
+    /// [`model_registry`](henad_models::registry::model_registry) by the id of `entry`.
+    ///
     /// Planning happens before this returns. The probe build and the runs happen after it, on native on a thread of
     /// the sweep's own and in a browser in [`Self::update`].
     ///
     /// # Errors
     ///
     /// Returns [`SweepStartError`] when `spec` names another model, cannot be planned, or asks a browser for a GPU
-    /// model, when `output` is a directory that holds results, or when the sweep's thread cannot start.
+    /// model, when `output` is a directory that holds results, or when the sweep's thread cannot start. A device the
+    /// sweep cannot acquire fails the sweep with a [`SweepEvent::Failed`].
     pub fn start(
         entry: ModelEntry,
         gpu: Option<GpuContext>,
@@ -271,13 +282,13 @@ impl SweepRun {
     /// Resumes the sweep whose results the directory `dir` holds, running only the runs it lacks.
     ///
     /// The spec, source and shard come from the directory's manifest, and the sweep runs as
-    /// [`crate::sweep::run_sweep`] resumes one.
+    /// [`crate::sweep::run_sweep`] resumes one. `gpu` is the device a GPU model steps on, as in [`Self::start`].
     ///
     /// # Errors
     ///
     /// Returns [`SweepStartError`] when the manifest or its spec cannot be read, the spec names another model or
-    /// cannot be planned, or the sweep's thread cannot start. A directory whose runs do not fit the plan fails the
-    /// sweep with a [`SweepEvent::Failed`].
+    /// cannot be planned, or the sweep's thread cannot start. A directory whose runs do not fit the plan, or a device
+    /// the sweep cannot acquire, fails the sweep with a [`SweepEvent::Failed`].
     #[cfg(not(target_arch = "wasm32"))]
     pub fn resume_directory(
         entry: ModelEntry,
@@ -423,7 +434,6 @@ impl SweepRun {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn launch(launch: SweepLaunch) -> Result<Self, SweepStartError> {
-        use crate::output::manifest::ManifestRuntime;
         use crate::search_run::{run_search_in_memory, run_search_into_directory};
         use crate::sweep::{SweepInputs, SweepOptions, run_in_memory, run_into_directory};
         use henad_compute::fault::catching;
@@ -440,7 +450,7 @@ impl SweepRun {
             },
             concurrency: launch.options.concurrency,
             memory_budget: launch.options.memory_budget,
-            gpu_memory: None,
+            gpu_memory: launch.options.gpu_memory,
             dry_run: false,
             control: control.clone(),
             shard: launch.shard,
@@ -461,11 +471,15 @@ impl SweepRun {
                     options,
                     ..
                 } = launch;
-                let runtime = options.runtime.unwrap_or_else(|| ManifestRuntime::new(None));
+                let bound = match catching(ACQUIRING_DEVICE, || BoundModel::new(entry, gpu, options.runtime)) {
+                    Ok(Ok(bound)) => bound,
+                    Ok(Err(error)) => return channel.fail(&error),
+                    Err(fault) => return channel.fail(&fault),
+                };
                 let inputs = SweepInputs {
-                    entry: &entry,
-                    gpu: gpu.as_ref(),
-                    runtime: &runtime,
+                    entry: &bound.entry,
+                    gpu: bound.gpu.as_ref(),
+                    runtime: &bound.runtime,
                     spec: &spec,
                     source: &options.source,
                     provenance: &options.provenance,
@@ -542,6 +556,86 @@ impl Drop for SweepRun {
 /// Task a panic outside any run reports as its `during`.
 #[cfg(not(target_arch = "wasm32"))]
 const RUNNING_SWEEP: &str = "running the sweep";
+
+/// Task a panic while the sweep acquires its device reports as its `during`.
+#[cfg(not(target_arch = "wasm32"))]
+const ACQUIRING_DEVICE: &str = "acquiring the sweep's GPU device";
+
+/// Model a sweep builds its runs from, with the device they step on and the host and device its manifest records.
+#[cfg(not(target_arch = "wasm32"))]
+struct BoundModel {
+    entry: ModelEntry,
+    gpu: Option<GpuContext>,
+    runtime: ManifestRuntime,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl BoundModel {
+    /// Returns `entry` on the device `gpu`, recorded as `runtime`.
+    ///
+    /// A GPU model with no `gpu` is built again from the registry on a device acquired here, and the manifest records
+    /// that device in place of `runtime`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OwnDeviceError`] when no device can be acquired, or the registry lacks the model.
+    fn new(
+        entry: ModelEntry,
+        gpu: Option<GpuContext>,
+        runtime: Option<ManifestRuntime>,
+    ) -> Result<Self, OwnDeviceError> {
+        if gpu.is_some() || entry.metadata.backend != Backend::Gpu {
+            return Ok(Self {
+                entry,
+                gpu,
+                runtime: runtime.unwrap_or_else(|| ManifestRuntime::new(None)),
+            });
+        }
+        let (ctx, device_runtime) = crate::device::acquire_headless().map_err(OwnDeviceError::Acquire)?;
+        let entry = henad_models::registry::model_registry(Some(ctx.clone()))
+            .into_iter()
+            .find(|candidate| candidate.id == entry.id)
+            .ok_or_else(|| OwnDeviceError::Unregistered(entry.id.clone()))?;
+        Ok(Self {
+            entry,
+            gpu: Some(ctx),
+            runtime: ManifestRuntime::new(Some(&device_runtime)),
+        })
+    }
+}
+
+/// Reason a sweep cannot step a GPU model on a device of its own.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+enum OwnDeviceError {
+    /// No device could be acquired, for the reason inside.
+    Acquire(crate::device::DeviceError),
+    /// A model the registry lacks, by its id.
+    Unregistered(String),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl fmt::Display for OwnDeviceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Acquire(_) => f.write_str("cannot acquire a GPU device for the sweep"),
+            Self::Unregistered(id) => write!(
+                f,
+                "model '{id}' is not registered, and cannot be built on the sweep's device"
+            ),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::error::Error for OwnDeviceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Acquire(error) => Some(error),
+            Self::Unregistered(_) => None,
+        }
+    }
+}
 
 /// Sweep to launch, planned.
 ///
@@ -760,7 +854,7 @@ impl Progress for SweepChannel {
                 });
             }
             ProgressEvent::SearchBatchTold(update) => {
-                self.send(SweepEvent::SearchBatchTold(Box::new((*update).clone())));
+                self.send(SweepEvent::SearchBatchTold(Arc::new((*update).clone())));
             }
             ProgressEvent::Progressed(_) | ProgressEvent::Ended(_) => {}
         }

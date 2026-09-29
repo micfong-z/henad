@@ -1,5 +1,5 @@
-//! Header of the Sweep tab: the mode switch or the session's state, the model, the Plan toggle and the Spec menu, over a
-//! line for notifications and the mode's description.
+//! Header of the Sweep tab: the mode switch or the session's state, the model, the Plan toggle and the Spec menu,
+//! over a line for notifications and the mode's description.
 
 use egui::containers::Sides;
 use egui::{Button, Color32, CornerRadius, Frame, Margin, RichText, WidgetInfo, WidgetType};
@@ -150,9 +150,7 @@ pub fn session_header(
     let text = match header.state {
         SessionState::Planning => "Building first configuration to plan runs.".to_owned(),
         SessionState::Running => "Results will appear as runs finish. Press Show results to open them.".to_owned(),
-        SessionState::Paused | SessionState::PausedByFault => {
-            "Runs in progress are paused. Press Resume to continue.".to_owned()
-        }
+        SessionState::Paused => "Runs in progress are paused. Press Resume to continue.".to_owned(),
         SessionState::Finished | SessionState::Aborted | SessionState::Stopped | SessionState::Failed
             if header.resumed =>
         {
@@ -306,7 +304,6 @@ fn status_badge(ui: &mut egui::Ui, state: SessionState) {
         SessionState::Planning => ("Planning".to_owned(), mcs::GRAY_800, mcs::GRAY_200),
         SessionState::Running => ("Running".to_owned(), mcs::BLUE_900, mcs::BLUE_200),
         SessionState::Paused => ("Paused".to_owned(), mcs::ORANGE_900, mcs::ORANGE_200),
-        SessionState::PausedByFault => ("Paused after GPU error".to_owned(), mcs::ORANGE_900, mcs::ORANGE_200),
         SessionState::Finished => (format!("{MDI_CHECK} Finished"), mcs::GREEN_900, mcs::GREEN_200),
         SessionState::Aborted => ("Aborted".to_owned(), mcs::ORANGE_900, mcs::ORANGE_200),
         SessionState::Stopped => ("Stopped".to_owned(), mcs::ORANGE_900, mcs::ORANGE_200),

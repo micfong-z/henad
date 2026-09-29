@@ -4,6 +4,10 @@
 //! candidate to land in it, and counts every candidate that did. After its initial samples, drawn at random, the
 //! search draws two filled cells, takes the one with fewer hits, and mutates its exemplar.
 //!
+//! The initial samples fill batches of their own, and breeding starts once every one of them is told. Without initial
+//! samples, the first candidate is drawn at random, alone in its batch. A later batch asked while the archive is still
+//! empty is drawn at random in full.
+//!
 //! An axis given no bounds has an automatic range. The search holds every evaluation until the initial samples are
 //! all told, takes the range from their outputs, and then places the held evaluations in candidate order.
 
@@ -66,10 +70,11 @@ impl PatternAxis {
     /// Returns the index of the cell `value` lands in and whether `value` lay outside the axis, or `None` for an
     /// axis without both bounds.
     ///
-    /// A value below the lower bound or above the upper bound lands in the edge cell nearer to it.
+    /// A value below the lower bound or above the upper bound lands in the edge cell nearer to it, and `NaN` in the
+    /// first cell. Each lies outside the axis.
     pub fn cell_index(&self, value: f64) -> Option<(u32, bool)> {
         let (min, max) = self.range()?;
-        if value < min {
+        if value.is_nan() || value < min {
             return Some((0, true));
         }
         if value > max {
@@ -211,6 +216,15 @@ impl PatternSpaceSettings {
         self.initial_samples.min(max_evaluations)
     }
 
+    /// Returns the number of batches of at most `batch_size` candidates an exploration of `max_evaluations` asks for.
+    ///
+    /// The initial samples fill batches of their own, and so does the first candidate when there are none.
+    pub fn batch_count(&self, max_evaluations: u64, batch_size: usize) -> u64 {
+        let batch = (batch_size as u64).max(1);
+        let random_samples = self.initial_samples.max(1).min(max_evaluations);
+        random_samples.div_ceil(batch) + (max_evaluations - random_samples).div_ceil(batch)
+    }
+
     /// Returns the settings with each automatic axis given the range [`automatic_range`] takes from `outputs`.
     ///
     /// `outputs` holds the x and y output of each initial sample that has both. An axis with bounds keeps them.
@@ -327,7 +341,7 @@ pub struct PatternSpaceExploration {
     rng: DesignRng,
     tracker: CandidateTracker,
     archive: BTreeMap<PatternCell, ArchiveRecord>,
-    /// Number of initial samples an automatic range is taken from.
+    /// Number of initial samples within the budget, the candidates an automatic range is taken from.
     range_samples: u64,
     /// Initial samples told so far.
     told_samples: u64,
@@ -401,10 +415,16 @@ fn offspring(space: &SearchSpace, rng: &mut DesignRng, mutation_scale: f64, reco
 
 impl Searcher for PatternSpaceExploration {
     fn ask(&mut self, max: usize) -> Vec<Candidate> {
+        let mut count = self.tracker.capacity(max) as u64;
+        let random_samples = self.range_samples.max(1);
+        let sampling = self.tracker.issued < random_samples;
+        if sampling {
+            count = count.min(random_samples - self.tracker.issued);
+        }
         let records: Vec<&ArchiveRecord> = self.archive.values().collect();
-        let proposals = (0..self.tracker.capacity(max) as u64)
-            .map(|position| {
-                if self.tracker.issued + position < self.settings.initial_samples || records.is_empty() {
+        let proposals = (0..count)
+            .map(|_| {
+                if sampling || records.is_empty() {
                     Proposal::first_evaluation(self.space.random_genome(&mut self.rng), CandidateOrigin::Random)
                 } else {
                     offspring(&self.space, &mut self.rng, self.settings.mutation_scale, &records)
@@ -479,8 +499,8 @@ mod tests {
         automatic_range,
     };
     use crate::explore::fingerprint::fnv1a64;
-    use crate::explore::search::tests::support::{drive, noise, unit_space};
-    use crate::explore::search::{Candidate, Evaluation, SearchSpecError, Searcher as _};
+    use crate::explore::search::tests::support::{drive, drive_batches, noise, unit_space};
+    use crate::explore::search::{Candidate, CandidateOrigin, Evaluation, SearchSpecError, Searcher as _};
 
     fn axis(column: &str, cells: u32) -> PatternAxis {
         PatternAxis::bounded(column, 0.0, 100.0, cells)
@@ -567,8 +587,8 @@ mod tests {
 
     #[test]
     fn explicit_bounds_keep_their_trajectory() {
-        // Hashes of the trajectories the exploration took before an axis could have an automatic range.
-        for (seed, expected) in [(3, 0xe6ce_5f66_2e1e_b14e_u64), (11, 0xe292_2621_2537_d54c)] {
+        // Hashes of the trajectories an exploration with both bounds given takes.
+        for (seed, expected) in [(3, 0x2b4e_69fa_34f1_1ba3_u64), (11, 0xccf5_0d16_6148_66ed)] {
             let settings = PatternSpaceSettings {
                 initial_samples: 40,
                 ..PatternSpaceSettings::new(
@@ -580,6 +600,142 @@ mod tests {
             assert_eq!(trajectory_hash(&mut search), expected, "seed {seed}");
             assert_eq!(search.pattern_settings(), Some(&settings), "bounds given are kept");
         }
+    }
+
+    /// Returns the size of each batch in `batches`.
+    fn sizes(batches: &[Vec<Candidate>]) -> Vec<usize> {
+        batches.iter().map(Vec::len).collect()
+    }
+
+    fn is_mutation(candidate: &Candidate) -> bool {
+        matches!(candidate.origin, CandidateOrigin::Mutation { .. })
+    }
+
+    #[test]
+    fn a_budget_within_one_batch_breeds_after_the_initial_samples() {
+        for (initial_samples, max_evaluations, expected) in [(1, 2, [1, 1]), (3, 8, [3, 5])] {
+            let settings = PatternSpaceSettings {
+                initial_samples,
+                ..PatternSpaceSettings::new(axis("Infected:max", 10), axis("Infected:argmax", 10))
+            };
+            let mut search =
+                PatternSpaceExploration::new(unit_space(2), settings, max_evaluations, 5).expect("valid settings");
+            let batches = drive_batches(&mut search, 16, 1, skewed);
+            assert_eq!(sizes(&batches), expected, "the initial samples alone, then the rest");
+            assert!(
+                batches[0]
+                    .iter()
+                    .all(|candidate| candidate.origin == CandidateOrigin::Random)
+            );
+            assert!(
+                batches[1].iter().all(is_mutation),
+                "every candidate after the initial samples comes from the archive"
+            );
+        }
+    }
+
+    #[test]
+    fn one_automatic_axis_takes_its_range_and_the_other_keeps_its_bounds() {
+        let settings = PatternSpaceSettings {
+            initial_samples: 10,
+            ..PatternSpaceSettings::new(
+                PatternAxis::automatic("Infected:max", 8),
+                PatternAxis::bounded("Infected:argmax", 0.0, 50.0, 5),
+            )
+        };
+        let mut search = PatternSpaceExploration::new(unit_space(2), settings.clone(), 60, 3).expect("valid settings");
+        let batches = drive_batches(&mut search, 4, 1, skewed);
+        assert_eq!(
+            sizes(&batches)[..4],
+            [4, 4, 2, 4],
+            "the third batch ends at the last initial sample"
+        );
+        let asked = batches.concat();
+        for candidate in &asked {
+            assert_eq!(
+                candidate.origin == CandidateOrigin::Random,
+                candidate.id < 10,
+                "candidate {}",
+                candidate.id
+            );
+        }
+        let resolved = search.pattern_settings().expect("every initial sample told");
+        let x_values = asked[..10]
+            .iter()
+            .map(|candidate| skewed(candidate, 0)[0].expect("a finite output"));
+        assert_eq!(resolved.x_axis.range(), Some(automatic_range(x_values)));
+        assert_eq!(resolved.y_axis, settings.y_axis, "the bounded axis keeps its bounds");
+        assert!(search.filled_cells() > 1, "{} cells", search.filled_cells());
+    }
+
+    #[test]
+    fn without_initial_samples_the_first_candidate_fills_a_batch_alone() {
+        let settings = PatternSpaceSettings {
+            initial_samples: 0,
+            ..PatternSpaceSettings::new(axis("Infected:max", 10), axis("Infected:argmax", 10))
+        };
+        let mut search = PatternSpaceExploration::new(unit_space(2), settings.clone(), 20, 7)
+            .expect("bounded axes need no initial sample");
+        let batches = drive_batches(&mut search, 8, 1, skewed);
+        assert_eq!(sizes(&batches), [1, 8, 8, 3]);
+        assert_eq!(batches[0][0].origin, CandidateOrigin::Random);
+        assert!(
+            batches[1..].iter().flatten().all(is_mutation),
+            "the first candidate fills the archive"
+        );
+
+        // With no output on the y axis, no candidate lands in a cell.
+        let mut search = PatternSpaceExploration::new(unit_space(2), settings, 13, 7).expect("valid settings");
+        let missing = |_: &Candidate, _| vec![Some(1.0), None];
+        let batches = drive_batches(&mut search, 8, 1, missing);
+        assert_eq!(sizes(&batches), [1, 8, 4], "an empty archive asks for whole batches");
+        assert!(
+            batches
+                .iter()
+                .flatten()
+                .all(|candidate| candidate.origin == CandidateOrigin::Random)
+        );
+    }
+
+    #[test]
+    fn the_batch_count_matches_the_batches_asked_for() {
+        let missing = |_: &Candidate, _| vec![None, Some(1.0)];
+        let bounded = |initial_samples| PatternSpaceSettings {
+            initial_samples,
+            ..PatternSpaceSettings::new(axis("Infected:max", 10), axis("Infected:argmax", 10))
+        };
+        let automatic = |initial_samples| PatternSpaceSettings {
+            initial_samples,
+            ..automatic_settings()
+        };
+        for (settings, max_evaluations, batch_size, landing) in [
+            (bounded(0), 20, 8, true),
+            (bounded(0), 1, 8, true),
+            (bounded(3), 8, 16, true),
+            (bounded(10), 30, 6, true),
+            (bounded(12), 30, 6, true),
+            (bounded(50), 30, 6, true),
+            (bounded(10), 30, 6, false),
+            (automatic(10), 30, 4, true),
+            (automatic(10), 30, 4, false),
+            (automatic(1), 5, 1, true),
+        ] {
+            let mut search = PatternSpaceExploration::new(unit_space(2), settings.clone(), max_evaluations, 9)
+                .expect("valid settings");
+            let batches = if landing {
+                drive_batches(&mut search, batch_size, 1, skewed)
+            } else {
+                drive_batches(&mut search, batch_size, 1, missing)
+            };
+            assert_eq!(
+                settings.batch_count(max_evaluations, batch_size),
+                batches.len() as u64,
+                "{} initial samples, {max_evaluations} evaluations in batches of {batch_size}, sizes {:?}",
+                settings.initial_samples,
+                sizes(&batches)
+            );
+        }
+        assert_eq!(bounded(4).batch_count(0, 8), 0);
     }
 
     /// Returns the settings of an exploration with automatic ranges on both axes and 40 initial samples.
@@ -613,8 +769,8 @@ mod tests {
         assert_eq!(search.pattern_settings(), None, "32 of 40 initial samples told");
         assert_eq!(search.filled_cells(), 0, "the archive waits for the range");
 
-        // The third batch holds the last 8 initial samples and 8 candidates after them.
         let batch = search.ask(16);
+        assert_eq!(batch.len(), 8, "the third batch holds the last 8 initial samples alone");
         let evaluations: Vec<Evaluation> = batch
             .iter()
             .map(|candidate| Evaluation {
@@ -793,6 +949,9 @@ mod tests {
         assert_eq!(axis.cell_index(25.0), Some((1, false)));
         assert_eq!(axis.cell_index(100.0), Some((3, false)));
         assert_eq!(axis.cell_index(250.0), Some((3, true)));
+        assert_eq!(axis.cell_index(f64::NAN), Some((0, true)), "NaN lies outside the axis");
+        assert_eq!(axis.cell_index(f64::NEG_INFINITY), Some((0, true)));
+        assert_eq!(axis.cell_index(f64::INFINITY), Some((3, true)));
         assert_eq!(axis.cell_bounds(1), Some((25.0, 50.0)));
         assert_eq!(axis.cell_bounds(3), Some((75.0, 100.0)));
         let automatic = PatternAxis::automatic("Infected:max", 4);

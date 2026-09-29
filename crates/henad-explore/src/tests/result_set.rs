@@ -11,6 +11,7 @@ use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 
 use crate::output::manifest::ManifestStatus;
+use crate::output::read::ReadError;
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::progress::{Progress, ProgressEvent};
 use crate::result_set::{ResultReplayError, ResultSet, ResultSetError, read_directory_series};
@@ -63,12 +64,17 @@ impl Progress for Outcomes {
 
 /// Runs the SIR sweep into `dir` and returns its committed outcomes.
 fn run_sir_sweep(dir: &Path) -> Vec<RunOutcome> {
+    run_sweep(dir, &sir_spec())
+}
+
+/// Runs `spec` over SIR into `dir` and returns its committed outcomes.
+fn run_sweep(dir: &Path, spec: &SweepSpec) -> Vec<RunOutcome> {
     let options = SweepOptions {
         output_dir: Some(dir.to_owned()),
         ..SweepOptions::default()
     };
     let mut outcomes = Outcomes::default();
-    sweep_with(&entry("sir", None), None, &sir_spec(), &options, &mut outcomes).expect("the sweep runs");
+    sweep_with(&entry("sir", None), None, spec, &options, &mut outcomes).expect("the sweep runs");
     outcomes.0
 }
 
@@ -179,7 +185,8 @@ fn the_series_budget_holds_a_prefix_of_the_runs() {
     }
 
     // A run with no rows is neither read nor dropped.
-    let read = read_directory_series(scratch.path(), 3, &[1, 99].into(), usize::MAX).expect("series.csv reads");
+    let read = read_directory_series(scratch.path(), none.stat_columns(), &[1, 99].into(), usize::MAX)
+        .expect("series.csv reads");
     assert_eq!(read.series.keys().copied().collect::<Vec<_>>(), [1]);
     assert!(read.dropped_runs.is_empty());
 
@@ -188,6 +195,87 @@ fn the_series_budget_holds_a_prefix_of_the_runs() {
     let set = ResultSet::from_files(without_series, usize::MAX).expect("series.csv is optional");
     assert_eq!(set.held_series_count(), 0);
     assert_eq!(set.runs().len(), 6);
+}
+
+#[test]
+fn a_run_with_rows_on_both_sides_of_the_budget_is_held_without_its_series() {
+    let scratch = ScratchDir::new("result-set-straddle");
+    run_sir_sweep(scratch.path());
+    let series = fs::read_to_string(scratch.path().join(SERIES_FILE)).expect("series.csv is written");
+    let mut lines = series.lines();
+    let header = lines.next().expect("series.csv has a header");
+    let mut rows_by_run: Vec<Vec<&str>> = vec![Vec::new(); 6];
+    for row in lines {
+        let run_id: usize = row.split(',').next().and_then(|id| id.parse().ok()).expect("a run id");
+        rows_by_run[run_id].push(row);
+    }
+    let split = rows_by_run[0].len() / 2;
+    assert!(split > 0, "run 0 has rows on both sides of the split");
+
+    // Run 0's rows go on both sides of run 1's, and the budget runs out inside run 1.
+    let mut reordered = vec![header];
+    reordered.extend(&rows_by_run[0][..split]);
+    reordered.extend(&rows_by_run[1]);
+    reordered.extend(&rows_by_run[0][split..]);
+    for rows in &rows_by_run[2..] {
+        reordered.extend(rows);
+    }
+    let reordered: String = reordered.iter().map(|line| format!("{line}\n")).collect();
+    let mut picked = directory_entries(scratch.path());
+    picked.retain(|(name, _)| !name.ends_with(SERIES_FILE));
+    picked.push((SERIES_FILE.to_owned(), reordered.into_bytes()));
+    // A held row takes its tick and each stat value as an `f64`, every column but the run id.
+    let row_bytes = (header.split(',').count() - 1) * size_of::<f64>();
+    let set = ResultSet::from_files(picked, (split + 1) * row_bytes).expect("the files read");
+
+    assert_eq!(set.runs().len(), rows_by_run.len(), "every run of the sweep is read");
+    assert_eq!(set.held_series_count(), 0, "no run keeps part of its series");
+    for run in set.runs() {
+        assert!(!run.series_held, "run {}", run.outcome.run.run_id);
+        assert!(run.outcome.series.is_empty(), "run {}", run.outcome.run.run_id);
+    }
+}
+
+#[test]
+fn a_series_header_with_other_columns_is_refused() {
+    let scratch = ScratchDir::new("result-set-series-header");
+    run_sir_sweep(scratch.path());
+    let stat_columns = ResultSet::open_dir(scratch.path(), usize::MAX)
+        .expect("the directory reads")
+        .stat_columns()
+        .to_vec();
+    let series_path = scratch.path().join(SERIES_FILE);
+    let series = fs::read_to_string(&series_path).expect("series.csv is written");
+    let header_end = series.find('\n').expect("a header line");
+
+    let renamed = format!("run_id,tick,Healthy,Infected,Recovered{}", &series[header_end..]);
+    fs::write(&series_path, renamed).expect("series.csv is rewritten");
+    let error = ResultSet::open_dir(scratch.path(), usize::MAX).expect_err("a stat column is renamed");
+    assert!(
+        matches!(
+            &error,
+            ResultSetError::Table(ReadError::BadField { record_number: 1, column, text, .. })
+                if column == "Susceptible" && text == "Healthy"
+        ),
+        "{error:?}"
+    );
+    let error = read_directory_series(scratch.path(), &stat_columns, &[0].into(), usize::MAX)
+        .expect_err("a stat column is renamed");
+    assert!(
+        matches!(error, ResultSetError::Table(ReadError::BadField { .. })),
+        "{error:?}"
+    );
+
+    let renamed = format!("run_id,time,Susceptible,Infected,Recovered{}", &series[header_end..]);
+    fs::write(&series_path, renamed).expect("series.csv is rewritten");
+    let error = ResultSet::open_dir(scratch.path(), usize::MAX).expect_err("an id column is renamed");
+    assert!(
+        matches!(
+            error,
+            ResultSetError::Table(ReadError::MissingColumn { column: "tick", .. })
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -220,6 +308,25 @@ fn a_directory_a_stopped_sweep_left_opens_with_its_written_runs() {
         &whole.runs()[..3],
         "the runs written in full, their series whole"
     );
+}
+
+#[test]
+fn a_runs_table_without_a_header_opens_with_no_runs() {
+    let scratch = ScratchDir::new("result-set-no-header");
+    run_sir_sweep(scratch.path());
+    let runs_path = scratch.path().join(RUNS_FILE);
+    let runs = fs::read_to_string(&runs_path).expect("runs.csv is written");
+    let partial_header = &runs[..runs.find('\n').expect("a header line") / 2];
+
+    // A sweep killed before its first run leaves both tables empty, or a header cut short.
+    for runs_text in ["", partial_header] {
+        fs::write(&runs_path, runs_text).expect("runs.csv is rewritten");
+        fs::write(scratch.path().join(SERIES_FILE), "").expect("series.csv is emptied");
+        let set = ResultSet::open_dir(scratch.path(), usize::MAX).expect("the directory reads");
+        assert!(set.runs().is_empty(), "{runs_text:?}");
+        assert!(set.value_columns().is_empty() && set.reducer_columns().is_empty());
+        assert_eq!(set.stat_columns(), ["Susceptible", "Infected", "Recovered"]);
+    }
 }
 
 #[test]
@@ -294,4 +401,34 @@ fn a_result_set_replays_each_run_as_its_plan_does() {
         set.replay(&entry("game_of_life", None), 0),
         Err(ResultReplayError::Plan(_))
     ));
+}
+
+#[test]
+fn a_sweep_replay_refuses_a_row_of_another_sweep() {
+    let scratch = ScratchDir::new("result-set-mispicked");
+    let (first, second) = (scratch.path().join("first"), scratch.path().join("second"));
+    run_sir_sweep(&first);
+    let mut other_spec = sir_spec();
+    other_spec.blocks[0].factors[0] = FactorSpec::param("infection_rate", values(&["0.3", "0.5", "0.7"]));
+    run_sweep(&second, &other_spec);
+    let own = ResultSet::open_dir(&first, usize::MAX).expect("the directory reads");
+
+    // The rows of the second sweep carry the ids, replicates and seeds of the first's, with other rates.
+    let mut picked = directory_entries(&first);
+    picked.retain(|(name, _)| !name.ends_with(RUNS_FILE));
+    picked.push((
+        RUNS_FILE.to_owned(),
+        fs::read(second.join(RUNS_FILE)).expect("runs.csv is written"),
+    ));
+    let mixed = ResultSet::from_files(picked, usize::MAX).expect("the files read");
+    let sir = entry("sir", None);
+    for run_id in 0..6 {
+        let position = run_id as usize;
+        assert_eq!(mixed.runs()[position].outcome.run, own.runs()[position].outcome.run);
+        assert!(own.replay(&sir, run_id).is_ok(), "run {run_id}");
+        assert!(
+            matches!(mixed.replay(&sir, run_id), Err(ResultReplayError::Mismatch { run_id: id }) if id == run_id),
+            "run {run_id}"
+        );
+    }
 }

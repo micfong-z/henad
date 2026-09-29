@@ -151,14 +151,12 @@ impl eframe::App for HenadApp {
         }
 
         if let Some(fault) = self.state.render_ctx.faults.take() {
-            // A sweep's GPU work shares the device, and its uncaught errors land here too.
-            self.state.sweep.pause_after_gpu_fault();
             self.state.report_fault(fault);
         }
 
         self.state.poll_saves();
         self.state.poll_opens();
-        ui::results::poll(&mut self.state);
+        ui::results::poll(ctx, &mut self.state);
         self.state.poll_capture();
 
         // Request continuous repaint while running. A run to a tick wakes the UI on each publish, and needs the

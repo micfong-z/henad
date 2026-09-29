@@ -4,6 +4,7 @@
 //! onto its range. A whole-number gene over `m` values takes the value at position `floor(gene * m)`, and so does a
 //! categorical gene over `m` listed levels.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::explore::design::{continuous_level, continuous_value, whole_number_level};
@@ -11,7 +12,7 @@ use crate::explore::design_rng::DesignRng;
 use crate::explore::factor::{Factor, FactorDomain, FactorError, FactorLevel, FactorSpec, FactorTarget};
 use crate::explore::plan::Config;
 use crate::explore::spec::ActionSpec;
-use crate::params::ParamDescriptor;
+use crate::params::{ParamDescriptor, ParamValue};
 
 /// A point in a search space, one gene per factor, each from 0 to 1.
 #[derive(Debug, Clone, PartialEq)]
@@ -58,10 +59,12 @@ pub struct SearchSpace {
 impl SearchSpace {
     /// Returns the space over `factors`.
     ///
+    /// A level listed twice is kept once, at its first place.
+    ///
     /// # Errors
     ///
     /// Returns [`SearchSpaceError`] for no factors, or a factor with an empty list of levels.
-    pub fn new(factors: Vec<Factor>) -> Result<Self, SearchSpaceError> {
+    pub fn new(mut factors: Vec<Factor>) -> Result<Self, SearchSpaceError> {
         if factors.is_empty() {
             return Err(SearchSpaceError::NoFactors);
         }
@@ -70,6 +73,12 @@ impl SearchSpace {
             .position(|factor| factor.levels().is_some_and(<[FactorLevel]>::is_empty))
         {
             return Err(SearchSpaceError::NoLevels { factor_index });
+        }
+        for factor in &mut factors {
+            if let FactorDomain::Levels(levels) = &mut factor.domain {
+                let mut seen = BTreeSet::new();
+                levels.retain(|level| seen.insert(level_identity(level)));
+            }
         }
         Ok(Self { factors })
     }
@@ -209,6 +218,17 @@ fn level(factor: &Factor, gene: f64) -> FactorLevel {
     }
 }
 
+/// Returns a key two levels share when they are equal, with zero and negative zero as one.
+fn level_identity(level: &FactorLevel) -> (u8, u64) {
+    match level {
+        FactorLevel::Param(ParamValue::F32(value)) => (0, u64::from(if *value == 0.0 { 0 } else { value.to_bits() })),
+        FactorLevel::Param(ParamValue::U32(value)) => (1, u64::from(*value)),
+        FactorLevel::Param(ParamValue::Bool(value)) => (2, u64::from(*value)),
+        FactorLevel::Param(ParamValue::Choice(index)) => (3, *index as u64),
+        FactorLevel::Tick(tick) => (4, *tick),
+    }
+}
+
 /// Returns `floor(gene * count)`, kept from 0 to `count - 1`.
 fn level_index(gene: f64, count: u128) -> u128 {
     // The cast saturates, taking a negative product to 0.
@@ -263,7 +283,7 @@ mod tests {
 
     use super::{Genome, SearchSpace, SearchSpaceError, reflect};
     use crate::explore::design_rng::DesignRng;
-    use crate::explore::factor::{FactorLevel, FactorSpec, FactorTarget, LevelSpec};
+    use crate::explore::factor::{Factor, FactorDomain, FactorLevel, FactorSlot, FactorSpec, FactorTarget, LevelSpec};
     use crate::explore::plan::Config;
     use crate::explore::spec::ActionSpec;
     use crate::explore::value::check_value;
@@ -487,5 +507,45 @@ mod tests {
             )
         );
         assert_eq!(space.decode(&genome(&[0.6]), &base()).params[1], ParamValue::U32(8));
+    }
+
+    #[test]
+    fn a_repeated_level_is_kept_once() {
+        // "2" names the third shape by its index.
+        let shapes = ["star", "ring", "star", "2", "grid"].map(str::to_owned).to_vec();
+        let specs = [FactorSpec::param("shape", LevelSpec::Values(shapes))];
+        let space = SearchSpace::resolve(&specs, &params(), &actions(), &[]).expect("listed shapes resolve");
+        let choices = [1, 0, 2].map(|index| FactorLevel::Param(ParamValue::Choice(index)));
+        assert_eq!(space.factors()[0].levels(), Some(&choices[..]), "first places kept");
+        for (first, second) in [(0.1, 0.3), (0.4, 0.6), (0.7, 0.9)] {
+            assert_eq!(
+                space.config_key(&genome(&[first])),
+                space.config_key(&genome(&[second]))
+            );
+        }
+        assert_ne!(space.config_key(&genome(&[0.1])), space.config_key(&genome(&[0.9])));
+
+        // Steps below the spacing of f32 values near 0.5 round several levels to one value.
+        let step = LevelSpec::Range {
+            min: 0.5,
+            max: 0.500_000_05,
+            step: Some(1e-8),
+        };
+        let space = SearchSpace::resolve(&[FactorSpec::param("rate", step)], &params(), &actions(), &[])
+            .expect("the rates resolve");
+        let rates = [0.5, f32::from_bits(0.5_f32.to_bits() + 1)].map(|rate| FactorLevel::Param(ParamValue::F32(rate)));
+        assert_eq!(space.factors()[0].levels(), Some(&rates[..]));
+
+        let signed_zeros = [0.0, -0.0, 0.25].map(|rate| FactorLevel::Param(ParamValue::F32(rate)));
+        let space = SearchSpace::new(vec![Factor {
+            slot: FactorSlot::Param(0),
+            domain: FactorDomain::Levels(signed_zeros.to_vec()),
+        }])
+        .expect("three levels");
+        assert_eq!(
+            space.factors()[0].levels().map(<[FactorLevel]>::len),
+            Some(2),
+            "zero is one level"
+        );
     }
 }

@@ -18,7 +18,7 @@ use henad_models::registry::{ModelEntry, ModelState};
 use crate::exec::{BatchEnd, Concurrency, Executor, GpuTrackDepth, RunRequest, SweepControl};
 use crate::sweep::ExploreError;
 use crate::tests::support::{
-    Collected, ONE_TRACK, Recorder, ScratchDir, Tables, baseline_device, entry, headless_device, planned, sweep,
+    Collected, ONE_TRACK, OutputTables, Recorder, ScratchDir, baseline_device, entry, headless_device, planned, sweep,
     sweep_options, sweep_with,
 };
 
@@ -47,7 +47,7 @@ fn a_gpu_sweep_writes_the_same_files_twice() {
     }];
 
     let scratch = ScratchDir::new("gpu-twice");
-    let tables: Vec<Tables> = ["first", "second"]
+    let tables: Vec<OutputTables> = ["first", "second"]
         .into_iter()
         .map(|name| {
             let output_dir = scratch.path().join(name);
@@ -57,7 +57,7 @@ fn a_gpu_sweep_writes_the_same_files_twice() {
                 "one track per run, up to the auto cap"
             );
             assert_eq!((report.counts.rows, report.counts.ok), (4, 4));
-            Tables::read(&output_dir)
+            OutputTables::read(&output_dir)
         })
         .collect();
     assert_eq!(
@@ -138,7 +138,7 @@ fn a_gpu_run_stops_on_the_first_sample_where_the_condition_holds() {
         &scratch.path().join("full"),
         Concurrency::Auto,
     );
-    let full = Tables::read(&scratch.path().join("full"));
+    let full = OutputTables::read(&scratch.path().join("full"));
     let threshold = full
         .series_of(0, "Recovered")
         .into_iter()
@@ -155,7 +155,7 @@ fn a_gpu_run_stops_on_the_first_sample_where_the_condition_holds() {
         &scratch.path().join("stopped"),
         Concurrency::Auto,
     );
-    let stopped = Tables::read(&scratch.path().join("stopped"));
+    let stopped = OutputTables::read(&scratch.path().join("stopped"));
     let threshold: f64 = threshold.parse().expect("a number");
     for run_id in 0..2 {
         let full_series = full.series_of(run_id, "Recovered");
@@ -195,7 +195,7 @@ fn a_gpu_action_tick_factor_moves_the_action() {
     }];
     let scratch = ScratchDir::new("gpu-action-tick");
     sweep(&gpu_sir, Some(&ctx), &spec, scratch.path(), Concurrency::Auto);
-    let tables = Tables::read(scratch.path());
+    let tables = OutputTables::read(scratch.path());
     assert_eq!(tables.run_column("action.wave"), ["0", "12", "40"]);
     assert_eq!(tables.run_column("status"), ["ok", "ok", "ok"]);
     let [at_start, at_twelve, at_forty] = [0, 1, 2].map(|run_id| tables.series_of(run_id, "Infected"));

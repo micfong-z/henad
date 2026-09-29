@@ -6,7 +6,7 @@
 
 use egui::{Button, Checkbox, ComboBox, DragValue, Id, Label, Response, RichText, Ui, vec2};
 use henad_core::explore::plan::ModelSchema;
-use henad_core::explore::search::genetic::GeneticSettings;
+use henad_core::explore::search::genetic::{GeneticSettings, MAX_POPULATION, MAX_TOURNAMENT_SIZE};
 use henad_core::explore::search::hill_climb::HillClimbSettings;
 use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
 use henad_core::explore::search::{Aggregate, Goal};
@@ -27,9 +27,6 @@ use crate::ui::sweep::layout::{
 
 /// Most candidates the Batch size field takes.
 const MAX_BATCH_SIZE: usize = 1 << 16;
-
-/// Most members the Population field takes.
-const MAX_POPULATION: usize = 1 << 16;
 
 /// Most cells the Cells field of a grid axis takes.
 const MAX_AXIS_CELLS: u32 = 256;
@@ -155,7 +152,13 @@ pub fn evaluations_feedback(evaluations: u64, replicates: u64) -> String {
 /// Returns the feedback of the Batch size field: the batches the budget of `search` takes, as in "About 13 batches".
 pub fn batches_feedback(search: &SearchDraft) -> String {
     let genetic = (search.algorithm == DraftAlgorithm::Genetic).then_some(&search.genetic);
-    let batches = batch_estimate(search.max_evaluations, search.batch_size, genetic);
+    let batches = if search.algorithm == DraftAlgorithm::PatternSpace {
+        search
+            .pattern_space
+            .batch_count(search.max_evaluations, search.batch_size)
+    } else {
+        batch_estimate(search.max_evaluations, search.batch_size, genetic)
+    };
     let noun = if batches == 1 { "batch" } else { "batches" };
     format!("About {batches} {noun}")
 }
@@ -272,9 +275,9 @@ pub fn parse_bound(text: &str) -> Option<f64> {
 /// Output columns the Objective and axis lists offer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OutputChoices {
-    /// Columns the runs record, as in `Infected:max`.
+    /// Columns the runs record, as in `Infected:max` or `Velocity.magnitude:max` for a part of a vector stat.
     pub recorded: Vec<String>,
-    /// Columns of each stat the runs do not record yet. Picking one adds it to the Outputs section.
+    /// Outputs of every stat column that the runs do not record yet. Picking one adds it to the Outputs section.
     pub unrecorded: Vec<String>,
 }
 
@@ -534,7 +537,7 @@ fn range_rows(
                     Button::new("Use range from results").small(),
                 )
                 .on_hover_text("Set Minimum and Maximum to the range of this output in the Results tab")
-                .on_disabled_hover_text("No values for this output in the Results tab")
+                .on_disabled_hover_text("No range for this output in the Results tab")
                 .clicked();
         });
 
@@ -792,7 +795,7 @@ fn genetic_rows(ui: &mut Ui, rows: &mut FormRows, settings: &mut GeneticSettings
         "genetic.tournament_size",
         ("Tournament size", "Configurations compared to select each parent"),
         DragValue::new(&mut settings.tournament_size)
-            .range(1..=MAX_POPULATION)
+            .range(1..=MAX_TOURNAMENT_SIZE)
             .clamp_existing_to_range(false),
     );
     setting_row(
@@ -955,6 +958,8 @@ fn aggregate_row(ui: &mut Ui, layout: &FormLayout, id: Id, aggregate: &mut Aggre
 mod tests {
     use henad_core::explore::search::genetic::GeneticSettings;
     use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
+    use henad_core::params::ParamValue;
+    use henad_explore::probe::ProbeReport;
     use henad_explore::schema::model_schema;
     use henad_models::registry::{ModelEntry, model_registry};
 
@@ -1000,6 +1005,13 @@ mod tests {
             batches_feedback(&draft.search),
             "About 15 batches",
             "no batch spans two generations"
+        );
+        let mut draft = search_draft(DraftAlgorithm::PatternSpace);
+        draft.search.pattern_space.initial_samples = 20;
+        assert_eq!(
+            batches_feedback(&draft.search),
+            "About 14 batches",
+            "the 20 initial samples end a batch of their own"
         );
 
         let settings = GeneticSettings::default();
@@ -1075,6 +1087,38 @@ mod tests {
         assert_eq!(choices.recorded, ["Infected:argmax"]);
         assert_eq!(choices.unrecorded.len(), 6 * schema.stats.len() - 1);
         assert!(!choices.unrecorded.iter().any(|column| column == "Infected:argmax"));
+    }
+
+    #[test]
+    fn the_output_lists_offer_the_parts_of_a_vector_stat() {
+        let entry = model_registry(None)
+            .into_iter()
+            .find(|entry| entry.id == "boids")
+            .expect("boids is registered");
+        let schema = model_schema(&entry);
+        let values: Vec<ParamValue> = entry
+            .param_descriptors
+            .iter()
+            .map(|descriptor| descriptor.kind.default_value())
+            .collect();
+        let report = ProbeReport::build(&entry, None, &values, None).unwrap_or_else(|error| panic!("{error}"));
+        let mut draft = SweepDraft::new(&schema);
+        draft.set_stat_columns(&report.columns);
+        let choices = OutputChoices::of(&draft, &schema);
+        for part in ["x", "y", "magnitude"] {
+            let recorded = format!("Average Velocity.{part}:max");
+            assert!(choices.recorded.contains(&recorded), "{recorded}: {choices:?}");
+            let unrecorded = format!("Average Velocity.{part}:argmax");
+            assert!(choices.unrecorded.contains(&unrecorded), "{unrecorded}: {choices:?}");
+        }
+        assert!(
+            !choices
+                .recorded
+                .iter()
+                .chain(&choices.unrecorded)
+                .any(|column| column.starts_with("Average Velocity:")),
+            "no reducer writes the bare label of a vector: {choices:?}"
+        );
     }
 
     fn axes(x_max: f64, y_max: f64) -> PatternSpaceSettings {

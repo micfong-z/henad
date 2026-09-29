@@ -24,6 +24,20 @@ pub fn drive(
     replicates: u64,
     outputs: impl Fn(&Candidate, u64) -> Vec<Option<f64>>,
 ) -> Vec<Candidate> {
+    drive_batches(searcher, batch_size, replicates, outputs).concat()
+}
+
+/// Runs `searcher` as [`drive`] does, and returns the candidates of each ask as a batch of its own.
+///
+/// # Panics
+///
+/// Panics when the searcher is still not done after [`MAX_ASKS`] asks.
+pub fn drive_batches(
+    searcher: &mut dyn Searcher,
+    batch_size: usize,
+    replicates: u64,
+    outputs: impl Fn(&Candidate, u64) -> Vec<Option<f64>>,
+) -> Vec<Vec<Candidate>> {
     let mut asked = Vec::new();
     for _ in 0..MAX_ASKS {
         if searcher.is_done() {
@@ -43,7 +57,7 @@ pub fn drive(
             })
             .collect();
         searcher.tell(&evaluations);
-        asked.extend(batch);
+        asked.push(batch);
     }
     panic!("the searcher was not done after {MAX_ASKS} asks");
 }

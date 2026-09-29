@@ -170,8 +170,8 @@ impl SweepSection {
             DraftSite::Search | DraftSite::Objective | DraftSite::Axis(_) | DraftSite::MethodSetting(_) => Self::Search,
             DraftSite::Action(_) => Self::Actions,
             DraftSite::Replicates | DraftSite::Seed | DraftSite::DesignSeed => Self::Seeds,
-            DraftSite::RunLength | DraftSite::Stop => Self::RunLength,
-            DraftSite::Sampling | DraftSite::Output(_) => Self::Outputs,
+            DraftSite::RunLength | DraftSite::Stop | DraftSite::Timeout => Self::RunLength,
+            DraftSite::Sampling | DraftSite::Output(_) | DraftSite::Outputs => Self::Outputs,
             DraftSite::Execution => Self::Execution,
         }
     }
@@ -367,8 +367,8 @@ impl IssueCount {
         }
     }
 
-    /// Returns the count in words: "2 problems" while any issue is invalid, "2 missing" while every one is missing input,
-    /// and `None` for no issue.
+    /// Returns the count in words: "2 problems" while any issue is invalid, "2 missing" while every one is missing
+    /// input, and `None` for no issue.
     pub fn phrase(self) -> Option<String> {
         let total = self.total() as u64;
         match self.kind()? {
@@ -1135,9 +1135,11 @@ mod tests {
     fn each_new_site_belongs_to_the_section_that_draws_its_row() {
         let section = |site| SweepSection::of_site(site, DraftMode::Sweep);
         assert_eq!(section(DraftSite::Sampling), SweepSection::Outputs);
+        assert_eq!(section(DraftSite::Outputs), SweepSection::Outputs);
         assert_eq!(section(DraftSite::DesignSeed), SweepSection::Seeds);
         assert_eq!(section(DraftSite::Parameters), SweepSection::Parameters);
         assert_eq!(section(DraftSite::Execution), SweepSection::Execution);
+        assert_eq!(section(DraftSite::Timeout), SweepSection::RunLength);
         assert_eq!(section(DraftSite::Axis(GridAxis::X)), SweepSection::Search);
         assert_eq!(
             section(DraftSite::MethodSetting("genetic.elite_count")),

@@ -34,12 +34,17 @@ fn main() -> eframe::Result {
 }
 
 /// Returns the folder `--open DIR` or `--open=DIR` names in `arguments`, the command line without the program.
+///
+/// An argument starting with `--` is a flag and never the folder after `--open`.
 #[cfg(not(target_arch = "wasm32"))]
 fn results_folder(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> Option<std::path::PathBuf> {
-    let mut arguments = arguments.into_iter();
+    let mut arguments = arguments.into_iter().peekable();
     while let Some(argument) = arguments.next() {
         if argument == "--open" {
-            return arguments.next().map(std::path::PathBuf::from);
+            if let Some(folder) = arguments.next_if(|next| !next.as_encoded_bytes().starts_with(b"--")) {
+                return Some(std::path::PathBuf::from(folder));
+            }
+            continue;
         }
         if let Some(folder) = argument.to_str().and_then(|text| text.strip_prefix("--open=")) {
             return Some(std::path::PathBuf::from(folder));
@@ -131,5 +136,20 @@ mod tests {
             "a flag without its folder"
         );
         assert_eq!(results_folder(arguments(&[])), None);
+    }
+
+    /// The regression. A flag after `--open` used to be taken as the folder.
+    #[test]
+    fn open_never_takes_a_flag_for_its_folder() {
+        assert_eq!(
+            results_folder(arguments(&["--open", "--verbose"])),
+            None,
+            "a flag where the folder belongs"
+        );
+        assert_eq!(
+            results_folder(arguments(&["--open", "--open=runs/sir"])),
+            Some(PathBuf::from("runs/sir")),
+            "the flag after a bare --open is read as a flag"
+        );
     }
 }

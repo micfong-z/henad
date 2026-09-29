@@ -9,7 +9,7 @@ use henad_core::explore::stop::StopSpec;
 use crate::exec::Concurrency;
 use crate::sweep::SweepWarning;
 use crate::tests::broken::RefusesActions;
-use crate::tests::support::{Recorder, ScratchDir, Tables, entry, sweep, sweep_options, sweep_with};
+use crate::tests::support::{OutputTables, Recorder, ScratchDir, entry, sweep, sweep_options, sweep_with};
 
 fn values(raw: &[&str]) -> LevelSpec {
     LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
@@ -48,7 +48,7 @@ fn a_run_stops_on_the_first_sample_where_the_condition_holds() {
     let scratch = ScratchDir::new("stop");
     let spec = sir_spec(120, 4);
     sweep(&sir, None, &spec, &scratch.path().join("full"), Concurrency::Auto);
-    let full = Tables::read(&scratch.path().join("full"));
+    let full = OutputTables::read(&scratch.path().join("full"));
     let threshold: f64 = full
         .series_of(0, "Recovered")
         .iter()
@@ -62,7 +62,7 @@ fn a_run_stops_on_the_first_sample_where_the_condition_holds() {
             Some(StopSpec::parse(&format!("Recovered >= {threshold}"), min_tick).expect("a valid condition"));
         let output_dir = scratch.path().join(name);
         sweep(&sir, None, &stopping, &output_dir, Concurrency::Auto);
-        let stopped = Tables::read(&output_dir);
+        let stopped = OutputTables::read(&output_dir);
         for run_id in 0..2 {
             let full_series = full.series_of(run_id, "Recovered");
             let expected = first_reaching(&full_series, threshold, min_tick).expect("Recovered never falls");
@@ -89,7 +89,7 @@ fn a_run_stops_on_the_first_sample_where_the_condition_holds() {
     never.run.stop = Some(StopSpec::parse("Recovered < 0", 0).expect("a valid condition"));
     let output_dir = scratch.path().join("never");
     sweep(&sir, None, &never, &output_dir, Concurrency::Auto);
-    let unstopped = Tables::read(&output_dir);
+    let unstopped = OutputTables::read(&output_dir);
     assert_eq!(unstopped.run_column("stop_reason"), ["steps", "steps"]);
     assert_eq!(
         unstopped.series, full.series,
@@ -134,7 +134,7 @@ fn an_action_tick_factor_moves_the_action() {
         scratch.path(),
         Concurrency::Auto,
     );
-    let tables = Tables::read(scratch.path());
+    let tables = OutputTables::read(scratch.path());
     assert_eq!(tables.run_column("action.wave"), ["0", "10", "30"]);
     assert_eq!(tables.summary_column("action.wave"), ["0", "10", "30"]);
     assert_eq!(tables.run_column("status"), ["ok", "ok", "ok"]);
@@ -193,7 +193,7 @@ fn a_refused_action_is_noted_and_the_run_stays_ok() {
         &scratch.path().join("refused"),
         Concurrency::Auto,
     );
-    let refused = Tables::read(&scratch.path().join("refused"));
+    let refused = OutputTables::read(&scratch.path().join("refused"));
     assert_eq!(refused.run_column("status"), ["ok"]);
     assert_eq!(refused.run_column("stop_reason"), ["steps"]);
     assert_eq!(
@@ -211,6 +211,6 @@ fn a_refused_action_is_noted_and_the_run_stays_ok() {
         &scratch.path().join("quiet"),
         Concurrency::Auto,
     );
-    let quiet = Tables::read(&scratch.path().join("quiet"));
+    let quiet = OutputTables::read(&scratch.path().join("quiet"));
     assert_eq!(refused.series, quiet.series, "a refused action changes nothing");
 }

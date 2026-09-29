@@ -100,7 +100,7 @@ enum Part {
 /// Column layout of a stat series, planned from one sample.
 ///
 /// A scalar series is one column, a vector is three (`.x`, `.y` and `.magnitude`), and a histogram
-/// is one per bucket plus `.total`. Note that the accessors panic on an index past [`Self::len`].
+/// is one per bucket plus `.total`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatColumns {
     columns: Vec<Column>,
@@ -159,16 +159,28 @@ impl StatColumns {
     }
 
     /// Name of column `i` before CSV escaping.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `i` is not below [`Self::len`].
     pub fn name(&self, i: usize) -> &str {
         &self.columns[i].name
     }
 
     /// Header of column `i`, escaped for CSV.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `i` is not below [`Self::len`].
     pub fn header(&self, i: usize) -> &str {
         &self.columns[i].header
     }
 
     /// Returns whether column `i` counts a single histogram bucket.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `i` is not below [`Self::len`].
     pub fn is_bucket(&self, i: usize) -> bool {
         matches!(self.columns[i].part, Part::Bucket(_))
     }

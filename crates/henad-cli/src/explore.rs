@@ -55,7 +55,8 @@ const LOGGED_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Flags that make a sweep, or merge the shards of one.
 ///
-/// Every flag but `--merge` needs `--out`, `--spec` or `--dry-run`.
+/// `--out`, `--spec` and `--dry-run` each ask for a sweep, and every other flag apart from `--merge` needs one of
+/// them.
 #[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
 #[command(next_help_heading = "Sweeps")]
 pub struct ExploreArgs {
@@ -132,8 +133,8 @@ pub struct ExploreArgs {
     #[arg(long, requires = "explore")]
     pub no_default_reducers: bool,
 
-    /// End a run after this many seconds of wall-clock time and record it as `timed_out`. With `--resume`, it will
-    /// run again.
+    /// End a run after this many seconds of wall-clock time and record it as `timed_out`. Beside other GPU runs, a
+    /// run's clock counts its share of the device. With `--resume`, it will run again.
     #[arg(long, value_name = "SECONDS", value_parser = parse_timeout, requires = "explore")]
     pub timeout: Option<Duration>,
 
@@ -177,7 +178,8 @@ pub struct ExploreArgs {
     )]
     pub merge: Vec<PathBuf>,
 
-    /// Print the sweep's plan and write nothing. The first and last configs are built as a check.
+    /// Print the sweep's plan and write nothing. The first config that builds without a fault and the last config
+    /// are built as a check.
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -437,10 +439,11 @@ pub fn parse_vary(raw: &str) -> Result<FactorSpec> {
     })
 }
 
-/// Returns the actions `--act` adds to every run of a sweep, each named by its id.
+/// Returns the actions `--act` adds to every run of a sweep.
 ///
-/// An id given more than once is named `ID_2` the second time, `ID_3` the third, and so on. The model checks the ids
-/// when the sweep is planned.
+/// An action is named by its id, or by the first of `ID_2`, `ID_3` and so on that no earlier action has taken. The
+/// second `--act` of an id is then `ID_2` and the third `ID_3`, unless an earlier entry took the name. The model
+/// checks the ids when the sweep is planned.
 ///
 /// # Errors
 ///
@@ -456,9 +459,12 @@ pub fn fixed_actions(raw: &[String]) -> Result<Vec<ActionSpec>, ScheduleError> {
             source,
         })?;
         let mut action = ActionSpec::new(id, tick);
-        let repeats = actions.iter().filter(|earlier| earlier.id == id).count();
-        if repeats > 0 {
-            action.name = format!("{id}_{}", repeats + 1);
+        let name_taken = |name: &str| actions.iter().any(|earlier| earlier.name == name);
+        if name_taken(id) {
+            action.name = (2_u64..)
+                .map(|count| format!("{id}_{count}"))
+                .find(|name| !name_taken(name))
+                .unwrap_or_default();
         }
         actions.push(action);
     }
@@ -1318,6 +1324,49 @@ mod tests {
             Mode::Benchmark,
             "outside a sweep --act keeps its meaning"
         );
+    }
+
+    /// The regression. A repeated id was numbered by its count alone, so an explicit `ID_2` after it took the same
+    /// name and the plan refused the sweep.
+    #[test]
+    fn a_repeated_action_takes_the_first_free_name() {
+        let names = |raw: &[&str]| {
+            let raw: Vec<String> = raw.iter().map(|&entry| entry.to_owned()).collect();
+            fixed_actions(&raw)
+                .expect("every entry reads")
+                .into_iter()
+                .map(|action| action.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&["seed@1", "seed@2", "seed@3"]), ["seed", "seed_2", "seed_3"]);
+        assert_eq!(names(&["seed@1", "seed@2", "seed_2@3"]), ["seed", "seed_2", "seed_2_2"]);
+        assert_eq!(names(&["seed@1", "seed_2@2", "seed@3"]), ["seed", "seed_2", "seed_3"]);
+    }
+
+    /// The regression. `--info` or `--list` with no model printed and exited, and the sweep asked for never ran.
+    #[test]
+    fn info_and_list_do_not_drop_a_sweep() {
+        let mode = |line: &[&str]| {
+            Args::try_parse_from(line)
+                .map(|args| Mode::of(&args))
+                .map_err(|error| error.kind())
+        };
+        assert_eq!(mode(&["henad-cli", "--info"]), Ok(Mode::InfoOnly));
+        assert_eq!(
+            mode(&["henad-cli", "--info", "--out", "d", "--vary", "infection_rate=0.1,0.2"]),
+            Ok(Mode::Explore),
+            "the sweep then asks for a model"
+        );
+        assert_eq!(mode(&["henad-cli", "--info", "--dry-run"]), Ok(Mode::Explore));
+        assert_eq!(mode(&["henad-cli", "--info", "--spec", "s.toml"]), Ok(Mode::Explore));
+        let listed: [&[&str]; 3] = [
+            &["henad-cli", "--list", "--out", "d"],
+            &["henad-cli", "--list", "--dry-run"],
+            &["henad-cli", "--list", "--spec", "s.toml"],
+        ];
+        for line in listed {
+            assert_eq!(parse(line), Err(ErrorKind::ArgumentConflict), "{line:?}");
+        }
     }
 
     #[test]

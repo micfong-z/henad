@@ -7,6 +7,7 @@ use crate::icons::material_design_icons::{
 };
 use crate::state::AppState;
 use crate::ui::banner;
+use crate::ui::sweep::layout::{add_button, icon_button};
 use henad_compute::cpu::sim_thread::SimCommand;
 use henad_core::action::{ActionDescriptor, Schedule, Scheduled};
 use henad_core::authoring::primitives::rng::mix_seed;
@@ -161,7 +162,7 @@ fn seed_row(ui: &mut egui::Ui, app: &mut AppState) {
         {
             app.seed = seed;
         }
-        if ui.button(MDI_DICE_5).on_hover_text("Generate random seed").clicked() {
+        if dice_button(ui).clicked() {
             let seed = draw_seed(app.seed);
             app.seed = Some(seed);
             app.seed_text = seed.to_string();
@@ -173,6 +174,11 @@ fn seed_row(ui: &mut egui::Ui, app: &mut AppState) {
     if parse_seed(&app.seed_text).is_err() {
         ui.colored_label(ui.visuals().error_fg_color, INVALID_SEED);
     }
+}
+
+/// Adds the button beside the Seed field that draws a random seed.
+fn dice_button(ui: &mut egui::Ui) -> egui::Response {
+    add_button(ui, true, egui::Button::new(MDI_DICE_5), "Generate random seed").on_hover_text("Generate random seed")
 }
 
 /// Returns the width of a Seed field that shows every digit of the largest seed.
@@ -262,7 +268,8 @@ fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[ActionDescripto
         heading = heading.color(ui.visuals().warn_fg_color);
         format!("Schedule changed. Press {MDI_RESTART}\u{a0}Build to apply.")
     } else {
-        "Each action runs after the step on the corresponding tick.".to_owned()
+        "Actions at tick 0 run when the model is built. Later ones run after the step that reaches their tick."
+            .to_owned()
     };
 
     ui.add_space(4.0);
@@ -273,15 +280,12 @@ fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[ActionDescripto
         let label = actions
             .get(entry.index)
             .map_or(entry.id.as_str(), |action| action.label);
+        let text = format!("{label} at tick {}", entry.tick);
         ui.horizontal(|ui| {
-            if ui
-                .small_button(MDI_DELETE_OUTLINE)
-                .on_hover_text("Remove action")
-                .clicked()
-            {
+            if remove_button(ui, &text).clicked() {
                 removed = Some(position);
             }
-            ui.label(format!("{label} at tick {}", entry.tick));
+            ui.label(text);
         });
     }
     if let Some(position) = removed {
@@ -323,6 +327,11 @@ fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[ActionDescripto
     {
         app.schedule = Schedule::default();
     }
+}
+
+/// Adds the button removing the scheduled action that the row reads as `entry`.
+fn remove_button(ui: &mut egui::Ui, entry: &str) -> egui::Response {
+    icon_button(ui, MDI_DELETE_OUTLINE, &format!("Remove {entry}"), "Remove action")
 }
 
 /// Returns `schedule` with `entry` after every entry due at or before its tick.
@@ -508,8 +517,10 @@ mod tests {
     use henad_models::registry::model_registry;
 
     use super::{
-        INVALID_SEED, decimal_value, display_value, f32_slider, parse_seed, percent_decimals, with_entry, without_entry,
+        INVALID_SEED, decimal_value, dice_button, display_value, f32_slider, parse_seed, percent_decimals,
+        remove_button, with_entry, without_entry,
     };
+    use crate::icons::material_design_icons::{MDI_DELETE_OUTLINE, MDI_DICE_5};
 
     /// Draws the slider of an F32 parameter of `kind` over `value` for one frame of `context`, focused and pressed
     /// with `keys`, and returns whether it reports a change.
@@ -691,5 +702,46 @@ mod tests {
         assert_eq!(percent_decimals(Some(0.005)), 1, "0.5% steps");
         assert_eq!(percent_decimals(Some(0.0025)), 2, "0.25% steps");
         assert_eq!(percent_decimals(None), 1, "no step");
+    }
+
+    /// Returns the accessible names of the widgets `add` draws in one frame.
+    fn accessible_names(add: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        let context = egui::Context::default();
+        context.enable_accesskit();
+        let output = context.run_ui(egui::RawInput::default(), add);
+        let names = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .map(|update| {
+                update
+                    .nodes
+                    .iter()
+                    .filter_map(|(_, node)| node.label().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        output.drop_without_applying_deltas();
+        names
+    }
+
+    /// The regression. The dice and remove buttons were named by their icon glyphs, which a screen reader cannot read.
+    #[test]
+    fn the_icon_buttons_are_named_for_what_they_do() {
+        let names = accessible_names(|ui| {
+            dice_button(ui);
+            remove_button(ui, "Seed outbreak at tick 5");
+        });
+        assert!(names.iter().any(|name| name == "Generate random seed"), "{names:?}");
+        assert!(
+            names.iter().any(|name| name == "Remove Seed outbreak at tick 5"),
+            "{names:?}"
+        );
+        assert!(
+            !names
+                .iter()
+                .any(|name| name == MDI_DICE_5 || name == MDI_DELETE_OUTLINE),
+            "{names:?}"
+        );
     }
 }

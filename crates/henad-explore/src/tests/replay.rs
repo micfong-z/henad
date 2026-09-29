@@ -1,5 +1,7 @@
 //! Checks that the live loops replay a run as a sweep and `--export-stats` step it.
 
+use std::sync::Arc;
+
 use henad_compute::cpu::sim_thread::SimThread;
 use henad_compute::fault::FaultSink;
 use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
@@ -8,6 +10,7 @@ use henad_compute::snapshot::Snapshot;
 use henad_core::action::{Fire, Schedule};
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::measure::Sampler;
 use henad_core::explore::outcome::RunStatus;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 use henad_core::explore::value::resolve_params;
@@ -52,6 +55,25 @@ fn row(columns: &StatColumns, tick: u64, stats: &[StatEntry]) -> Vec<f64> {
     values
 }
 
+/// Returns the values of `stats` in the columns a folder recorded, named by `names`, in the folder's order.
+///
+/// # Panics
+///
+/// Panics when `stats` has no column of one of the names.
+fn recorded_row(names: &[String], tick: u64, stats: &[StatEntry]) -> Vec<f64> {
+    let columns = StatColumns::plan(stats);
+    let values = row(&columns, tick, stats);
+    names
+        .iter()
+        .map(|name| {
+            let column = columns
+                .resolve(name)
+                .unwrap_or_else(|| panic!("the replay has no column '{name}'"));
+            values[column]
+        })
+        .collect()
+}
+
 #[test]
 fn a_replay_of_a_planned_run_matches_its_sweep_row() {
     let sir = entry("sir", None);
@@ -87,23 +109,41 @@ fn a_replay_of_a_planned_run_matches_its_sweep_row() {
     // Run 1 fires its action before the first step, and run 7 after the step reaching tick 20.
     for run_id in [1, 7] {
         let outcome = &outcomes.0[run_id as usize];
+        assert_eq!(outcome.run.run_id, run_id);
         assert_eq!(outcome.status, RunStatus::Ok, "run {run_id}");
-        let (last_tick, last_row) = outcome.series.rows().last().expect("a run keeps its final sample");
 
         let replay = plan.replay(run_id).expect("the run is planned");
-        assert_eq!(replay.ticks, last_tick);
+        assert_eq!(replay.ticks, outcome.ticks);
         let Ok(ModelState::Cpu(state)) = (sir.create)(&replay.params, Some(replay.seed)) else {
             panic!("SIR builds on the CPU");
         };
         let mut thread = SimThread::new(state, 60.0, None, FaultSink::new());
         thread.set_schedule(replay.schedule.clone());
-        thread.run_to(replay.ticks);
-        let reached = snapshot_at(|| thread.take_snapshot(), replay.ticks).expect("the replay reaches its last tick");
+        // The live loop runs to each sampled tick in turn, and its snapshots go through the sweep's own sampler.
+        let mut sampler = Sampler::new(Arc::clone(&measure));
+        let mut reached = None;
+        for tick in measure.sample_ticks() {
+            thread.run_to(tick);
+            let snapshot = snapshot_at(|| thread.take_snapshot(), tick).expect("the replay reaches each sampled tick");
+            let stops = sampler.push(tick, &snapshot.stats).expect("the stats fit the columns");
+            assert!(!stops, "the spec has no stop condition");
+            reached = Some(snapshot);
+        }
+        let replayed = sampler.finish();
         assert_eq!(
-            row(measure.columns(), reached.tick, &reached.stats),
-            last_row,
-            "run {run_id}: the replay ends on the sweep's final row"
+            replayed.series.len(),
+            6,
+            "run {run_id}: ticks 5 to 30, every fifth tick"
         );
+        assert_eq!(
+            replayed.series, outcome.series,
+            "run {run_id}: the replay samples the sweep's series"
+        );
+        assert_eq!(
+            replayed.reducers, outcome.reducers,
+            "run {run_id}: the replay folds to the sweep's row"
+        );
+        let reached = reached.expect("the run samples at least once");
         assert_eq!(reached.population, outcome.population);
     }
 }
@@ -201,6 +241,7 @@ fn a_replayed_run_from_a_result_set_matches_its_row() {
         .position(|name| name == "Infected")
         .expect("SIR counts its infected");
 
+    assert_eq!(set.runs().len(), 8, "2 rates by 2 action ticks by 2 replicates");
     for recorded in set.runs() {
         let outcome = &recorded.outcome;
         assert_eq!(outcome.status, RunStatus::Ok);
@@ -213,10 +254,9 @@ fn a_replayed_run_from_a_result_set_matches_its_row() {
         thread.set_schedule(replay.schedule.clone());
         thread.run_to(replay.ticks);
         let reached = snapshot_at(|| thread.take_snapshot(), replay.ticks).expect("the replay reaches its last tick");
-        let columns = StatColumns::plan(&reached.stats);
         let (last_tick, last_row) = outcome.series.rows().last().expect("a run keeps its final sample");
         assert_eq!(last_tick, replay.ticks);
-        let replayed = row(&columns, reached.tick, &reached.stats);
+        let replayed = recorded_row(set.stat_columns(), reached.tick, &reached.stats);
         assert_eq!(
             replayed, last_row,
             "run {}: the replay ends on its row's series",
@@ -254,6 +294,7 @@ fn a_replayed_gpu_run_from_a_result_set_matches_its_row() {
     sweep(&gpu_sir, Some(&ctx), &spec, scratch.path(), Concurrency::Auto);
     let set = ResultSet::open_dir(scratch.path(), usize::MAX).expect("the directory reads");
 
+    assert_eq!(set.runs().len(), 2, "one config of 2 replicates");
     for recorded in set.runs() {
         let outcome = &recorded.outcome;
         assert_eq!(outcome.status, RunStatus::Ok, "{:?}", outcome.note);
@@ -270,10 +311,9 @@ fn a_replayed_gpu_run_from_a_result_set_matches_its_row() {
         thread.set_schedule(replay.schedule.clone());
         thread.run_to(replay.ticks);
         let reached = snapshot_at(|| thread.take_snapshot(), replay.ticks).expect("the loop reaches its target");
-        let columns = StatColumns::plan(&reached.stats);
         let (_, last_row) = outcome.series.rows().last().expect("a run keeps its final sample");
         assert_eq!(
-            row(&columns, reached.tick, &reached.stats),
+            recorded_row(set.stat_columns(), reached.tick, &reached.stats),
             last_row,
             "run {}: the live loop ends on its row's series",
             outcome.run.run_id

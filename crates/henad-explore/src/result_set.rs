@@ -211,7 +211,13 @@ impl ResultSet {
     /// Reads `series`, the lines of the `series.csv` at `path`, into the runs, while the series fit `series_budget`
     /// bytes.
     ///
-    /// Rows of a run that `runs.csv` does not hold are left out, and so is a partial last line.
+    /// Rows of a run that `runs.csv` does not hold are left out, and so is a partial last line. A run with any row
+    /// past the budget is held without its series, even when some of its rows came before.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResultSetError::Table`] when `series` cannot be read, its header does not name the manifest's stat
+    /// columns, or a row is not one the sweep writes.
     fn read_series(
         &mut self,
         mut series: impl BufRead,
@@ -220,21 +226,12 @@ impl ResultSet {
     ) -> Result<(), ResultSetError> {
         let width = self.stat_columns.len();
         let row_bytes = (width + 1) * size_of::<f64>();
-        let table_error = ResultSetError::Table;
         let mut line = Vec::new();
         if !read_line(&mut series, &mut line, path)? {
             self.mark_series_missing();
             return Ok(());
         }
-        let header = parse_one(&String::from_utf8_lossy(&line), path, 1).map_err(table_error)?;
-        if header.len() != width + 2 {
-            return Err(table_error(ReadError::FieldCount {
-                path: path.to_owned(),
-                record_number: 1,
-                found: header.len(),
-                expected: width + 2,
-            }));
-        }
+        check_series_header(&line, &self.stat_columns, path)?;
         let mut budget_spent = false;
         let mut values = Vec::with_capacity(width);
         let mut record_number = 1;
@@ -252,11 +249,12 @@ impl ResultSet {
                 self.runs[last].outcome.series.shrink_to_fit();
             }
             let run = &mut self.runs[position];
-            if budget_spent || !run.series_held {
-                run.series_held = false;
+            if !run.series_held {
                 continue;
             }
-            if self.series_bytes + row_bytes > series_budget {
+            // Past the budget a run drops the rows it holds. Otherwise a run with rows on both sides of the crossing
+            // keeps part of its series.
+            if budget_spent || self.series_bytes + row_bytes > series_budget {
                 budget_spent = true;
                 self.series_bytes -= run.outcome.series.len() * row_bytes;
                 run.outcome.series = SeriesBuffer::new(width);
@@ -294,11 +292,15 @@ impl ResultSet {
     }
 
     /// Names of the parameter and action columns of `runs.csv`, in order.
+    ///
+    /// Empty when `runs.csv` has no header yet, as in a directory whose sweep has written no run.
     pub fn value_columns(&self) -> &[String] {
         &self.value_columns
     }
 
     /// Names of the reducer columns of `runs.csv`, one per value of a run's [`RunOutcome::reducers`].
+    ///
+    /// Empty when `runs.csv` has no header yet.
     pub fn reducer_columns(&self) -> &[String] {
         &self.reducer_columns
     }
@@ -353,7 +355,9 @@ impl ResultSet {
     /// # Errors
     ///
     /// Returns [`ResultReplayError`] when the model refuses the spec, `runs.csv` holds no run `run_id`, or the plan
-    /// gives the run another config, replicate or seed than its row.
+    /// gives the run another config, replicate, seed or run key than its row. The run key covers the config's
+    /// parameter values and action ticks. It also hashes the model's declarations, so it is compared only while
+    /// [`Self::schema_matches`] holds for `entry`.
     pub fn replay(&self, entry: &ModelEntry, run_id: u64) -> Result<Replay, ResultReplayError> {
         let recorded = self.run(run_id).ok_or(ResultReplayError::UnknownRun { run_id })?;
         if self.is_search() {
@@ -361,7 +365,9 @@ impl ResultSet {
         }
         let plan = self.plan(entry).map_err(ResultReplayError::Plan)?;
         match plan.run(run_id) {
-            Some(planned) if planned == recorded.outcome.run => {
+            Some(planned)
+                if planned == recorded.outcome.run && self.key_matches(entry, plan.run_key(&planned), recorded) =>
+            {
                 plan.replay(run_id).ok_or(ResultReplayError::Mismatch { run_id })
             }
             _ => Err(ResultReplayError::Mismatch { run_id }),
@@ -392,10 +398,16 @@ impl ResultSet {
                 .collect::<Option<_>>()
                 .ok_or_else(mismatch)?,
         };
-        if plan.run_key(&run, &config) != recorded.outcome.run_key {
+        if !self.key_matches(entry, plan.run_key(&run, &config), recorded) {
             return Err(mismatch());
         }
         Ok(plan.replay(&run, &config))
+    }
+
+    /// Returns whether `key`, the key a plan through `entry` gives `recorded`, matches the key its row holds. Any key
+    /// matches once `entry` no longer declares what the sweep ran with.
+    fn key_matches(&self, entry: &ModelEntry, key: u64, recorded: &RunRow) -> bool {
+        !self.schema_matches(entry) || key == recorded.outcome.run_key
     }
 
     /// Returns whether the results are a search's.
@@ -433,7 +445,7 @@ impl ResultSet {
     /// # Errors
     ///
     /// Returns [`ResultSetError::Missing`] for a set read from bytes, and [`ResultSetError::Table`] when `series.csv`
-    /// cannot be read.
+    /// cannot be read or its header does not name the stat columns.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_run_series(
         &self,
@@ -449,7 +461,7 @@ impl ResultSet {
             .copied()
             .filter(|run_id| self.positions.contains_key(run_id))
             .collect();
-        read_directory_series(dir, self.stat_columns.len(), &held, series_budget)
+        read_directory_series(dir, &self.stat_columns, &held, series_budget)
     }
 
     /// Returns the runs in the order `runs.csv` lists them, and drops the rest of the set.
@@ -470,19 +482,20 @@ pub struct DirectorySeries {
     pub dropped_runs: BTreeSet<u64>,
 }
 
-/// Reads the whole series of each run of `run_ids` from the `series.csv` of the output directory `dir`, whose rows
-/// hold `stat_width` stat values, while the series fit `series_budget` bytes.
+/// Reads the whole series of each run of `run_ids` from the `series.csv` of the output directory `dir`, whose stat
+/// columns are `stat_columns`, while the series fit `series_budget` bytes.
 ///
 /// A series counts its bytes as [`ResultSet`] does. From the first row past the budget, every run not yet read in
 /// full is left out.
 ///
 /// # Errors
 ///
-/// Returns [`ResultSetError::Table`] when `series.csv` cannot be read or holds a row that is not `stat_width` wide.
+/// Returns [`ResultSetError::Table`] when `series.csv` cannot be read, its header does not name `stat_columns`, or it
+/// holds a row that is not as wide as the header.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_directory_series(
     dir: &Path,
-    stat_width: usize,
+    stat_columns: &[String],
     run_ids: &BTreeSet<u64>,
     series_budget: usize,
 ) -> Result<DirectorySeries, ResultSetError> {
@@ -495,6 +508,7 @@ pub fn read_directory_series(
     })?;
     let mut lines = io::BufReader::new(file);
     let mut read = DirectorySeries::default();
+    let stat_width = stat_columns.len();
     let row_bytes = (stat_width + 1) * size_of::<f64>();
     let mut series_bytes = 0;
     let mut budget_spent = false;
@@ -506,6 +520,7 @@ pub fn read_directory_series(
     if !read_line(&mut lines, &mut line, &path)? {
         return Ok(read);
     }
+    check_series_header(&line, stat_columns, &path)?;
     while read_line(&mut lines, &mut line, &path)? {
         record_number += 1;
         let (run_id, tick) = parse_series_row(&line, stat_width, &mut values, &path, record_number)?;
@@ -567,6 +582,42 @@ fn picked_table(name: &str, bytes: &[u8]) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Checks that `line`, the header line of the `series.csv` at `path`, names the id columns and then `stat_columns`.
+fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Result<(), ResultSetError> {
+    let table_error = ResultSetError::Table;
+    let text = String::from_utf8_lossy(line);
+    let header = parse_one(&text, 0..text.len(), path, 1).map_err(table_error)?;
+    let expected = SERIES_ID_COLUMNS.len() + stat_columns.len();
+    if header.len() != expected {
+        return Err(table_error(ReadError::FieldCount {
+            path: path.to_owned(),
+            record_number: 1,
+            found: header.len(),
+            expected,
+        }));
+    }
+    let (ids, stats) = header.split_at(SERIES_ID_COLUMNS.len());
+    for (&column, name) in SERIES_ID_COLUMNS.iter().zip(ids) {
+        if name != column {
+            return Err(table_error(ReadError::MissingColumn {
+                path: path.to_owned(),
+                column,
+            }));
+        }
+    }
+    for (column, name) in stat_columns.iter().zip(stats) {
+        if name != column {
+            return Err(table_error(ReadError::BadField {
+                path: path.to_owned(),
+                record_number: 1,
+                column: column.clone(),
+                text: name.clone(),
+            }));
+        }
+    }
+    Ok(())
 }
 
 /// Reads the next complete line of `lines` into `line`, and returns whether there was one.
@@ -638,6 +689,9 @@ struct RunsColumnNames {
 }
 
 /// Reads the complete records of `bytes`, a `runs.csv` read from `path`, as runs whose series are `width` wide.
+///
+/// A file without a complete header line holds no runs and no columns. A sweep's header reaches the file with its
+/// first run.
 fn read_runs(bytes: &[u8], path: &Path, width: usize) -> Result<(RunsColumnNames, Vec<RunRow>), ResultSetError> {
     let table_error = ResultSetError::Table;
     let ends = record_ends(bytes);
@@ -649,18 +703,19 @@ fn read_runs(bytes: &[u8], path: &Path, width: usize) -> Result<(RunsColumnNames
         })
     })?;
     let Some((&header_end, record_ends)) = ends.split_first() else {
-        return Err(table_error(ReadError::MissingColumn {
-            path: path.to_owned(),
-            column: ID_COLUMNS[0],
-        }));
+        let columns = RunsColumnNames {
+            value_columns: Vec::new(),
+            reducer_columns: Vec::new(),
+        };
+        return Ok((columns, Vec::new()));
     };
-    let header = parse_one(&text[..header_end], path, 1).map_err(table_error)?;
+    let header = parse_one(text, 0..header_end, path, 1).map_err(table_error)?;
     let column_positions = RunsColumnPositions::find(&header, path).map_err(table_error)?;
     let mut records = Vec::with_capacity(record_ends.len());
     let mut start = header_end;
     for (index, &end) in record_ends.iter().enumerate() {
         let record_number = index + 2;
-        let fields = parse_one(&text[start..end], path, record_number).map_err(table_error)?;
+        let fields = parse_one(text, start..end, path, record_number).map_err(table_error)?;
         if fields.len() != header.len() {
             return Err(table_error(ReadError::FieldCount {
                 path: path.to_owned(),
@@ -829,7 +884,7 @@ pub enum ResultReplayError {
     Search(SearchPlanError),
     /// A run id `runs.csv` does not hold.
     UnknownRun { run_id: u64 },
-    /// A run whose config, replicate or seed differs between its row and the plan.
+    /// A run whose config, replicate, seed or run key differs between its row and the plan.
     Mismatch { run_id: u64 },
 }
 

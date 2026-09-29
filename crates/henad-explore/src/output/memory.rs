@@ -32,12 +32,18 @@ impl SweepFiles {
     ///
     /// # Errors
     ///
-    /// Returns [`OutputError::Summary`] when the runs cannot be summarized, and [`OutputError::Manifest`] when the
-    /// manifest cannot be serialized.
+    /// Returns [`OutputError::Summary`] when the runs cannot be summarized, [`OutputError::Read`] when they are not
+    /// UTF-8, and [`OutputError::Manifest`] when the manifest cannot be serialized.
     pub fn assemble(writer: OutputWriter<Vec<u8>>, manifest: &Manifest) -> Result<Self, OutputError> {
         let (runs, series) = writer.finish().map_err(write_error_at(Path::new(RUNS_FILE)))?;
-        let summary = match write_summary(&String::from_utf8_lossy(&runs), Vec::new()) {
+        let summary = match write_summary(runs.as_slice(), Vec::new()) {
             Ok(summary) => summary,
+            Err(SummaryError::Read(source)) => {
+                return Err(OutputError::Read {
+                    path: Path::new(RUNS_FILE).to_owned(),
+                    source,
+                });
+            }
             Err(SummaryError::Io(source)) => return Err(write_error_at(Path::new(SUMMARY_FILE))(source)),
             Err(error) => return Err(OutputError::Summary(error)),
         };

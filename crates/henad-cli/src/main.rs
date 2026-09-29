@@ -71,7 +71,7 @@ mod json_report;
     ArgGroup::new("explore")
         .args(["out", "spec", "dry_run"])
         .multiple(true)
-        .conflicts_with_all(["export", "export_stats", "global_warmup"])
+        .conflicts_with_all(["list", "export", "export_stats", "global_warmup"])
 ))]
 struct Args {
     /// Model id to run (see `--list`). Optional with `--spec`.
@@ -106,7 +106,8 @@ struct Args {
 
     /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable. An unknown id is
     /// refused, and the error lists the ids the model declares. Each rep and each run of a sweep replays the same
-    /// schedule. A sweep names the action by its id, or `ID_2` for the second `--act` of an id.
+    /// schedule. A sweep names the action by its id, or `ID_2` for the second `--act` of an id, skipping a name an
+    /// earlier `--act` has taken.
     #[arg(long = "act", value_name = "ID@TICK")]
     act: Vec<String>,
 
@@ -132,8 +133,8 @@ struct Args {
     #[arg(long, conflicts_with_all = ["out", "dry_run"])]
     params: bool,
 
-    /// Print host and GPU information. With no model given it prints and exits, with one it
-    /// prints as a provenance header before the benchmark.
+    /// Print host and GPU information. With no model and no sweep it prints and exits. Otherwise it
+    /// prints as a provenance header before the benchmark or sweep.
     #[arg(long)]
     info: bool,
 
@@ -155,7 +156,7 @@ enum Mode {
     List,
     /// `--merge`. Joins the directories of a sweep's shards, with no model and no device.
     Merge,
-    /// `--info` with no model. Prints the runtime and exits.
+    /// `--info` with no model and no sweep. Prints the runtime and exits.
     InfoOnly,
     Params,
     Explore,
@@ -171,7 +172,7 @@ impl Mode {
             Self::List
         } else if !args.explore.merge.is_empty() {
             Self::Merge
-        } else if args.info && args.model.is_none() && args.explore.spec.is_none() {
+        } else if args.info && args.model.is_none() && !args.explore.is_sweep() {
             Self::InfoOnly
         } else if args.params {
             Self::Params

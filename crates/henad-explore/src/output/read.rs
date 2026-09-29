@@ -80,13 +80,13 @@ impl RunsCsv {
         let Some((&header_end, record_ends)) = ends.split_first() else {
             return Ok(table);
         };
-        let header = parse_one(&text[..header_end], path, 1)?;
+        let header = parse_one(text, 0..header_end, path, 1)?;
         let layout = RecordLayout::find(&header, path)?;
         let mut start = header_end;
         for (index, &end) in record_ends.iter().enumerate() {
             let record_number = index + 2;
             let record_text = &text[start..end];
-            let fields = parse_one(record_text, path, record_number)?;
+            let fields = parse_one(text, start..end, path, record_number)?;
             if fields.len() != header.len() {
                 return Err(ReadError::FieldCount {
                     path: path.to_owned(),
@@ -171,13 +171,20 @@ impl RecordLayout {
     }
 }
 
-/// Returns the fields of the one complete record in `text`, record `record_number` of the file at `path`.
-pub(crate) fn parse_one(text: &str, path: &Path, record_number: usize) -> Result<Vec<String>, ReadError> {
-    parse_records(text)
-        .map_err(|source| ReadError::Csv {
+/// Returns the fields of the one complete record at `record` in `text`, record `record_number` of the file at `path`.
+///
+/// The line of a [`CsvError`] counts from the start of `text`.
+pub(crate) fn parse_one(
+    text: &str,
+    record: Range<usize>,
+    path: &Path,
+    record_number: usize,
+) -> Result<Vec<String>, ReadError> {
+    parse_records(&text[record.clone()])
+        .map_err(|error| ReadError::Csv {
             path: path.to_owned(),
             record_number,
-            source,
+            source: shifted(&error, text[..record.start].matches('\n').count()),
         })?
         .into_iter()
         .next()
@@ -189,18 +196,59 @@ pub(crate) fn parse_one(text: &str, path: &Path, record_number: usize) -> Result
         })
 }
 
+/// Returns `error`, found in a text that starts after `lines` line feeds, with its line counted from the start of
+/// the whole text.
+pub(crate) fn shifted(error: &CsvError, lines: usize) -> CsvError {
+    match *error {
+        CsvError::UnterminatedQuote { line } => CsvError::UnterminatedQuote { line: line + lines },
+        CsvError::MisplacedQuote { line } => CsvError::MisplacedQuote { line: line + lines },
+    }
+}
+
 /// Returns the end of each complete record of `bytes`, just past its line feed.
 pub(crate) fn record_ends(bytes: &[u8]) -> Vec<usize> {
     let mut ends = Vec::new();
-    let mut quoted = false;
+    let mut scan = RecordScan::FieldStart;
     for (index, &byte) in bytes.iter().enumerate() {
-        match byte {
-            b'"' => quoted = !quoted,
-            b'\n' if !quoted => ends.push(index + 1),
-            _ => {}
+        let (next, record_ended) = scan.advance(byte);
+        scan = next;
+        if record_ended {
+            ends.push(index + 1);
         }
     }
     ends
+}
+
+/// Position of a scan within a CSV record, in the grammar [`parse_records`] reads.
+///
+/// Note that a quote inside an unquoted field changes nothing. The record holding it ends at its line feed, and
+/// [`parse_records`] refuses it.
+///
+/// A quote that opens a field and is never closed makes the rest of the text one partial record. [`record_ends`]
+/// finds no end after it, and a reader of complete records leaves that record out without an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordScan {
+    /// At the start of a field.
+    FieldStart,
+    /// Inside a field that does not open with a quote.
+    Unquoted,
+    /// Inside a quoted field.
+    Quoted,
+    /// Just past a quote inside a quoted field, which either closes the field or starts a doubled quote.
+    QuoteClosed,
+}
+
+impl RecordScan {
+    /// Returns the position after `byte`, and whether `byte` ends a record.
+    pub(crate) fn advance(self, byte: u8) -> (Self, bool) {
+        match (self, byte) {
+            (Self::Quoted, b'"') => (Self::QuoteClosed, false),
+            (Self::QuoteClosed | Self::FieldStart, b'"') | (Self::Quoted, _) => (Self::Quoted, false),
+            (_, b',') => (Self::FieldStart, false),
+            (_, b'\n') => (Self::FieldStart, true),
+            _ => (Self::Unquoted, false),
+        }
+    }
 }
 
 /// Layout of a `series.csv`: its header, and the stretches of complete lines in order of their run ids.
@@ -461,8 +509,9 @@ mod tests {
     use std::fs;
 
     use henad_core::explore::outcome::RunStatus;
+    use henad_core::export::csv::CsvError;
 
-    use super::{RunsCsv, SeriesScan, SeriesSegment, merge_series};
+    use super::{ReadError, RunsCsv, SeriesScan, SeriesSegment, merge_series, record_ends};
     use crate::tests::support::ScratchDir;
 
     const RUNS: &str = "\
@@ -525,6 +574,34 @@ run_id,config_id,block,rep,seed,run_key,rate,status,note
         assert_eq!(
             (missing.header, missing.records.len(), missing.file_bytes),
             (None, 0, 0)
+        );
+    }
+
+    #[test]
+    fn a_stray_quote_is_refused_instead_of_hiding_the_records_after_it() {
+        let scratch = ScratchDir::new("stray-quote");
+        fs::create_dir_all(scratch.path()).expect("a scratch directory");
+        let path = scratch.path().join("runs.csv");
+        let stray = RUNS.replace("00000000000000ba,0.2,ok", "00000000000000ba,0.2\",ok");
+        fs::write(&path, &stray).expect("the table writes");
+        let error = RunsCsv::read(&path).expect_err("a quote inside an unquoted field");
+        assert!(
+            matches!(
+                error,
+                ReadError::Csv {
+                    record_number: 4,
+                    source: CsvError::MisplacedQuote { line: 5 },
+                    ..
+                }
+            ),
+            "the line counts the quoted line feed before it: {error:?}"
+        );
+
+        let text = "a,b\n\"say \"\"hi\"\"\",\"x\ny\"\n1,2";
+        assert_eq!(
+            record_ends(text.as_bytes()),
+            [4, 23],
+            "doubled and multi-line quotes stay in their field"
         );
     }
 

@@ -22,7 +22,7 @@ use crate::ui::results::store::output_label;
 use crate::ui::sweep::builder::design_label;
 use crate::ui::sweep::draft::{
     DraftAlgorithm, DraftDesign, DraftMode, LevelCount, LevelPreview, LevelPreviews, MAX_DRAFT_RUNS,
-    MAX_MEMORY_SERIES_BYTES, StopDraft, SweepDraft, comparator_words, parse_levels,
+    MAX_MEMORY_SERIES_BYTES, StopDraft, SweepDraft, TickSource, comparator_words, parse_levels,
 };
 use crate::ui::sweep::layout::{Reveal, SweepSection, issue_color, issue_icon};
 use crate::ui::sweep::search::algorithm_label;
@@ -31,6 +31,9 @@ use crate::ui::sweep::{CheckSummary, DraftCheck, IssueLine, SweepRequest};
 
 /// Value of a row that needs a plan, while the draft has none.
 pub const NOT_COUNTED: &str = "Unknown";
+
+/// Most varied ticks of an action the Actions row lists one by one.
+const MAX_LISTED_TICKS: usize = 4;
 
 /// One row of the plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +103,7 @@ impl PlanSummary {
         ));
         let runs = planned.map(|planned| planned.counts().2);
         rows.push(runs_row(runs));
-        rows.extend(run_rows(draft, schema));
+        rows.extend(run_rows(draft, schema, &check.level_previews.1));
         let in_memory = draft.holds_results_in_memory();
         rows.push(series_row(
             draft.series_every,
@@ -117,6 +120,7 @@ impl PlanSummary {
             concurrency_text(draft.concurrency),
             Some(SweepSection::Execution),
         ));
+        rows.extend(budget_rows(draft));
 
         Self {
             rows,
@@ -217,7 +221,9 @@ fn level_counts((params, ticks): &LevelPreviews) -> (Vec<Option<LevelCount>>, Ve
 }
 
 /// Returns the rows of a run's length, its stop condition, its timeout, its actions and its outputs.
-fn run_rows(draft: &SweepDraft, schema: &ModelSchema<'_>) -> [PlanRow; 6] {
+///
+/// `tick_previews` holds the values of each action row's varied ticks, as [`SweepDraft::level_previews`] gives them.
+fn run_rows(draft: &SweepDraft, schema: &ModelSchema<'_>, tick_previews: &[Option<LevelPreview>]) -> [PlanRow; 6] {
     [
         PlanRow::new(
             "Steps per run",
@@ -239,7 +245,11 @@ fn run_rows(draft: &SweepDraft, schema: &ModelSchema<'_>) -> [PlanRow; 6] {
             draft.timeout_s.map_or_else(|| "None".to_owned(), seconds_text),
             Some(SweepSection::RunLength),
         ),
-        PlanRow::new("Actions", actions_text(draft, schema), Some(SweepSection::Actions)),
+        PlanRow::new(
+            "Actions",
+            actions_text(draft, schema, tick_previews),
+            Some(SweepSection::Actions),
+        ),
         PlanRow::new(
             "Outputs per run",
             draft.output_names(schema).len().to_string(),
@@ -316,6 +326,22 @@ fn series_row(series_every: u64, bytes: Option<u64>, in_memory: bool) -> PlanRow
     row
 }
 
+/// Returns a row for each memory budget of `draft`, which only a loaded spec file sets.
+fn budget_rows(draft: &SweepDraft) -> Vec<PlanRow> {
+    let budgets = [
+        ("Memory budget", draft.memory_budget),
+        ("GPU memory budget", draft.gpu_memory_budget),
+    ];
+    budgets
+        .into_iter()
+        .filter_map(|(label, bytes)| {
+            let mut row = PlanRow::new(label, fmt_bytes(bytes?), Some(SweepSection::Execution));
+            row.tooltip = Some("From loaded spec file".to_owned());
+            Some(row)
+        })
+        .collect()
+}
+
 /// Returns the Results row for results written to `folder`, or held in memory for `None`.
 fn results_row(folder: Option<&Path>) -> PlanRow {
     let mut row = PlanRow::new("Results", "In memory", Some(SweepSection::Execution));
@@ -344,8 +370,14 @@ fn steps_text(steps: u64, warmup: u64) -> String {
 
 /// Returns the samples a run of `steps` measured ticks takes at one every `stats_every` ticks, the first and the last
 /// included, `None` for no sampling.
+///
+/// A count past `u64::MAX` saturates.
 pub fn sample_count(steps: u64, stats_every: u64) -> Option<u64> {
-    (stats_every > 0).then(|| steps / stats_every + 1 + u64::from(!steps.is_multiple_of(stats_every)))
+    (stats_every > 0).then(|| {
+        (steps / stats_every)
+            .saturating_add(1)
+            .saturating_add(u64::from(!steps.is_multiple_of(stats_every)))
+    })
 }
 
 /// Returns the number of samples a run takes as the plan shows it, [`NOT_COUNTED`] for no sampling.
@@ -384,27 +416,43 @@ pub fn concurrency_text(concurrency: Concurrency) -> String {
 }
 
 /// Returns the actions of `draft`, one per line, each with its tick or ticks, as in "Seed outbreak at 0, 100 or 200".
-fn actions_text(draft: &SweepDraft, schema: &ModelSchema<'_>) -> String {
+///
+/// `tick_previews` holds the values of each action row's varied ticks, as [`SweepDraft::level_previews`] gives them.
+/// Ticks with an issue read as typed.
+fn actions_text(draft: &SweepDraft, schema: &ModelSchema<'_>, tick_previews: &[Option<LevelPreview>]) -> String {
     if draft.actions.is_empty() {
         return "None".to_owned();
     }
     let actions: Vec<String> = draft
         .actions
         .iter()
-        .map(|action| {
+        .enumerate()
+        .map(|(position, action)| {
             let label = action.label(schema);
-            let ticks = if action.vary_tick {
-                match parse_levels(&action.ticks_text) {
-                    Ok(LevelSpec::Values(values)) => either_text(&values),
-                    _ => action.ticks_text.trim().to_owned(),
-                }
-            } else {
-                action.tick.to_string()
-            };
-            format!("{label} at {ticks}")
+            match draft.tick_source(action) {
+                TickSource::Fixed => format!("{label} at {}", action.tick),
+                TickSource::Table => format!("{label}, tick from design table"),
+                TickSource::Varied => match tick_previews.get(position).and_then(Option::as_ref) {
+                    Some(preview) => format!("{label} at {}", ticks_text(preview)),
+                    None => format!("{label} at {}", action.ticks_text.trim()),
+                },
+            }
         })
         .collect();
     actions.join("\n")
+}
+
+/// Returns the ticks of `preview` as the Actions row reads them: "0, 100 or 200", "one of 11 ticks from 0 to 100", or
+/// "any tick from 0 to 400" for ticks drawn from a range.
+fn ticks_text(preview: &LevelPreview) -> String {
+    match preview {
+        LevelPreview::Listed { count, values, .. } if *count <= MAX_LISTED_TICKS => either_text(values),
+        LevelPreview::Listed { count, values, last } => format!(
+            "one of {count} ticks from {} to {last}",
+            values.first().map_or("", String::as_str)
+        ),
+        LevelPreview::Drawn { min, max } => format!("any tick from {min} to {max}"),
+    }
 }
 
 /// Returns `values` joined as alternatives, as in "0, 100 or 200".
@@ -626,12 +674,16 @@ pub fn plan_body(ui: &mut egui::Ui, summary: &PlanSummary, interactive: bool, re
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use henad_compute::cpu::sim_thread::WakeFn;
     use henad_core::params::ParamValue;
     use henad_explore::schema::model_schema;
     use henad_models::registry::{ModelEntry, model_registry};
 
-    use super::{NOT_COUNTED, PlanSummary, either_text, samples_text, steps_text};
-    use crate::ui::sweep::draft::{DraftAlgorithm, DraftDesign, DraftMode, GridAxis};
+    use super::{NOT_COUNTED, PlanSummary, budget_rows, either_text, samples_text, steps_text};
+    use crate::ui::sweep::draft::{DesignTableDraft, DraftAlgorithm, DraftDesign, DraftMode, GridAxis, SweepDraft};
     use crate::ui::sweep::{CheckSummary, SweepPanel};
 
     fn sir() -> ModelEntry {
@@ -659,6 +711,14 @@ mod tests {
         edit(panel.draft_mut(&schema), &ids);
         let check = panel.cached_check(&schema, &panel_values);
         let summary = CheckSummary::new(check, &entry, &schema);
+        PlanSummary::for_draft(check, &schema, &entry.name, &summary)
+    }
+
+    /// Returns the plan of the draft `panel` holds for `entry`'s model, checked against the model's defaults.
+    fn plan_of_panel(panel: &mut SweepPanel, entry: &ModelEntry) -> PlanSummary {
+        let schema = model_schema(entry);
+        let check = panel.cached_check(&schema, &default_values(entry));
+        let summary = CheckSummary::new(check, entry, &schema);
         PlanSummary::for_draft(check, &schema, &entry.name, &summary)
     }
 
@@ -799,9 +859,138 @@ mod tests {
         assert_eq!(samples_text(1005, 10), "102", "the last tick is sampled too");
         assert_eq!(samples_text(1000, 0), NOT_COUNTED);
         assert_eq!(
+            samples_text(u64::MAX, 1),
+            u64::MAX.to_string(),
+            "a count past the largest integer saturates"
+        );
+        assert_eq!(
             either_text(&["0".to_owned(), "100".to_owned(), "200".to_owned()]),
             "0, 100 or 200"
         );
         assert_eq!(either_text(&["7".to_owned()]), "7");
+    }
+
+    /// Returns the Actions row of the plan of a SIR draft with one action at tick 50, which `edit` changes.
+    fn actions_row(edit: impl FnOnce(&mut crate::ui::sweep::draft::SweepDraft)) -> String {
+        let plan = plan_of(|draft, _| {
+            let entry = sir();
+            draft.add_action(&model_schema(&entry), 0, 50);
+            edit(draft);
+        });
+        value(&plan, "Actions").to_owned()
+    }
+
+    #[test]
+    fn the_actions_row_reads_varied_ticks_as_words() {
+        let vary = |ticks: &'static str| {
+            move |draft: &mut crate::ui::sweep::draft::SweepDraft| {
+                draft.actions[0].vary_tick = true;
+                draft.actions[0].ticks_text = ticks.to_owned();
+            }
+        };
+        assert_eq!(actions_row(|_| {}), "Seed outbreak at 50");
+        assert_eq!(actions_row(vary("0:30:10")), "Seed outbreak at 0, 10, 20 or 30");
+        assert_eq!(
+            actions_row(vary("0:100:10")),
+            "Seed outbreak at one of 11 ticks from 0 to 100"
+        );
+        assert_eq!(
+            actions_row(|draft| {
+                vary("0:400")(draft);
+                draft.mode = DraftMode::Search;
+            }),
+            "Seed outbreak at any tick from 0 to 400"
+        );
+    }
+
+    #[test]
+    fn a_range_searched_past_the_listed_values_reads_as_words() {
+        let plan = plan_of(|draft, _| {
+            let entry = sir();
+            draft.add_action(&model_schema(&entry), 0, 50);
+            draft.actions[0].vary_tick = true;
+            draft.actions[0].ticks_text = "0:2000000".to_owned();
+            draft.mode = DraftMode::Search;
+        });
+        assert_eq!(value(&plan, "Actions"), "Seed outbreak at any tick from 0 to 2000000");
+        assert_eq!(
+            plan.varied,
+            [(
+                "Seed outbreak tick".to_owned(),
+                "any value from 0 to 2000000".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_design_table_sets_the_tick_the_actions_row_reads() {
+        let under_table = |text: &str| {
+            let text = text.to_owned();
+            actions_row(move |draft| {
+                draft.actions[0].vary_tick = true;
+                draft.actions[0].ticks_text = "20, 40".to_owned();
+                draft.design = DraftDesign::Table;
+                draft.table = Some(DesignTableDraft {
+                    file_name: "design.csv".to_owned(),
+                    text,
+                });
+            })
+        };
+        assert_eq!(
+            under_table("infection_rate,action.seed_outbreak\n0.1,20\n"),
+            "Seed outbreak, tick from design table"
+        );
+        assert_eq!(
+            under_table("infection_rate\n0.1\n"),
+            "Seed outbreak at 50",
+            "a table without the action's column leaves its tick"
+        );
+    }
+
+    #[test]
+    fn the_outputs_per_run_count_each_part_of_a_vector_stat() {
+        let entry = model_registry(None)
+            .into_iter()
+            .find(|entry| entry.id == "boids")
+            .expect("boids is registered");
+        let mut panel = SweepPanel::default();
+        assert_eq!(
+            value(&plan_of_panel(&mut panel, &entry), "Outputs per run"),
+            "8",
+            "each stat counts as one column until a build reports"
+        );
+        let (sender, woken) = flume::bounded(1);
+        let wake: WakeFn = Arc::new(move || {
+            sender.try_send(()).ok();
+        });
+        panel.learn_stat_columns(&entry, &wake);
+        woken
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the build of boids reports its columns");
+        panel.learn_stat_columns(&entry, &wake);
+        assert_eq!(
+            value(&plan_of_panel(&mut panel, &entry), "Outputs per run"),
+            "16",
+            "four defaults of Average Speed, and of each of Average Velocity's x, y and magnitude"
+        );
+    }
+
+    #[test]
+    fn the_plan_lists_each_loaded_budget() {
+        let mut draft = SweepDraft::new(&model_schema(&sir()));
+        assert!(budget_rows(&draft).is_empty(), "a draft without budgets lists none");
+        draft.memory_budget = Some(4 << 30);
+        draft.gpu_memory_budget = Some(2 << 30);
+        let rows: Vec<(&str, String)> = budget_rows(&draft)
+            .into_iter()
+            .map(|row| (row.label, row.value))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("Memory budget", "4.0 GB".to_owned()),
+                ("GPU memory budget", "2.0 GB".to_owned())
+            ]
+        );
     }
 }

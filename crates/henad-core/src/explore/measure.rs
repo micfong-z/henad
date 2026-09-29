@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::explore::reducer::{ReducerError, ReducerPlan, ReducerState};
+use crate::explore::reducer::{ReducerError, ReducerKind, ReducerPlan, ReducerState};
 use crate::explore::spec::{MeasureSettings, RunSettings};
 use crate::explore::stop::{StopCondition, StopError};
 use crate::export::{StatColumns, StatsWriteError};
@@ -24,12 +24,14 @@ pub struct MeasurePlan {
 }
 
 impl MeasurePlan {
-    /// Checks the length of `run` and the cadence of `measure`, before any column is known.
+    /// Checks the length of `run`, the cadence of `measure` and the threshold of every comparison, before any column
+    /// is known.
     ///
     /// # Errors
     ///
-    /// Returns [`MeasureError`] when the total tick count overflows, `stats_every` is 0, or `series_every` is not a
-    /// multiple of `stats_every`.
+    /// Returns [`MeasureError`] when the total tick count overflows, `stats_every` is 0, `series_every` is not a
+    /// multiple of `stats_every`, or the stop condition or a `first` reducer compares against a threshold that is not
+    /// finite.
     pub fn check(run: &RunSettings, measure: &MeasureSettings) -> Result<(), MeasureError> {
         if run.warmup.checked_add(run.steps).is_none() {
             return Err(MeasureError::TooManyTicks {
@@ -45,6 +47,19 @@ impl MeasurePlan {
                 series_every: measure.series_every,
                 stats_every: measure.stats_every,
             });
+        }
+        if let Some(stop) = &run.stop {
+            stop.check_threshold().map_err(MeasureError::Stop)?;
+        }
+        for reducer in &measure.reducers {
+            if let ReducerKind::FirstCrossing(comparison) = reducer.kind {
+                comparison.check().map_err(|source| {
+                    MeasureError::Reducer(ReducerError::Comparison {
+                        raw: reducer.kind.to_string(),
+                        source,
+                    })
+                })?;
+            }
         }
         Ok(())
     }
@@ -156,8 +171,10 @@ impl MeasurePlan {
 }
 
 /// Returns the number of ticks in `0..=span` that are multiples of `every`, counting `span` itself once.
+///
+/// The count saturates at `u64::MAX`.
 fn count_on_cadence(span: u64, every: u64) -> u64 {
-    span / every + 1 + u64::from(!span.is_multiple_of(every))
+    (span / every).saturating_add(1 + u64::from(!span.is_multiple_of(every)))
 }
 
 /// Settings that cannot measure a run.
@@ -169,9 +186,9 @@ pub enum MeasureError {
     ZeroStatsEvery,
     /// A `series_every` that is not a multiple of `stats_every`.
     SeriesOffCadence { series_every: u64, stats_every: u64 },
-    /// A reducer that does not bind, for the reason inside.
+    /// A reducer that is refused or does not bind, for the reason inside.
     Reducer(ReducerError),
-    /// A stop condition that does not bind, for the reason inside.
+    /// A stop condition that is refused or does not bind, for the reason inside.
     Stop(StopError),
 }
 
@@ -293,7 +310,8 @@ impl fmt::Display for NonFiniteSample {
 /// Values a run kept from its samples.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Measured {
-    /// One value per reducer, `None` for a reducer that saw no finite value.
+    /// One value per reducer, `None` for a reducer that saw no finite value, a `first` reducer whose comparison never
+    /// held, or a window mean with no sample in its window.
     pub reducers: Vec<Option<f64>>,
     pub series: SeriesBuffer,
     /// First value that was not finite, when any sample had one.
@@ -384,8 +402,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{MeasureError, MeasurePlan, NonFiniteSample, Sampler};
+    use crate::explore::reducer::{ReducerError, ReducerKind, ReducerSpec};
     use crate::explore::spec::{MeasureSettings, RunSettings};
-    use crate::explore::stop::{StopError, StopSpec};
+    use crate::explore::stop::{Comparator, Comparison, ComparisonError, StopError, StopSpec};
     use crate::export::StatColumns;
     use crate::helpers::stat;
     use crate::view::StatEntry;
@@ -539,6 +558,61 @@ mod tests {
             ..RunSettings::default()
         };
         assert!(MeasurePlan::check(&endless, &measure(1, 1)).is_err());
+    }
+
+    /// The regression. The longest run a check accepts, sampled every tick, overflowed the count of its samples.
+    #[test]
+    fn the_longest_accepted_run_counts_its_samples_without_overflow() {
+        let longest = plan(0, u64::MAX, 1, 1);
+        assert_eq!(longest.sample_count(), u64::MAX, "the count saturates");
+        assert_eq!(longest.series_row_count(), u64::MAX);
+        assert_eq!(plan(0, u64::MAX, 2, 2).series_row_count(), u64::MAX / 2 + 2);
+    }
+
+    /// The regression. A threshold built outside the parser could be infinite, and every run stopped at its first
+    /// sample.
+    #[test]
+    fn a_comparison_against_a_threshold_that_is_not_finite_is_refused() {
+        let infinite = Comparison {
+            comparator: Comparator::LessOrEqual,
+            threshold: f64::INFINITY,
+        };
+        let run = RunSettings {
+            stop: Some(StopSpec {
+                column: "Infected".to_owned(),
+                comparison: infinite,
+                min_tick: 0,
+            }),
+            ..RunSettings::default()
+        };
+        assert_eq!(
+            MeasurePlan::check(&run, &MeasureSettings::default()),
+            Err(MeasureError::Stop(StopError::NonFiniteThreshold {
+                raw: "Infected <= inf".to_owned()
+            }))
+        );
+
+        let measure = MeasureSettings {
+            reducers: vec![ReducerSpec {
+                column: "Infected".to_owned(),
+                kind: ReducerKind::FirstCrossing(Comparison {
+                    threshold: f64::NAN,
+                    ..infinite
+                }),
+            }],
+            ..MeasureSettings::default()
+        };
+        assert_eq!(
+            MeasurePlan::check(&RunSettings::default(), &measure),
+            Err(MeasureError::Reducer(ReducerError::Comparison {
+                raw: "first<=NaN".to_owned(),
+                source: ComparisonError::BadThreshold { raw: "NaN".to_owned() },
+            }))
+        );
+        assert!(
+            MeasurePlan::new(&run, &MeasureSettings::default(), StatColumns::plan(&sample(0.0, 0.0))).is_err(),
+            "a plan built without a check refuses it too"
+        );
     }
 
     #[test]

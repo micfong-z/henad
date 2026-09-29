@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use henad_core::explore::plan::Plan;
 use henad_core::explore::spec::SweepSpec;
-use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
 use henad_explore::exec::Concurrency;
 use henad_explore::handle::{SweepEvent, SweepOutput, SweepPhase, SweepProgress, SweepRun, SweepRunOptions};
@@ -35,8 +34,6 @@ pub enum SessionState {
     Planning,
     Running,
     Paused,
-    /// Paused after a GPU error that no run could be tied to.
-    PausedByFault,
     /// Every run is written.
     Finished,
     Aborted,
@@ -49,15 +46,12 @@ pub enum SessionState {
 impl SessionState {
     /// Returns whether the session is still to send its last event.
     pub fn is_running(self) -> bool {
-        matches!(
-            self,
-            Self::Planning | Self::Running | Self::Paused | Self::PausedByFault
-        )
+        matches!(self, Self::Planning | Self::Running | Self::Paused)
     }
 
     /// Returns whether the session is held between two slices of steps.
     pub fn is_paused(self) -> bool {
-        matches!(self, Self::Paused | Self::PausedByFault)
+        self == Self::Paused
     }
 }
 
@@ -66,7 +60,6 @@ pub struct SweepSession {
     run: SweepRun,
     /// Name of the model the sweep runs, as the Model tab shows it.
     pub model_name: String,
-    pub backend: Backend,
     /// Folder the results stream into, `None` for results held in memory.
     pub output_dir: Option<PathBuf>,
     /// Warnings of the sweep, in the order they arrived.
@@ -75,10 +68,8 @@ pub struct SweepSession {
     pub report: Option<SweepReport>,
     /// Error that ended the sweep outside any run.
     pub failure: Option<String>,
-    /// Whether a GPU error paused the sweep.
-    pub paused_by_fault: bool,
     /// Update of a search after the last batch it was told, `None` for a sweep or before the first batch.
-    pub latest_search_update: Option<Box<SearchUpdate>>,
+    pub latest_search_update: Option<Arc<SearchUpdate>>,
     /// Generations of a genetic algorithm that finished before the last batch it was told, the index of the
     /// generation that batch belongs to.
     pub latest_generation: u64,
@@ -90,11 +81,22 @@ pub struct SweepSession {
     pub kept: Option<Box<KeptDraft>>,
 }
 
+/// Settings of a sweep that decide how many runs step at once. None of them change its results.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionExecution {
+    /// Number of runs stepped at once.
+    pub concurrency: Concurrency,
+    /// Bytes of host memory the live runs can hold together, `None` for no limit.
+    pub memory_budget: Option<u64>,
+    /// Bytes of GPU memory the live runs can hold together, `None` for the device's largest buffer.
+    pub gpu_memory_budget: Option<u64>,
+}
+
 impl SweepSession {
     /// Starts a sweep of `spec` on the model `spec` names, and pauses the live simulation.
     ///
-    /// The results go to `output_dir`, or stay in memory when it is `None`. Planning happens before this returns,
-    /// and the runs after it.
+    /// The results go to `output_dir`, or stay in memory when it is `None`. A GPU model steps on a device of the
+    /// sweep's own. Planning happens before this returns, and the runs after it.
     ///
     /// # Errors
     ///
@@ -102,7 +104,7 @@ impl SweepSession {
     pub fn start(
         app: &mut AppState,
         spec: SweepSpec,
-        concurrency: Concurrency,
+        execution: SessionExecution,
         output_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
         let entry = model_registry(app.gpu_ctx.clone())
@@ -110,7 +112,6 @@ impl SweepSession {
             .find(|entry| entry.id == spec.model)
             .ok_or_else(|| format!("{} is unavailable on this device", spec.model))?;
         let model_name = entry.name.clone();
-        let backend = entry.metadata.backend;
         let output = match &output_dir {
             None => SweepOutput::Memory,
             #[cfg(not(target_arch = "wasm32"))]
@@ -119,24 +120,23 @@ impl SweepSession {
             Some(_) => return Err("Writing results to a folder is unavailable in a browser".to_owned()),
         };
         let options = SweepRunOptions {
-            concurrency,
+            concurrency: execution.concurrency,
+            memory_budget: execution.memory_budget,
+            gpu_memory: execution.gpu_memory_budget,
             provenance: provenance(),
             runtime: Some(ManifestRuntime::new(Some(&app.runtime))),
             wake: Some(app.repaint_waker()),
             ..SweepRunOptions::default()
         };
-        let run = SweepRun::start(entry, app.gpu_ctx.clone(), spec, output, options)
-            .map_err(|error| describe_error(&error))?;
+        let run = SweepRun::start(entry, None, spec, output, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
         Ok(Self {
             run,
             model_name,
-            backend,
             output_dir,
             warnings: Vec::new(),
             report: None,
             failure: None,
-            paused_by_fault: false,
             latest_search_update: None,
             latest_generation: 0,
             finished_generations: 0,
@@ -146,7 +146,7 @@ impl SweepSession {
     }
 
     /// Resumes the sweep whose results `folder` holds, a sweep of the model `model_id`, and pauses the live
-    /// simulation.
+    /// simulation. A GPU model steps on a device of the sweep's own.
     ///
     /// # Errors
     ///
@@ -158,25 +158,21 @@ impl SweepSession {
             .find(|entry| entry.id == model_id)
             .ok_or_else(|| format!("{model_id} is unavailable on this device"))?;
         let model_name = entry.name.clone();
-        let backend = entry.metadata.backend;
         let options = SweepRunOptions {
             provenance: provenance(),
             runtime: Some(ManifestRuntime::new(Some(&app.runtime))),
             wake: Some(app.repaint_waker()),
             ..SweepRunOptions::default()
         };
-        let run = SweepRun::resume_directory(entry, app.gpu_ctx.clone(), &folder, options)
-            .map_err(|error| describe_error(&error))?;
+        let run = SweepRun::resume_directory(entry, None, &folder, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
         Ok(Self {
             run,
             model_name,
-            backend,
             output_dir: Some(folder),
             warnings: Vec::new(),
             report: None,
             failure: None,
-            paused_by_fault: false,
             latest_search_update: None,
             latest_generation: 0,
             finished_generations: 0,
@@ -204,9 +200,10 @@ impl SweepSession {
         }
     }
 
-    /// Steps the sweep within the frame's budget in a browser, and hands every waiting event to `results`.
+    /// Steps the sweep within the frame's budget in a browser, and hands every waiting event to `results` at once.
     pub fn update(&mut self, dt: f64, results: &mut ResultsPanel) {
         self.run.update(dt);
+        let mut events = Vec::new();
         while let Some(event) = self.run.try_recv() {
             match &event {
                 SweepEvent::Warned(warning) => self.warnings.push(capitalize(&warning.to_string())),
@@ -217,13 +214,14 @@ impl SweepSession {
                     if let Some(last) = update.generations.last() {
                         self.finished_generations = self.finished_generations.max(last.generation + 1);
                     }
-                    self.latest_search_update = Some(update.clone());
+                    self.latest_search_update = Some(Arc::clone(update));
                 }
                 SweepEvent::Planned(outline) => self.outline = Some(outline.clone()),
                 SweepEvent::RunFinished { .. } => {}
             }
-            results.ingest(event);
+            events.push(event);
         }
+        results.ingest(events);
     }
 
     pub fn progress(&self) -> SweepProgress {
@@ -235,7 +233,6 @@ impl SweepSession {
         if self.is_running() {
             return match progress.phase {
                 SweepPhase::Planning => SessionState::Planning,
-                SweepPhase::Paused if self.paused_by_fault => SessionState::PausedByFault,
                 SweepPhase::Paused => SessionState::Paused,
                 // The last event is still on its way.
                 SweepPhase::Running | SweepPhase::Ended(_) | SweepPhase::Failed => SessionState::Running,
@@ -271,20 +268,11 @@ impl SweepSession {
     }
 
     pub fn resume(&mut self) {
-        self.paused_by_fault = false;
         self.run.resume();
     }
 
     pub fn abort(&mut self) {
         self.run.abort();
-    }
-
-    /// Pauses a running GPU sweep after a device error nothing could tie to one side.
-    pub fn pause_after_gpu_fault(&mut self) {
-        if self.backend == Backend::Gpu && self.is_running() && !self.is_paused() {
-            self.run.pause();
-            self.paused_by_fault = true;
-        }
     }
 }
 
@@ -299,5 +287,76 @@ fn provenance() -> Provenance {
         argv: std::env::args_os()
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use henad_compute::fault::Fault;
+    use henad_core::explore::spec::SweepSpec;
+    use henad_explore::sweep::SweepEnd;
+
+    use super::{SessionExecution, SessionState, SweepSession};
+    use crate::state::AppState;
+    use crate::ui::results::ResultsPanel;
+
+    /// Returns the app over a headless device, or `None` to skip a GPU test on a machine without one.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
+    fn headless_app() -> Option<AppState> {
+        match henad_explore::device::acquire_headless() {
+            Ok((ctx, runtime)) => Some(AppState::new(egui::Context::default(), ctx.clone(), Some(ctx), runtime)),
+            Err(error) => {
+                let required =
+                    std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|value| !value.is_empty() && value != "0");
+                assert!(!required, "HENAD_REQUIRE_GPU is set but {error}");
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn a_gpu_sweep_and_the_app_keep_their_faults_apart() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        app.render_ctx
+            .faults
+            .set_once(Fault::refused("drawing the viewport", "a fault of the app's"));
+        let mut spec = SweepSpec::new("gpu_sir");
+        spec.fixed = vec![
+            ("grid_width".to_owned(), "32".to_owned()),
+            ("grid_height".to_owned(), "32".to_owned()),
+        ];
+        spec.run.steps = 20;
+        spec.run.replicates = 2;
+        spec.measure.stats_every = 4;
+        spec.measure.series_every = 4;
+
+        let mut session =
+            SweepSession::start(&mut app, spec, SessionExecution::default(), None).expect("the sweep starts");
+        let mut results = ResultsPanel::default();
+        let started = Instant::now();
+        while session.is_running() {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "the sweep did not end in time"
+            );
+            session.update(0.0, &mut results);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let state = session.state(&session.progress());
+        assert_eq!(state, SessionState::Finished, "the sweep failed: {:?}", session.failure);
+        let report = session.report.as_ref().expect("a finished sweep has a report");
+        assert_eq!((report.end, report.counts.ok), (SweepEnd::Complete, 2));
+        assert!(
+            app.render_ctx.faults.take().is_some(),
+            "the app's fault stays with the app"
+        );
     }
 }

@@ -142,6 +142,8 @@ pub fn resolve_params(
 /// built from this range. `--set` reaches the same parameter with nothing between it and `init`,
 /// where a model sizes its buffers from the number it is given.
 ///
+/// A choice reads an option's name first, then an option's index.
+///
 /// # Errors
 ///
 /// Returns [`ValueError`] when `raw` does not read as the kind, or [`check_value`] refuses it.
@@ -160,18 +162,14 @@ pub fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue, ValueError
             source: Some(error),
         })?),
         ParamKind::Choice { options, .. } => {
-            // Accept either a numeric index or one of the option labels.
-            let index = if let Ok(index) = raw.parse::<usize>() {
-                index
-            } else {
-                options
-                    .iter()
-                    .position(|option| *option == raw)
-                    .ok_or_else(|| ValueError::UnknownOption {
-                        raw: raw.to_owned(),
-                        options,
-                    })?
-            };
+            let index = options
+                .iter()
+                .position(|option| *option == raw)
+                .or_else(|| raw.parse::<usize>().ok())
+                .ok_or_else(|| ValueError::UnknownOption {
+                    raw: raw.to_owned(),
+                    options,
+                })?;
             ParamValue::Choice(index)
         }
     };
@@ -393,6 +391,30 @@ mod tests {
             format_value(&descriptors[2].kind, &ParamValue::Choice(1)),
             "von_neumann"
         );
+    }
+
+    /// The regression. A name that reads as a number used to be read as an index, so option "0" at index 1 came
+    /// back as option 0.
+    #[test]
+    fn a_choice_reads_an_option_name_before_an_index() {
+        let kind = ParamKind::Choice {
+            options: &["low", "0"],
+            default: 0,
+        };
+        assert_eq!(parse_value(&kind, "0"), Ok(ParamValue::Choice(1)), "the name wins");
+        assert_eq!(
+            parse_value(&kind, "1"),
+            Ok(ParamValue::Choice(1)),
+            "an index still reads"
+        );
+        let kind = ParamKind::Choice {
+            options: &["low", "2"],
+            default: 0,
+        };
+        for index in 0..2 {
+            let value = ParamValue::Choice(index);
+            assert_eq!(parse_value(&kind, &format_value(&kind, &value)), Ok(value));
+        }
     }
 
     #[test]

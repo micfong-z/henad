@@ -12,7 +12,7 @@ use crate::merge::{MergeError, merge};
 use crate::output::OutputDir;
 use crate::output::manifest::ManifestStatus;
 use crate::sweep::{SweepOptions, SweepWarning};
-use crate::tests::support::{Recorder, ScratchDir, Tables, entry, manifest, sweep, sweep_options, sweep_with};
+use crate::tests::support::{OutputTables, Recorder, ScratchDir, entry, manifest, sweep, sweep_options, sweep_with};
 
 /// Returns 3 configs of SIR on a 16 by 16 grid with 3 replicates each, 9 runs.
 fn sir_spec() -> SweepSpec {
@@ -67,7 +67,7 @@ fn merged_shards_equal_an_unsharded_sweep() {
     let report = merge(&inputs, &merged_dir, &mut progress).expect("the shards merge");
     assert_eq!((report.counts.rows, report.missing), (9, 0));
     assert!(progress.warnings.is_empty());
-    assert_eq!(Tables::read(&merged_dir), Tables::read(&whole_dir));
+    assert_eq!(OutputTables::read(&merged_dir), OutputTables::read(&whole_dir));
     let merged = manifest(&merged_dir);
     assert_eq!(merged.status, ManifestStatus::Complete);
     assert_eq!((merged.shard.index, merged.shard.count), (0, 1));
@@ -156,6 +156,6 @@ fn a_merge_missing_a_shard_is_filled_in_by_a_resume() {
     assert_eq!(progress.committed, [1, 4, 7]);
     let whole_dir = scratch.path().join("whole");
     sweep(&sir, None, &spec, &whole_dir, Concurrency::Auto);
-    assert_eq!(Tables::read(&merged_dir), Tables::read(&whole_dir));
+    assert_eq!(OutputTables::read(&merged_dir), OutputTables::read(&whole_dir));
     assert_eq!(manifest(&merged_dir).status, ManifestStatus::Complete);
 }

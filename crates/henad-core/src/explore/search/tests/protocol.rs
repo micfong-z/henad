@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::explore::search::genetic::GeneticSettings;
+use crate::explore::search::genetic::{GeneticSettings, MAX_POPULATION, MAX_TOURNAMENT_SIZE};
 use crate::explore::search::hill_climb::HillClimbSettings;
 use crate::explore::search::pse::{PatternAxis, PatternSpaceSettings};
 use crate::explore::search::tests::support::{drive, noise, unit_space};
@@ -212,6 +212,46 @@ fn a_search_spec_checks_its_objective_and_settings() {
     };
     assert_eq!(key, "genetic.mutation_rate");
     assert!(genetic.searcher(&unit_space(1), 0).is_err());
+
+    let largest = GeneticSettings {
+        population: MAX_POPULATION,
+        tournament_size: MAX_TOURNAMENT_SIZE,
+        ..genetic_settings()
+    };
+    assert_eq!(spec(SearchAlgorithm::Genetic(largest), 10).check(), Ok(()));
+    for (settings, refused) in [
+        (
+            GeneticSettings {
+                population: MAX_POPULATION + 1,
+                ..genetic_settings()
+            },
+            "genetic.population",
+        ),
+        (
+            GeneticSettings {
+                population: usize::MAX,
+                ..genetic_settings()
+            },
+            "genetic.population",
+        ),
+        (
+            GeneticSettings {
+                tournament_size: MAX_TOURNAMENT_SIZE + 1,
+                ..genetic_settings()
+            },
+            "genetic.tournament_size",
+        ),
+    ] {
+        let genetic = spec(SearchAlgorithm::Genetic(settings), 10);
+        let Err(SearchSpecError::Setting { key, .. }) = genetic.check() else {
+            panic!("{settings:?} is refused");
+        };
+        assert_eq!(key, refused);
+        assert!(
+            genetic.searcher(&unit_space(1), 0).is_err(),
+            "{key} is refused before the searcher allocates"
+        );
+    }
 }
 
 #[test]

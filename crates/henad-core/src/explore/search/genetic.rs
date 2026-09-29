@@ -1,9 +1,11 @@
 //! Generational genetic algorithm for a noisy objective.
 //!
-//! Generation 0 is drawn at random. Each later generation re-evaluates the best members of the one before, then keeps
-//! its elites and fills the rest with children. A child comes from a tournament winner, crossed with a second winner
-//! at the crossover rate, then mutated gene by gene. Fitness is the objective over every replicate a member has,
-//! re-evaluations included.
+//! Generation 0 is drawn at random. Each later generation re-evaluates the best members of the one before, keeps its
+//! elites and fills the rest with children. The children are bred as the generation starts, from the fitness the
+//! members had before its re-evaluations. The elites are chosen once the re-evaluations are told.
+//!
+//! A child comes from a tournament winner, crossed with a second winner at the crossover rate, then mutated gene by
+//! gene. Fitness is the objective over every replicate a member has, re-evaluations included.
 //!
 //! No two first evaluations share a config. A child whose config an earlier candidate has is mutated again. When no
 //! draw finds a new config, the generation re-evaluates that candidate, and the candidate joins it in the child's
@@ -18,6 +20,12 @@ use crate::explore::search::{
     Aggregate, Candidate, CandidateOrigin, CandidateTracker, ConfigDraw, Evaluation, GenerationSummary, Goal,
     Objective, Proposal, RankingEntry, SearchReport, SearchSpecError, Searcher, check_setting, draw_config,
 };
+
+/// Most members a generation can have.
+pub const MAX_POPULATION: usize = 1 << 16;
+
+/// Most members one tournament can draw.
+pub const MAX_TOURNAMENT_SIZE: usize = 1 << 16;
 
 /// Settings of a genetic algorithm.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,14 +65,15 @@ impl GeneticSettings {
     ///
     /// # Errors
     ///
-    /// Returns [`SearchSpecError::Setting`] for an empty population, as many elites as members, an empty tournament,
-    /// a rate or fraction outside `[0, 1]`, or a mutation scale that is not a positive number.
+    /// Returns [`SearchSpecError::Setting`] for a population outside 1 to [`MAX_POPULATION`], as many elites as
+    /// members, a tournament size outside 1 to [`MAX_TOURNAMENT_SIZE`], a rate or fraction outside `[0, 1]`, or a
+    /// mutation scale that is not a positive number.
     pub fn check(&self) -> Result<(), SearchSpecError> {
         check_setting(
-            self.population >= 1,
+            (1..=MAX_POPULATION).contains(&self.population),
             "genetic.population",
             self.population,
-            "at least 1",
+            format!("from 1 to {MAX_POPULATION}"),
         )?;
         check_setting(
             self.elite_count < self.population,
@@ -73,10 +82,10 @@ impl GeneticSettings {
             format!("less than the population of {}", self.population),
         )?;
         check_setting(
-            self.tournament_size >= 1,
+            (1..=MAX_TOURNAMENT_SIZE).contains(&self.tournament_size),
             "genetic.tournament_size",
             self.tournament_size,
-            "at least 1",
+            format!("from 1 to {MAX_TOURNAMENT_SIZE}"),
         )?;
         for (key, rate) in [
             ("genetic.crossover_rate", self.crossover_rate),
@@ -341,7 +350,7 @@ mod tests {
 
     use super::{GeneticAlgorithm, GeneticSettings};
     use crate::explore::search::tests::support::{drive, level_space, noise, unit_space};
-    use crate::explore::search::{Aggregate, Candidate, CandidateOrigin, Goal, Objective, Searcher as _};
+    use crate::explore::search::{Aggregate, Candidate, CandidateOrigin, Evaluation, Goal, Objective, Searcher as _};
 
     fn settings() -> GeneticSettings {
         GeneticSettings {
@@ -468,6 +477,38 @@ mod tests {
                 .all(|candidate| matches!(candidate.origin, CandidateOrigin::Reevaluation { .. })),
             "once every config is known, the search re-evaluates"
         );
+    }
+
+    #[test]
+    fn no_batch_spans_two_generations() {
+        let objective = Objective {
+            column: "Infected:max".to_owned(),
+            goal: Goal::Maximize,
+            aggregate: Aggregate::Mean,
+        };
+        // 20 members, then 5 re-evaluations and 18 children a generation, in batches of at most 7.
+        let mut search = GeneticAlgorithm::new(unit_space(2), settings(), objective, 200, 6).expect("valid settings");
+        let mut sizes = Vec::new();
+        while !search.is_done() {
+            let (queued, finished) = (search.queue.len(), search.generations.len());
+            let batch = search.ask(7);
+            let evaluations: Vec<Evaluation> = batch
+                .iter()
+                .map(|candidate| Evaluation {
+                    candidate_id: candidate.id,
+                    outputs: vec![vec![Some(height(candidate.genome.genes()))]],
+                })
+                .collect();
+            search.tell(&evaluations);
+            let drained = batch.len() == queued;
+            assert_eq!(
+                search.generations.len(),
+                finished + usize::from(drained),
+                "a generation ends with the batch that asks for its last candidate"
+            );
+            sizes.push(batch.len());
+        }
+        assert_eq!(sizes[..7], [7, 7, 6, 7, 7, 7, 2]);
     }
 
     #[test]

@@ -25,8 +25,10 @@ pub enum DesignKind {
     Random { samples: usize },
     /// `samples` configs in a Latin hypercube, each factor's domain split into `samples` strata.
     ///
-    /// Every stratum of a continuous factor holds one sample. A factor with `m` levels takes each level
-    /// `samples / m` times, rounded down or up.
+    /// Every stratum of a continuous factor holds one sample, at a random point inside it. A stratum of a factor
+    /// with `m` levels takes the lowest level it covers, and each level is then taken `samples / m` times, rounded
+    /// down or up. The levels such a factor takes therefore depend on `samples` alone, and the design seed decides
+    /// only which config takes each one.
     LatinHypercube { samples: usize },
     /// One config per row of a comma-separated table, whose header names parameter ids or `action.<name>`.
     ///
@@ -74,6 +76,8 @@ pub enum DesignError {
     NoFactors,
     /// Factor `factor_index` of a factorial or zip design, a range with no listed levels.
     UnlistedLevels { factor_index: usize },
+    /// Factor `factor_index`, a list of no levels.
+    NoLevels { factor_index: usize },
 }
 
 impl fmt::Display for DesignError {
@@ -96,6 +100,7 @@ impl fmt::Display for DesignError {
                     "range of factor {factor_index} needs a step, except in a random or Latin hypercube design"
                 )
             }
+            Self::NoLevels { factor_index } => write!(f, "factor {factor_index} has no levels"),
         }
     }
 }
@@ -109,9 +114,17 @@ impl std::error::Error for DesignError {}
 ///
 /// # Errors
 ///
-/// Returns [`DesignError`] for a zip over factors of unequal length, a sampled design with no samples or no
-/// factors, a whole range in a design that lists levels, or more than [`MAX_CONFIGS`] configs.
+/// Returns [`DesignError`] for a factor with an empty list of levels, a zip over factors of unequal length, a
+/// sampled design with no samples or no factors, a whole range in a design that lists levels, or more than
+/// [`MAX_CONFIGS`] configs.
 pub fn generate(block: &Block, base: &Config) -> Result<Vec<Config>, DesignError> {
+    if let Some(factor_index) = block
+        .factors
+        .iter()
+        .position(|factor| factor.levels().is_some_and(<[FactorLevel]>::is_empty))
+    {
+        return Err(DesignError::NoLevels { factor_index });
+    }
     match block.design {
         DesignKind::Factorial => factorial(&listed_levels(&block.factors)?, &block.factors, base),
         DesignKind::Zip | DesignKind::Table { .. } => zip(&listed_levels(&block.factors)?, &block.factors, base),
@@ -555,5 +568,32 @@ mod tests {
             generate(&block(DesignKind::Factorial, unlisted()), &base()),
             Err(DesignError::UnlistedLevels { factor_index: 0 })
         );
+    }
+
+    /// The regression. A sampled design indexed into an empty list and panicked, and a listed one gave no configs.
+    #[test]
+    fn a_factor_with_no_levels_is_refused_by_every_design() {
+        for design in [
+            DesignKind::Factorial,
+            DesignKind::Zip,
+            DesignKind::Random { samples: 4 },
+            DesignKind::LatinHypercube { samples: 4 },
+        ] {
+            assert_eq!(
+                rows(design.clone(), vec![factor(0, &[1, 2]), factor(1, &[])]),
+                Err(DesignError::NoLevels { factor_index: 1 }),
+                "{design:?}"
+            );
+        }
+    }
+
+    /// A stratum of a discrete factor takes the lowest level it covers, whatever the design seed.
+    #[test]
+    fn a_latin_hypercube_takes_the_lowest_level_of_each_stratum() {
+        let levels = || vec![whole_numbers(FactorSlot::Param(1), 1, 100)];
+        let expected: BTreeMap<u32, usize> = (0..40).map(|stratum| (1 + stratum * 100 / 40, 1)).collect();
+        for design_seed in [3, 42] {
+            assert_eq!(counts(&lhs(40, levels(), design_seed), 1), expected);
+        }
     }
 }

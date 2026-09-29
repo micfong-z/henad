@@ -57,12 +57,34 @@ pub fn bool_param(id: &'static str, label: &'static str, default: bool) -> Param
     }
 }
 
+/// Returns a descriptor of a choice among `options`, starting at option `default`.
+///
+/// # Panics
+///
+/// Panics when two options share a name, a name is empty or has spaces at either end, or a name reads as an unsigned
+/// integer. Text naming a choice is trimmed, then read as an option's name, then as an index. The second of two equal
+/// names would read back as the first, a name with spaces at an end would never be found, and an index written as
+/// text would read as the option of that name.
 pub fn choice_param(
     id: &'static str,
     label: &'static str,
     options: &'static [&'static str],
     default: usize,
 ) -> ParamDescriptor {
+    for (position, option) in options.iter().enumerate() {
+        assert!(
+            !option.is_empty() && option.trim() == *option,
+            "option '{option}' of choice '{id}' is empty or has spaces at an end"
+        );
+        assert!(
+            option.parse::<usize>().is_err(),
+            "option '{option}' of choice '{id}' reads as an index"
+        );
+        assert!(
+            !options[..position].contains(option),
+            "choice '{id}' has option '{option}' twice"
+        );
+    }
     ParamDescriptor {
         id,
         label,
@@ -142,6 +164,30 @@ mod tests {
 
         let p = u32_param("count", "Count", 10, 1, 100);
         assert_eq!(p.kind.default_value(), ParamValue::U32(10));
+    }
+
+    #[test]
+    fn choice_builder_takes_named_options() {
+        let p = choice_param("shape", "Shape", &["square", "hexagon"], 1);
+        assert_eq!(p.kind.default_value(), ParamValue::Choice(1));
+    }
+
+    #[test]
+    #[should_panic(expected = "option '2' of choice 'level' reads as an index")]
+    fn choice_builder_refuses_an_option_named_as_an_index() {
+        choice_param("level", "Level", &["low", "2"], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "option 'Random ' of choice 'network' is empty or has spaces at an end")]
+    fn choice_builder_refuses_an_option_with_trailing_spaces() {
+        choice_param("network", "Network", &["Random ", "Geometric"], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "choice 'shape' has option 'square' twice")]
+    fn choice_builder_refuses_a_repeated_option() {
+        choice_param("shape", "Shape", &["square", "hexagon", "square"], 0);
     }
 
     #[test]

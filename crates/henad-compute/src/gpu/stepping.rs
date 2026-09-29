@@ -173,8 +173,12 @@ pub fn run_due<'s>(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &'s 
 
 /// Returns the stats of the state's current tick, blocking until the GPU reads them back.
 ///
-/// Note that a fault the sample raises is left for the next [`wait`] to report.
+/// A readback still in flight is collected first. Otherwise the sample's copy would be skipped, and the stats
+/// returned would be the older sample's. Note that a fault the sample raises is left for the next [`wait`] to report.
 pub fn sample_stats(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Vec<StatEntry> {
+    if state.stats_readback_pending() {
+        state.poll_stats_readback(&ctx.device, true);
+    }
     let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("henad_gpu_stats_sample"),
     });
@@ -183,4 +187,112 @@ pub fn sample_stats(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Vec<StatEn
     state.begin_stats_readback();
     state.poll_stats_readback(&ctx.device, true);
     state.stats()
+}
+
+#[cfg(test)]
+mod tests {
+    use henad_core::model::SimState;
+    use henad_core::params::ParamValue;
+    use henad_core::view::{StatEntry, StatValue};
+
+    use super::{sample_stats, submit_slice, submit_steps};
+    use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
+    use crate::gpu::{GpuSimState, headless_context};
+    use crate::snapshot::GpuSnapshot;
+
+    /// Reads its own tick back from the GPU as its one stat.
+    struct TickReadback {
+        tick: u32,
+        queue: wgpu::Queue,
+        readback: CounterReadback,
+    }
+
+    impl SimState for TickReadback {
+        fn step(&mut self) {
+            self.tick += 1;
+        }
+        fn tick(&self) -> u64 {
+            u64::from(self.tick)
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            vec![StatEntry {
+                label: "Tick",
+                value: StatValue::Scalar(f64::from(self.readback.values()[0])),
+                color: [0; 4],
+            }]
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    impl GpuSimState for TickReadback {
+        fn encode_steps(
+            &mut self,
+            _encoder: &mut wgpu::CommandEncoder,
+            count: u32,
+            _timestamps: Option<&wgpu::QuerySet>,
+        ) {
+            self.tick += count;
+        }
+        fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
+            let wgpu::BindingResource::Buffer(storage) = self.readback.binding() else {
+                panic!("the readback binds a buffer");
+            };
+            // The write lands as the encoder's submission starts, ahead of the copy.
+            self.queue
+                .write_buffer(storage.buffer, 0, bytemuck::bytes_of(&self.tick));
+            self.readback.encode_copy(encoder);
+        }
+        fn begin_stats_readback(&mut self) {
+            self.readback.begin_map();
+        }
+        fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
+            if block {
+                self.readback.poll_blocking(device)
+            } else {
+                self.readback.poll(device)
+            }
+        }
+        fn stats_readback_pending(&self) -> bool {
+            self.readback.is_pending()
+        }
+        fn view(&self) -> GpuSnapshot {
+            GpuSnapshot {
+                display: None,
+                agents: None,
+            }
+        }
+    }
+
+    /// The regression. A sample taken while an earlier readback was in flight skipped its own copy and reported
+    /// the earlier sample's values.
+    #[test]
+    fn a_sample_behind_an_unfinished_readback_reports_the_current_tick() {
+        let Some(ctx) = headless_context("henad_sample_stats_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_sample_behind_an_unfinished_readback_reports_the_current_tick: no adapter");
+            return;
+        };
+        let mut state = TickReadback {
+            tick: 0,
+            queue: ctx.queue.clone(),
+            readback: CounterReadback::new(&ctx.device, "henad_sample_stats_test", 1),
+        };
+
+        submit_slice(&mut state, &ctx, 3, true);
+        assert!(
+            state.stats_readback_pending(),
+            "a sampled slice leaves its readback in flight"
+        );
+        submit_steps(&mut state, &ctx, 4);
+        let stats = sample_stats(&mut state, &ctx);
+        assert_eq!(stats[0].value.scalar(), 7.0, "the sample reported the slice's tick");
+        assert!(ctx.faults.take().is_none());
+    }
 }

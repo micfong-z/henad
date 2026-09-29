@@ -32,7 +32,7 @@ use crate::output::memory::SweepFiles;
 use crate::output::resume::{ResumeError, ResumeScan};
 use crate::output::runs_csv::column_names;
 use crate::output::{OutputDir, OutputError, OutputWriter, runs_csv, series_csv};
-use crate::probe::{CapacityError, ProbeError, ProbeReport, check_capacity};
+use crate::probe::{CapacityError, ProbeError, ProbeReport, TimedProbe, check_capacity};
 use crate::progress::{Progress, ProgressEvent, ProgressMeter};
 use crate::schema::{backend_name, model_schema, schema_json};
 use crate::search_run::{SearchOutline, SearchPlanError};
@@ -115,9 +115,11 @@ pub struct SweepOptions {
     /// Directory the results go in. A dry run needs none.
     pub output_dir: Option<PathBuf>,
     pub concurrency: Concurrency,
-    /// Bytes of host memory the live runs can hold together, `None` for no limit.
+    /// Bytes of host memory the live runs can hold together, `None` for no limit. The lanes are sized from the probed
+    /// run, and a probed run larger than the budget leaves one lane.
     pub memory_budget: Option<u64>,
-    /// Cap on the bytes of device memory the live GPU runs hold together, `None` for the device's largest buffer.
+    /// Cap on the bytes of device memory the live GPU runs hold together, `None` for the device's largest buffer. A
+    /// run larger than the cap runs alone.
     pub gpu_memory: Option<u64>,
     /// Whether to plan and probe the sweep and stop there, writing nothing.
     pub dry_run: bool,
@@ -396,7 +398,7 @@ pub fn run_sweep(
         provenance,
         options,
     };
-    let preparation = SweepPreparation::new(&inputs, None)?;
+    let preparation = SweepPreparation::new(&inputs, None, None)?;
     preparation.announce(provenance, progress);
     let Some(output_dir) = output_dir else {
         let report = preparation.report(SweepEnd::Planned, ResultCounts::default(), None);
@@ -422,7 +424,7 @@ pub(crate) fn run_into_directory(
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
     install_panic_hook();
-    let preparation = SweepPreparation::new(inputs, Some(plan))?;
+    let preparation = SweepPreparation::new(inputs, Some(plan), None)?;
     preparation.announce(inputs.provenance, progress);
     let record = preparation.write_directory(inputs, output_dir, progress)?;
     progress.report(&ProgressEvent::Ended(&record.report));
@@ -446,7 +448,7 @@ pub(crate) fn run_in_memory(
     use crate::output::memory::memory_writer;
 
     install_panic_hook();
-    let preparation = SweepPreparation::new(inputs, Some(plan))?;
+    let preparation = SweepPreparation::new(inputs, Some(plan), None)?;
     preparation.announce(inputs.provenance, progress);
     let mut manifest = preparation.manifest(inputs)?;
     let writer = memory_writer(&preparation.plan, &inputs.entry.param_descriptors, &preparation.measure)?;
@@ -492,14 +494,21 @@ pub(crate) struct SweepPreparation {
 
 impl SweepPreparation {
     /// Checks and probes `plan`, the plan of `inputs.spec`, and chooses its layout. With no `plan`, the spec is
-    /// planned first.
-    pub(crate) fn new(inputs: &SweepInputs<'_>, plan: Option<Arc<Plan>>) -> Result<Self, ExploreError> {
+    /// planned first. `probe`, when given, takes the place of the report [`ProbeReport::for_plan`] gives for the plan,
+    /// and its clock readings the ones taken on entry.
+    pub(crate) fn new(
+        inputs: &SweepInputs<'_>,
+        plan: Option<Arc<Plan>>,
+        probe: Option<TimedProbe>,
+    ) -> Result<Self, ExploreError> {
         let (entry, gpu, options) = (inputs.entry, inputs.gpu, inputs.options);
         if inputs.spec.search.is_some() {
             return Err(ExploreError::Search(SearchPlanError::NotASweep));
         }
-        let started = Instant::now();
-        let started_unix_ms = now_unix_ms();
+        let (started, started_unix_ms, probe) = match probe {
+            Some(timed) => (timed.started, timed.started_unix_ms, Some(timed.report)),
+            None => (Instant::now(), now_unix_ms(), None),
+        };
         let plan = match plan {
             Some(plan) => plan,
             None => Arc::new(inputs.spec.plan(&model_schema(entry))?),
@@ -514,7 +523,10 @@ impl SweepPreparation {
         if let Some(ctx) = gpu {
             check_capacity(entry, &plan, &ctx.device.limits())?;
         }
-        let probe = ProbeReport::for_plan(entry, gpu, &plan)?;
+        let probe = match probe {
+            Some(probe) => probe,
+            None => ProbeReport::for_plan(entry, gpu, &plan)?,
+        };
         let measure = MeasurePlan::new(plan.run_settings(), plan.measure_settings(), probe.columns.clone())?;
         let resumed = resume_dir
             .map(|output_dir| {
@@ -538,7 +550,8 @@ impl SweepPreparation {
             })
             .collect();
 
-        // The layout is sized from whichever of the first and last configs holds more.
+        // The layout is sized from the first config that builds without a fault or the last config, whichever holds
+        // more.
         let last_probe = ProbeReport::for_last_config(entry, gpu, &plan, &probe);
         let sizing_probe = match &last_probe {
             Some(last_probe) if last_probe.footprint() > probe.footprint() => last_probe,

@@ -21,7 +21,7 @@ pub mod summary_csv;
 
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -98,13 +98,27 @@ impl OutputDir {
     ///
     /// # Errors
     ///
-    /// Returns [`OutputError::HoldsResults`] when the directory holds a file a sweep or a search writes.
+    /// Returns [`OutputError::HoldsResults`] when the directory holds a file a sweep or a search writes, a staged
+    /// table or the marker of staged tables included.
     pub fn check_free(path: &Path) -> Result<(), OutputError> {
-        match RESULT_FILES.iter().find(|&&file| path.join(file).exists()) {
-            Some(&file) => Err(OutputError::HoldsResults {
+        let holds_results = |file: String| {
+            Err(OutputError::HoldsResults {
                 dir: path.to_owned(),
                 file,
-            }),
+            })
+        };
+        if let Some(&file) = RESULT_FILES.iter().find(|&&file| path.join(file).exists()) {
+            return holds_results(file.to_owned());
+        }
+        // A staged table can stand in for its original, as `table_paths` reads the directory.
+        let staged = std::fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .find(|name| name.ends_with(STAGED_SUFFIX));
+        match staged {
+            Some(file) => holds_results(file),
             None => Ok(()),
         }
     }
@@ -327,14 +341,16 @@ impl OutputDir {
     /// cannot be written, and [`OutputError::Summary`] when `runs.csv` cannot be summarized.
     pub fn write_summary(&self) -> Result<(), OutputError> {
         let runs_path = self.path.join(RUNS_FILE);
-        let runs = std::fs::read_to_string(&runs_path).map_err(|source| OutputError::Read {
+        let read_error = |source| OutputError::Read {
             path: runs_path.clone(),
             source,
-        })?;
+        };
+        let runs = File::open(&runs_path).map_err(read_error)?;
         let summary_path = self.path.join(SUMMARY_FILE);
         let summary = File::create(&summary_path).map_err(write_error_at(&summary_path))?;
-        match write_summary(&runs, BufWriter::new(summary)) {
+        match write_summary(BufReader::new(runs), BufWriter::new(summary)) {
             Ok(_) => Ok(()),
+            Err(SummaryError::Read(source)) => Err(read_error(source)),
             Err(SummaryError::Io(source)) => Err(write_error_at(&summary_path)(source)),
             Err(error) => Err(OutputError::Summary(error)),
         }
@@ -457,7 +473,7 @@ impl<W: Write> RunSink for OutputWriter<W> {
 #[derive(Debug)]
 pub enum OutputError {
     /// Directory `dir` holds `file` from an earlier sweep or search.
-    HoldsResults { dir: PathBuf, file: &'static str },
+    HoldsResults { dir: PathBuf, file: String },
     /// Reading `path` failed.
     Read { path: PathBuf, source: io::Error },
     /// Creating or writing `path` failed.
@@ -566,17 +582,24 @@ mod tests {
         fs::write(nested.join(MANIFEST_FILE), "{}").expect("a scratch file");
         let error = OutputDir::create(&nested).expect_err("a manifest marks results");
         assert!(
-            matches!(
-                error,
-                OutputError::HoldsResults {
-                    file: MANIFEST_FILE,
-                    ..
-                }
-            ),
+            matches!(&error, OutputError::HoldsResults { file, .. } if file == MANIFEST_FILE),
             "{error:?}"
         );
         fs::remove_file(nested.join(MANIFEST_FILE)).expect("the manifest is removed");
         fs::write(nested.join(RUNS_FILE), "").expect("a scratch file");
         assert!(OutputDir::check_free(&nested).is_err(), "so does an empty runs.csv");
+        fs::remove_file(nested.join(RUNS_FILE)).expect("the table is removed");
+
+        for staged in [staged_path(&nested, SERIES_FILE), nested.join(STAGED_MARKER)] {
+            fs::write(&staged, "").expect("a scratch file");
+            let error = OutputDir::create(&nested).expect_err("a staged file marks results");
+            let name = staged.file_name().map(|name| name.to_string_lossy().into_owned());
+            assert!(
+                matches!(&error, OutputError::HoldsResults { file, .. } if Some(file) == name.as_ref()),
+                "{error:?}"
+            );
+            fs::remove_file(&staged).expect("the staged file is removed");
+        }
+        assert!(OutputDir::check_free(&nested).is_ok());
     }
 }

@@ -8,7 +8,11 @@ use crate::explore::measure::SeriesBuffer;
 /// One run of a plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlannedRun {
-    /// Position of the run in the plan, `config_id * replicates + rep`.
+    /// Position of the run in the plan.
+    ///
+    /// In a sweep it is `config_id * replicates + rep`. In a search it is `config_id * replicates` plus the run's
+    /// index within its candidate, and a re-evaluation numbers `rep` on from the replicates of the candidate it
+    /// repeats.
     pub run_id: u64,
     pub config_id: u64,
     /// Replicate index within the config.

@@ -3,6 +3,7 @@
 //! A draft keeps each field as typed, so text that does not parse yet survives the next frame. Every parameter a
 //! draft does not vary takes its Parameters tab value. The draft reads those values each time it writes a spec.
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::time::Duration;
 
@@ -10,24 +11,28 @@ use henad_core::explore::design::{DesignError, DesignKind};
 use henad_core::explore::factor::{
     Factor, FactorDomain, FactorError, FactorLevel, FactorSpec, FactorTarget, LevelSpec, LevelSpecError,
 };
-use henad_core::explore::measure::MeasureError;
+use henad_core::explore::measure::{MeasureError, MeasurePlan};
 use henad_core::explore::plan::{ModelSchema, Plan, PlanError};
-use henad_core::explore::reducer::{ReducerError, ReducerKind, ReducerSpec};
+use henad_core::explore::reducer::{ReducerError, ReducerKind, ReducerPlan, ReducerSpec};
 use henad_core::explore::search::genetic::GeneticSettings;
 use henad_core::explore::search::genome::SearchSpaceError;
 use henad_core::explore::search::hill_climb::HillClimbSettings;
 use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
 use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, SearchSpec, SearchSpecError};
 use henad_core::explore::seed::SeedScheme;
-use henad_core::explore::spec::{ActionSpec, BlockSpec, MeasureSettings, RunSettings, SeedSettings, SweepSpec};
+use henad_core::explore::spec::{
+    ACTION_COLUMN_PREFIX, ActionSpec, BlockSpec, MeasureSettings, RunSettings, SeedSettings, SweepSpec,
+};
 use henad_core::explore::stop::{Comparator, Comparison, StopSpec};
 use henad_core::explore::value::{ValueError, format_value, parse_value};
+use henad_core::export::StatColumns;
 use henad_core::export::csv::parse_records;
 use henad_core::helpers::fmt_bytes;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
+use henad_core::view::{StatEntry, StatValue};
 use henad_explore::exec::Concurrency;
 use henad_explore::search_run::{SearchPlan, SearchPlanError};
-use henad_explore::spec_file::SpecFile;
+use henad_explore::spec_file::{ExecutionTable, SpecFile};
 
 use crate::ui::params::display_value;
 use crate::ui::plural;
@@ -46,6 +51,11 @@ pub const MAX_MEMORY_SERIES_BYTES: u64 = 4 << 30;
 /// Most bytes of `series.csv` a sweep can hold in memory. The web build has 4 GiB of memory in all.
 #[cfg(target_arch = "wasm32")]
 pub const MAX_MEMORY_SERIES_BYTES: u64 = 1 << 30;
+
+/// Fewest seconds the Timeout field can be set to.
+///
+/// Note that a loaded spec can hold less, as `henad-cli` accepts it.
+pub const MIN_TIMEOUT_SECONDS: f64 = 1.0;
 
 /// Approximate bytes one value of `series.csv` takes as text.
 const SERIES_VALUE_BYTES: u64 = 12;
@@ -80,7 +90,13 @@ pub const INITIAL_SAMPLES_KEY: &str = "pse.initial_samples";
 /// Issue of a grid axis with its own range that still spans 0 to 0, the range its fields start with.
 pub const AXIS_RANGE_MISSING: &str = "Set Minimum and Maximum";
 
-/// Output kinds the Objective and axis lists offer for each stat, recorded or not.
+/// Issue of a stop condition or a crossing whose threshold is infinite or not a number.
+const NOT_FINITE_THRESHOLD: &str = "Threshold must be a finite number";
+
+/// Issue of a draft whose model has not reported its stat columns yet.
+pub const COLUMNS_PENDING: &str = "Reading model outputs";
+
+/// Output kinds the Objective and axis lists offer for each stat column, recorded or not.
 const OFFERED_KINDS: [ReducerKind; 6] = [
     ReducerKind::Final,
     ReducerKind::Min,
@@ -369,11 +385,7 @@ impl DesignTableDraft {
 
     /// Number of rows after the header, blank lines left out.
     pub fn row_count(&self) -> usize {
-        self.text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count()
-            .saturating_sub(1)
+        table_row_count(&self.text)
     }
 }
 
@@ -414,10 +426,37 @@ pub struct SweepDraft {
     /// Outputs added after the defaults.
     pub reducers: Vec<ReducerSpec>,
     pub concurrency: Concurrency,
+    /// Bytes of host memory the live runs can hold together, as a loaded spec's `[execution]` table sets it.
+    ///
+    /// The Execution section shows it read-only, Save spec writes it back unchanged, and a sweep the tab starts runs
+    /// under it.
+    pub memory_budget: Option<u64>,
+    /// Bytes of device memory the live GPU runs can hold together, kept from a loaded spec as
+    /// [`Self::memory_budget`] is.
+    pub gpu_memory_budget: Option<u64>,
     /// Whether the results stream into [`Self::output_dir_text`] in place of staying in memory. A spec never holds it.
     pub results_in_folder: bool,
     /// Folder the results stream into while [`Self::results_in_folder`] is set. Only the desktop app writes one.
     pub output_dir_text: String,
+    /// Stat columns a build of the model samples. They name the parts of a vector or histogram stat.
+    ///
+    /// Until [`Self::set_stat_columns`] gives them, they are `None` and every stat counts as one column. A spec never
+    /// holds them.
+    pub stat_columns: Option<StatColumns>,
+    /// Whether a build of the model is still sampling [`Self::stat_columns`]. The draft cannot start until the build
+    /// reports. A spec never holds it.
+    pub columns_pending: bool,
+}
+
+/// Source of the tick an action fires at in each run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickSource {
+    /// The action's own tick, the same in every run.
+    Fixed,
+    /// The ticks the draft varies or searches over.
+    Varied,
+    /// The action's column in the design table the draft runs.
+    Table,
 }
 
 /// One of the two axes of a Pattern Space Exploration's grid.
@@ -462,10 +501,13 @@ pub enum DraftSite {
     /// Steps and warm-up.
     RunLength,
     Stop,
+    Timeout,
     /// Sample every and Series every.
     Sampling,
     /// Output row `i`.
     Output(usize),
+    /// The Outputs section as a whole, as while the model's stat columns are still being read.
+    Outputs,
     /// Results, the output folder and the concurrency.
     Execution,
 }
@@ -629,8 +671,71 @@ impl SweepDraft {
             default_reducers: measure.default_reducers,
             reducers: Vec::new(),
             concurrency: Concurrency::Auto,
+            memory_budget: None,
+            gpu_memory_budget: None,
             results_in_folder: false,
             output_dir_text: String::new(),
+            stat_columns: None,
+            columns_pending: false,
+        }
+    }
+
+    /// Gives the draft the stat columns a build of its model samples.
+    ///
+    /// Each output a search reads that names a vector or histogram stat by its label alone, as in `Velocity:max`,
+    /// becomes the output of the column the label stands for, `Velocity.magnitude:max`. A reducer reads a bare label
+    /// the same way.
+    pub fn set_stat_columns(&mut self, columns: &StatColumns) {
+        self.columns_pending = false;
+        if self.stat_columns.as_ref() == Some(columns) {
+            return;
+        }
+        self.stat_columns = Some(columns.clone());
+        let search = &mut self.search;
+        for output in [
+            &mut search.objective_column,
+            &mut search.pattern_space.x_axis.column,
+            &mut search.pattern_space.y_axis.column,
+        ] {
+            let resolved = output.rsplit_once(':').and_then(|(stat_column, kind)| {
+                let name = columns.name(columns.resolve(stat_column)?);
+                (name != stat_column).then(|| format!("{name}:{kind}"))
+            });
+            if let Some(resolved) = resolved {
+                *output = resolved;
+            }
+        }
+    }
+
+    /// Returns the stat columns of [`Self::stat_columns`], or one column per stat of `schema` until they are given.
+    fn stat_layout(&self, schema: &ModelSchema<'_>) -> Cow<'_, StatColumns> {
+        match &self.stat_columns {
+            Some(columns) => Cow::Borrowed(columns),
+            None => Cow::Owned(scalar_columns(schema)),
+        }
+    }
+
+    /// Returns where the tick of `action`, one of the draft's actions, comes from in each run.
+    ///
+    /// A design table sets the tick of each action it has a column for. The action's ticks in the draft then go
+    /// unused.
+    pub fn tick_source(&self, action: &ActionDraft) -> TickSource {
+        if !self.runs_table() {
+            return if action.vary_tick {
+                TickSource::Varied
+            } else {
+                TickSource::Fixed
+            };
+        }
+        let column = format!("{ACTION_COLUMN_PREFIX}{}", action.name);
+        if self
+            .table
+            .as_ref()
+            .is_some_and(|table| table.columns().contains(&column))
+        {
+            TickSource::Table
+        } else {
+            TickSource::Fixed
         }
     }
 
@@ -722,7 +827,7 @@ impl SweepDraft {
             _ if self.draws_ranges() => format!("Enter values, such as {}", whole_range_text(&descriptor.kind)),
             _ => format!("Enter values, such as {}", levels_example(&descriptor.kind)),
         };
-        let levels = row_levels(&self.factors[index].levels_text, missing)?;
+        let levels = row_levels(&self.factors[index].levels_text, self.draws_ranges(), missing)?;
         FactorSpec::param(descriptor.id, levels)
             .resolve(schema.params, actions, &self.factor_design())
             .map_err(|error| (IssueKind::Invalid, factor_message(&error)))
@@ -737,7 +842,9 @@ impl SweepDraft {
         position: usize,
     ) -> Result<Factor, (IssueKind, String)> {
         let action = &self.actions[position];
-        let levels = row_levels(&action.ticks_text, || format!("Enter ticks, such as {TICKS_EXAMPLE}"))?;
+        let levels = row_levels(&action.ticks_text, self.draws_ranges(), || {
+            format!("Enter ticks, such as {TICKS_EXAMPLE}")
+        })?;
         FactorSpec::action(action.name.clone(), levels)
             .resolve(schema.params, actions, &self.factor_design())
             .map_err(|error| (IssueKind::Invalid, factor_message(&error)))
@@ -770,7 +877,7 @@ impl SweepDraft {
     /// Returns every issue the draft's rows show before a plan is made, in the order the Sweep tab draws the rows.
     ///
     /// Each parameter row, action tick, seed and search field is checked, and every issue found is listed. The plan
-    /// finds the rest one at a time.
+    /// finds the rest one at a time. The issue of stat columns still being sampled comes last.
     pub fn issues(&self, schema: &ModelSchema<'_>) -> Vec<DraftIssue> {
         let mut issues = Vec::new();
         let mut row_issues = Vec::new();
@@ -854,6 +961,8 @@ impl SweepDraft {
                 format!("Design seed: {message}"),
             ));
         }
+        issues.extend(self.stop_issue());
+        issues.extend(self.timeout().err());
         if self.stats_every == 0 {
             issues.push(DraftIssue::new(DraftSite::Sampling, "Sample every must be at least 1"));
         } else if !self.series_every.is_multiple_of(self.stats_every) {
@@ -863,18 +972,59 @@ impl SweepDraft {
         if self.results_in_folder && !cfg!(target_arch = "wasm32") && self.output_dir_text.trim().is_empty() {
             issues.push(DraftIssue::missing(DraftSite::Execution, "Select a folder"));
         }
+        if self.columns_pending {
+            issues.push(DraftIssue::missing(DraftSite::Outputs, COLUMNS_PENDING));
+        }
         issues
     }
 
-    /// Returns an issue for each output row whose window ends before it starts.
+    /// Returns the issue of a stop condition whose threshold is not a finite number.
     ///
-    /// The plan takes a window in either order. A spec file refuses one that ends before it starts.
+    /// The plan takes any threshold. A spec file refuses one that is not finite.
+    fn stop_issue(&self) -> Option<DraftIssue> {
+        self.stop
+            .as_ref()
+            .filter(|stop| !stop.threshold.is_finite())
+            .map(|_| DraftIssue::new(DraftSite::Stop, NOT_FINITE_THRESHOLD))
+    }
+
+    /// Returns the time limit of each run, `None` for no limit.
+    ///
+    /// A limit under [`MIN_TIMEOUT_SECONDS`] is taken, 0 included, as `henad-cli` takes it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the issue of a limit that is negative, not a number, or too large for a [`Duration`].
+    fn timeout(&self) -> Result<Option<Duration>, DraftIssue> {
+        let Some(seconds) = self.timeout_s else {
+            return Ok(None);
+        };
+        if let Ok(timeout) = Duration::try_from_secs_f64(seconds) {
+            return Ok(Some(timeout));
+        }
+        let message = if seconds.is_nan() {
+            "Seconds per run must be a number"
+        } else if seconds < 0.0 {
+            "Seconds per run must be at least 0"
+        } else {
+            "Seconds per run is too large"
+        };
+        Err(DraftIssue::new(DraftSite::Timeout, message))
+    }
+
+    /// Returns an issue for each output row whose window ends before it starts, or whose crossing threshold is not a
+    /// finite number.
+    ///
+    /// The plan takes a window in either order and any threshold. A spec file refuses both.
     fn output_issues(&self) -> impl Iterator<Item = DraftIssue> + '_ {
-        self.reducers
-            .iter()
-            .enumerate()
-            .filter(|(_, reducer)| matches!(reducer.kind, ReducerKind::WindowMean { start, end } if start > end))
-            .map(|(position, _)| DraftIssue::new(DraftSite::Output(position), "From tick must be at most To tick"))
+        self.reducers.iter().enumerate().filter_map(|(position, reducer)| {
+            let message = match reducer.kind {
+                ReducerKind::WindowMean { start, end } if start > end => "From tick must be at most To tick",
+                ReducerKind::FirstCrossing(comparison) if !comparison.threshold.is_finite() => NOT_FINITE_THRESHOLD,
+                _ => return None,
+            };
+            Some(DraftIssue::new(DraftSite::Output(position), message))
+        })
     }
 
     /// Returns the issue of a series every [`Self::series_every`] ticks, off the cadence of the samples.
@@ -981,8 +1131,8 @@ impl SweepDraft {
     ///
     /// # Errors
     ///
-    /// Returns every [`DraftIssue`] of text that does not parse, a design table that is missing, or an action the
-    /// model does not declare. Everything else is checked by [`Self::check`].
+    /// Returns every [`DraftIssue`] of text that does not parse, a design table that is missing, an action the model
+    /// does not declare, or a timeout that is not a [`Duration`]. Everything else is checked by [`Self::check`].
     pub fn to_spec(&self, schema: &ModelSchema<'_>, panel_values: &[ParamValue]) -> Result<SweepSpec, Vec<DraftIssue>> {
         let mut issues = Vec::new();
         let mut spec = SweepSpec::new(self.model_id.clone());
@@ -1020,6 +1170,10 @@ impl SweepDraft {
             }
         }
         spec.fixed = self.fixed_values(schema, panel_values);
+        let timeout = self.timeout().unwrap_or_else(|issue| {
+            issues.push(issue);
+            None
+        });
         spec.run = RunSettings {
             steps: self.steps,
             warmup: self.warmup,
@@ -1032,9 +1186,7 @@ impl SweepDraft {
                 },
                 min_tick: stop.min_tick,
             }),
-            timeout: self
-                .timeout_s
-                .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok()),
+            timeout,
         };
         spec.measure = MeasureSettings {
             stats_every: self.stats_every,
@@ -1090,11 +1242,22 @@ impl SweepDraft {
                 Err(error) => return Err(vec![self.search_issue(&error, &spec, schema)]),
             },
         };
+        // The plan checks each column against the stat labels alone. A sweep binds its reducers, its stop condition
+        // and a search's outputs to the columns a build samples, and the check does the same once it has them.
+        if let Some(columns) = &self.stat_columns {
+            let measure = MeasurePlan::new(&spec.run, &spec.measure, columns.clone())
+                .map_err(|error| vec![self.measure_issue(&error)])?;
+            if let Some(search_plan) = &search_plan {
+                search_plan
+                    .watched_reducers(&measure)
+                    .map_err(|error| vec![self.search_issue(&error, &spec, schema)])?;
+            }
+        }
         let run_count = search_plan.as_ref().map_or(plan.run_count(), SearchPlan::run_count);
         if run_count > MAX_DRAFT_RUNS {
             return Err(too_many(run_count));
         }
-        let series_bytes = estimated_series_bytes(&plan, run_count, schema.stats.len());
+        let series_bytes = estimated_series_bytes(&plan, run_count, self.stat_layout(schema).len());
         if self.holds_results_in_memory() && series_bytes > MAX_MEMORY_SERIES_BYTES {
             return Err(vec![DraftIssue::new(
                 DraftSite::Execution,
@@ -1109,63 +1272,67 @@ impl SweepDraft {
         })
     }
 
-    /// Returns the output columns the draft's runs record, as in `Infected:max`: the final, minimum, maximum and mean
-    /// of every stat when the draft records them, then each added output.
+    /// Returns the output columns the draft's runs record, as the reducers of a sweep name them: the final, minimum,
+    /// maximum and mean of every stat column when the draft records them, then each added output.
     ///
-    /// Note that a vector or histogram stat records its defaults under the columns of its parts, such as
-    /// `Velocity.x:max`. Only a build names those.
+    /// A scalar stat is one column, as in `Infected:max`. A vector stat records its parts, as in
+    /// `Velocity.magnitude:max`, and a histogram stat its total. An added output whose column the model does not
+    /// give is left out. Until [`Self::stat_columns`] are given, an added output over a part of a stat, as in
+    /// `Velocity.x:argmax`, keeps the name it is written with.
     pub fn output_names(&self, schema: &ModelSchema<'_>) -> Vec<String> {
-        let mut names: Vec<String> = Vec::new();
-        if self.default_reducers {
-            for stat in schema.stats {
-                names.extend(
-                    ReducerKind::DEFAULTS
-                        .iter()
-                        .map(|kind| format!("{}:{kind}", stat.label)),
-                );
-            }
-        }
-        for reducer in &self.reducers {
-            let name = format!("{}:{}", reducer.column, reducer.kind);
-            if !names.contains(&name) {
-                names.push(name);
+        let columns = self.stat_layout(schema);
+        let bound: Vec<ReducerSpec> = self
+            .reducers
+            .iter()
+            .filter(|reducer| columns.resolve(&reducer.column).is_some())
+            .cloned()
+            .collect();
+        let mut names = ReducerPlan::bind(&columns, &bound, self.default_reducers)
+            .map(|plan| plan.names().to_vec())
+            .unwrap_or_default();
+        if self.stat_columns.is_none() {
+            let parts = self.reducers.iter().filter(|reducer| {
+                columns.resolve(&reducer.column).is_none() && reducer.check_label(schema.stats).is_ok()
+            });
+            for reducer in parts {
+                let name = written_name(reducer, None);
+                if !names.contains(&name) {
+                    names.push(name);
+                }
             }
         }
         names
     }
 
     /// Returns each output column the Objective and axis lists offer that the draft's runs do not record yet, as in
-    /// `Infected:argmax`: the final value, minimum, maximum, mean and ticks of the maximum and minimum of every stat.
+    /// `Infected:argmax`: the final value, minimum, maximum, mean and ticks of the maximum and minimum of every stat
+    /// column but a histogram's buckets.
     pub fn unrecorded_outputs(&self, schema: &ModelSchema<'_>) -> Vec<String> {
         let recorded = self.output_names(schema);
-        schema
-            .stats
-            .iter()
-            .flat_map(|stat| OFFERED_KINDS.iter().map(move |kind| format!("{}:{kind}", stat.label)))
+        let columns = self.stat_layout(schema);
+        (0..columns.len())
+            .filter(|&column| !columns.is_bucket(column))
+            .flat_map(|column| {
+                let name = columns.name(column);
+                OFFERED_KINDS.iter().map(move |kind| format!("{name}:{kind}"))
+            })
             .filter(|column| !recorded.contains(column))
             .collect()
     }
 
-    /// Returns whether the draft's runs record the output column `column`.
+    /// Returns whether the draft's runs record the output column `column`, named as [`Self::output_names`] names it.
     ///
-    /// A column of a stat's part, such as `Velocity.x:max`, counts when the draft records the defaults of every stat
-    /// and the kind is one of them.
+    /// Until [`Self::stat_columns`] are given, a column of a stat's part, as in `Velocity.x:max`, also counts when
+    /// the draft records the defaults of every stat and the kind is one of them.
     pub fn records_output(&self, column: &str, schema: &ModelSchema<'_>) -> bool {
         if self.output_names(schema).iter().any(|name| name == column) {
             return true;
         }
-        let Some((stat_column, kind)) = column.rsplit_once(':') else {
-            return false;
-        };
-        let names_part = schema.stats.iter().any(|stat| {
-            stat_column
-                .strip_prefix(stat.label)
-                .is_some_and(|part| part.starts_with('.'))
-        });
-        let default_kind = kind
-            .parse::<ReducerKind>()
-            .is_ok_and(|kind| ReducerKind::DEFAULTS.contains(&kind));
-        self.default_reducers && names_part && default_kind
+        self.stat_columns.is_none()
+            && self.default_reducers
+            && column.parse::<ReducerSpec>().is_ok_and(|output| {
+                ReducerKind::DEFAULTS.contains(&output.kind) && output.check_label(schema.stats).is_ok()
+            })
     }
 
     /// Adds the output column `column` reads, as in `Infected:max`, as an output row of its own.
@@ -1179,17 +1346,20 @@ impl SweepDraft {
         let Ok(kind) = kind.parse::<ReducerKind>() else {
             return false;
         };
+        let added = ReducerSpec {
+            column: stat.to_owned(),
+            kind,
+        };
+        let columns = self.stat_columns.as_ref();
+        let name = written_name(&added, columns);
         let recorded = self
             .reducers
             .iter()
-            .any(|reducer| reducer.column == stat && reducer.kind == kind);
+            .any(|reducer| written_name(reducer, columns) == name);
         if stat.is_empty() || recorded {
             return false;
         }
-        self.reducers.push(ReducerSpec {
-            column: stat.to_owned(),
-            kind,
-        });
+        self.reducers.push(added);
         true
     }
 
@@ -1225,7 +1395,7 @@ impl SweepDraft {
         if self.mode != DraftMode::Search {
             return None;
         }
-        let column = format!("{}:{}", reducer.column, reducer.kind);
+        let column = written_name(reducer, self.stat_columns.as_ref());
         self.search
             .watched_columns()
             .into_iter()
@@ -1293,17 +1463,33 @@ impl SweepDraft {
         Some(self.output_dir_text.trim()).filter(|folder| !self.holds_results_in_memory() && !folder.is_empty())
     }
 
-    /// Returns the spec file of the draft as TOML, its concurrency included.
+    /// Returns the spec file of the draft as TOML, its concurrency and memory budgets included.
     ///
     /// # Errors
     ///
-    /// Returns the issues of [`Self::to_spec`].
+    /// Returns the issues of [`Self::to_spec`], and the issue of each value a spec file refuses: a window that ends
+    /// before it starts, or a threshold that is not finite. Returns the reason [`Self::from_spec_file`] gives for
+    /// any other file it would refuse to read back.
     pub fn to_toml(&self, schema: &ModelSchema<'_>, panel_values: &[ParamValue]) -> Result<String, Vec<DraftIssue>> {
+        let refused: Vec<DraftIssue> = self.stop_issue().into_iter().chain(self.output_issues()).collect();
+        if !refused.is_empty() {
+            return Err(refused);
+        }
         let spec = self.to_spec(schema, panel_values)?;
         let mut file = SpecFile::from(&spec);
-        file.execution.concurrent = self.concurrency;
-        file.to_toml()
-            .map_err(|error| vec![DraftIssue::new(DraftSite::Sweep, describe_error(&error))])
+        file.execution = ExecutionTable {
+            concurrent: self.concurrency,
+            memory: self.memory_budget,
+            gpu_memory: self.gpu_memory_budget,
+        };
+        let text = file
+            .to_toml()
+            .map_err(|error| vec![DraftIssue::new(DraftSite::Sweep, describe_error(&error))])?;
+        SpecFile::parse(&text)
+            .map_err(|error| describe_error(&error))
+            .and_then(|file| Self::from_spec_file(file, schema))
+            .map_err(|message| vec![DraftIssue::new(DraftSite::Sweep, message)])?;
+        Ok(text)
     }
 
     /// Reads a draft from `file` over `schema`'s model, with the Parameters tab values the file sets.
@@ -1312,9 +1498,12 @@ impl SweepDraft {
     ///
     /// Returns the reason for a file that does not read as a spec, or a spec [`Self::from_spec`] refuses.
     pub fn from_spec_file(file: SpecFile, schema: &ModelSchema<'_>) -> Result<(Self, Vec<Option<ParamValue>>), String> {
-        let concurrency = file.execution.concurrent;
+        let execution = file.execution;
         let spec = file.into_spec().map_err(|error| describe_error(&error))?;
-        Self::from_spec(&spec, concurrency, schema)
+        let (mut draft, panel_values) = Self::from_spec(&spec, execution.concurrent, schema)?;
+        draft.memory_budget = execution.memory;
+        draft.gpu_memory_budget = execution.gpu_memory;
+        Ok((draft, panel_values))
     }
 
     /// Reads a draft from `spec` over `schema`'s model.
@@ -1456,9 +1645,10 @@ impl SweepDraft {
         issues: &mut Vec<DraftIssue>,
     ) -> (Vec<(usize, FactorSpec)>, Vec<FactorSpec>) {
         let mut params = Vec::new();
+        let draws_ranges = self.draws_ranges();
         for (index, (factor, descriptor)) in self.factors.iter().zip(schema.params).enumerate() {
             if factor.vary {
-                match row_levels(&factor.levels_text, || "Enter values".to_owned()) {
+                match row_levels(&factor.levels_text, draws_ranges, || "Enter values".to_owned()) {
                     Ok(levels) => params.push((index, FactorSpec::param(descriptor.id, levels))),
                     Err((kind, message)) => issues.push(DraftIssue {
                         site: DraftSite::Factor(index),
@@ -1471,7 +1661,7 @@ impl SweepDraft {
         let mut actions = Vec::new();
         for (position, action) in self.actions.iter().enumerate() {
             if action.vary_tick {
-                match row_levels(&action.ticks_text, || "Enter ticks".to_owned()) {
+                match row_levels(&action.ticks_text, draws_ranges, || "Enter ticks".to_owned()) {
                     Ok(levels) => actions.push(FactorSpec::action(action.name.clone(), levels)),
                     Err((kind, message)) => issues.push(DraftIssue {
                         site: DraftSite::Action(position),
@@ -1696,6 +1886,15 @@ impl SweepDraft {
                 DraftIssue::new(site, "No values")
             }
             SearchPlanError::Space(SearchSpaceError::Factor(source)) => self.factor_issue(source, schema),
+            SearchPlanError::UnknownColumn { column, .. } => {
+                let site = self
+                    .search
+                    .watched_columns()
+                    .into_iter()
+                    .find(|(_, watched)| watched == column)
+                    .map_or(DraftSite::Search, |(site, _)| site);
+                DraftIssue::new(site, format!("{} is missing from Outputs", output_label(column)))
+            }
             _ => DraftIssue::new(DraftSite::Search, describe_error(error)),
         }
     }
@@ -1827,8 +2026,11 @@ pub fn levels_example(kind: &ParamKind) -> String {
         ParamKind::U32 { min, max, .. } => (f64::from(min), f64::from(max)),
         ParamKind::Bool { .. } | ParamKind::Choice { .. } => return "all".to_owned(),
     };
-    let step = round_step((max - min) / 4.0);
-    if step.is_finite() && step > 0.0 {
+    let step = match kind {
+        ParamKind::U32 { .. } => round_step((max - min) / 4.0).round().max(1.0),
+        _ => round_step((max - min) / 4.0),
+    };
+    if step.is_finite() && step > 0.0 && max > min {
         format!(
             "{}:{}:{}",
             number_text(kind, min),
@@ -1836,7 +2038,7 @@ pub fn levels_example(kind: &ParamKind) -> String {
             number_text(kind, step)
         )
     } else {
-        format!("{}, {}", number_text(kind, min), number_text(kind, max))
+        format!("{},{}", number_text(kind, min), number_text(kind, max))
     }
 }
 
@@ -1871,11 +2073,30 @@ pub fn whole_range_text(kind: &ParamKind) -> String {
 
 /// Reads the levels of a row's `text`, or returns the kind and message of its issue. An empty row is missing input,
 /// described by `missing`.
-fn row_levels(text: &str, missing: impl FnOnce() -> String) -> Result<LevelSpec, (IssueKind, String)> {
+///
+/// A range of more than [`MAX_DRAFT_LEVELS`] values is refused, unless it has no step and `draws_ranges` is set. A
+/// sampled design or a search draws its values from such a range and lists none of them.
+fn row_levels(
+    text: &str,
+    draws_ranges: bool,
+    missing: impl FnOnce() -> String,
+) -> Result<LevelSpec, (IssueKind, String)> {
     if text.trim().is_empty() {
         return Err((IssueKind::Missing, missing()));
     }
-    parse_levels(text).map_err(|message| (IssueKind::Invalid, message))
+    let levels = parse_levels(text).map_err(|message| (IssueKind::Invalid, message))?;
+    let enumerated = match levels {
+        LevelSpec::Range { step: None, .. } => !draws_ranges,
+        LevelSpec::Range { step: Some(_), .. } => true,
+        LevelSpec::Values(_) | LevelSpec::All => false,
+    };
+    match level_estimate(&levels) {
+        count if enumerated && count > MAX_DRAFT_LEVELS => Err((
+            IssueKind::Invalid,
+            format!("Range gives {count} values, over the limit of {MAX_DRAFT_LEVELS}"),
+        )),
+        _ => Ok(levels),
+    }
 }
 
 /// Returns the preview of parameter `descriptor`'s resolved `factor`, each value as the Parameters tab shows it.
@@ -2005,10 +2226,12 @@ fn every_refusal<S>(
 
 /// Reads levels as `--vary` takes them, with spaces around each listed value ignored.
 ///
+/// Note that a range of any length reads. The check refuses one of more than [`MAX_DRAFT_LEVELS`] values where the
+/// draft lists them.
+///
 /// # Errors
 ///
-/// Returns a message for text with no values, a range that does not read, or a range of more than
-/// [`MAX_DRAFT_LEVELS`] values.
+/// Returns a message for text with no values, or a range that does not read.
 pub fn parse_levels(text: &str) -> Result<LevelSpec, String> {
     let text = text.trim();
     if text.is_empty() {
@@ -2027,12 +2250,7 @@ pub fn parse_levels(text: &str) -> Result<LevelSpec, String> {
             }
             Ok(LevelSpec::Values(values))
         }
-        levels => match level_estimate(&levels) {
-            count if count > MAX_DRAFT_LEVELS => Err(format!(
-                "Range gives {count} values, over the limit of {MAX_DRAFT_LEVELS}"
-            )),
-            _ => Ok(levels),
-        },
+        levels => Ok(levels),
     }
 }
 
@@ -2118,7 +2336,7 @@ fn value_message(error: &ValueError) -> String {
 /// Returns `levels` in the text [`parse_levels`] reads.
 pub fn levels_text(levels: &LevelSpec) -> String {
     match levels {
-        LevelSpec::Values(values) => values.join(", "),
+        LevelSpec::Values(values) => values.join(","),
         LevelSpec::Range {
             min,
             max,
@@ -2158,23 +2376,31 @@ fn estimated_configs(spec: &SweepSpec) -> u64 {
                 DesignKind::Factorial => counts.fold(1, u64::saturating_mul),
                 DesignKind::Zip => counts.max().unwrap_or(1),
                 DesignKind::Random { samples } | DesignKind::LatinHypercube { samples } => *samples as u64,
-                DesignKind::Table { text } => text.lines().count() as u64,
+                DesignKind::Table { text } => table_row_count(text) as u64,
             }
         })
         .fold(0, u64::saturating_add)
 }
 
+/// Returns the rows of the design table `text` after its header, blank lines left out.
+fn table_row_count(text: &str) -> usize {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+        .saturating_sub(1)
+}
+
 /// Returns about the bytes of `series.csv` that `run_count` runs with the settings of `plan` write, for a model of
-/// `stat_count` stats.
+/// `column_count` stat columns.
 ///
 /// Every run counts as running to its last step.
-fn estimated_series_bytes(plan: &Plan, run_count: u64, stat_count: usize) -> u64 {
+fn estimated_series_bytes(plan: &Plan, run_count: u64, column_count: usize) -> u64 {
     let series_every = plan.measure_settings().series_every;
     if series_every == 0 {
         return 0;
     }
-    let rows = plan.run_settings().steps / series_every + 1;
-    let row_bytes = (stat_count as u64 + 2) * SERIES_VALUE_BYTES;
+    let rows = (plan.run_settings().steps / series_every).saturating_add(1);
+    let row_bytes = (column_count as u64 + 2) * SERIES_VALUE_BYTES;
     run_count.saturating_mul(rows).saturating_mul(row_bytes)
 }
 
@@ -2192,6 +2418,31 @@ fn memory_refusal(bytes: u64) -> String {
              increase Series every."
         )
     }
+}
+
+/// Returns the output column `reducer` writes among the stat columns `columns`, as in `Velocity.magnitude:max` for a
+/// reducer over the bare label `Velocity`.
+///
+/// A column that `columns` lacks, or any column while `columns` is `None`, is written as the reducer names it.
+pub fn written_name(reducer: &ReducerSpec, columns: Option<&StatColumns>) -> String {
+    let column = columns
+        .and_then(|columns| Some(columns.name(columns.resolve(&reducer.column)?)))
+        .unwrap_or(&reducer.column);
+    format!("{column}:{}", reducer.kind)
+}
+
+/// Returns the stat columns of `schema`'s stats, each one column as a scalar stat is.
+fn scalar_columns(schema: &ModelSchema<'_>) -> StatColumns {
+    let stats: Vec<StatEntry> = schema
+        .stats
+        .iter()
+        .map(|stat| StatEntry {
+            label: stat.label,
+            value: StatValue::Scalar(0.0),
+            color: stat.color,
+        })
+        .collect();
+    StatColumns::plan(&stats)
 }
 
 /// Reads a seed typed as a whole number from 0 to `u64::MAX`.
@@ -2250,25 +2501,33 @@ pub fn capitalize(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
+    use std::time::Duration;
 
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
+    use henad_core::explore::measure::MeasurePlan;
+    use henad_core::explore::plan::ModelSchema;
     use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
     use henad_core::explore::search::genetic::GeneticSettings;
     use henad_core::explore::search::pse::PatternAxis;
     use henad_core::explore::search::{Aggregate, Goal};
+    use henad_core::explore::spec::{BlockSpec, SweepSpec};
     use henad_core::explore::stop::{Comparator, Comparison};
+    use henad_core::export::StatColumns;
     use henad_core::params::ParamValue;
     use henad_explore::exec::Concurrency;
+    use henad_explore::probe::ProbeReport;
     use henad_explore::schema::model_schema;
     use henad_explore::spec_file::SpecFile;
     use henad_models::registry::{ModelEntry, model_registry};
 
     use super::{
-        DesignTableDraft, DraftAlgorithm, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis, INITIAL_SAMPLES_KEY,
-        IssueKind, LevelCount, LevelPreview, MAX_DRAFT_LEVELS, SPEC_TABLE_NAME, StopDraft, SweepDraft, batch_estimate,
-        comparator_words, generation_estimate, parse_levels,
+        COLUMNS_PENDING, DesignTableDraft, DraftAlgorithm, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis,
+        INITIAL_SAMPLES_KEY, IssueKind, LevelCount, LevelPreview, MAX_DRAFT_LEVELS, NOT_FINITE_THRESHOLD,
+        SPEC_TABLE_NAME, StopDraft, SweepDraft, TickSource, batch_estimate, comparator_words, estimated_configs,
+        generation_estimate, parse_levels, written_name,
     };
+    use crate::ui::sweep::parameters::{EditorSegment, segment_text};
 
     // Indices of SIR's parameters.
     const INFECTION_RATE: usize = 2;
@@ -2279,6 +2538,28 @@ mod tests {
             .into_iter()
             .find(|entry| entry.id == "sir")
             .expect("SIR is registered")
+    }
+
+    fn boids() -> ModelEntry {
+        model_registry(None)
+            .into_iter()
+            .find(|entry| entry.id == "boids")
+            .expect("boids is registered")
+    }
+
+    fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
+        entry
+            .param_descriptors
+            .iter()
+            .map(|descriptor| descriptor.kind.default_value())
+            .collect()
+    }
+
+    /// Returns the stat columns of a build of `entry` at its default values, as a sweep's probe samples them.
+    fn sampled_columns(entry: &ModelEntry) -> StatColumns {
+        ProbeReport::build(entry, None, &default_values(entry), None)
+            .unwrap_or_else(|error| panic!("{} does not build: {error}", entry.id))
+            .columns
     }
 
     /// Returns SIR's defaults on a 32 by 32 grid, with an infection rate of 0.3 and a recovery rate of 0.05.
@@ -2301,13 +2582,13 @@ mod tests {
         let schema = model_schema(entry);
         let mut draft = SweepDraft::new(&schema);
         draft.factors[INFECTION_RATE].vary = true;
-        draft.factors[INFECTION_RATE].levels_text = "0.1, 0.2, 0.4".to_owned();
+        draft.factors[INFECTION_RATE].levels_text = "0.1,0.2,0.4".to_owned();
         draft.factors[RECOVERY_RATE].vary = true;
         draft.factors[RECOVERY_RATE].levels_text = "0.02:0.06:0.02".to_owned();
         draft.design = design;
         draft.add_action(&schema, 0, 50);
         draft.actions[0].vary_tick = true;
-        draft.actions[0].ticks_text = "20, 40, 60".to_owned();
+        draft.actions[0].ticks_text = "20,40,60".to_owned();
         draft.replicates = 3;
         draft.root_seed_text = "42".to_owned();
         draft.common_random_numbers = false;
@@ -2577,9 +2858,12 @@ mod tests {
         );
         assert_eq!(
             parse_levels("0:1:0.0000001"),
-            Err(format!(
-                "Range gives 10000001 values, over the limit of {MAX_DRAFT_LEVELS}"
-            ))
+            Ok(LevelSpec::Range {
+                min: 0.0,
+                max: 1.0,
+                step: Some(0.0000001)
+            }),
+            "a range of any length reads, and the check caps what it lists"
         );
     }
 
@@ -2961,7 +3245,7 @@ mod tests {
         draft.factors[INFECTION_RATE].vary = true;
         draft.factors[INFECTION_RATE].levels_text = "0.05:0.9".to_owned();
         draft.factors[RECOVERY_RATE].vary = true;
-        draft.factors[RECOVERY_RATE].levels_text = "0.02, 0.05, 0.1".to_owned();
+        draft.factors[RECOVERY_RATE].levels_text = "0.02,0.05,0.1".to_owned();
         draft.add_action(&schema, 0, 50);
         draft.actions[0].vary_tick = true;
         draft.actions[0].ticks_text = "0:400".to_owned();
@@ -3264,5 +3548,446 @@ mod tests {
             words,
             ["below", "at most", "equal to", "not equal to", "at least", "above"]
         );
+    }
+
+    #[test]
+    fn a_boids_pattern_space_search_watches_only_columns_a_reducer_writes() {
+        let entry = boids();
+        let schema = model_schema(&entry);
+        let values = default_values(&entry);
+        let columns = sampled_columns(&entry);
+        let mut draft = SweepDraft::new(&schema);
+        draft.set_stat_columns(&columns);
+        draft.mode = DraftMode::Search;
+        draft.search.algorithm = DraftAlgorithm::PatternSpace;
+        let separation = schema
+            .params
+            .iter()
+            .position(|descriptor| descriptor.id == "separation")
+            .expect("boids has a separation weight");
+        draft.factors[separation].vary = true;
+        draft.factors[separation].levels_text = "0:2".to_owned();
+        assert_eq!(
+            draft.search.pattern_space.y_axis.column, "Average Velocity.magnitude:max",
+            "a vector's bare label stands for its magnitude"
+        );
+
+        let planned = draft
+            .check(&schema, &values)
+            .unwrap_or_else(|issues| panic!("the default search does not plan: {issues:?}"));
+        let search_plan = planned.search_plan.as_ref().expect("a search plans its search");
+        let measure = MeasurePlan::new(&planned.spec.run, &planned.spec.measure, columns.clone())
+            .expect("the outputs bind to the sampled columns");
+        assert!(
+            search_plan.watched_reducers(&measure).is_ok(),
+            "a reducer writes every column the search watches"
+        );
+        let written = measure.reducers().names();
+        assert_eq!(
+            draft.output_names(&schema),
+            written,
+            "the outputs are the ones the reducers write"
+        );
+        assert_eq!(
+            written.len(),
+            4 * 4,
+            "the defaults of one scalar and of a vector's three parts"
+        );
+        let offered = draft.unrecorded_outputs(&schema);
+        assert!(
+            offered.contains(&"Average Velocity.x:argmax".to_owned()),
+            "a vector's parts are offered: {offered:?}"
+        );
+        assert!(
+            written
+                .iter()
+                .chain(&offered)
+                .all(|name| !name.starts_with("Average Velocity:")),
+            "no bare label of a vector is offered"
+        );
+
+        draft.search.pattern_space.y_axis.column = "Average Velocity:max".to_owned();
+        let issues = draft
+            .check(&schema, &values)
+            .expect_err("no reducer writes a bare vector label");
+        assert_eq!(
+            issues,
+            [DraftIssue::new(
+                DraftSite::Axis(GridAxis::Y),
+                "Average Velocity, maximum is missing from Outputs"
+            )]
+        );
+
+        draft.search.pattern_space.y_axis.column = "Average Velocity.x:argmax".to_owned();
+        assert!(draft.add_watched_output("Average Velocity.x:argmax"));
+        assert!(
+            draft.check(&schema, &values).is_ok(),
+            "a part picked from the list is recorded as an output row"
+        );
+    }
+
+    /// Returns a draft of a Pattern Space Exploration of boids over its separation weight.
+    fn boids_pattern_space(schema: &ModelSchema<'_>) -> SweepDraft {
+        let mut draft = SweepDraft::new(schema);
+        draft.mode = DraftMode::Search;
+        draft.search.algorithm = DraftAlgorithm::PatternSpace;
+        let separation = schema
+            .params
+            .iter()
+            .position(|descriptor| descriptor.id == "separation")
+            .expect("boids has a separation weight");
+        draft.factors[separation].vary = true;
+        draft.factors[separation].levels_text = "0:2".to_owned();
+        draft
+    }
+
+    #[test]
+    fn a_draft_cannot_start_until_its_columns_are_sampled() {
+        let entry = boids();
+        let schema = model_schema(&entry);
+        let values = default_values(&entry);
+        let mut draft = SweepDraft::new(&schema);
+        draft.columns_pending = true;
+        assert_eq!(
+            draft
+                .check(&schema, &values)
+                .expect_err("a sweep waits for the columns"),
+            [DraftIssue::missing(DraftSite::Outputs, COLUMNS_PENDING)]
+        );
+
+        let mut search = boids_pattern_space(&schema);
+        search.columns_pending = true;
+        search.search.pattern_space.y_axis.column.clear();
+        assert_eq!(
+            search
+                .check(&schema, &values)
+                .expect_err("a search waits for the columns"),
+            [
+                DraftIssue::missing(DraftSite::Axis(GridAxis::Y), "Select output"),
+                DraftIssue::missing(DraftSite::Outputs, COLUMNS_PENDING),
+            ],
+            "every other issue comes first"
+        );
+
+        draft.set_stat_columns(&sampled_columns(&entry));
+        assert!(!draft.columns_pending);
+        assert!(
+            draft.check(&schema, &values).is_ok(),
+            "the issue clears once the build reports"
+        );
+    }
+
+    #[test]
+    fn a_draft_without_columns_accepts_a_part_of_a_stat() {
+        let entry = boids();
+        let schema = model_schema(&entry);
+        let values = default_values(&entry);
+        let mut draft = boids_pattern_space(&schema);
+        assert_eq!(draft.stat_columns, None);
+        for column in ["Average Velocity:max", "Average Velocity.x:max"] {
+            draft.search.pattern_space.y_axis.column = column.to_owned();
+            assert!(draft.records_output(column, &schema), "{column}");
+            assert!(
+                draft.check(&schema, &values).is_ok(),
+                "{column}: the sweep's probe checks the columns a build gives"
+            );
+        }
+
+        let part = "Average Velocity.y:argmax";
+        draft.search.pattern_space.y_axis.column = part.to_owned();
+        assert!(
+            !draft.records_output(part, &schema),
+            "no default is a tick of a maximum"
+        );
+        assert!(draft.add_watched_output(part));
+        assert!(draft.output_names(&schema).iter().any(|name| name == part));
+        assert!(draft.check(&schema, &values).is_ok(), "an output row records the part");
+
+        assert!(
+            !draft.records_output("Average Heading.x:max", &schema),
+            "the model has no such stat"
+        );
+        draft.default_reducers = false;
+        assert!(
+            !draft.records_output("Average Velocity.x:max", &schema),
+            "no row records it without the defaults"
+        );
+    }
+
+    #[test]
+    fn an_output_row_over_a_bare_vector_label_writes_its_magnitude() {
+        let entry = boids();
+        let schema = model_schema(&entry);
+        let columns = sampled_columns(&entry);
+        let mut draft = SweepDraft::new(&schema);
+        let row = ReducerSpec {
+            column: "Average Velocity".to_owned(),
+            kind: ReducerKind::ArgMax,
+        };
+        assert_eq!(
+            written_name(&row, None),
+            "Average Velocity:argmax",
+            "no columns sampled yet"
+        );
+        assert_eq!(written_name(&row, Some(&columns)), "Average Velocity.magnitude:argmax");
+
+        draft.set_stat_columns(&columns);
+        draft.mode = DraftMode::Search;
+        draft.search.objective_column = "Average Velocity.magnitude:argmax".to_owned();
+        draft.reducers.push(row);
+        assert_eq!(
+            draft.output_reader(0),
+            Some(DraftSite::Objective),
+            "the row writes the column the objective reads"
+        );
+        assert!(
+            !draft.add_watched_output("Average Velocity.magnitude:argmax"),
+            "a row records it already"
+        );
+
+        draft.mode = DraftMode::Sweep;
+        draft.reducers[0].column = "Average Velocity.z".to_owned();
+        let issues = draft
+            .check(&schema, &default_values(&entry))
+            .expect_err("the model gives no such column");
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].site, DraftSite::Output(0));
+    }
+
+    #[test]
+    fn save_spec_refuses_what_the_loader_refuses() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let panel_values = panel_values(&entry);
+        let refusal = |draft: &SweepDraft| -> Vec<(DraftSite, String)> {
+            draft
+                .to_toml(&schema, &panel_values)
+                .expect_err("the spec does not load back")
+                .into_iter()
+                .map(|issue| (issue.site, issue.message))
+                .collect()
+        };
+
+        let mut draft = varied_draft(&entry, DraftDesign::EveryCombination);
+        draft.reducers[0].kind = ReducerKind::WindowMean { start: 1000, end: 100 };
+        assert_eq!(
+            refusal(&draft),
+            [(DraftSite::Output(0), "From tick must be at most To tick".to_owned())]
+        );
+
+        let mut draft = varied_draft(&entry, DraftDesign::EveryCombination);
+        draft.stop.as_mut().expect("the draft stops early").threshold = f64::INFINITY;
+        draft.reducers[1].kind = ReducerKind::FirstCrossing(Comparison {
+            comparator: Comparator::GreaterOrEqual,
+            threshold: f64::NAN,
+        });
+        let expected = [
+            (DraftSite::Stop, NOT_FINITE_THRESHOLD.to_owned()),
+            (DraftSite::Output(1), NOT_FINITE_THRESHOLD.to_owned()),
+        ];
+        assert_eq!(refusal(&draft), expected);
+        let sites: Vec<DraftSite> = draft
+            .check(&schema, &panel_values)
+            .expect_err("the check refuses a threshold that is not finite")
+            .iter()
+            .map(|issue| issue.site)
+            .collect();
+        assert_eq!(sites, [DraftSite::Stop, DraftSite::Output(1)]);
+
+        let mut outside = panel_values.clone();
+        outside[0] = ParamValue::U32(0);
+        let issues = varied_draft(&entry, DraftDesign::EveryCombination)
+            .to_toml(&schema, &outside)
+            .expect_err("a grid width of 0 does not load back");
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].site, DraftSite::Sweep);
+    }
+
+    #[test]
+    fn a_timeout_that_is_not_a_duration_is_an_issue_of_its_row() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let panel_values = panel_values(&entry);
+        let mut draft = SweepDraft::new(&schema);
+        for (seconds, message) in [
+            (f64::NAN, "Seconds per run must be a number"),
+            (-1.0, "Seconds per run must be at least 0"),
+            (f64::INFINITY, "Seconds per run is too large"),
+            (2.0_f64.powi(64), "Seconds per run is too large"),
+        ] {
+            draft.timeout_s = Some(seconds);
+            let expected = [DraftIssue::new(DraftSite::Timeout, message)];
+            assert_eq!(draft.issues(&schema), expected, "{seconds} s");
+            let written = draft
+                .to_spec(&schema, &panel_values)
+                .expect_err("the spec takes no such timeout");
+            assert_eq!(written, expected, "{seconds} s");
+            let saved = draft
+                .to_toml(&schema, &panel_values)
+                .expect_err("the spec file takes no such timeout");
+            assert_eq!(saved, expected, "{seconds} s");
+        }
+        for seconds in [0.0, 0.5, 600.0] {
+            draft.timeout_s = Some(seconds);
+            let spec = draft
+                .to_spec(&schema, &panel_values)
+                .unwrap_or_else(|issues| panic!("{seconds} s is refused: {issues:?}"));
+            assert_eq!(
+                spec.run.timeout,
+                Some(Duration::from_secs_f64(seconds)),
+                "a timeout under the field's minimum is kept, as henad-cli keeps it"
+            );
+            assert!(draft.check(&schema, &panel_values).is_ok(), "{seconds} s");
+        }
+    }
+
+    #[test]
+    fn a_loaded_memory_budget_is_saved_again() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let text = varied_draft(&entry, DraftDesign::EveryCombination)
+            .to_toml(&schema, &panel_values(&entry))
+            .unwrap_or_else(|issues| panic!("the draft writes no spec: {issues:?}"));
+        let mut file = SpecFile::parse(&text).unwrap_or_else(|error| panic!("{error}"));
+        file.execution.memory = Some(1_000_000);
+        file.execution.gpu_memory = Some(2_000_000);
+        let (loaded, _) = SweepDraft::from_spec_file(file, &schema).unwrap_or_else(|message| panic!("{message}"));
+        assert_eq!(loaded.memory_budget, Some(1_000_000));
+        assert_eq!(loaded.gpu_memory_budget, Some(2_000_000));
+
+        let saved = loaded
+            .to_toml(&schema, &panel_values(&entry))
+            .unwrap_or_else(|issues| panic!("the loaded draft writes no spec: {issues:?}"));
+        let execution = SpecFile::parse(&saved)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .execution;
+        assert_eq!(execution.memory, Some(1_000_000), "{saved}");
+        assert_eq!(execution.gpu_memory, Some(2_000_000), "{saved}");
+        assert_eq!(execution.concurrent, loaded.concurrency);
+    }
+
+    #[test]
+    fn a_range_drawn_from_is_not_capped_at_the_listed_values() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let panel_values = panel_values(&entry);
+        let mut draft = SweepDraft::new(&schema);
+        draft.add_action(&schema, 0, 50);
+        draft.actions[0].vary_tick = true;
+        draft.actions[0].ticks_text = "0:2000000".to_owned();
+        let over_limit = format!("Range gives 2000001 values, over the limit of {MAX_DRAFT_LEVELS}");
+
+        let issues = draft.check(&schema, &panel_values).expect_err("every tick is listed");
+        assert_eq!(issues, [DraftIssue::new(DraftSite::Action(0), over_limit.clone())]);
+        assert_eq!(
+            parse_levels("0:2000000"),
+            Ok(LevelSpec::Range {
+                min: 0.0,
+                max: 2_000_000.0,
+                step: None
+            }),
+            "the editor and the Plan read the range as typed"
+        );
+        assert_eq!(EditorSegment::of("1:5000000", true), EditorSegment::Drawn);
+        let width = &schema.params[0].kind;
+        assert_eq!(
+            segment_text(EditorSegment::Drawn, "100:3000000", width),
+            "100:3000000",
+            "the editor keeps a typed range"
+        );
+        draft.design = DraftDesign::LatinHypercube;
+        assert!(
+            draft.check(&schema, &panel_values).is_ok(),
+            "a sampled design draws its samples from the range"
+        );
+        draft.actions[0].ticks_text = "0:2000000:1".to_owned();
+        let issues = draft
+            .check(&schema, &panel_values)
+            .expect_err("a step lists every tick");
+        assert_eq!(issues, [DraftIssue::new(DraftSite::Action(0), over_limit)]);
+
+        draft.design = DraftDesign::EveryCombination;
+        draft.mode = DraftMode::Search;
+        draft.actions[0].ticks_text = "0:2000000".to_owned();
+        assert!(
+            draft.check(&schema, &panel_values).is_ok(),
+            "a search draws from the range"
+        );
+    }
+
+    #[test]
+    fn a_table_counts_its_rows_and_not_its_header() {
+        let mut spec = SweepSpec::new("sir".to_owned());
+        spec.blocks.push(BlockSpec {
+            design: DesignKind::Table {
+                text: "infection_rate\n0.1\n\n0.2\n0.3\n\n".to_owned(),
+            },
+            factors: Vec::new(),
+            design_seed: None,
+        });
+        assert_eq!(estimated_configs(&spec), 3);
+    }
+
+    #[test]
+    fn a_run_of_every_tick_does_not_overflow_the_series_estimate() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let mut draft = SweepDraft::new(&schema);
+        draft.steps = u64::MAX;
+        draft.warmup = 0;
+        draft.stats_every = 1;
+        draft.series_every = 1;
+        let issues = draft
+            .check(&schema, &panel_values(&entry))
+            .expect_err("the series pass the memory limit");
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].site, DraftSite::Execution);
+    }
+
+    #[test]
+    fn a_design_table_sets_the_ticks_it_names() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let mut draft = varied_draft(&entry, DraftDesign::EveryCombination);
+        assert_eq!(draft.tick_source(&draft.actions[0]), TickSource::Varied);
+        draft.design = DraftDesign::Table;
+        assert_eq!(
+            draft.tick_source(&draft.actions[0]),
+            TickSource::Fixed,
+            "no table yet, so the action keeps its own tick"
+        );
+        draft.table = Some(DesignTableDraft {
+            file_name: "design.csv".to_owned(),
+            text: "infection_rate,action.seed_outbreak\n0.1,20\n".to_owned(),
+        });
+        assert_eq!(draft.tick_source(&draft.actions[0]), TickSource::Table);
+        draft.actions[0].vary_tick = false;
+        assert_eq!(
+            draft.tick_source(&draft.actions[0]),
+            TickSource::Table,
+            "the table sets it either way"
+        );
+        draft.add_action(&schema, 0, 70);
+        assert_eq!(
+            draft.tick_source(&draft.actions[1]),
+            TickSource::Fixed,
+            "a column the table lacks"
+        );
+    }
+
+    #[test]
+    fn an_integer_levels_example_resolves_as_vary_text() {
+        for (min, max) in [(1, 2), (0, 1), (5, 5), (0, 100), (1, 7)] {
+            let descriptor = henad_core::helpers::u32_param("count", "Count", min, min, max);
+            let example = super::levels_example(&descriptor.kind);
+            let factor = FactorSpec {
+                target: henad_core::explore::factor::FactorTarget::Param("count".to_owned()),
+                levels: LevelSpec::parse(&example).expect("the example parses"),
+            };
+            assert!(
+                factor.resolve(&[descriptor], &[], &DesignKind::Factorial).is_ok(),
+                "{min}..={max} gave {example}"
+            );
+        }
     }
 }

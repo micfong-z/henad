@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use web_time::Instant;
+
 use henad_compute::fault::{Fault, STEPPING, catching};
 use henad_compute::gpu::{Demand, GpuContext};
 #[cfg(not(target_arch = "wasm32"))]
@@ -10,6 +12,8 @@ use henad_core::explore::plan::Plan;
 use henad_core::export::StatColumns;
 use henad_core::params::ParamValue;
 use henad_models::registry::{ModelEntry, ModelState};
+
+use crate::output::manifest::now_unix_ms;
 
 /// Most refused configs a [`CapacityError`] lists.
 pub const MAX_LISTED_CONFIGS: usize = 5;
@@ -80,18 +84,12 @@ impl ProbeReport {
     /// Returns [`ProbeError::NoDevice`] for a GPU model with no device in `gpu`, and
     /// [`ProbeError::EveryConfigFaulted`] when every config tried faults.
     pub fn for_plan(entry: &ModelEntry, gpu: Option<&GpuContext>, plan: &Plan) -> Result<Self, ProbeError> {
-        let mut faults = Vec::new();
-        for (config_id, config) in (0_u64..).zip(plan.configs()).take(MAX_PROBED_CONFIGS) {
-            let run = plan
-                .run(config_id * plan.replicates())
-                .expect("every config has a first run");
-            match Self::build(entry, gpu, &config.params, Some(run.seed)) {
-                Ok(report) => return Ok(report),
-                Err(ProbeError::Fault(fault)) => faults.push(ConfigFault { config_id, fault }),
-                Err(error) => return Err(error),
+        let mut probe = PlanProbe::new();
+        loop {
+            if let Some(timed) = probe.step(entry, gpu, plan)? {
+                return Ok(timed.report);
             }
         }
-        Err(ProbeError::EveryConfigFaulted(faults))
     }
 
     /// Builds the last config of `plan` with the seed of its first run.
@@ -126,6 +124,84 @@ impl ProbeReport {
             .build()
             .map_err(ProbeError::Pool)?;
         crate::exec::run_in_pool(&pool, || Self::build(entry, None, &self.params, self.seed))
+    }
+}
+
+/// Probe of a plan's configs in progress, one build per call to [`PlanProbe::step`].
+///
+/// The configs are tried as [`ProbeReport::for_plan`] tries them.
+#[derive(Debug)]
+pub(crate) struct PlanProbe {
+    /// Config the next step builds.
+    next_config: u64,
+    /// Faults of the configs tried so far.
+    faults: Vec<ConfigFault>,
+    /// Clock reading when the probe was created.
+    started: Instant,
+    /// Wall clock time when the probe was created, in milliseconds since the Unix epoch.
+    started_unix_ms: u64,
+}
+
+/// Report of the first config of a plan that builds, with the clock readings taken when its probe was created.
+#[derive(Debug)]
+pub(crate) struct TimedProbe {
+    pub(crate) report: ProbeReport,
+    pub(crate) started: Instant,
+    pub(crate) started_unix_ms: u64,
+}
+
+impl PlanProbe {
+    /// Returns a probe that has tried no config yet, timed from now.
+    pub(crate) fn new() -> Self {
+        Self {
+            next_config: 0,
+            faults: Vec::new(),
+            started: Instant::now(),
+            started_unix_ms: now_unix_ms(),
+        }
+    }
+
+    /// Builds the next config of `plan` with the seed of its first run, and returns its report with the probe's clock
+    /// readings when it builds without a fault.
+    ///
+    /// Returns `Ok(None)` for a config that faults while configs are left to try. The fault is left for the config's
+    /// runs to record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProbeError::NoDevice`] for a GPU model with no device in `gpu`, and
+    /// [`ProbeError::EveryConfigFaulted`] once every config tried faults.
+    pub(crate) fn step(
+        &mut self,
+        entry: &ModelEntry,
+        gpu: Option<&GpuContext>,
+        plan: &Plan,
+    ) -> Result<Option<TimedProbe>, ProbeError> {
+        let config_limit = plan.configs().len().min(MAX_PROBED_CONFIGS) as u64;
+        let config_id = self.next_config;
+        let Some(config) = plan.config(config_id).filter(|_| config_id < config_limit) else {
+            return Err(ProbeError::EveryConfigFaulted(std::mem::take(&mut self.faults)));
+        };
+        self.next_config += 1;
+        let run = plan
+            .run(config_id * plan.replicates())
+            .expect("every config has a first run");
+        match ProbeReport::build(entry, gpu, &config.params, Some(run.seed)) {
+            Ok(report) => Ok(Some(TimedProbe {
+                report,
+                started: self.started,
+                started_unix_ms: self.started_unix_ms,
+            })),
+            Err(ProbeError::Fault(fault)) => {
+                self.faults.push(ConfigFault { config_id, fault });
+                if self.next_config < config_limit {
+                    Ok(None)
+                } else {
+                    Err(ProbeError::EveryConfigFaulted(std::mem::take(&mut self.faults)))
+                }
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -284,7 +360,7 @@ mod tests {
     use henad_core::params::ParamValue;
     use henad_models::registry::{ModelEntry, model_registry, register_grid_model};
 
-    use super::{MAX_PROBED_CONFIGS, ProbeError, ProbeReport, check_capacity};
+    use super::{MAX_LISTED_CONFIGS, MAX_PROBED_CONFIGS, ProbeError, ProbeReport, check_capacity};
     use crate::schema::model_schema;
     use crate::tests::broken::DividesByParam;
 
@@ -307,7 +383,60 @@ mod tests {
         assert!(probe.parallel_jobs.is_some());
         assert!(probe.demand.is_none(), "boids runs on the CPU");
         assert!(!probe.columns.is_empty());
-        assert!(check_capacity(&entry, &plan, &wgpu::Limits::default()).is_ok());
+    }
+
+    /// Returns a spec over `model` whose configs are the square grids with the sides `sides`.
+    fn square_grids(model: &str, sides: &[&str]) -> SweepSpec {
+        let levels = LevelSpec::Values(sides.iter().map(|&side| side.to_owned()).collect());
+        let mut spec = SweepSpec::new(model);
+        spec.blocks = vec![BlockSpec {
+            design: DesignKind::Zip,
+            factors: ["grid_width", "grid_height"]
+                .map(|id| FactorSpec::param(id, levels.clone()))
+                .to_vec(),
+            design_seed: None,
+        }];
+        spec
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn check_capacity_counts_every_config_past_the_limits_and_passes_a_cpu_model() {
+        let Some(ctx) = crate::tests::support::headless_device() else {
+            return;
+        };
+        let gpu_sir = crate::tests::support::entry("gpu_sir", Some(&ctx));
+        let sides = ["16", "32", "48", "64", "80", "96", "112"];
+        let plan = square_grids("gpu_sir", &sides)
+            .plan(&model_schema(&gpu_sir))
+            .expect("a valid spec");
+        let fitting = plan.config(0).expect("the plan has config 0");
+        let demand = gpu_sir.demand(&fitting.params).expect("a GPU model has a demand");
+        let largest = demand
+            .buffers
+            .iter()
+            .map(|alloc| alloc.bytes)
+            .max()
+            .expect("gpu_sir allocates buffers");
+        // The largest buffer of the smallest grid fills a binding, and every larger grid needs more.
+        let limits = wgpu::Limits {
+            max_storage_buffer_binding_size: largest,
+            ..wgpu::Limits::default()
+        };
+        let error = check_capacity(&gpu_sir, &plan, &limits).expect_err("the larger grids pass the binding size");
+        assert_eq!(error.count, 6);
+        let listed: Vec<u64> = error.refused.iter().map(|config| config.config_id).collect();
+        assert_eq!(listed, (1..=MAX_LISTED_CONFIGS as u64).collect::<Vec<_>>());
+        assert!(error.refused.iter().all(|config| !config.reasons.is_empty()));
+
+        let game_of_life = entry("game_of_life");
+        let plan = square_grids("game_of_life", &sides)
+            .plan(&model_schema(&game_of_life))
+            .expect("a valid spec");
+        assert!(
+            check_capacity(&game_of_life, &plan, &limits).is_ok(),
+            "a CPU model passes limits that refuse a GPU model"
+        );
     }
 
     /// Returns a spec over `DividesByParam` on an 8 by 8 grid, varying `init_divisor` over `levels`.

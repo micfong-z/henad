@@ -1,11 +1,11 @@
 //! Heatmap view: an output over the levels of two varied parameters or action ticks.
 
-use egui_plot::{Heatmap, Plot, PlotPoint, uniform_grid_spacer};
+use egui_plot::{Plot, PlotPoint, uniform_grid_spacer};
 use web_time::Instant;
 
 use crate::ui::results::ResultsRequest;
 use crate::ui::results::plot::{
-    color_bar, format_significant, heat_color, labeled_combo, level_formatter, refresh_due,
+    HeatmapTiles, color_bar, format_significant, heat_color, labeled_combo, level_formatter, refresh_due,
 };
 use crate::ui::results::response::{output_combo, pins_row};
 use crate::ui::results::store::{HeatColor, HeatGrid, HeatQuery, ResultsStore};
@@ -81,11 +81,16 @@ pub fn heatmap_ui(
     };
     let (min, max) = grid.range().unwrap_or((0.0, 1.0));
     color_bar(ui, min, max);
-    let heatmap = Heatmap::new(grid.values.clone(), grid.columns)
-        .at(PlotPoint::new(-0.5, -0.5))
-        .custom_mapping(Box::new(move |value| heat_color(value, min, max)))
-        .formatter(Box::new(format_significant))
-        .show_labels(grid.values.len() <= MAX_LABELED_CELLS);
+    let mut tiles = HeatmapTiles::new(
+        &grid.values,
+        grid.columns,
+        PlotPoint::new(-0.5, -0.5),
+        [1.0, 1.0],
+        move |value| heat_color(value, min, max),
+    );
+    if grid.values.len() <= MAX_LABELED_CELLS {
+        tiles = tiles.labels(format_significant);
+    }
     let plot = Plot::new("henad_results_heatmap")
         .x_axis_label(x_axis.label.as_str())
         .y_axis_label(y_axis.label.as_str())
@@ -95,7 +100,7 @@ pub fn heatmap_ui(
         .y_grid_spacer(uniform_grid_spacer(|_| [1.0, 5.0, 10.0]))
         .show_crosshair(false);
     let response = show_plot(ui, plot, |plot_ui| {
-        plot_ui.heatmap(heatmap);
+        plot_ui.add(tiles);
         plot_ui.pointer_coordinate()
     });
     let Some((column, row)) = response.inner.and_then(|position| cell_at(grid, position)) else {

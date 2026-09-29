@@ -34,8 +34,20 @@ const MAX_NOTE_VALUES: usize = 6;
 /// Values a note lists before the ellipsis, once it skips to the last one.
 const NOTE_HEAD_VALUES: usize = 3;
 
-pub const LEVELS_TOOLTIP: &str = "Enter comma-separated values or min:max:step, both ends included. Use min:max \
-                                  under Latin hypercube or Uniform random.";
+/// Returns the tooltip of a row's values in a sweep, for an integer parameter or tick when `integer` is set, in a
+/// draft that draws from a range when `draws_ranges` is set.
+pub fn levels_tooltip(integer: bool, draws_ranges: bool) -> &'static str {
+    match (integer, draws_ranges) {
+        (_, true) => "Enter comma-separated values, min:max:step with both ends included, or min:max to draw from",
+        (true, false) => {
+            "Enter comma-separated values or min:max:step, both ends included. Leave out the step to step by 1."
+        }
+        (false, false) => {
+            "Enter comma-separated values or min:max:step, both ends included. Use min:max under Latin hypercube or \
+             Uniform random."
+        }
+    }
+}
 
 pub const SEARCH_LEVELS_TOOLTIP: &str = "Enter a range as min:max to search, or comma-separated values to select from";
 
@@ -154,7 +166,8 @@ pub fn legend(mode: DraftMode, design: DraftDesign) -> &'static str {
             "Enter a range as 0.1:0.5 for the design to draw from, or values as 0.1, 0.2."
         }
         (DraftMode::Sweep, DraftDesign::EveryCombination | DraftDesign::Zip | DraftDesign::VaryEachAlone) => {
-            "Enter values as 0.1, 0.2, or a range as 0.1:0.5:0.1 with both ends included."
+            "Enter values as 0.1, 0.2, or a range as 0.1:0.5:0.1 with both ends included. Leave out the step of an \
+             integer range to step by 1."
         }
     }
 }
@@ -193,6 +206,7 @@ pub fn parameters_section(
             continue;
         };
         let row = ParameterRow {
+            model_id: schema.id,
             index,
             descriptor,
             panel_value: input.panel_values.get(index),
@@ -216,6 +230,8 @@ struct RowContext {
 
 /// Everything a parameter row shows besides the draft's factor.
 struct ParameterRow<'a> {
+    /// Id of the model the row's draft belongs to.
+    model_id: &'a str,
     index: usize,
     descriptor: &'a ParamDescriptor,
     panel_value: Option<&'a ParamValue>,
@@ -225,9 +241,17 @@ struct ParameterRow<'a> {
     issue: Option<&'a DraftIssue>,
 }
 
-/// Returns the id of the text field of parameter row `index`.
-fn values_field_id(index: usize) -> Id {
-    Id::new(("henad_sweep_values", index))
+/// Returns the id of the values text field of parameter `param_id` of model `model_id`.
+///
+/// Note that egui keeps a text field's cursor and undo history under its id, and each model's draft keeps text of
+/// its own.
+fn values_field_id(model_id: &str, param_id: &str) -> Id {
+    Id::new(("henad_sweep_values", model_id, param_id))
+}
+
+/// Returns the id of the values editor of parameter `param_id` of model `model_id`.
+fn values_editor_id(model_id: &str, param_id: &str) -> Id {
+    Id::new(("henad_sweep_values_editor", model_id, param_id))
 }
 
 /// Draws one parameter row: its checkbox, its Parameters tab value, and its values while varied.
@@ -311,7 +335,7 @@ fn ticked(
     if context.search && factor.levels_text.trim().is_empty() {
         factor.levels_text = whole_range_text(&row.descriptor.kind);
     } else if !context.search {
-        rows.focus_later(ui, values_field_id(row.index));
+        rows.focus_later(ui, values_field_id(row.model_id, row.descriptor.id));
     }
 }
 
@@ -375,19 +399,20 @@ fn values_field(
     text: &mut String,
     width: f32,
 ) -> egui::Response {
+    let integer = matches!(row.descriptor.kind, ParamKind::U32 { .. });
     let (hint, tooltip) = if context.search {
         (whole_range_text(&row.descriptor.kind), SEARCH_LEVELS_TOOLTIP)
     } else if context.draws_ranges {
-        ("min:max or values".to_owned(), LEVELS_TOOLTIP)
+        ("min:max or values".to_owned(), levels_tooltip(integer, true))
     } else {
-        ("Values or min:max:step".to_owned(), LEVELS_TOOLTIP)
+        ("Values or min:max:step".to_owned(), levels_tooltip(integer, false))
     };
     ui.horizontal(|ui| {
         let field_width = (width - EDITOR_BUTTON_WIDTH - ui.spacing().item_spacing.x).max(0.0);
         let field = ui
             .add(
                 TextEdit::singleline(text)
-                    .id(values_field_id(row.index))
+                    .id(values_field_id(row.model_id, row.descriptor.id))
                     .hint_text(hint)
                     .desired_width(field_width),
             )
@@ -395,7 +420,7 @@ fn values_field(
         let name = format!("Edit values of {}", row.descriptor.label);
         let button = icon_button(ui, MDI_TUNE_VERTICAL, &name, "Edit values");
         Popup::from_toggle_button_response(&button)
-            .id(Id::new(("henad_sweep_values_editor", row.index)))
+            .id(values_editor_id(row.model_id, row.descriptor.id))
             .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
             .width(EDITOR_WIDTH)
             .show(|ui| {
@@ -538,7 +563,7 @@ pub fn segment_text(segment: EditorSegment, text: &str, kind: &ParamKind) -> Str
         EditorSegment::Values => match parse_levels(text) {
             Ok(LevelSpec::Values(_)) => text.to_owned(),
             Ok(LevelSpec::Range { .. }) => {
-                format!("{}, {}", number_text(kind, fields.min), number_text(kind, fields.max))
+                format!("{},{}", number_text(kind, fields.min), number_text(kind, fields.max))
             }
             _ => String::new(),
         },
@@ -559,7 +584,7 @@ pub fn whole_range_fill(kind: &ParamKind, draws_ranges: bool) -> String {
 /// Returns the quick fill of a parameter's minimum and maximum only.
 pub fn both_ends_fill(kind: &ParamKind) -> String {
     let (low, high) = kind_bounds(kind);
-    format!("{}, {}", number_text(kind, low), number_text(kind, high))
+    format!("{},{}", number_text(kind, low), number_text(kind, high))
 }
 
 /// Returns the quick fill of half, one and one and a half times `value`, each held within a parameter's bounds, with
@@ -579,7 +604,7 @@ pub fn around_fill(kind: &ParamKind, value: &ParamValue) -> String {
             texts.push(text);
         }
     }
-    texts.join(", ")
+    texts.join(",")
 }
 
 /// Everything the values editor shows besides the row's text.
@@ -747,13 +772,17 @@ pub fn options_text(names: &[String], picked: &[bool]) -> String {
     if !picked.is_empty() && picked.iter().all(|pick| *pick) {
         return "all".to_owned();
     }
-    let chosen: Vec<&str> = names
+    chosen_options(names, picked).join(",")
+}
+
+/// Returns the names of the options `picked` of `names`.
+fn chosen_options<'a>(names: &'a [String], picked: &[bool]) -> Vec<&'a str> {
+    names
         .iter()
         .zip(picked)
         .filter(|(_, pick)| **pick)
         .map(|(name, _)| name.as_str())
-        .collect();
-    chosen.join(", ")
+        .collect()
 }
 
 /// Returns the text of the options menu's button: "All options", the options picked, or "None".
@@ -761,7 +790,7 @@ pub fn options_button_text(names: &[String], picked: &[bool]) -> String {
     match options_text(names, picked).as_str() {
         "all" => "All options".to_owned(),
         "" => "None".to_owned(),
-        text => text.to_owned(),
+        _ => chosen_options(names, picked).join(", "),
     }
 }
 
@@ -800,14 +829,16 @@ fn options_menu(ui: &mut egui::Ui, kind: &ParamKind, text: &mut String, width: f
 
 #[cfg(test)]
 mod tests {
-    use henad_core::params::{ParamKind, ParamValue};
+    use henad_core::explore::design::DesignKind;
+    use henad_core::explore::factor::{FactorSpec, LevelSpec};
+    use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 
     use super::{
         EditorSegment, LevelNoun, RangeFields, around_fill, both_ends_fill, bounds_text, format_hint,
         options_button_text, options_text, picked_options, preview_note, preview_tooltip, row_note, segment_text,
-        whole_range_fill,
+        values_editor_id, values_field_id, whole_range_fill,
     };
-    use crate::ui::sweep::draft::{DraftIssue, DraftSite, IssueKind, LevelPreview};
+    use crate::ui::sweep::draft::{DraftIssue, DraftSite, IssueKind, LevelPreview, levels_text};
     use crate::ui::sweep::layout::Note;
 
     const RATE: ParamKind = ParamKind::F32 {
@@ -823,8 +854,20 @@ mod tests {
         default: 1024,
     };
 
+    /// Kind of a whole number with one value, whose range has no step.
+    const FIXED: ParamKind = ParamKind::U32 {
+        min: 5,
+        max: 5,
+        default: 5,
+    };
+
     const NETWORK: ParamKind = ParamKind::Choice {
         options: &["Random", "Geometric"],
+        default: 0,
+    };
+
+    const LAYOUT: ParamKind = ParamKind::Choice {
+        options: &["Random", "Geometric", "Lattice"],
         default: 0,
     };
 
@@ -948,7 +991,7 @@ mod tests {
     fn the_editor_switches_text_between_its_forms() {
         assert_eq!(segment_text(EditorSegment::Range, "0.1, 0.5", &RATE), "0.1:0.5:0.1");
         assert_eq!(segment_text(EditorSegment::Drawn, "0.1:0.5:0.1", &RATE), "0.1:0.5");
-        assert_eq!(segment_text(EditorSegment::Values, "0.1:0.5:0.1", &RATE), "0.1, 0.5");
+        assert_eq!(segment_text(EditorSegment::Values, "0.1:0.5:0.1", &RATE), "0.1,0.5");
         assert_eq!(segment_text(EditorSegment::Range, "", &WIDTH), "1:16384:5000");
         assert_eq!(
             RangeFields {
@@ -963,21 +1006,82 @@ mod tests {
         assert_eq!(bounds_text(&WIDTH), "1 to 16384, integers");
     }
 
+    /// Returns whether `henad-cli --vary` takes `text` as the values of a parameter of `kind` in a factorial design.
+    fn vary_takes(kind: &ParamKind, text: &str) -> bool {
+        let descriptor = ParamDescriptor {
+            id: "param",
+            label: "Param",
+            kind: kind.clone(),
+            apply: ParamApply::Live,
+            format: ParamFormat::Plain,
+        };
+        LevelSpec::parse(text).is_ok_and(|levels| {
+            FactorSpec::param("param", levels)
+                .resolve(&[descriptor], &[], &DesignKind::Factorial)
+                .is_ok()
+        })
+    }
+
     #[test]
     fn quick_fills_write_the_text_a_command_line_takes() {
         assert_eq!(whole_range_fill(&RATE, false), "0:1:0.2");
         assert_eq!(whole_range_fill(&RATE, true), "0:1");
-        assert_eq!(both_ends_fill(&WIDTH), "1, 16384");
-        assert_eq!(around_fill(&RATE, &ParamValue::F32(0.3)), "0.15, 0.3, 0.45");
+        assert_eq!(both_ends_fill(&WIDTH), "1,16384");
+        assert_eq!(around_fill(&RATE, &ParamValue::F32(0.3)), "0.15,0.3,0.45");
         assert_eq!(
             around_fill(&RATE, &ParamValue::F32(0.8)),
-            "0.4, 0.8, 1",
+            "0.4,0.8,1",
             "held within the bounds"
         );
         assert_eq!(
             around_fill(&WIDTH, &ParamValue::U32(1)),
-            "1, 2",
+            "1,2",
             "a whole number rounds, and a repeat is dropped"
+        );
+        assert_eq!(
+            whole_range_fill(&FIXED, false),
+            "5,5",
+            "a range with no width lists both ends"
+        );
+        let loaded = LevelSpec::Values(vec!["1".to_owned(), "16384".to_owned()]);
+        assert_eq!(levels_text(&loaded), "1,16384", "a row loaded from a spec");
+        let fills = [
+            (&RATE, whole_range_fill(&RATE, false)),
+            (&RATE, both_ends_fill(&RATE)),
+            (&RATE, around_fill(&RATE, &ParamValue::F32(0.3))),
+            (&RATE, segment_text(EditorSegment::Values, "0.1:0.5:0.1", &RATE)),
+            (&WIDTH, whole_range_fill(&WIDTH, false)),
+            (&WIDTH, both_ends_fill(&WIDTH)),
+            (&WIDTH, around_fill(&WIDTH, &ParamValue::U32(1024))),
+            (&WIDTH, levels_text(&loaded)),
+            (&FIXED, whole_range_fill(&FIXED, false)),
+            (
+                &LAYOUT,
+                options_text(&super::option_names(&LAYOUT), &[true, true, true]),
+            ),
+            (
+                &LAYOUT,
+                options_text(&super::option_names(&LAYOUT), &[true, false, true]),
+            ),
+        ];
+        for (kind, text) in fills {
+            assert!(vary_takes(kind, &text), "--vary refuses {text:?}");
+        }
+    }
+
+    #[test]
+    fn a_values_field_belongs_to_one_parameter_of_one_model() {
+        let field = values_field_id("sir", "infection_rate");
+        assert_eq!(field, values_field_id("sir", "infection_rate"));
+        assert_ne!(field, values_field_id("sir", "recovery_rate"));
+        assert_ne!(
+            field,
+            values_field_id("virus_network", "infection_rate"),
+            "another model's row keeps its own undo history"
+        );
+        assert_ne!(
+            values_editor_id("sir", "infection_rate"),
+            values_editor_id("virus_network", "infection_rate")
         );
     }
 
@@ -988,12 +1092,20 @@ mod tests {
         assert_eq!(picked_options(&NETWORK, "all"), [true, true]);
         assert_eq!(picked_options(&NETWORK, "Geometric"), [false, true]);
         assert_eq!(picked_options(&NETWORK, "Random, Geometric"), [true, true]);
+        assert_eq!(picked_options(&NETWORK, "Random,Geometric"), [true, true]);
         assert_eq!(picked_options(&NETWORK, "Square"), [false, false]);
         assert_eq!(options_text(&names, &[true, true]), "all");
         assert_eq!(options_text(&names, &[false, true]), "Geometric");
         assert_eq!(options_text(&names, &[false, false]), "");
         assert_eq!(options_button_text(&names, &[true, true]), "All options");
         assert_eq!(options_button_text(&names, &[false, false]), "None");
+        let three = super::option_names(&LAYOUT);
+        assert_eq!(options_text(&three, &[true, false, true]), "Random,Lattice");
+        assert_eq!(
+            options_button_text(&three, &[true, false, true]),
+            "Random, Lattice",
+            "the button reads as prose"
+        );
 
         let flag = ParamKind::Bool { default: false };
         assert_eq!(picked_options(&flag, "true"), [false, true]);

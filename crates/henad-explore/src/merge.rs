@@ -343,7 +343,7 @@ pub enum MergeError {
     },
     /// Run `run_id` of input `dir`, outside its shard or past the plan's runs.
     OutsideShard { dir: PathBuf, run_id: u64 },
-    /// Run `run_id` of input `dir`, held by an earlier input as well.
+    /// Run `run_id`, listed twice in `runs.csv` of input `dir`.
     DuplicateRun { dir: PathBuf, run_id: u64 },
     /// The merged directory cannot be written, for the reason inside.
     Output(OutputError),
@@ -399,7 +399,7 @@ impl fmt::Display for MergeError {
                 write!(f, "'{}' holds run {run_id}, outside its shard", dir.display())
             }
             Self::DuplicateRun { dir, run_id } => {
-                write!(f, "'{}' and another shard both hold run {run_id}", dir.display())
+                write!(f, "'{}' lists run {run_id} twice", dir.display())
             }
             Self::Output(_) => f.write_str("cannot write the merged results"),
             Self::NotASweep { dir } => write!(f, "'{}' holds a search. A search has no shards to merge", dir.display()),
@@ -425,5 +425,48 @@ impl std::error::Error for MergeError {
             | Self::DuplicateRun { .. }
             | Self::NotASweep { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use henad_core::explore::spec::SweepSpec;
+
+    use super::{MergeError, merge};
+    use crate::exec::Concurrency;
+    use crate::output::RUNS_FILE;
+    use crate::progress::NoProgress;
+    use crate::tests::support::{ScratchDir, entry, sweep};
+
+    #[test]
+    fn a_shard_listing_a_run_twice_is_refused() {
+        let scratch = ScratchDir::new("merge-duplicate");
+        let shard_dir = scratch.path().join("shard");
+        let mut spec = SweepSpec::new("game_of_life");
+        spec.fixed = vec![
+            ("grid_width".to_owned(), "8".to_owned()),
+            ("grid_height".to_owned(), "8".to_owned()),
+        ];
+        spec.run.steps = 2;
+        spec.run.replicates = 2;
+        sweep(&entry("game_of_life", None), None, &spec, &shard_dir, Concurrency::Auto);
+        let runs_path = shard_dir.join(RUNS_FILE);
+        let runs = fs::read_to_string(&runs_path).expect("runs.csv is written");
+        let last_row = runs.lines().last().expect("runs.csv holds a run");
+        fs::write(&runs_path, format!("{runs}{last_row}\n")).expect("runs.csv is written again");
+
+        let error = merge(
+            std::slice::from_ref(&shard_dir),
+            &scratch.path().join("merged"),
+            &mut NoProgress,
+        )
+        .expect_err("a run listed twice");
+        assert!(matches!(error, MergeError::DuplicateRun { run_id: 1, .. }), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            format!("'{}' lists run 1 twice", shard_dir.display())
+        );
     }
 }

@@ -1,6 +1,12 @@
 //! Response view: an output against one varied parameter or action tick, with whiskers for its spread.
 
-use egui_plot::{Legend, Line, Plot, Points, uniform_grid_spacer};
+use std::ops::RangeInclusive;
+
+use egui::{Color32, Id, Shape, Stroke};
+use egui_plot::{
+    Legend, Line, Plot, PlotBounds, PlotGeometry, PlotItem, PlotItemBase, PlotPoint, PlotTransform, Points,
+    uniform_grid_spacer,
+};
 use henad_core::explore::summary::ReplicateSummary;
 use web_time::Instant;
 
@@ -10,6 +16,9 @@ use crate::ui::show_plot;
 
 /// Most levels an axis can have for its points to be joined into lines.
 const MAX_JOINED_LEVELS: usize = 32;
+
+/// Width of a whisker's stem and caps, in points.
+const WHISKER_WIDTH: f32 = 1.0;
 
 /// Spread a whisker spans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -53,13 +62,27 @@ pub struct ResponseView {
     cache: Option<ResponseCache>,
 }
 
-/// Lines of one response plot, with the query and the store revision they were computed from.
+/// Lines of one response plot, with the query, the error bars and the store revision they were computed from.
 #[derive(Debug)]
 struct ResponseCache {
     revision: u64,
     computed_at: Instant,
     query: ResponseQuery,
-    lines: Vec<ResponseLine>,
+    error_bars: ErrorBars,
+    lines: Vec<PlottedLine>,
+}
+
+/// One line of a response plot in plot coordinates.
+#[derive(Debug, Clone, PartialEq)]
+struct PlottedLine {
+    /// Name of the line in the legend.
+    name: String,
+    /// Id the line's points and whiskers share, so the legend hides them together.
+    id: Id,
+    /// Mean at each level of the x axis that has one.
+    means: Vec<PlotPoint>,
+    /// Ends of each whisker segment, the stem and then the low and high caps of each whisker in turn.
+    whiskers: Vec<[PlotPoint; 2]>,
 }
 
 pub fn response_ui(ui: &mut egui::Ui, store: &ResultsStore, view: &mut ResponseView) {
@@ -74,63 +97,166 @@ pub fn response_ui(ui: &mut egui::Ui, store: &ResultsStore, view: &mut ResponseV
     }
     view.fit(store);
     controls(ui, store, view);
-    let (output, error_bars) = (view.output, view.error_bars);
     let x_axis = &axes[view.x_axis];
-    let group_axis = view.group_axis.and_then(|axis| axes.get(axis));
     let query = ResponseQuery {
         x_axis: view.x_axis,
-        output,
+        output: view.output,
         group_axis: view.group_axis,
         pins: view.pins.clone(),
     };
-    let lines = view.lines(ui.ctx(), store, &query);
-    let whisker_half_width = whisker_half_width(x_axis);
+    let error_bars = view.error_bars;
+    let lines = view.lines(ui.ctx(), store, &query, error_bars);
     // Lines come in the order of their group's levels. A legend sorted by name lists level 10 before level 2.
     let mut plot = Plot::new("henad_results_response")
         .legend(Legend::default().follow_insertion_order(true))
         .x_axis_label(x_axis.label.as_str())
-        .y_axis_label(store.output_label(output));
+        .y_axis_label(store.output_label(query.output));
     if !x_axis.numeric {
         plot = plot
             .x_axis_formatter(level_formatter(&x_axis.levels))
             .x_grid_spacer(uniform_grid_spacer(|_| [1.0, 5.0, 10.0]));
     }
+    let joined = x_axis.levels.len() <= MAX_JOINED_LEVELS;
     show_plot(ui, plot, |plot_ui| {
         for (position, line) in lines.iter().enumerate() {
             let color = config_color(position);
-            let name = match (group_axis, line.group_level) {
-                (Some(axis), Some(level)) => format!("{} {}", axis.label, axis.levels[level]),
-                _ => store.output_label(output),
-            };
-            let means: Vec<[f64; 2]> = line
-                .points
-                .iter()
-                .filter_map(|point| Some([point.x, point.summary.mean?]))
-                .collect();
-            if x_axis.levels.len() <= MAX_JOINED_LEVELS {
-                plot_ui.line(Line::new(name.clone(), means.clone()).color(color).width(1.5));
+            if joined {
+                plot_ui.line(
+                    Line::new(line.name.as_str(), line.means.as_slice())
+                        .color(color)
+                        .width(1.5)
+                        .id(line.id),
+                );
             }
-            plot_ui.points(Points::new(name, means).color(color).radius(3.5));
-            for point in &line.points {
-                let Some((low, high)) = whisker(point.summary, error_bars) else {
-                    continue;
-                };
-                let (left, right) = (point.x - whisker_half_width, point.x + whisker_half_width);
-                for segment in [
-                    [[point.x, low], [point.x, high]],
-                    [[left, low], [right, low]],
-                    [[left, high], [right, high]],
-                ] {
-                    plot_ui.line(
-                        Line::new("", segment.to_vec())
-                            .color(color)
-                            .width(1.0)
-                            .allow_hover(false),
-                    );
-                }
+            plot_ui.points(
+                Points::new(line.name.as_str(), line.means.as_slice())
+                    .color(color)
+                    .radius(3.5)
+                    .id(line.id),
+            );
+            if !line.whiskers.is_empty() {
+                plot_ui.add(Whiskers::new(&line.whiskers, color, line.id));
             }
         }
     });
+}
+
+/// Returns the lines of `query` over `store` in plot coordinates, with the whiskers `error_bars` asks for.
+fn plotted_lines(store: &ResultsStore, query: &ResponseQuery, error_bars: ErrorBars) -> Vec<PlottedLine> {
+    let axes = store.axes();
+    let half_width = whisker_half_width(&axes[query.x_axis]);
+    let group_axis = query.group_axis.and_then(|axis| axes.get(axis));
+    store
+        .response(query)
+        .iter()
+        .map(|line| {
+            let name = match (group_axis, line.group_level) {
+                (Some(axis), Some(level)) => format!("{} {}", axis.label, axis.levels[level]),
+                _ => store.output_label(query.output),
+            };
+            plotted_line(line, name, error_bars, half_width)
+        })
+        .collect()
+}
+
+/// Returns `line`, named `name`, in plot coordinates, with the whiskers `error_bars` asks for and their caps
+/// `half_width` either side of the stem.
+fn plotted_line(line: &ResponseLine, name: String, error_bars: ErrorBars, half_width: f64) -> PlottedLine {
+    let means = line
+        .points
+        .iter()
+        .filter_map(|point| Some(PlotPoint::new(point.x, point.summary.mean?)))
+        .collect();
+    let whiskers = line
+        .points
+        .iter()
+        .filter_map(|point| Some((point.x, whisker(point.summary, error_bars)?)))
+        .flat_map(|(x, (low, high))| {
+            let (left, right) = (x - half_width, x + half_width);
+            [
+                [PlotPoint::new(x, low), PlotPoint::new(x, high)],
+                [PlotPoint::new(left, low), PlotPoint::new(right, low)],
+                [PlotPoint::new(left, high), PlotPoint::new(right, high)],
+            ]
+        })
+        .collect();
+    PlottedLine {
+        id: Id::new(("henad_results_response_line", name.as_str())),
+        name,
+        means,
+        whiskers,
+    }
+}
+
+/// Whiskers of one line as a single plot item, drawn from segments computed once per cache entry.
+///
+/// The whiskers take the id of their line and stay out of the legend.
+struct Whiskers<'a> {
+    base: PlotItemBase,
+    id: Id,
+    segments: &'a [[PlotPoint; 2]],
+    color: Color32,
+}
+
+impl<'a> Whiskers<'a> {
+    fn new(segments: &'a [[PlotPoint; 2]], color: Color32, id: Id) -> Self {
+        Self {
+            base: PlotItemBase::new(String::new()),
+            id,
+            segments,
+            color,
+        }
+    }
+}
+
+impl PlotItem for Whiskers<'_> {
+    fn shapes(&self, _ui: &egui::Ui, transform: &PlotTransform, shapes: &mut Vec<Shape>) {
+        // A highlighted item doubles its width, as a highlighted line does.
+        let width = if self.highlighted() {
+            2.0 * WHISKER_WIDTH
+        } else {
+            WHISKER_WIDTH
+        };
+        let stroke = Stroke::new(width, self.color);
+        shapes.extend(self.segments.iter().map(|[start, end]| {
+            let ends = [transform.position_from_point(start), transform.position_from_point(end)];
+            Shape::line_segment(ends, stroke)
+        }));
+    }
+
+    fn initialize(&mut self, _x_range: RangeInclusive<f64>) {}
+
+    fn color(&self) -> Color32 {
+        self.color
+    }
+
+    fn allow_hover(&self) -> bool {
+        false
+    }
+
+    fn geometry(&self) -> PlotGeometry<'_> {
+        PlotGeometry::None
+    }
+
+    fn bounds(&self) -> PlotBounds {
+        let mut bounds = PlotBounds::NOTHING;
+        for point in self.segments.iter().flatten() {
+            bounds.extend_with(point);
+        }
+        bounds
+    }
+
+    fn base(&self) -> &PlotItemBase {
+        &self.base
+    }
+
+    fn base_mut(&mut self) -> &mut PlotItemBase {
+        &mut self.base
+    }
+
+    fn id(&self) -> Id {
+        self.id
+    }
 }
 
 /// Returns the low and high ends of the whisker `error_bars` asks for, or `None` when there is none to draw.
@@ -238,16 +364,23 @@ impl ResponseView {
         }
     }
 
-    /// Returns the lines of `query`, computed again when the query changes, and at most once per
-    /// [`REFRESH_INTERVAL`] while the store changes.
+    /// Returns the lines of `query` with the whiskers `error_bars` asks for, computed again when either changes, and at
+    /// most once per [`REFRESH_INTERVAL`] while the store changes.
     ///
     /// `ctx` repaints once a pending refresh is due.
     ///
     /// [`REFRESH_INTERVAL`]: crate::ui::results::plot::REFRESH_INTERVAL
-    fn lines(&mut self, ctx: &egui::Context, store: &ResultsStore, query: &ResponseQuery) -> &[ResponseLine] {
+    fn lines(
+        &mut self,
+        ctx: &egui::Context,
+        store: &ResultsStore,
+        query: &ResponseQuery,
+        error_bars: ErrorBars,
+    ) -> &[PlottedLine] {
         let stale = self.cache.as_ref().is_some_and(|cache| {
-            if cache.query != *query || cache.revision == store.revision() {
-                return cache.query != *query;
+            let settings_changed = cache.query != *query || cache.error_bars != error_bars;
+            if settings_changed || cache.revision == store.revision() {
+                return settings_changed;
             }
             refresh_due(ctx, cache.computed_at)
         });
@@ -258,8 +391,98 @@ impl ResponseView {
             revision: store.revision(),
             computed_at: Instant::now(),
             query: query.clone(),
-            lines: store.response(query),
+            error_bars,
+            lines: plotted_lines(store, query, error_bars),
         });
         &cache.lines
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Color32, Id, Rect, Shape, pos2};
+    use egui_plot::{PlotItem as _, PlotPoint, PlotTransform};
+    use henad_core::explore::summary::ReplicateSummary;
+
+    use super::{ErrorBars, Whiskers, plotted_line};
+    use crate::ui::results::store::{ResponseLine, ResponsePoint};
+
+    /// Returns the point at `x` of level `level`, with a mean of `mean` and a confidence interval of `ci95`.
+    fn point(x: f64, level: usize, mean: Option<f64>, ci95: Option<(f64, f64)>) -> ResponsePoint {
+        ResponsePoint {
+            x,
+            level,
+            summary: ReplicateSummary {
+                n: 2,
+                mean,
+                standard_deviation: mean.map(|_| 1.0),
+                ci95,
+            },
+        }
+    }
+
+    #[test]
+    fn a_plotted_line_holds_three_segments_per_whisker() {
+        let line = ResponseLine {
+            group_level: None,
+            points: vec![
+                point(1.0, 0, Some(5.0), Some((4.0, 6.0))),
+                point(2.0, 1, Some(7.0), None),
+                point(3.0, 2, None, None),
+            ],
+        };
+        let plotted = plotted_line(&line, "Infected, max".to_owned(), ErrorBars::ConfidenceInterval, 0.25);
+
+        assert_eq!(
+            plotted.means,
+            [PlotPoint::new(1.0, 5.0), PlotPoint::new(2.0, 7.0)],
+            "a level with no mean is left out"
+        );
+        assert_eq!(
+            plotted.whiskers,
+            [
+                [PlotPoint::new(1.0, 4.0), PlotPoint::new(1.0, 6.0)],
+                [PlotPoint::new(0.75, 4.0), PlotPoint::new(1.25, 4.0)],
+                [PlotPoint::new(0.75, 6.0), PlotPoint::new(1.25, 6.0)],
+            ],
+            "a level with no interval draws no whisker"
+        );
+        let deviations = plotted_line(&line, "Infected, max".to_owned(), ErrorBars::StandardDeviation, 0.25);
+        assert_eq!(deviations.whiskers.len(), 6, "both levels with a mean have a deviation");
+        assert_eq!(deviations.id, plotted.id, "the id follows the name");
+        let hidden = plotted_line(&line, "Infected, max".to_owned(), ErrorBars::Hidden, 0.25);
+        assert!(hidden.whiskers.is_empty());
+    }
+
+    #[test]
+    fn whiskers_draw_one_segment_each_within_their_bounds() {
+        let segments = [
+            [PlotPoint::new(1.0, 4.0), PlotPoint::new(1.0, 6.0)],
+            [PlotPoint::new(0.75, 4.0), PlotPoint::new(1.25, 4.0)],
+            [PlotPoint::new(0.75, 6.0), PlotPoint::new(1.25, 6.0)],
+        ];
+        let id = Id::new("line");
+        let whiskers = Whiskers::new(&segments, Color32::RED, id);
+        assert_eq!(whiskers.id(), id, "the whiskers hide with their line");
+        assert!(!whiskers.allow_hover());
+        let bounds = whiskers.bounds();
+        assert_eq!((bounds.min(), bounds.max()), ([0.75, 4.0], [1.25, 6.0]));
+
+        let transform = PlotTransform::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0)), bounds, false);
+        let context = egui::Context::default();
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            let mut shapes = Vec::new();
+            whiskers.shapes(ui, &transform, &mut shapes);
+            assert_eq!(shapes.len(), segments.len());
+            for (shape, [start, end]) in shapes.iter().zip(&segments) {
+                let Shape::LineSegment { points, stroke } = shape else {
+                    panic!("{shape:?} is not a line segment");
+                };
+                let expected = [transform.position_from_point(start), transform.position_from_point(end)];
+                assert_eq!(*points, expected);
+                assert_eq!(stroke.color, Color32::RED);
+            }
+        });
+        output.drop_without_applying_deltas();
     }
 }

@@ -1,11 +1,13 @@
-//! Drawing helpers the result views share: colours, decimation, level labels, a colour bar, the labeled combo boxes
-//! of the views' controls, and the pace at which a view computes again while runs arrive.
+//! Drawing helpers the result views share.
+//!
+//! They cover colours, decimation, level labels, a colour bar, the tiles of a heatmap, the labeled combo boxes of the
+//! views' controls, and the pace at which a view computes again while runs arrive.
 
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use egui::Color32;
-use egui_plot::GridMark;
+use egui::{Color32, Mesh, Rect, Shape, TextStyle};
+use egui_plot::{GridMark, PlotBounds, PlotGeometry, PlotItem, PlotItemBase, PlotPoint, PlotTransform};
 use web_time::Instant;
 
 /// Colours of the configurations a view draws, in order. A config's band and mean line share one.
@@ -33,6 +35,9 @@ const HEAT_STOPS: [Color32; 5] = [
 
 /// Colour of a heatmap cell that holds no value.
 pub const NO_DATA_COLOR: Color32 = Color32::from_gray(110);
+
+/// Luminance, out of 255, of a tile fill below which the tile's text is white.
+const WHITE_TEXT_MAX_LUMINANCE: f32 = 140.0;
 
 /// Most points a line keeps once decimated.
 pub const MAX_PLOT_POINTS: usize = 1000;
@@ -164,6 +169,136 @@ pub fn color_bar(ui: &mut egui::Ui, min: f64, max: f64) {
     });
 }
 
+/// Tiles of a heatmap as one plot item, filled from values it borrows.
+///
+/// Value `i` fills the tile in column `i % columns` and row `i / columns`, with row 0 lowest.
+pub struct HeatmapTiles<'a, F> {
+    base: PlotItemBase,
+    /// Value of each tile, row by row from the lowest row.
+    values: &'a [f64],
+    /// Number of tiles in a row.
+    columns: usize,
+    /// Lower left corner of the first tile.
+    origin: PlotPoint,
+    /// Width and height of a tile in plot coordinates.
+    tile_size: [f64; 2],
+    /// Mapping from a tile's value to its fill.
+    fill: F,
+    /// Formatter of the value each tile writes, `None` for tiles without text.
+    label: Option<fn(f64) -> String>,
+}
+
+impl<'a, F: Fn(f64) -> Color32> HeatmapTiles<'a, F> {
+    /// Returns the tiles of `values`, `columns` to a row, each filled by `fill`.
+    ///
+    /// The first tile's lower left corner sits at `origin`, and each tile is `tile_size` wide and high in plot
+    /// coordinates.
+    pub fn new(values: &'a [f64], columns: usize, origin: PlotPoint, tile_size: [f64; 2], fill: F) -> Self {
+        Self {
+            base: PlotItemBase::new(String::new()),
+            values,
+            columns,
+            origin,
+            tile_size,
+            fill,
+            label: None,
+        }
+    }
+
+    /// Writes each tile's value in the tile, formatted by `format`.
+    pub fn labels(mut self, format: fn(f64) -> String) -> Self {
+        self.label = Some(format);
+        self
+    }
+
+    /// Number of rows, a last row that is short included.
+    fn rows(&self) -> usize {
+        if self.columns == 0 {
+            0
+        } else {
+            self.values.len().div_ceil(self.columns)
+        }
+    }
+
+    /// Returns the rectangle on screen of tile `index` under `transform`.
+    fn tile_rect(&self, transform: &PlotTransform, index: usize) -> Rect {
+        let (column, row) = ((index % self.columns) as f64, (index / self.columns) as f64);
+        let [width, height] = self.tile_size;
+        let corner =
+            |column: f64, row: f64| PlotPoint::new(self.origin.x + width * column, self.origin.y + height * row);
+        transform.rect_from_values(&corner(column, row), &corner(column + 1.0, row + 1.0))
+    }
+}
+
+impl<F: Fn(f64) -> Color32> PlotItem for HeatmapTiles<'_, F> {
+    fn shapes(&self, ui: &egui::Ui, transform: &PlotTransform, shapes: &mut Vec<Shape>) {
+        if self.columns == 0 {
+            return;
+        }
+        let mut mesh = Mesh::default();
+        mesh.reserve_vertices(4 * self.values.len());
+        mesh.reserve_triangles(2 * self.values.len());
+        let font = TextStyle::Monospace.resolve(ui.style());
+        let mut labels = Vec::new();
+        for (index, &value) in self.values.iter().enumerate() {
+            let rect = self.tile_rect(transform, index);
+            let fill = (self.fill)(value);
+            mesh.add_colored_rect(rect, fill);
+            if let Some(format) = self.label {
+                let color = tile_text_color(fill);
+                let galley = ui.painter().layout_no_wrap(format(value), font.clone(), color);
+                labels.push(Shape::galley(rect.center() - galley.size() / 2.0, galley, color));
+            }
+        }
+        shapes.push(Shape::mesh(mesh));
+        shapes.extend(labels);
+    }
+
+    fn initialize(&mut self, _x_range: RangeInclusive<f64>) {}
+
+    fn color(&self) -> Color32 {
+        Color32::TRANSPARENT
+    }
+
+    // Each view writes its own hover text for the tile under the pointer.
+    fn allow_hover(&self) -> bool {
+        false
+    }
+
+    fn geometry(&self) -> PlotGeometry<'_> {
+        PlotGeometry::None
+    }
+
+    fn bounds(&self) -> PlotBounds {
+        let [width, height] = self.tile_size;
+        PlotBounds::from_min_max(
+            [self.origin.x, self.origin.y],
+            [
+                self.origin.x + width * self.columns as f64,
+                self.origin.y + height * self.rows() as f64,
+            ],
+        )
+    }
+
+    fn base(&self) -> &PlotItemBase {
+        &self.base
+    }
+
+    fn base_mut(&mut self) -> &mut PlotItemBase {
+        &mut self.base
+    }
+}
+
+/// Returns the colour of the text on a tile filled with `fill`, white on a dark fill and black on a light one.
+fn tile_text_color(fill: Color32) -> Color32 {
+    let luminance = 0.2126 * f32::from(fill.r()) + 0.7152 * f32::from(fill.g()) + 0.0722 * f32::from(fill.b());
+    if luminance < WHITE_TEXT_MAX_LUMINANCE {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
+}
+
 /// Draws `label` and a combo box on one row of a wrapping layout, and returns the combo box's response, labeled by
 /// `label`.
 ///
@@ -289,7 +424,12 @@ fn group_whole(digits: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{NO_DATA_COLOR, decimate, format_precise, format_significant, heat_color};
+    use egui::{Color32, Rect, Shape, pos2};
+    use egui_plot::{PlotItem as _, PlotPoint, PlotTransform};
+
+    use super::{
+        HeatmapTiles, NO_DATA_COLOR, decimate, format_precise, format_significant, heat_color, tile_text_color,
+    };
 
     fn series(values: &[f64]) -> Vec<[f64; 2]> {
         values.iter().enumerate().map(|(x, &y)| [x as f64, y]).collect()
@@ -339,6 +479,60 @@ mod tests {
             "a low value clamps to the scale"
         );
         assert_eq!(heat_color(3.0, 3.0, 3.0), heat_color(0.5, 0.0, 1.0));
+    }
+
+    #[test]
+    fn heatmap_tiles_fill_every_tile_and_write_values_only_when_labeled() {
+        let values = [1.0, 2.0, f64::NAN, 4.0, 5.0, 6.0];
+        let fill = |value: f64| heat_color(value, 1.0, 6.0);
+        let tiles = HeatmapTiles::new(&values, 3, PlotPoint::new(-0.5, -0.5), [1.0, 2.0], fill);
+        let bounds = tiles.bounds();
+        assert_eq!((bounds.min(), bounds.max()), ([-0.5, -0.5], [2.5, 3.5]));
+        assert!(!tiles.allow_hover());
+        let labeled =
+            HeatmapTiles::new(&values, 3, PlotPoint::new(-0.5, -0.5), [1.0, 2.0], fill).labels(format_significant);
+
+        let transform = PlotTransform::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(300.0, 400.0)), bounds, false);
+        let context = egui::Context::default();
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            let mut shapes = Vec::new();
+            tiles.shapes(ui, &transform, &mut shapes);
+            let [Shape::Mesh(mesh)] = shapes.as_slice() else {
+                panic!("{shapes:?} is not one mesh");
+            };
+            assert_eq!(mesh.vertices.len(), 4 * values.len());
+            for (corners, &value) in mesh.vertices.chunks(4).zip(&values) {
+                assert!(
+                    corners.iter().all(|vertex| vertex.color == fill(value)),
+                    "tile of {value}"
+                );
+            }
+            let last: Vec<_> = mesh.vertices[20..].iter().map(|vertex| vertex.pos).collect();
+            assert_eq!(
+                Rect::from_points(&last),
+                transform.rect_from_values(&PlotPoint::new(1.5, 1.5), &PlotPoint::new(2.5, 3.5)),
+                "the last tile sits in the top row, rightmost"
+            );
+
+            let mut shapes = Vec::new();
+            labeled.shapes(ui, &transform, &mut shapes);
+            assert!(matches!(shapes[0], Shape::Mesh(_)));
+            let texts: Vec<&str> = shapes[1..]
+                .iter()
+                .map(|shape| match shape {
+                    Shape::Text(text) => text.galley.text(),
+                    other => panic!("{other:?} is not a text"),
+                })
+                .collect();
+            assert_eq!(texts, ["1", "2", "–", "4", "5", "6"]);
+        });
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn tile_text_contrasts_with_its_fill() {
+        assert_eq!(tile_text_color(heat_color(0.0, 0.0, 1.0)), Color32::WHITE);
+        assert_eq!(tile_text_color(heat_color(1.0, 0.0, 1.0)), Color32::BLACK);
     }
 
     #[test]

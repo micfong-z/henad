@@ -53,7 +53,7 @@ pub struct Manifest {
     /// Directories whose shards were merged into this one, `None` for a sweep that ran here.
     pub merged_shards: Option<Vec<String>>,
     /// Search the directory holds, `None` for a sweep.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub search: Option<ManifestSearch>,
 }
 
@@ -538,9 +538,44 @@ fn civil_date(days: u64) -> (u64, u64, u64) {
 
 #[cfg(test)]
 mod tests {
-    use henad_core::explore::outcome::RunStatus;
+    use std::path::Path;
 
-    use super::{ResultCounts, rfc3339};
+    use henad_core::explore::outcome::RunStatus;
+    use henad_core::explore::spec::SweepSpec;
+    use serde_json::Value;
+
+    use super::{Manifest, ResultCounts, rfc3339};
+    use crate::exec::Concurrency;
+    use crate::output::MANIFEST_FILE;
+    use crate::tests::support::{ScratchDir, entry, sweep};
+
+    #[test]
+    fn a_sweep_manifest_writes_its_search_as_null() {
+        let scratch = ScratchDir::new("sweep-manifest");
+        let mut spec = SweepSpec::new("game_of_life");
+        spec.fixed = vec![
+            ("grid_width".to_owned(), "8".to_owned()),
+            ("grid_height".to_owned(), "8".to_owned()),
+        ];
+        spec.run.steps = 2;
+        sweep(
+            &entry("game_of_life", None),
+            None,
+            &spec,
+            scratch.path(),
+            Concurrency::Auto,
+        );
+        let text = std::fs::read_to_string(scratch.path().join(MANIFEST_FILE)).expect("the manifest is written");
+        let mut json: Value = serde_json::from_str(&text).expect("the manifest is JSON");
+        assert_eq!(json.get("search"), Some(&Value::Null));
+        assert_eq!(json.get("merged_shards"), Some(&Value::Null));
+        let manifest = Manifest::parse(&text, Path::new(MANIFEST_FILE)).expect("the manifest reads back");
+        assert_eq!(manifest.search, None);
+
+        json.as_object_mut().expect("a JSON object").remove("search");
+        let without_key: Manifest = serde_json::from_value(json).expect("a manifest without the key reads");
+        assert_eq!(without_key, manifest);
+    }
 
     #[test]
     fn timestamps_are_written_in_rfc3339() {

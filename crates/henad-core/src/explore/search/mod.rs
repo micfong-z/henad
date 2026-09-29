@@ -37,7 +37,8 @@ use crate::explore::seed::search_seed;
 pub trait Searcher {
     /// Returns up to `max` candidates to evaluate next.
     ///
-    /// Note that an ask returns fewer at the end of a generation or of the budget, and none once the budget is spent.
+    /// Note that an ask can return fewer, as at the end of a generation, of the initial samples or of the budget, and
+    /// returns none once the budget is spent.
     fn ask(&mut self, max: usize) -> Vec<Candidate>;
 
     /// Takes the evaluations of the candidates the last ask returned, sorted by candidate id.

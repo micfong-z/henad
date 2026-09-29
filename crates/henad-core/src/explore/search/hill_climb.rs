@@ -4,8 +4,9 @@
 //! and the climb moves to the best of them when it strictly beats the incumbent. After `patience` batches without a
 //! move, the climb starts over from a new random batch.
 //!
-//! A neighbor always has a config no earlier candidate has. When no draw finds one, the batch re-evaluates the
-//! candidate the neighbor matched instead, and a re-evaluation never moves the climb.
+//! No two first evaluations share a config. A starting point or a neighbor whose config an earlier candidate has is
+//! drawn again. When no draw finds a new config, the batch re-evaluates that candidate in its place. A re-evaluated
+//! starting point competes for the start like any other, and a re-evaluated neighbor never moves the climb.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -69,6 +70,8 @@ pub struct HillClimb {
     config_candidates: BTreeMap<ConfigKey, u64>,
     /// Candidate the climb moves from, `None` while the next ask draws starting points.
     incumbent: Option<u64>,
+    /// Known candidates the pending start batch re-evaluates in place of a starting point.
+    revisited: BTreeSet<u64>,
     /// Batches since the incumbent last moved.
     stalled: u64,
     /// Climbs begun, the first one and each restart.
@@ -97,12 +100,17 @@ impl HillClimb {
             log: EvaluationLog::new(objective),
             config_candidates: BTreeMap::new(),
             incumbent: None,
+            revisited: BTreeSet::new(),
             stalled: 0,
             climbs: 0,
         })
     }
 
-    /// Returns `count` random starting points.
+    /// Returns up to `count` random starting points.
+    ///
+    /// A starting point whose draws all give a known config becomes a re-evaluation of the candidate the first draw
+    /// matched, unless the batch re-evaluates that candidate already or the match is another starting point of the
+    /// batch. Note that the batch is never empty. Its first draw meets no other proposal of the batch.
     fn starting_points(&mut self, count: usize) -> Vec<Proposal> {
         let origin = if self.climbs == 0 {
             CandidateOrigin::Random
@@ -110,9 +118,28 @@ impl HillClimb {
             CandidateOrigin::Restart
         };
         self.climbs += 1;
-        (0..count)
-            .map(|_| Proposal::first_evaluation(self.space.random_genome(&mut self.rng), origin))
-            .collect()
+        let mut proposals = Vec::with_capacity(count);
+        let mut proposed = BTreeSet::new();
+        for _ in 0..count {
+            let (space, rng) = (&self.space, &mut self.rng);
+            match draw_config(space, &self.config_candidates, &proposed, || space.random_genome(rng)) {
+                ConfigDraw::New(genome, key) => {
+                    proposed.insert(key);
+                    proposals.push(Proposal::first_evaluation(genome, origin));
+                }
+                ConfigDraw::Known { candidate_id } => {
+                    if self.revisited.insert(candidate_id) {
+                        let known = self
+                            .log
+                            .get(candidate_id)
+                            .expect("a candidate with a config was evaluated");
+                        proposals.push(Proposal::reevaluation(candidate_id, known));
+                    }
+                }
+                ConfigDraw::Proposed => {}
+            }
+        }
+        proposals
     }
 
     /// Returns up to `count` candidates around `incumbent`, a re-evaluation of it first when the settings ask for one.
@@ -173,6 +200,7 @@ impl Searcher for HillClimb {
     fn tell(&mut self, evaluations: &[Evaluation]) {
         let mut starting_points = Vec::new();
         let mut neighbors = Vec::new();
+        let revisited = std::mem::take(&mut self.revisited);
         for evaluation in evaluations {
             let Some((candidate, batch)) = self.tracker.settle(evaluation.candidate_id) else {
                 continue;
@@ -186,6 +214,9 @@ impl Searcher for HillClimb {
             match candidate.origin {
                 CandidateOrigin::Random | CandidateOrigin::Restart => starting_points.push(candidate.id),
                 CandidateOrigin::Neighbor { .. } => neighbors.push(candidate.id),
+                CandidateOrigin::Reevaluation { candidate_id } if revisited.contains(&candidate_id) => {
+                    starting_points.push(candidate_id);
+                }
                 CandidateOrigin::Mutation { .. }
                 | CandidateOrigin::Crossover { .. }
                 | CandidateOrigin::Reevaluation { .. } => {}
@@ -239,7 +270,7 @@ mod tests {
 
     use super::{HillClimb, HillClimbSettings};
     use crate::explore::search::tests::support::{drive, level_space, noise, unit_space};
-    use crate::explore::search::{Aggregate, Candidate, CandidateOrigin, Goal, Objective, Searcher as _};
+    use crate::explore::search::{Aggregate, Candidate, CandidateOrigin, Evaluation, Goal, Objective, Searcher as _};
 
     fn objective() -> Objective {
         Objective {
@@ -302,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn a_neighbor_never_repeats_a_config() {
+    fn no_two_first_evaluations_share_a_config() {
         let settings = HillClimbSettings {
             mutation_scale: 0.1,
             patience: 3,
@@ -313,7 +344,35 @@ mod tests {
         let value = |candidate: &Candidate, replicate| {
             vec![Some(candidate.genome.genes()[0] + 0.1 * noise(candidate.id, replicate))]
         };
-        let asked = drive(&mut climb, 4, 2, value);
+        let mut asked = Vec::new();
+        let mut revisited_starts = 0;
+        while !climb.is_done() {
+            let starting = climb.incumbent.is_none();
+            let batch = climb.ask(4);
+            assert!(!batch.is_empty(), "an ask within the budget returns a candidate");
+            let evaluations: Vec<Evaluation> = batch
+                .iter()
+                .map(|candidate| Evaluation {
+                    candidate_id: candidate.id,
+                    outputs: (0..2)
+                        .map(|index| value(candidate, candidate.replicate_offset + index))
+                        .collect(),
+                })
+                .collect();
+            climb.tell(&evaluations);
+            if starting {
+                assert!(climb.incumbent.is_some(), "every start gives the climb an incumbent");
+                if batch
+                    .iter()
+                    .all(|candidate| candidate.origin.reevaluated_id().is_some())
+                {
+                    revisited_starts += 1;
+                }
+            }
+            asked.extend(batch);
+        }
+        assert_eq!(asked.len(), 200);
+
         let mut keys = BTreeSet::new();
         for candidate in &asked {
             if let CandidateOrigin::Neighbor { parent_id } = candidate.origin {
@@ -322,24 +381,22 @@ mod tests {
                     "a re-evaluation never becomes the incumbent"
                 );
             }
-            if candidate.origin.reevaluated_id().is_some() {
-                continue;
-            }
-            let new = keys.insert(space.config_key(&candidate.genome));
-            if matches!(candidate.origin, CandidateOrigin::Neighbor { .. }) {
+            if candidate.origin.reevaluated_id().is_none() {
                 assert!(
-                    new,
-                    "neighbor {} repeats the config of an earlier candidate",
+                    keys.insert(space.config_key(&candidate.genome)),
+                    "candidate {} repeats the config of an earlier candidate",
                     candidate.id
                 );
             }
         }
+        assert_eq!(keys.len(), 15, "the climb finds every config");
         assert!(
             asked
                 .iter()
                 .any(|candidate| candidate.origin == CandidateOrigin::Restart),
             "the climb runs out of new neighbors and starts over"
         );
+        assert!(revisited_starts > 0, "a start over known configs re-evaluates them");
     }
 
     #[test]

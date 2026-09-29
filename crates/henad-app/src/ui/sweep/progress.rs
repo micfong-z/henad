@@ -63,7 +63,6 @@ pub fn bar_text(progress: &SweepProgress, state: SessionState) -> String {
     match state {
         SessionState::Planning => "Building first configuration".to_owned(),
         SessionState::Paused => format!("Paused · {runs}"),
-        SessionState::PausedByFault => format!("Paused after GPU error · {runs}"),
         SessionState::Running
         | SessionState::Finished
         | SessionState::Aborted
@@ -390,12 +389,17 @@ pub fn result_rows(ending: &Ending, elapsed: Duration, results: &str) -> Vec<Pro
     ]
 }
 
-/// Returns the note under the Result grid of the `noun` that ended as `ending`, `None` for one with no runs left.
+/// Returns the note under the Result grid of the `noun` that ended as `ending`, `None` for one that finished or
+/// failed.
 ///
 /// The note says whether and where the runs it did not write can run. Only results in a folder can resume.
 pub fn result_note(noun: &str, ending: &Ending, in_folder: bool) -> Option<String> {
     let left = ending.planned.saturating_sub(ending.written);
     match ending.state {
+        // An abort or a lost device can land after the last run is written.
+        SessionState::Aborted | SessionState::Stopped if left == 0 => {
+            Some(format!("Every run finished before the {noun} ended."))
+        }
         SessionState::Aborted if in_folder => Some(format!(
             "Press Resume {noun} in the Results tab to run the remaining {left}."
         )),
@@ -435,7 +439,10 @@ pub fn search_rows(standing: &SearchStanding<'_>) -> Vec<ProgressRow> {
     );
     let evaluations = match standing.update {
         Some(update) => {
-            let batches = batch_estimate(budget, search.batch_size, genetic);
+            let batches = match &search.algorithm {
+                SearchAlgorithm::PatternSpaceExploration(settings) => settings.batch_count(budget, search.batch_size),
+                _ => batch_estimate(budget, search.batch_size, genetic),
+            };
             let about = if exact { "" } else { "about " };
             format!(
                 "{} of {budget}, batch {} of {about}{batches}",
@@ -539,18 +546,6 @@ pub fn progress_ui(ui: &mut Ui, view: &ProgressView<'_>, request: &mut Option<Sw
     let session = view.session;
     let (progress, state) = (view.progress, view.state);
     let noun = session.noun();
-    if state == SessionState::PausedByFault {
-        let detail = format!(
-            "The error cannot be traced to a single run. Press Resume to continue, or Abort to end the {noun}."
-        );
-        banner(
-            ui,
-            MDI_ALERT,
-            ui.visuals().warn_fg_color,
-            "Paused after GPU error",
-            &detail,
-        );
-    }
     if let Some(failure) = &session.failure {
         let title = format!("{} failed", capitalize(noun));
         banner(ui, MDI_ALERT, ui.visuals().error_fg_color, &title, failure);
@@ -790,10 +785,6 @@ mod tests {
         );
         assert_eq!(bar_text(&progress, SessionState::Paused), "Paused · 12 of 60 runs");
         assert_eq!(
-            bar_text(&progress, SessionState::PausedByFault),
-            "Paused after GPU error · 12 of 60 runs"
-        );
-        assert_eq!(
             bar_text(&progress, SessionState::Planning),
             "Building first configuration"
         );
@@ -954,6 +945,24 @@ mod tests {
             result_note("sweep", &stopped, true).as_deref(),
             Some("Press Resume sweep in the Results tab to run the rest on a working device.")
         );
+        let aborted_after_the_last_run = Ending {
+            written: 300,
+            ..aborted
+        };
+        for in_folder in [true, false] {
+            assert_eq!(
+                result_note("search", &aborted_after_the_last_run, in_folder).as_deref(),
+                Some("Every run finished before the search ended.")
+            );
+        }
+        let stopped_after_the_last_run = Ending {
+            state: SessionState::Stopped,
+            ..aborted_after_the_last_run
+        };
+        assert_eq!(
+            result_note("sweep", &stopped_after_the_last_run, true).as_deref(),
+            Some("Every run finished before the sweep ended.")
+        );
 
         let failed = Ending::new(SessionState::Failed, None, &progress());
         assert_eq!((failed.written, failed.planned), (10, 60), "waiting runs are dropped");
@@ -1057,6 +1066,21 @@ mod tests {
         assert_eq!(labels(&rows), ["Evaluations", "Cells filled"]);
         assert_eq!(value(&rows, "Evaluations"), "16 of 100, batch 1 of 7");
         assert_eq!(value(&rows, "Cells filled"), "9 of 400");
+        let cut = search(SearchAlgorithm::PatternSpaceExploration(PatternSpaceSettings {
+            initial_samples: 50,
+            ..PatternSpaceSettings::new(axis("Infected:max"), axis("Infected:argmax"))
+        }));
+        let standing = SearchStanding {
+            search: &cut,
+            update: Some(&told),
+            generation: 0,
+            best_values: &[],
+        };
+        assert_eq!(
+            value(&search_rows(&standing), "Evaluations"),
+            "16 of 100, batch 1 of 8",
+            "the 50 initial samples end a batch of their own"
+        );
 
         let automatic = |column: &str| PatternAxis::automatic(column, 20);
         let settings = PatternSpaceSettings::new(automatic("Infected:max"), automatic("Infected:argmax"));

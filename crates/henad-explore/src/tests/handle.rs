@@ -6,15 +6,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use henad_compute::fault::Fault;
 use henad_compute::runner::{Pace, SimLoop as _};
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
+use henad_core::explore::stop::StopSpec;
 use henad_core::export::csv::parse_records;
 use henad_models::registry::ModelEntry;
 
-use crate::exec::Concurrency;
+use crate::exec::{Concurrency, SweepControl};
 use crate::handle::{SweepChannel, SweepEvent, SweepOutput, SweepPhase, SweepRun, SweepRunOptions, SweepStartError};
 use crate::output::manifest::{Manifest, ManifestStatus};
 use crate::output::memory::SweepFiles;
@@ -22,8 +24,10 @@ use crate::output::{MANIFEST_FILE, OutputError, RUNS_FILE, SERIES_FILE, SUMMARY_
 use crate::pumped::PumpedSweep;
 use crate::result_set::ResultSet;
 use crate::schema::model_schema;
-use crate::sweep::{SweepEnd, SweepRecord};
-use crate::tests::support::{ScratchDir, entry, headless_device, provenance, sweep, without_timing};
+use crate::sweep::{SweepEnd, SweepOptions, SweepRecord};
+use crate::tests::support::{
+    CommitLimit, ScratchDir, entry, headless_device, provenance, sweep, sweep_with, ticks_seen, without_timing,
+};
 
 /// Longest a test waits for a sweep to reach a state.
 const PATIENCE: Duration = Duration::from_secs(60);
@@ -69,6 +73,22 @@ fn endless_spec() -> SweepSpec {
     spec.run.replicates = 2;
     spec.measure.stats_every = 1 << 40;
     spec.measure.series_every = 0;
+    spec
+}
+
+/// Returns 16 runs of Game of Life on a 64 by 64 grid, under the stop condition `Alive <= 0`.
+///
+/// The first 8 start empty and stop at tick 0. The last 8 start at a density of 0.3 and step as the runs of
+/// [`endless_spec`] do, for far longer than any test waits. Every run samples at tick 0 and at its end only.
+fn stopping_then_endless_spec() -> SweepSpec {
+    let mut spec = endless_spec();
+    spec.run.replicates = 8;
+    spec.run.stop = Some(StopSpec::parse("Alive <= 0", 0).expect("a valid condition"));
+    spec.blocks = vec![BlockSpec {
+        design: DesignKind::Factorial,
+        factors: vec![FactorSpec::param("density", values(&["0", "0.3"]))],
+        design_seed: None,
+    }];
     spec
 }
 
@@ -222,10 +242,6 @@ fn a_sweep_sends_its_outline_every_run_in_order_and_its_record() {
     assert_eq!(record.manifest.columns.reducers, outline.reducer_columns);
     let files = record.files.as_ref().expect("a sweep in memory hands its files over");
     assert_eq!(String::from_utf8_lossy(&files.runs).lines().count(), 7);
-    assert!(
-        wakes.load(Ordering::Relaxed) >= events.len(),
-        "every event wakes the host"
-    );
 
     let progress = run.progress();
     assert_eq!(progress.phase, SweepPhase::Ended(SweepEnd::Complete));
@@ -236,6 +252,14 @@ fn a_sweep_sends_its_outline_every_run_in_order_and_its_record() {
     assert_eq!(progress.remaining, None);
     assert!(progress.active_runs.is_empty());
     assert!(run.try_recv().is_none(), "nothing follows the record");
+    // The sweep's thread wakes the host after it sends an event. Dropping the handle joins that thread, and the wake
+    // of the last event has run by then.
+    drop(run);
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        events.len(),
+        "every event wakes the host once"
+    );
 
     // The events and the files agree, the series included.
     let set = ResultSet::from_files(files.clone().into_entries(), usize::MAX).expect("the files read back");
@@ -371,22 +395,18 @@ fn a_paused_sweep_holds_every_run_until_resumed() {
     });
 
     run.pause();
-    assert_eq!(run.progress().phase, SweepPhase::Paused);
-    // The slice in flight when the pause landed finishes first.
-    let deadline = Instant::now() + PATIENCE;
-    let held = loop {
-        let before = run.progress();
-        std::thread::sleep(Duration::from_millis(100));
-        let after = run.progress();
-        if after.active_runs == before.active_runs {
-            break after;
-        }
-        assert!(Instant::now() < deadline, "the runs never settled after the pause");
-    };
-    std::thread::sleep(Duration::from_millis(500));
-    let later = run.progress();
-    assert_eq!(later.active_runs, held.active_runs, "no run steps while paused");
-    assert_eq!(later.elapsed, held.elapsed, "the clock stops while paused");
+    let paused = run.progress();
+    assert_eq!(paused.phase, SweepPhase::Paused);
+    // A lane finishes the slice in flight, records its tick and holds at its next check of the control. Each run
+    // therefore moves at most once after the pause, however long that slice takes.
+    let seen = ticks_seen(|| run.progress().active_runs);
+    let held = run.progress();
+    assert_eq!(seen.len(), 2, "both runs stay in progress: {seen:?}");
+    assert!(
+        seen.values().all(|ticks| ticks.len() <= 2),
+        "no run steps while paused: {seen:?}"
+    );
+    assert_eq!(held.elapsed, paused.elapsed, "the clock stops while paused");
 
     run.resume();
     assert_eq!(run.progress().phase, SweepPhase::Running);
@@ -409,10 +429,14 @@ fn a_paused_sweep_holds_every_run_until_resumed() {
 
 #[test]
 fn an_aborted_sweep_finishes_with_the_runs_so_far() {
-    let mut spec = sir_spec(40);
-    spec.run.steps = 300;
-    let mut run =
-        SweepRun::start(entry("sir", None), None, spec, SweepOutput::Memory, options()).expect("the sweep starts");
+    let mut run = SweepRun::start(
+        entry("game_of_life", None),
+        None,
+        stopping_then_endless_spec(),
+        SweepOutput::Memory,
+        options(),
+    )
+    .expect("the sweep starts");
     let mut events = Vec::new();
     let deadline = Instant::now() + PATIENCE;
     while outcomes(&events).len() < 3 {
@@ -430,7 +454,7 @@ fn an_aborted_sweep_finishes_with_the_runs_so_far() {
     assert_eq!(record.report.end, SweepEnd::Aborted);
     assert_eq!(record.manifest.status, ManifestStatus::Aborted);
     assert_eq!(record.report.counts.rows, finished);
-    assert!(finished < 120, "the abort left runs out");
+    assert!(finished <= 8, "no endless run finished: {finished}");
     let ids: Vec<u64> = outcomes(&events).iter().map(|outcome| outcome.run.run_id).collect();
     assert_eq!(ids, (0..finished).collect::<Vec<_>>(), "the runs so far are a prefix");
 
@@ -520,28 +544,25 @@ fn a_resumed_directory_runs_only_the_runs_it_lacks() {
     let spec = sir_spec(2);
     sweep(&entry("sir", None), None, &spec, &fresh_dir, Concurrency::Auto);
 
-    let aborted = SweepRunOptions {
+    // One lane aborts once two runs are written, before the third starts.
+    let control = SweepControl::new();
+    let aborted = SweepOptions {
+        output_dir: Some(resumed_dir.clone()),
         concurrency: Concurrency::Fixed(std::num::NonZeroUsize::MIN),
-        ..options()
+        control: control.clone(),
+        ..SweepOptions::default()
     };
-    let mut run = SweepRun::start(
-        entry("sir", None),
+    let report = sweep_with(
+        &entry("sir", None),
         None,
-        spec,
-        SweepOutput::Directory(resumed_dir.clone()),
-        aborted,
+        &spec,
+        &aborted,
+        &mut CommitLimit::new(control, 2),
     )
-    .expect("the sweep starts");
-    let mut events = Vec::new();
-    while outcomes(&events).len() < 2 && !run.is_ended() {
-        match run.try_recv() {
-            Some(event) => events.push(event),
-            None => std::thread::sleep(Duration::from_millis(1)),
-        }
-    }
-    run.abort();
-    events.extend(drain(&mut run));
-    let kept = record(&events).report.counts.rows;
+    .expect("an abort is not an error");
+    assert_eq!(report.end, SweepEnd::Aborted);
+    let kept = report.counts.rows;
+    assert_eq!(kept, 2, "the directory lacks runs for the resume to run");
 
     let mut run =
         SweepRun::resume_directory(entry("sir", None), None, &resumed_dir, options()).expect("the resume starts");
@@ -562,17 +583,23 @@ fn a_resumed_directory_runs_only_the_runs_it_lacks() {
     assert_eq!((resumed.series, resumed.summary), (fresh.series, fresh.summary));
 }
 
-#[test]
-fn a_gpu_sweep_runs_on_the_handle_thread() {
-    let Some(ctx) = headless_device() else {
-        return;
-    };
+/// Returns 2 runs of GPU SIR on a 32 by 32 grid of 20 steps.
+fn gpu_sir_spec() -> SweepSpec {
     let mut spec = SweepSpec::new("gpu_sir");
     spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
     spec.run.steps = 20;
     spec.run.replicates = 2;
     spec.measure.stats_every = 4;
     spec.measure.series_every = 4;
+    spec
+}
+
+#[test]
+fn a_gpu_sweep_runs_on_the_handle_thread() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
+    let spec = gpu_sir_spec();
     let scratch = ScratchDir::new("handle-gpu");
     let gpu_sir = entry("gpu_sir", Some(&ctx));
     sweep(&gpu_sir, Some(&ctx), &spec, scratch.path(), Concurrency::Auto);
@@ -584,4 +611,39 @@ fn a_gpu_sweep_runs_on_the_handle_thread() {
     let memory = UntimedFiles::new(record.files.as_ref().expect("files in memory"));
     let directory = UntimedFiles::new(&directory_files(scratch.path()));
     assert_eq!((memory.runs, memory.series), (directory.runs, directory.series));
+}
+
+#[test]
+fn a_gpu_sweep_handed_no_device_steps_on_its_own() {
+    let Some(host) = headless_device() else {
+        return;
+    };
+    host.faults
+        .set_once(Fault::refused("drawing the viewport", "a fault of the host's"));
+
+    let gpu_sir = entry("gpu_sir", Some(&host));
+    let budgets = SweepRunOptions {
+        memory_budget: Some(1 << 30),
+        gpu_memory: Some(1 << 26),
+        ..options()
+    };
+    let mut run =
+        SweepRun::start(gpu_sir, None, gpu_sir_spec(), SweepOutput::Memory, budgets).expect("the sweep starts");
+    let events = drain(&mut run);
+    let record = record(&events);
+    assert_eq!((record.report.end, record.report.counts.ok), (SweepEnd::Complete, 2));
+    let execution = &record.manifest.execution;
+    assert_eq!(
+        (execution.memory_budget, execution.gpu_memory_budget),
+        (Some(1 << 30), Some(1 << 26)),
+        "the sweep keeps both budgets it is handed"
+    );
+    assert!(
+        host.faults.take().is_some(),
+        "the host's fault stays on the host's device"
+    );
+    assert!(
+        record.manifest.runtime.adapter.is_some(),
+        "the manifest records the sweep's device"
+    );
 }

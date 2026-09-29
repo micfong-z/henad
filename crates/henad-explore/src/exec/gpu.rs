@@ -39,6 +39,8 @@ use crate::cursor::{OutcomeParts, RunEnd, RunFailure, failed_build_outcome, mill
 /// error scopes ends every live track. A lost device, or a failed wait on it, ends the batch as
 /// [`BatchEnd::DeviceLost`], and a run that failed on the GPU is then left without an outcome.
 ///
+/// The wall time of each round is split evenly between the live runs. A run's timeout reads its share.
+///
 /// # Errors
 ///
 /// Returns [`ExecutionError::Sink`] when `sink` refuses a run.
@@ -48,19 +50,7 @@ pub(super) fn run_on_tracks(
     requests: &[RunRequest<'_>],
     sink: &mut dyn RunSink,
 ) -> Result<BatchEnd, ExecutionError> {
-    let mut interleaver = Interleaver {
-        executor,
-        ctx,
-        requests,
-        unbuilt_requests: (0..requests.len()).collect(),
-        tracks: Vec::new(),
-        track_cap: executor.layout.gpu_tracks.max(1),
-        gpu_memory_budget: gpu_memory_budget(executor.gpu_memory, ctx),
-        admission_held: false,
-        submissions: VecDeque::new(),
-        failed_builds: Vec::new(),
-        reorder: ReorderBuffer::default(),
-    };
+    let mut interleaver = Interleaver::new(executor, ctx, requests);
     loop {
         if !executor.control.proceed() {
             return Ok(BatchEnd::Aborted);
@@ -81,11 +71,12 @@ struct Interleaver<'x> {
     tracks: Vec<GpuTrack>,
     /// Most tracks alive at once.
     track_cap: usize,
-    /// Bytes of device memory the live runs can hold together.
+    /// Bytes of device memory the live runs can hold together. A run larger than the budget runs alone.
     gpu_memory_budget: u64,
     /// Whether admission waits for a live track to end, set when a build runs out of device memory.
     admission_held: bool,
-    /// Command buffers of every track the device has not finished, oldest first.
+    /// Slice command buffers of every track the device has not finished, oldest first. Note that the command buffers
+    /// of actions are left out.
     submissions: VecDeque<Submission>,
     /// Runs whose build failed this round.
     failed_builds: Vec<EndedRun>,
@@ -108,7 +99,24 @@ struct Submission {
     done: Arc<AtomicBool>,
 }
 
-impl Interleaver<'_> {
+impl<'x> Interleaver<'x> {
+    /// Returns an interleaver with no live track, and every request of `requests` queued to build.
+    fn new(executor: &'x Executor<'x>, ctx: &'x GpuContext, requests: &'x [RunRequest<'x>]) -> Self {
+        Self {
+            executor,
+            ctx,
+            requests,
+            unbuilt_requests: (0..requests.len()).collect(),
+            tracks: Vec::new(),
+            track_cap: executor.layout.gpu_tracks.max(1),
+            gpu_memory_budget: gpu_memory_budget(executor.gpu_memory, ctx),
+            admission_held: false,
+            submissions: VecDeque::new(),
+            failed_builds: Vec::new(),
+            reorder: ReorderBuffer::default(),
+        }
+    }
+
     /// Builds the runs that fit, visits every live track once and commits the runs that finished.
     ///
     /// Returns the end of the batch once it has one. A round in which no track moved waits for the device to finish
@@ -235,21 +243,21 @@ impl Interleaver<'_> {
 
     /// Ends every live track on `failure`, a fault that no error scope traced to one track.
     ///
-    /// Each run fails however it ends, a run that ended earlier this round included. The track at `sampled_position`
-    /// drops the sample its latest command buffer read back.
+    /// Each live run fails however it ends. A run that ended earlier this round keeps its end. The track at
+    /// `sampled_position` drops the sample its latest command buffer read back.
     fn fail_every_track(&mut self, failure: &RunFailure, sampled_position: Option<usize>) {
         for (position, track) in self.tracks.iter_mut().enumerate() {
-            track.untraced_failure.get_or_insert_with(|| failure.clone());
             if track.end.is_none() {
+                track.untraced_failure.get_or_insert_with(|| failure.clone());
                 track.fail(failure.clone(), sampled_position == Some(position));
             }
         }
     }
 
-    /// Blocks until the device finishes the oldest command buffer it has not finished.
+    /// Blocks until the device finishes the oldest slice command buffer it has not finished.
     ///
-    /// A buffer the device finished since the last poll lets the next round move, and nothing waits. With no buffer
-    /// on the device, the thread yields instead.
+    /// A buffer the device finished since the last poll lets the next round move, and nothing waits. With no slice
+    /// command buffer on the device, the thread yields instead.
     ///
     /// # Errors
     ///
@@ -266,11 +274,14 @@ impl Interleaver<'_> {
         catching(STEPPING, || stepping::await_submission(ctx, submission_index))?
     }
 
-    /// Adds `elapsed` to the wall time of every live track, and ends a track past its timeout.
+    /// Adds an even share of `elapsed`, the wall time of one round, to the wall time of every live track, and ends a
+    /// track past its timeout.
     fn charge(&mut self, elapsed: Duration) {
         let timeout = self.executor.timeout;
+        let track_count = u32::try_from(self.tracks.len()).unwrap_or(u32::MAX);
+        let share = elapsed.checked_div(track_count).unwrap_or_default();
         for track in &mut self.tracks {
-            track.wall += elapsed;
+            track.wall += share;
             let recording = track.end.is_none() && track.failure.is_none();
             if recording && timeout.is_some_and(|timeout| track.wall >= timeout) {
                 track.end = Some(RunEnd::TimedOut);
@@ -349,10 +360,10 @@ struct GpuTrack {
     population: u64,
     /// Tick and note of each action the model refused, in the order they were due.
     refusals: Vec<(u64, String)>,
-    /// Done flag of each command buffer of the track the device might still hold, oldest first.
+    /// Done flag of each slice command buffer of the track the device might still hold, oldest first.
     done_flags: VecDeque<Arc<AtomicBool>>,
     build_ms: f64,
-    /// Time the run has been live, the pauses of its batch left out.
+    /// Sum of the run's shares of the rounds it was live in, the pauses of its batch left out.
     wall: Duration,
     /// Fault that ended the recording, held while the sample before it reads back.
     failure: Option<RunFailure>,
@@ -487,7 +498,7 @@ impl GpuTrack {
     /// there, or the steps to the next tick anything is due at.
     ///
     /// A command buffer that reaches a sampled tick with nothing due there and no readback in flight holds the stats
-    /// passes of that sample too. Each recorded buffer goes on `submissions`.
+    /// passes of that sample too. That command buffer goes on `submissions`. The actions' command buffers do not.
     ///
     /// # Errors
     ///
@@ -622,5 +633,104 @@ fn poll_fault(error: wgpu::PollError) -> Fault {
     Fault {
         during: STEPPING,
         kind: FaultKind::Poll(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use henad_compute::gpu::GpuContext;
+    use henad_core::explore::measure::MeasurePlan;
+    use henad_core::explore::outcome::{RunStatus, StopReason};
+    use henad_core::explore::plan::Plan;
+    use henad_core::explore::spec::SweepSpec;
+    use henad_models::registry::ModelEntry;
+
+    use super::Interleaver;
+    use crate::cursor::{RunEnd, RunFailure};
+    use crate::exec::{Executor, RunRequest, SweepControl};
+    use crate::tests::support::{entry, headless_device, planned, tracks};
+
+    /// Returns the model and plan of four `gpu_game_of_life` runs, and the plan's measure plan.
+    fn four_runs(ctx: &GpuContext) -> (ModelEntry, Plan, Arc<MeasurePlan>) {
+        let mut spec = SweepSpec::new("gpu_game_of_life");
+        spec.fixed = vec![
+            ("grid_width".to_owned(), "16".to_owned()),
+            ("grid_height".to_owned(), "16".to_owned()),
+        ];
+        spec.run.steps = 10;
+        spec.run.replicates = 4;
+        let model = entry("gpu_game_of_life", Some(ctx));
+        let (plan, measure) = planned(&model, Some(ctx), &spec);
+        (model, plan, measure)
+    }
+
+    /// Returns the executor of `model` on four tracks, each run with `timeout`.
+    fn executor<'e>(
+        model: &'e ModelEntry,
+        ctx: &'e GpuContext,
+        measure: &Arc<MeasurePlan>,
+        timeout: Option<Duration>,
+    ) -> Executor<'e> {
+        Executor::new(model, Some(ctx), Arc::clone(measure), tracks(4), SweepControl::new())
+            .expect("a device")
+            .with_timeout(timeout)
+    }
+
+    #[test]
+    fn a_round_is_split_evenly_between_the_live_tracks() {
+        let Some(ctx) = headless_device() else {
+            return;
+        };
+        let (model, plan, measure) = four_runs(&ctx);
+        let executor = executor(&model, &ctx, &measure, Some(Duration::from_millis(30)));
+        let requests: Vec<RunRequest<'_>> = plan.runs().map(|run| RunRequest::planned(&plan, run)).collect();
+        let mut interleaver = Interleaver::new(&executor, &ctx, &requests);
+        interleaver.admit();
+        assert_eq!(interleaver.tracks.len(), 4);
+
+        interleaver.charge(Duration::from_millis(100));
+        for track in &interleaver.tracks {
+            assert_eq!(track.wall, Duration::from_millis(25), "run {}", track.run.run_id);
+            assert!(track.end.is_none(), "a share of 25 ms is inside the timeout of 30 ms");
+        }
+        interleaver.charge(Duration::from_millis(40));
+        for track in &interleaver.tracks {
+            assert_eq!(track.wall, Duration::from_millis(35), "run {}", track.run.run_id);
+            assert!(matches!(track.end, Some(RunEnd::TimedOut)), "run {}", track.run.run_id);
+        }
+    }
+
+    #[test]
+    fn an_untraced_fault_leaves_a_run_that_ended_alone() {
+        let Some(ctx) = headless_device() else {
+            return;
+        };
+        let (model, plan, measure) = four_runs(&ctx);
+        let executor = executor(&model, &ctx, &measure, None);
+        let requests: Vec<RunRequest<'_>> = plan.runs().map(|run| RunRequest::planned(&plan, run)).collect();
+        let mut interleaver = Interleaver::new(&executor, &ctx, &requests);
+        interleaver.admit();
+        interleaver.tracks[0].end = Some(RunEnd::Stopped(StopReason::Steps));
+
+        let failure = RunFailure {
+            status: RunStatus::GpuError,
+            note: "a validation error on another track".to_owned(),
+        };
+        interleaver.fail_every_track(&failure, None);
+        let mut tracks = std::mem::take(&mut interleaver.tracks).into_iter();
+        let mut ended = tracks.next().expect("four tracks are live");
+        let end = ended.end.take().expect("the run ended before the fault");
+        let outcome = ended.finish(end, None).outcome;
+        assert_eq!(
+            (outcome.status, outcome.stop_reason),
+            (RunStatus::Ok, StopReason::Steps)
+        );
+        for live in tracks {
+            assert!(live.untraced_failure.is_some(), "run {}", live.run.run_id);
+            assert!(live.failure.is_some(), "run {}", live.run.run_id);
+        }
     }
 }

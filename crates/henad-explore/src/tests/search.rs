@@ -2,7 +2,7 @@
 //! search a browser runs, and a search of a GPU model.
 
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,7 +15,7 @@ use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
 use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, SearchSpec};
 use henad_core::explore::spec::{ActionSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
-use henad_core::export::csv::parse_records;
+use henad_core::export::csv::{escape_field, parse_records};
 use henad_models::registry::ModelEntry;
 
 use crate::cursor::{CursorState, RunCursor};
@@ -25,8 +25,8 @@ use crate::output::manifest::{Manifest, ManifestAxisRanges, ManifestMode, Manife
 use crate::output::resume::ResumeError;
 use crate::output::search_tables::SearchHistory;
 use crate::output::{
-    ARCHIVE_FILE, BATCHES_FILE, BEST_FILE, EVALUATIONS_FILE, GENERATIONS_FILE, MANIFEST_FILE, RUNS_FILE, SERIES_FILE,
-    SUMMARY_FILE,
+    ARCHIVE_FILE, BATCHES_FILE, BEST_FILE, EVALUATIONS_FILE, GENERATIONS_FILE, MANIFEST_FILE, OutputError, RUNS_FILE,
+    SERIES_FILE, SUMMARY_FILE,
 };
 use crate::progress::{NoProgress, Progress, ProgressEvent};
 use crate::pumped::PumpedSweep;
@@ -35,7 +35,10 @@ use crate::schema::model_schema;
 use crate::search_run::{EvaluationReading, SearchPlan, SearchPlanError, run_search};
 use crate::spec_file::SpecFile;
 use crate::sweep::{ExploreError, SpecSource, SweepEnd, SweepOptions, SweepReport};
-use crate::tests::support::{ScratchDir, Tables, entry, headless_device, planned, provenance, sweep, without_timing};
+use crate::tests::support::{
+    CommitLimit, OutputTables, ScratchDir, entry, headless_device, planned, provenance, sweep, sweep_options,
+    without_timing,
+};
 
 /// Longest a test waits for a search to end.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(120);
@@ -180,22 +183,53 @@ fn search(
     search_with(entry, gpu, spec, &options, &mut NoProgress).expect("the search runs")
 }
 
+/// Returns the search tables a search of `spec` writes, its closing table last.
+///
+/// # Panics
+///
+/// Panics when `spec` has no search.
+fn written_search_files(spec: &SweepSpec) -> Vec<&'static str> {
+    let algorithm = &spec.search.as_ref().expect("a search spec").algorithm;
+    let mut files = vec![EVALUATIONS_FILE, BATCHES_FILE];
+    if matches!(algorithm, SearchAlgorithm::Genetic(_)) {
+        files.push(GENERATIONS_FILE);
+    }
+    files.push(match algorithm {
+        SearchAlgorithm::PatternSpaceExploration(_) => ARCHIVE_FILE,
+        SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => BEST_FILE,
+    });
+    files
+}
+
 /// Every table of a search's output directory, with the timing columns of `runs.csv` emptied.
 #[derive(Debug, PartialEq, Eq)]
 struct SearchTables {
-    tables: Tables,
-    /// Text of each search table the directory holds, by file name.
+    tables: OutputTables,
+    /// Text of each search table the search wrote, by file name.
     search_tables: Vec<(&'static str, String)>,
 }
 
 impl SearchTables {
-    fn read(dir: &Path) -> Self {
-        let search_tables = SEARCH_FILES
+    /// Reads the tables a search of `spec` wrote to `dir`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a table the search writes is missing, or a table it does not write is there.
+    fn read(dir: &Path, spec: &SweepSpec) -> Self {
+        let written = written_search_files(spec);
+        for file in SEARCH_FILES.into_iter().filter(|file| !written.contains(file)) {
+            assert!(!dir.join(file).exists(), "a search of this kind writes no {file}");
+        }
+        let search_tables = written
             .into_iter()
-            .filter_map(|file| Some((file, std::fs::read_to_string(dir.join(file)).ok()?)))
+            .map(|file| {
+                let text = std::fs::read_to_string(dir.join(file))
+                    .unwrap_or_else(|error| panic!("the search wrote {file}: {error}"));
+                (file, text)
+            })
             .collect();
         Self {
-            tables: Tables::read(dir),
+            tables: OutputTables::read(dir),
             search_tables,
         }
     }
@@ -261,11 +295,12 @@ fn every_example_search_spec_parses() {
 fn a_search_writes_the_same_tables_at_any_concurrency() {
     let sir = entry("sir", None);
     let scratch = ScratchDir::new("search-any-concurrency");
-    // A generation of 8 asks for batches of 6 and 2, and the other searches for batches of 6.
+    // A generation of 8 asks for batches of 6 and 2, and the other searches for batches of 6. A PSE cuts its second
+    // batch at the last of its 10 initial samples.
     for (name, algorithm, batches) in [
         ("genetic", genetic(), 7),
         ("hill", hill_climb(), 5),
-        ("pse", pattern(), 5),
+        ("pse", pattern(), 6),
     ] {
         let spec = search_spec(algorithm, 30);
         let tables: Vec<SearchTables> = [1, 3]
@@ -276,10 +311,14 @@ fn a_search_writes_the_same_tables_at_any_concurrency() {
                 assert_eq!(report.end, SweepEnd::Complete);
                 assert_eq!(report.outline.layout.cpu_lanes, count, "{name}");
                 assert_eq!(report.counts.rows, 60, "{name}: 30 evaluations of 2 replicates");
-                SearchTables::read(&output_dir)
+                SearchTables::read(&output_dir, &spec)
             })
             .collect();
         let first = &tables[0];
+        let closing = *written_search_files(&spec)
+            .last()
+            .expect("a search writes a closing table");
+        assert!(first.table(closing).len() > 1, "{name}: {closing} holds the candidates");
         assert_eq!(first.tables.runs.len(), 1 + 60, "{name}");
         assert_eq!(first.table(EVALUATIONS_FILE).len(), 1 + 30, "{name}");
         assert_eq!(first.table(BATCHES_FILE).len(), 1 + batches, "{name}");
@@ -292,13 +331,13 @@ fn a_search_writes_the_same_tables_at_any_concurrency() {
         );
         assert_eq!(tables[1], *first, "{name}: 3 lanes against 1");
     }
-    let genetic_tables = SearchTables::read(&scratch.path().join("genetic-1"));
+    let genetic_tables = SearchTables::read(&scratch.path().join("genetic-1"), &search_spec(genetic(), 30));
     assert!(
         genetic_tables.table(GENERATIONS_FILE).len() > 1,
         "a genetic algorithm writes its generations"
     );
     assert!(genetic_tables.table(BEST_FILE).len() > 1);
-    let pattern_tables = SearchTables::read(&scratch.path().join("pse-1"));
+    let pattern_tables = SearchTables::read(&scratch.path().join("pse-1"), &search_spec(pattern(), 30));
     let archive = pattern_tables.table(ARCHIVE_FILE);
     assert!(archive.len() > 2, "the exploration fills cells");
     let hits: u64 = archive[1..]
@@ -314,7 +353,7 @@ fn a_reevaluation_gets_fresh_replicate_indices_and_seeds() {
     let scratch = ScratchDir::new("search-reevaluation");
     let spec = search_spec(genetic(), 30);
     search(&sir, None, &spec, scratch.path(), lane_count(1));
-    let tables = SearchTables::read(scratch.path());
+    let tables = SearchTables::read(scratch.path(), &spec);
     let evaluations = tables.table(EVALUATIONS_FILE);
     let column = |name: &str| {
         evaluations[0]
@@ -378,37 +417,19 @@ fn a_reevaluation_gets_fresh_replicate_indices_and_seeds() {
     }
 }
 
-/// Progress that aborts `control` once `limit` runs are committed.
-struct CommitLimit {
-    control: SweepControl,
-    limit: usize,
-    committed: usize,
-}
-
-impl Progress for CommitLimit {
-    fn report(&mut self, event: &ProgressEvent<'_>) {
-        if let ProgressEvent::RunCommitted(_) = event {
-            self.committed += 1;
-            if self.committed == self.limit {
-                self.control.abort();
-            }
-        }
-    }
-}
-
 #[test]
 fn a_resumed_search_follows_the_same_trajectory() {
     let sir = entry("sir", None);
     let scratch = ScratchDir::new("search-resume");
     for (name, algorithm, batches) in [
         ("genetic", genetic(), 7),
-        ("pse", pattern(), 5),
-        ("pse-automatic", automatic_pattern(), 5),
+        ("pse", pattern(), 6),
+        ("pse-automatic", automatic_pattern(), 6),
     ] {
         let spec = search_spec(algorithm, 30);
         let fresh_dir = scratch.path().join(format!("{name}-fresh"));
         search(&sir, None, &spec, &fresh_dir, lane_count(2));
-        let fresh = SearchTables::read(&fresh_dir);
+        let fresh = SearchTables::read(&fresh_dir, &spec);
 
         let resumed_dir = scratch.path().join(format!("{name}-resumed"));
         let control = SweepControl::new();
@@ -418,11 +439,7 @@ fn a_resumed_search_follows_the_same_trajectory() {
             control: control.clone(),
             ..SweepOptions::default()
         };
-        let mut abort = CommitLimit {
-            control,
-            limit: 17,
-            committed: 0,
-        };
+        let mut abort = CommitLimit::new(control, 17);
         let report = search_with(&sir, None, &spec, &interrupted, &mut abort).expect("an abort is not an error");
         assert_eq!(report.end, SweepEnd::Aborted, "{name}");
         let kept = report.counts.rows;
@@ -445,7 +462,7 @@ fn a_resumed_search_follows_the_same_trajectory() {
         );
         assert_eq!(report.counts.rows, 60);
         assert_eq!(
-            SearchTables::read(&resumed_dir),
+            SearchTables::read(&resumed_dir, &spec),
             fresh,
             "{name}: the resumed tables equal a fresh search's"
         );
@@ -482,10 +499,7 @@ fn a_resume_that_meets_a_changed_run_leaves_the_directory_alone() {
     // The last run gets another key, as under a build whose last batch decodes differently.
     let runs_path = scratch.path().join(RUNS_FILE);
     let text = std::fs::read_to_string(&runs_path).expect("runs.csv reads");
-    let mut records: Vec<Vec<String>> = text
-        .lines()
-        .map(|line| line.split(',').map(str::to_owned).collect())
-        .collect();
+    let mut records = parse_records(&text).expect("runs.csv is valid CSV");
     let run_key = records[0]
         .iter()
         .position(|header| header == "run_key")
@@ -493,9 +507,15 @@ fn a_resume_that_meets_a_changed_run_leaves_the_directory_alone() {
     let last = records.last_mut().expect("runs.csv holds runs");
     let changed_run_id: u64 = last[0].parse().expect("a run id");
     last[run_key] = "0".to_owned();
-    let lines: Vec<String> = records.iter().map(|record| format!("{}\n", record.join(","))).collect();
+    let lines: Vec<String> = records
+        .iter()
+        .map(|record| {
+            let fields: Vec<String> = record.iter().map(|field| escape_field(field)).collect();
+            format!("{}\n", fields.join(","))
+        })
+        .collect();
     std::fs::write(&runs_path, lines.concat()).expect("runs.csv writes");
-    let before = SearchTables::read(scratch.path());
+    let before = SearchTables::read(scratch.path(), &spec);
     let manifest_before = std::fs::read(scratch.path().join(MANIFEST_FILE)).expect("the manifest reads");
 
     let resume = SweepOptions {
@@ -512,7 +532,7 @@ fn a_resume_that_meets_a_changed_run_leaves_the_directory_alone() {
         "{error:?}"
     );
     assert_eq!(
-        SearchTables::read(scratch.path()),
+        SearchTables::read(scratch.path(), &spec),
         before,
         "every table is left as it was"
     );
@@ -632,6 +652,50 @@ fn a_watched_column_must_name_a_reducer() {
     assert_eq!(known, ["Infected:max", "Infected:argmax"]);
 }
 
+/// Progress that puts a directory where `best.csv` goes once a batch is told. The search then fails as it ends.
+struct ClosingTableBlocker {
+    output_dir: PathBuf,
+}
+
+impl Progress for ClosingTableBlocker {
+    fn report(&mut self, event: &ProgressEvent<'_>) {
+        let path = self.output_dir.join(BEST_FILE);
+        if matches!(event, ProgressEvent::SearchBatchTold(_)) && !path.exists() {
+            std::fs::create_dir(&path).expect("the directory is created");
+        }
+    }
+}
+
+#[test]
+fn a_failed_search_records_its_standing_in_the_manifest() {
+    let scratch = ScratchDir::new("search-failed-standing");
+    let mut blocker = ClosingTableBlocker {
+        output_dir: scratch.path().to_owned(),
+    };
+    let error = search_with(
+        &entry("sir", None),
+        None,
+        &search_spec(SearchAlgorithm::Random, 12),
+        &sweep_options(scratch.path(), false),
+        &mut blocker,
+    )
+    .expect_err("best.csv cannot be written");
+    assert!(
+        matches!(&error, ExploreError::Output(OutputError::Write { path, .. }) if path.ends_with(BEST_FILE)),
+        "{error:?}"
+    );
+
+    let manifest = Manifest::read(&scratch.path().join(MANIFEST_FILE)).expect("the manifest reads back");
+    assert_eq!(manifest.status, ManifestStatus::Failed);
+    let search = manifest.search.expect("a search records its standing");
+    assert_eq!((search.evaluations, search.batch_count), (12, 2));
+    assert!(search.best_candidate_id.is_some());
+    for (file, rows) in [(EVALUATIONS_FILE, 12), (BATCHES_FILE, 2)] {
+        let table = std::fs::read_to_string(scratch.path().join(file)).expect("the table reads");
+        assert_eq!(table.lines().count(), 1 + rows, "{file}");
+    }
+}
+
 /// Receives the events of `run` until its last one, and returns them.
 fn drain(run: &mut SweepRun) -> Vec<SweepEvent> {
     let deadline = Instant::now() + SEARCH_TIMEOUT;
@@ -696,19 +760,27 @@ fn a_search_through_a_handle_sends_each_batch_after_its_runs() {
     assert!(run.search_plan().is_some());
     let events = drain(&mut run);
     let mut runs_seen = 0;
+    let mut run_candidates = Vec::new();
     let mut batches = Vec::new();
     for event in &events {
         match event {
             SweepEvent::RunFinished { outcome, .. } => {
-                assert_eq!(
-                    outcome.run.config_id / 6,
-                    batches.len() as u64,
-                    "runs come before their batch"
-                );
+                run_candidates.push(outcome.run.config_id);
                 runs_seen += 1;
             }
             SweepEvent::SearchBatchTold(update) => {
                 assert_eq!(update.runs, runs_seen, "a batch follows its runs");
+                run_candidates.dedup();
+                let told: Vec<u64> = update
+                    .evaluated
+                    .iter()
+                    .map(|evaluated| evaluated.candidate_id)
+                    .collect();
+                assert_eq!(
+                    std::mem::take(&mut run_candidates),
+                    told,
+                    "runs come before their batch"
+                );
                 assert!(
                     update
                         .evaluated
@@ -723,7 +795,11 @@ fn a_search_through_a_handle_sends_each_batch_after_its_runs() {
             SweepEvent::Finished(_) | SweepEvent::Failed(_) | SweepEvent::Warned(_) => {}
         }
     }
-    assert_eq!(batches, [0, 1, 2]);
+    assert_eq!(
+        batches,
+        [0, 1, 2, 3],
+        "batches of 6 and 4 initial samples, then of 6 and 2"
+    );
     let Some(SweepEvent::Finished(record)) = events.last() else {
         panic!("the search did not finish: {:?}", events.last());
     };
@@ -801,7 +877,7 @@ fn a_gpu_search_writes_the_same_tables_on_any_track_count() {
             let report = search(&gpu_sir, Some(&ctx), &spec, &output_dir, lane_count(count));
             assert_eq!(report.outline.layout.gpu_tracks, count);
             assert_eq!((report.counts.rows, report.counts.ok), (24, 24));
-            SearchTables::read(&output_dir)
+            SearchTables::read(&output_dir, &spec)
         })
         .collect();
     assert_eq!(tables[0].table(BEST_FILE).len(), 1 + 12, "every candidate is ranked");

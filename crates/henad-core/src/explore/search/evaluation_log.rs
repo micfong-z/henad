@@ -24,7 +24,9 @@ pub struct CandidateRecord {
     genome: Genome,
     first_batch: u64,
     evaluations: u64,
-    /// Objective value of each replicate in the order told, `None` for a failed one.
+    /// Objective value of each replicate in the order told, `None` for a replicate told no value.
+    ///
+    /// A failed replicate holds `None` or a value that is not finite.
     values: Vec<Option<f64>>,
     /// Objective over every value of `values`.
     objective: f64,

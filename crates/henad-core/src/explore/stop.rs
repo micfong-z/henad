@@ -67,6 +67,21 @@ impl Comparison {
     pub fn holds(self, value: f64) -> bool {
         !value.is_nan() && self.comparator.compare(value, self.threshold)
     }
+
+    /// Checks that the threshold is finite, as text read through [`FromStr`] always is.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ComparisonError::BadThreshold`] for a threshold that is infinite or NaN.
+    pub fn check(self) -> Result<(), ComparisonError> {
+        if self.threshold.is_finite() {
+            Ok(())
+        } else {
+            Err(ComparisonError::BadThreshold {
+                raw: self.threshold.to_string(),
+            })
+        }
+    }
 }
 
 impl fmt::Display for Comparison {
@@ -81,14 +96,14 @@ impl FromStr for Comparison {
 
     /// Reads a comparator followed by a finite threshold, with optional spaces around either.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let text = raw.trim_start();
+        let text = raw.trim();
         let (comparator, threshold) = Comparator::PARSE_ORDER
             .iter()
             .find_map(|&comparator| {
                 text.strip_prefix(comparator.as_str())
                     .map(|rest| (comparator, rest.trim()))
             })
-            .ok_or_else(|| ComparisonError::MissingComparator { raw: raw.to_owned() })?;
+            .ok_or_else(|| ComparisonError::MissingComparator { raw: text.to_owned() })?;
         let threshold = threshold
             .parse::<f64>()
             .ok()
@@ -100,10 +115,10 @@ impl FromStr for Comparison {
     }
 }
 
-/// Text that does not read as a [`Comparison`].
+/// Text that does not read as a [`Comparison`], or a threshold that is not finite.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComparisonError {
-    /// Text that does not start with a comparator.
+    /// Text, trimmed, that does not start with a comparator.
     MissingComparator { raw: String },
     /// A threshold that is not a finite number.
     BadThreshold { raw: String },
@@ -112,6 +127,9 @@ pub enum ComparisonError {
 impl fmt::Display for ComparisonError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingComparator { raw } if raw.is_empty() => {
+                write!(f, "missing comparator, expected <, <=, >, >=, == or !=")
+            }
             Self::MissingComparator { raw } => write!(f, "'{raw}' does not start with <, <=, >, >=, == or !="),
             Self::BadThreshold { raw } => write!(f, "threshold '{raw}' is not a finite number"),
         }
@@ -159,6 +177,19 @@ impl StopSpec {
         })
     }
 
+    /// Checks that the threshold is finite, as [`StopSpec::parse`] does for a condition written as text.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StopError::NonFiniteThreshold`] for a threshold that is infinite or NaN.
+    pub fn check_threshold(&self) -> Result<(), StopError> {
+        if self.comparison.threshold.is_finite() {
+            Ok(())
+        } else {
+            Err(StopError::NonFiniteThreshold { raw: self.to_string() })
+        }
+    }
+
     /// Checks the column against the stat labels a model declares, as [`ReducerSpec::check_label`] does.
     ///
     /// [`ReducerSpec::check_label`]: crate::explore::reducer::ReducerSpec::check_label
@@ -193,6 +224,8 @@ pub enum StopError {
     MissingColumn { raw: String },
     /// A condition whose comparison cannot be read, for the reason in `source`.
     Comparison { raw: String, source: ComparisonError },
+    /// A condition built with a threshold that is infinite or NaN. `raw` is the condition as text.
+    NonFiniteThreshold { raw: String },
     /// A column no stat series gives. `known` lists the columns or labels there are.
     UnknownColumn { column: String, known: Vec<String> },
 }
@@ -206,6 +239,9 @@ impl fmt::Display for StopError {
                     f,
                     "invalid stop condition '{raw}', expected COLUMN COMPARATOR THRESHOLD"
                 )
+            }
+            Self::NonFiniteThreshold { raw } => {
+                write!(f, "stop condition '{raw}' has a threshold that is not a finite number")
             }
             Self::UnknownColumn { column, known } => {
                 write!(
@@ -222,7 +258,7 @@ impl std::error::Error for StopError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Comparison { source, .. } => Some(source),
-            Self::MissingColumn { .. } | Self::UnknownColumn { .. } => None,
+            Self::MissingColumn { .. } | Self::NonFiniteThreshold { .. } | Self::UnknownColumn { .. } => None,
         }
     }
 }
@@ -263,6 +299,10 @@ impl StopCondition {
     /// Returns whether the sample `row`, taken at `tick`, ends the run.
     ///
     /// `row` holds a value per stat column.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `row` holds no value at [`Self::column`].
     pub fn holds(&self, tick: u64, row: &[f64]) -> bool {
         tick >= self.min_tick && self.comparison.holds(row[self.column])
     }
@@ -359,6 +399,50 @@ mod tests {
             StopSpec::parse("Infected <= x", 0).map_err(|error| error.to_string()),
             Err("invalid stop condition 'Infected <= x', expected COLUMN COMPARATOR THRESHOLD".to_owned())
         );
+    }
+
+    /// The fragment an error quotes is trimmed, and a missing comparator is named as missing.
+    #[test]
+    fn a_missing_comparator_quotes_the_trimmed_text() {
+        assert_eq!(
+            " 0 ".parse::<Comparison>(),
+            Err(ComparisonError::MissingComparator { raw: "0".to_owned() })
+        );
+        let error = "".parse::<Comparison>().expect_err("no comparator");
+        assert_eq!(error.to_string(), "missing comparator, expected <, <=, >, >=, == or !=");
+    }
+
+    /// The regression. A comparison built outside [`std::str::FromStr`] could hold an infinite threshold. It held
+    /// at the first sample, and its spec written back as text did not read.
+    #[test]
+    fn a_threshold_that_is_not_finite_is_refused() {
+        for threshold in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let spec = StopSpec {
+                column: "Infected".to_owned(),
+                comparison: Comparison {
+                    comparator: Comparator::LessOrEqual,
+                    threshold,
+                },
+                min_tick: 0,
+            };
+            assert_eq!(
+                spec.check_threshold(),
+                Err(StopError::NonFiniteThreshold { raw: spec.to_string() })
+            );
+            assert!(StopSpec::parse(&spec.to_string(), 0).is_err(), "{spec}");
+        }
+        let infinite = StopSpec {
+            comparison: Comparison {
+                comparator: Comparator::LessOrEqual,
+                threshold: f64::INFINITY,
+            },
+            ..stop("Infected <= 0")
+        };
+        assert_eq!(
+            infinite.check_threshold().map_err(|error| error.to_string()),
+            Err("stop condition 'Infected <= inf' has a threshold that is not a finite number".to_owned())
+        );
+        assert_eq!(stop("Infected <= 0").check_threshold(), Ok(()));
     }
 
     #[test]

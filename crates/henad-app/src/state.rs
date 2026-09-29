@@ -114,8 +114,9 @@ pub struct AppState {
     pub history_len: usize,
     /// Fixed for the life of the process, collected once at startup.
     pub runtime: RuntimeInfo,
-    /// Device and queue for rendering, present wherever the app runs. Errors are reported into
-    /// `faults`. `gpu_ctx` below is a different thing, and gates GPU models.
+    /// Device and queue for rendering, present wherever the app runs. The renderer and the live
+    /// simulation report their errors into `faults`. A GPU sweep steps on a device of its own, and
+    /// its errors stay with the sweep. `gpu_ctx` below is a different thing, and gates GPU models.
     pub render_ctx: GpuContext,
     /// The fault being shown, cleared when the user dismisses the modal.
     pub fault: Option<Fault>,
@@ -328,7 +329,7 @@ impl AppState {
         let declared = self.registry[model_index].param_descriptors.len();
         if replay.params.len() != declared {
             return Err(format!(
-                "Run sets {} parameters, but {} has {declared}",
+                "This run sets {} parameters, but {} has {declared}",
                 replay.params.len(),
                 replay.model
             ));
@@ -453,7 +454,7 @@ impl AppState {
         self.run_to_target = None;
     }
 
-    /// Stops everything and hands the fault to the modal.
+    /// Offloads the live simulation and hands the fault to the modal. A running sweep carries on.
     pub fn report_fault(&mut self, fault: Fault) {
         log::error!("{fault}");
         self.offload_simulation();

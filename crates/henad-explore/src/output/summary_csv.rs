@@ -5,14 +5,16 @@
 //! runs that did not fail. `n` counts the finite values, and a statistic with too few of them is an empty cell.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::fmt;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::ops::Range;
 
 use henad_core::explore::outcome::RunStatus;
 use henad_core::explore::summary::{ReplicateSummary, SummaryAccumulator};
 use henad_core::export::csv::{CsvError, escape_field, fmt_f64, parse_records};
 
+use crate::output::read::{RecordScan, shifted};
 use crate::output::runs_csv::{NOTE_COLUMN, OUTCOME_COLUMNS};
 
 /// Statistics written for each reducer, as suffixes of its column name.
@@ -39,6 +41,8 @@ pub enum SummaryError {
         column: String,
         text: String,
     },
+    /// Reading `runs.csv` failed, or it is not UTF-8.
+    Read(io::Error),
     /// Writing the summary failed.
     Io(io::Error),
 }
@@ -47,6 +51,7 @@ impl fmt::Display for SummaryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Csv(_) => f.write_str("runs.csv is not valid CSV"),
+            Self::Read(_) => f.write_str("cannot read runs.csv"),
             Self::MissingColumn { column } => write!(f, "runs.csv has no '{column}' column"),
             Self::FieldCount {
                 record_number,
@@ -75,7 +80,7 @@ impl std::error::Error for SummaryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Csv(error) => Some(error),
-            Self::Io(error) => Some(error),
+            Self::Read(error) | Self::Io(error) => Some(error),
             Self::MissingColumn { .. } | Self::FieldCount { .. } | Self::BadField { .. } => None,
         }
     }
@@ -102,6 +107,8 @@ struct RunsLayout {
 }
 
 impl RunsLayout {
+    /// Finds the columns in `header`. Each column after the parameters is looked for after the one before it, and
+    /// from the end of the header, so the ranges between them never run backwards.
     fn read(header: &[String]) -> Result<Self, SummaryError> {
         let find_first = |column: &'static str| {
             header
@@ -109,55 +116,109 @@ impl RunsLayout {
                 .position(|name| name == column)
                 .ok_or(SummaryError::MissingColumn { column })
         };
-        let find_last = |column: &'static str| {
+        let find_last_from = |start: usize, column: &'static str| {
             header
-                .iter()
-                .rposition(|name| name == column)
+                .get(start..)
+                .and_then(|rest| rest.iter().rposition(|name| name == column))
+                .map(|position| start + position)
                 .ok_or(SummaryError::MissingColumn { column })
         };
         let last_outcome = OUTCOME_COLUMNS[OUTCOME_COLUMNS.len() - 1];
         let config_id = find_first("config_id")?;
         let block = find_first("block")?;
         let values_start = find_first("run_key")? + 1;
-        let status = find_last("status")?;
+        let status = find_last_from(values_start, "status")?;
+        let reducers_start = find_last_from(status, last_outcome)? + 1;
         Ok(Self {
             config_id,
             block,
             values: values_start..status,
             status,
-            ticks: find_last("ticks")?,
-            reducers: find_last(last_outcome)? + 1..find_last(NOTE_COLUMN)?,
+            ticks: find_last_from(status, "ticks")?,
+            reducers: reducers_start..find_last_from(reducers_start, NOTE_COLUMN)?,
         })
     }
 }
 
-/// Block and values of one config, as `runs.csv` writes them.
-struct ConfigFields<'r> {
-    block: &'r str,
-    values: &'r [String],
+/// Reader of the records of a CSV text, one at a time.
+struct RecordReader<R> {
+    source: R,
+    /// Text of the record being read.
+    text: Vec<u8>,
+    /// Line feeds read so far.
+    line_feeds: usize,
 }
 
-/// Reads `runs`, the text of a `runs.csv`, writes the summary of every config in it to `dest`, and hands `dest` back.
+impl<R: BufRead> RecordReader<R> {
+    fn new(source: R) -> Self {
+        Self {
+            source,
+            text: Vec::new(),
+            line_feeds: 0,
+        }
+    }
+
+    /// Returns the fields of the next record, or `None` at the end of the text. The last record's line ending is
+    /// optional.
+    fn next_record(&mut self) -> Result<Option<Vec<String>>, SummaryError> {
+        self.text.clear();
+        let lines_before = self.line_feeds;
+        let mut scan = RecordScan::FieldStart;
+        let mut record_ended = false;
+        while !record_ended {
+            let start = self.text.len();
+            // A read stops after the first line feed, the one byte that can end a record.
+            if self
+                .source
+                .read_until(b'\n', &mut self.text)
+                .map_err(SummaryError::Read)?
+                == 0
+            {
+                break;
+            }
+            for &byte in &self.text[start..] {
+                (scan, record_ended) = scan.advance(byte);
+            }
+            if self.text.ends_with(b"\n") {
+                self.line_feeds += 1;
+            }
+        }
+        if self.text.is_empty() {
+            return Ok(None);
+        }
+        let text = std::str::from_utf8(&self.text)
+            .map_err(|error| SummaryError::Read(io::Error::new(io::ErrorKind::InvalidData, error)))?;
+        let record = parse_records(text)
+            .map_err(|error| SummaryError::Csv(shifted(&error, lines_before)))?
+            .into_iter()
+            .next();
+        Ok(record)
+    }
+}
+
+/// Reads `runs`, a `runs.csv`, writes the summary of every config in it to `dest`, and hands `dest` back.
 ///
-/// Configs are written in id order. Note that the statistics depend on the order of the runs in `runs`, down to the
-/// last bit.
+/// The runs are read one record at a time. Configs are written in id order. Note that the statistics depend on the
+/// order of the runs in `runs`, down to the last bit.
 ///
 /// # Errors
 ///
-/// Returns [`SummaryError`] when `runs` is not a `runs.csv` or a write fails.
-pub fn write_summary<W: Write>(runs: &str, mut dest: W) -> Result<W, SummaryError> {
-    let records = parse_records(runs).map_err(SummaryError::Csv)?;
-    let Some((header, rows)) = records.split_first() else {
+/// Returns [`SummaryError`] when `runs` cannot be read or is not a `runs.csv`, or a write fails.
+pub fn write_summary<R: BufRead, W: Write>(runs: R, mut dest: W) -> Result<W, SummaryError> {
+    let mut records = RecordReader::new(runs);
+    let Some(header) = records.next_record()? else {
         return Err(SummaryError::MissingColumn { column: "run_id" });
     };
-    let layout = RunsLayout::read(header)?;
+    let layout = RunsLayout::read(&header)?;
     let reducer_names = &header[layout.reducers.clone()];
 
     let mut accumulator = SummaryAccumulator::new(reducer_names.len());
-    let mut configs: BTreeMap<u64, ConfigFields<'_>> = BTreeMap::new();
+    // Block and value cells of each config, escaped and joined, as its first run gives them.
+    let mut configs: BTreeMap<u64, String> = BTreeMap::new();
     let mut reducers = Vec::with_capacity(reducer_names.len());
-    for (index, row) in rows.iter().enumerate() {
-        let record_number = index + 2;
+    let mut record_number = 1;
+    while let Some(row) = records.next_record()? {
+        record_number += 1;
         if row.len() != header.len() {
             return Err(SummaryError::FieldCount {
                 record_number,
@@ -188,10 +249,14 @@ pub fn write_summary<W: Write>(runs: &str, mut dest: W) -> Result<W, SummaryErro
             reducers.push(value);
         }
         accumulator.push(config_id, status, ticks, &reducers);
-        configs.entry(config_id).or_insert_with(|| ConfigFields {
-            block: &row[layout.block],
-            values: &row[layout.values.clone()],
-        });
+        if let Entry::Vacant(entry) = configs.entry(config_id) {
+            let mut cells = escape_field(&row[layout.block]);
+            for value in &row[layout.values.clone()] {
+                cells.push(',');
+                cells.push_str(&escape_field(value));
+            }
+            entry.insert(cells);
+        }
     }
 
     let mut columns: Vec<String> = ["config_id", "block"].map(str::to_owned).to_vec();
@@ -202,11 +267,10 @@ pub fn write_summary<W: Write>(runs: &str, mut dest: W) -> Result<W, SummaryErro
     }
     writeln!(dest, "{}", columns.join(","))?;
     for summary in accumulator.rows() {
-        let Some(fields) = configs.get(&summary.config_id) else {
+        let Some(config_cells) = configs.remove(&summary.config_id) else {
             continue;
         };
-        let mut cells = vec![summary.config_id.to_string(), escape_field(fields.block)];
-        cells.extend(fields.values.iter().map(|value| escape_field(value)));
+        let mut cells = vec![summary.config_id.to_string(), config_cells];
         cells.extend([summary.runs, summary.ok, summary.failed].map(|count| count.to_string()));
         cells.push(optional_cell(summary.ticks.mean));
         for reducer in &summary.reducers {
@@ -236,6 +300,10 @@ fn optional_cell(value: Option<f64>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::BufReader;
+
+    use henad_core::export::csv::CsvError;
+
     use super::{SummaryError, write_summary};
 
     const RUNS: &str = "\
@@ -249,7 +317,49 @@ run_id,config_id,block,rep,seed,run_key,rate,\"a, b\",status,stop_reason,ticks,p
 ";
 
     fn summary(runs: &str) -> Result<String, SummaryError> {
-        write_summary(runs, Vec::new()).map(|bytes| String::from_utf8(bytes).expect("the rows are UTF-8"))
+        write_summary(runs.as_bytes(), Vec::new()).map(|bytes| String::from_utf8(bytes).expect("the rows are UTF-8"))
+    }
+
+    #[test]
+    fn a_record_read_across_many_reads_is_summarized_as_one() {
+        let runs = RUNS.replace(
+            "x,ok,steps,10,64,1,2,5000,1,,",
+            "\"x\",ok,steps,10,64,1,2,5000,1,,\"two\nlines\"",
+        );
+        let whole = summary(&runs).expect("a valid runs.csv");
+        let byte_by_byte =
+            write_summary(BufReader::with_capacity(1, runs.as_bytes()), Vec::new()).expect("a valid runs.csv");
+        assert_eq!(String::from_utf8(byte_by_byte).expect("the rows are UTF-8"), whole);
+        assert_eq!(
+            whole,
+            summary(RUNS).expect("a valid runs.csv"),
+            "quotes change no value"
+        );
+
+        let stray = runs.replace("5,1,1,1,12,", "5,1,1,1,1\"2,");
+        assert!(
+            matches!(
+                summary(&stray),
+                Err(SummaryError::Csv(CsvError::MisplacedQuote { line: 8 }))
+            ),
+            "the line counts from the start of the file, the quoted line feed included"
+        );
+    }
+
+    #[test]
+    fn a_header_out_of_order_is_refused() {
+        let note_first = RUNS
+            .replacen(",note\n", ",Late\n", 1)
+            .replacen("run_key,", "run_key,note,", 1);
+        assert!(matches!(
+            summary(note_first.lines().next().expect("a header")),
+            Err(SummaryError::MissingColumn { column: "note" })
+        ));
+        let status_first = "status,run_id,config_id,block,rep,seed,run_key,stop_reason,ticks,population,build_ms,wall_ms,steps_per_s,note\n";
+        assert!(matches!(
+            summary(status_first),
+            Err(SummaryError::MissingColumn { column: "status" })
+        ));
     }
 
     #[test]

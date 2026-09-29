@@ -18,7 +18,7 @@ use henad_core::explore::plan::Plan;
 use henad_explore::handle::{DEFAULT_SERIES_BUDGET, SweepEvent};
 use henad_explore::output::memory::SweepFiles;
 use henad_explore::result_set::ResultSet;
-use henad_explore::search_run::SearchPlan;
+use henad_explore::search_run::{SearchPlan, SearchUpdate};
 use henad_explore::sweep::SweepEnd;
 use henad_models::registry::ModelEntry;
 
@@ -38,6 +38,9 @@ use crate::ui::sweep::session::SweepSession;
 
 /// Configs a new store selects for the Series view.
 const DEFAULT_SELECTED_CONFIGS: usize = 5;
+
+/// Status line shown while picked files wait to be read.
+const READING_RESULTS: &str = "Reading results";
 
 /// View the Results tab shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -98,6 +101,13 @@ struct SeriesLoad {
     receiver: flume::Receiver<SeriesRead>,
 }
 
+/// Files picked in a dialog, read on a frame after the one that first shows [`READING_RESULTS`].
+struct PickedFiles {
+    files: Vec<DialogFile>,
+    /// Number of the frame that first saw the files, `None` before any frame has.
+    first_frame: Option<u64>,
+}
+
 /// State of the Results tab.
 #[derive(Default)]
 pub struct ResultsPanel {
@@ -127,6 +137,8 @@ pub struct ResultsPanel {
     /// Series a thread reads from the folder.
     #[cfg(not(target_arch = "wasm32"))]
     series_load: Option<SeriesLoad>,
+    /// Files picked in a dialog and not read yet.
+    picked_files: Option<PickedFiles>,
     /// Folder to read again once the sweep that resumed it ends.
     reload_folder: Option<PathBuf>,
     /// Whether the modal asking to replace results held in memory is open.
@@ -181,34 +193,46 @@ impl ResultsPanel {
         self.store = Some(store);
     }
 
-    /// Takes one event of the running sweep.
-    pub fn ingest(&mut self, event: SweepEvent) {
+    /// Takes the events of the running sweep that arrived since the last frame, in the order they arrived.
+    ///
+    /// The configs of the search batches among `events` join the store together, after the other events.
+    pub fn ingest(&mut self, events: impl IntoIterator<Item = SweepEvent>) {
         let Some(store) = &mut self.store else {
             return;
         };
-        match event {
-            SweepEvent::Planned(outline) => store.set_columns(&outline.stat_columns, &outline.reducer_columns),
-            SweepEvent::RunFinished {
-                outcome,
-                series_dropped,
-            } => store.push_run(*outcome, series_dropped),
-            SweepEvent::Finished(record) => {
-                let record = *record;
-                store.set_complete(record.report.end == SweepEnd::Complete);
-                self.files = record.files.map(Arc::new);
-                self.files_generation += 1;
-                self.files_saved = false;
-                self.reload_folder = resumed_folder(store);
-            }
-            SweepEvent::Failed(_) => self.reload_folder = resumed_folder(store),
-            SweepEvent::SearchBatchTold(update) => {
-                store.push_search_update(&update);
-                // A search's first candidates arrive with its first batch, after the store was set.
-                if self.selected_configs.is_empty() && update.batch == 0 {
-                    self.selected_configs = store.config_ids().take(DEFAULT_SELECTED_CONFIGS).collect();
+        let mut updates: Vec<Arc<SearchUpdate>> = Vec::new();
+        for event in events {
+            match event {
+                SweepEvent::Planned(outline) => store.set_columns(&outline.stat_columns, &outline.reducer_columns),
+                SweepEvent::RunFinished {
+                    outcome,
+                    series_dropped,
+                } => store.push_run(*outcome, series_dropped),
+                SweepEvent::Finished(record) => {
+                    let record = *record;
+                    store.set_complete(record.report.end == SweepEnd::Complete);
+                    self.files = record.files.map(Arc::new);
+                    self.files_generation += 1;
+                    self.files_saved = false;
+                    self.reload_folder = resumed_folder(store);
                 }
+                SweepEvent::Failed(_) => self.reload_folder = resumed_folder(store),
+                SweepEvent::SearchBatchTold(update) => updates.push(update),
+                SweepEvent::Warned(_) => {}
             }
-            SweepEvent::Warned(_) => {}
+        }
+        let mut pending = 0;
+        for (index, update) in updates.iter().enumerate() {
+            // A search's first candidates arrive with its first batch, after the store was set. The selection reads
+            // the store as that batch leaves it.
+            if self.selected_configs.is_empty() && update.batch == 0 {
+                store.push_search_updates(updates[pending..=index].iter().map(Arc::as_ref));
+                self.selected_configs = store.config_ids().take(DEFAULT_SELECTED_CONFIGS).collect();
+                pending = index + 1;
+            }
+        }
+        if pending < updates.len() {
+            store.push_search_updates(updates[pending..].iter().map(Arc::as_ref));
         }
     }
 
@@ -263,13 +287,42 @@ impl ResultsPanel {
         }
     }
 
-    /// Drops the folder and the series being read, so a read that finishes later goes nowhere.
+    /// Drops the folder, files and series being read, so a read that finishes later goes nowhere.
     fn drop_pending_loads(&mut self) {
+        self.picked_files = None;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.folder_load = None;
             self.series_load = None;
         }
+    }
+
+    /// Shows the results `set`, read from `source`, replaying through the models of `registry`.
+    fn show_result_set(&mut self, set: ResultSet, source: ResultsSource, registry: &[ModelEntry]) {
+        let search = SearchView::for_result_set(&set);
+        let store = ResultsStore::from_result_set(set, source, registry, DEFAULT_SERIES_BUDGET);
+        self.set_store(store);
+        self.search = search;
+    }
+
+    /// Holds the picked `files` to read on a later frame, and reports the wait on the status line.
+    fn hold_picked_files(&mut self, files: Vec<DialogFile>) {
+        self.status = Some(READING_RESULTS.to_owned());
+        self.picked_files = Some(PickedFiles {
+            files,
+            first_frame: None,
+        });
+    }
+
+    /// Returns the picked files once the current frame, `frame`, comes after the first frame that saw them.
+    ///
+    /// The first frame draws [`READING_RESULTS`] before the read holds up the next.
+    fn due_picked_files(&mut self, frame: u64) -> Option<Vec<DialogFile>> {
+        let picked = self.picked_files.as_mut()?;
+        if *picked.first_frame.get_or_insert(frame) == frame {
+            return None;
+        }
+        self.picked_files.take().map(|picked| picked.files)
     }
 }
 
@@ -288,7 +341,7 @@ pub fn receive_open(app: &mut AppState, result: OpenResult) {
         OpenResult::Folder(folder) => open_folder(app, folder),
         #[cfg(target_arch = "wasm32")]
         OpenResult::Folder(_) => app.results.status = Some("Use the desktop app to open folders".to_owned()),
-        OpenResult::Files(files) => open_files(app, files),
+        OpenResult::Files(files) => app.results.hold_picked_files(files),
         OpenResult::Failed(message) => app.results.status = Some(format!("Open failed: {message}")),
         OpenResult::Canceled => {}
     }
@@ -318,7 +371,7 @@ pub fn open_folder(app: &mut AppState, folder: PathBuf) {
 }
 
 /// Reads the picked files `files` of one folder, and shows them.
-fn open_files(app: &mut AppState, files: Vec<DialogFile>) {
+fn read_files(app: &mut AppState, files: Vec<DialogFile>) {
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
     let file_bytes = files.into_iter().map(|file| (file.name, file.bytes)).collect();
     match ResultSet::from_files(file_bytes, DEFAULT_SERIES_BUDGET) {
@@ -329,13 +382,14 @@ fn open_files(app: &mut AppState, files: Vec<DialogFile>) {
 
 /// Shows `set`, read from `source`, and brings the Results tab to the front.
 fn show_results(app: &mut AppState, set: ResultSet, source: ResultsSource) {
-    let store = ResultsStore::from_result_set(set, source, &app.registry, DEFAULT_SERIES_BUDGET);
-    app.results.set_store(store);
+    app.results.show_result_set(set, source, &app.registry);
     app.focus_request = Some(Tab::Results);
 }
 
-/// Takes the results and series the tab's threads have read, and reads a resumed folder again once its sweep ends.
-pub fn poll(app: &mut AppState) {
+/// Takes the results and series the tab has read, reads picked files once `ctx` has drawn a frame since they
+/// arrived, and reads a resumed folder again once its sweep ends.
+pub fn poll(ctx: &egui::Context, app: &mut AppState) {
+    poll_picked_files(ctx, app);
     #[cfg(not(target_arch = "wasm32"))]
     {
         poll_folder_load(app);
@@ -350,6 +404,22 @@ pub fn poll(app: &mut AppState) {
     {
         app.results.reload_folder = None;
     }
+}
+
+/// Reads the picked files on the frame after the first one that saw them, and repaints until then.
+fn poll_picked_files(ctx: &egui::Context, app: &mut AppState) {
+    let Some(files) = app.results.due_picked_files(ctx.cumulative_frame_nr()) else {
+        if app.results.picked_files.is_some() {
+            ctx.request_repaint();
+        }
+        return;
+    };
+    // The sweep's events go to the store it started with.
+    if app.sweep.is_running() {
+        app.results.status = None;
+        return;
+    }
+    read_files(app, files);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -429,6 +499,7 @@ fn series_load_text(requested: u64, held: u64, empty: u64) -> String {
 pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let mut request = None;
     toolbar(ui, app, &mut request);
+    let sweep_running = app.sweep.is_running();
     let ResultsPanel {
         store,
         view,
@@ -469,7 +540,7 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
             .show(ui, |ui| table::detail_strip(ui, store, run_id, &mut request));
     }
     match view {
-        ResultsView::Search => search::search_ui(ui, store, search, &mut request),
+        ResultsView::Search => search::search_ui(ui, store, search, sweep_running, &mut request),
         ResultsView::Series => series::series_ui(ui, store, series, selected_configs, &mut request),
         ResultsView::Response => response::response_ui(ui, store, response),
         ResultsView::Heatmap => heatmap::heatmap_ui(ui, store, heatmap, &mut request),
@@ -691,15 +762,16 @@ fn load_series(app: &mut AppState) {
         .flat_map(|&config_id| store.config_runs(config_id))
         .map(|outcome| outcome.run.run_id)
         .collect();
-    let stat_width = store.stat_columns().len();
+    let stat_columns = store.stat_columns().to_vec();
     let series_budget = store.series_room(&kept_runs);
     let requested_runs = missing.clone();
     let (sender, receiver) = flume::bounded(1);
     let spawned = std::thread::Builder::new()
         .name("henad-series".to_owned())
         .spawn(move || {
-            let read = henad_explore::result_set::read_directory_series(&folder, stat_width, &missing, series_budget)
-                .map_err(|error| describe_error(&error));
+            let read =
+                henad_explore::result_set::read_directory_series(&folder, &stat_columns, &missing, series_budget)
+                    .map_err(|error| describe_error(&error));
             drop(sender.send(read));
             wake();
         });
@@ -732,15 +804,18 @@ mod tests {
     use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
     use henad_core::explore::plan::Plan;
     use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
+    use henad_core::explore::search::genetic::GeneticSettings;
     use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
     use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, SearchSpec};
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
-    use henad_explore::handle::{SweepOutput, SweepRun, SweepRunOptions};
+    use henad_explore::handle::{SweepEvent, SweepOutput, SweepRun, SweepRunOptions};
+    use henad_explore::output::GENERATIONS_FILE;
     use henad_explore::result_set::{DirectorySeries, ResultSet};
     use henad_explore::schema::model_schema;
     use henad_models::registry::{ModelEntry, model_registry};
 
-    use super::{ResultsPanel, ResultsView, SeriesLoad, poll_series_load};
+    use super::{READING_RESULTS, ResultsPanel, ResultsView, SeriesLoad, poll_series_load};
+    use crate::ui::files::DialogFile;
     use crate::ui::results::store::{ResultsSource, ResultsStore};
 
     /// Returns a series of one sample whose three stats are all `value`.
@@ -907,18 +982,18 @@ mod tests {
             );
             let started = std::time::Instant::now();
             while !run.is_ended() {
-                while let Some(event) = run.try_recv() {
-                    if let henad_explore::handle::SweepEvent::Failed(message) = &event {
-                        panic!("{name}: the search failed: {message}");
-                    }
-                    panel.ingest(event);
+                let events: Vec<SweepEvent> = std::iter::from_fn(|| run.try_recv()).collect();
+                if let Some(SweepEvent::Failed(message)) = events.last() {
+                    panic!("{name}: the search failed: {message}");
                 }
+                panel.ingest(events);
                 assert!(started.elapsed().as_secs() < 60, "{name}: the search ends");
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             let live = panel.store.as_ref().expect("the search's store");
 
             let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
+            let command = first_run_command(&set);
             let opened =
                 ResultsStore::from_result_set(set, ResultsSource::Folder(folder.0.clone()), &registry, 1 << 20);
             for store in [live, &opened] {
@@ -973,7 +1048,198 @@ mod tests {
                 );
                 assert!(live.cli_command(run_id).is_ok(), "{name}: run {run_id}");
             }
+            for store in [live, &opened] {
+                assert_eq!(
+                    store.cli_command(0).as_ref(),
+                    Ok(&command),
+                    "{name}: the command sets the fixed values and candidate 0's rate"
+                );
+            }
         }
+    }
+
+    /// Returns the command that replays run 0 of the search of [`search_spec`] in `set`.
+    ///
+    /// The seed and the rate come from `runs.csv`. The command decodes the rate from the candidate, as a replay does.
+    fn first_run_command(set: &ResultSet) -> String {
+        let recorded = set.run(0).expect("run 0 is recorded");
+        let rate_column = set
+            .value_columns()
+            .iter()
+            .position(|column| column == "infection_rate")
+            .expect("the infection rate is a value column");
+        format!(
+            "henad-cli sir --seed {} --set grid_width=16 --set grid_height=16 --set infection_rate={} --warmup 0 \
+             --steps 30 --stats-every 5 --export-stats run-0.csv",
+            recorded.outcome.run.seed, recorded.values[rate_column]
+        )
+    }
+
+    /// Returns a panel that held a genetic search of SIR in memory, whose budget of 6 evaluations ends inside its
+    /// first generation of 32.
+    fn short_genetic_search() -> ResultsPanel {
+        let spec = search_spec(SearchAlgorithm::Genetic(GeneticSettings::default()));
+        let mut run = SweepRun::start(sir(), None, spec, SweepOutput::Memory, SweepRunOptions::default())
+            .expect("the search starts");
+        let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));
+        let mut panel = ResultsPanel::default();
+        panel.begin_search(search_plan, &sir(), 0, None);
+        let started = std::time::Instant::now();
+        while !run.is_ended() {
+            let events: Vec<SweepEvent> = std::iter::from_fn(|| run.try_recv()).collect();
+            if let Some(SweepEvent::Failed(message)) = events.last() {
+                panic!("the search failed: {message}");
+            }
+            panel.ingest(events);
+            assert!(started.elapsed().as_secs() < 60, "the search ends");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panel
+    }
+
+    #[test]
+    fn a_frame_of_search_events_leaves_the_panel_as_a_frame_per_event_does() {
+        let mut spec = search_spec(SearchAlgorithm::Random);
+        if let Some(search) = &mut spec.search {
+            search.max_evaluations = 12;
+        }
+        let mut run = SweepRun::start(sir(), None, spec, SweepOutput::Memory, SweepRunOptions::default())
+            .expect("the search starts");
+        let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));
+        let mut events = Vec::new();
+        let started = std::time::Instant::now();
+        while !run.is_ended() {
+            events.extend(std::iter::from_fn(|| run.try_recv()));
+            assert!(started.elapsed().as_secs() < 60, "the search ends");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if let Some(SweepEvent::Failed(message)) = events.last() {
+            panic!("the search failed: {message}");
+        }
+
+        let (mut together, mut one_at_a_time) = (ResultsPanel::default(), ResultsPanel::default());
+        together.begin_search(Arc::clone(&search_plan), &sir(), 0, None);
+        one_at_a_time.begin_search(search_plan, &sir(), 0, None);
+        for event in &events {
+            one_at_a_time.ingest([event.clone()]);
+        }
+        together.ingest(events);
+
+        assert_eq!(
+            together.selected_configs,
+            BTreeSet::from([0, 1, 2]),
+            "the first batch's candidates are selected"
+        );
+        assert_eq!(together.selected_configs, one_at_a_time.selected_configs);
+        let (together, one_at_a_time) = (
+            together.store.as_ref().expect("the search's store"),
+            one_at_a_time.store.as_ref().expect("the search's store"),
+        );
+        assert_eq!(together.search_log(), one_at_a_time.search_log(), "the search's course");
+        assert_eq!(
+            together.search_log().map(|log| log.history.batches.len()),
+            Some(4),
+            "four batches of three"
+        );
+        assert_eq!(together.runs(), one_at_a_time.runs());
+        assert!(together.config_ids().eq(0..12), "one config per candidate");
+        assert!(together.config_ids().eq(one_at_a_time.config_ids()));
+        let axis_levels = |store: &ResultsStore| -> Vec<(String, Vec<String>, Vec<f64>)> {
+            let axes = store.axes().iter();
+            axes.map(|axis| (axis.label.clone(), axis.levels.clone(), axis.positions.clone()))
+                .collect()
+        };
+        assert_eq!(axis_levels(together), axis_levels(one_at_a_time), "the axes");
+        assert_eq!(together.axes().len(), 1, "the infection rate varies");
+        for config_id in 0..12 {
+            assert_eq!(
+                together.config_level(config_id, 0),
+                one_at_a_time.config_level(config_id, 0),
+                "config {config_id}"
+            );
+            let run_ids = |store: &ResultsStore| -> Vec<u64> {
+                let runs = store.config_runs(config_id);
+                runs.map(|outcome| outcome.run.run_id).collect()
+            };
+            assert_eq!(
+                run_ids(together),
+                [2 * config_id, 2 * config_id + 1],
+                "config {config_id}"
+            );
+            assert_eq!(run_ids(together), run_ids(one_at_a_time), "config {config_id}");
+        }
+    }
+
+    /// Returns the files `panel` holds as a dialog picks them, leaving out the file named `left_out`.
+    fn picked_files(panel: &ResultsPanel, left_out: &str) -> Vec<DialogFile> {
+        let files = panel.files().expect("a search held in memory hands over its files");
+        files
+            .entries()
+            .into_iter()
+            .filter(|(name, _)| *name != left_out)
+            .map(|(name, bytes)| DialogFile {
+                name: name.to_owned(),
+                bytes: bytes.to_vec(),
+                path: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_genetic_search_that_ends_in_its_first_generation_tells_it_from_a_missing_table() {
+        let live = short_genetic_search();
+        let log = live
+            .store
+            .as_ref()
+            .and_then(ResultsStore::search_log)
+            .expect("a search log");
+        assert_eq!(log.history.batches.len(), 2, "two batches of three");
+        assert!(log.history.generations.is_empty(), "no generation finished");
+        assert!(!live.search.generations_missing, "a live search has every table");
+
+        let registry = model_registry(None);
+        let open = |files: Vec<DialogFile>| {
+            let names = files.iter().map(|file| file.name.clone()).collect();
+            let entries = files.into_iter().map(|file| (file.name, file.bytes)).collect();
+            let set = ResultSet::from_files(entries, usize::MAX).expect("the files read");
+            let mut panel = ResultsPanel::default();
+            panel.show_result_set(set, ResultsSource::Files(names), &registry);
+            panel
+        };
+        let whole = open(picked_files(&live, ""));
+        assert!(!whole.search.generations_missing, "the table holds its header alone");
+        assert_eq!(whole.view, ResultsView::Search);
+        let without = open(picked_files(&live, GENERATIONS_FILE));
+        assert!(without.search.generations_missing);
+    }
+
+    #[test]
+    fn picked_files_are_read_on_a_later_frame_than_the_status() {
+        let files = vec![DialogFile {
+            name: "manifest.json".to_owned(),
+            bytes: b"{}".to_vec(),
+            path: None,
+        }];
+        let mut panel = ResultsPanel::default();
+        panel.hold_picked_files(files.clone());
+        assert_eq!(panel.status.as_deref(), Some(READING_RESULTS));
+        assert_eq!(panel.due_picked_files(7), None, "the first frame shows the status");
+        assert_eq!(
+            panel.due_picked_files(7),
+            None,
+            "a second pass of that frame reads nothing"
+        );
+        assert_eq!(
+            panel.due_picked_files(8),
+            Some(files.clone()),
+            "the next frame reads them"
+        );
+        assert_eq!(panel.due_picked_files(9), None, "the files are read once");
+
+        let sir = sir();
+        panel.hold_picked_files(files);
+        panel.begin_sweep(plan(&sir, 1), &sir, 0, None);
+        assert!(panel.picked_files.is_none(), "a sweep that starts drops them");
     }
 
     #[test]

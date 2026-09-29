@@ -21,13 +21,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use egui::{CentralPanel, Frame, Id, Margin, Panel, ScrollArea};
-use henad_compute::cpu::sim_thread::SimCommand;
+use henad_compute::cpu::sim_thread::{SimCommand, WakeFn};
+use henad_compute::gpu::GpuContext;
 use henad_core::action::Schedule;
 use henad_core::explore::plan::{ModelSchema, PlanWarning};
+use henad_core::export::StatColumns;
 use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
 use henad_explore::output::manifest::{ManifestMode, ManifestStatus};
 use henad_explore::output::{MANIFEST_FILE, OutputDir};
+use henad_explore::probe::ProbeReport;
 use henad_explore::schema::model_schema;
 use henad_explore::spec_file::SpecFile;
 use henad_models::registry::ModelEntry;
@@ -48,7 +51,7 @@ use crate::ui::sweep::header::{BuilderHeader, SessionHeader};
 use crate::ui::sweep::layout::{FormState, IssueCount, Reveal, SweepSection};
 use crate::ui::sweep::plan::PlanSummary;
 use crate::ui::sweep::progress::SessionResult;
-use crate::ui::sweep::session::{KeptDraft, SessionState, SweepSession};
+use crate::ui::sweep::session::{KeptDraft, SessionExecution, SessionState, SweepSession};
 
 /// Id of the Plan panel.
 const PLAN_PANEL_ID: &str = "henad_sweep_plan";
@@ -83,6 +86,64 @@ pub struct SweepPanel {
     confirm_abort: bool,
     /// Whether the modal asking to replace results held in memory is open.
     confirm_replace: bool,
+    /// Build of each model the tab has shown, for the stat columns it samples, by model id.
+    column_builds: BTreeMap<String, ColumnsBuild>,
+}
+
+/// Build of a model at its default values, for the stat columns its sample at tick 0 has.
+enum ColumnsBuild {
+    /// Build running on a thread of its own. The thread sends the columns once sampled.
+    #[cfg(not(target_arch = "wasm32"))]
+    Running(flume::Receiver<Option<StatColumns>>),
+    /// Columns of the build, `None` for a build that failed or a model that cannot build here.
+    Sampled(Option<StatColumns>),
+}
+
+impl ColumnsBuild {
+    /// Starts a build of `entry`'s model.
+    ///
+    /// On native the model builds on a thread of its own, and `wake` runs once the build reports. A GPU model builds
+    /// on a device of its own, as a sweep does, so a fault in the build never reaches the live model. A browser builds
+    /// a CPU model at once and never builds a GPU model. A GPU sample blocks, and a browser cannot block.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start(entry: &ModelEntry, wake: &WakeFn) -> Self {
+        let (sender, receiver) = flume::bounded(1);
+        let model_id = entry.id.clone();
+        let backend = entry.metadata.backend;
+        let wake = Arc::clone(wake);
+        let spawned = std::thread::Builder::new()
+            .name("henad-stat-columns".to_owned())
+            .spawn(move || {
+                let columns = default_stat_columns(&model_id, backend);
+                // The receiver is gone once the app is closing, and nothing is left to report to.
+                drop(sender.send(columns));
+                wake();
+            });
+        match spawned {
+            Ok(_) => Self::Running(receiver),
+            Err(_) => Self::Sampled(None),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn start(entry: &ModelEntry, _wake: &WakeFn) -> Self {
+        Self::Sampled(match entry.metadata.backend {
+            Backend::Cpu => sampled_stat_columns(entry, None),
+            Backend::Gpu => None,
+        })
+    }
+
+    /// Takes the columns of a build that has reported since the last poll.
+    fn poll(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Self::Running(receiver) = self {
+            match receiver.try_recv() {
+                Ok(columns) => *self = Self::Sampled(columns),
+                Err(flume::TryRecvError::Empty) => {}
+                Err(flume::TryRecvError::Disconnected) => *self = Self::Sampled(None),
+            }
+        }
+    }
 }
 
 /// A draft and the Parameters tab values it was checked against, with the result.
@@ -191,17 +252,41 @@ impl SweepPanel {
         })
     }
 
+    /// Gives the draft of `entry`'s model the stat columns of a build of the model at its default values.
+    ///
+    /// The first call for a model starts the build, as [`ColumnsBuild::start`] describes. Until the build reports, the
+    /// draft cannot start. A build that fails leaves the draft counting every stat as one column.
+    fn learn_stat_columns(&mut self, entry: &ModelEntry, wake: &WakeFn) {
+        let build = self
+            .column_builds
+            .entry(entry.id.clone())
+            .or_insert_with(|| ColumnsBuild::start(entry, wake));
+        build.poll();
+        let draft = self
+            .drafts
+            .entry(entry.id.clone())
+            .or_insert_with(|| SweepDraft::new(&model_schema(entry)));
+        match &*build {
+            #[cfg(not(target_arch = "wasm32"))]
+            ColumnsBuild::Running(_) => draft.columns_pending = true,
+            ColumnsBuild::Sampled(Some(columns)) => draft.set_stat_columns(columns),
+            ColumnsBuild::Sampled(None) => draft.columns_pending = false,
+        }
+    }
+
     /// Drops the last check, so the next one reads the output folder again.
     fn clear_check(&mut self) {
         self.last_check = None;
     }
 
-    /// Drops the ended session, and checks the draft again on the next frame.
+    /// Drops the ended session, closes its modals, and checks the draft again on the next frame.
     ///
     /// The session might have written results into the draft's output folder.
     pub fn clear_session(&mut self) {
         self.session = None;
         self.status = None;
+        self.confirm_abort = false;
+        self.confirm_replace = false;
         self.clear_check();
     }
 
@@ -217,13 +302,6 @@ impl SweepPanel {
             .is_some_and(|session| session.is_running() && !session.is_paused())
     }
 
-    /// Pauses a running GPU sweep after a device error nothing could tie to one side.
-    pub fn pause_after_gpu_fault(&mut self) {
-        if let Some(session) = &mut self.session {
-            session.pause_after_gpu_fault();
-        }
-    }
-
     /// Returns the title of the Sweep tab, with the state of its session.
     pub fn tab_title(&self) -> String {
         let state = self.session.as_ref().map(|session| {
@@ -234,6 +312,34 @@ impl SweepPanel {
     }
 }
 
+/// Returns the stat columns of model `model_id` at its default values, `None` when the build fails or no GPU device
+/// can be acquired for a GPU model.
+#[cfg(not(target_arch = "wasm32"))]
+fn default_stat_columns(model_id: &str, backend: Backend) -> Option<StatColumns> {
+    let gpu = match backend {
+        Backend::Gpu => Some(henad_explore::device::acquire_headless().ok()?.0),
+        Backend::Cpu => None,
+    };
+    let entry = henad_models::registry::model_registry(gpu.clone())
+        .into_iter()
+        .find(|entry| entry.id == model_id)?;
+    sampled_stat_columns(&entry, gpu.as_ref())
+}
+
+/// Returns the stat columns of a build of `entry`'s model at its default values, `None` when the build fails.
+///
+/// A GPU model builds on `gpu`.
+fn sampled_stat_columns(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Option<StatColumns> {
+    let values: Vec<ParamValue> = entry
+        .param_descriptors
+        .iter()
+        .map(|descriptor| descriptor.kind.default_value())
+        .collect();
+    ProbeReport::build(entry, gpu, &values, None)
+        .ok()
+        .map(|report| report.columns)
+}
+
 /// Returns the title of the Sweep tab for a session in a state with a share of its runs finished, `None` for no
 /// session: "Sweep 42%" while it runs, "Sweep paused", then "Sweep done", "Sweep stopped" or "Sweep failed".
 fn tab_title(state: Option<(SessionState, f32)>) -> String {
@@ -242,7 +348,7 @@ fn tab_title(state: Option<(SessionState, f32)>) -> String {
         Some((SessionState::Planning | SessionState::Running, fraction)) => {
             format!("Sweep {}%", (fraction * 100.0).floor() as u32)
         }
-        Some((SessionState::Paused | SessionState::PausedByFault, _)) => "Sweep paused".to_owned(),
+        Some((SessionState::Paused, _)) => "Sweep paused".to_owned(),
         Some((SessionState::Finished, _)) => "Sweep done".to_owned(),
         Some((SessionState::Aborted | SessionState::Stopped, _)) => "Sweep stopped".to_owned(),
         Some((SessionState::Failed, _)) => "Sweep failed".to_owned(),
@@ -506,6 +612,8 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
         return;
     };
     let schema = model_schema(entry);
+    let wake = app.repaint_waker();
+    app.sweep.learn_stat_columns(entry, &wake);
     // Every text the panels draw is built here. The form borrows the draft once they have drawn.
     let check = app.sweep.cached_check(&schema, &app.param_values);
     let summary = CheckSummary::new(check, entry, &schema);
@@ -618,9 +726,7 @@ fn session_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     let state = session.state(&progress);
     let noun = session.noun();
     let resumed = session.is_resumed();
-    // A sweep that ends while the modal is open has nothing left to abort.
-    *confirm_abort &= state.is_running();
-    let modal_open = *confirm_abort || *confirm_replace;
+    let modal_open = settle_session_modals(state, confirm_abort, confirm_replace);
     let resumed_plan;
     let plan = if let Some(kept) = &session.kept {
         &kept.plan
@@ -687,6 +793,17 @@ fn session_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
         };
         footer::abort_modal(&ctx, &modal, confirm_abort, request);
     }
+}
+
+/// Closes each modal that a session in `state` leaves nothing to answer, and returns whether the abort modal is still
+/// open.
+///
+/// The replace modal belongs to the form, and a session takes the form's place. The abort modal closes once the sweep
+/// ends.
+fn settle_session_modals(state: SessionState, confirm_abort: &mut bool, confirm_replace: &mut bool) -> bool {
+    *confirm_replace = false;
+    *confirm_abort &= state.is_running();
+    *confirm_abort
 }
 
 /// Draws the progress `view` shows in a scroll area, with the plan `plan_section` under it while the Plan panel does
@@ -777,6 +894,8 @@ fn start(app: &mut AppState) {
         return;
     };
     let schema = model_schema(entry);
+    let wake = app.repaint_waker();
+    app.sweep.learn_stat_columns(entry, &wake);
     app.sweep.clear_check();
     let check = app.sweep.cached_check(&schema, &app.param_values);
     let Ok(planned) = &check.result else {
@@ -795,7 +914,11 @@ fn start(app: &mut AppState) {
         "Sweep"
     };
     let folder_results = check.folder_results;
-    let concurrency = check.draft.concurrency;
+    let execution = SessionExecution {
+        concurrency: check.draft.concurrency,
+        memory_budget: check.draft.memory_budget,
+        gpu_memory_budget: check.draft.gpu_memory_budget,
+    };
     let output_dir = check.draft.output_folder().map(PathBuf::from);
     let folder = output_dir.clone();
     app.sweep.start_failure = None;
@@ -803,7 +926,7 @@ fn start(app: &mut AppState) {
         app.sweep.start_failure = Some(format!("{noun} start failed: {}", results.refusal()));
         return;
     }
-    match SweepSession::start(app, spec, concurrency, output_dir) {
+    match SweepSession::start(app, spec, execution, output_dir) {
         Ok(mut session) => {
             if let Some(model_index) = app.registry.iter().position(|entry| entry.id == session.plan().model()) {
                 let entry = &app.registry[model_index];
@@ -1050,17 +1173,23 @@ pub fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::Duration;
 
+    use henad_compute::cpu::sim_thread::WakeFn;
+    use henad_core::export::StatColumns;
     use henad_core::params::ParamValue;
     use henad_explore::output::manifest::ManifestMode;
     use henad_explore::output::{EVALUATIONS_FILE, MANIFEST_FILE, RUNS_FILE};
     use henad_explore::schema::model_schema;
     use henad_models::registry::model_registry;
 
-    use super::{CheckSummary, FolderResults, SweepPanel, folder_results, format_duration, tab_title};
+    use super::{
+        CheckSummary, ColumnsBuild, FolderResults, SweepPanel, folder_results, format_duration, sampled_stat_columns,
+        settle_session_modals, tab_title,
+    };
     use crate::icons::material_design_icons::MDI_FLASK_OUTLINE;
-    use crate::ui::sweep::draft::IssueKind;
+    use crate::ui::sweep::draft::{COLUMNS_PENDING, DraftIssue, DraftSite, IssueKind};
     use crate::ui::sweep::layout::SweepSection;
     use crate::ui::sweep::session::SessionState;
 
@@ -1088,12 +1217,42 @@ mod tests {
     }
 
     #[test]
+    fn a_session_closes_the_modals_it_leaves_nothing_to_answer() {
+        let (mut confirm_abort, mut confirm_replace) = (true, true);
+        assert!(settle_session_modals(
+            SessionState::Running,
+            &mut confirm_abort,
+            &mut confirm_replace
+        ));
+        assert!(confirm_abort, "a running sweep can still be aborted");
+        assert!(!confirm_replace, "the form that asked to replace results is gone");
+
+        assert!(!settle_session_modals(
+            SessionState::Aborted,
+            &mut confirm_abort,
+            &mut confirm_replace
+        ));
+        assert!(!confirm_abort, "an ended sweep has nothing to abort");
+
+        let mut panel = SweepPanel {
+            confirm_abort: true,
+            confirm_replace: true,
+            ..SweepPanel::default()
+        };
+        panel.clear_session();
+        assert!(
+            !panel.confirm_abort && !panel.confirm_replace,
+            "the form opens with no modal"
+        );
+    }
+
+    #[test]
     fn the_tab_title_follows_the_session() {
         let title = |state| tab_title(state).trim_start_matches(MDI_FLASK_OUTLINE).trim().to_owned();
         assert_eq!(title(None), "Sweep");
         assert_eq!(title(Some((SessionState::Planning, 0.0))), "Sweep 0%");
         assert_eq!(title(Some((SessionState::Running, 0.429))), "Sweep 42%");
-        assert_eq!(title(Some((SessionState::PausedByFault, 0.5))), "Sweep paused");
+        assert_eq!(title(Some((SessionState::Paused, 0.5))), "Sweep paused");
         assert_eq!(title(Some((SessionState::Finished, 1.0))), "Sweep done");
         assert_eq!(title(Some((SessionState::Aborted, 0.3))), "Sweep stopped");
         assert_eq!(title(Some((SessionState::Stopped, 0.3))), "Sweep stopped");
@@ -1205,6 +1364,54 @@ mod tests {
         assert!(summary.lines.iter().all(|line| line.kind == IssueKind::Invalid));
         assert_eq!(summary.section_issues(SweepSection::Parameters).invalid, 1);
         assert_eq!(summary.section_issues(SweepSection::Design).total(), 0);
+    }
+
+    #[test]
+    fn a_draft_waits_for_the_build_of_its_columns() {
+        let boids = model_registry(None)
+            .into_iter()
+            .find(|entry| entry.id == "boids")
+            .expect("boids is registered");
+        let schema = model_schema(&boids);
+        let panel_values: Vec<ParamValue> = boids
+            .param_descriptors
+            .iter()
+            .map(|descriptor| descriptor.kind.default_value())
+            .collect();
+        let wake: WakeFn = Arc::new(|| {});
+        let pending = [DraftIssue::missing(DraftSite::Outputs, COLUMNS_PENDING)];
+
+        let mut panel = SweepPanel::default();
+        let (sender, receiver) = flume::bounded(1);
+        panel
+            .column_builds
+            .insert(boids.id.clone(), ColumnsBuild::Running(receiver));
+        panel.learn_stat_columns(&boids, &wake);
+        let check = panel.cached_check(&schema, &panel_values);
+        assert_eq!(check.result.as_ref().err().map(Vec::as_slice), Some(&pending[..]));
+        sender
+            .send(sampled_stat_columns(&boids, None))
+            .expect("the panel holds the receiver");
+        panel.learn_stat_columns(&boids, &wake);
+        let check = panel.cached_check(&schema, &panel_values);
+        assert!(check.result.is_ok(), "the issue clears once the build reports");
+        assert!(check.draft.stat_columns.is_some());
+
+        let mut panel = SweepPanel::default();
+        let (sender, receiver) = flume::bounded::<Option<StatColumns>>(1);
+        panel
+            .column_builds
+            .insert(boids.id.clone(), ColumnsBuild::Running(receiver));
+        panel.learn_stat_columns(&boids, &wake);
+        assert!(panel.cached_check(&schema, &panel_values).result.is_err());
+        drop(sender);
+        panel.learn_stat_columns(&boids, &wake);
+        let check = panel.cached_check(&schema, &panel_values);
+        assert!(
+            check.result.is_ok(),
+            "a failed build leaves the stat labels to check against"
+        );
+        assert!(check.draft.stat_columns.is_none());
     }
 
     #[test]

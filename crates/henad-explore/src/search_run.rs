@@ -55,7 +55,7 @@ use crate::output::{
     ARCHIVE_FILE, BATCHES_FILE, BEST_FILE, EVALUATIONS_FILE, GENERATIONS_FILE, MANIFEST_FILE, OutputDir, OutputError,
     OutputWriter, RUNS_FILE, SERIES_FILE, runs_csv, series_csv, table_paths,
 };
-use crate::probe::{ProbeReport, check_capacity};
+use crate::probe::{ProbeReport, TimedProbe, check_capacity};
 use crate::progress::{Progress, ProgressEvent, ProgressMeter};
 use crate::schema::model_schema;
 use crate::sweep::{
@@ -131,6 +131,10 @@ impl SearchPlan {
     }
 
     /// Returns the config `genome` decodes to, over the spec's fixed values and actions.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `genome` has a gene count other than the space's.
     pub fn config(&self, genome: &Genome) -> Config {
         let base = self.base.config(0).expect("a plan with no blocks has one config");
         self.space.decode(genome, base)
@@ -380,7 +384,7 @@ pub(crate) struct SearchSession {
     /// Position of each watched column among the reducer columns.
     watched_reducers: Vec<usize>,
     /// Runs a resumed directory holds, by run id from 0.
-    recorded_runs: Vec<RecordedRun>,
+    recorded_runs: Arc<[RecordedRun]>,
     /// Config of every candidate asked for its first evaluation, by candidate id.
     configs: BTreeMap<u64, Config>,
     batch_count: u64,
@@ -462,7 +466,7 @@ impl SearchSession {
     pub(crate) fn new(
         plan: Arc<SearchPlan>,
         watched_reducers: Vec<usize>,
-        recorded_runs: Vec<RecordedRun>,
+        recorded_runs: Arc<[RecordedRun]>,
     ) -> Result<Self, SearchPlanError> {
         let root = plan.base.seed_settings().root;
         let searcher = plan
@@ -801,7 +805,8 @@ pub(crate) struct RecordedRun {
 pub(crate) struct RecordedSearch {
     /// Manifest the directory holds.
     pub(crate) recorded: Manifest,
-    runs: Vec<RecordedRun>,
+    /// Runs the directory holds, by run id from 0.
+    runs: Arc<[RecordedRun]>,
     counts: ResultCounts,
     /// Bytes `runs.csv` keeps, cutting a partial last record.
     runs_bytes: u64,
@@ -869,7 +874,8 @@ impl RecordedSearch {
             if record.run_id != position as u64 {
                 return Err(ResumeError::SearchRunChanged { run_id: record.run_id });
             }
-            let fields = parse_one(&record.text, &runs_path, position + 2).map_err(ResumeError::Table)?;
+            let fields =
+                parse_one(&record.text, 0..record.text.len(), &runs_path, position + 2).map_err(ResumeError::Table)?;
             let values = watched_reducers
                 .iter()
                 .map(|&reducer| {
@@ -914,7 +920,7 @@ impl RecordedSearch {
         }
         Ok(Self {
             recorded,
-            runs,
+            runs: runs.into(),
             counts,
             runs_bytes: table.complete_bytes,
             series_bytes: series.first_dropped_offset.unwrap_or(series.complete_bytes),
@@ -989,7 +995,7 @@ pub fn run_search(
         provenance,
         options,
     };
-    let preparation = SearchPreparation::new(&inputs, None)?;
+    let preparation = SearchPreparation::new(&inputs, None, None)?;
     preparation.announce(provenance, progress);
     let Some(output_dir) = output_dir else {
         let report = preparation.report(SweepEnd::Planned, ResultCounts::default(), None);
@@ -1015,7 +1021,7 @@ pub(crate) fn run_search_into_directory(
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
     install_panic_hook();
-    let preparation = SearchPreparation::new(inputs, Some(plan))?;
+    let preparation = SearchPreparation::new(inputs, Some(plan), None)?;
     preparation.announce(inputs.provenance, progress);
     let record = preparation.write_directory(inputs, output_dir, progress)?;
     progress.report(&ProgressEvent::Ended(&record.report));
@@ -1037,7 +1043,7 @@ pub(crate) fn run_search_in_memory(
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
     install_panic_hook();
-    let preparation = SearchPreparation::new(inputs, Some(plan))?;
+    let preparation = SearchPreparation::new(inputs, Some(plan), None)?;
     preparation.announce(inputs.provenance, progress);
     let (mut output, manifest) = preparation.memory_output(inputs)?;
     let executor = preparation.executor(inputs)?;
@@ -1073,8 +1079,13 @@ pub(crate) struct SearchWriters<W: Write> {
 
 impl SearchPreparation {
     /// Checks and probes `plan`, the search of `inputs.spec`, and chooses its layout. With no `plan`, the spec is
-    /// planned first.
-    pub(crate) fn new(inputs: &SweepInputs<'_>, plan: Option<Arc<SearchPlan>>) -> Result<Self, ExploreError> {
+    /// planned first. `probe`, when given, takes the place of the report [`ProbeReport::for_plan`] gives for
+    /// [`SearchPlan::base`], and its clock readings the ones taken on entry.
+    pub(crate) fn new(
+        inputs: &SweepInputs<'_>,
+        plan: Option<Arc<SearchPlan>>,
+        probe: Option<TimedProbe>,
+    ) -> Result<Self, ExploreError> {
         let (entry, gpu, options) = (inputs.entry, inputs.gpu, inputs.options);
         if options.shard != Shard::WHOLE {
             return Err(SearchPlanError::Sharded.into());
@@ -1082,8 +1093,10 @@ impl SearchPreparation {
         if options.retry_failed {
             return Err(SearchPlanError::RetryFailed.into());
         }
-        let started = Instant::now();
-        let started_unix_ms = now_unix_ms();
+        let (started, started_unix_ms, probe) = match probe {
+            Some(timed) => (timed.started, timed.started_unix_ms, Some(timed.report)),
+            None => (Instant::now(), now_unix_ms(), None),
+        };
         let plan = match plan {
             Some(plan) => plan,
             None => Arc::new(SearchPlan::new(inputs.spec, &model_schema(entry))?),
@@ -1099,7 +1112,10 @@ impl SearchPreparation {
         if let Some(ctx) = gpu {
             check_capacity(entry, base, &ctx.device.limits())?;
         }
-        let probe = ProbeReport::for_plan(entry, gpu, base)?;
+        let probe = match probe {
+            Some(probe) => probe,
+            None => ProbeReport::for_plan(entry, gpu, base)?,
+        };
         let measure = MeasurePlan::new(base.run_settings(), base.measure_settings(), probe.columns.clone())?;
         let watched_reducers = plan.watched_reducers(&measure)?;
         let resumed = resume_dir
@@ -1119,7 +1135,7 @@ impl SearchPreparation {
         if let Some(recorded) = resumed.as_ref().filter(|recorded| !recorded.runs.is_empty()) {
             // Every held run is checked before anything is written. The search tables are emptied before the
             // batches replay, and a changed run found then would leave them holding their headers alone.
-            SearchSession::new(Arc::clone(&plan), watched_reducers.clone(), recorded.runs.clone())?
+            SearchSession::new(Arc::clone(&plan), watched_reducers.clone(), Arc::clone(&recorded.runs))?
                 .replay_recorded_runs()?;
         }
         let skipped = resumed.as_ref().map_or(0, |recorded| recorded.runs.len() as u64);
@@ -1221,7 +1237,7 @@ impl SearchPreparation {
         let recorded = self
             .resumed
             .as_ref()
-            .map(|resumed| resumed.runs.clone())
+            .map(|resumed| Arc::clone(&resumed.runs))
             .unwrap_or_default();
         Ok(SearchSession::new(
             Arc::clone(&self.plan),
@@ -1275,10 +1291,14 @@ impl SearchPreparation {
         };
         let mut manifest = self.manifest(inputs)?;
         dir.write_manifest(&manifest)?;
-        let (end, counts, session, search_report) = match self.run_into(&dir, inputs, progress) {
+        let mut standing = None;
+        let (end, counts, session, search_report) = match self.run_into(&dir, inputs, progress, &mut standing) {
             Ok(finished) => finished,
             Err(error) => {
                 manifest.fail(now_unix_ms());
+                if let Some(standing) = standing {
+                    manifest.search = Some(standing);
+                }
                 // The search's own error is the one to report. A manifest that cannot be written says `running`.
                 drop(dir.write_manifest(&manifest));
                 return Err(error);
@@ -1298,11 +1318,13 @@ impl SearchPreparation {
     /// Repairs a resumed directory, runs the search into `dir`, writes its closing table and rebuilds the summary.
     ///
     /// Returns the end of the search, the counts of the rows `runs.csv` holds, the session and its final report.
+    /// `standing` receives the manifest's record of the search once the batches stop, with an error or without.
     fn run_into(
         &self,
         dir: &OutputDir,
         inputs: &SweepInputs<'_>,
         progress: &mut dyn Progress,
+        standing: &mut Option<ManifestSearch>,
     ) -> Result<(BatchEnd, ResultCounts, SearchSession, SearchReport), ExploreError> {
         let params = &inputs.entry.param_descriptors;
         let executor = self.executor(inputs)?;
@@ -1338,7 +1360,9 @@ impl SearchPreparation {
             tables,
             columns: ConfigColumns::new(params, self.plan.base.actions()),
         };
-        let end = self.run_all(&executor, &mut output, progress)?;
+        let end = self.run_all(&executor, &mut output, progress);
+        *standing = Some(output.session.manifest_search());
+        let end = end?;
         let SearchWriters {
             session,
             writer,

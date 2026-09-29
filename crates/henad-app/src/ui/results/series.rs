@@ -9,7 +9,7 @@ use web_time::Instant;
 
 use crate::ui::results::ResultsRequest;
 use crate::ui::results::plot::{MAX_PLOT_POINTS, config_color, decimate, labeled_combo, refresh_due};
-use crate::ui::results::store::{Band, BandKind, ResultsStore};
+use crate::ui::results::store::{BandKind, ResultsStore, SeriesBand};
 use crate::ui::{plural, show_plot};
 
 /// Most configs the view draws at once.
@@ -34,6 +34,8 @@ pub struct SeriesView {
 struct SeriesPlot {
     /// Number of runs, and of runs with their series held, of each drawn config.
     run_counts: Vec<(usize, usize)>,
+    /// Count of runs the store had replaced, from [`ResultsStore::replaced_count`].
+    replaced_runs: u64,
     computed_at: Instant,
     stat: usize,
     band: BandKind,
@@ -50,7 +52,7 @@ struct SeriesPlot {
 struct ConfigBand {
     config_id: u64,
     /// Band whose low and high ends the fill spans.
-    band: Band,
+    band: SeriesBand,
     /// Centre line, decimated so its spikes survive.
     center: Vec<PlotPoint>,
 }
@@ -283,7 +285,7 @@ fn held_line(
 
 impl SeriesView {
     /// Returns the bands and run lines of `configs`, computed again when the settings change, and at most once per
-    /// [`REFRESH_INTERVAL`] while runs land in `configs`.
+    /// [`REFRESH_INTERVAL`] while runs land in `configs` or the store replaces a run.
     ///
     /// Runs landing in other configs leave the drawing alone. `ctx` repaints once a pending refresh is due.
     ///
@@ -291,10 +293,12 @@ impl SeriesView {
     fn cached_plot(&mut self, ctx: &egui::Context, store: &ResultsStore, configs: Vec<u64>) -> &SeriesPlot {
         let (stat, band, show_runs) = (self.stat, self.band, self.show_runs);
         let run_counts = run_counts(store, &configs);
+        let replaced_runs = store.replaced_count();
         let stale = self.cache.as_ref().is_some_and(|cache| {
             let settings_changed =
                 cache.stat != stat || cache.band != band || cache.show_runs != show_runs || cache.configs != configs;
-            if settings_changed || cache.run_counts == run_counts {
+            let runs_changed = cache.run_counts != run_counts || cache.replaced_runs != replaced_runs;
+            if settings_changed || !runs_changed {
                 return settings_changed;
             }
             refresh_due(ctx, cache.computed_at)
@@ -321,6 +325,7 @@ impl SeriesView {
             };
             SeriesPlot {
                 run_counts,
+                replaced_runs,
                 computed_at: Instant::now(),
                 stat,
                 band,
@@ -376,7 +381,7 @@ fn run_lines(store: &ResultsStore, configs: &[u64], stat: usize) -> Vec<RunLine>
 }
 
 /// Returns the centre line of `band`, decimated to at most [`MAX_PLOT_POINTS`] points.
-fn center_line(band: &Band) -> Vec<PlotPoint> {
+fn center_line(band: &SeriesBand) -> Vec<PlotPoint> {
     let points: Vec<[f64; 2]> = band
         .ticks
         .iter()
@@ -393,15 +398,15 @@ fn center_line(band: &Band) -> Vec<PlotPoint> {
 /// the ticks it stands for.
 ///
 /// Note that the thinned band's centre is the middle sample of each bucket, and [`center_line`] draws the centre.
-fn thin_band(band: Band) -> Band {
+fn thin_band(band: SeriesBand) -> SeriesBand {
     let count = band.ticks.len();
     if count <= MAX_PLOT_POINTS {
         return band;
     }
     let bucket = count.div_ceil(MAX_PLOT_POINTS);
-    let mut thinned_band = Band {
+    let mut thinned_band = SeriesBand {
         runs: band.runs,
-        ..Band::default()
+        ..SeriesBand::default()
     };
     for start in (0..count).step_by(bucket) {
         let range = start..(start + bucket).min(count);
@@ -424,9 +429,18 @@ mod tests {
     use egui_plot::PlotPoint;
     use web_time::Instant;
 
-    use super::{ConfigBand, SeriesPlot, center_line, draw_plot, thin_band};
-    use crate::ui::results::plot::MAX_PLOT_POINTS;
-    use crate::ui::results::store::{Band, BandKind};
+    use std::sync::Arc;
+
+    use henad_core::explore::measure::SeriesBuffer;
+    use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
+    use henad_core::explore::plan::Plan;
+    use henad_core::explore::spec::SweepSpec;
+    use henad_explore::schema::model_schema;
+    use henad_models::registry::model_registry;
+
+    use super::{ConfigBand, SeriesPlot, SeriesView, center_line, draw_plot, thin_band};
+    use crate::ui::results::plot::{MAX_PLOT_POINTS, REFRESH_INTERVAL};
+    use crate::ui::results::store::{BandKind, ResultsStore, SeriesBand};
 
     /// Adds the text of every text shape in `shape` to `texts`, in paint order.
     fn collect_texts(shape: &Shape, texts: &mut Vec<String>) {
@@ -446,7 +460,7 @@ mod tests {
         let configs = vec![1, 2, 10];
         let config_band = |config_id| ConfigBand {
             config_id,
-            band: Band {
+            band: SeriesBand {
                 ticks: vec![0.0, 1.0],
                 center: vec![1.0, 2.0],
                 low: vec![0.5, 1.5],
@@ -457,6 +471,7 @@ mod tests {
         };
         let plotted = SeriesPlot {
             run_counts: vec![(2, 2); configs.len()],
+            replaced_runs: 0,
             computed_at: Instant::now(),
             stat: 0,
             band: BandKind::default(),
@@ -497,7 +512,7 @@ mod tests {
         let mut center: Vec<f64> = ticks.iter().map(|tick| (tick * 0.001).sin()).collect();
         center[54_321] = 30.0;
         center[77_777] = -20.0;
-        let band = Band {
+        let band = SeriesBand {
             low: center.iter().map(|value| value - 1.0).collect(),
             high: center.iter().map(|value| value + 1.0).collect(),
             ticks,
@@ -519,5 +534,70 @@ mod tests {
         let highest = thinned_band.high.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let lowest = thinned_band.low.iter().copied().fold(f64::INFINITY, f64::min);
         assert_eq!((highest, lowest), (31.0, -21.0), "the fill spans both spikes");
+    }
+
+    /// Returns run `run_id` of `plan`, whose Infected count is `infected` at ticks 0 and 10.
+    fn run(plan: &Plan, run_id: u64, infected: f64) -> RunOutcome {
+        let run = plan.run(run_id).expect("a planned run");
+        let mut series = SeriesBuffer::new(3);
+        series.push(0, &[0.0, infected, 0.0]);
+        series.push(10, &[0.0, infected, 0.0]);
+        RunOutcome {
+            run,
+            run_key: plan.run_key(&run),
+            status: RunStatus::Ok,
+            stop_reason: StopReason::Steps,
+            ticks: 10,
+            population: 256,
+            build_ms: 1.0,
+            wall_ms: 2.0,
+            reducers: Vec::new(),
+            series,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn a_rerun_that_replaces_a_run_refreshes_its_band() {
+        let sir = model_registry(None)
+            .into_iter()
+            .find(|entry| entry.id == "sir")
+            .expect("SIR is registered");
+        let mut spec = SweepSpec::new("sir");
+        spec.run.steps = 10;
+        spec.run.replicates = 2;
+        spec.measure.stats_every = 10;
+        spec.measure.series_every = 10;
+        let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
+        let mut store = ResultsStore::for_sweep(Arc::clone(&plan), &sir, 0, None, usize::MAX);
+        store.set_columns(&["Susceptible", "Infected", "Recovered"].map(str::to_owned), &[]);
+        store.push_run(run(&plan, 0, 2.0), false);
+        store.push_run(run(&plan, 1, 4.0), false);
+
+        let context = egui::Context::default();
+        let mut view = SeriesView {
+            stat: 1,
+            ..SeriesView::default()
+        };
+        let center = |view: &mut SeriesView, store: &ResultsStore| {
+            let plotted = view.cached_plot(&context, store, vec![0]);
+            plotted.bands[0]
+                .as_ref()
+                .map(|config_band| config_band.band.center.clone())
+        };
+        assert_eq!(center(&mut view, &store), Some(vec![3.0, 3.0]));
+
+        // A resumed sweep reruns run 1. The config keeps its count of runs and of held series.
+        store.push_run(run(&plan, 1, 8.0), false);
+        if let Some(cache) = &mut view.cache {
+            cache.computed_at = Instant::now()
+                .checked_sub(REFRESH_INTERVAL)
+                .expect("the clock reads past the refresh interval");
+        }
+        assert_eq!(
+            center(&mut view, &store),
+            Some(vec![5.0, 5.0]),
+            "the band reads the rerun"
+        );
     }
 }

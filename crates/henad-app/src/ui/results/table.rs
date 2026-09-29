@@ -40,12 +40,22 @@ struct RowOrder {
 }
 
 impl RunsFilter {
-    fn label(self) -> &'static str {
+    /// Returns the name of the filter, with `configs` the plural the results give their configs.
+    fn label(self, configs: &str) -> String {
         match self {
-            Self::All => "All runs",
-            Self::Failed => "Failed runs",
-            Self::SelectedConfigs => "Selected configurations",
+            Self::All => "All runs".to_owned(),
+            Self::Failed => "Failed runs".to_owned(),
+            Self::SelectedConfigs => format!("Selected {configs}"),
         }
+    }
+}
+
+/// Returns the plural the Runs view gives the configs of `store`, "candidates" for the results of a search.
+fn configs_noun(store: &ResultsStore) -> &'static str {
+    if store.is_search() {
+        "candidates"
+    } else {
+        "configurations"
     }
 }
 
@@ -70,16 +80,18 @@ pub fn table_ui(
     selected_run: Option<u64>,
     request: &mut Option<ResultsRequest>,
 ) {
+    let configs = configs_noun(store);
     ui.horizontal_wrapped(|ui| {
-        labeled_combo(ui, "Show", "henad_results_runs_filter", view.filter.label(), |ui| {
+        let filter_text = view.filter.label(configs);
+        labeled_combo(ui, "Show", "henad_results_runs_filter", &filter_text, |ui| {
             for filter in [RunsFilter::All, RunsFilter::Failed, RunsFilter::SelectedConfigs] {
-                ui.selectable_value(&mut view.filter, filter, filter.label());
+                ui.selectable_value(&mut view.filter, filter, filter.label(configs));
             }
         });
         let clearable = view.filter == RunsFilter::SelectedConfigs && !selected_configs.is_empty();
         if ui
             .add_enabled(clearable, egui::Button::new("Clear selection"))
-            .on_hover_text("Deselect all configurations")
+            .on_hover_text(format!("Deselect all {configs}"))
             .clicked()
         {
             *request = Some(ResultsRequest::ClearSelection);
@@ -331,7 +343,9 @@ pub fn detail_strip(ui: &mut egui::Ui, store: &ResultsStore, run_id: u64, reques
         }
         let copy = ui
             .add_enabled(replays, egui::Button::new(format!("{MDI_CONTENT_COPY} Copy command")))
-            .on_hover_text("Copy henad-cli command to replay this run")
+            .on_hover_text(
+                "Copy henad-cli command to replay this run. Its stats might fall on other ticks than this run's series.",
+            )
             .on_disabled_hover_text(refusal_text);
         if copy.clicked() {
             *request = Some(ResultsRequest::CopyCommand(run_id));
@@ -354,7 +368,7 @@ mod tests {
 
     use super::{ROW_HEIGHT, header_text, min_column_width};
     use crate::icons::material_design_icons::{MDI_MENU_DOWN, MDI_MENU_UP};
-    use crate::ui::results::store::RunsColumn;
+    use crate::ui::results::store::{RunsColumn, RunsFilter};
 
     /// Returns the width `widget` takes untruncated, laid out in a table cell `width` wide.
     fn intrinsic_width(ui: &mut egui::Ui, width: f32, widget: impl Widget) -> f32 {
@@ -400,5 +414,15 @@ mod tests {
             }
         });
         output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn the_selection_filter_names_configs_as_the_results_do() {
+        assert_eq!(RunsFilter::SelectedConfigs.label("candidates"), "Selected candidates");
+        assert_eq!(
+            RunsFilter::SelectedConfigs.label("configurations"),
+            "Selected configurations"
+        );
+        assert_eq!(RunsFilter::Failed.label("candidates"), "Failed runs");
     }
 }

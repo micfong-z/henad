@@ -4,6 +4,10 @@
 //! A value column is a parameter or an action tick of `runs.csv`. An axis is a value column that takes more than one
 //! value across the configs, and a level is one of those values. Runs are held in full, and their series within a
 //! byte budget. The configs of a search are its candidates, known once the search is told their evaluations.
+//!
+//! Every statistic pools the runs of a config in order of run id. Note that `summary.csv` pools them in the order of
+//! `runs.csv`, and a resumed sweep can write that file out of run-id order. The last digits of a statistic can then
+//! differ between the two.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,8 +33,8 @@ use henad_models::registry::ModelEntry;
 
 use crate::ui::sweep::draft::describe_error;
 
-/// Level of a config on an axis whose column the config lacks.
-const NO_LEVEL: usize = usize::MAX;
+/// Level id of a config on an axis whose column the config lacks.
+const NO_LEVEL_ID: usize = usize::MAX;
 
 /// Place results come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +61,95 @@ pub struct ResultsAxis {
     pub positions: Vec<f64>,
     /// Whether every level is a number.
     pub numeric: bool,
+    /// Id of each level. A level keeps its id when levels are added below it.
+    level_ids: Vec<usize>,
+    /// Level of each id, the inverse of `level_ids`.
+    id_levels: Vec<usize>,
+}
+
+impl ResultsAxis {
+    /// Returns the axis of value column `column`, labelled `label`, with `levels` at `positions`.
+    fn new(column: usize, label: String, levels: Vec<String>, positions: Vec<f64>, numeric: bool) -> Self {
+        let level_ids: Vec<usize> = (0..levels.len()).collect();
+        Self {
+            column,
+            label,
+            levels,
+            positions,
+            numeric,
+            id_levels: level_ids.clone(),
+            level_ids,
+        }
+    }
+
+    /// Returns the level whose id is `level_id`, or `None` for [`NO_LEVEL_ID`].
+    fn level_of_id(&self, level_id: usize) -> Option<usize> {
+        self.id_levels.get(level_id).copied()
+    }
+
+    /// Returns the id of the level whose value is `text`, or [`NO_LEVEL_ID`] when the axis lacks it.
+    fn level_id(&self, text: &str) -> usize {
+        self.level(text).map_or(NO_LEVEL_ID, |level| self.level_ids[level])
+    }
+
+    /// Returns the level whose value is `text`, or `None` when the axis lacks it.
+    fn level(&self, text: &str) -> Option<usize> {
+        if !self.numeric {
+            return self.levels.iter().position(|level| level == text);
+        }
+        let value = finite_number(text)?;
+        let start = self
+            .positions
+            .partition_point(|position| position.total_cmp(&value).is_lt());
+        (start..self.levels.len())
+            .take_while(|&level| self.positions[level].total_cmp(&value).is_eq())
+            .find(|&level| self.levels[level] == text)
+    }
+
+    /// Adds each value of `texts` the axis lacks as a level with an id of its own.
+    ///
+    /// A numeric axis places a new level among the numbers, after any old level of the same value, and leaves out a
+    /// text that is not a finite number. Any other axis adds new levels at the end. Note that every level above the
+    /// lowest new one moves up, in time that grows with the number of levels it moves. A search over an `f32` range
+    /// draws a value below the highest on nearly every batch.
+    fn extend<'a>(&mut self, texts: impl Iterator<Item = &'a str>) {
+        let mut seen = BTreeSet::new();
+        let new_texts = texts.filter(|&text| self.level(text).is_none() && seen.insert(text));
+        let mut new_levels: Vec<(f64, &str)> = if self.numeric {
+            let mut numbers: Vec<(f64, &str)> = new_texts
+                .filter_map(|text| Some((finite_number(text)?, text)))
+                .collect();
+            numbers.sort_by(|a, b| a.0.total_cmp(&b.0));
+            numbers
+        } else {
+            let positions = (self.levels.len()..).map(|level| level as f64);
+            positions.zip(new_texts).collect()
+        };
+        let old_count = self.levels.len();
+        let count = old_count + new_levels.len();
+        self.levels.resize_with(count, String::new);
+        self.positions.resize(count, 0.0);
+        self.level_ids.resize(count, NO_LEVEL_ID);
+        // Places the new levels from the highest down. Each old level above the one being placed moves up to make
+        // room, and the levels below the lowest new one stay where they are.
+        let (mut unmoved, mut slot) = (old_count, count);
+        while let Some((position, text)) = new_levels.pop() {
+            while unmoved > 0 && self.positions[unmoved - 1].total_cmp(&position).is_gt() {
+                unmoved -= 1;
+                slot -= 1;
+                self.levels.swap(unmoved, slot);
+                self.positions[slot] = self.positions[unmoved];
+                let level_id = self.level_ids[unmoved];
+                self.level_ids[slot] = level_id;
+                self.id_levels[level_id] = slot;
+            }
+            slot -= 1;
+            self.levels[slot] = text.to_owned();
+            self.positions[slot] = position;
+            self.level_ids[slot] = self.id_levels.len();
+            self.id_levels.push(slot);
+        }
+    }
 }
 
 /// Block and values of one config.
@@ -75,10 +168,44 @@ struct ConfigEntry {
     block: usize,
     /// Value of each value column, as `runs.csv` writes it.
     texts: Vec<String>,
-    /// Level of each axis, [`NO_LEVEL`] where the config lacks the axis's column.
-    levels: Vec<usize>,
+    /// Id of the config's level on each axis, [`NO_LEVEL_ID`] where the config lacks the axis's column.
+    level_ids: Vec<usize>,
     /// Positions in the store's runs of the config's runs, in order of run id.
     runs: Vec<usize>,
+}
+
+/// Levels the configs of one block take on each axis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlockAxes {
+    /// Id of the level of each axis in the first config of the block that has one, [`NO_LEVEL_ID`] while no config
+    /// has one.
+    first_level_ids: Vec<usize>,
+    /// Whether each axis takes more than one level within the block.
+    varies: Vec<bool>,
+}
+
+impl BlockAxes {
+    fn new(axis_count: usize) -> Self {
+        Self {
+            first_level_ids: vec![NO_LEVEL_ID; axis_count],
+            varies: vec![false; axis_count],
+        }
+    }
+
+    /// Adds `level_ids`, the id of the level of one more config of the block on each axis.
+    fn add(&mut self, level_ids: &[usize]) {
+        let axes = self.first_level_ids.iter_mut().zip(&mut self.varies);
+        for ((first, varies), &level_id) in axes.zip(level_ids) {
+            if level_id == NO_LEVEL_ID {
+                continue;
+            }
+            if *first == NO_LEVEL_ID {
+                *first = level_id;
+            } else if *first != level_id {
+                *varies = true;
+            }
+        }
+    }
 }
 
 /// Series of runs, held while they fit a byte budget.
@@ -202,7 +329,7 @@ pub enum BandKind {
 
 /// Centre line and spread of one stat over the replicates of a config, tick by tick.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Band {
+pub struct SeriesBand {
     pub ticks: Vec<f64>,
     pub center: Vec<f64>,
     pub low: Vec<f64>,
@@ -385,13 +512,19 @@ pub struct ResultsStore {
     stat_columns: Vec<String>,
     reducer_columns: Vec<String>,
     axes: Vec<ResultsAxis>,
-    /// Whether each axis takes more than one level within a block, by block index.
-    block_axes: BTreeMap<usize, Vec<bool>>,
+    /// Levels the configs of each block take on the axes, by block index.
+    block_axes: BTreeMap<usize, BlockAxes>,
     configs: BTreeMap<u64, ConfigEntry>,
     /// Runs in the order they arrived, each with its series left empty.
     runs: Vec<RunOutcome>,
     /// Position in `runs` of each run, by run id.
     positions: BTreeMap<u64, usize>,
+    /// Positions in `runs` of the runs whose config the store does not hold yet, by config id and in order of run id.
+    unassigned_runs: BTreeMap<u64, Vec<usize>>,
+    /// Number of runs that ended on a fault or a timeout.
+    failed_runs: usize,
+    /// Count of runs replaced by a later run of the same id.
+    replaced_runs: u64,
     series: SeriesCache,
     /// Runs that recorded no series rows, which a load cannot find either.
     empty_series_runs: BTreeSet<u64>,
@@ -431,6 +564,9 @@ impl ResultsStore {
             configs: BTreeMap::new(),
             runs: Vec::new(),
             positions: BTreeMap::new(),
+            unassigned_runs: BTreeMap::new(),
+            failed_runs: 0,
+            replaced_runs: 0,
             series: SeriesCache::new(series_budget),
             empty_series_runs: BTreeSet::new(),
             revision: 0,
@@ -526,6 +662,9 @@ impl ResultsStore {
             configs: BTreeMap::new(),
             runs: Vec::new(),
             positions: BTreeMap::new(),
+            unassigned_runs: BTreeMap::new(),
+            failed_runs: 0,
+            replaced_runs: 0,
             series: SeriesCache::new(series_budget),
             empty_series_runs: BTreeSet::new(),
             revision: 0,
@@ -560,18 +699,19 @@ impl ResultsStore {
         let configs: BTreeMap<u64, ConfigEntry> = texts
             .into_iter()
             .map(|(config_id, ConfigTexts { block, texts })| {
-                let levels = axes
+                // A new axis gives each level the id of its place.
+                let level_ids = axes
                     .iter()
                     .zip(&lookups)
                     .map(|(axis, lookup)| {
                         let text = texts.get(axis.column).map(String::as_str);
-                        text.and_then(|text| lookup.get(text)).copied().unwrap_or(NO_LEVEL)
+                        text.and_then(|text| lookup.get(text)).copied().unwrap_or(NO_LEVEL_ID)
                     })
                     .collect();
                 let entry = ConfigEntry {
                     block,
                     texts,
-                    levels,
+                    level_ids,
                     runs: Vec::new(),
                 };
                 (config_id, entry)
@@ -587,7 +727,7 @@ impl ResultsStore {
     fn block_varies(&self, block: usize, axis: usize) -> bool {
         self.block_axes
             .get(&block)
-            .and_then(|varies| varies.get(axis))
+            .and_then(|block_axes| block_axes.varies.get(axis))
             .copied()
             .unwrap_or(false)
     }
@@ -607,10 +747,7 @@ impl ResultsStore {
         if distinct.len() < 2 {
             return None;
         }
-        let numbers: Option<Vec<f64>> = distinct
-            .iter()
-            .map(|text| text.parse::<f64>().ok().filter(|value| value.is_finite()))
-            .collect();
+        let numbers: Option<Vec<f64>> = distinct.iter().map(|text| finite_number(text)).collect();
         let (levels, positions, numeric) = if let Some(numbers) = numbers {
             let mut pairs: Vec<(f64, &str)> = numbers.into_iter().zip(distinct).collect();
             pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -620,13 +757,13 @@ impl ResultsStore {
             let positions = (0..distinct.len()).map(|level| level as f64).collect();
             (distinct.into_iter().map(str::to_owned).collect(), positions, false)
         };
-        Some(ResultsAxis {
+        Some(ResultsAxis::new(
             column,
-            label: self.column_label(column),
+            self.column_label(column),
             levels,
             positions,
             numeric,
-        })
+        ))
     }
 
     /// Returns the name the views give value column `column`: a parameter's label, or an action's label and "tick".
@@ -676,60 +813,139 @@ impl ResultsStore {
         } else {
             self.series.insert(run_id, series);
         }
+        let failed = usize::from(outcome.status.is_failure());
         if let Some(&position) = self.positions.get(&run_id) {
-            self.runs[position] = outcome;
+            let replaced = std::mem::replace(&mut self.runs[position], outcome);
+            self.failed_runs -= usize::from(replaced.status.is_failure());
+            self.failed_runs += failed;
+            self.replaced_runs += 1;
             return;
         }
         let position = self.runs.len();
         let config_id = outcome.run.config_id;
         self.runs.push(outcome);
         self.positions.insert(run_id, position);
-        if let Some(config) = self.configs.get_mut(&config_id) {
-            let runs = &self.runs;
-            let slot = config.runs.partition_point(|&held| runs[held].run.run_id < run_id);
-            config.runs.insert(slot, position);
-        }
+        self.failed_runs += failed;
+        let positions = match self.configs.get_mut(&config_id) {
+            Some(config) => &mut config.runs,
+            None => self.unassigned_runs.entry(config_id).or_default(),
+        };
+        insert_by_run_id(positions, &self.runs, position);
     }
 
-    /// Adds the configs of the candidates `update` reports, and the batch to the search's course.
+    /// Adds the configs of the candidates `updates` report, and each batch in order to the search's course.
     ///
-    /// A batch the course holds already, as a resumed search reports again, adds no second entry.
-    pub fn push_search_update(&mut self, update: &SearchUpdate) {
+    /// A batch the course holds already, as a resumed search reports again, adds no second entry. The configs of every
+    /// batch join the configs held in one pass over the axes.
+    pub fn push_search_updates<'a>(&mut self, updates: impl IntoIterator<Item = &'a SearchUpdate>) {
         let Some(search) = &mut self.search else {
             return;
         };
-        let known = search
-            .history
-            .batches
-            .last()
-            .is_some_and(|last| last.batch >= update.batch);
-        if !known {
-            search.history.push(update);
+        let mut added: BTreeMap<u64, ConfigTexts> = BTreeMap::new();
+        for update in updates {
+            let known = search
+                .history
+                .batches
+                .last()
+                .is_some_and(|last| last.batch >= update.batch);
+            if !known {
+                search.history.push(update);
+            }
+            for evaluated in &update.evaluated {
+                if !self.configs.contains_key(&evaluated.candidate_id) {
+                    added
+                        .entry(evaluated.candidate_id)
+                        .or_insert_with(|| config_texts(&evaluated.config, &self.descriptors));
+                }
+            }
         }
-        let added: BTreeMap<u64, ConfigTexts> = update
-            .evaluated
-            .iter()
-            .filter(|evaluated| !self.configs.contains_key(&evaluated.candidate_id))
-            .map(|evaluated| {
-                let texts = config_texts(&evaluated.config, &self.descriptors);
-                (evaluated.candidate_id, texts)
-            })
-            .collect();
         if !added.is_empty() && !self.descriptors.is_empty() {
             self.add_configs(added);
         }
         self.revision += 1;
     }
 
-    /// Adds the configs `added` beside the configs held, finds the axes again and gives each config its runs.
+    /// Adds the configs `added` beside the configs held, and gives each config its runs.
+    ///
+    /// The axes grow in place when [`Self::fits_axes`] finds that the added configs fit them. Otherwise every config
+    /// is built again and the axes are found again.
     fn add_configs(&mut self, added: BTreeMap<u64, ConfigTexts>) {
-        let mut texts: BTreeMap<u64, ConfigTexts> = self
-            .configs
+        if self.fits_axes(&added) {
+            self.extend_configs(added);
+        } else {
+            self.rebuild_configs(added);
+        }
+    }
+
+    /// Returns whether the configs `added` fit the axes held: every added id comes after every held one, no column
+    /// that is not an axis takes a second value, and every value on a numeric axis is a finite number.
+    ///
+    /// A store that holds no config yet fits nothing.
+    fn fits_axes(&self, added: &BTreeMap<u64, ConfigTexts>) -> bool {
+        let (Some((&first_added, _)), Some((&last_held, _))) = (added.first_key_value(), self.configs.last_key_value())
+        else {
+            return false;
+        };
+        if first_added <= last_held {
+            return false;
+        }
+        let added_texts = |column: usize| added.values().filter_map(move |config| config.texts.get(column));
+        let numbers_fit = self
+            .axes
             .iter()
-            .map(|(&config_id, config)| {
+            .filter(|axis| axis.numeric)
+            .all(|axis| added_texts(axis.column).all(|text| finite_number(text).is_some()));
+        let axis_columns: BTreeSet<usize> = self.axes.iter().map(|axis| axis.column).collect();
+        numbers_fit
+            && (0..self.value_columns.len())
+                .filter(|column| !axis_columns.contains(column))
+                .all(|column| {
+                    let held = self.configs.values().find_map(|config| config.texts.get(column));
+                    let mut texts = held.into_iter().chain(added_texts(column));
+                    let first = texts.next();
+                    texts.all(|text| Some(text) == first)
+                })
+    }
+
+    /// Adds the configs `added`, which fit the axes held, and gives each its runs.
+    ///
+    /// Every config and block held keeps its entry. A level keeps its id when levels are added below it.
+    fn extend_configs(&mut self, added: BTreeMap<u64, ConfigTexts>) {
+        for axis in &mut self.axes {
+            let column = axis.column;
+            let texts = added.values().filter_map(|config| config.texts.get(column));
+            axis.extend(texts.map(String::as_str));
+        }
+        let axis_count = self.axes.len();
+        for (config_id, ConfigTexts { block, texts }) in added {
+            let level_ids: Vec<usize> = self
+                .axes
+                .iter()
+                .map(|axis| texts.get(axis.column).map_or(NO_LEVEL_ID, |text| axis.level_id(text)))
+                .collect();
+            self.block_axes
+                .entry(block)
+                .or_insert_with(|| BlockAxes::new(axis_count))
+                .add(&level_ids);
+            let config = ConfigEntry {
+                block,
+                texts,
+                level_ids,
+                runs: self.unassigned_runs.remove(&config_id).unwrap_or_default(),
+            };
+            self.configs.insert(config_id, config);
+        }
+    }
+
+    /// Builds every config again from the configs held and `added`, finds the axes again and gives each config its
+    /// runs.
+    fn rebuild_configs(&mut self, added: BTreeMap<u64, ConfigTexts>) {
+        let mut texts: BTreeMap<u64, ConfigTexts> = std::mem::take(&mut self.configs)
+            .into_iter()
+            .map(|(config_id, config)| {
                 let texts = ConfigTexts {
                     block: config.block,
-                    texts: config.texts.clone(),
+                    texts: config.texts,
                 };
                 (config_id, texts)
             })
@@ -738,12 +954,14 @@ impl ResultsStore {
             texts.entry(config_id).or_insert(config);
         }
         self.set_configs(texts);
+        self.unassigned_runs.clear();
         let mut positions: Vec<usize> = (0..self.runs.len()).collect();
         positions.sort_by_key(|&position| self.runs[position].run.run_id);
         for position in positions {
             let config_id = self.runs[position].run.config_id;
-            if let Some(config) = self.configs.get_mut(&config_id) {
-                config.runs.push(position);
+            match self.configs.get_mut(&config_id) {
+                Some(config) => config.runs.push(position),
+                None => self.unassigned_runs.entry(config_id).or_default().push(position),
             }
         }
     }
@@ -780,7 +998,12 @@ impl ResultsStore {
 
     /// Number of runs that ended on a fault or a timeout.
     pub fn failed_count(&self) -> usize {
-        self.runs.iter().filter(|outcome| outcome.status.is_failure()).count()
+        self.failed_runs
+    }
+
+    /// Count of runs replaced by a later run of the same id, as a resumed sweep replaces a run that timed out.
+    pub fn replaced_count(&self) -> u64 {
+        self.replaced_runs
     }
 
     pub fn series(&self, run_id: u64) -> Option<&SeriesBuffer> {
@@ -825,8 +1048,12 @@ impl ResultsStore {
 
     /// Returns the level of config `config_id` on axis `axis`.
     pub fn config_level(&self, config_id: u64, axis: usize) -> Option<usize> {
-        let level = *self.configs.get(&config_id)?.levels.get(axis)?;
-        (level != NO_LEVEL).then_some(level)
+        self.entry_level(self.configs.get(&config_id)?, axis)
+    }
+
+    /// Returns the level of `config` on axis `axis`, `None` where the config lacks the axis's column.
+    fn entry_level(&self, config: &ConfigEntry, axis: usize) -> Option<usize> {
+        self.axes.get(axis)?.level_of_id(*config.level_ids.get(axis)?)
     }
 
     /// Returns the word the views give a config, "Candidate" for the results of a search.
@@ -924,9 +1151,9 @@ impl ResultsStore {
     }
 
     /// Returns whether `config` sits at every pinned level of `pins`, the axes in `free` left out.
-    fn matches_pins(config: &ConfigEntry, pins: &[Option<usize>], free: &[Option<usize>]) -> bool {
+    fn matches_pins(&self, config: &ConfigEntry, pins: &[Option<usize>], free: &[Option<usize>]) -> bool {
         pins.iter().enumerate().all(|(axis, pin)| {
-            free.contains(&Some(axis)) || pin.is_none_or(|level| config.levels.get(axis) == Some(&level))
+            free.contains(&Some(axis)) || pin.is_none_or(|level| self.entry_level(config, axis) == Some(level))
         })
     }
 
@@ -934,7 +1161,7 @@ impl ResultsStore {
     /// not fail, or `None` when there is no such run.
     ///
     /// A run that ended early adds nothing to the ticks past its end.
-    pub fn band(&self, config_id: u64, stat: usize, kind: BandKind) -> Option<Band> {
+    pub fn band(&self, config_id: u64, stat: usize, kind: BandKind) -> Option<SeriesBand> {
         let config = self.configs.get(&config_id)?;
         let mut samples: BTreeMap<u64, Vec<f64>> = BTreeMap::new();
         let mut runs = 0;
@@ -956,9 +1183,9 @@ impl ResultsStore {
         if runs == 0 {
             return None;
         }
-        let mut band = Band {
+        let mut band = SeriesBand {
             runs,
-            ..Band::default()
+            ..SeriesBand::default()
         };
         for (tick, mut values) in samples {
             let (center, low, high) = spread(&mut values, kind);
@@ -979,17 +1206,17 @@ impl ResultsStore {
         let free = [Some(query.x_axis), query.group_axis];
         let mut cells: BTreeMap<(Option<usize>, usize), RunningMoments> = BTreeMap::new();
         for config in self.configs.values() {
-            if !self.block_varies(config.block, query.x_axis) || !Self::matches_pins(config, &query.pins, &free) {
+            if !self.block_varies(config.block, query.x_axis) || !self.matches_pins(config, &query.pins, &free) {
                 continue;
             }
-            let Some(&x_level) = config.levels.get(query.x_axis).filter(|&&level| level != NO_LEVEL) else {
+            let Some(x_level) = self.entry_level(config, query.x_axis) else {
                 continue;
             };
             let group_level = match query.group_axis {
                 None => None,
-                Some(axis) => match config.levels.get(axis) {
-                    Some(&level) if level != NO_LEVEL => Some(level),
-                    _ => continue,
+                Some(axis) => match self.entry_level(config, axis) {
+                    Some(level) => Some(level),
+                    None => continue,
                 },
             };
             let moments = cells.entry((group_level, x_level)).or_default();
@@ -1040,15 +1267,15 @@ impl ResultsStore {
         let mut pooled_texts: Vec<BTreeSet<&[String]>> = vec![BTreeSet::new(); columns * rows];
         for (&config_id, config) in &self.configs {
             let varies = self.block_varies(config.block, query.x_axis) || self.block_varies(config.block, query.y_axis);
-            if !varies || !Self::matches_pins(config, &query.pins, &free) {
+            if !varies || !self.matches_pins(config, &query.pins, &free) {
                 continue;
             }
-            let (Some(&column), Some(&row)) = (config.levels.get(query.x_axis), config.levels.get(query.y_axis)) else {
+            let (Some(column), Some(row)) = (
+                self.entry_level(config, query.x_axis),
+                self.entry_level(config, query.y_axis),
+            ) else {
                 continue;
             };
-            if column == NO_LEVEL || row == NO_LEVEL {
-                continue;
-            }
             let cell = row * columns + column;
             if !pooled_texts[cell].insert(config.texts.as_slice()) {
                 continue;
@@ -1140,8 +1367,9 @@ impl ResultsStore {
     /// # Errors
     ///
     /// Returns [`Self::replay_refusal`], or a message when the store holds no run `run_id` or the plan gives the run
-    /// another config, replicate or seed than its record. A search's run fails when its candidate's values do not
-    /// give the key its record holds.
+    /// another config, replicate or seed than its record. A search's run fails when the value columns do not name the
+    /// model's parameters in order. A run of either kind fails when its values do not give the key its record holds,
+    /// unless the model has changed since the run.
     pub fn replay(&self, run_id: u64) -> Result<Replay, String> {
         let plan = self.plan.as_ref().map_err(Clone::clone)?;
         let outcome = self
@@ -1151,11 +1379,22 @@ impl ResultsStore {
             ReplayPlan::Sweep(plan) => plan,
             ReplayPlan::Search(search_plan) => return self.search_replay(search_plan, outcome),
         };
-        if plan.run(run_id) != Some(outcome.run) {
-            return Err(format!("Run {run_id} does not match the plan of its sweep"));
+        let mismatch = || format!("Run {run_id} does not match the plan of its sweep");
+        match plan.run(run_id) {
+            Some(planned) if planned == outcome.run && self.key_matches(plan.run_key(&planned), outcome) => {
+                plan.replay(run_id).ok_or_else(mismatch)
+            }
+            _ => Err(mismatch()),
         }
-        plan.replay(run_id)
-            .ok_or_else(|| format!("Run {run_id} does not match the plan of its sweep"))
+    }
+
+    /// Returns whether `key`, the key a plan gives `outcome`, matches the key its record holds. Any key matches once
+    /// the model has changed since the run.
+    ///
+    /// The key hashes the model's declarations. After a change to the model no run's key matches, and the runs table
+    /// warns that a replay might differ.
+    fn key_matches(&self, key: u64, outcome: &RunOutcome) -> bool {
+        !self.schema_matches || key == outcome.run_key
     }
 
     /// Returns the replay of `outcome`, a run of the search of `search_plan`, from the values of its candidate.
@@ -1164,7 +1403,13 @@ impl ResultsStore {
         let mismatch = || format!("Run {run_id} does not match the search it comes from");
         let config = self.configs.get(&outcome.run.config_id).ok_or_else(mismatch)?;
         let param_count = self.descriptors.len();
-        if config.texts.len() != param_count + search_plan.base().actions().len() {
+        let columns = &self.value_columns;
+        let names_params = columns
+            .iter()
+            .zip(&self.descriptors)
+            .all(|(column, descriptor)| column == descriptor.id);
+        let column_count = param_count + search_plan.base().actions().len();
+        if !names_params || columns.len() != column_count || config.texts.len() != column_count {
             return Err(mismatch());
         }
         let (param_texts, tick_texts) = config.texts.split_at(param_count);
@@ -1185,7 +1430,7 @@ impl ResultsStore {
             params,
             action_ticks,
         };
-        if search_plan.run_key(&outcome.run, &config) != outcome.run_key {
+        if !self.key_matches(search_plan.run_key(&outcome.run, &config), outcome) {
             return Err(mismatch());
         }
         Ok(search_plan.replay(&outcome.run, &config))
@@ -1393,27 +1638,28 @@ fn config_texts(config: &Config, params: &[ParamDescriptor]) -> ConfigTexts {
     }
 }
 
-/// Returns whether each of `axis_count` axes takes more than one level within a block of `configs`, by block index.
-fn block_axes(configs: &BTreeMap<u64, ConfigEntry>, axis_count: usize) -> BTreeMap<usize, Vec<bool>> {
-    let mut first_levels: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    let mut varied: BTreeMap<usize, Vec<bool>> = BTreeMap::new();
+/// Returns the levels the configs of each block of `configs` take on `axis_count` axes, by block index.
+fn block_axes(configs: &BTreeMap<u64, ConfigEntry>, axis_count: usize) -> BTreeMap<usize, BlockAxes> {
+    let mut blocks: BTreeMap<usize, BlockAxes> = BTreeMap::new();
     for config in configs.values() {
-        let first = first_levels
+        blocks
             .entry(config.block)
-            .or_insert_with(|| vec![NO_LEVEL; axis_count]);
-        let varies = varied.entry(config.block).or_insert_with(|| vec![false; axis_count]);
-        for (axis, &level) in config.levels.iter().enumerate() {
-            if level == NO_LEVEL {
-                continue;
-            }
-            if first[axis] == NO_LEVEL {
-                first[axis] = level;
-            } else if first[axis] != level {
-                varies[axis] = true;
-            }
-        }
+            .or_insert_with(|| BlockAxes::new(axis_count))
+            .add(&config.level_ids);
     }
-    varied
+    blocks
+}
+
+/// Inserts `position` into `positions`, positions in `runs` in order of run id, keeping that order.
+fn insert_by_run_id(positions: &mut Vec<usize>, runs: &[RunOutcome], position: usize) {
+    let run_id = runs[position].run.run_id;
+    let slot = positions.partition_point(|&held| runs[held].run.run_id < run_id);
+    positions.insert(slot, position);
+}
+
+/// Returns `text` as a number, or `None` when it is not a finite number.
+fn finite_number(text: &str) -> Option<f64> {
+    text.parse::<f64>().ok().filter(|value| value.is_finite())
 }
 
 /// Returns the centre and the low and high ends of the spread `kind` over `values`.
@@ -1470,24 +1716,24 @@ fn shell_word(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::SeriesBuffer;
-    use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
-    use henad_core::explore::plan::{Config, Plan};
+    use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason};
+    use henad_core::explore::plan::{Config, ModelSchema, Plan};
     use henad_core::explore::search::{Aggregate, CandidateOrigin, Goal, Objective, SearchAlgorithm, SearchSpec};
     use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
-    use henad_core::params::ParamValue;
+    use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
     use henad_explore::schema::model_schema;
     use henad_explore::search_run::{EvaluatedCandidate, EvaluationReading, SearchPlan, SearchUpdate};
     use henad_models::registry::{ModelEntry, model_registry};
 
     use super::{
-        BandKind, HeatColor, HeatQuery, ResponseQuery, ResultsStore, RunsColumn, RunsFilter, RunsSort, output_label,
-        series_bytes, shell_word,
+        BandKind, HeatColor, HeatQuery, ResponseQuery, ResultsAxis, ResultsStore, RunsColumn, RunsFilter, RunsSort,
+        config_texts, output_label, series_bytes, shell_word,
     };
 
     const STATS: [&str; 3] = ["Susceptible", "Infected", "Recovered"];
@@ -1503,8 +1749,8 @@ mod tests {
         LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
     }
 
-    /// Returns the plan of an SIR factorial over `factors` with `replicates` runs per config.
-    fn plan(entry: &ModelEntry, factors: Vec<FactorSpec>, replicates: u64) -> Arc<Plan> {
+    /// Returns the spec of an SIR factorial over `factors` with `replicates` runs per config.
+    fn factorial_spec(factors: Vec<FactorSpec>, replicates: u64) -> SweepSpec {
         let mut spec = SweepSpec::new("sir");
         spec.run.steps = 20;
         spec.run.replicates = replicates;
@@ -1515,6 +1761,12 @@ mod tests {
             factors,
             design_seed: None,
         }];
+        spec
+    }
+
+    /// Returns the plan of an SIR factorial over `factors` with `replicates` runs per config.
+    fn plan(entry: &ModelEntry, factors: Vec<FactorSpec>, replicates: u64) -> Arc<Plan> {
+        let spec = factorial_spec(factors, replicates);
         Arc::new(spec.plan(&model_schema(entry)).expect("a valid spec"))
     }
 
@@ -1679,29 +1931,69 @@ mod tests {
         assert_eq!(store.output_range("Infected:min"), None, "a column the runs lack");
     }
 
-    #[test]
-    fn a_search_candidate_lists_its_searched_values_once_its_batch_ends() {
-        let sir = sir();
-        let schema = model_schema(&sir);
-        let mut spec = SweepSpec::new("sir");
-        spec.search = Some(SearchSpec {
+    /// Returns a random search of 4096 evaluations in batches of 16 over `space`, maximising the median of
+    /// `Infected:max`.
+    fn random_search(space: Vec<FactorSpec>) -> SearchSpec {
+        SearchSpec {
             algorithm: SearchAlgorithm::Random,
-            max_evaluations: 4,
-            batch_size: 2,
+            max_evaluations: 4096,
+            batch_size: 16,
             objective: Some(Objective {
                 column: "Infected:max".to_owned(),
                 goal: Goal::Maximize,
                 aggregate: Aggregate::Median,
             }),
-            space: vec![FactorSpec::param(
-                "infection_rate",
-                LevelSpec::Range {
-                    min: 0.0,
-                    max: 1.0,
-                    step: None,
-                },
-            )],
-        });
+            space,
+        }
+    }
+
+    /// Returns the evaluation of candidate `candidate_id`, asked for in batch `batch`, whose genome decodes to
+    /// `config`.
+    fn evaluated_candidate(candidate_id: u64, batch: u64, config: Config) -> EvaluatedCandidate {
+        EvaluatedCandidate {
+            candidate_id,
+            batch,
+            origin: CandidateOrigin::Random,
+            replicate_offset: 0,
+            replicates: 1,
+            config,
+            failed_count: 0,
+            reading: EvaluationReading::Objective {
+                objective: 1.0,
+                pooled_objective: 1.0,
+                pooled_replicates: 1,
+            },
+        }
+    }
+
+    /// Returns the update of batch `batch`, which tells the search `evaluated`.
+    fn search_update(batch: u64, evaluated: Vec<EvaluatedCandidate>) -> SearchUpdate {
+        SearchUpdate {
+            batch,
+            evaluations: evaluated.len() as u64,
+            runs: evaluated.len() as u64,
+            evaluated,
+            best: None,
+            generations: Vec::new(),
+            landed_entries: Vec::new(),
+            filled_cells: 0,
+            pattern_settings: None,
+        }
+    }
+
+    #[test]
+    fn a_search_candidate_lists_its_searched_values_once_its_batch_ends() {
+        let sir = sir();
+        let schema = model_schema(&sir);
+        let mut spec = SweepSpec::new("sir");
+        spec.search = Some(random_search(vec![FactorSpec::param(
+            "infection_rate",
+            LevelSpec::Range {
+                min: 0.0,
+                max: 1.0,
+                step: None,
+            },
+        )]));
         let search_plan = SearchPlan::new(&spec, &schema).expect("a valid search");
         let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, 0, None, usize::MAX);
         assert_eq!(store.config_values(0), None, "no batch has ended");
@@ -1712,39 +2004,544 @@ mod tests {
             .map(|descriptor| descriptor.kind.default_value())
             .collect();
         params[2] = ParamValue::F32(0.25);
-        let evaluated = EvaluatedCandidate {
-            candidate_id: 0,
-            batch: 0,
-            origin: CandidateOrigin::Random,
-            replicate_offset: 0,
-            replicates: 1,
-            config: Config {
-                block: 0,
-                params,
-                action_ticks: Vec::new(),
-            },
-            failed_count: 0,
-            reading: EvaluationReading::Objective {
-                objective: 1.0,
-                pooled_objective: 1.0,
-                pooled_replicates: 1,
-            },
+        let config = Config {
+            block: 0,
+            params,
+            action_ticks: Vec::new(),
         };
-        store.push_search_update(&SearchUpdate {
-            batch: 0,
-            evaluations: 1,
-            runs: 1,
-            evaluated: vec![evaluated],
-            best: None,
-            generations: Vec::new(),
-            landed_entries: Vec::new(),
-            filled_cells: 0,
-            pattern_settings: None,
-        });
+        store.push_search_updates([&search_update(0, vec![evaluated_candidate(0, 0, config)])]);
         assert_eq!(
             store.config_values_text(0).as_deref(),
             Some("Infection Rate 0.25"),
             "one candidate varies no axis, and still names what the search picks"
+        );
+    }
+
+    /// Advances `state` by one xorshift step and returns a draw below `count`.
+    fn draw(state: &mut u64, count: u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state % count
+    }
+
+    /// Returns a config of `entry` for candidate `candidate_id`, drawn from `state`.
+    ///
+    /// `gain_resistance_chance` stays at its default, and `initial_outbreak_size` stays there before candidate 2000.
+    /// Candidates from 3000 on come from block 1. A search has one block, and the store takes any.
+    fn drawn_config(entry: &ModelEntry, candidate_id: u64, state: &mut u64) -> Config {
+        let params = entry
+            .param_descriptors
+            .iter()
+            .map(|descriptor| {
+                let fixed = descriptor.id == "gain_resistance_chance"
+                    || (descriptor.id == "initial_outbreak_size" && candidate_id < 2000);
+                match descriptor.kind {
+                    _ if fixed => descriptor.kind.default_value(),
+                    ParamKind::F32 { min, max, .. } => {
+                        ParamValue::F32(min + (max - min) * draw(state, 1000) as f32 / 1000.0)
+                    }
+                    ParamKind::U32 { min, max, .. } => {
+                        ParamValue::U32(min + draw(state, u64::from((max - min).min(2)) + 1) as u32)
+                    }
+                    ParamKind::Bool { .. } => ParamValue::Bool(draw(state, 2) == 1),
+                    ParamKind::Choice { options, .. } => ParamValue::Choice(draw(state, options.len() as u64) as usize),
+                }
+            })
+            .collect();
+        Config {
+            block: usize::from(candidate_id >= 3000),
+            params,
+            action_ticks: vec![draw(state, 3) * 10],
+        }
+    }
+
+    /// Returns replicate `rep` of candidate `candidate_id`, a run of `replicates` per candidate, ended with `status`.
+    fn search_outcome(candidate_id: u64, rep: u64, replicates: u64, status: RunStatus) -> RunOutcome {
+        RunOutcome {
+            run: PlannedRun {
+                run_id: candidate_id * replicates + rep,
+                config_id: candidate_id,
+                rep,
+                seed: rep,
+            },
+            run_key: 0,
+            status,
+            stop_reason: StopReason::Steps,
+            ticks: 10,
+            population: 1,
+            build_ms: 1.0,
+            wall_ms: 1.0,
+            reducers: vec![Some(candidate_id as f64)],
+            series: SeriesBuffer::new(1),
+            note: None,
+        }
+    }
+
+    /// Returns a copy of each axis of `store`, with the level ids a new axis gives its levels.
+    fn axis_levels(store: &ResultsStore) -> Vec<ResultsAxis> {
+        let axes = store.axes.iter().cloned();
+        axes.map(|axis| ResultsAxis::new(axis.column, axis.label, axis.levels, axis.positions, axis.numeric))
+            .collect()
+    }
+
+    /// Returns the level of each config of `store` on each axis, by config id.
+    fn config_levels(store: &ResultsStore) -> Vec<(u64, Vec<Option<usize>>)> {
+        let levels = |config| {
+            (0..store.axes.len())
+                .map(|axis| store.entry_level(config, axis))
+                .collect()
+        };
+        store
+            .configs
+            .iter()
+            .map(|(&config_id, config)| (config_id, levels(config)))
+            .collect()
+    }
+
+    /// Returns the level of the first config of each block of `store` on each axis, and whether the block varies
+    /// each axis, by block index.
+    fn block_levels(store: &ResultsStore) -> Vec<(usize, Vec<Option<usize>>, Vec<bool>)> {
+        let blocks = store.block_axes.iter();
+        blocks
+            .map(|(&block, block_axes)| {
+                let first_ids = store.axes.iter().zip(&block_axes.first_level_ids);
+                let first_levels = first_ids.map(|(axis, &level_id)| axis.level_of_id(level_id)).collect();
+                (block, first_levels, block_axes.varies.clone())
+            })
+            .collect()
+    }
+
+    /// Asserts that `store` holds the configs, axes and runs `expected` holds, at `checkpoint`.
+    fn assert_same_configs(store: &ResultsStore, expected: &ResultsStore, checkpoint: &str) {
+        assert_eq!(axis_levels(store), axis_levels(expected), "the axes {checkpoint}");
+        for axis in &store.axes {
+            let places = axis.level_ids.iter().map(|&level_id| axis.id_levels[level_id]);
+            assert!(
+                places.eq(0..axis.levels.len()),
+                "the ids of axis {} {checkpoint}",
+                axis.label
+            );
+        }
+        assert_eq!(store.configs.len(), expected.configs.len(), "the configs {checkpoint}");
+        for ((config_id, config), expected_config) in store.configs.iter().zip(expected.configs.values()) {
+            assert_eq!(
+                (config.block, &config.texts, &config.runs),
+                (expected_config.block, &expected_config.texts, &expected_config.runs),
+                "config {config_id} {checkpoint}"
+            );
+        }
+        assert_eq!(
+            config_levels(store),
+            config_levels(expected),
+            "the levels of each config {checkpoint}"
+        );
+        assert_eq!(
+            block_levels(store),
+            block_levels(expected),
+            "the levels of each block {checkpoint}"
+        );
+        assert_eq!(
+            store.unassigned_runs, expected.unassigned_runs,
+            "the runs without a config {checkpoint}"
+        );
+        assert_eq!(
+            store.failed_count(),
+            expected.failed_count(),
+            "the failed runs {checkpoint}"
+        );
+    }
+
+    /// Tells `store` the batches `updates` together. Returns whether they extend the axes in place, and whether they
+    /// move the level of a config held.
+    ///
+    /// Asserts that batches that extend the axes in place leave the level id of every config held alone.
+    fn tell_batches(store: &mut ResultsStore, updates: &[SearchUpdate]) -> (bool, bool) {
+        let mut added = BTreeMap::new();
+        for candidate in updates.iter().flat_map(|update| &update.evaluated) {
+            if !store.configs.contains_key(&candidate.candidate_id) {
+                let texts = config_texts(&candidate.config, &store.descriptors);
+                added.entry(candidate.candidate_id).or_insert(texts);
+            }
+        }
+        let fits_axes = store.fits_axes(&added);
+        let held_ids: Vec<Vec<usize>> = store.configs.values().map(|config| config.level_ids.clone()).collect();
+        let held_levels = config_levels(store);
+        store.push_search_updates(updates);
+        if !fits_axes {
+            return (false, false);
+        }
+        let batches: Vec<u64> = updates.iter().map(|update| update.batch).collect();
+        let ids = store.configs.values().map(|config| &config.level_ids);
+        assert!(
+            ids.take(held_ids.len()).eq(&held_ids),
+            "batches {batches:?} keep the level ids held"
+        );
+        let levels = config_levels(store);
+        (true, levels[..held_levels.len()] != held_levels[..])
+    }
+
+    // Shape of the search `told_batches` tells.
+    const SEARCH_BATCHES: u64 = 300;
+    const SEARCH_BATCH_SIZE: u64 = 16;
+    const SEARCH_REPLICATES: u64 = 2;
+
+    /// Batch a search tells, with the runs that finish before it.
+    struct ToldBatch {
+        runs: Vec<RunOutcome>,
+        update: SearchUpdate,
+    }
+
+    /// Returns Virus on a Network and a random search of it over the virus spread chance, which fires the rewire
+    /// action.
+    fn virus_search() -> (ModelEntry, Arc<SearchPlan>) {
+        let entry = model_registry(None)
+            .into_iter()
+            .find(|entry| entry.id == "virus_network")
+            .expect("Virus on a Network is registered");
+        let mut spec = SweepSpec::new("virus_network");
+        spec.actions = vec![ActionSpec::new("rewire", 0)];
+        spec.search = Some(random_search(vec![FactorSpec::param(
+            "virus_spread_chance",
+            LevelSpec::Range {
+                min: 0.0,
+                max: 1.0,
+                step: None,
+            },
+        )]));
+        let search_plan = SearchPlan::new(&spec, &model_schema(&entry)).expect("a valid search");
+        (entry, Arc::new(search_plan))
+    }
+
+    /// Returns the batches of a search of `entry` over configs [`drawn_config`] draws, [`SEARCH_BATCH_SIZE`]
+    /// candidates of [`SEARCH_REPLICATES`] runs each.
+    ///
+    /// Replicates land out of order, and a few fail. Candidate 50 is told in batch 200, after candidates of higher
+    /// ids. Each batch also re-evaluates a candidate told before, which adds no config.
+    fn told_batches(entry: &ModelEntry) -> Vec<ToldBatch> {
+        const LATE_CANDIDATE: u64 = 50;
+        const LATE_BATCH: u64 = 200;
+
+        let mut state = 0x9e37_79b9_7f4a_7c15;
+        let mut told: Vec<EvaluatedCandidate> = Vec::new();
+        let mut late = None;
+        let mut batches = Vec::new();
+        for batch in 0..SEARCH_BATCHES {
+            let mut runs = Vec::new();
+            let mut evaluated = Vec::new();
+            for candidate_id in batch * SEARCH_BATCH_SIZE..(batch + 1) * SEARCH_BATCH_SIZE {
+                for rep in (0..SEARCH_REPLICATES).rev() {
+                    let status = if (candidate_id + rep) % 7 == 0 {
+                        RunStatus::Panicked
+                    } else {
+                        RunStatus::Ok
+                    };
+                    runs.push(search_outcome(candidate_id, rep, SEARCH_REPLICATES, status));
+                }
+                let candidate = evaluated_candidate(candidate_id, batch, drawn_config(entry, candidate_id, &mut state));
+                if candidate_id == LATE_CANDIDATE {
+                    late = Some(candidate);
+                } else {
+                    evaluated.push(candidate);
+                }
+            }
+            if batch == LATE_BATCH {
+                evaluated.extend(late.take());
+            }
+            told.extend(evaluated.iter().cloned());
+            if let Some(repeated) = told.get(told.len().saturating_sub(40)) {
+                evaluated.push(EvaluatedCandidate {
+                    batch,
+                    ..repeated.clone()
+                });
+            }
+            let update = search_update(batch, evaluated);
+            batches.push(ToldBatch { runs, update });
+        }
+        batches
+    }
+
+    /// Returns a store of `entry` for `search_plan` that holds the runs of `batches`, then `reruns`, and is told every
+    /// candidate of `batches` in one batch.
+    fn one_pass(
+        entry: &ModelEntry,
+        search_plan: &Arc<SearchPlan>,
+        batches: &[ToldBatch],
+        reruns: &[RunOutcome],
+    ) -> ResultsStore {
+        let mut store = ResultsStore::for_search(Arc::clone(search_plan), entry, 0, None, usize::MAX);
+        for outcome in batches.iter().flat_map(|told| &told.runs).chain(reruns) {
+            store.push_run(outcome.clone(), false);
+        }
+        let mut seen = BTreeSet::new();
+        let candidates = batches.iter().flat_map(|told| &told.update.evaluated);
+        let told = candidates.filter(|candidate| seen.insert(candidate.candidate_id));
+        store.push_search_updates([&search_update(0, told.cloned().collect())]);
+        store
+    }
+
+    #[test]
+    fn search_batches_extend_the_store_as_one_pass_builds_it() {
+        let (entry, search_plan) = virus_search();
+        let batches = told_batches(&entry);
+        let mut store = ResultsStore::for_search(Arc::clone(&search_plan), &entry, 0, None, usize::MAX);
+        let (mut in_place, mut moved_levels) = (0, 0);
+        for (index, told) in batches.iter().enumerate() {
+            for outcome in &told.runs {
+                store.push_run(outcome.clone(), false);
+            }
+            let (extended, moved) = tell_batches(&mut store, std::slice::from_ref(&told.update));
+            in_place += usize::from(extended);
+            moved_levels += usize::from(moved);
+            if index % 50 == 49 {
+                let expected = one_pass(&entry, &search_plan, &batches[..=index], &[]);
+                assert_same_configs(&store, &expected, &format!("after batch {index}"));
+            }
+        }
+        // A resumed search reruns a failed run and a run that ended well.
+        let reruns = [(7, 0, RunStatus::Ok), (8, 1, RunStatus::TimedOut)]
+            .map(|(candidate_id, rep, status)| search_outcome(candidate_id, rep, SEARCH_REPLICATES, status));
+        for outcome in &reruns {
+            store.push_run(outcome.clone(), false);
+        }
+        let expected = one_pass(&entry, &search_plan, &batches, &reruns);
+        assert_same_configs(&store, &expected, "after the reruns");
+
+        let batches = SEARCH_BATCHES as usize;
+        assert!(
+            (batches - 10..=batches - 3).contains(&in_place),
+            "{in_place} of {batches} batches extend the axes in place. The first batch, the batch that adds an axis \
+             and the batch of the late candidate build the configs again."
+        );
+        assert!(
+            moved_levels > batches / 2,
+            "{moved_levels} of {batches} batches move a level held"
+        );
+        assert!(store.unassigned_runs.is_empty(), "every run has its config");
+        let failed = store
+            .runs()
+            .iter()
+            .filter(|outcome| outcome.status.is_failure())
+            .count();
+        assert_eq!(store.failed_count(), failed, "the failed runs");
+    }
+
+    #[test]
+    fn search_batches_told_together_extend_the_store_as_batches_told_one_at_a_time() {
+        const LARGEST_GROUP: usize = 5;
+
+        let (entry, search_plan) = virus_search();
+        let batches = told_batches(&entry);
+        let new_store = || ResultsStore::for_search(Arc::clone(&search_plan), &entry, 0, None, usize::MAX);
+        let (mut together, mut one_at_a_time) = (new_store(), new_store());
+        let (mut start, mut group_size, mut group_count) = (0, 1, 0);
+        let (mut joined_groups, mut in_place, mut moved_levels) = (0, 0, 0);
+        while start < batches.len() {
+            let group = &batches[start..batches.len().min(start + group_size)];
+            let end = start + group.len();
+            for told in group {
+                for outcome in &told.runs {
+                    one_at_a_time.push_run(outcome.clone(), false);
+                    together.push_run(outcome.clone(), false);
+                }
+                one_at_a_time.push_search_updates([&told.update]);
+            }
+            let updates: Vec<SearchUpdate> = group.iter().map(|told| told.update.clone()).collect();
+            let (extended, moved) = tell_batches(&mut together, &updates);
+            if group.len() > 1 {
+                joined_groups += 1;
+                in_place += usize::from(extended);
+                moved_levels += usize::from(moved);
+            }
+            let checkpoint = format!("after batches {start} to {}", end - 1);
+            assert_same_configs(&together, &one_at_a_time, &checkpoint);
+            assert_eq!(
+                together.search_log(),
+                one_at_a_time.search_log(),
+                "the search's course {checkpoint}"
+            );
+            group_count += 1;
+            if group_count % 10 == 0 || end == batches.len() {
+                let expected = one_pass(&entry, &search_plan, &batches[..end], &[]);
+                assert_same_configs(&together, &expected, &checkpoint);
+            }
+            start = end;
+            group_size = group_size % LARGEST_GROUP + 1;
+        }
+
+        assert!(
+            (joined_groups - 4..joined_groups).contains(&in_place),
+            "{in_place} of {joined_groups} groups of batches extend the axes in place. The group that adds an axis and \
+             the group of the late candidate build the configs again."
+        );
+        assert!(
+            moved_levels > joined_groups / 2,
+            "{moved_levels} of {joined_groups} groups of batches move a level held"
+        );
+    }
+
+    #[test]
+    fn a_numeric_axis_places_new_levels_among_its_numbers() {
+        let texts = |texts: &[&str]| texts.iter().map(|&text| text.to_owned()).collect();
+        let mut axis = ResultsAxis::new(0, "Rate".to_owned(), texts(&["1", "2"]), vec![1.0, 2.0], true);
+        let (one, two) = (axis.level_id("1"), axis.level_id("2"));
+        axis.extend(["3", "2.5", "3", "1"].into_iter());
+        assert_eq!(axis.levels, ["1", "2", "2.5", "3"]);
+        // A new text of an old value goes after the old level, as a config of a higher id does in one pass.
+        axis.extend(["1.0", "0.5", "2", "not a number"].into_iter());
+        assert_eq!(axis.levels, ["0.5", "1", "1.0", "2", "2.5", "3"]);
+        assert_eq!(axis.positions, [0.5, 1.0, 1.0, 2.0, 2.5, 3.0]);
+        assert_eq!(
+            (axis.level("1.0"), axis.level("1"), axis.level("4")),
+            (Some(2), Some(1), None)
+        );
+        assert_eq!(
+            (axis.level_of_id(one), axis.level_of_id(two)),
+            (Some(1), Some(3)),
+            "a level keeps its id as levels are added below it"
+        );
+        let places = axis.level_ids.iter().map(|&level_id| axis.level_of_id(level_id));
+        assert!(places.eq((0..6).map(Some)), "each level's id leads back to it");
+    }
+
+    #[test]
+    fn a_text_axis_adds_new_levels_at_the_end() {
+        let texts = |texts: &[&str]| texts.iter().map(|&text| text.to_owned()).collect();
+        let mut axis = ResultsAxis::new(0, "Mode".to_owned(), texts(&["b", "a"]), vec![0.0, 1.0], false);
+        axis.extend(["c", "a", "0.5", "c"].into_iter());
+        assert_eq!(axis.levels, ["b", "a", "c", "0.5"]);
+        assert_eq!(axis.positions, [0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(axis.level_of_id(axis.level_id("0.5")), Some(3));
+    }
+
+    #[test]
+    fn the_failed_count_follows_a_replaced_run() {
+        let sir = sir();
+        let plan = plan(
+            &sir,
+            vec![FactorSpec::param("infection_rate", values(&["0.1", "0.2"]))],
+            2,
+        );
+        let mut store = store(&sir, Arc::clone(&plan), usize::MAX);
+        store.push_run(outcome(&plan, 0, RunStatus::TimedOut, 1.0, &[1.0]), false);
+        store.push_run(outcome(&plan, 1, RunStatus::Panicked, 1.0, &[1.0]), false);
+        store.push_run(outcome(&plan, 2, RunStatus::Ok, 1.0, &[1.0]), false);
+        assert_eq!((store.failed_count(), store.replaced_count()), (2, 0));
+
+        // A resumed sweep reruns the run that timed out.
+        store.push_run(outcome(&plan, 0, RunStatus::Ok, 1.0, &[1.0]), false);
+        assert_eq!((store.failed_count(), store.replaced_count()), (1, 1));
+        store.push_run(outcome(&plan, 2, RunStatus::Panicked, 1.0, &[1.0]), false);
+        assert_eq!((store.failed_count(), store.replaced_count()), (2, 2));
+        assert_eq!(
+            store.row_order(RunsFilter::Failed, &BTreeSet::new(), RunsSort::default()),
+            [1, 2]
+        );
+    }
+
+    /// Returns the parameters of `entry` with a default Recovery Rate of 0.1, as an earlier version of SIR declared.
+    fn params_before_change(entry: &ModelEntry) -> Vec<ParamDescriptor> {
+        let mut params = entry.param_descriptors.clone();
+        let recovery = params
+            .iter_mut()
+            .find(|param| param.id == "recovery_rate")
+            .expect("SIR declares a recovery rate");
+        if let ParamKind::F32 { default, .. } = &mut recovery.kind {
+            *default = 0.1;
+        }
+        params
+    }
+
+    /// Returns the schema of `entry` with `params` in place of the parameters it declares.
+    fn schema_with<'a>(entry: &'a ModelEntry, params: &'a [ParamDescriptor]) -> ModelSchema<'a> {
+        ModelSchema {
+            params,
+            ..model_schema(entry)
+        }
+    }
+
+    #[test]
+    fn a_sweep_run_replays_after_the_model_changes() {
+        let sir = sir();
+        let factors = vec![FactorSpec::param("infection_rate", values(&["0.1", "0.2"]))];
+        let params = params_before_change(&sir);
+        let spec = factorial_spec(factors.clone(), 1);
+        let recorded_plan = spec.plan(&schema_with(&sir, &params)).expect("a valid spec");
+        let mut store = store(&sir, plan(&sir, factors, 1), usize::MAX);
+        // The run ran with the model as it was, whose declarations give every run another key.
+        store.push_run(outcome(&recorded_plan, 1, RunStatus::Ok, 1.0, &[1.0]), false);
+        assert_eq!(
+            store.replay(1).err().as_deref(),
+            Some("Run 1 does not match the plan of its sweep"),
+            "a key that differs under the same model"
+        );
+        store.schema_matches = false;
+        let replay = store.replay(1).expect("the run replays with a warning");
+        assert_eq!(replay.params[2], ParamValue::F32(0.2));
+    }
+
+    #[test]
+    fn a_search_run_replays_after_the_model_changes() {
+        let sir = sir();
+        let mut spec = SweepSpec::new("sir");
+        spec.search = Some(random_search(vec![FactorSpec::param(
+            "infection_rate",
+            LevelSpec::Range {
+                min: 0.0,
+                max: 1.0,
+                step: None,
+            },
+        )]));
+        let params = params_before_change(&sir);
+        let recorded_plan = SearchPlan::new(&spec, &schema_with(&sir, &params)).expect("a valid search");
+        let search_plan = SearchPlan::new(&spec, &model_schema(&sir)).expect("a valid search");
+        let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, 0, None, usize::MAX);
+        let mut values: Vec<ParamValue> = params.iter().map(|param| param.kind.default_value()).collect();
+        values[2] = ParamValue::F32(0.25);
+        let config = Config {
+            block: 0,
+            params: values,
+            action_ticks: Vec::new(),
+        };
+        let mut recorded = search_outcome(0, 0, 1, RunStatus::Ok);
+        recorded.run_key = recorded_plan.run_key(&recorded.run, &config);
+        store.push_run(recorded, false);
+        store.push_search_updates([&search_update(0, vec![evaluated_candidate(0, 0, config.clone())])]);
+        let refusal = Some("Run 0 does not match the search it comes from");
+        assert_eq!(
+            store.replay(0).err().as_deref(),
+            refusal,
+            "a key that differs under the same model"
+        );
+
+        store.schema_matches = false;
+        let replay = store.replay(0).expect("the run replays with a warning");
+        assert_eq!(
+            replay.params, config.params,
+            "the replay takes the values the run recorded"
+        );
+        store.value_columns.swap(2, 3);
+        assert_eq!(
+            store.replay(0).err().as_deref(),
+            refusal,
+            "columns that name other parameters"
+        );
+    }
+
+    #[test]
+    fn a_sweep_run_replays_only_with_the_values_of_its_record() {
+        let sir = sir();
+        let factor = |levels: &[&str]| vec![FactorSpec::param("infection_rate", values(levels))];
+        let recorded_plan = plan(&sir, factor(&["0.1", "0.2"]), 1);
+        let other_plan = plan(&sir, factor(&["0.1", "0.3"]), 1);
+        let mut store = store(&sir, recorded_plan, usize::MAX);
+        // Both runs have the ids and seeds the store's plan gives them. Run 1 ran another infection rate.
+        store.push_run(outcome(&other_plan, 0, RunStatus::Ok, 1.0, &[1.0]), false);
+        store.push_run(outcome(&other_plan, 1, RunStatus::Ok, 1.0, &[1.0]), false);
+        assert!(store.replay(0).is_ok(), "run 0 ran the values of the plan");
+        assert_eq!(
+            store.replay(1).err().as_deref(),
+            Some("Run 1 does not match the plan of its sweep")
         );
     }
 

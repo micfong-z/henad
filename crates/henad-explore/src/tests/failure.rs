@@ -12,7 +12,7 @@ use crate::output::manifest::{Manifest, ManifestStatus};
 use crate::output::{MANIFEST_FILE, SUMMARY_FILE};
 use crate::sweep::ExploreError;
 use crate::tests::broken::{DividesByParam, InverseOfCountdown};
-use crate::tests::support::{Recorder, ScratchDir, Tables, manifest, sweep, sweep_options, sweep_with};
+use crate::tests::support::{OutputTables, Recorder, ScratchDir, manifest, sweep, sweep_options, sweep_with};
 
 /// Returns a spec over `model` on an 8 by 8 grid, with one factorial block over `param` at `levels`.
 fn spec_over(model: &str, param: &str, levels: &[&str]) -> SweepSpec {
@@ -51,7 +51,7 @@ fn a_panicking_run_is_recorded_and_the_rest_complete() {
             "{count} lanes"
         );
 
-        let tables = Tables::read(&output_dir);
+        let tables = OutputTables::read(&output_dir);
         assert_eq!(
             tables.run_column("status"),
             ["ok", "ok", "panicked", "panicked", "ok", "ok"]
@@ -95,7 +95,7 @@ fn a_first_config_that_panics_while_building_is_recorded_like_any_other() {
     let report = sweep(&model, None, &spec, scratch.path(), Concurrency::Auto);
     assert_eq!((report.counts.rows, report.counts.ok, report.counts.failed), (2, 1, 1));
 
-    let tables = Tables::read(scratch.path());
+    let tables = OutputTables::read(scratch.path());
     assert_eq!(tables.run_column("status"), ["panicked", "ok"]);
     assert_eq!(tables.run_column("ticks"), ["0", "10"]);
     let note = tables.run_column("note")[0];
@@ -118,7 +118,7 @@ fn a_non_finite_stat_is_recorded_as_non_finite() {
         (2, 1, 1, 0)
     );
 
-    let tables = Tables::read(scratch.path());
+    let tables = OutputTables::read(scratch.path());
     assert_eq!(tables.run_column("status"), ["non_finite", "ok"]);
     assert_eq!(tables.run_column("stop_reason"), ["steps", "steps"]);
     assert_eq!(tables.run_column("ticks"), ["10", "10"]);

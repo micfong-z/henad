@@ -130,10 +130,7 @@ impl CounterReadback {
                 self.failed = !self.finish_map(result);
             }
             // The callback was dropped without running, so no value can arrive.
-            Err(flume::TryRecvError::Disconnected) => {
-                self.pending = None;
-                self.failed = true;
-            }
+            Err(flume::TryRecvError::Disconnected) => self.abandon_map(),
             Err(flume::TryRecvError::Empty) => {}
         }
         self.status()
@@ -146,10 +143,19 @@ impl CounterReadback {
     /// Returns the state of the readback after the wait.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn poll_blocking(&mut self, device: &wgpu::Device) -> StatsPoll {
-        if let Some(rx) = self.pending.take() {
-            let landed = device.poll(wgpu::PollType::wait_indefinitely()).is_ok()
-                && rx.recv().is_ok_and(|result| self.finish_map(result));
-            self.failed = !landed;
+        if let Some(rx) = self.pending.as_ref() {
+            let received = match device.poll(wgpu::PollType::wait_indefinitely()) {
+                Ok(_) => rx.recv().ok(),
+                // The map can have finished before the wait failed.
+                Err(_) => rx.try_recv().ok(),
+            };
+            match received {
+                Some(result) => {
+                    self.pending = None;
+                    self.failed = !self.finish_map(result);
+                }
+                None => self.abandon_map(),
+            }
         }
         self.status()
     }
@@ -169,6 +175,15 @@ impl CounterReadback {
         } else {
             StatsPoll::Landed
         }
+    }
+
+    /// Gives up the map in flight as failed, and unmaps the staging buffer.
+    ///
+    /// Otherwise the buffer stays mapped or pending, and the next [`Self::encode_copy`] records a copy into it.
+    fn abandon_map(&mut self) {
+        self.pending = None;
+        self.failed = true;
+        self.staging.unmap();
     }
 
     /// Reads and unmaps the staging buffer after a completed `map_async`.
@@ -280,5 +295,36 @@ mod tests {
         assert_eq!(readback.values(), [1, 2, 3], "a failed map leaves the values it found");
         assert_eq!(readback.poll(&ctx.device), StatsPoll::Failed);
         assert!(ctx.faults.take().is_some(), "the device reports the refused map");
+    }
+
+    /// The regression. A map given up without being read left the staging buffer mapped or pending, and the next
+    /// copy into it was a validation error.
+    #[test]
+    fn an_abandoned_map_leaves_the_next_readback_working() {
+        let Some(ctx) = headless_context("henad_readback_abandoned_test", wgpu::Features::empty()) else {
+            log::warn!("skipping an_abandoned_map_leaves_the_next_readback_working: no adapter");
+            return;
+        };
+        let mut readback = CounterReadback::new(&ctx.device, "henad_readback_abandoned_test", 3);
+
+        begin_read_back(&ctx, &mut readback, &[1, 2, 3]);
+        readback.abandon_map();
+        assert_eq!(
+            readback.poll(&ctx.device),
+            StatsPoll::Failed,
+            "an abandoned map polls as failed"
+        );
+
+        // This time the map lands before it is given up.
+        begin_read_back(&ctx, &mut readback, &[4, 5, 6]);
+        ctx.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the map runs");
+        readback.abandon_map();
+
+        begin_read_back(&ctx, &mut readback, &[7, 8, 9]);
+        assert_eq!(readback.poll_blocking(&ctx.device), StatsPoll::Landed);
+        assert_eq!(readback.values(), [7, 8, 9]);
+        assert!(ctx.faults.take().is_none(), "a copy went into a mapped staging buffer");
     }
 }

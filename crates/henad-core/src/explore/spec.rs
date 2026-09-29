@@ -103,7 +103,8 @@ pub struct RunSettings {
     pub replicates: u64,
     /// Condition that ends a run at the first sample where it holds.
     pub stop: Option<StopSpec>,
-    /// Wall-clock time after which a run is abandoned, checked between slices of steps.
+    /// Wall-clock time after which a run is abandoned, checked between slices of steps. On a GPU track, a run's
+    /// clock counts its share of the time the sweep spends on the tracks.
     ///
     /// Note that a timed-out run depends on the machine, so no plan or results hash covers the timeout.
     pub timeout: Option<Duration>,

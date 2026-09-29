@@ -164,6 +164,12 @@ impl fmt::Display for ReducerError {
                 "unknown reducer kind '{raw}', expected one of final, min, max, mean, argmax, argmin, first<=VALUE, \
                  mean@START..END"
             ),
+            Self::Comparison {
+                raw,
+                source: source @ ComparisonError::BadThreshold { .. },
+            } => {
+                write!(f, "invalid reducer kind '{raw}', {source}")
+            }
             Self::Comparison { raw, .. } => write!(
                 f,
                 "invalid reducer kind '{raw}', expected 'first' followed by <, <=, >, >=, == or != and a number"
@@ -492,6 +498,12 @@ mod tests {
                 "{bad} gave {error:?}"
             );
         }
+        let infinite = "first<=inf".parse::<ReducerKind>().expect_err("refused");
+        assert_eq!(
+            infinite.to_string(),
+            "invalid reducer kind 'first<=inf', threshold 'inf' is not a finite number",
+            "the message names the threshold, not the format"
+        );
     }
 
     #[test]

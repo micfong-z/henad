@@ -23,6 +23,8 @@ const ROUNDING: f64 = 1e-9;
 #[derive(Debug, Clone, PartialEq)]
 pub enum LevelSpec {
     /// Values in the text [`parse_value`] reads, or ticks for an action.
+    ///
+    /// A plan trims the spaces around each value before it reads it.
     Values(Vec<String>),
     /// Every value from `min` to `max` inclusive, `step` apart.
     ///
@@ -36,17 +38,21 @@ pub enum LevelSpec {
 impl LevelSpec {
     /// Reads levels as `--vary` writes them: `all`, a range `min:max:step` or `min:max`, or a list `v1,v2,...`.
     ///
-    /// The model checks the levels when the sweep is planned.
+    /// Spaces around the text, a listed value or a part of a range are ignored. The model checks the levels when
+    /// the sweep is planned.
     ///
     /// # Errors
     ///
     /// Returns [`LevelSpecError`] for a range with other than two or three parts, or a part that is not a number.
     pub fn parse(text: &str) -> Result<Self, LevelSpecError> {
+        let text = text.trim();
         if text == "all" {
             return Ok(Self::All);
         }
         if !text.contains(':') {
-            return Ok(Self::Values(text.split(',').map(str::to_owned).collect()));
+            return Ok(Self::Values(
+                text.split(',').map(|value| value.trim().to_owned()).collect(),
+            ));
         }
         let number = |part: &str| {
             part.trim().parse::<f64>().map_err(|source| LevelSpecError::NotANumber {
@@ -423,7 +429,7 @@ fn parsed_levels(id: &str, kind: &ParamKind, raw: &[String]) -> Result<Vec<Facto
     }
     raw.iter()
         .map(|text| {
-            parse_value(kind, text)
+            parse_value(kind, text.trim())
                 .map(FactorLevel::Param)
                 .map_err(|source| FactorError::Level {
                     id: id.to_owned(),
@@ -870,6 +876,26 @@ mod tests {
         assert_eq!(
             LevelSpec::parse("0:1:0.1:2").map_err(|error| error.to_string()),
             Err("invalid range '0:1:0.1:2', expected MIN:MAX:STEP or MIN:MAX".to_owned())
+        );
+    }
+
+    /// The regression. A list read its spaces as part of each value, while a range and a tick ignored them.
+    #[test]
+    fn spaces_around_a_listed_value_are_ignored() {
+        assert_eq!(
+            LevelSpec::parse(" moore, von_neumann "),
+            Ok(LevelSpec::Values(vec!["moore".to_owned(), "von_neumann".to_owned()]))
+        );
+        assert_eq!(LevelSpec::parse(" all "), Ok(LevelSpec::All));
+        let spaced = |raw: &[&str]| LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect());
+        assert_eq!(
+            levels("neighborhood", spaced(&["moore", " hexagonal "])),
+            Ok(vec![ParamValue::Choice(0), ParamValue::Choice(2)]),
+            "a spec file's values are trimmed when planned"
+        );
+        assert_eq!(
+            levels("rate", spaced(&[" 0.1", "0.2 "])),
+            Ok(vec![ParamValue::F32(0.1), ParamValue::F32(0.2)])
         );
     }
 

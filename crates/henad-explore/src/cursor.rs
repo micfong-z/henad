@@ -128,7 +128,8 @@ pub(crate) struct OutcomeParts {
     /// Population at the latest sample.
     pub(crate) population: u64,
     pub(crate) build_ms: f64,
-    /// Time the run was live, builds and pauses left out. A GPU track counts the rounds spent on other tracks too.
+    /// Time the run was live, builds and pauses left out. A GPU track counts an even share of each round among the
+    /// live tracks.
     pub(crate) wall: Duration,
     pub(crate) timeout: Option<Duration>,
     /// One note per action the model refused, in the order they were due.
@@ -241,10 +242,6 @@ impl RunCursor {
             run_key: request.run_key,
             phase,
         }
-    }
-
-    pub fn run(&self) -> PlannedRun {
-        self.run
     }
 
     /// Tick the run has reached, 0 for a run whose build failed.

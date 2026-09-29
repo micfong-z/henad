@@ -230,6 +230,8 @@ struct Loop {
     timestamp_query: Option<TimestampQuery>,
     /// Actions recorded after the step that reaches their tick.
     schedule: Schedule,
+    /// Highest tick whose actions have had their turn to fire. `None` until the first step or schedule.
+    fired_through: Option<u64>,
     /// Tick a pending [`SimCommand::RunTo`] stops at.
     run_to_target: Option<u64>,
 }
@@ -262,6 +264,7 @@ impl SimLoop for Loop {
                 self.state.encode_steps(&mut encoder, 1, None);
                 self.ctx.queue.submit(Some(encoder.finish()));
                 fire_due(&mut *self.state, &self.ctx, &self.schedule);
+                self.fired_through = Some(self.state.tick());
                 self.snapshot_now();
             }
             Command::Sim(SimCommand::SetParam { index, value }) => {
@@ -291,7 +294,10 @@ impl SimLoop for Loop {
             }
             Command::Sim(SimCommand::SetSchedule(schedule)) => {
                 self.schedule = schedule;
-                fire_due(&mut *self.state, &self.ctx, &self.schedule);
+                if self.fired_through.is_none_or(|through| through < self.state.tick()) {
+                    fire_due(&mut *self.state, &self.ctx, &self.schedule);
+                    self.fired_through = Some(self.state.tick());
+                }
                 self.snapshot_now();
             }
             Command::Sim(SimCommand::RunTo(target)) => {
@@ -538,6 +544,8 @@ impl Loop {
                 }
             }
         }
+        // Every tick the batch passed has had its turn. A due action ended its chunk and fired above.
+        self.fired_through = Some(self.state.tick());
 
         self.step_count += u64::from(batch_size_submitted);
 
@@ -693,6 +701,7 @@ impl GpuSimThread {
             serial: 0,
             timestamp_query,
             schedule: Schedule::default(),
+            fired_through: None,
             run_to_target: None,
         };
 
@@ -1011,5 +1020,50 @@ mod tests {
         assert!(snapshot_at(&mut thread, 200).0.is_some());
         assert_eq!(fired_ticks(), [0, 5, 64, 64, 100, 101]);
         assert_eq!(ticks.load(Ordering::Relaxed), 200);
+    }
+
+    /// The regression. A second schedule used to record the actions of the tick the loop sat at a second time.
+    #[test]
+    fn a_replaced_gpu_schedule_never_fires_a_tick_again() {
+        let Some(ctx) = headless_context("henad_gpu_replaced_schedule_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_replaced_gpu_schedule_never_fires_a_tick_again: no adapter");
+            return;
+        };
+        let (mut thread, _, fired) = action_recorder(ctx);
+        let schedule = |ticks: &[u64]| {
+            let entries = ticks
+                .iter()
+                .map(|&tick| Scheduled {
+                    index: 0,
+                    id: "mark".to_owned(),
+                    tick,
+                })
+                .collect();
+            Schedule::from_entries(entries)
+        };
+        let fired_ticks = || fired.lock().expect("action log").clone();
+
+        thread.set_schedule(schedule(&[0, 40]));
+        thread.set_schedule(schedule(&[0, 40, 90]));
+        thread.run_to(40);
+        assert!(snapshot_at(&mut thread, 40).0.is_some());
+        assert_eq!(fired_ticks(), [0, 40], "a second schedule at tick 0 fired it again");
+
+        thread.set_schedule(schedule(&[40, 90]));
+        thread.run_to(90);
+        assert!(snapshot_at(&mut thread, 90).0.is_some());
+        assert_eq!(
+            fired_ticks(),
+            [0, 40, 90],
+            "a schedule at a tick a batch reached fired it again"
+        );
+
+        // Tick 150 ends a batch with nothing due, and has had its turn all the same.
+        thread.run_to(150);
+        assert!(snapshot_at(&mut thread, 150).0.is_some());
+        thread.set_schedule(schedule(&[150, 151]));
+        thread.step_once();
+        assert!(snapshot_at(&mut thread, 151).0.is_some());
+        assert_eq!(fired_ticks(), [0, 40, 90, 151]);
     }
 }

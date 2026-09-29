@@ -1,9 +1,11 @@
 //! Headless device, scratch directories and sweep helpers for the tests.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use henad_compute::gpu::GpuContext;
 use henad_core::explore::measure::MeasurePlan;
@@ -16,9 +18,9 @@ use henad_models::registry::{ModelEntry, model_registry};
 use henad_compute::fault::FaultSink;
 
 use crate::device::acquire_headless;
-use crate::exec::{BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, RunSink, SweepControl};
+use crate::exec::{ActiveRun, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, RunSink, SweepControl};
 use crate::output::manifest::Manifest;
-use crate::output::runs_csv::TIMING_COLUMNS;
+use crate::output::runs_csv::{OUTCOME_COLUMNS, TIMING_COLUMNS};
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::probe::ProbeReport;
 use crate::progress::{NoProgress, Progress, ProgressEvent};
@@ -228,30 +230,41 @@ pub fn manifest(dir: &Path) -> Manifest {
     Manifest::read(&dir.join(MANIFEST_FILE)).expect("the manifest reads back")
 }
 
-/// Three CSV files of an output directory, each as records of fields.
+/// Three CSV files of an output directory, as their text and as records of fields.
+///
+/// Two readings are equal when `series.csv` and `summary.csv` match byte for byte, and `runs.csv` matches apart from
+/// the fields of its timing columns.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Tables {
+pub struct OutputTables {
+    /// Text of `runs.csv`, with the fields of the timing columns emptied.
+    runs_text: String,
+    series_text: String,
+    summary_text: String,
     /// Records of `runs.csv`, with the timing columns emptied.
     pub runs: Vec<Vec<String>>,
     pub series: Vec<Vec<String>>,
     pub summary: Vec<Vec<String>>,
 }
 
-impl Tables {
+impl OutputTables {
     /// Reads the tables of the output directory `dir`.
     ///
     /// # Panics
     ///
     /// Panics when a table is missing or is not valid CSV.
     pub fn read(dir: &Path) -> Self {
-        let read = |file: &str| {
-            let text = std::fs::read_to_string(dir.join(file)).expect("the table is written");
-            parse_records(&text).expect("the table is valid CSV")
-        };
+        let read = |file: &str| std::fs::read_to_string(dir.join(file)).expect("the table is written");
+        let records = |text: &str| parse_records(text).expect("the table is valid CSV");
+        let (runs_text, series_text, summary_text) = (read(RUNS_FILE), read(SERIES_FILE), read(SUMMARY_FILE));
+        let runs = without_timing(records(&runs_text));
+        let timing = timing_positions(&runs[0]);
         Self {
-            runs: without_timing(read(RUNS_FILE)),
-            series: read(SERIES_FILE),
-            summary: read(SUMMARY_FILE),
+            runs_text: with_fields_emptied(&runs_text, &timing),
+            series: records(&series_text),
+            summary: records(&summary_text),
+            runs,
+            series_text,
+            summary_text,
         }
     }
 
@@ -305,21 +318,112 @@ fn column<'t>(table: &'t [Vec<String>], name: &str) -> Vec<&'t str> {
 ///
 /// # Panics
 ///
-/// Panics when the header lacks a timing column.
+/// Panics when the header lacks the outcome columns.
 pub fn without_timing(mut runs: Vec<Vec<String>>) -> Vec<Vec<String>> {
-    let timing: Vec<usize> = runs[0]
-        .iter()
-        .enumerate()
-        .filter(|(_, name)| TIMING_COLUMNS.contains(&name.as_str()))
-        .map(|(column, _)| column)
-        .collect();
-    assert_eq!(timing.len(), TIMING_COLUMNS.len(), "runs.csv has every timing column");
+    let timing = timing_positions(&runs[0]);
     for record in &mut runs[1..] {
         for &column in &timing {
             record[column].clear();
         }
     }
     runs
+}
+
+/// Returns the positions of the timing columns in `header`, the header of a `runs.csv`.
+///
+/// The timing columns are found by their place among the outcome columns, the last run of [`OUTCOME_COLUMNS`] in the
+/// header. A parameter named like a timing column is compared as any other.
+///
+/// # Panics
+///
+/// Panics when the header has no run of the outcome columns.
+fn timing_positions(header: &[String]) -> Vec<usize> {
+    let outcomes_start = header
+        .windows(OUTCOME_COLUMNS.len())
+        .rposition(|window| window.iter().zip(OUTCOME_COLUMNS).all(|(name, column)| name == column))
+        .expect("runs.csv has the outcome columns");
+    TIMING_COLUMNS
+        .iter()
+        .map(|timing| {
+            let offset = OUTCOME_COLUMNS
+                .iter()
+                .position(|column| column == timing)
+                .expect("a timing column is an outcome column");
+            outcomes_start + offset
+        })
+        .collect()
+}
+
+/// Returns `text`, the text of a CSV table, with the fields at `positions` emptied in every record after the header.
+///
+/// Every other byte is kept. A quoted field can hold commas and line breaks, so the walk tracks the quotes to tell a
+/// separator from the text of a field.
+fn with_fields_emptied(text: &str, positions: &[usize]) -> String {
+    let mut kept = String::with_capacity(text.len());
+    let (mut in_header, mut position, mut quoted) = (true, 0, false);
+    for character in text.chars() {
+        let separator = !quoted && matches!(character, ',' | '\n');
+        if character == '"' {
+            quoted = !quoted;
+        }
+        if separator || in_header || !positions.contains(&position) {
+            kept.push(character);
+        }
+        if character == ',' && separator {
+            position += 1;
+        } else if separator {
+            in_header = false;
+            position = 0;
+        }
+    }
+    kept
+}
+
+/// Progress that aborts `control` once `limit` runs are committed.
+///
+/// On one lane the sweep then ends with exactly `limit` runs written. Its next run checks the control before it
+/// starts.
+pub struct CommitLimit {
+    control: SweepControl,
+    limit: usize,
+    committed: usize,
+}
+
+impl CommitLimit {
+    pub fn new(control: SweepControl, limit: usize) -> Self {
+        Self {
+            control,
+            limit,
+            committed: 0,
+        }
+    }
+}
+
+impl Progress for CommitLimit {
+    fn report(&mut self, event: &ProgressEvent<'_>) {
+        if let ProgressEvent::RunCommitted(_) = event {
+            self.committed += 1;
+            if self.committed == self.limit {
+                self.control.abort();
+            }
+        }
+    }
+}
+
+/// Time a test watches paused runs for. A run that kept stepping would move many times in it.
+pub const HOLD_WINDOW: Duration = Duration::from_millis(500);
+
+/// Reads `active_runs` over [`HOLD_WINDOW`], and returns every tick each run was seen at, by run id.
+pub fn ticks_seen(active_runs: impl Fn() -> Vec<ActiveRun>) -> BTreeMap<u64, BTreeSet<u64>> {
+    let mut seen: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
+    let deadline = Instant::now() + HOLD_WINDOW;
+    while Instant::now() < deadline {
+        for active in active_runs() {
+            seen.entry(active.run.run_id).or_default().insert(active.tick);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    seen
 }
 
 /// Returns the plan of `spec` over `entry`, and its measure plan bound to the columns of a probe build.
@@ -390,3 +494,25 @@ pub const ONE_TRACK: ExecutionLayout = ExecutionLayout {
     threads_per_lane: 0,
     gpu_tracks: 1,
 };
+
+#[test]
+fn only_the_timing_fields_of_the_outcome_columns_are_emptied() {
+    let header = concat!(
+        "run_id,build_ms,",
+        "status,stop_reason,ticks,population,build_ms,wall_ms,steps_per_s,",
+        "Infected:max,note\n"
+    );
+    let record = "0,7,ok,steps,30,256,1.5,2.25,13333,\"4, or \"\"5\"\"\",\"line\r\nbreak\"\r\n";
+    let text = format!("{header}{record}");
+    let header_fields = &parse_records(&text).expect("valid CSV")[0];
+    assert_eq!(
+        timing_positions(header_fields),
+        [6, 7, 8],
+        "the parameter named build_ms is kept"
+    );
+    assert_eq!(
+        with_fields_emptied(&text, &[6, 7, 8]),
+        format!("{header}0,7,ok,steps,30,256,,,,\"4, or \"\"5\"\"\",\"line\r\nbreak\"\r\n"),
+        "every other byte is kept, quotes and line endings included"
+    );
+}

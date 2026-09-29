@@ -88,9 +88,11 @@ impl FromStr for Concurrency {
 pub struct ExecutionBudget {
     /// Worker threads the runs share.
     pub workers: usize,
-    /// Bytes of host memory the live runs can hold together, `None` for no limit.
+    /// Bytes of host memory the live runs can hold together, `None` for no limit. The lanes are sized from the probed
+    /// run, and a probed run larger than the budget leaves one lane.
     pub memory_budget: Option<u64>,
-    /// Bytes of device memory the live GPU runs can hold together, `None` for no limit.
+    /// Bytes of device memory the live GPU runs can hold together, `None` for no limit. A run larger than the budget
+    /// runs alone.
     pub gpu_memory_budget: Option<u64>,
     /// Whether lanes can run on threads of their own.
     pub can_spawn_threads: bool,
@@ -145,7 +147,9 @@ impl ExecutionLayout {
 /// split into lanes of that width. A model that reports no jobs counts one per [`POPULATION_PER_JOB`] of its
 /// population. [`Concurrency::Fixed`] sets the lane count instead and splits the workers evenly.
 ///
-/// Either way the lanes are capped by `runs` and by the memory budget, and a single lane takes every worker.
+/// Either way the lanes are capped by `runs` and by the memory budget, and a single lane takes every worker. One lane
+/// runs even when the probe holds more than the budget. A target that cannot spawn threads gets one lane, whatever
+/// `concurrency` asks.
 ///
 /// A GPU model gets as many tracks as the GPU memory budget holds runs like the probe, up to
 /// [`MAX_AUTO_GPU_TRACKS`], and one track from a population of [`LARGE_GPU_POPULATION`]. [`Concurrency::Fixed`] sets
@@ -330,7 +334,9 @@ impl ActiveRuns {
         self.lock().stepping.values().copied().collect()
     }
 
-    /// Number of runs that finished and wait for an earlier run to be committed. An abort drops them.
+    /// Number of runs that finished and wait for an earlier run to be committed.
+    ///
+    /// Note that a batch that ends before committing every run leaves the runs still waiting in the count.
     pub fn waiting_count(&self) -> usize {
         self.lock().waiting.len()
     }
@@ -510,7 +516,8 @@ pub struct Executor<'a> {
     active_runs: Option<ActiveRuns>,
     /// One pool per lane. Empty when a single lane steps on rayon's global pool.
     pools: Vec<rayon::ThreadPool>,
-    /// Cap on the bytes of device memory the live GPU runs hold together, `None` for the device's largest buffer.
+    /// Cap on the bytes of device memory the live GPU runs hold together, `None` for the device's largest buffer. A
+    /// run larger than the cap runs alone.
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
     gpu_memory: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
@@ -573,8 +580,9 @@ impl<'a> Executor<'a> {
 
     /// Returns the executor with each run abandoned once its stepping and sampling pass `timeout`.
     ///
-    /// The timeout is checked between slices of steps. A GPU run counts the wall time since its build, the time its
-    /// batch spent paused left out.
+    /// The timeout is checked between slices of steps. A GPU run counts its share of the wall time since its build.
+    /// The time spent visiting the tracks is split evenly between the live runs, and the time the batch spent paused is
+    /// left out.
     pub fn with_timeout(self, timeout: Option<Duration>) -> Self {
         Self { timeout, ..self }
     }
@@ -584,8 +592,11 @@ impl<'a> Executor<'a> {
         Self { active_runs, ..self }
     }
 
-    /// Returns the executor with the live GPU runs holding at most `gpu_memory` bytes of device memory together, as
+    /// Returns the executor with a budget of `gpu_memory` bytes of device memory for the live GPU runs, as
     /// [`gpu_memory_budget`] reads it.
+    ///
+    /// A run is built once its demand fits the budget beside the demand of the live runs. A run larger than the budget
+    /// is built once no other run is live, and runs alone.
     pub fn with_gpu_memory(self, gpu_memory: Option<u64>) -> Self {
         Self { gpu_memory, ..self }
     }
@@ -844,8 +855,8 @@ mod tests {
     use henad_models::registry::{ModelEntry, model_registry};
 
     use super::{
-        ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionLayout, Executor, LARGE_GPU_POPULATION,
-        ReorderBuffer, RunRequest, RunSink, SliceSize, SweepControl, choose_layout,
+        ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionError, ExecutionLayout, Executor,
+        LARGE_GPU_POPULATION, ReorderBuffer, RunRequest, RunSink, SliceSize, SweepControl, choose_layout,
     };
     use crate::probe::ProbeReport;
     use crate::schema::model_schema;
@@ -1332,6 +1343,23 @@ mod tests {
         }));
         assert!(batch.is_err(), "the sink's panic reaches the caller");
         assert!(control.is_aborted(), "the lanes were told to stop");
+    }
+
+    #[test]
+    fn a_panicking_lane_ends_the_batch_with_an_error() {
+        let plain = entry("game_of_life");
+        let (plan, measure) = plan(&plain, 20, 2);
+        // The build panics past the registry's catch, as a fault in the executor itself would.
+        let panicking = ModelEntry {
+            create: Box::new(|_params, _seed| panic!("the lane cannot build a run")),
+            ..plain
+        };
+        let control = SweepControl::new();
+        let executor =
+            Executor::new(&panicking, None, measure, lanes(3, 1), control.clone()).expect("the lane pools build");
+        let batch = executor.run_batch(&requests(&plan), &mut KeepingSink::new());
+        assert!(matches!(batch, Err(ExecutionError::LanePanicked)), "{batch:?}");
+        assert!(control.is_aborted(), "the other lanes were told to stop");
     }
 
     #[test]

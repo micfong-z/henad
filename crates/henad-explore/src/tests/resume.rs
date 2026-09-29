@@ -13,11 +13,11 @@ use henad_models::registry::register_grid_model;
 use crate::exec::Concurrency;
 use crate::output::manifest::ManifestStatus;
 use crate::output::resume::ResumeError;
-use crate::output::{RUNS_FILE, SERIES_FILE};
+use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::sweep::{ExploreError, Provenance, SpecSource, SweepOptions, SweepWarning, run_sweep};
 use crate::tests::broken::DividesByParam;
 use crate::tests::support::{
-    Recorder, ScratchDir, Tables, entry, manifest, provenance, sweep, sweep_options, sweep_with,
+    OutputTables, Recorder, ScratchDir, entry, manifest, provenance, sweep, sweep_options, sweep_with,
 };
 
 fn values(raw: &[&str]) -> LevelSpec {
@@ -61,6 +61,14 @@ fn resume(entry_id: &str, spec: &SweepSpec, output_dir: &Path, options: SweepOpt
     progress.committed
 }
 
+/// Returns the bytes of each of the four files of the output directory `dir`, by file name.
+fn file_bytes(dir: &Path) -> Vec<(&'static str, Vec<u8>)> {
+    [RUNS_FILE, SERIES_FILE, SUMMARY_FILE, MANIFEST_FILE]
+        .into_iter()
+        .map(|file| (file, fs::read(dir.join(file)).expect("the file is written")))
+        .collect()
+}
+
 /// Returns the text of the first `line_count` lines of `text`.
 fn first_lines(text: &str, line_count: usize) -> &str {
     let end = text
@@ -91,7 +99,7 @@ fn a_resumed_sweep_skips_finished_runs_and_matches_a_fresh_one() {
 
     let committed = resume("sir", &spec, &resumed_dir, SweepOptions::default());
     assert_eq!(committed, [2, 3, 4, 5], "runs 0 and 1 were kept");
-    assert_eq!(Tables::read(&resumed_dir), Tables::read(&fresh_dir));
+    assert_eq!(OutputTables::read(&resumed_dir), OutputTables::read(&fresh_dir));
     let recorded = manifest(&resumed_dir);
     assert_eq!(recorded.status, ManifestStatus::Complete);
     let sessions: Vec<(u64, u64)> = recorded
@@ -106,7 +114,7 @@ fn a_resumed_sweep_skips_finished_runs_and_matches_a_fresh_one() {
         resume("sir", &spec, &resumed_dir, SweepOptions::default()).is_empty(),
         "a complete directory has nothing left to run"
     );
-    assert_eq!(Tables::read(&resumed_dir), Tables::read(&fresh_dir));
+    assert_eq!(OutputTables::read(&resumed_dir), OutputTables::read(&fresh_dir));
 }
 
 #[test]
@@ -165,7 +173,7 @@ fn resume_refuses_a_changed_spec() {
     let spec = sir_spec(2);
     let scratch = ScratchDir::new("resume-changed");
     sweep(&sir, None, &spec, scratch.path(), Concurrency::Auto);
-    let runs = fs::read(scratch.path().join(RUNS_FILE)).expect("runs.csv is written");
+    let written = file_bytes(scratch.path());
 
     let mut longer = spec.clone();
     longer.run.steps = 31;
@@ -196,11 +204,9 @@ fn resume_refuses_a_changed_spec() {
         matches!(error, ExploreError::Resume(ResumeError::ShardChanged { .. })),
         "{error:?}"
     );
-    assert_eq!(
-        fs::read(scratch.path().join(RUNS_FILE)).expect("runs.csv is kept"),
-        runs,
-        "a refused resume changes nothing"
-    );
+    for ((file, before), (_, after)) in written.iter().zip(file_bytes(scratch.path())) {
+        assert!(*before == after, "a refused resume leaves {file} as it was");
+    }
 
     let mut timed = spec.clone();
     timed.run.timeout = Some(Duration::from_secs(600));
@@ -229,7 +235,7 @@ fn retry_failed_reruns_only_failures() {
     }];
     let scratch = ScratchDir::new("retry-failed");
     sweep(&model, None, &spec, scratch.path(), Concurrency::Auto);
-    let first = Tables::read(scratch.path());
+    let first = OutputTables::read(scratch.path());
     assert_eq!(
         first.run_column("status"),
         ["ok", "ok", "panicked", "panicked", "ok", "ok"]
@@ -246,7 +252,11 @@ fn retry_failed_reruns_only_failures() {
     };
     assert!(resumed(false).is_empty(), "a failed run counts as finished");
     assert_eq!(resumed(true), [2, 3]);
-    assert_eq!(Tables::read(scratch.path()), first, "the retried runs fail as they did");
+    assert_eq!(
+        OutputTables::read(scratch.path()),
+        first,
+        "the retried runs fail as they did"
+    );
     let sessions: Vec<(u64, u64)> = manifest(scratch.path())
         .sessions
         .iter()
@@ -266,8 +276,8 @@ fn raising_replicates_on_resume_runs_only_the_new_ones() {
 
     let fresh_dir = scratch.path().join("fresh");
     sweep(&sir, None, &sir_spec(3), &fresh_dir, Concurrency::Auto);
-    let resumed = Tables::read(&resumed_dir);
-    assert_eq!(resumed, Tables::read(&fresh_dir));
+    let resumed = OutputTables::read(&resumed_dir);
+    assert_eq!(resumed, OutputTables::read(&fresh_dir));
     assert_eq!(resumed.run_column("rep"), ["0", "1", "2", "0", "1", "2", "0", "1", "2"]);
     let recorded = manifest(&resumed_dir);
     assert_eq!((recorded.plan.replicates, recorded.plan.runs), (3, 9));
@@ -304,7 +314,7 @@ fn a_run_past_its_timeout_is_recorded_and_resume_retries_it() {
     let resumed_dir = scratch.path().join("resumed");
     let report = sweep(&sir, None, &timed, &resumed_dir, Concurrency::Auto);
     assert_eq!((report.counts.rows, report.counts.failed), (6, 6));
-    let timed_out = Tables::read(&resumed_dir);
+    let timed_out = OutputTables::read(&resumed_dir);
     assert!(
         timed_out
             .run_column("status")
@@ -326,5 +336,5 @@ fn a_run_past_its_timeout_is_recorded_and_resume_retries_it() {
     assert_eq!(committed, [0, 1, 2, 3, 4, 5], "a timed-out run is never finished");
     let fresh_dir = scratch.path().join("fresh");
     sweep(&sir, None, &sir_spec(2), &fresh_dir, Concurrency::Auto);
-    assert_eq!(Tables::read(&resumed_dir), Tables::read(&fresh_dir));
+    assert_eq!(OutputTables::read(&resumed_dir), OutputTables::read(&fresh_dir));
 }

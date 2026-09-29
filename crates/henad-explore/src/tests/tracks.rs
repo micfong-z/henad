@@ -27,8 +27,8 @@ use crate::output::manifest::ManifestStatus;
 use crate::progress::NoProgress;
 use crate::sweep::{SweepEnd, SweepOptions};
 use crate::tests::support::{
-    Collected, ONE_TRACK, ScratchDir, Tables, entry, headless_device, manifest, planned, sweep, sweep_options,
-    sweep_with, tracks,
+    Collected, ONE_TRACK, OutputTables, ScratchDir, entry, headless_device, manifest, planned, sweep, sweep_options,
+    sweep_with, ticks_seen, tracks,
 };
 
 /// Fault a [`HarnessState`] injects at a tick.
@@ -338,12 +338,71 @@ fn interleaved_gpu_runs_match_sequential_ones() {
             let report = sweep(&model, Some(&ctx), &spec, &output_dir, concurrency);
             assert_eq!(report.outline.layout.gpu_tracks, count);
             assert_eq!((report.counts.rows, report.counts.ok), (8, 8), "{}", spec.model);
-            Tables::read(&output_dir)
+            OutputTables::read(&output_dir)
         });
         assert_eq!(one, four, "{}", spec.model);
         let stop_reasons = one.run_column("stop_reason");
         assert!(stop_reasons.contains(&"condition"), "{}: {stop_reasons:?}", spec.model);
     }
+}
+
+/// Returns the parts of `tables` the engine fixes, whatever values the model computes: every field of `runs.csv` up
+/// to the population, and the run and tick of every row of `series.csv`.
+fn engine_owned(tables: &OutputTables) -> (Vec<Vec<String>>, Vec<(String, String)>) {
+    let population = tables.runs[0]
+        .iter()
+        .rposition(|name| name == "population")
+        .expect("runs.csv has a population column");
+    let runs = tables
+        .runs
+        .iter()
+        .map(|record| record[..=population].to_vec())
+        .collect();
+    let series = tables
+        .series
+        .iter()
+        .map(|record| (record[0].clone(), record[1].clone()))
+        .collect();
+    (runs, series)
+}
+
+/// Checks the rows of `gpu_boids`, whose neighbour index leaves the order within a cell unfixed.
+///
+/// Its values can differ between two sweeps of one spec. Its run order, ids, seeds, keys, statuses and sampled ticks
+/// come from the engine and match at any track count.
+#[test]
+fn interleaved_gpu_boids_runs_commit_in_plan_order() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
+    let model = entry("gpu_boids", Some(&ctx));
+    let mut spec = SweepSpec::new("gpu_boids");
+    spec.fixed = fixed_values(&[("num_agents", "2000"), ("world_width", "400"), ("world_height", "400")]);
+    spec.run.steps = 30;
+    spec.run.replicates = 2;
+    spec.measure.stats_every = 3;
+    spec.measure.series_every = 3;
+    spec.seeds.root = 9;
+    spec.blocks = vec![factorial(vec![FactorSpec::param(
+        "separation",
+        values(&["0.05", "0.5"]),
+    )])];
+    let scratch = ScratchDir::new("gpu-boids-interleaved");
+    let [one, four] = [1, 4].map(|count| {
+        let output_dir = scratch.path().join(format!("tracks-{count}"));
+        let concurrency = Concurrency::Fixed(count.try_into().expect("a track count above 0"));
+        let report = sweep(&model, Some(&ctx), &spec, &output_dir, concurrency);
+        assert_eq!(report.outline.layout.gpu_tracks, count);
+        assert_eq!((report.counts.rows, report.counts.ok), (4, 4));
+        OutputTables::read(&output_dir)
+    });
+    assert_eq!(one.run_column("run_id"), ["0", "1", "2", "3"]);
+    assert_eq!(
+        one.series.len(),
+        1 + 4 * 11,
+        "ticks 0 to 30 of every run, every third tick"
+    );
+    assert_eq!(engine_owned(&one), engine_owned(&four));
 }
 
 /// Returns the rows a blocking run of `run` samples, stepping to each sampled tick and waiting on its stats.
@@ -781,9 +840,7 @@ fn a_lost_device_leaves_a_directory_a_resume_completes() {
     );
     assert_eq!(manifest(&lost_dir).status, ManifestStatus::Incomplete);
 
-    let Some(fresh_ctx) = headless_device() else {
-        return;
-    };
+    let fresh_ctx = headless_device().expect("a machine that gave a device gives another");
     let gpu_sir = entry("gpu_sir", Some(&fresh_ctx));
     let resumed = SweepOptions {
         concurrency: options.concurrency,
@@ -793,7 +850,7 @@ fn a_lost_device_leaves_a_directory_a_resume_completes() {
     assert_eq!((report.end, report.counts.ok), (SweepEnd::Complete, 8));
     let fresh_dir = scratch.path().join("fresh");
     sweep(&gpu_sir, Some(&fresh_ctx), &spec, &fresh_dir, options.concurrency);
-    assert_eq!(Tables::read(&lost_dir), Tables::read(&fresh_dir));
+    assert_eq!(OutputTables::read(&lost_dir), OutputTables::read(&fresh_dir));
 }
 
 /// Guard that aborts its control when dropped, so a failed check never leaves a batch running.
@@ -844,10 +901,14 @@ fn gpu_tracks_hold_on_a_pause_and_end_on_an_abort() {
         let _abort_on_drop = AbortOnDrop(control.clone());
         wait_until(&|| ticks().len() == 4 && ticks().iter().all(|&tick| tick > 0));
         control.pause();
-        std::thread::sleep(Duration::from_millis(100));
+        // The round in flight visits each track at most once more, and the next round holds at the control.
+        let seen = ticks_seen(|| active_runs.list());
+        assert_eq!(seen.len(), 4, "every track stays live: {seen:?}");
+        assert!(
+            seen.values().all(|ticks| ticks.len() <= 2),
+            "a paused batch records nothing: {seen:?}"
+        );
         let paused = ticks();
-        std::thread::sleep(Duration::from_millis(200));
-        assert_eq!(ticks(), paused, "a paused batch records nothing");
         control.resume();
         wait_until(&|| ticks().iter().zip(&paused).all(|(tick, before)| tick > before));
         let aborted_at = Instant::now();

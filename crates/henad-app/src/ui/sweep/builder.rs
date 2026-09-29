@@ -11,6 +11,7 @@ use egui::{Align, Button, ComboBox, DragValue, Id, Label, Layout, RadioButton, R
 use henad_core::explore::plan::ModelSchema;
 use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
 use henad_core::explore::stop::{Comparator, Comparison};
+use henad_core::export::StatColumns;
 use henad_core::helpers::fmt_bytes;
 use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
@@ -18,21 +19,22 @@ use henad_explore::exec::Concurrency;
 use henad_models::registry::ModelEntry;
 
 use crate::icons::material_design_icons::{
-    MDI_DELETE_OUTLINE, MDI_DICE_5, MDI_FILE_DELIMITED_OUTLINE, MDI_FOLDER_OUTLINE, MDI_PLUS,
+    MDI_CLOSE, MDI_DELETE_OUTLINE, MDI_DICE_5, MDI_FILE_DELIMITED_OUTLINE, MDI_FOLDER_OUTLINE, MDI_PLUS,
 };
 use crate::ui::params::{display_value, draw_seed, seed_field_width};
 use crate::ui::plural;
 use crate::ui::results::store::{ResultsStore, column_output_label, reducer_label};
 use crate::ui::sweep::draft::{
     ActionDraft, DesignTableDraft, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis, IssueKind, LevelPreview,
-    MAX_MEMORY_SERIES_BYTES, StopDraft, SweepDraft, TICKS_EXAMPLE, comparator_words,
+    MAX_MEMORY_SERIES_BYTES, MIN_TIMEOUT_SECONDS, StopDraft, SweepDraft, TICKS_EXAMPLE, TickSource, comparator_words,
+    written_name,
 };
 use crate::ui::sweep::layout::{
     FormLayout, FormRows, FormState, Note, SectionHeading, SweepSection, add_button, checkbox_indent, icon_button,
     icon_button_width, note_block, note_label, note_line, segmented, slot, text_width, widest_label,
 };
 use crate::ui::sweep::parameters::{
-    BASELINE_HEADER, LEVELS_TOOLTIP, LevelNoun, SEARCH_LEVELS_TOOLTIP, parameters_section, preview_tooltip, row_note,
+    BASELINE_HEADER, LevelNoun, SEARCH_LEVELS_TOOLTIP, levels_tooltip, parameters_section, preview_tooltip, row_note,
 };
 use crate::ui::sweep::plan::{
     NOT_COUNTED, PlanSummary, concurrency_text, folder_name, sample_count, seconds_text, stop_text,
@@ -45,6 +47,12 @@ const MAX_SAMPLES: usize = 1 << 20;
 
 /// Seconds a run is given once Timeout is ticked, until the user sets another number.
 const DEFAULT_TIMEOUT_SECONDS: f64 = 600.0;
+
+/// Most seconds the Seconds per run field takes, the largest `f64` below 2 to the power 64.
+/// [`Duration::try_from_secs_f64`] refuses 2 to the power 64 itself.
+///
+/// [`Duration::try_from_secs_f64`]: std::time::Duration::try_from_secs_f64
+const MAX_TIMEOUT_SECONDS: f64 = (u64::MAX - 2047) as f64;
 
 /// Width of an action's tick field, and of the text field that takes its place while the tick varies, in points.
 const TICKS_FIELD_WIDTH: f32 = 160.0;
@@ -192,15 +200,19 @@ fn actions_summary(draft: &SweepDraft, schema: &ModelSchema<'_>) -> String {
         DraftMode::Sweep => "varied",
         DraftMode::Search => "searched",
     };
-    let varied = draft.actions.iter().filter(|action| action.vary_tick).count() as u64;
+    let varied = draft
+        .actions
+        .iter()
+        .filter(|action| draft.tick_source(action) == TickSource::Varied)
+        .count() as u64;
     match draft.actions.as_slice() {
         [] => "None".to_owned(),
         [action] => {
             let label = action.label(schema);
-            if action.vary_tick {
-                format!("{label}, tick {verb}")
-            } else {
-                format!("{label} at tick {}", action.tick)
+            match draft.tick_source(action) {
+                TickSource::Varied => format!("{label}, tick {verb}"),
+                TickSource::Table => format!("{label}, tick from design table"),
+                TickSource::Fixed => format!("{label} at tick {}", action.tick),
             }
         }
         actions => {
@@ -325,6 +337,7 @@ fn form_labels(ui: &egui::Ui, draft: &SweepDraft, schema: &ModelSchema<'_>) -> V
         ("Crossing", indent),
         ("To tick", indent),
         ("Concurrent runs", 0.0),
+        ("Memory budget", 0.0),
         ("Results", 0.0),
         ("Folder", 0.0),
     ]);
@@ -628,7 +641,9 @@ fn design_section(
             &layout,
             "Samples",
             "Configurations to draw",
-            DragValue::new(&mut draft.samples).range(1..=MAX_SAMPLES),
+            DragValue::new(&mut draft.samples)
+                .range(1..=MAX_SAMPLES)
+                .clamp_existing_to_range(false),
         );
     }
     if draft.design == DraftDesign::Table {
@@ -729,9 +744,10 @@ fn actions_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
     if draft.actions.is_empty() {
         ui.add(Label::new(RichText::new("Press Add action to schedule a model action in every run.").weak()).wrap());
     }
+    let sources: Vec<TickSource> = draft.actions.iter().map(|action| draft.tick_source(action)).collect();
     let mut chosen = None;
     let mut removed = None;
-    for (position, action) in draft.actions.iter_mut().enumerate() {
+    for ((position, action), source) in draft.actions.iter_mut().enumerate().zip(sources) {
         if position > 0 {
             ui.add(egui::Separator::default().spacing(2.0));
         }
@@ -769,7 +785,7 @@ fn actions_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
             .inner
         });
         let combo = combo.labelled_by(label.id);
-        let (field, varied) = tick_row(ui, rows, input, context, position, action);
+        let (field, varied) = tick_row(ui, rows, input, context, position, action, source);
         // A row with a fixed tick reveals its action, as for an action the model does not declare.
         let site = DraftSite::Action(position);
         if varied {
@@ -795,15 +811,28 @@ fn actions_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
 #[derive(Debug, Clone, Copy)]
 struct TickContext {
     search: bool,
-    /// Whether a design table sets the ticks.
+    /// Whether the draft runs a design table. No tick varies under one.
     runs_table: bool,
     /// Whether a range with no step is drawn from, as in a sampled design or a search.
     draws_ranges: bool,
 }
 
+/// Hover of an action's disabled tick controls while the design table sets its tick.
+const TABLE_TICK_HOVER: &str = "Tick set by design table";
+
+/// Returns the hover of the Vary tick checkbox, disabled under a design table, for an action whose tick comes from
+/// `source`.
+fn table_tick_hover(source: TickSource) -> &'static str {
+    match source {
+        TickSource::Table => TABLE_TICK_HOVER,
+        TickSource::Fixed | TickSource::Varied => "Design table has no column for this action",
+    }
+}
+
 /// Draws the Tick row of action row `position`: its tick, or while varied its ticks and their note.
 ///
-/// Returns the field holding the tick or the ticks, and whether the ticks vary.
+/// `source` is where the action's tick comes from in each run, as [`SweepDraft::tick_source`] gives it. Returns the
+/// field holding the tick or the ticks, and whether the ticks vary.
 fn tick_row(
     ui: &mut egui::Ui,
     rows: &mut FormRows,
@@ -811,6 +840,7 @@ fn tick_row(
     context: TickContext,
     position: usize,
     action: &mut ActionDraft,
+    source: TickSource,
 ) -> (egui::Response, bool) {
     let layout = rows.layout;
     let (vary_label, vary_tooltip) = if context.search {
@@ -824,7 +854,7 @@ fn tick_row(
         .iter()
         .find(|(warned, _)| *warned == position)
         .map(|(_, text)| text.clone());
-    let varied = action.vary_tick && !context.runs_table;
+    let varied = source == TickSource::Varied;
     let (label, field) = layout.row(ui, "Tick", |ui| {
         let field = ui
             .horizontal(|ui| {
@@ -834,7 +864,7 @@ fn tick_row(
                         let tooltip = if context.search {
                             SEARCH_LEVELS_TOOLTIP
                         } else {
-                            LEVELS_TOOLTIP
+                            levels_tooltip(true, context.draws_ranges)
                         };
                         let field = TextEdit::singleline(&mut action.ticks_text)
                             .hint_text(TICKS_EXAMPLE)
@@ -842,8 +872,9 @@ fn tick_row(
                         return ui.add(field).on_hover_text(tooltip);
                     }
                     let drag = ui
-                        .add(DragValue::new(&mut action.tick))
-                        .on_hover_text("Tick to run the action on");
+                        .add_enabled(source != TickSource::Table, DragValue::new(&mut action.tick))
+                        .on_hover_text("Tick to run the action on")
+                        .on_disabled_hover_text(TABLE_TICK_HOVER);
                     // The ticks start as the fixed tick once they vary.
                     if drag.changed() {
                         action.ticks_text = action.tick.to_string();
@@ -856,7 +887,7 @@ fn tick_row(
                     egui::Checkbox::new(&mut action.vary_tick, vary_label),
                 )
                 .on_hover_text(vary_tooltip)
-                .on_disabled_hover_text("Ticks set by design table");
+                .on_disabled_hover_text(table_tick_hover(source));
                 if action.vary_tick && !was_varied && action.ticks_text.trim().is_empty() {
                     action.ticks_text = action.tick.to_string();
                 }
@@ -978,7 +1009,11 @@ fn seeds_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft,
     );
     let (label, replicates) = layout.row(ui, "Replicates", |ui| {
         layout.with_feedback(ui, &feedback, |ui| {
-            ui.add(DragValue::new(&mut draft.replicates).range(1..=u64::from(u32::MAX)))
+            ui.add(
+                DragValue::new(&mut draft.replicates)
+                    .range(1..=u64::from(u32::MAX))
+                    .clamp_existing_to_range(false),
+            )
         })
     });
     let label = label.on_hover_text(replicates_tooltip);
@@ -1036,7 +1071,11 @@ fn run_length_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepD
     );
     let (label, steps) = layout.row(ui, "Steps", |ui| {
         layout.with_feedback(ui, &feedback, |ui| {
-            ui.add(DragValue::new(&mut draft.steps).range(1..=u64::MAX))
+            ui.add(
+                DragValue::new(&mut draft.steps)
+                    .range(0..=u64::MAX)
+                    .clamp_existing_to_range(false),
+            )
         })
     });
     let tooltip = "Ticks measured per run, after warm-up";
@@ -1051,7 +1090,7 @@ fn run_length_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepD
         DragValue::new(&mut draft.warmup),
     );
     stop_rows(ui, rows, draft, input);
-    timeout_rows(ui, &layout, draft);
+    timeout_rows(ui, rows, draft, input);
 }
 
 /// Returns the note under a stop condition, as in "Runs will end at the first sample where Infected is at most 0,
@@ -1102,7 +1141,11 @@ fn stop_rows(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft, inp
         ui.horizontal(|ui| {
             let comparator = comparator_combo(ui, Id::new("sweep_stop_comparator"), &mut stop.comparator)
                 .on_hover_text("Comparison with threshold");
-            let threshold = ui.add(DragValue::new(&mut stop.threshold).speed(0.1));
+            let threshold = ui.add(
+                DragValue::new(&mut stop.threshold)
+                    .range(f64::MIN..=f64::MAX)
+                    .speed(0.1),
+            );
             (comparator, threshold)
         })
         .inner
@@ -1120,7 +1163,8 @@ fn stop_rows(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft, inp
     from_tick.labelled_by(label.id);
 }
 
-fn timeout_rows(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraft) {
+fn timeout_rows(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft, input: &FormInput<'_>) {
+    let layout = rows.layout;
     let mut enabled = draft.timeout_s.is_some();
     let (timeout, ()) = layout.checkbox_row(ui, &mut enabled, "Timeout", |_| {});
     timeout.on_hover_text("End a run after a wall-clock time limit");
@@ -1132,16 +1176,23 @@ fn timeout_rows(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraft) 
     let Some(seconds) = &mut draft.timeout_s else {
         return;
     };
+    let note = site_note(
+        input.summary,
+        DraftSite::Timeout,
+        Note::Weak("Whether a run times out depends on the machine's speed.".to_owned()),
+    );
     let (label, field) = layout.sub_row(ui, "Seconds per run", |ui, sub| {
-        let field = ui.add(DragValue::new(seconds).range(0.0..=f64::MAX).suffix(" s"));
-        note_line(
-            ui,
-            sub.cell_width,
-            &Note::Weak("Whether a run times out depends on the machine's speed.".to_owned()),
+        let field = ui.add(
+            DragValue::new(seconds)
+                .range(MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS)
+                .clamp_existing_to_range(false)
+                .suffix(" s"),
         );
+        note_line(ui, sub.cell_width, &note);
         field
     });
-    field.labelled_by(label.id);
+    let field = field.labelled_by(label.id);
+    rows.reveal_row(ui, DraftSite::Timeout, &field, None);
 }
 
 /// Returns a drag value for a number of ticks, labeled "1 tick" or "5 ticks".
@@ -1217,9 +1268,10 @@ pub fn series_feedback(series_every: u64, bytes: Option<u64>, in_memory: bool) -
     Note::Weak(format!("About {} of series", fmt_bytes(bytes)))
 }
 
-/// Returns the note of an output row: the column `runs.csv` gives it, as in "Written as Susceptible:argmax".
-pub fn output_note(reducer: &ReducerSpec) -> String {
-    format!("Written as {}:{}", reducer.column, reducer.kind)
+/// Returns the note of an output row: the column `runs.csv` gives it among the stat columns `columns`, as in "Written
+/// as Susceptible:argmax".
+pub fn output_note(reducer: &ReducerSpec, columns: Option<&StatColumns>) -> String {
+    format!("Written as {}", written_name(reducer, columns))
 }
 
 /// Returns the label of the search field of `site` that reads an output.
@@ -1261,7 +1313,11 @@ fn sampling_rows(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft,
     let tooltip = "Ticks between stat samples. Frequent sampling slows runs, especially on the GPU.";
     let (label, sample_every) = layout.row(ui, "Sample every", |ui| {
         layout.with_feedback(ui, &sample_note, |ui| {
-            ui.add(ticks_drag_value(&mut draft.stats_every).range(1..=u64::MAX))
+            ui.add(
+                ticks_drag_value(&mut draft.stats_every)
+                    .range(1..=u64::MAX)
+                    .clamp_existing_to_range(false),
+            )
         })
     });
     let label = label.on_hover_text(tooltip);
@@ -1287,10 +1343,18 @@ fn outputs_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
     sampling_rows(ui, rows, draft, summary);
 
     let mut defaults = draft.default_reducers;
-    layout.blank_row(ui, |ui| {
-        ui.checkbox(&mut defaults, "Final value, minimum, maximum and mean of every stat")
+    let pending = summary.issues_at(DraftSite::Outputs).next();
+    let every_stat = layout.blank_row(ui, |ui| {
+        let checkbox = ui
+            .checkbox(&mut defaults, "Final value, minimum, maximum and mean of every stat")
             .on_hover_text("Record these four values of every stat for each run");
+        // The note line of an issue of the whole section is not reserved. It shows only while the issue lasts.
+        if let Some(issue) = pending {
+            note_line(ui, layout.cell_width, &Note::Issue(issue.kind, issue.message.clone()));
+        }
+        checkbox
     });
+    rows.reveal_row(ui, DraftSite::Outputs, &every_stat, None);
     if defaults != draft.default_reducers {
         if defaults {
             draft.default_reducers = true;
@@ -1307,7 +1371,11 @@ fn outputs_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
     for (position, reducer) in draft.reducers.iter_mut().enumerate() {
         let site = DraftSite::Output(position);
         let reader = readers.get(position).copied().flatten();
-        let note = site_note(summary, site, Note::Weak(output_note(reducer)));
+        let note = site_note(
+            summary,
+            site,
+            Note::Weak(output_note(reducer, draft.stat_columns.as_ref())),
+        );
         let (label, stat) = layout.row(ui, "Output", |ui| {
             let stat = ui
                 .horizontal(|ui| {
@@ -1413,7 +1481,11 @@ fn output_sub_rows(ui: &mut egui::Ui, layout: &FormLayout, position: usize, kind
                         Id::new(("sweep_output_comparator", position)),
                         &mut comparison.comparator,
                     );
-                    let threshold = ui.add(DragValue::new(&mut comparison.threshold).speed(0.1));
+                    let threshold = ui.add(
+                        DragValue::new(&mut comparison.threshold)
+                            .range(f64::MIN..=f64::MAX)
+                            .speed(0.1),
+                    );
                     (comparator, threshold)
                 })
                 .inner
@@ -1461,7 +1533,37 @@ fn execution_section(
     request: &mut Option<SweepRequest>,
 ) {
     concurrency_row(ui, &rows.layout, draft, input.entry.metadata.backend);
+    budget_row(ui, &rows.layout, draft);
     results_rows(ui, rows, draft, input, request);
+}
+
+/// Draws the memory budgets of a loaded spec file, with a button to go back to the automatic budgets. Draws nothing
+/// when `draft` has no budget.
+fn budget_row(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraft) {
+    let Some(text) = budget_text(draft.memory_budget, draft.gpu_memory_budget) else {
+        return;
+    };
+    let note = Note::Weak("From loaded spec file".to_owned());
+    layout.row(ui, "Memory budget", |ui| {
+        layout.with_feedback(ui, &note, |ui| {
+            ui.label(text);
+            let clear = icon_button(ui, MDI_CLOSE, "Clear memory budget", "Use automatic budgets");
+            if clear.clicked() {
+                draft.memory_budget = None;
+                draft.gpu_memory_budget = None;
+            }
+        });
+    });
+}
+
+/// Returns the memory budgets as the Memory budget row shows them, as in "4 GB, GPU 2 GB", or `None` for neither.
+fn budget_text(memory_budget: Option<u64>, gpu_memory_budget: Option<u64>) -> Option<String> {
+    match (memory_budget, gpu_memory_budget) {
+        (None, None) => None,
+        (Some(memory), None) => Some(fmt_bytes(memory)),
+        (None, Some(gpu_memory)) => Some(format!("GPU {}", fmt_bytes(gpu_memory))),
+        (Some(memory), Some(gpu_memory)) => Some(format!("{}, GPU {}", fmt_bytes(memory), fmt_bytes(gpu_memory))),
+    }
 }
 
 fn concurrency_row(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraft, backend: Backend) {
@@ -1652,6 +1754,7 @@ pub(super) fn banner_line(issue: &DraftIssue, draft: &SweepDraft, schema: &Model
         | DraftSite::Search
         | DraftSite::Parameters
         | DraftSite::Sampling
+        | DraftSite::Outputs
         | DraftSite::MethodSetting(_) => None,
         DraftSite::Factor(index) => schema.params.get(index).map(|descriptor| descriptor.label.to_owned()),
         DraftSite::Action(position) => draft
@@ -1671,6 +1774,7 @@ pub(super) fn banner_line(issue: &DraftIssue, draft: &SweepDraft, schema: &Model
         DraftSite::Seed => Some("Root seed".to_owned()),
         DraftSite::RunLength => Some("Run length".to_owned()),
         DraftSite::Stop => Some("Stop when".to_owned()),
+        DraftSite::Timeout => Some("Timeout".to_owned()),
         DraftSite::Execution if draft.results_in_folder => Some("Folder".to_owned()),
         DraftSite::Execution => Some("Results".to_owned()),
     };
@@ -1683,7 +1787,9 @@ pub(super) fn banner_line(issue: &DraftIssue, draft: &SweepDraft, schema: &Model
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
+    use std::time::Duration;
 
+    use egui::accesskit;
     use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
     use henad_core::explore::stop::Comparator;
     use henad_core::metadata::Backend;
@@ -1693,14 +1799,16 @@ mod tests {
     use henad_models::registry::{ModelEntry, model_registry};
 
     use super::{
-        SectionSummaries, SeedField, banner_line, comparator_item, concurrency_feedback, design_formula, output_note,
-        replicates_feedback, samples_feedback, seed_note, series_feedback, steps_feedback, stop_note, table_note,
+        FormInput, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, SectionSummaries, SeedField, banner_line, comparator_item,
+        concurrency_feedback, design_formula, form_ui, output_note, replicates_feedback, samples_feedback, seed_note,
+        series_feedback, steps_feedback, stop_note, table_note,
     };
     use crate::ui::sweep::draft::{
-        DesignTableDraft, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis, IssueKind, MAX_MEMORY_SERIES_BYTES,
-        StopDraft, SweepDraft,
+        COLUMNS_PENDING, DesignTableDraft, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis, IssueKind,
+        MAX_MEMORY_SERIES_BYTES, StopDraft, SweepDraft, TickSource,
     };
-    use crate::ui::sweep::layout::Note;
+    use crate::ui::sweep::layout::{FormState, Note, Reveal, SweepSection};
+    use crate::ui::sweep::plan::PlanSummary;
     use crate::ui::sweep::{CheckSummary, SweepPanel};
 
     // Indices of SIR's parameters.
@@ -1998,7 +2106,7 @@ mod tests {
             column: "Susceptible".to_owned(),
             kind: ReducerKind::ArgMax,
         };
-        assert_eq!(output_note(&output), "Written as Susceptible:argmax");
+        assert_eq!(output_note(&output, None), "Written as Susceptible:argmax");
     }
 
     #[test]
@@ -2044,6 +2152,7 @@ mod tests {
             "Root seed: 'x' is not a number"
         );
         assert_eq!(line(&draft, DraftSite::Sweep, "Too many runs"), "Too many runs");
+        assert_eq!(line(&draft, DraftSite::Outputs, COLUMNS_PENDING), COLUMNS_PENDING);
         assert_eq!(
             line(&draft, DraftSite::Axis(GridAxis::Y), "Set Minimum and Maximum"),
             "Y axis: Set Minimum and Maximum"
@@ -2090,6 +2199,349 @@ mod tests {
             seed_note(&summary, design_seed),
             Note::Empty,
             "another seed's issue stays on its own row"
+        );
+    }
+
+    /// Draws the form of `draft`, a draft of `entry`'s model, for a few frames with every row of a number shown, and
+    /// returns the draft as drawn.
+    fn drawn(entry: &ModelEntry, draft: SweepDraft) -> SweepDraft {
+        draw_form(entry, draft, None).draft
+    }
+
+    /// Control of a drawn form, found by the row label beside it or by a name of its own.
+    #[derive(Debug, Clone, Copy)]
+    enum FormControl<'a> {
+        /// Control labelled by the row label, as the Tick field is.
+        Row(&'a str),
+        /// Control that goes by its own name, as the Vary tick checkbox does.
+        Named(&'a str),
+    }
+
+    impl FormControl<'_> {
+        /// Returns the accessibility node of the control among `nodes`.
+        ///
+        /// # Panics
+        ///
+        /// Panics unless exactly one control matches, and for [`Self::Row`] exactly one row goes by the label.
+        fn find(self, nodes: &[(accesskit::NodeId, accesskit::Node)]) -> &accesskit::Node {
+            let controls: Vec<&accesskit::Node> = match self {
+                Self::Row(label) => {
+                    let labels: Vec<accesskit::NodeId> = nodes
+                        .iter()
+                        .filter(|(_, node)| node.role() == accesskit::Role::Label && node.value() == Some(label))
+                        .map(|&(id, _)| id)
+                        .collect();
+                    assert_eq!(labels.len(), 1, "{label} rows: {labels:?}");
+                    nodes
+                        .iter()
+                        .filter(|(_, node)| node.labelled_by().contains(&labels[0]))
+                        .map(|(_, node)| node)
+                        .collect()
+                }
+                Self::Named(name) => nodes
+                    .iter()
+                    .filter(|(_, node)| node.label() == Some(name))
+                    .map(|(_, node)| node)
+                    .collect(),
+            };
+            assert_eq!(controls.len(), 1, "{self:?}: {controls:?}");
+            controls[0]
+        }
+    }
+
+    /// Draft and last frame of a form [`draw_form`] draws.
+    struct DrawnForm {
+        draft: SweepDraft,
+        /// Each text of the last frame and the height its top sits at.
+        texts: Vec<(String, f32)>,
+        /// Accessibility nodes of the last frame.
+        nodes: Vec<(accesskit::NodeId, accesskit::Node)>,
+        /// Texts the last frame shows that the frame before the pointer came to rest on the hovered control did not.
+        /// Empty when no control is hovered.
+        tooltip: Vec<String>,
+    }
+
+    impl DrawnForm {
+        /// Returns whether `control` takes input.
+        ///
+        /// # Panics
+        ///
+        /// Panics unless the form holds exactly one such control.
+        fn enabled(&self, control: FormControl<'_>) -> bool {
+            !control.find(&self.nodes).is_disabled()
+        }
+    }
+
+    /// Draws the form of `draft` as [`drawn`] does, and returns the draft as drawn with the last frame.
+    ///
+    /// With `hovered`, the pointer then rests on that control until its tooltip shows.
+    fn draw_form(entry: &ModelEntry, draft: SweepDraft, hovered: Option<FormControl<'_>>) -> DrawnForm {
+        let schema = model_schema(entry);
+        let panel_values = default_values(entry);
+        let mut panel = SweepPanel::default();
+        *panel.draft_mut(&schema) = draft;
+        let check = panel.cached_check(&schema, &panel_values);
+        let summary = CheckSummary::new(check, entry, &schema);
+        let plan = PlanSummary::for_draft(check, &schema, &entry.name, &summary);
+        let sections = SectionSummaries::new(check, &schema, &summary);
+        let input = FormInput {
+            entry,
+            schema: &schema,
+            panel_values: &panel_values,
+            summary: &summary,
+            sections: &sections,
+            plan: &plan,
+            results: None,
+        };
+        let mut draft = check.draft.clone();
+        // The Outputs section starts collapsed, and a reveal opens it.
+        let mut form = FormState {
+            reveal: Some(Reveal::section(SweepSection::Outputs)),
+            ..FormState::default()
+        };
+        let context = egui::Context::default();
+        context.enable_accesskit();
+        // Frame `second` is drawn at `second` seconds, so a pointer at rest outlasts the tooltip delay in one frame.
+        let mut draw_frame = |second: u32, events: Vec<egui::Event>| {
+            let raw_input = egui::RawInput {
+                time: Some(f64::from(second)),
+                events,
+                ..egui::RawInput::default()
+            };
+            let mut output = context.run_ui(raw_input, |ui| form_ui(ui, &mut draft, &mut form, &input, &mut None));
+            let texts: Vec<(String, f32)> = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.pos.y)),
+                    _ => None,
+                })
+                .collect();
+            let nodes = output
+                .platform_output
+                .accesskit_update
+                .take()
+                .map(|update| update.nodes)
+                .unwrap_or_default();
+            output.drop_without_applying_deltas();
+            (texts, nodes)
+        };
+        let mut frame = (Vec::new(), Vec::new());
+        for second in 0..3 {
+            frame = draw_frame(second, Vec::new());
+        }
+        let tooltip = if let Some(control) = hovered {
+            let bounds = control.find(&frame.1).bounds().expect("egui gives every widget bounds");
+            let center = egui::pos2(
+                f64::midpoint(bounds.x0, bounds.x1) as f32,
+                f64::midpoint(bounds.y0, bounds.y1) as f32,
+            );
+            let before: Vec<String> = frame.0.iter().map(|(text, _)| text.clone()).collect();
+            frame = draw_frame(3, vec![egui::Event::PointerMoved(center)]);
+            // A tooltip shows once the pointer has rested for the delay, and its area takes a frame to size.
+            for second in 4..7 {
+                frame = draw_frame(second, Vec::new());
+            }
+            frame
+                .0
+                .iter()
+                .map(|(text, _)| text.clone())
+                .filter(|text| !before.contains(text))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let (texts, nodes) = frame;
+        DrawnForm {
+            draft,
+            texts,
+            nodes,
+            tooltip,
+        }
+    }
+
+    #[test]
+    fn the_outputs_section_shows_that_its_columns_are_pending() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let mut draft = SweepDraft::new(&schema);
+        draft.columns_pending = true;
+        let texts = draw_form(&entry, draft, None).texts;
+        let top = |needle: &str| {
+            let tops: Vec<f32> = texts
+                .iter()
+                .filter(|(text, _)| text.contains(needle))
+                .map(|&(_, top)| top)
+                .collect();
+            assert_eq!(tops.len(), 1, "{needle}: {texts:?}");
+            tops[0]
+        };
+        assert!(
+            top(COLUMNS_PENDING) > top("of every stat"),
+            "the issue sits under the outputs of every stat"
+        );
+        assert!(top("Series every") < top("of every stat"));
+    }
+
+    #[test]
+    fn drawing_the_form_leaves_a_loaded_value_alone() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let mut loaded = SweepDraft::new(&schema);
+        loaded.design = DraftDesign::LatinHypercube;
+        loaded.samples = 2_000_000;
+        loaded.replicates = 0;
+        loaded.steps = 0;
+        loaded.stats_every = 0;
+        loaded.timeout_s = Some(0.5);
+        assert_eq!(drawn(&entry, loaded.clone()), loaded);
+
+        let mut over = SweepDraft::new(&schema);
+        over.design = DraftDesign::LatinHypercube;
+        vary(&mut over, INFECTION_RATE, "0.1:0.5");
+        over.samples = 2_000_000;
+        let over = drawn(&entry, over);
+        assert_eq!(over.samples, 2_000_000);
+        let issues = over
+            .check(&schema, &default_values(&entry))
+            .expect_err("a sample count over the limit is refused");
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.message.contains("over the app's limit")),
+            "{issues:?}"
+        );
+
+        let mut warmup_only = SweepDraft::new(&schema);
+        warmup_only.steps = 0;
+        warmup_only.warmup = 50;
+        let warmup_only = drawn(&entry, warmup_only);
+        assert_eq!(warmup_only.steps, 0);
+        assert!(
+            warmup_only.check(&schema, &default_values(&entry)).is_ok(),
+            "a run can measure its warm-up alone"
+        );
+
+        let mut short_timeout = SweepDraft::new(&schema);
+        short_timeout.timeout_s = Some(0.5);
+        let short_timeout = drawn(&entry, short_timeout);
+        assert_eq!(
+            short_timeout.timeout_s,
+            Some(0.5),
+            "the field keeps a loaded value under its minimum"
+        );
+        assert!(
+            short_timeout.check(&schema, &default_values(&entry)).is_ok(),
+            "a timeout henad-cli accepts passes the check"
+        );
+    }
+
+    #[test]
+    fn a_tick_row_under_a_design_table_says_where_its_tick_comes_from() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let under_table = |text: &str| {
+            let mut draft = SweepDraft::new(&schema);
+            draft.add_action(&schema, 0, 10);
+            draft.design = DraftDesign::Table;
+            draft.table = Some(DesignTableDraft {
+                file_name: "sir-design.csv".to_owned(),
+                text: text.to_owned(),
+            });
+            draft
+        };
+        let tick = FormControl::Row("Tick");
+        let vary_tick = FormControl::Named("Vary tick");
+        // Returns whether `control` takes input in the form of `draft`, and the tooltip it shows.
+        let hover = |draft: &SweepDraft, control: FormControl<'_>| {
+            let form = draw_form(&entry, draft.clone(), Some(control));
+            (form.enabled(control), form.tooltip)
+        };
+
+        let from_table = under_table("infection_rate,action.seed_outbreak\n0.1,5\n");
+        assert_eq!(from_table.tick_source(&from_table.actions[0]), TickSource::Table);
+        assert_eq!(
+            hover(&from_table, tick),
+            (false, vec!["Tick set by design table".to_owned()]),
+            "the table sets the tick"
+        );
+        assert_eq!(
+            hover(&from_table, vary_tick),
+            (false, vec!["Tick set by design table".to_owned()])
+        );
+
+        let fixed = under_table("infection_rate\n0.1\n");
+        assert_eq!(fixed.tick_source(&fixed.actions[0]), TickSource::Fixed);
+        assert_eq!(
+            hover(&fixed, tick),
+            (true, vec!["Tick to run the action on".to_owned()]),
+            "every run takes the action's own tick"
+        );
+        assert_eq!(
+            hover(&fixed, vary_tick),
+            (false, vec!["Design table has no column for this action".to_owned()]),
+            "a design table varies no tick"
+        );
+
+        let mut without_table = SweepDraft::new(&schema);
+        without_table.add_action(&schema, 0, 10);
+        assert_eq!(
+            hover(&without_table, tick),
+            (true, vec!["Tick to run the action on".to_owned()])
+        );
+        assert_eq!(
+            hover(&without_table, vary_tick),
+            (true, vec!["Try the action at several ticks".to_owned()])
+        );
+    }
+
+    #[test]
+    fn a_timeout_issue_shows_under_its_field_and_names_its_row() {
+        let entry = sir();
+        let schema = model_schema(&entry);
+        let mut draft = SweepDraft::new(&schema);
+        draft.timeout_s = Some(f64::INFINITY);
+        let issues = draft.issues(&schema);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(
+            banner_line(&issues[0], &draft, &schema),
+            "Timeout: Seconds per run is too large"
+        );
+        let form = draw_form(&entry, draft, None);
+        assert_eq!(
+            form.draft.timeout_s,
+            Some(f64::INFINITY),
+            "drawing leaves the timeout alone"
+        );
+        assert!(
+            form.texts
+                .iter()
+                .any(|(text, _)| text.ends_with(" Seconds per run is too large")),
+            "{:?}",
+            form.texts
+        );
+    }
+
+    #[test]
+    fn every_timeout_the_field_takes_is_a_duration() {
+        for seconds in [MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS] {
+            assert!(Duration::try_from_secs_f64(seconds).is_ok(), "{seconds} s");
+        }
+        let past_the_field = f64::from_bits(MAX_TIMEOUT_SECONDS.to_bits() + 1);
+        assert!(
+            Duration::try_from_secs_f64(past_the_field).is_err(),
+            "the limit is the largest number of seconds a duration takes"
+        );
+    }
+
+    #[test]
+    fn the_memory_budget_row_names_each_loaded_budget() {
+        assert_eq!(super::budget_text(None, None), None);
+        assert_eq!(super::budget_text(Some(4 << 30), None).as_deref(), Some("4.0 GB"));
+        assert_eq!(super::budget_text(None, Some(2 << 30)).as_deref(), Some("GPU 2.0 GB"));
+        assert_eq!(
+            super::budget_text(Some(4 << 30), Some(2 << 30)).as_deref(),
+            Some("4.0 GB, GPU 2.0 GB")
         );
     }
 }

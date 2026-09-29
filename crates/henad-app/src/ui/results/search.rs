@@ -4,14 +4,18 @@
 use std::collections::BTreeMap;
 
 use egui::Color32;
-use egui_plot::{Heatmap, Legend, Line, Plot, PlotPoint};
+use egui_plot::{Legend, Line, Plot, PlotPoint};
 use henad_core::explore::search::pse::{ArchiveEntry, PatternAxis, PatternCell, PatternSpaceSettings};
 use henad_core::explore::search::{Aggregate, GenerationSummary, Goal, SearchAlgorithm};
+use henad_explore::output::GENERATIONS_FILE;
 use henad_explore::output::search_tables::SearchHistory;
+use henad_explore::result_set::ResultSet;
 
 use crate::icons::material_design_icons::MDI_ALERT;
 use crate::ui::results::ResultsRequest;
-use crate::ui::results::plot::{CONFIG_COLORS, color_bar, format_precise, format_significant, heat_color};
+use crate::ui::results::plot::{
+    CONFIG_COLORS, HeatmapTiles, NO_DATA_COLOR, color_bar, format_precise, format_significant, heat_color,
+};
 use crate::ui::results::store::{ResultsStore, SearchLog, output_label};
 use crate::ui::sweep::draft::DraftAlgorithm;
 use crate::ui::sweep::search::algorithm_label;
@@ -25,6 +29,23 @@ const MAX_DRAWN_CELLS: u64 = 1 << 16;
 pub struct SearchView {
     /// Grid of the last Pattern Space Exploration drawn, with the store revision it was built from.
     grid_cache: Option<(u64, PatternGrid)>,
+    /// Whether the results lack the `generations.csv` of their genetic algorithm.
+    pub(super) generations_missing: bool,
+}
+
+impl SearchView {
+    /// Returns the view of the results `set` holds.
+    pub fn for_result_set(set: &ResultSet) -> Self {
+        let genetic = set
+            .spec()
+            .search
+            .as_ref()
+            .is_some_and(|search| matches!(search.algorithm, SearchAlgorithm::Genetic(_)));
+        Self {
+            generations_missing: set.is_search() && genetic && set.search_table(GENERATIONS_FILE).is_none(),
+            ..Self::default()
+        }
+    }
 }
 
 /// Cells of a Pattern Space Exploration's grid, row by row from the lowest cell of the y axis.
@@ -117,7 +138,14 @@ fn first_run(store: &ResultsStore, candidate_id: u64) -> Option<u64> {
     store.config_runs(candidate_id).next().map(|outcome| outcome.run.run_id)
 }
 
-pub fn search_ui(ui: &mut egui::Ui, store: &ResultsStore, view: &mut SearchView, request: &mut Option<ResultsRequest>) {
+/// Draws the Search view of `store`, whose search is still `running` or has ended.
+pub fn search_ui(
+    ui: &mut egui::Ui,
+    store: &ResultsStore,
+    view: &mut SearchView,
+    running: bool,
+    request: &mut Option<ResultsRequest>,
+) {
     let Some(search) = store.search_log() else {
         ui.weak("Search results will appear here while a search runs.");
         return;
@@ -138,7 +166,7 @@ pub fn search_ui(ui: &mut egui::Ui, store: &ResultsStore, view: &mut SearchView,
         algorithm => {
             best_line(ui, store, search, request);
             if matches!(algorithm, SearchAlgorithm::Genetic(_)) {
-                generations_plot(ui, search);
+                generations_plot(ui, search, running, view.generations_missing);
             } else {
                 best_so_far_plot(ui, search);
             }
@@ -196,7 +224,7 @@ fn best_line(ui: &mut egui::Ui, store: &ResultsStore, search: &SearchLog, reques
         if let Some(run_id) = first_run(store, candidate_id)
             && ui
                 .button("Select run")
-                .on_hover_text("Select first run of best candidate in the table below")
+                .on_hover_text("Select first run of best candidate. Its details will appear below.")
                 .clicked()
         {
             *request = Some(ResultsRequest::SelectRun(run_id));
@@ -227,9 +255,15 @@ fn best_so_far_plot(ui: &mut egui::Ui, search: &SearchLog) {
     });
 }
 
-fn generations_plot(ui: &mut egui::Ui, search: &SearchLog) {
+/// Draws the best, median and worst fitness of each finished generation, or why there is none to draw.
+///
+/// `running` is set while the search runs, and `generations_missing` for results without `generations.csv`.
+fn generations_plot(ui: &mut egui::Ui, search: &SearchLog, running: bool, generations_missing: bool) {
     if search.history.generations.is_empty() {
-        ui.weak("First generation is still running.");
+        // The warning above already explains a table that cannot be read.
+        if search.table_error.is_none() {
+            ui.weak(no_generation_text(running, generations_missing));
+        }
         return;
     }
     let [best, median, worst] = generation_lines(&search.history.generations);
@@ -245,6 +279,17 @@ fn generations_plot(ui: &mut egui::Ui, search: &SearchLog) {
     });
 }
 
+/// Returns the line the Search view shows while a genetic algorithm has no finished generation.
+fn no_generation_text(running: bool, generations_missing: bool) -> &'static str {
+    if generations_missing {
+        "Generations unavailable. These results have no generations.csv."
+    } else if running {
+        "First generation is still running."
+    } else {
+        "Search ended before its first generation finished."
+    }
+}
+
 fn grid_ui(
     ui: &mut egui::Ui,
     store: &ResultsStore,
@@ -258,7 +303,10 @@ fn grid_ui(
     let (x_axis, y_axis) = (&settings.x_axis, &settings.y_axis);
     let total = u64::from(x_axis.cells) * u64::from(y_axis.cells);
     if total > MAX_DRAWN_CELLS {
-        ui.weak(format!("Grid of {total} cells is too large to draw."));
+        ui.weak(format!(
+            "Grid of {total} cells is too large to draw. Reduce Cells of an axis in the Sweep tab and run the \
+             search again."
+        ));
         return;
     }
     let (Some((x_min, x_max)), Some((y_min, y_max))) = (x_axis.range(), y_axis.range()) else {
@@ -283,27 +331,7 @@ fn grid_ui(
         ));
         ui.weak("Click a cell to select the run of its first candidate.");
     });
-    let outside = search.history.outside_count;
-    if outside > 0 {
-        // An automatic axis shows no bounds to widen in the Sweep tab.
-        let automatic = matches!(
-            &search.spec.algorithm,
-            SearchAlgorithm::PatternSpaceExploration(spec) if spec.x_axis.is_automatic() || spec.y_axis.is_automatic()
-        );
-        let advice = if automatic {
-            "Press Use range from results in the Sweep tab to include these evaluations"
-        } else {
-            "Widen axes in the Sweep tab to include these evaluations"
-        };
-        ui.colored_label(
-            ui.visuals().warn_fg_color,
-            format!(
-                "{MDI_ALERT} {outside} {} outside the axes, counted in the edge cells",
-                plural(outside, "evaluation")
-            ),
-        )
-        .on_hover_text(advice);
-    }
+    outside_warning(ui, search);
     let max_hits = grid
         .hits
         .iter()
@@ -311,23 +339,23 @@ fn grid_ui(
         .filter(|hits| hits.is_finite())
         .fold(1.0, f64::max);
     color_bar(ui, 1.0, max_hits);
-    let empty_color = ui.visuals().faint_bg_color;
-    let heatmap = Heatmap::new(grid.hits.clone(), grid.columns)
-        .at(PlotPoint::new(x_min, y_min))
-        .tile_size(
-            ((x_max - x_min) / f64::from(x_axis.cells)) as f32,
-            ((y_max - y_min) / f64::from(y_axis.cells)) as f32,
-        )
-        .custom_mapping(Box::new(move |hits| hits_color(hits, max_hits, empty_color)))
-        // The heatmap lays out a label for every cell even when it shows none.
-        .formatter(Box::new(|_| String::new()))
-        .show_labels(false);
+    let tile_size = [
+        (x_max - x_min) / f64::from(x_axis.cells),
+        (y_max - y_min) / f64::from(y_axis.cells),
+    ];
+    let tiles = HeatmapTiles::new(
+        &grid.hits,
+        grid.columns,
+        PlotPoint::new(x_min, y_min),
+        tile_size,
+        move |hits| hits_color(hits, max_hits),
+    );
     let plot = Plot::new("henad_results_pattern_grid")
         .x_axis_label(output_label(&x_axis.column))
         .y_axis_label(output_label(&y_axis.column))
         .show_crosshair(false);
     let response = show_plot(ui, plot, |plot_ui| {
-        plot_ui.heatmap(heatmap);
+        plot_ui.add(tiles);
         plot_ui.pointer_coordinate()
     });
     let Some(position) = response.inner else {
@@ -356,6 +384,32 @@ fn grid_ui(
     response.response.on_hover_text_at_pointer(hover);
 }
 
+/// Draws the count of evaluations outside the axes of the grid, when there are any.
+fn outside_warning(ui: &mut egui::Ui, search: &SearchLog) {
+    let outside = search.history.outside_count;
+    if outside == 0 {
+        return;
+    }
+    // An automatic axis shows no bounds to widen in the Sweep tab.
+    let automatic = matches!(
+        &search.spec.algorithm,
+        SearchAlgorithm::PatternSpaceExploration(spec) if spec.x_axis.is_automatic() || spec.y_axis.is_automatic()
+    );
+    let advice = if automatic {
+        "Press Use range from results in the Sweep tab to include these evaluations"
+    } else {
+        "Widen axes in the Sweep tab to include these evaluations"
+    };
+    ui.colored_label(
+        ui.visuals().warn_fg_color,
+        format!(
+            "{MDI_ALERT} {outside} {} outside the axes, counted in the edge cells",
+            plural(outside, "evaluation")
+        ),
+    )
+    .on_hover_text(advice);
+}
+
 /// Returns the range of each output in the cell at x index `column` and y index `row`, one line per axis, or `None`
 /// while an axis has no range.
 fn cell_ranges_text(settings: &PatternSpaceSettings, column: usize, row: usize) -> Option<String> {
@@ -382,11 +436,11 @@ fn axis_cell_index(value: f64, axis: &PatternAxis) -> Option<usize> {
     Some(axis.cell_index(value)?.0 as usize)
 }
 
-/// Returns the colour of a cell `hits` candidates landed in, on a log scale up to `max_hits`, or `empty` for a cell
-/// none landed in.
-fn hits_color(hits: f64, max_hits: f64, empty: Color32) -> Color32 {
+/// Returns the colour of a cell `hits` candidates landed in, on a log scale up to `max_hits`, or [`NO_DATA_COLOR`] for
+/// a cell none landed in.
+fn hits_color(hits: f64, max_hits: f64) -> Color32 {
     if !hits.is_finite() {
-        return empty;
+        return NO_DATA_COLOR;
     }
     heat_color(hits.ln(), 0.0, max_hits.ln())
 }
@@ -399,7 +453,8 @@ mod tests {
     use henad_core::explore::search::pse::{ArchiveEntry, PatternAxis, PatternCell, PatternSpaceSettings};
     use henad_explore::output::search_tables::{BatchStanding, SearchHistory};
 
-    use super::{best_so_far_points, generation_lines, pattern_grid};
+    use super::{best_so_far_points, generation_lines, hits_color, no_generation_text, pattern_grid};
+    use crate::ui::results::plot::{NO_DATA_COLOR, heat_color};
 
     fn standing(batch: u64, evaluations: u64, best_objective: Option<f64>) -> BatchStanding {
         BatchStanding {
@@ -468,5 +523,28 @@ mod tests {
         assert_eq!(grid.hits[grid.index(0, 0)], 4.0);
         assert_eq!(grid.hits[grid.index(2, 1)], 1.0);
         assert!(grid.hits[grid.index(1, 1)].is_nan(), "an empty cell holds no value");
+    }
+
+    #[test]
+    fn an_empty_cell_takes_the_no_data_color() {
+        assert_eq!(hits_color(f64::NAN, 8.0), NO_DATA_COLOR);
+        assert_eq!(
+            hits_color(8.0, 8.0),
+            heat_color(1.0, 0.0, 1.0),
+            "the most hits take the top of the scale"
+        );
+    }
+
+    #[test]
+    fn a_search_with_no_generation_says_why() {
+        assert_eq!(no_generation_text(true, false), "First generation is still running.");
+        assert_eq!(
+            no_generation_text(false, false),
+            "Search ended before its first generation finished."
+        );
+        assert_eq!(
+            no_generation_text(false, true),
+            "Generations unavailable. These results have no generations.csv."
+        );
     }
 }
