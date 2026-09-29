@@ -265,7 +265,8 @@ Everything under **Sentences** applies here too. On top of it:
   the element carrying the colour picks the step. A badge, a fill or a coloured text takes its
   entry from that mapping in place of a `gamma_multiply` tint, a `Color32` literal or a theme
   colour borrowed as a fill. The theme's warn and error colours are orange 500 and red 500, and a
-  status text reads them from the theme. Data colours (the plot series, the heatmap scale and its
+  status text reads them from the theme. The theme's neutral surfaces and strokes in `init.rs`
+  predate MCS and stay as they are. Data colours (the plot series, the heatmap scale and its
   no-data grey) are not MCS and come from `ui/results/plot.rs`.
 - **No superfluous politeness.** No "please", no apology.
 - **"can" for ability, "might" for possibility.** Never "may".
@@ -444,24 +445,31 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   `explore/` holds the parts of a sweep that need no engine, and builds on wasm like the rest of the
   crate. `value.rs` reads a param value written as text and checks it against its descriptor
   (`parse_value`, `resolve_params`, `parse_overrides`), and `format_value` writes one back. `--set`
-  goes through it. `spec.rs` is a sweep as written, a `SweepSpec` of `BlockSpec`s with its
+  goes through it. A choice reads an option's name before its index, and `helpers::choice_param`
+  panics on an option name that reads as an unsigned integer or appears twice. `spec.rs` is a
+  sweep as written, a `SweepSpec` of `BlockSpec`s with its
   `RunSettings`, `MeasureSettings`, `SeedSettings` and `ActionSpec`s. `SweepSpec::plan` (`plan.rs`)
   checks it against a `ModelSchema` and lists every `Config`, its param values and one tick per
   action, into a `Plan`, where run `run_id` is replicate `run_id % replicates` of config
   `run_id / replicates`. It refuses an unknown id, a value out of bounds, a param both fixed and
   varied or varied twice in a block, a zip of unequal lengths, an `F32` range with no step outside
-  a sampled design, an undeclared action and a name two actions share, all before any run. An
+  a sampled design, a factor with no levels (`DesignError::NoLevels`), an undeclared action, a
+  name two actions share, and a stop or `first` threshold that is not finite (`MeasurePlan::check`,
+  through `StopSpec::check_threshold` and `Comparison::check`), all before any run. An
   action due past the last tick is only a `PlanWarning`. `Plan::schedule` orders a config's actions
   by tick, then by spec order, and a `Shard` (`I/N`) takes the runs with `run_id % N == I`.
   `factor.rs` resolves a factor over a param or an action's tick (`FactorTarget`) from a list, an
-  inclusive range or `all`, and `LevelSpec::parse` reads the level text of `--vary`.
+  inclusive range or `all`, and `LevelSpec::parse` reads the level text of `--vary`. It and a plan
+  ignore the spaces around each listed value.
   `inclusive_steps` computes value `i` as `min + i * step` and never accumulates, and a sampled
   design takes a range with no step as a whole `FactorDomain`. `design.rs` combines a block's
   factors under a `DesignKind`: `Factorial` (the first factor slowest, the last fastest), `Zip`,
   `Random`, `LatinHypercube` or `Table`. A Latin hypercube gives each factor its own Fisher-Yates
   permutation of the strata. A continuous factor takes one jittered point per stratum, computed in
   `f64` and clamped after the cast, and a factor of `m` levels takes level `stratum * m / N` in
-  `u128`, so each level lands in `N / m` configs, rounded down or up. `design_rng.rs` (`DesignRng`)
+  `u128`, the lowest level its stratum covers, so each level lands in `N / m` configs, rounded down
+  or up. That lattice is deliberate. It balances the levels exactly, and the design seed decides
+  only which config takes each level. `design_rng.rs` (`DesignRng`)
   draws both sampled designs from a design seed through `xorshift64` and `next_index` in integer
   arithmetic, with a `u64` path for a full `u32` span, and a seed gives the same design on every
   platform. `design_csv.rs` reads a design table, one column per param id or `action.<name>`,
@@ -493,7 +501,8 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   space as `FactorSpec`s, and `SearchSpec::searcher` builds the searcher from `search_seed(root)`.
   `CandidateTracker` numbers the candidates and holds the budget, a count of evaluations with the
   re-evaluations among them. `genome.rs` (`SearchSpace`, `Genome`) resolves the space as a sampled
-  design does and decodes a gene `u` in `[0, 1]`: linearly for an `f32` range, and as
+  design does, keeps a repeated listed level once at its first place (0.0 and -0.0 as one level),
+  and decodes a gene `u` in `[0, 1]`: linearly for an `f32` range, and as
   `floor(u * m)` for whole numbers and listed levels. A mutation of an ordered gene is the
   triangular step `u + scale * (r1 + r2 - 1)` reflected at the bounds, a listed-level gene is drawn
   again, and crossover is uniform. No draw goes through libm, and a trajectory is the same on every
@@ -501,20 +510,26 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   a re-evaluation's under the candidate it repeats, and scores a failed replicate as `Goal::worst`.
   Among equal scores the lower id ranks first. The four searchers are `random.rs`, `hill_climb.rs`
   ((1 + lambda) with lambda the batch size, a restart after `patience` batches without a strict
-  improvement, and an optional re-evaluation of the incumbent), `genetic.rs` (generational,
-  tournament selection, uniform crossover, per-gene mutation, `elite_count` survivors chosen after
+  improvement, an optional re-evaluation of the incumbent, and starting points drawn through
+  `draw_config` as neighbours are, so no two first evaluations share a config), `genetic.rs`
+  (generational, tournament selection, uniform crossover, per-gene mutation, children bred as a
+  generation starts from the fitness before its re-evaluations, `elite_count` survivors chosen after
   `ceil(reevaluate_fraction * population)` re-evaluations of the best members, fitness pooled over
-  every replicate a member has, and no batch spanning two generations) and `pse.rs` (Pattern Space
+  every replicate a member has, no batch spanning two generations, and `MAX_POPULATION` and
+  `MAX_TOURNAMENT_SIZE` of `1 << 16`) and `pse.rs` (Pattern Space
   Exploration over two `PatternAxis` outputs, with a `BTreeMap` archive keyed by `PatternCell`
   holding the hits and the first candidate to land, and parents taken from a two-way tournament on
-  fewest hits after `initial_samples` random candidates). An axis with neither `min` nor `max` has
-  an automatic range: the searcher holds every evaluation until the initial samples are told, takes
-  the range from their outputs (`automatic_range`, 5% margin), then files the held ones in candidate
-  order. `Searcher::pattern_settings` returns the settings once both axes have a range, and
-  `SearchUpdate`, `SearchHistory` and the manifest's `axis_ranges` carry them. `SearchHistory::read`
-  takes the range again from the initial samples' rows of `evaluations.csv` and places the rows
-  written before it. `search/tests/` holds the driver the searcher tests share (`support.rs`) and
-  the protocol tests every searcher passes.
+  fewest hits after `initial_samples` random candidates). The initial samples fill batches of their
+  own, and without any the first candidate is alone in its batch. After them, an ask on an empty
+  archive draws a whole random batch. `PatternSpaceSettings::batch_count` gives the number of
+  batches, and `PatternAxis::cell_index` puts NaN in cell 0, outside. An axis with neither `min` nor
+  `max` has an automatic range: the searcher holds every evaluation until the initial samples are
+  told, takes the range from their outputs (`automatic_range`, 5% margin), then files the held ones
+  in candidate order. `Searcher::pattern_settings` returns the settings once both axes have a range,
+  and `SearchUpdate`, `SearchHistory` and the manifest's `axis_ranges` carry them.
+  `SearchHistory::read` takes the range again from the initial samples' rows of `evaluations.csv`
+  and places the rows written before it. `search/tests/` holds the driver the searcher tests share
+  (`support.rs`) and the protocol tests every searcher passes.
 - **henad-compute**: the engine machinery that turns an authoring impl into something runnable.
   `cpu/` and `gpu/` are **siblings**, not a base and a specialisation, and mirror each other:
   each has its own `sim_thread.rs` (runner), its `*_engine.rs` (authoring trait → runnable state)
@@ -591,7 +606,9 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   A dry run stops after the probes. `spec_file.rs` is the TOML form of a spec (`SpecFile`). Every
   table is `deny_unknown_fields`. A param value stays the text `--set` takes, and a spec file and a
   command line hand `parse_value` the same text. A `table` block's `file` is read relative to the
-  spec file, and the manifest's copy of the spec carries the table inline as `table_text`. `specs/`
+  spec file, and only a table design's. A path that is absolute or holds `.` or `..` is refused
+  (`SpecFileError::TablePath`). The manifest's copy of the spec carries the table inline as
+  `table_text`, and the writer emits `design_seed` for a sampled design alone. `specs/`
   holds real spec files and a design table. The docs include each spec by `--8<--` region and the
   table whole, and a test plans the specs. `schema.rs` (`schema_json`) is the `--params --json`
   object, also embedded in the manifest. `cursor.rs` (`RunCursor`) owns one CPU run from its build
@@ -629,16 +646,21 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   readback lands, `state.tick()` has moved on. A round in which no track moved waits for the oldest
   submission through `stepping::await_submission`. A blocking readback poll would drain the whole
   device and stall every track. Each action and slice runs inside `catching_on`, and its fault ends
-  its own track. A fault left in `ctx.faults` ends every live track. A run ends at its last landed
-  sample, and the steps recorded past a sample that stops it are dropped with the state. A track's
-  clock counts every round it is live, builds and pauses aside. A lost device ends the batch as
-  `BatchEnd::DeviceLost`, the manifest reads `incomplete`, and `--resume` runs the rest. `output/`
+  its own track. A fault left in `ctx.faults` ends every live track, and a run that ended earlier in
+  the round keeps its end. A run ends at its last landed sample, and the steps recorded past a
+  sample that stops it are dropped with the state. Each round's time is split evenly between the
+  live tracks, and a track's clock counts its share, builds and pauses aside. The timeout, `wall_ms`
+  and `steps_per_s` read that clock. A lost device ends the batch as `BatchEnd::DeviceLost`, the
+  manifest reads `incomplete`, and `--resume` runs the rest. `output/`
   writes `runs.csv` (an `action.<name>` column per action after the params), `series.csv`,
-  `summary.csv` (rebuilt from `runs.csv` at the end of a sweep, a resume or a merge) and
+  `summary.csv` (rebuilt at the end of a sweep, a resume or a merge by `write_summary`, which
+  streams `runs.csv` one record at a time and holds one cell string per config) and
   `manifest.json` (written `running`, then replaced by a rename). `OutputDir` refuses a directory
-  that holds any of the four unless the sweep resumes, and `OutputWriter` writes and flushes a run's
-  series before its row. `output/read.rs` reads the tables back, keeping complete records only
-  (`RunsCsv`, `SeriesScan`), and `merge_series` interleaves series segments by run id.
+  that holds any of the four, a search table or any `*.staged` file unless the sweep resumes, and
+  `OutputWriter` writes and flushes a run's series before its row. `output/read.rs` reads the tables
+  back, keeping complete records only (`RunsCsv`, `SeriesScan`), and `merge_series` interleaves
+  series segments by run id. `record_ends` follows the CSV grammar (`RecordScan`), and a quote
+  inside an unquoted field fails its record instead of hiding the records after it.
   `output/resume.rs` (`ResumeScan`) accepts a directory only with the same plan hash, schema hash
   and shard, and no more replicates than the sweep runs. It keeps `ok`, `non_finite` and, without
   `--retry-failed`, failed runs, always reruns a `timed_out` one, renumbers kept runs when the
@@ -649,41 +671,58 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   and records the inputs in `merged_shards`. Missing runs are a warning and an `incomplete`
   manifest. A resume of the merged directory fills them in. `progress.rs` is the `Progress` trait
   the host renders. The library never prints. `device.rs` (`acquire_headless`) acquires a GPU device
-  with no window or surface, its limits raised by `gpu::limits::raise` as the app's are. It is
-  native only. `pollster` blocks on the request, and a browser cannot block. The crate is in the
-  wasm typecheck with the three below it. Native-only code sits behind
+  with no window or surface, at the WebGPU baseline raised by `gpu::limits::raise`. An adapter
+  below the baseline, as a GL adapter can be, gets `DeviceError::BelowBaseline`, and the CLI then
+  runs CPU models only. It is native only. `pollster` blocks on the request, and a browser cannot
+  block. The crate is in the wasm typecheck with the three below it. Native-only code sits behind
   `#[cfg(not(target_arch = "wasm32"))]`. `handle.rs` (`SweepRun`) is a host's handle on a sweep,
   with one API on native and in a browser, described under "Sim runs off the UI thread".
   `SweepRun::start` plans the spec before it returns, and a browser refuses a GPU model with
-  `SweepStartError::GpuNeedsNative`.
+  `SweepStartError::GpuNeedsNative`. The `gpu` a host passes to `start` or `resume_directory` is a
+  device it shares with the sweep, `FaultSink` included. Handed none for a GPU model, the sweep
+  thread acquires a device through `acquire_headless`, rebuilds the entry on it from
+  `model_registry` by id (`BoundModel`), and records that device in the manifest. A device it cannot
+  acquire fails the sweep with `SweepEvent::Failed`.
   `SweepOutput::Memory` writes the four files through the same writers over `Vec<u8>`
   (`output/memory.rs`, `SweepFiles`) and hands them over in the `SweepRecord`.
-  `SweepOutput::Directory` is native only. `SweepRunOptions::series_budget` caps the bytes of series
-  the `RunFinished` events carry. From the first run past it, every run arrives without its series,
-  and the files keep them all. `SweepRun::resume_directory` resumes a folder with the spec its
-  manifest records, along the path `--resume` takes. `pumped.rs` (`PumpedSweep`) is the browser's
-  executor, a `runner::SimLoop` that probes, then builds and steps one CPU `RunCursor` at a time
-  into memory, a slice of about half `PUMP_BUDGET_MS` per pump. It compiles for wasm32 and for
-  tests, and the tests pump it on native. `result_set.rs` (`ResultSet`) reads an output directory
-  back, through `open_dir` on native or `from_files` over the bytes of picked files. It needs
-  `manifest.json` and `runs.csv`, reads complete records only, and holds `series.csv` run by run in
-  file order while a byte budget lasts. `summary.csv` is left unread. `ResultSet::replay` plans the
-  recorded spec and returns a run's `Replay`, refusing a run whose config, replicate or seed differ
-  from its row. `read_directory_series` reads the series of chosen runs later. `src/tests/` holds
-  `support.rs` (the headless device, scratch directories, a sweep helper), `broken.rs` (`GridModel`s
-  that panic or report a value that is not finite, registered through the public
+  `SweepOutput::Directory` is native only. `SweepRunOptions::memory_budget` and `gpu_memory` are
+  the budgets of `--memory` and `--gpu-memory`. `SweepRunOptions::series_budget` caps the bytes of
+  series the `RunFinished` events carry. From the first run past it, every run arrives without its
+  series, and the files keep them all. `SweepRun::resume_directory` resumes a folder with the spec
+  its manifest records, along the path `--resume` takes. `pumped.rs` (`PumpedSweep`) is the
+  browser's executor, a `runner::SimLoop` that makes one probe build per pump (`PlanProbe`),
+  prepares the sweep in a pump of its own, then builds and steps one CPU `RunCursor` at a time
+  into memory, a slice of about half `PUMP_BUDGET_MS` per pump. A pause holds only the runs, and a
+  sweep or search paused after its last run still ends. It compiles for wasm32 and for tests, and
+  the tests pump it on native. `result_set.rs` (`ResultSet`) reads an output directory back, through
+  `open_dir` on native or `from_files` over the bytes of picked files. It needs `manifest.json` and
+  `runs.csv`, reads complete records only, and holds `series.csv` run by run in file order while a
+  byte budget lasts. A run the budget cuts holds none of its rows. A `runs.csv` with no complete
+  header, as a sweep stopped before its first run leaves it, opens with no runs and no value or
+  reducer columns. `series.csv`'s header has to name `run_id`, `tick` and the manifest's stat
+  columns. `summary.csv` is left unread. `ResultSet::replay` plans the recorded spec and returns a
+  run's `Replay`, refusing a run whose config, replicate, seed or run key differ from its row. The
+  run key hashes the model's declarations too, and is compared only while `schema_matches` holds.
+  `read_directory_series` reads the series of chosen runs later, given the stat column names.
+  `src/tests/` holds `support.rs` (the headless device, scratch directories, a sweep helper,
+  `OutputTables`, `CommitLimit`, and `ticks_seen` with `HOLD_WINDOW` for pause checks), `broken.rs`
+  (`GridModel`s that panic or report a value that is not finite, registered through the public
   `register_grid_model`), and the determinism, failure, run control, resume, shard, GPU sweep, GPU
-  track (`tracks.rs`), handle, result set and replay tests. The three CSVs are byte-identical apart
-  from `TIMING_COLUMNS` at any lane or track count, for merged shards against an unsharded sweep,
-  and for a resumed sweep against a fresh one, timed-out runs aside. A sweep held in memory, on a
-  thread or pumped, writes the bytes a directory sweep writes.
+  track (`tracks.rs`), handle, result set and replay tests. For a model that replays exactly (every
+  model but `gpu_boids`), the three CSVs are byte-identical apart from `TIMING_COLUMNS` at any lane
+  or track count, for merged shards against an unsharded sweep, and for a resumed sweep against a
+  fresh one, timed-out runs aside. A sweep held in memory, on a thread or pumped, writes the bytes a
+  directory sweep writes. `OutputTables` compares `series.csv` and `summary.csv` byte for byte, and
+  `runs.csv` with its timing fields emptied.
   `a_sweep_writes_the_same_files_at_any_concurrency`, `interleaved_gpu_runs_match_sequential_ones`,
   `ants_results_do_not_depend_on_lane_width`, `merged_shards_equal_an_unsharded_sweep`,
   `a_resumed_sweep_skips_finished_runs_and_matches_a_fresh_one`,
   `memory_output_equals_directory_output` and
   `the_pumped_sweep_writes_what_a_directory_sweep_writes` hold that line.
   `a_pipelined_gpu_sample_matches_a_blocking_one` pins a track's pipelined sample to
-  `stepping::sample_stats`. Keep them.
+  `stepping::sample_stats`. `gpu_boids` matches only in the parts the engine owns, every `runs.csv`
+  field up to `population` and the run and tick of each series row, and
+  `interleaved_gpu_boids_runs_commit_in_plan_order` pins them. Keep them.
   `search_run.rs` (`run_search`) runs a spec with a `[search]` table. `SearchPlan` plans the fixed
   values and actions as a one-config `Plan`, and a search spec with blocks is refused. It resolves
   the space, checks that every watched column is a reducer column, and hashes the settings that fix
@@ -695,14 +734,18 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   candidates, and a re-evaluation runs on fresh seeds. `SearchSession::tell` turns each batch into
   a `SearchUpdate`, reported as `ProgressEvent::SearchBatchTold`. `output/search_tables.rs` writes
   `evaluations.csv`, `batches.csv` and, for a genetic algorithm, `generations.csv` batch by batch,
-  then `best.csv` or `archive.csv` at the end, and `SearchHistory` reads them back for the app. A
+  then `best.csv` or `archive.csv` at the end, and `SearchHistory` reads them back for the app. It
+  finds the columns after a config by their place from the end of the header, since a param id can
+  share their names, tells a PSE table by its last column, and checks the trailing cells of a
+  scored `evaluations.csv`. A
   resume replays the searcher from its seed and reads every recorded run's values back from
   `runs.csv` (`RecordedSearch`) in place of running it, failed and timed-out runs included. It
   refuses a run whose `run_key` differs from the run asked for, and replays every recorded batch
   once in `SearchPreparation::new` to check them all before a table is written. A search refuses
   `--shard` and `--retry-failed`. The manifest reads `mode` `search`, holds the hash of the fixed
   values and actions as `plan_hash` and `null` as `plan.configs`, and adds a `ManifestSearch` with
-  the search hash. `SweepRun` and `PumpedSweep` run searches as well, and `ResultSet` reads
+  the search hash. A search that fails records its standing at the failure there. `SweepRun` and
+  `PumpedSweep` run searches as well, and `ResultSet` reads
   a search folder back with its tables. `specs/sir_search_genetic.toml` and
   `specs/sir_search_pse.toml` are the example searches the docs include. `tests/search.rs` holds
   `every_example_search_spec_parses`, `a_search_writes_the_same_tables_at_any_concurrency`,
@@ -772,19 +815,43 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   finds before it plans, each a `DraftIssue` with the `DraftSite` of its row and an `IssueKind`:
   `Missing` for input not given yet, `Invalid` for input the plan refuses. Both block Start.
   `SweepPanel::cached_check` plans the draft only when it or the panel values change, and caps a
-  sweep at `MAX_DRAFT_RUNS`. `CheckSummary` turns the check into the lines the footer, its chips
-  and the Plan panel list. `plan.rs` (`PlanSummary`) is the plan the panel, the narrow Plan section
+  sweep at `MAX_DRAFT_RUNS`. The panel learns each model's stat columns from one build at its
+  default values (`ColumnsBuild` in `mod.rs`), on a thread named `henad-stat-columns` whose report
+  wakes the UI, a GPU model on a headless device of its own. A browser builds a CPU model inline
+  and skips a GPU model. `SweepDraft::set_stat_columns` hands the columns to the draft, which then
+  names outputs as `ReducerPlan::bind` does (a vector's `.x`, `.y` and `.magnitude`, a histogram's
+  `.total`), turns a watched bare vector label into its magnitude column, and in `check` binds the
+  reducers, the stop condition and a search's watched columns through `MeasurePlan::new` and
+  `SearchPlan::watched_reducers`. While the build runs, `columns_pending` holds the Missing issue
+  `COLUMNS_PENDING` ("Reading model outputs") at `DraftSite::Outputs` and Start stays disabled.
+  After a failed build each stat counts as one column, and a watched `Label.part:kind` of a
+  default kind is accepted for the sweep's own probe to check.
+  `row_levels` caps at `MAX_DRAFT_LEVELS` only a range the draft lists, and a range with no step
+  under a sampled design or a search can be any size. `SweepDraft::tick_source` (`TickSource`)
+  gives an action's tick as fixed, varied or taken from the design table's `action.<name>` column.
+  Save spec (`to_toml`) also refuses what the loader would, a reversed window or a threshold that is
+  not finite, and reads its own TOML back as a check. The draft keeps a loaded spec's `[execution]`
+  `memory` and `gpu_memory` (`memory_budget`, `gpu_memory_budget`). Save spec writes them back,
+  Start passes them to `SweepRunOptions` through `SessionExecution`, the Plan lists them, and the
+  Execution section shows them read-only beside a clear button. `MIN_TIMEOUT_SECONDS` bounds only
+  the Timeout field, and a loaded shorter timeout, 0 included, is kept, as `henad-cli` takes it.
+  `CheckSummary` turns the check into the lines the footer, its chips and the Plan panel list.
+  `plan.rs` (`PlanSummary`) is the plan the panel, the narrow Plan section
   and a session draw. `layout.rs` holds `FormLayout`, the label column every section shares,
   `SIDE_BY_SIDE_BREAKPOINT`, the section headers with their issue counts, the note line a row
   reserves before any note comes, the `Reveal` that opens a section and scrolls to a row, and
   `ISSUE_DELAY`, the time a focused text field holds back the issue of its text. `builder.rs`
   draws the Design, Actions, Replicates and seeds, Run length, Outputs and Execution sections, and
   `parameters.rs` the parameter rows, the values editor and the options menu, each writing the
-  row's `--vary` text. `session.rs` wraps `henad_explore::handle::SweepRun` (a thread on native,
-  pumped from `HenadApp::logic` through `ui::sweep::update` in a browser, where the frame keeps
-  repainting while it steps), pauses the live sim on start, and keeps the `KeptDraft` that started
-  it for Save spec and the Plan panel. `progress.rs` draws the Status or Result grid, the Search
-  grid and Runs in progress, and `footer.rs` Pause, Resume, Abort with its modal, and the end with
+  row's `--vary` text, a list without spaces. `session.rs` wraps `henad_explore::handle::SweepRun`
+  (a thread on native, pumped from `HenadApp::logic` through `ui::sweep::update` in a browser, where
+  the frame keeps repainting while it steps), pauses the live sim on start, and keeps the
+  `KeptDraft` that started it for Save spec and the Plan panel. It hands `SweepRun` no device, so a
+  GPU sweep steps on a device of its own and never shares the app's `FaultSink`. A fault in
+  `render_ctx.faults` offloads the live model and leaves a running sweep alone, and `SessionState`
+  has no fault pause.
+  `progress.rs` draws the Status or Result grid, the Search grid and Runs in progress, and
+  `footer.rs` Pause, Resume, Abort with its modal, and the end with
   Edit sweep, Save results and Show results. Show results sets `focus_request` to Results, as Open
   on a run sets it to Viewport. Show failed runs and Show in Results go through
   `ResultsPanel::show_failed_runs` and `ResultsPanel::select_candidate`. Events go to
@@ -792,18 +859,27 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   sweep for Save results. `store.rs` (`ResultsStore`) holds every run of the sweep, or of a folder
   read through `henad_explore::result_set::ResultSet`, the configs with their axes (the value
   columns that take more than one value), and a `SeriesCache` of series within
-  `DEFAULT_SERIES_BUDGET` bytes. It computes the Series view's replicate bands, the Response
-  view's points and the heatmap's cells, each pooling the runs that did not fail in run order as
-  `summary.csv` does, and the runs table's order. Views cache on `ResultsStore::revision`.
-  `series.rs` draws a `FilledArea` band and a centre line per config, `response.rs` draws its
-  whiskers as short `Line` segments, and `heatmap.rs` draws the grid. `plot.rs` holds the palette,
-  `decimate` (the lowest and highest point of each bucket) and the heatmap scale. Every
-  `egui_plot::Heatmap` gets a `custom_mapping`, since the default mapping can index past its
-  palette, and a cell without a value draws as `NO_DATA_COLOR`. `table.rs` draws the runs with
+  `DEFAULT_SERIES_BUDGET` bytes. It computes the Series view's replicate bands (`SeriesBand`), the
+  Response view's points and the heatmap's cells, each pooling a config's runs that did not fail
+  in order of run id, and the runs table's order. `summary.csv` pools in `runs.csv` order, which a
+  resume can leave out of run-id order, and the last digits can then differ. The other views cache
+  on `ResultsStore::revision`, and the Series view on the drawn configs' counts of runs and held
+  series plus `ResultsStore::replaced_count`, the runs a resumed sweep's rerun replaced.
+  `series.rs` draws a `FilledArea` band and a centre line per config, `response.rs` caches each
+  line as a `PlottedLine` and draws its whiskers as one `Whiskers` item with the line's id, so the
+  legend hides both, and `heatmap.rs` draws the grid. `plot.rs` holds the palette, `decimate` (the
+  lowest and highest point of each bucket), the heatmap scale and `HeatmapTiles`, the plot item the
+  Heatmap view and the PSE grid draw through. It borrows the values, and a cell without a value, or
+  an empty PSE cell, draws as `NO_DATA_COLOR`. `table.rs` draws the runs with
   `egui_extras::TableBuilder`, and the detail strip whose Open and Open at end go through
   `AppState::open_run`. Open at end steps to the run's recorded ticks, which a stop condition can
-  bring early. Copy command puts an equivalent `henad-cli --export-stats` line on the clipboard.
-  Open results reads a folder on a thread of its own on native and the picked files in a browser.
+  bring early. The store refuses to replay a run whose plan gives another run key than its row,
+  while the model's schema matches the sweep's. After a model change the replay opens under the
+  table's warning. Copy command puts an equivalent `henad-cli --export-stats` line on the
+  clipboard, which samples from tick 0 on the CLI's own cadence. Open results reads a folder on a
+  thread of its own on native and the picked files in a browser, on the frame after the one that
+  first shows "Reading results" (`hold_picked_files`, `due_picked_files`). `ui::results::poll` takes
+  the `egui::Context` for it.
   Resume sweep resumes an incomplete folder through `SweepRun::resume_directory`, and the folder is
   read again once that sweep ends. `henad-app --open DIR` opens a folder at start.
   `ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
@@ -813,8 +889,15 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   every method across a switch. `ui/results/search.rs` is the Search view: the best so
   far against evaluations for random search and hill climbing, the best, median and worst of each
   generation for the genetic algorithm, and the PSE grid, where a click selects the first run of a
-  cell's exemplar. `ResultsStore` learns a search's configs, its candidates, batch by batch from
-  `SweepEvent::SearchBatchTold`.
+  cell's exemplar. `ResultsPanel::ingest` takes a frame's events together, as `SweepSession::update`
+  drains them, and `ResultsStore::push_search_updates` records each `SearchBatchTold` batch by
+  batch, then adds the frame's new configs in one pass. The pass extends the configs and axes in
+  place (`fits_axes`, `extend_configs`), and a level keeps its id when levels are added below it.
+  Every config is built again only when a batch brings a second value to a column that is not an
+  axis, a text that is not a finite number to a numeric axis, or a candidate id at or below one
+  held. Runs that land before their candidate is told wait in `unassigned_runs`. A new level on a
+  numeric axis moves every level above it, and an `f32` search costs time linear in its levels per
+  frame.
 - **henad-cli**: headless benchmark runner. Steps a state in a bare loop with no rendering, no
   `SimThread` and no pacing, so a measurement times nothing but `step()`. `--act ID@TICK`
   (`henad_core::action::Schedule`) runs a declared action before the step at that tick. An action
@@ -828,11 +911,13 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
   publish would.
   `explore.rs` is the sweep mode. `--out`, `--spec` or `--dry-run` selects it (`Mode::Explore`), and
-  no command line from before sweeps changes meaning. It turns the flags in `ExploreArgs` into a
-  one-block `SweepSpec`, a factorial over every `--vary`, a zip, a `--sample lhs:N` or
+  no command line from before sweeps changes meaning. `--list` refuses all three, and `--info`
+  beside them prints the provenance header and runs the sweep. It turns the flags in `ExploreArgs`
+  into a one-block `SweepSpec`, a factorial over every `--vary`, a zip, a `--sample lhs:N` or
   `random:N` draw, or a `--design` table, or loads `--spec`. In a sweep, `--act` adds an action
-  named by its id (`ID_2` for a second `--act` of that id), and `--vary action.NAME=LEVELS` varies
-  its tick. `--spec` conflicts with every flag that changes a result. `--concurrent` (the lanes of a
+  named by its id, or by the first of `ID_2`, `ID_3` and so on that no earlier action took, and
+  `--vary action.NAME=LEVELS` varies its tick. `--spec` conflicts with every flag that changes a
+  result. `--concurrent` (the lanes of a
   CPU model or the tracks of a GPU model), `--memory`, `--gpu-memory`, `--shard`, `--resume` and
   `--retry-failed` pass through to `SweepOptions`, and `--merge DIR... --out DIR` (`Mode::Merge`)
   calls `merge` with no model and no device. It renders `ProgressEvent`s as a text line on stderr
@@ -1038,8 +1123,11 @@ is about not undoing them.
   batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.
 - **A stats sample encoded while the previous readback is pending is dropped.** `CounterReadback`
   skips its copy while a map is in flight, and the stats repeat the older values with no error.
-  `stepping::submit_slice` debug-asserts against it. A host that pipelines its samples learns from
-  the `StatsPoll` that `poll_stats_readback` returns whether the latest one landed or failed. The
+  `stepping::submit_slice` debug-asserts against it, and `stepping::sample_stats` collects a
+  readback still in flight before it encodes its own. A poll that gives up a map unmaps the staging
+  buffer. A buffer left mapped or pending makes the next copy into it a validation error and fails
+  every later map. A host that pipelines its samples learns from the `StatsPoll` that
+  `poll_stats_readback` returns whether the latest one landed or failed. The
   GPU tracks in `henad-explore/src/exec/gpu.rs` record no sample while one reads back, and assert
   it outside their error scopes, where a panic would pass for a failed run.
 - **A lost device fails quietly first.** After `Device::destroy` or a driver loss, polls and waits
@@ -1081,7 +1169,11 @@ else, so stepping is written once. `SimThread`'s API (`play`/`pause`/`step_once`
 holds. `gpu/sim_thread.rs` is driven the same way.
 
 `SimCommand::SetSchedule` replaces the loop's `Schedule`, fires the entries due at the current tick
-at once, and publishes. From then on each entry fires once, after the step that reaches its tick.
+unless that tick has fired, and publishes. Both loops keep `fired_through`, the highest tick whose
+actions have had their turn, set once a step reaches a tick (on the GPU, once a batch or
+`StepOnce` passes it) or a schedule fires it. Only the first schedule sent before the first step
+fires the build tick, and no tick fires twice. From then on each entry fires once, after the step
+that reaches its tick.
 This is `Fire::AfterStep`, the rule of `henad-cli --export-stats` and a sweep's `RunCursor`, and
 the snapshot at tick t carries tick t's actions. An empty schedule costs one test per step, and
 `Schedule::run_due` allocates nothing when no action is refused. `SimCommand::RunTo(tick)` steps
@@ -1102,8 +1194,9 @@ A sweep started from the app runs off the UI thread as well, through
 `SweepControl` holds or ends every run between two slices of steps. In a browser it wraps a
 `runner::Driver<PumpedSweep>`, and `HenadApp::logic` pumps it each frame through
 `ui::sweep::update` and `SweepRun::update`. Either way the host reads `SweepEvent`s from an
-`mpsc` channel that loses none (`Planned`, each `RunFinished` in plan order, then one `Finished`
-with the `SweepRecord`, or `Failed`), and a `SweepProgress` where the latest write wins. The `wake`
+`mpsc` channel that loses none (`Planned`, each `RunFinished` in plan order, a search's
+`SearchBatchTold` with an `Arc<SearchUpdate>` after each batch's runs, then one `Finished` with the
+`SweepRecord`, or `Failed`), and a `SweepProgress` where the latest write wins. The `wake`
 callback of `SweepRunOptions` runs after each event, and an idle UI then repaints to collect it.
 Dropping the handle aborts the sweep, and on native waits for the thread to write its files. A
 pause never changes a result. A run's trajectory depends on its seed and schedule alone.
