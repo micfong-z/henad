@@ -3,7 +3,7 @@
 This document follows [Keep a Changelog v1.1](https://keepachangelog.com/en/1.1.0/).
 Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its releases.
 
-## [Unreleased]
+## [0.2.0] - 2026-10-01
 
 ### Added
 
@@ -41,4 +41,5 @@ This is the initial release.
 - Model authoring tools, primitives, and consistency tests.
 
 [Unreleased]: https://github.com/micfong-z/henad/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/micfong-z/henad/releases/tag/v0.2.0
 [0.1.0]: https://github.com/micfong-z/henad/releases/tag/v0.1.0
