@@ -19,16 +19,8 @@ use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
 use crate::snapshot::GpuSnapshot;
 
-/// The uniform every display and reduce shader reads, mirroring `Dims` in `shared/dims.wgsl`.
-///
-/// Hand written rather than generated, since no shader in this crate uses the type and naga drops
-/// what nothing references. `henad_models` sees both sides and asserts they agree.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Dims {
-    pub grid: [u32; 2],
-    pub tex: [u32; 2],
-}
+/// The uniform every display and reduce shader reads, generated from `henad::dims` through `grid_dims.wgsl`.
+pub(crate) type Dims = crate::shader_bindings::henad::dims::Dims;
 
 /// One ping-ponged pair of storage buffers.
 struct BufferPair {

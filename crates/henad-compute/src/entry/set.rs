@@ -75,13 +75,23 @@ impl ModelSet {
     /// Returns [`ModelLookupError::NotInSet`] for an id the set lacks, and [`ModelLookupError::NeedsGpu`] for a GPU
     /// model when `gpu` is `None`.
     pub fn lookup(&self, id: &str, gpu: Option<&GpuContext>) -> Result<&ModelEntry, ModelLookupError> {
-        let entry = self
-            .get(id)
-            .ok_or_else(|| ModelLookupError::NotInSet { id: id.to_owned() })?;
-        if entry.gpu_needs().is_some() && gpu.is_none() {
-            return Err(ModelLookupError::NeedsGpu { id: id.to_owned() });
+        if let Some(entry) = self.runnable(gpu).find(|entry| entry.id() == id) {
+            return Ok(entry);
         }
-        Ok(entry)
+        let id = id.to_owned();
+        Err(if self.get(&id).is_some() {
+            ModelLookupError::NeedsGpu { id }
+        } else {
+            ModelLookupError::NotInSet { id }
+        })
+    }
+
+    /// Returns the entries a host with `gpu` can run, in the set's order. A GPU model runs only with a device.
+    pub fn runnable<'a>(&'a self, gpu: Option<&GpuContext>) -> impl Iterator<Item = &'a ModelEntry> + use<'a> {
+        let device = gpu.is_some();
+        self.entries
+            .iter()
+            .filter(move |entry| device || entry.gpu_needs().is_none())
     }
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &ModelEntry> + '_ {
@@ -197,7 +207,10 @@ impl fmt::Display for ModelLookupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotInSet { id } => write!(f, "this build does not include model '{id}'"),
-            Self::NeedsGpu { id } => write!(f, "model '{id}' needs a GPU, and this machine has none"),
+            Self::NeedsGpu { id } => write!(
+                f,
+                "model '{id}' needs a GPU with compute support, and this device has none"
+            ),
         }
     }
 }

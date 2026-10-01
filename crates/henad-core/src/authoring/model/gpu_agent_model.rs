@@ -19,13 +19,13 @@
 //!
 //! # Shader imports
 //!
-//! A pass shader reaches shared WGSL with `#import shared::prelude::linear_index` and the like,
-//! resolved at build time by `wgsl_bindgen`. What the engine compiles is therefore the composed
+//! A pass shader reaches shared WGSL with `#import henad::dispatch::linear_index` and the like,
+//! resolved at build time by henad-build. What the engine compiles is therefore the composed
 //! module, re-emitted by naga, not the file as written. Set `HENAD_DUMP_WGSL` to a directory to
 //! read back what was actually compiled, since a WGSL error names that text rather than the source.
 //!
 //! The reduce leaf is an ordinary shader like any other pass. The workgroup fold it repeats is
-//! `shared::reduce_tree::block_sum`, so a model writes only the per lane value.
+//! `henad::reduce_tree::block_sum`, so a model writes only the per lane value.
 //!
 //! # Unchecked contracts
 //!
@@ -149,7 +149,7 @@ pub struct DisplaySpec {
 /// The leaf of the stat reduction, which folds the population down to one value per lane.
 ///
 /// The engine owns every level above it, so the leaf only has to write `partials`. Its shader
-/// imports `shared::reduce_tree::block_sum` for the workgroup fold.
+/// imports `henad::reduce_tree::block_sum` for the workgroup fold.
 #[derive(Debug)]
 pub struct ReduceSpec {
     pub shader: &'static str,

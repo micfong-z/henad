@@ -26,18 +26,20 @@ impl Fnv1a64 {
         Self { state: OFFSET_BASIS }
     }
 
-    pub fn write(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.state ^= u64::from(byte);
+    pub const fn write(&mut self, bytes: &[u8]) {
+        let mut index = 0;
+        while index < bytes.len() {
+            self.state ^= bytes[index] as u64;
             self.state = self.state.wrapping_mul(PRIME);
+            index += 1;
         }
     }
 
-    pub fn write_u64(&mut self, value: u64) {
+    pub const fn write_u64(&mut self, value: u64) {
         self.write(&value.to_le_bytes());
     }
 
-    pub fn write_str(&mut self, text: &str) {
+    pub const fn write_str(&mut self, text: &str) {
         self.write_u64(text.len() as u64);
         self.write(text.as_bytes());
     }
@@ -58,7 +60,7 @@ impl Fnv1a64 {
         self.write_u64(bits);
     }
 
-    pub fn finish(&self) -> u64 {
+    pub const fn finish(&self) -> u64 {
         self.state
     }
 }

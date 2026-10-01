@@ -430,28 +430,31 @@ crate that has shadowed them.
 
 ## Architecture
 
-The workspace has 6 crates:
+The workspace has 7 crates:
 
 ```
-henad-core ── henad-compute ─┬─ henad-models
-                             └─ henad-explore ─┬─ henad-cli
-                                               └─ henad-app
-henad-core     traits, types and provenance
-henad-compute  engines, runners, model entries and sets
+henad-core ─┬─ henad-build      (build dependency of every crate with WGSL)
+            └─ henad-compute ─┬─ henad-models
+                              └─ henad-explore ─┬─ henad-cli
+                                                └─ henad-app
+henad-core     traits, types, provenance and the shared WGSL as text
+henad-build    the shader bindings a build script generates
+henad-compute  engines, runners, model entries and sets, include_shaders!
 henad-models   the ten example models, and a path dev-dependency of henad-explore
 henad-explore  sweeps and searches
 henad-cli      headless bench and sweeps, also on henad-models for example_models()
 henad-app      egui UI, also on henad-models for example_models()
 ```
 
-The rule (decision 2.14 of #48): henad-core depends on nothing. Every other normal or build
-dependency runs from a crate to one nearer henad-core in the tree: henad-explore and henad-models
-onto henad-compute, and the hosts onto henad-explore, henad-compute and, for `example_models()`,
-henad-models. henad-models and henad-explore take no normal dependency on each other, and `cargo
-tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency between Henad
-crates that the normal graph does not hold is named here: today the one from henad-explore to
-henad-models, for its tests. henad-explore reaching an example model outside its tests needs the
-maintainer's approval as a new edge.
+The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core
+alone. Every other normal or build dependency runs from a crate to one drawn above it:
+henad-explore and henad-models onto henad-compute, the hosts onto henad-explore,
+henad-compute and, for `example_models()`, henad-models, and any crate with WGSL onto
+henad-build. henad-models and henad-explore take no normal dependency on each other, and
+`cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency
+between Henad crates that the normal graph does not hold is named here: today the one from
+henad-explore to henad-models, for its tests. henad-explore reaching an example model outside
+its tests needs the maintainer's approval as a new edge.
 
 - **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
   GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
@@ -465,7 +468,11 @@ maintainer's approval as a new edge.
   (`authoring/model/field.rs`),
   the grid slot an `AgentModel` sits over. `authoring/primitives/` is the primitive vocabulary those
   kernels call — wrapping, neighbourhoods, distances, random draws — most paired with a WGSL twin
-  under `henad-compute/src/gpu/shared/`, and each pure one pinned to its twin by a parity test.
+  under `authoring/primitives/wgsl/`, and each pure one pinned to its twin by a parity test.
+  `wgsl/` holds the five shared modules a shader imports as `henad::dispatch`, `henad::dims`,
+  `henad::rng`, `henad::space` and `henad::reduce_tree`, as text in `SHARED_WGSL_MODULES`, with
+  their `SHARED_WGSL_FNV1A64` computed by a `const` FNV-1a (`Fnv1a64`'s writes are `const fn`).
+  An interface change to one ships only in a breaking release. User shaders import these paths.
   `space::offsets`, `space::for_each_neighbor`, `rng::mix_seed` and `rng::next_index` are Rust
   only. `next_index`'s redraw needs a 64-bit product, and WGSL has no 64-bit integers.
   `docs/reference/primitives.md` is the index, marks each Rust-only and WGSL-only entry, and
@@ -581,6 +588,13 @@ maintainer's approval as a new edge.
   `SearchHistory::read` takes the range again from the initial samples' rows of `evaluations.csv`
   and places the rows written before it. `search/tests/` holds the driver the searcher tests share
   (`support.rs`) and the protocol tests every searcher passes.
+- **henad-build**: a build dependency, on henad-core and `wgsl_bindgen` alone. `lib.rs` holds
+  `ShaderBuild` and `ShaderBuildError`, `paths.rs` the walk of a shader root and the Rust names a
+  path becomes (`check_components`, `check_reserved`, `check_collisions`), `binding_lines.rs` the
+  private reader of `@group(0)` lines, and `output.rs` the shared-module copies, the stamp and the
+  two generated files. Its tests sit in `src/tests/`: the path checks, the reader against the
+  layout `wgsl_bindgen` generates, and whole generations (`a_second_build_reruns_nothing`,
+  `a_shader_added_between_builds_is_generated`, `a_crate_without_shaders_builds`). Keep them.
 - **henad-compute**: the engine machinery that turns an authoring impl into something runnable.
   `cpu/` and `gpu/` are **siblings**, not a base and a specialisation, and mirror each other:
   each has its own `sim_thread.rs` (runner), its `*_engine.rs` (authoring trait → runnable state)
@@ -618,8 +632,12 @@ maintainer's approval as a new edge.
     model hands the UI (`display.rs` for a texture layer, `agents.rs` for lane buffers drawn in
     place). `gpu/primitives/` holds the GPU counterparts of henad-core's data structures —
     `spatial_hash.rs`, `prefix_scan.rs`, `reduce.rs`, `readback.rs` — plus `dispatch.rs` and
-    `pipeline.rs`. The prelude a pass imports and the `reduce_tree` fold a reduce leaf repeats are
-    WGSL in `gpu/shared/`.
+    `pipeline.rs`. The `henad::dispatch` module a pass imports and the `reduce_tree` fold a reduce
+    leaf repeats are WGSL in henad-core's `authoring/primitives/wgsl/`. `gpu/grid_dims.wgsl` is an
+    entry point that is never dispatched. It brings `henad::dims::Dims` into the generated
+    bindings, and `grid_engine.rs`'s `Dims` is a `pub(crate)` alias of that struct.
+    `gpu/tests/parity.wgsl` is the parity test's shader, with a `CODES` array that references
+    each boundary and table code the test reads.
     `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`
     is what asks whether a model fits the device before anything is allocated.
     `gpu/stepping.rs` steps a `GpuSimState` from a host with no sim thread, native only. It submits
@@ -636,7 +654,7 @@ maintainer's approval as a new edge.
     The one name carrying three meanings is `primitives`, so keep them straight: `cpu/primitives/`
     and `gpu/primitives/` are engine internals and are counterparts of each other, while
     `henad-core/src/authoring/primitives/` is the model-author-facing vocabulary and is a
-    counterpart of `gpu/shared/` instead.
+    counterpart of its own `wgsl/` directory instead.
 
 - **henad-models**: concrete simulations — `sir.rs` and `game_of_life.rs` (`GridModel`), `boids/`
   (`AgentModel` over `NoField`), `ants/` (`AgentModel` over `ScalarField`, the one composite
@@ -840,14 +858,15 @@ maintainer's approval as a new edge.
   `state.rs` (`AppState`) holds the set as `models` and keys the selection by id:
   `selected_model` and `loaded_model` are `Option<String>`, resolved at use through
   `selected_entry`, `loaded_entry` and `lookup`. `offered_models` hides a GPU model where the
-  adapter has no compute, and the app opens on the first offered model, or with none selected and
-  `NO_MODEL_RUNS` in the Model panel. A missing id reads as `lookup_message` words it, "This build
-  does not include model 'x'." or "Model 'x' needs a GPU, and this machine has none."
-  `select_model` loads the defaults and clears the schedule, for the Model panel and the Sweep tab
-  alike. `AppState` also holds the values the next build reads: `param_values`, the Seed field's
-  `seed` with its raw `seed_text`, and the scheduled actions in `schedule`. `build_runner` passes
-  `seed` to the entry's factory, and `reset_simulation` sends `SimCommand::SetSchedule` to the new
-  runner when the schedule is not empty, then records `loaded_seed` and `loaded_schedule`.
+  adapter has no compute, through `ModelSet::runnable`, and the app opens on the first offered
+  model, or with none selected and `NO_MODEL_RUNS` in the Model panel. A missing id reads as
+  `lookup_message` words it, "This build does not include model 'x'" or "Model 'x' needs a GPU with
+  compute support, and this device has none", with no full stop. `select_model` loads the defaults
+  and clears the schedule, for the Model panel and the Sweep tab alike, and an id the set lacks
+  leaves no values. `AppState` also holds the values the next build reads: `param_values`, the Seed
+  field's `seed` with its raw `seed_text`, and the scheduled actions in `schedule`. `build_runner`
+  passes `seed` to the entry's factory, and `reset_simulation` sends `SimCommand::SetSchedule` to
+  the new runner when the schedule is not empty, then records `loaded_seed` and `loaded_schedule`.
   `seed_pending` and `schedule_pending` compare each with its loaded copy, and the Reload needed
   notice counts both. A `None` seed is the model's default, the constant `henad-cli` uses without
   `--seed`. The engines take `seed.map_or(CONST, mix_seed)`, and the field keeps `None` as a state
@@ -1044,10 +1063,10 @@ and the whole `SimState` impl.
    over three ping-ponged lanes, ants runs two passes over seven in-place buffers with a display
    pass and a persistent counter. So a model declares `BUFFERS`, `STEP_PASSES` and an optional
    `DISPLAY`, and each pass points at its shader's generated declarations,
-   `crate::binding_decls::bindings::<SHADER>`. The engine builds a second buffer side only when
-   some `BufferSpec` asks for it, so a model that writes in place pays nothing for double
-   buffering. `Domain` has exactly three variants because those are
-   the three the two models use — do not add speculative ones.
+   `crate::binding_decls::bindings::<SHADER>`, brought in by `include_shaders!`. The engine builds a
+   second buffer side only when some `BufferSpec` asks for it, so a model that writes in place pays
+   nothing for double buffering. `Domain` has exactly three variants because those are the three the
+   two models use — do not add speculative ones.
 5. **`NetworkModel`** (`henad-core/src/authoring/model/network_model.rs`) is a population of nodes
    joined by edges, on the CPU only. Declare node lanes with `agent_lanes!` as for an agent model,
    then implement `init`, `stats` and whichever passes the model needs. `init` gets a graph holding
@@ -1216,21 +1235,42 @@ is about not undoing them.
   queue empty. `GpuContext::new` installs that callback and `GpuContext::is_lost` reads it. The GPU
   tracks drain the device and check it before writing any run that failed on the GPU. Otherwise
   every run left is written as `gpu_error` instead of being left for `--resume`.
-- **Uniform layouts and a model's binding slots are generated.** A `build.rs` in henad-compute,
-  henad-models and henad-app runs `wgsl_bindgen` over that crate's shaders, and the output lands
-  in `OUT_DIR` behind a `shader_bindings` module. Uniform structs, workgroup sizes and bind group
-  layouts therefore come from the WGSL, and each model asserts its own struct against the
-  generated one. Shared WGSL lives in `henad-compute/src/gpu/shared/` and is reached with
-  `#import`, resolved at build time, so no shader is assembled at runtime any more.
-  henad-models' `build.rs` also reads each shader's `@group(0)` lines into `binding_decls`, in
-  `@binding` order, and fails the build on a line it cannot parse or a gap in the indices. The
-  engine resolves each name itself. `params`, `dims`, `output`, `cell_start`, `sorted`, `counters`
-  and `partials` are reserved, and any other name is a `BufferSpec` label with an optional `_in`
-  or `_out` suffix. The access mode picks the side.
-  `henad-core/src/authoring/model/binding.rs` is the reference.
-  Generation cannot reach a type no shader in the crate uses (hence the hand-written `Dims` in
-  `grid_engine.rs`) or a constant arriving through an `#import`, since naga keeps only what an entry
-  point references.
+- **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
+  henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
+  `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as
+  `shader_bindings` and `binding_decls`, each under one allow list, `unsafe_code` included. The
+  macro and the generated code name `include!`, `concat!`, `env!` and `assert!` through `::core`.
+  henad-compute names its entry points with `ShaderBuild::new("src/gpu")`, and the other two use
+  `discover` over `src` and `src/ui`: every `.wgsl` file without a `#define_import_path` line.
+  `discover` refuses a path component that is no Rust identifier or is a keyword, names that
+  collide, a `henad.wgsl` file or a `henad` directory holding a `.wgsl` file in any case, which
+  would shadow a shared module, and a first component the generated code uses at its root (`wgpu`,
+  `bytemuck`, `std`, `core`, `alloc`, `_root`, `ShaderEntry`, `layout_asserts`, `bytemuck_impls`). A
+  module with a `@binding(` line fails the build. The binding constant is the path's components
+  upper-cased and joined by `_`. `generate` copies the shared modules from henad-core into
+  `OUT_DIR/henad_wgsl/henad/`, runs `wgsl_bindgen` (pinned to `=0.23.3`, and
+  `scripts/check_packaging.sh` holds `WGSL_BINDGEN_VERSION` to the pin) with its own rerun lines
+  off, prints one `cargo:rerun-if-changed` for the shader root (and one per explicit entry), in the
+  single-colon form that keeps a downstream MSRV below 1.77, skips the pass when the FNV-1a stamp of
+  its inputs and of `output.rs` itself matches `shader_bindings.stamp`, and writes each file only
+  when its bytes change. A crate with no shaders gets an empty `shader_bindings.rs` and loses its
+  stamp. Otherwise the shaders' return would match the old stamp and keep the empty file.
+  `ShaderBuildError`'s `Debug` writes its `Display`. Uniform structs, workgroup sizes and bind group
+  layouts therefore come from the WGSL, and each model asserts its own struct against the generated
+  one. Shared WGSL is reached with `#import henad::<module>`, resolved at build time, so no shader
+  is assembled at runtime any more. henad-build also reads each entry's `@group(0)` lines into
+  `binding_decls`, in `@binding` order, and fails the build on any line holding `@binding(` in
+  another form than `@group(G) @binding(N) var<...> name: Type;` or a gap in the indices. A
+  compile-time assertion in `binding_decls.rs` holds each list to the length of the generated
+  `WgpuBindGroup0` layout, and `include_shaders!` asserts that the shaders were composed against the
+  `SHARED_WGSL_FNV1A64` of the henad-core it links. henad-build's tests run `generate` against a
+  scratch `OUT_DIR`, never Cargo. The engine resolves each name itself. `params`, `dims`, `output`,
+  `cell_start`, `sorted`, `counters` and `partials` are reserved, and any other name is a
+  `BufferSpec` label with an optional `_in` or `_out` suffix. The access mode picks the side.
+  `henad-core/src/authoring/model/binding.rs` is the reference. An imported constant or type reaches
+  the generated bindings exactly when an entry point references it, since naga keeps only what an
+  entry point references. Hence `grid_dims.wgsl` for `Dims`, and the `CODES` array in `parity.wgsl`
+  for `MOORE_ROW_MAJOR` and the other codes.
 
 ### Sim runs off the UI thread
 

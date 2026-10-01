@@ -3,7 +3,7 @@
 // One invocation covers a cell of each field layer and, where the index reaches, an ant. The
 // domain is the longer of the two, so neither half is left short.
 
-#import shared::prelude::linear_index
+#import henad::dispatch::linear_index
 #import gpu_ants::state::{HAS_REWARD_BIT}
 
 struct Params {

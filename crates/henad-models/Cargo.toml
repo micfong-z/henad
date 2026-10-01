@@ -22,7 +22,7 @@ wgpu = { workspace = true }
 bytemuck = { workspace = true }
 
 [build-dependencies]
-wgsl_bindgen = { workspace = true }
+henad-build = { workspace = true }
 
 [dev-dependencies]
 rayon = { workspace = true }

@@ -1934,6 +1934,7 @@ dependencies = [
  "egui_plot",
  "env_logger",
  "flume",
+ "henad-build",
  "henad-compute",
  "henad-core",
  "henad-explore",
@@ -1951,6 +1952,14 @@ dependencies = [
  "web-sys",
  "web-time",
  "wgpu",
+]
+
+[[package]]
+name = "henad-build"
+version = "0.2.0"
+dependencies = [
+ "heck",
+ "henad-core",
  "wgsl_bindgen",
 ]
 
@@ -1976,6 +1985,7 @@ dependencies = [
  "bytemuck",
  "criterion",
  "flume",
+ "henad-build",
  "henad-core",
  "log",
  "pollster 0.4.0",
@@ -1984,7 +1994,6 @@ dependencies = [
  "web-sys",
  "web-time",
  "wgpu",
- "wgsl_bindgen",
 ]
 
 [[package]]
@@ -2013,13 +2022,13 @@ version = "0.2.0"
 dependencies = [
  "bytemuck",
  "flume",
+ "henad-build",
  "henad-compute",
  "henad-core",
  "log",
  "pollster 0.4.0",
  "rayon",
  "wgpu",
- "wgsl_bindgen",
 ]
 
 [[package]]

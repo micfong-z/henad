@@ -1,4 +1,4 @@
-#define_import_path shared::rng
+#define_import_path henad::rng
 
 // Random draws, the twin of `henad_core::authoring::primitives::rng`.
 //

@@ -25,6 +25,12 @@ for name, spec in root["workspace"]["dependencies"].items():
 
 crates = sorted(path.parent for path in Path("crates").glob("*/Cargo.toml"))
 
+# henad-build folds the wgsl_bindgen release into its stamp, and names the release the workspace pins.
+pin = root["workspace"]["dependencies"]["wgsl_bindgen"]["version"]
+named = re.search(r'const WGSL_BINDGEN_VERSION: &str = "([^"]+)";', Path("crates/henad-build/src/output.rs").read_text())
+if not pin.startswith("=") or not named or named.group(1) != pin[1:]:
+    errors.append(f"crates/henad-build/src/output.rs: `WGSL_BINDGEN_VERSION` needs to equal the exact pin `{pin}`")
+
 # Each package ships both licence texts, as copies of the root's.
 for crate in crates:
     for licence in ("LICENSE-MIT", "LICENSE-APACHE"):
@@ -42,12 +48,10 @@ for crate in crates:
                 if not target.is_relative_to(crate.resolve()):
                     errors.append(f"{source}:{number}: `{path}` is outside {crate}")
 
-# A build script joins no path that climbs out of its crate. Listed here are the build scripts that
-# read the shared WGSL from henad-compute's sources.
-climbing_allowed = {Path("crates/henad-models/build.rs")}
+# A build script joins no path that climbs out of its crate.
 for crate in crates:
     script = crate / "build.rs"
-    if not script.is_file() or script in climbing_allowed:
+    if not script.is_file():
         continue
     for number, line in enumerate(script.read_text().splitlines(), 1):
         if '"../' in line or '".."' in line:

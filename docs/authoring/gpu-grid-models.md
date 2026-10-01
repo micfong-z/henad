@@ -71,7 +71,7 @@ Both pairs of dimensions arrive in a shared `Dims` uniform, and they stay equal 
 --8<-- "crates/henad-models/src/gpu_sir/reduce.wgsl:bindings"
 ```
 
-`Dims` comes from `shared::dims` in `henad-compute/src/gpu/shared/dims.wgsl`, and holds `grid` and `tex`, each a `vec2<u32>`.
+`Dims` comes from `henad::dims`, in `henad-core/src/authoring/primitives/wgsl/dims.wgsl`, and holds `grid` and `tex`, each a `vec2<u32>`.
 
 The display shader writes RGBA directly, and it therefore carries its own copy of the palette colours in WGSL.
 Only the stats UI reads `PALETTE`, so keeping the two in agreement is your responsibility as the model author.

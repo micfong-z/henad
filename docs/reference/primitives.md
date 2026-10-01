@@ -17,8 +17,8 @@ use henad_core::authoring::primitives::rng::{next_bits, random_float};
 ```
 
 ```wgsl
-#import shared::space::{TORUS, dist_sq, offset_cell}
-#import shared::rng::{next_bits, random_float}
+#import henad::space::{TORUS, dist_sq, offset_cell}
+#import henad::rng::{next_bits, random_float}
 ```
 
 Where a primitive exists in both languages, the names match.
@@ -34,7 +34,7 @@ Each entry below gives the Rust signature, and calls out the WGSL one wherever i
 
 ## Space
 
-`henad_core::authoring::primitives::space` and `shared::space`.
+`henad_core::authoring::primitives::space` and `henad::space`.
 
 Positions are `f32` in world units, cells are `u32` indices into a grid `w` by `h`.
 The y axis points down, matching the display, and `dy` therefore runs south.
@@ -351,7 +351,7 @@ See also: [`neighbor_count`](#neighbor_count), [`offset_cell`](#offset_cell).
 
 ## Random
 
-`henad_core::authoring::primitives::rng` and `shared::rng`.
+`henad_core::authoring::primitives::rng` and `henad::rng`.
 
 A draw takes a raw `u32` word and is pure.
 A `next_*` form advances a generator and then calls the pure form.
@@ -530,7 +530,7 @@ See also: [`random_float`](#random_float), [`MOORE_COLUMN_MAJOR`](#moore_column_
 ## Parity
 
 Each pair is pinned by a parity test.
-`crates/henad-compute/src/gpu/shared/parity.wgsl` runs one invocation per case and one dispatch for the whole set, switching on an op code, and `crates/henad-compute/src/gpu/tests/parity.rs` drives it and compares.
+`crates/henad-compute/src/gpu/tests/parity.wgsl` runs one invocation per case and one dispatch for the whole set, switching on an op code, and `crates/henad-compute/src/gpu/tests/parity.rs` drives it and compares.
 Op codes come from the generated bindings.
 
 Integer results must match exactly, and so must [`random_float`](#random_float).
@@ -575,8 +575,8 @@ Anything with one call site stays in that model.
 ## Where these live
 
 ```text
-crates/henad-core/src/authoring/primitives/space.rs   <->  crates/henad-compute/src/gpu/shared/space.wgsl
-crates/henad-core/src/authoring/primitives/rng.rs     <->  crates/henad-compute/src/gpu/shared/rng.wgsl
+crates/henad-core/src/authoring/primitives/space.rs   <->  crates/henad-core/src/authoring/primitives/wgsl/space.wgsl
+crates/henad-core/src/authoring/primitives/rng.rs     <->  crates/henad-core/src/authoring/primitives/wgsl/rng.wgsl
 ```
 
 Adding a primitive means adding both sides, an op in `parity.wgsl` and a case builder in the parity driver.

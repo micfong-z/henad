@@ -6,7 +6,7 @@
 // per 256 cells instead of 1 per cell, which is the difference between a negligible pass and a
 // contended one at the grid sizes this engine targets.
 
-#import shared::dims::Dims
+#import henad::dims::Dims
 
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var<storage, read_write> counters: atomic<u32>;

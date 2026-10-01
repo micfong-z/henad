@@ -192,7 +192,7 @@ impl AppState {
         gpu_ctx: Option<GpuContext>,
         runtime: RuntimeInfo,
     ) -> Self {
-        let first = offered(&models, gpu_ctx.as_ref()).next();
+        let first = models.runnable(gpu_ctx.as_ref()).next();
         let selected_model = first.map(|entry| entry.id().to_owned());
         let param_values: Vec<ParamValue> = first.map(default_values).unwrap_or_default();
 
@@ -482,14 +482,6 @@ impl AppState {
         }
     }
 
-    pub fn load_default_params(&mut self) {
-        let Some(entry) = self.selected_entry() else {
-            return;
-        };
-        self.param_values = default_values(entry);
-        self.pending_reload = vec![false; self.param_values.len()];
-    }
-
     pub fn layout_command(&self) -> SimCommand {
         SimCommand::SetLayout {
             on: self.layout_on,
@@ -521,7 +513,7 @@ impl AppState {
 
     /// Returns the models of the set that run on this machine, in the set's order.
     pub fn offered_models(&self) -> impl Iterator<Item = &ModelEntry> + '_ {
-        offered(&self.models, self.gpu_ctx.as_ref())
+        self.models.runnable(self.gpu_ctx.as_ref())
     }
 
     /// Returns entry `id`, or the reason this build or this machine cannot run it.
@@ -536,13 +528,14 @@ impl AppState {
 
     /// Selects model `id` with its default values and no scheduled actions.
     ///
-    /// The model selected already keeps its values.
+    /// The model selected already keeps its values. An id the set lacks leaves no values.
     pub fn select_model(&mut self, id: &str) {
         if self.selected_model.as_deref() == Some(id) {
             return;
         }
         self.selected_model = Some(id.to_owned());
-        self.load_default_params();
+        self.param_values = self.models.get(id).map(default_values).unwrap_or_default();
+        self.pending_reload = vec![false; self.param_values.len()];
         // Entries index the previous model's actions.
         self.schedule = Schedule::default();
         self.schedule_action_input = 0;
@@ -662,16 +655,6 @@ impl AppState {
     }
 }
 
-/// Returns the models of `models` that run with `gpu`, in the set's order.
-///
-/// A GPU model runs only where the adapter has compute.
-pub fn offered<'a>(models: &'a ModelSet, gpu: Option<&GpuContext>) -> impl Iterator<Item = &'a ModelEntry> + 'a {
-    let compute = gpu.is_some();
-    models
-        .iter()
-        .filter(move |entry| compute || entry.gpu_needs().is_none())
-}
-
 /// Returns the default value of every parameter of `entry`.
 pub fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
     entry
@@ -681,9 +664,9 @@ pub fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
         .collect()
 }
 
-/// Returns `error` as a sentence, as in "This build does not include model 'x'."
+/// Returns `error` capitalised, as in "This build does not include model 'x'".
 pub fn lookup_message(error: &ModelLookupError) -> String {
-    format!("{}.", crate::ui::sweep::draft::capitalize(&error.to_string()))
+    crate::ui::sweep::draft::capitalize(&error.to_string())
 }
 
 #[cfg(test)]
@@ -749,11 +732,11 @@ mod tests {
 
         assert_eq!(
             app.open_run(replay_of("gpu_sir"), OpenAt::Start),
-            Err("Model 'gpu_sir' needs a GPU, and this machine has none.".to_owned())
+            Err("Model 'gpu_sir' needs a GPU with compute support, and this device has none".to_owned())
         );
         assert_eq!(
             app.open_run(replay_of("absent"), OpenAt::Start),
-            Err("This build does not include model 'absent'.".to_owned())
+            Err("This build does not include model 'absent'".to_owned())
         );
         assert_eq!(
             app.selected_model.as_deref(),

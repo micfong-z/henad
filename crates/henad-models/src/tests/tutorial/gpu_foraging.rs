@@ -218,7 +218,7 @@ fn pack_state(lanes: &AntLanes, i: usize) -> u32 {
     packed
 }
 
-/// Matches `pcg_hash` in `shared::rng` bit for bit, since `u32` arithmetic wraps the same on both sides.
+/// Matches `pcg_hash` in `henad::rng` bit for bit, since `u32` arithmetic wraps the same on both sides.
 fn pcg_hash(input: u32) -> u32 {
     let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);

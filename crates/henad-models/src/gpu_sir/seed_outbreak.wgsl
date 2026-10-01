@@ -3,8 +3,8 @@
 // Draws from the action's own seed rather than the per-cell `rng` buffer, so a press leaves the
 // run's stream where it was.
 
-#import shared::rng::{pcg_hash, below}
-#import shared::space::cell_index
+#import henad::rng::{pcg_hash, below}
+#import henad::space::cell_index
 
 struct Params {
     width: u32,

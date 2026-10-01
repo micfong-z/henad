@@ -24,7 +24,7 @@ rayon = { workspace = true }
 web-time = { workspace = true }
 
 [build-dependencies]
-wgsl_bindgen = { workspace = true }
+henad-build = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Only under atomics, where a `wgpu::Error` stops being `Send`. See `GpuContext::new`.

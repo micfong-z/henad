@@ -1,14 +1,15 @@
 //! A headless benchmark runner for Henad models.
 //!
-//! The non-GUI sibling of `henad-app`. It builds a model from the example models' [`ModelSet`] and
-//! steps its `SimState` in a bare loop, with no rendering, no `SimThread` and no pacing, so a
-//! measurement times nothing but `state.step()`.
+//! The non-GUI sibling of `henad-app`. It builds a model from the example models'
+//! [`ModelSet`](henad_compute::entry::ModelSet) and steps its `SimState` in a bare loop, with no
+//! rendering, no `SimThread` and no pacing, so a measurement times nothing but `state.step()`.
 //!
 //! Both CPU and GPU models run. GPU support needs a `wgpu::Device`, which `henad-compute` never
 //! creates itself, so this binary acquires one headlessly (see [`acquire_headless`]) for the set's
 //! needs, and builds a GPU model on the resulting [`GpuContext`]. Without a device `--list` leaves
-//! the GPU models out, and naming one is refused. GPU stepping does *not* go through `SimState::step()`, which would leave one
-//! unwaited submission per step. See [`stepping::run_steps`].
+//! the GPU models out, and naming one is refused. GPU stepping does *not* go through
+//! `SimState::step()`, which would leave one unwaited submission per step. See
+//! [`stepping::run_steps`].
 //!
 //! ```text
 //! henad-cli --list
@@ -45,7 +46,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{ArgGroup, Parser};
 
-use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelState};
+use henad_compute::entry::{ModelEntry, ModelLookupError, ModelState};
 use henad_compute::fault::install_panic_hook;
 use henad_compute::gpu::{GpuContext, GpuSimState, stepping};
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
@@ -241,7 +242,7 @@ fn main() -> Result<ExitCode> {
 
     match mode {
         Mode::List => {
-            print_models(offered(&models, gpu_ctx.as_ref()));
+            print_models(models.runnable(gpu_ctx.as_ref()));
             return Ok(ExitCode::SUCCESS);
         }
         Mode::InfoOnly => return Ok(ExitCode::SUCCESS),
@@ -354,12 +355,6 @@ fn print_runtime_info(runtime: Option<&RuntimeInfo>) {
             println!("    display texture cap: {0}x{0}", runtime.display_cap());
         }
     }
-}
-
-/// Returns the models of `models` that run with `gpu`, in the set's order. A GPU model runs only on a device.
-fn offered<'a>(models: &'a ModelSet, gpu: Option<&GpuContext>) -> impl Iterator<Item = &'a ModelEntry> + 'a {
-    let device = gpu.is_some();
-    models.iter().filter(move |entry| device || entry.gpu_needs().is_none())
 }
 
 /// Print the id and human name of each model in `entries`.
@@ -1222,7 +1217,7 @@ parameters for virus_network (Virus on a Network):
     #[test]
     fn params_json_lists_every_descriptor() {
         let models = example_models();
-        for entry in super::offered(&models, None) {
+        for entry in models.runnable(None) {
             let line = json_report::params(entry, None);
             assert_eq!(line["kind"], json!("params"), "{}", entry.id());
             assert_eq!(line["model"], json!(entry.id()));

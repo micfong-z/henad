@@ -13,7 +13,7 @@ gpu/
   grid_engine.rs    GpuGridState<M>      GpuGridModel  -> SimState + GpuSimState
   agent_engine.rs   GpuAgentState<M>     GpuAgentModel -> SimState + GpuSimState
   primitives/       spatial_hash, prefix_scan, reduce, readback, dispatch, pipeline
-  shared/           WGSL reached by #import: prelude, space, rng, dims, reduce_tree
+  grid_dims.wgsl    an entry point that brings henad::dims into the generated bindings, for Dims
   view/             display.rs (a texture layer), agents.rs (lane buffers drawn in place)
   limits.rs         what raises the device past the WebGPU baseline
   capacity.rs       whether a model fits, asked before anything is allocated

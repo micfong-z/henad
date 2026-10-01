@@ -252,7 +252,7 @@ On the CPU the engine built our display texture for us, indexing `PALETTE` by th
 On the GPU we need to draw our texture instead, because only the model knows how a word of bits maps to colours.
 
 ``` { .wgsl .annotate title="crates/henad-models/src/gpu_life/display.wgsl" }
-#import shared::dims::{Dims, cell_at} // (1)!
+#import henad::dims::{Dims, cell_at} // (1)!
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> dims: Dims; // (2)!
@@ -282,7 +282,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 ```
 
-1. Shared WGSL lives in `henad-compute/src/gpu/shared/` and can be reached with `#import`, resolved at build time. `shared::dims` holds the `Dims` struct every grid model's display and reduce shader reads.
+1. Shared WGSL ships with henad-core and can be reached with `#import henad::<module>`, resolved at build time. `henad::dims` holds the `Dims` struct every grid model's display and reduce shader reads.
 2. Display and reduce bind `state` and a `Dims` uniform of their own, carrying the grid size and the texture size. Our step uniform never reaches them.
 3. The shader writes RGBA directly, so it carries its own copy of the two palette colours as WGSL constants. It is recommended to maintain consistency with the CPU palette.
 4. The pass dispatches one invocation per _texel_, never per cell. The texture is capped at 4096 a side, so a big grid is sampled, and `cell_at` reads the cell at `texel * grid / tex`. Nothing special happens if this cap is not reached.
@@ -298,7 +298,7 @@ We would like to display a count of cells alive in the statistics.
 On the CPU we counted with `reduce_chunks` at publish time, and the GPU equivalent is a reduction pass that runs at the same snapshot cadence:
 
 ``` { .wgsl .annotate title="crates/henad-models/src/gpu_life/reduce.wgsl" }
-#import shared::dims::Dims
+#import henad::dims::Dims
 
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var<storage, read_write> counters: atomic<u32>; // (1)!
@@ -438,21 +438,16 @@ Next come the declarations with no CPU counterpart, the buffers the step ping-po
 2. The WGSL source, embedded as a string at build time.
 3. Each shader's `@group(0)` declarations in `@binding` order, read off the source at build time, so the Rust side cannot disagree with the WGSL about what is bound where.
 
-Neither of those modules knows about our shaders yet.
-A `build.rs` in this crate runs `wgsl_bindgen` over every shader it is told about and generates both, so a new shader has to be listed there before anything compiles.
-Add our three entries:
+Both modules are generated when the crate builds.
+The crate's `build.rs` runs henad-build over every `.wgsl` file under `src`, and `include_shaders!` at the top of `lib.rs` brings the output in:
 
 ``` rust title="crates/henad-models/build.rs"
-    "gpu_life/step.wgsl",
-    "gpu_life/display.wgsl",
-    "gpu_life/reduce.wgsl",
+--8<-- "crates/henad-models/build.rs:shader_build"
 ```
 
-For context, here is the list our entries join:
-
-``` rust title="crates/henad-models/build.rs"
---8<-- "crates/henad-models/build.rs:entry_points"
-```
+Our three shaders are already part of it, with nothing to list.
+Each one's path decides its names, so `gpu_life/step.wgsl` becomes `shader_bindings::gpu_life::step` and `GPU_LIFE_STEP`.
+The [shaders page](../../authoring/shaders.md#generated-from-the-wgsl) has the rules a path follows.
 
 ``` rust title="crates/henad-models/src/gpu_life/mod.rs"
 use henad_core::authoring::model::binding::BindingDecl;

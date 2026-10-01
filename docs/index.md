@@ -66,7 +66,7 @@ The core of the Game of Life model looks like this:
 
 -   **[Architecture](developing/architecture.md)**
   
-    How the six crates fit together and where a tick actually runs.
+    How the seven crates fit together and where a tick actually runs.
 
 </div>
 

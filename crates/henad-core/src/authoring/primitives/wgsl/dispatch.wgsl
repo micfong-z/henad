@@ -1,4 +1,4 @@
-#define_import_path shared::prelude
+#define_import_path henad::dispatch
 
 const WORKGROUP: u32 = 256u;
 

@@ -53,7 +53,7 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// The wgpu setup both entry points use, with a device sized to `needs`. Only the device request differs from
+/// Returns the wgpu setup both entry points use, with a device sized to `needs`. Only the device request differs from
 /// egui's default.
 pub fn wgpu_configuration(needs: GpuNeeds) -> egui_wgpu::WgpuConfiguration {
     egui_wgpu::WgpuConfiguration {
@@ -65,7 +65,7 @@ pub fn wgpu_configuration(needs: GpuNeeds) -> egui_wgpu::WgpuConfiguration {
     }
 }
 
-/// The device Henad asks for to run models that need `needs`, on top of what egui would have requested.
+/// Returns the device Henad asks for to run models that need `needs`, on top of what egui would have requested.
 ///
 /// `raise` clamps to what the adapter offers. On the web the adapter reports the browser's
 /// ceiling, well under the hardware's.

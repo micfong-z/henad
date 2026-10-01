@@ -1,6 +1,6 @@
-//! Holds each `shared::space` primitive to its Rust twin on a real device.
+//! Holds each `henad::space` and `henad::rng` primitive to its Rust twin on a real device.
 //!
-//! Drives `shared/parity.wgsl`, where the ops themselves live.
+//! Drives `parity.wgsl` beside this file, where the ops themselves live.
 //!
 //! Integer results must match exactly. Float results are compared with a tolerance, since WGSL's
 //! float `%` is defined through a division while Rust's is an exact fmod, so the two round
@@ -11,12 +11,12 @@ use henad_core::authoring::primitives::space::{self, Boundary, MOORE_COLUMN_MAJO
 
 use crate::gpu::headless_context;
 use crate::gpu::primitives::pipeline::compute_pipeline;
-use crate::shader_bindings::shared::parity::{
+use crate::shader_bindings::henad::space as codes;
+use crate::shader_bindings::tests::parity::{
     Case, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT, OP_NEIGHBOR_COUNT,
     OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD, OP_WRAP_INDEX, Out,
     SHADER_STRING, WgpuBindGroup0,
 };
-use crate::shader_bindings::shared::space as codes;
 
 /// Absolute slack allowed on a float result that goes through WGSL's float `%`.
 const TOLERANCE: f32 = 1e-4;

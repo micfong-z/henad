@@ -1,5 +1,5 @@
-#define_import_path shared::reduce_tree
-#import shared::prelude::WORKGROUP
+#define_import_path henad::reduce_tree
+#import henad::dispatch::WORKGROUP
 
 var<workgroup> scratch: array<f32, WORKGROUP>;
 

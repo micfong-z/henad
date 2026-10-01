@@ -1,14 +1,17 @@
-#define_import_path shared::parity
-
-// Runs each `shared::space` primitive over caller-supplied cases, so a test can compare the result
-// against the Rust twin. One invocation per case.
+// Runs each `henad::space` and `henad::rng` primitive over caller-supplied cases, so a test can
+// compare the result against the Rust twin. One invocation per case.
 //
 // Every op writes into the same `Out`. The field carrying the answer is fixed per op, and the
 // test knows it.
 
-#import shared::space::{wrap_index, wrap_coord, cell_index, offset_cell, axis_delta, dist_sq}
-#import shared::space::{neighbor_count, neighbor_offset, heading_octant}
-#import shared::rng::{random_float, below, choice3, reservoir_accept}
+#import henad::space::{wrap_index, wrap_coord, cell_index, offset_cell, axis_delta, dist_sq}
+#import henad::space::{neighbor_count, neighbor_offset, heading_octant}
+#import henad::space::{TORUS, BOUNDED, MOORE_ROW_MAJOR, MOORE_COLUMN_MAJOR, VON_NEUMANN}
+#import henad::rng::{random_float, below, choice3, reservoir_accept}
+
+// The boundary and table codes the test reads from the generated bindings. An imported constant
+// reaches them only through a reference here.
+const CODES: array<u32, 5> = array<u32, 5>(TORUS, BOUNDED, MOORE_ROW_MAJOR, MOORE_COLUMN_MAJOR, VON_NEUMANN);
 
 const OP_WRAP_INDEX: u32 = 0u;
 const OP_WRAP_COORD: u32 = 1u;

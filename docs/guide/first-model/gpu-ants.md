@@ -116,7 +116,7 @@ const HAS_FOOD_BIT: u32 = 0x100u;
 const HAS_REWARD_BIT: u32 = 0x200u;
 ```
 
-1. A file with an import path is a module other shaders can `#import` from, through the same mechanism that gives us `shared::rng`. It is not an entry point, so it does not go in `build.rs`.
+1. A file with an import path is a module other shaders can `#import` from, through the same mechanism that gives us `henad::rng`. The import path mirrors the file's path under `src`, and the file is no entry point, so it gets no bindings of its own.
 
 ## Fields
 
@@ -140,7 +140,7 @@ After every ant has run, a second pass folds the accumulated deposits into the f
 This is `ScalarField::update` in miniature:
 
 ``` { .wgsl .annotate title="crates/henad-models/src/gpu_foraging/merge.wgsl" }
-#import shared::prelude::linear_index // (1)!
+#import henad::dispatch::linear_index // (1)!
 
 struct Params { // (2)!
     n: u32,
@@ -178,7 +178,7 @@ fn main(
 }
 ```
 
-1. An agent pass folds its linear invocation domain onto a 2D grid of workgroups, because a large domain overflows one row of them. `linear_index` from the shared prelude does the fold, and needs the fold width `groups_x` from the uniform.
+1. An agent pass folds its linear invocation domain onto a 2D grid of workgroups, because a large domain overflows one row of them. `linear_index` from `henad::dispatch` does the fold, and needs the fold width `groups_x` from the uniform.
 2. A uniform block is a struct we design, and `build.rs` generates its Rust twin, which we fill in under [Uniforms](#uniforms).
 3. The step shader writes `accum` through atomics, and here it is bound as a plain `u32` array. Only one invocation touches each entry in this pass, so it can reset the slot for the next tick with an ordinary store.
 4. Every agent pass declares 256, and every display pass declares a square, exactly as the grid model's shaders all declared 16 by 16.
@@ -466,7 +466,7 @@ The helpers this leans on are small:
 /// Domain separated from the ant seeding stream, so the two do not start correlated.
 const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 
-/// Matches `pcg_hash` in `shared::rng` bit for bit, since `u32` arithmetic wraps the same on both sides.
+/// Matches `pcg_hash` in `henad::rng` bit for bit, since `u32` arithmetic wraps the same on both sides.
 fn pcg_hash(input: u32) -> u32 { // (1)!
     let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
@@ -497,7 +497,7 @@ fn packed_cell_palette() -> [[u32; 4]; 4] {
 }
 ```
 
-1. WGSL has no 64-bit integers, so the GPU cannot run `xorshift64`. Its generator is `pcg_hash` over `u32`, from `shared::rng`, and this is the same hash in Rust so the buffer can be seeded to a known first state.
+1. WGSL has no 64-bit integers, so the GPU cannot run `xorshift64`. Its generator is `pcg_hash` over `u32`, from `henad::rng`, and this is the same hash in Rust so the buffer can be seeded to a known first state.
 2. Both palettes are packed from the CPU model's constants rather than retyped, one for the step uniform and one for the display uniform.
 
 ``` rust title="crates/henad-models/src/gpu_foraging/mod.rs"
@@ -564,15 +564,8 @@ The passes are declared as data, in the order they run:
 4. A two-lane reduction, one lane counting carrying ants and one summing the field. We write only the leaf, and the engine owns every level of the reduction tree above it.
 5. The two lanes live on different domains, one per ant and one per cell, so the pass dispatches over whichever is longer.
 
-As on the grid page, the shaders have to be listed in the crate's `build.rs` before `shader_bindings` knows about them.
-Four entries this time, since `state.wgsl` is a module rather than an entry point:
-
-``` rust title="crates/henad-models/build.rs"
-    "gpu_foraging/step.wgsl",
-    "gpu_foraging/merge.wgsl",
-    "gpu_foraging/display.wgsl",
-    "gpu_foraging/reduce.wgsl",
-```
+As on the grid page, the build script finds the shaders under `src` by itself.
+`state.wgsl` declares an import path, so it is a module rather than an entry point, and the other four each get a module in `shader_bindings` and a constant in `binding_decls`.
 
 #### Pass 1: stepping
 
@@ -581,8 +574,8 @@ One invocation is one ant, and the kernel mirrors `advect_agent` and `deposit_va
 It opens with its imports, its uniform and its bindings:
 
 ``` { .wgsl .annotate title="crates/henad-models/src/gpu_foraging/step.wgsl" }
-#import shared::prelude::linear_index
-#import shared::rng::{choice3, next_bits, next_float, reservoir_accept} // (1)!
+#import henad::dispatch::linear_index
+#import henad::rng::{choice3, next_bits, next_float, reservoir_accept} // (1)!
 #import gpu_foraging::state::{LAST_STEP_MASK, HAS_FOOD_BIT, HAS_REWARD_BIT}
 
 struct Params {
@@ -790,7 +783,7 @@ Choosing where to move is the same three-way logic as the CPU kernel, trail firs
 1. The ant's own generator state, loaded into a local and written back at the end. On the CPU a chunk's generator came from `chunk_seed`, and here every ant carries its own, since a shader has no chunk.
 2. The same deliberate quirk as the CPU page, giving the first neighbour visited twice the odds of every other.
 3. `dx` on the outside and `dy` on the inside, spelled out as two loops where the CPU walked `MOORE_COLUMN_MAJOR`. The order is the same, and it has to be, because ties are broken by a draw.
-4. The reservoir draw, from `shared::rng`. The same call as on the CPU, over a 32-bit word.
+4. The reservoir draw, from `henad::rng`. The same call as on the CPU, over a 32-bit word.
 5. The lost-ant branch, repeating the last step with probability `momentum`. The direction decodes inline where the CPU had `decode_step`.
 6. Otherwise the small chance of ignoring the trail altogether.
 7. Two draws, two separate `next_bits` calls, for the same reason as on the CPU.
@@ -921,8 +914,8 @@ The reduce shader is only the _leaf_, computing one value per lane per workgroup
 // Leaf of the stat reduction. One workgroup folds its slice down to one value per lane, and
 // `GpuLaneReduce` owns every level above this.
 
-#import shared::prelude::WORKGROUP
-#import shared::reduce_tree::block_sum // (1)!
+#import henad::dispatch::WORKGROUP
+#import henad::reduce_tree::block_sum // (1)!
 #import gpu_foraging::state::HAS_FOOD_BIT
 
 struct Params {

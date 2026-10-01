@@ -1,7 +1,7 @@
 // One level of a multi-level exclusive prefix sum. Each workgroup scans WORKGROUP elements and
 // publishes its total to `block_sums`, which the level above scans in turn.
 
-#import shared::prelude::WORKGROUP
+#import henad::dispatch::WORKGROUP
 
 struct ScanParams {
     n: u32,

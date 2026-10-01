@@ -4,7 +4,7 @@
 // then decay it. Resetting `accum` here rather than clearing the buffer each tick costs nothing,
 // since this pass already owns the cell.
 
-#import shared::prelude::linear_index
+#import henad::dispatch::linear_index
 
 struct Params {
     n: u32,

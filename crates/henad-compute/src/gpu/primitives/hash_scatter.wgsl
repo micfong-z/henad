@@ -3,7 +3,7 @@
 // The cursor starts as a copy of the scanned offsets, so a cell's agents land contiguously. Which
 // slot within the cell is whatever order the atomics resolve in.
 
-#import shared::prelude::WORKGROUP
+#import henad::dispatch::WORKGROUP
 
 struct HashParams {
     grid_w: u32,

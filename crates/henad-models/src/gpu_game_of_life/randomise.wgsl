@@ -4,7 +4,7 @@
 // than a walked xorshift64 stream. An action is no part of the tick-0 oracle, so the two backends
 // need not land on the same grid here.
 
-#import shared::rng::{pcg_hash, below}
+#import henad::rng::{pcg_hash, below}
 
 struct Params {
     width: u32,

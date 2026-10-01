@@ -6,13 +6,18 @@ icon: material/crane
 
 # Architecture
 
-Henad is a workspace of six crates.
-henad-core depends on no other crate, and every other dependency runs from a crate to one nearer henad-core in the graph below.
+Henad is a workspace of seven crates.
+henad-core depends on no other crate, and henad-build on henad-core alone.
+Every other dependency runs from a crate to one drawn above it in the graph below, and a crate with WGSL takes henad-build as a build dependency.
 henad-models and henad-explore take no dependency on each other, and the two front ends reach the example models only for `example_models()`.
 
 ```mermaid
 graph LR
   core["henad-core<br/><small>traits and types</small>"] --> compute["henad-compute<br/><small>engine, runners and model entries</small>"]
+  core --> build["henad-build<br/><small>shader bindings</small>"]
+  build -. "build" .-> compute
+  build -. "build" .-> models
+  build -. "build" .-> app
   compute --> models["henad-models<br/><small>example models</small>"]
   compute --> explore["henad-explore<br/><small>sweeps and searches</small>"]
   explore --> cli["henad-cli<br/><small>headless bench</small>"]
@@ -26,6 +31,9 @@ The layers are easiest to follow from the bottom up, since each one depends only
 **henad-core** sits at the bottom and depends on no other crate, not even wgpu or bytemuck.
 With those dependencies absent, the two GPU traits describe their shaders as `&'static str` strings and their buffers as plain bytes.
 Alongside the authoring API, the crate holds the `Grid2D<T>` double-buffered grid, the counting-sort `SpatialHash`, the `Network` graph, parameter and action descriptors, and the stat and view types the UI reads.
+
+**henad-build** runs from the build scripts of the crates with WGSL.
+It composes each crate's shaders with the shared modules henad-core holds as text, which a shader reaches with `#import henad::<module>`, and writes the Rust bindings that `include_shaders!` brings into the crate.
 
 **henad-compute** turns an authoring impl into something runnable.
 Its `cpu/` and `gpu/` halves are siblings rather than a base class and a specialisation, and they mirror each other file by file: each half has its own runner, its own engines and its own primitives.

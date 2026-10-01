@@ -17,6 +17,7 @@ homepage = "https://micfong-z.github.io/henad/"
 [workspace.dependencies]
 # Each version equals `[workspace.package] version`, which `scripts/check_packaging.sh` checks.
 henad-core = { path = "crates/henad-core", version = "0.2.0" }
+henad-build = { path = "crates/henad-build", version = "0.2.0" }
 henad-compute = { path = "crates/henad-compute", version = "0.2.0" }
 henad-models = { path = "crates/henad-models", version = "0.2.0" }
 henad-explore = { path = "crates/henad-explore", version = "0.2.0" }
@@ -50,9 +51,11 @@ wgpu = { version = "30.0", features = [
 ] }
 flume = "0.12"
 rfd = "0.17"
-# Build scripts only. Default features off: the default `glam` map would make every generated
-# uniform field a `glam` type, and `RustWgslTypeMap` wants plain arrays.
-wgsl_bindgen = { version = "0.23.3", default-features = false }
+# henad-build only. Default features off: the default `glam` map would make every generated
+# uniform field a `glam` type, and `RustWgslTypeMap` wants plain arrays. The exact pin holds the
+# generated code henad-compute expects. A patch moves only with a Henad release.
+wgsl_bindgen = { version = "=0.23.3", default-features = false }
+heck = "0.5"
 egui_plot = "0.37"
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"

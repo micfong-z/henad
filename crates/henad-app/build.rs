@@ -4,25 +4,12 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use wgsl_bindgen::{RustWgslTypeMap, WgslBindgenOptionBuilder, WgslShaderSourceType, WgslTypeSerializeStrategy};
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
-    let ui = manifest.join("src/ui");
-    let out = PathBuf::from(std::env::var("OUT_DIR")?);
 
     emit_commit_stamp(&manifest);
 
-    WgslBindgenOptionBuilder::default()
-        .workspace_root(&ui)
-        .add_entry_point(ui.join("agents.wgsl").to_string_lossy().into_owned())
-        .add_entry_point(ui.join("edges.wgsl").to_string_lossy().into_owned())
-        .serialization_strategy(WgslTypeSerializeStrategy::Bytemuck)
-        .type_map(RustWgslTypeMap)
-        .shader_source_type(WgslShaderSourceType::EmbedSource)
-        .output(out.join("shader_bindings.rs"))
-        .build()?
-        .generate()?;
+    henad_build::ShaderBuild::discover("src/ui")?.generate()?;
 
     Ok(())
 }

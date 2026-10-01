@@ -12,7 +12,7 @@ use crate::state::AppState;
 use crate::ui::{KvGridRows, kv_grid};
 
 /// Text the Model panel shows when no model of the set runs on this machine.
-const NO_MODEL_RUNS: &str = "No model in this build runs on this device. GPU models need a compute-capable adapter.";
+const NO_MODEL_RUNS: &str = "No model in this build runs on this device. GPU models need a GPU with compute support.";
 
 pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let offered: Vec<(String, String)> = app

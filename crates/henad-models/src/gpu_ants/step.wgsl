@@ -4,8 +4,8 @@
 // this tick's merge, and an ant only ever touches its own lanes, so one invocation doing both in
 // order is the same computation.
 
-#import shared::prelude::linear_index
-#import shared::rng::{choice3, next_bits, next_float, reservoir_accept}
+#import henad::dispatch::linear_index
+#import henad::rng::{choice3, next_bits, next_float, reservoir_accept}
 #import gpu_ants::state::{LAST_STEP_MASK, HAS_FOOD_BIT, HAS_REWARD_BIT}
 
 struct Params {

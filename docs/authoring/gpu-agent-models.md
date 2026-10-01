@@ -81,7 +81,7 @@ const REDUCE: ReduceSpec = ReduceSpec { shader, bindings, lanes, domain };
 
 The engine owns every level of the reduction tree above the leaf, and your shader only computes one per-lane value.
 `lanes` says how many values the leaf sums, and boids uses three, for speed and the two velocity components.
-For the workgroup fold, the leaf's shader imports `shared::reduce_tree::block_sum`.
+For the workgroup fold, the leaf's shader imports `henad::reduce_tree::block_sum`.
 
 `COUNTERS` is a separate mechanism for persistent `u32` counters, which a kernel accumulates into and nothing ever clears.
 Ants counts cumulative deliveries this way, whereas the reduction target is cleared before every reduction.

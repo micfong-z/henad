@@ -1,5 +1,5 @@
 
-#import shared::dims::{Dims, cell_at}
+#import henad::dims::{Dims, cell_at}
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> dims: Dims;

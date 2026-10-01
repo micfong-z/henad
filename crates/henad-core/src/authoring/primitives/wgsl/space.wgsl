@@ -1,4 +1,4 @@
-#define_import_path shared::space
+#define_import_path henad::space
 
 // World geometry, the twin of `henad_core::authoring::primitives::space`.
 //

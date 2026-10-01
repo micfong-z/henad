@@ -1,8 +1,8 @@
 // Turns every boid a fresh way without touching its speed, one invocation per boid.
 
-#import shared::prelude::linear_index
-#import shared::rng::{pcg_hash, random_float}
-#import shared::space::heading_octant
+#import henad::dispatch::linear_index
+#import henad::rng::{pcg_hash, random_float}
+#import henad::space::heading_octant
 
 const TAU: f32 = 6.2831855;
 

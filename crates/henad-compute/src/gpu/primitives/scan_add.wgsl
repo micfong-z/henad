@@ -1,6 +1,6 @@
 // Add-back half of the scan. Lifts each block by the scanned total of every block before it.
 
-#import shared::prelude::WORKGROUP
+#import henad::dispatch::WORKGROUP
 
 struct ScanParams {
     n: u32,
