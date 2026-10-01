@@ -1263,7 +1263,13 @@ parameters for virus_network (Virus on a Network):
     /// `compare_network.py` build them. A documented sweep line enters explore mode, and a merge line merge mode.
     #[test]
     fn existing_invocations_keep_their_mode() {
-        let mut lines = command_lines(include_str!("../../../docs/reference/cli.md"));
+        // Read at run time. The page sits outside the package, and a crate built from its tarball skips the test.
+        let reference = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/cli.md");
+        let Ok(reference) = std::fs::read_to_string(&reference) else {
+            eprintln!("note: skipped, {} is absent", reference.display());
+            return;
+        };
+        let mut lines = command_lines(&reference);
         lines.extend(command_lines(include_str!("main.rs")));
         let documented = lines.len();
         let scripts = [

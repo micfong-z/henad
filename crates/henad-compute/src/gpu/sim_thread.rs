@@ -16,7 +16,7 @@
 //! Steps go out `batch_size` per batch, split across submissions of at most
 //! [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] steps each. Each step is still its own compute pass,
 //! since wgpu only synchronizes between passes and the ping-pong needs that. The display and
-//! stats-reduction passes run only once [`SNAPSHOT_INTERVAL`] has elapsed, so steps per snapshot
+//! stats-reduction passes run only once `SNAPSHOT_INTERVAL` has elapsed, so steps per snapshot
 //! is emergent and independent of batch size.
 //!
 //! One batch is outstanding at a time. Left unbounded, egui's own submissions queue behind a

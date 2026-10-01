@@ -1,4 +1,6 @@
 {
+  "installCommand": "rustup toolchain install \"$(cat templates/model-project/scripts/web-toolchain)\" --profile minimal --component rust-src --target wasm32-unknown-unknown && cargo install --locked trunk --version \"$(cat templates/model-project/scripts/trunk-version)\"",
+  "buildCommand": "./scripts/build_web.sh build --release",
   "outputDirectory": "dist",
   "headers": [
     {

@@ -39,10 +39,12 @@ cd henad
 
 rustup should automatically install the correct toolchain on first build.
 
-However, if you want to build the web app, you need to install the nightly toolchain with the `rust-src` component for wasm threads:
+However, if you want to build the web app, you need the dated nightly toolchain the repository pins, with the `rust-src` component for wasm threads.
+Run this from the repository root:
 
 ``` bash
-rustup toolchain install nightly --component rust-src --target wasm32-unknown-unknown
+rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+  --component rust-src,clippy --target wasm32-unknown-unknown
 ```
 
 ## Web build
@@ -50,7 +52,7 @@ rustup toolchain install nightly --component rust-src --target wasm32-unknown-un
 The web build also require [Trunk](https://github.com/trunk-rs/trunk):
 
 ``` bash
-cargo install --locked trunk
+cargo install --locked trunk --version "$(cat templates/model-project/scripts/trunk-version)"
 ```
 
 Use `scripts/build_web.sh` to build the web app.

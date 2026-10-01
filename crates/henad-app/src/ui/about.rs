@@ -11,7 +11,7 @@ pub const DOCS_URL: &str = "https://micfong-z.github.io/henad/";
 
 const TAGLINE: &str = "A massively parallel agent-based modelling engine.";
 
-const LOGO_PNG: &[u8] = include_bytes!("../../../../assets/henad-logo-transparent-256.png");
+const LOGO_PNG: &[u8] = include_bytes!("../../assets/henad-logo-transparent-256.png");
 const LOGO_SIZE: f32 = 64.0;
 
 const MODAL_WIDTH: f32 = 420.0;

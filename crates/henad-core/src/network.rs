@@ -461,7 +461,7 @@ impl Network {
 
     /// Returns whether the graph should be repacked to reclaim space from relocated rows.
     ///
-    /// This is true when the number of stale entries exceeds 1/2 of occupied rows and is greater than [`Csr::MIN_ROW`].
+    /// This is true when the number of stale entries exceeds 1/2 of occupied rows and is greater than `Csr::MIN_ROW`.
     pub fn should_repack(&self) -> bool {
         let stale = self.in_csr.stale_count + self.out_csr.stale_count;
         let slots = self.in_csr.neighbors.len() + self.out_csr.neighbors.len();

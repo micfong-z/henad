@@ -67,11 +67,11 @@
 //! Nothing here can be verified at compile time. The shaders are opaque strings to Rust, so a
 //! mismatch surfaces as a wgpu validation error at model construction. A valid model has all of
 //! the following true.
-//! - [`Self::WORKGROUP_SIZE`] must equal the `@workgroup_size(N, N)` all three shaders declare,
-//! - [`Self::STATS`] length must equal the reduce shader's `atomic<u32>` array length and the
-//!   number of entries [`Self::stats`] returns,
-//! - [`Self::buffer_lens`] must return exactly [`Self::BUFFERS.len()`] lengths, and
-//!   [`Self::seed_buffers`] exactly that many vectors, of exactly those lengths.
+//! - [`GpuGridModel::WORKGROUP_SIZE`] must equal the `@workgroup_size(N, N)` all three shaders declare,
+//! - [`GpuGridModel::STATS`] length must equal the reduce shader's `atomic<u32>` array length and the
+//!   number of entries [`GpuGridModel::stats`] returns,
+//! - [`GpuGridModel::buffer_lens`] must return exactly [`GpuGridModel::BUFFERS`]`.len()` lengths, and
+//!   [`GpuGridModel::seed_buffers`] exactly that many vectors, of exactly those lengths.
 
 use crate::action::ActionDescriptor;
 use crate::authoring::model::binding::BindingDecl;
@@ -151,7 +151,7 @@ pub trait GpuGridModel: Send + Sync + 'static {
 
     /// Initial contents of each ping-ponged buffer, CPU-seeded and uploaded once at construction.
     ///
-    /// Returns [`Self::BUFFERS.len()`] vectors, whose lengths match [`Self::buffer_lens`], in
+    /// Returns [`Self::BUFFERS`]`.len()` vectors, whose lengths match [`Self::buffer_lens`], in
     /// binding order. Index 0 is the primary state buffer that display and reduce read.
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>>;
 

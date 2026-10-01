@@ -68,7 +68,12 @@ The web build runs the same models on the same backends.
 
 Use the build script rather than `trunk` directly.
 
-The script requires `rustup toolchain install nightly --component rust-src --target wasm32-unknown-unknown`.
+The script requires the dated nightly the repository pins, with `rust-src`:
+
+```bash
+rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+  --component rust-src,clippy --target wasm32-unknown-unknown
+```
 
 ## Documentation
 

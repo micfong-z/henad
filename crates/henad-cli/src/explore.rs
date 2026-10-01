@@ -1693,7 +1693,12 @@ mod tests {
 
     #[test]
     fn a_search_spec_plans_its_budget_and_space() {
+        // The spec sits in henad-explore's package, and a crate built from its tarball skips the test.
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../henad-explore/specs/sir_search_pse.toml");
+        if !path.is_file() {
+            eprintln!("note: skipped, {} is absent", path.display());
+            return;
+        }
         let loaded = LoadedSpec::load(&path).expect("the example spec reads");
         let spec = loaded.file.clone().into_spec().expect("a search spec");
         let registry = model_registry(None);

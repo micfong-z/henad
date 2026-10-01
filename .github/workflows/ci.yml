@@ -48,6 +48,16 @@ jobs:
       - name: Changelog extractor
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
+      # Workspace versions, licence copies, and paths that climb out of a crate.
+      - name: Packaging
+        run: ./scripts/check_packaging.sh
+
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --locked
+
       # `docs/license.html` is committed and deploys with the docs site, so a dependency change
       # that never regenerated it would publish a stale attribution page. cargo-about resolves
       # every target, which is why this output does not depend on the runner. The version is
@@ -202,15 +212,97 @@ jobs:
       # Threads need a std rebuilt with atomics, which needs nightly and `rust-src`.
       - name: Install nightly
         run: |
-          rustup toolchain install nightly --profile minimal \
-            --component rust-src --target wasm32-unknown-unknown
+          rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+            --component rust-src,clippy --target wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Install trunk
         run: |
-          curl -sSfL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+          version="$(cat templates/model-project/scripts/trunk-version)"
+          curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xzf - -C "$HOME/.cargo/bin"
 
       - name: Build
         run: ./scripts/build_web.sh build
+
+  # Packages every crate without building it, which catches a manifest that cargo refuses.
+  package:
+    name: cargo package
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dorny/paths-filter@v3
+        id: manifests
+        with:
+          filters: |
+            changed:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/*/Cargo.toml'
+
+      - name: Package
+        if: steps.manifests.outputs.changed == 'true'
+        run: cargo package --workspace --exclude henad-tutorial --no-verify --locked
+
+  # Holds the declared `rust-version` true.
+  msrv:
+    name: msrv
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install eframe build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev
+
+      - name: Install 1.95
+        run: rustup toolchain install 1.95 --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check
+        run: cargo +1.95 check --workspace --locked
+
+  # The docs.rs builds, reproduced. henad-app's wasm32 half needs the atomics flags, which only a
+  # nightly applies. They go in both variables, since only `RUSTFLAGS` reaches the dependencies.
+  docs:
+    name: docs
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install eframe build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev
+
+      - name: Install nightly
+        run: |
+          rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+            --component rust-src,clippy --target wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Native docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps --all-features
+
+      - name: henad-app wasm32 docs
+        env:
+          CARGO_TARGET_DIR: target/docs-wasm
+          RUSTFLAGS: -C target-feature=+atomics,+bulk-memory
+          RUSTDOCFLAGS: -D warnings -C target-feature=+atomics,+bulk-memory
+        run: |
+          RUSTUP_TOOLCHAIN="$(cat templates/model-project/scripts/web-toolchain)" \
+            cargo doc --locked -p henad-app --no-deps --target wasm32-unknown-unknown

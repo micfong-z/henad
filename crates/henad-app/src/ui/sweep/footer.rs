@@ -178,7 +178,7 @@ pub fn problems_chip(lines: &[IssueLine]) -> Option<(IssueKind, String)> {
     Some((count.kind()?, count.phrase()?))
 }
 
-/// Returns the hover text of a disabled Start: up to [`MAX_START_REASONS`] problems of `lines`, and a count of the
+/// Returns the hover text of a disabled Start: up to `MAX_START_REASONS` problems of `lines`, and a count of the
 /// rest.
 pub fn start_refusal(lines: &[IssueLine]) -> String {
     let mut text = "Fix these first:".to_owned();

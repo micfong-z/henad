@@ -7,8 +7,14 @@ cargo check --quiet --workspace --all-targets
 # `wasm-bindgen-rayon` refuses to compile without them.
 cargo check --quiet -p henad-core -p henad-compute -p henad-models -p henad-explore --all-features --lib --target wasm32-unknown-unknown
 cargo fmt --all -- --check
+./scripts/check_packaging.sh
+# CI runs cargo-deny on every pull request, and a machine without it skips the check here.
+if cargo deny --version >/dev/null 2>&1; then
+    cargo deny --log-level error --locked check
+fi
 cargo clippy --quiet --workspace --all-targets --all-features --  -D warnings -W clippy::all
 cargo test --quiet --workspace --all-targets --all-features
 cargo test --quiet --workspace --doc
+RUSTDOCFLAGS="-D warnings" cargo doc --quiet --workspace --no-deps --all-features
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ./scripts/build_web.sh build

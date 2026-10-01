@@ -2,15 +2,17 @@
 name = "henad-app"
 default-run = "henad-app"
 version.workspace = true
-description = "Henad desktop and web GUI application."
+description = "Desktop and web app for Henad, a parallel agent-based modelling engine."
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
-readme.workspace = true
+documentation = "https://docs.rs/henad-app"
+readme = "README.md"
+keywords = ["agent-based-model", "simulation", "egui", "gui", "visualization"]
+categories = ["simulation", "science", "visualization", "gui"]
 
 [features]
 # Lets an external inspector (egui_mcp) drive the app. Off unless asked for, and inert at runtime
@@ -55,3 +57,10 @@ web-sys = { workspace = true }
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+# wasm-bindgen-rayon refuses to compile for wasm32 without atomics. Native targets warn about the
+# flags and continue.
+rustc-args = ["-C", "target-feature=+atomics,+bulk-memory"]
+rustdoc-args = ["--cfg", "docsrs"]

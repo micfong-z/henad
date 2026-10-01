@@ -78,7 +78,7 @@ impl LevelNoun {
 
 /// Returns the note of a row whose values are `preview`, as in "5 values: 0.1, 0.2, 0.3, 0.4, 0.5".
 ///
-/// Past [`MAX_NOTE_VALUES`] values the note lists the first few and the last. In a search, listed values are picked
+/// Past `MAX_NOTE_VALUES` values the note lists the first few and the last. In a search, listed values are picked
 /// among and a range is searched whole. Elsewhere a design draws from a range.
 pub fn preview_note(preview: &LevelPreview, noun: LevelNoun, search: bool) -> String {
     match preview {

@@ -329,7 +329,7 @@ Varies one parameter at a time. Other parameters use values from the Parameters 
 ## Commands
 
 ```bash
-./check.sh                    # full CI-equivalent check — run this before considering work done
+./check.sh                    # CI's checks bar the slow ones — run this before considering work done
 cargo check --workspace --all-targets
 cargo check -p henad-core -p henad-compute -p henad-models -p henad-explore --all-features --lib \
   --target wasm32-unknown-unknown          # typechecks without atomics; henad-app cannot
@@ -338,7 +338,18 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::
 cargo test --workspace --all-targets
 cargo test --workspace --doc
 ./scripts/build_web.sh build  # builds the WASM/web target
+./scripts/check_packaging.sh  # workspace versions, licence copies, paths that climb out of a crate
+cargo deny --locked check     # advisories, licences and sources
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+  --component rust-src,clippy --target wasm32-unknown-unknown   # the pinned nightly the web build needs
 ```
+
+`./check.sh` runs every line above but the install, and skips `cargo deny` where cargo-deny is not
+installed. CI alone runs `cargo package --workspace --exclude henad-tutorial --no-verify --locked`
+(the `package` job, on manifest changes), `cargo +1.95 check --workspace --locked` (`msrv`), and
+henad-app's wasm32 docs on the pinned nightly with the atomics flags in `RUSTFLAGS` and
+`RUSTDOCFLAGS` (`docs`).
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
@@ -373,13 +384,21 @@ Regenerate the third-party licence page: `cargo about generate about.hbs -o docs
 dependency tree disagree). A crate shipping two files under one licence gets a `clarify` entry in
 `about.toml`, as `rfd` and `miniz_oxide` have. Left alone, cargo-about keeps whichever file its
 directory walk finds first, and walk order depends on the filesystem. A page generated on macOS can
-then fail the check on Linux, or pass it by luck, as `miniz_oxide` did.
+then fail the check on Linux, or pass it by luck, as `miniz_oxide` did. The app's four fonts are no
+crates, and their section of the page is static HTML in `about.hbs`. Their sources, licences and the
+procedure that rebuilds Henad Sans and Henad Mono from IBM Plex are in
+`crates/henad-app/assets/fonts/SOURCES.md`.
 
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).
-The web build is the exception and runs on nightly, which `scripts/build_web.sh` selects. Threads on
-wasm need `-C target-feature=+atomics,+bulk-memory,+mutable-globals` and a std rebuilt to match, so
-nightly needs `rust-src`. That script is the only supported way to build for the web; a bare `trunk
-build` produces a binary whose thread pool cannot start.
+The web build is the exception and runs on one dated nightly, named in
+`templates/model-project/scripts/web-toolchain` and selected by `scripts/build_web.sh`, which prints
+the install line above when the toolchain or its `rust-src` is missing. The Trunk release sits beside
+it in `templates/model-project/scripts/trunk-version`. CI, vercel.json and the docs read both files,
+and the repository holds one pin. Threads on wasm need
+`-C target-feature=+atomics,+bulk-memory,+mutable-globals` and a std rebuilt to match, so the nightly
+needs `rust-src`. That script is the only supported way to build for the web; a bare `trunk build`
+produces a binary whose thread pool cannot start. It also unsets `CARGO_ENCODED_RUSTFLAGS`, which
+would otherwise outrank the `RUSTFLAGS` it sets.
 
 ### Environment variables
 

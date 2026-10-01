@@ -2,7 +2,7 @@
 //!
 //! A cursor steps its run a slice at a time, fires the run's actions and samples it at every tick its
 //! [`MeasurePlan`] names. The CPU executors drive their runs through cursors. A GPU run steps on a track of
-//! `exec::gpu` instead, and both end a run through [`run_outcome`].
+//! `exec::gpu` instead, and both end a run through `run_outcome`.
 
 use std::sync::Arc;
 use std::time::Duration;

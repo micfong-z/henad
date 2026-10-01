@@ -47,7 +47,7 @@ henad_core::actions! {
 /// chunk per tick rather than drawn per call.
 ///
 /// The reference's biased neighbour tie-break is reproduced rather than corrected, see
-/// [`step::advect_agent`].
+/// `step::advect_agent`.
 pub struct AntsModel;
 
 pub struct AntParams {

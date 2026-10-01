@@ -23,6 +23,15 @@ Go ahead and open a PR if you want to contribute small changes.
 For larger changes, please create an issue first to discuss your ideas to aviod duplicate work!
 
 You can test your code with `./check.sh`.
+Its last step builds the web app, which needs the dated nightly that `templates/model-project/scripts/web-toolchain` names, with `rust-src`:
+
+```bash
+rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+  --component rust-src,clippy --target wasm32-unknown-unknown
+```
+
+`./check.sh` also runs `cargo deny` when [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) is installed.
+CI runs it on every pull request, together with the jobs `./check.sh` leaves out: a `cargo package` pass, a check at the minimum supported Rust version, and the wasm32 documentation of henad-app.
 
 ## AI usage
 

@@ -1,15 +1,17 @@
 [package]
 name = "henad-cli"
 version.workspace = true
-description = "Henad CLI application."
+description = "Command-line benchmark and sweep runner for Henad, a parallel agent-based modelling engine."
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
-readme.workspace = true
+documentation = "https://docs.rs/henad-cli"
+readme = "README.md"
+keywords = ["agent-based-model", "simulation", "benchmark", "parameter-sweep", "cli"]
+categories = ["simulation", "science", "command-line-utilities"]
 
 [[bin]]
 name = "henad-cli"
@@ -32,3 +34,7 @@ rayon = { workspace = true }
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
