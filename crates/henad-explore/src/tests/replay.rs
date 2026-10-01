@@ -114,7 +114,7 @@ fn a_replay_of_a_planned_run_matches_its_sweep_row() {
 
         let replay = plan.replay(run_id).expect("the run is planned");
         assert_eq!(replay.ticks, outcome.ticks);
-        let Ok(ModelState::Cpu(state)) = (sir.create)(&replay.params, Some(replay.seed)) else {
+        let Ok(ModelState::Cpu(state)) = sir.build(&replay.params, Some(replay.seed), None) else {
             panic!("SIR builds on the CPU");
         };
         let mut thread = SimThread::new(state, 60.0, None, FaultSink::new());
@@ -155,7 +155,7 @@ fn a_gpu_schedule_matches_export_stats() {
     };
     let gpu_sir = entry("gpu_sir", Some(&ctx));
     let params = resolve_params(
-        &gpu_sir.param_descriptors,
+        gpu_sir.param_descriptors(),
         &fixed(&[
             ("grid_width", "64"),
             ("grid_height", "64"),
@@ -171,9 +171,9 @@ fn a_gpu_schedule_matches_export_stats() {
         "seed_outbreak@40",
     ]
     .map(str::to_owned);
-    let schedule = Schedule::parse(&raw, "gpu_sir", &gpu_sir.action_descriptors).expect("declared actions");
+    let schedule = Schedule::parse(&raw, "gpu_sir", gpu_sir.action_descriptors()).expect("declared actions");
     let (seed, total) = (42, 40);
-    let build = || match (gpu_sir.create)(&params, Some(seed)) {
+    let build = || match gpu_sir.build(&params, Some(seed), Some(&ctx)) {
         Ok(ModelState::Gpu(state)) => state,
         Ok(ModelState::Cpu(_)) | Err(_) => panic!("gpu_sir builds on the GPU"),
     };

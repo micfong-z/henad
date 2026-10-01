@@ -168,7 +168,7 @@ fn ants_results_do_not_depend_on_lane_width() {
         .map(|layout| {
             let runs = RunsWriter::new(
                 Vec::new(),
-                &ants.param_descriptors,
+                ants.param_descriptors(),
                 plan.actions(),
                 measure.reducers().names(),
             )
