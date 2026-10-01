@@ -46,10 +46,10 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
         ui.add_space(4.0);
         ui.strong("Host");
-        kv_grid(ui, "system_host_grid").show(ui, |ui| {
+        kv_grid(ui, "system_host_grid").show(ui, |ui, rows| {
             ui.label("Platform");
             ui.label(format!("{} ({})", info.host.os, info.host.arch));
-            ui.end_row();
+            rows.end_row(ui);
 
             ui.label("Logical CPUs");
             ui.label(
@@ -57,7 +57,7 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
                     .logical_cpus
                     .map_or_else(|| "Unknown".to_owned(), |n| n.to_string()),
             );
-            ui.end_row();
+            rows.end_row(ui);
 
             ui.label("Worker threads");
             ui.label(
@@ -65,28 +65,28 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
                     .worker_threads
                     .map_or_else(|| "None (single-threaded)".to_owned(), |n| n.to_string()),
             );
-            ui.end_row();
+            rows.end_row(ui);
         });
 
         ui.add_space(8.0);
         ui.strong("Graphics");
-        kv_grid(ui, "system_gpu_grid").show(ui, |ui| {
+        kv_grid(ui, "system_gpu_grid").show(ui, |ui, rows| {
             ui.label("Adapter");
             ui.label(info.adapter.name.as_str());
-            ui.end_row();
+            rows.end_row(ui);
 
             ui.label("Type");
             ui.label(device_type_name(info.adapter.device_type));
-            ui.end_row();
+            rows.end_row(ui);
 
             ui.label("Backend");
             ui.label(info.adapter.backend.to_string());
-            ui.end_row();
+            rows.end_row(ui);
 
             if !info.adapter.driver_info.is_empty() {
                 ui.label("Driver");
                 ui.label(info.adapter.driver_info.as_str());
-                ui.end_row();
+                rows.end_row(ui);
             }
 
             ui.label("Timestamp query");
@@ -95,7 +95,7 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
             } else {
                 "Unavailable"
             });
-            ui.end_row();
+            rows.end_row(ui);
 
             ui.label("Network edges");
             if info.vertex_storage {
@@ -105,7 +105,7 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
                     "Drawing edges is unsupported on this GPU. Network models should still run normally.",
                 );
             }
-            ui.end_row();
+            rows.end_row(ui);
         });
 
         ui.add_space(8.0);
@@ -118,7 +118,7 @@ pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
 fn limits_grid(ui: &mut egui::Ui, info: &RuntimeInfo) {
     let (granted, available) = (&info.granted, &info.available);
 
-    kv_grid(ui, "system_limits_grid").show(ui, |ui| {
+    kv_grid(ui, "system_limits_grid").show(ui, |ui, rows| {
         let mut row = |label: &str, granted: String, available: String| {
             ui.label(label);
             ui.horizontal(|ui| {
@@ -129,7 +129,7 @@ fn limits_grid(ui: &mut egui::Ui, info: &RuntimeInfo) {
                     ui.weak(format!(" of {available}"));
                 }
             });
-            ui.end_row();
+            rows.end_row(ui);
         };
 
         row(

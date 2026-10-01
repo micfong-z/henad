@@ -107,8 +107,17 @@ impl TimestampQuery {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             drop(tx.send(result));
         });
-        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-        rx.recv().ok()?.ok()?;
+        let received = match device.poll(wgpu::PollType::wait_indefinitely()) {
+            Ok(_) => rx.recv().ok(),
+            // The map can have finished before the wait failed.
+            Err(_) => rx.try_recv().ok(),
+        };
+        // A map given up while pending or mapped makes every later `map_async` on the buffer fail at once.
+        let Some(result) = received else {
+            self.readback_buffer.unmap();
+            return None;
+        };
+        result.ok()?;
 
         // Unmap on the error path too, or the next `map_async` finds the buffer still mapped.
         let Ok(data) = slice.get_mapped_range() else {

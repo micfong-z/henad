@@ -13,6 +13,17 @@
 
 use std::mem::size_of;
 
+/// State of a stats readback after a poll.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatsPoll {
+    /// A readback has begun and not finished.
+    Pending,
+    /// No readback is in flight, and none has begun or the latest to finish succeeded.
+    Landed,
+    /// No readback is in flight, and the latest to finish failed, leaving the values from before it.
+    Failed,
+}
+
 /// A GPU-side `u32` accumulator of `count` counters, plus the staging buffer used to read it back
 /// without blocking.
 pub struct CounterReadback {
@@ -23,6 +34,8 @@ pub struct CounterReadback {
     pending: Option<flume::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     /// Set once a fresh value is in `staging` and waiting to be mapped.
     copied: bool,
+    /// Whether the latest map to finish failed.
+    failed: bool,
     values: Vec<u32>,
 }
 
@@ -47,6 +60,7 @@ impl CounterReadback {
             staging,
             pending: None,
             copied: false,
+            failed: false,
             values: vec![0; count],
         }
     }
@@ -102,45 +116,74 @@ impl CounterReadback {
     ///
     /// `device.poll` is what actually runs wgpu's map callbacks on native, so this must be called
     /// on every loop iteration, not only when a value is expected.
-    /// Returns whether a fresh value landed in [`Self::values`].
-    pub fn poll(&mut self, device: &wgpu::Device) -> bool {
+    /// Returns the state of the readback after the poll.
+    pub fn poll(&mut self, device: &wgpu::Device) -> StatsPoll {
         let Some(rx) = self.pending.as_ref() else {
-            return false;
+            return self.status();
         };
 
         drop(device.poll(wgpu::PollType::Poll));
 
-        let Ok(result) = rx.try_recv() else {
-            return false;
-        };
-        self.pending = None;
-        self.finish_map(result)
+        match rx.try_recv() {
+            Ok(result) => {
+                self.pending = None;
+                self.failed = !self.finish_map(result);
+            }
+            // The callback was dropped without running, so no value can arrive.
+            Err(flume::TryRecvError::Disconnected) => self.abandon_map(),
+            Err(flume::TryRecvError::Empty) => {}
+        }
+        self.status()
     }
 
     /// Blocking counterpart to [`Self::poll`]: waits for the GPU to drain, then consumes the map.
     ///
     /// Only for one-shot snapshots (initial load, pause, step-once). Never call from the hot
     /// batching loop.
-    /// Returns whether a fresh value landed in [`Self::values`].
+    /// Returns the state of the readback after the wait.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn poll_blocking(&mut self, device: &wgpu::Device) -> bool {
-        let Some(rx) = self.pending.take() else {
-            return false;
-        };
-        if device.poll(wgpu::PollType::wait_indefinitely()).is_err() {
-            return false;
+    pub fn poll_blocking(&mut self, device: &wgpu::Device) -> StatsPoll {
+        if let Some(rx) = self.pending.as_ref() {
+            let received = match device.poll(wgpu::PollType::wait_indefinitely()) {
+                Ok(_) => rx.recv().ok(),
+                // The map can have finished before the wait failed.
+                Err(_) => rx.try_recv().ok(),
+            };
+            match received {
+                Some(result) => {
+                    self.pending = None;
+                    self.failed = !self.finish_map(result);
+                }
+                None => self.abandon_map(),
+            }
         }
-        let Ok(result) = rx.recv() else {
-            return false;
-        };
-        self.finish_map(result)
+        self.status()
     }
 
     /// Nothing to wait on. WebGPU's `poll` is a no-op and the map resolves on the JS microtask
     /// queue, so a wait here hangs the tab. The value lands on a later [`Self::poll`] instead.
     #[cfg(target_arch = "wasm32")]
-    pub fn poll_blocking(&mut self, device: &wgpu::Device) -> bool {
+    pub fn poll_blocking(&mut self, device: &wgpu::Device) -> StatsPoll {
         self.poll(device)
+    }
+
+    fn status(&self) -> StatsPoll {
+        if self.pending.is_some() {
+            StatsPoll::Pending
+        } else if self.failed {
+            StatsPoll::Failed
+        } else {
+            StatsPoll::Landed
+        }
+    }
+
+    /// Gives up the map in flight as failed, and unmaps the staging buffer.
+    ///
+    /// Otherwise the buffer stays mapped or pending, and the next [`Self::encode_copy`] records a copy into it.
+    fn abandon_map(&mut self) {
+        self.pending = None;
+        self.failed = true;
+        self.staging.unmap();
     }
 
     /// Reads and unmaps the staging buffer after a completed `map_async`.
@@ -179,5 +222,109 @@ impl CounterReadback {
     /// per element type.
     pub fn values_f32(&self) -> impl Iterator<Item = f32> + '_ {
         self.values.iter().copied().map(f32::from_bits)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::{CounterReadback, StatsPoll};
+    use crate::gpu::{GpuContext, headless_context};
+
+    /// Writes `values` into the accumulator, submits their copy to the staging buffer and begins the map.
+    fn begin_read_back(ctx: &GpuContext, readback: &mut CounterReadback, values: &[u32]) {
+        ctx.queue
+            .write_buffer(&readback.storage, 0, bytemuck::cast_slice(values));
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        readback.encode_copy(&mut encoder);
+        ctx.queue.submit(Some(encoder.finish()));
+        readback.begin_map();
+    }
+
+    #[test]
+    fn a_completed_map_polls_as_landed() {
+        let Some(ctx) = headless_context("henad_readback_landed_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_completed_map_polls_as_landed: no adapter");
+            return;
+        };
+        let mut readback = CounterReadback::new(&ctx.device, "henad_readback_landed_test", 3);
+
+        begin_read_back(&ctx, &mut readback, &[1, 2, 3]);
+        assert!(readback.is_pending(), "a begun map is pending");
+        assert_eq!(readback.poll_blocking(&ctx.device), StatsPoll::Landed);
+        assert_eq!(readback.values(), [1, 2, 3]);
+
+        begin_read_back(&ctx, &mut readback, &[4, 5, 6]);
+        ctx.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the copy runs");
+        assert_eq!(
+            readback.poll(&ctx.device),
+            StatsPoll::Landed,
+            "a map the device completed lands on the next poll"
+        );
+        assert_eq!(readback.values(), [4, 5, 6]);
+        assert_eq!(
+            readback.poll(&ctx.device),
+            StatsPoll::Landed,
+            "a poll with nothing in flight reports the latest map"
+        );
+    }
+
+    #[test]
+    fn a_failed_map_polls_as_failed_and_keeps_the_values() {
+        let Some(ctx) = headless_context("henad_readback_failed_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_failed_map_polls_as_failed_and_keeps_the_values: no adapter");
+            return;
+        };
+        let mut readback = CounterReadback::new(&ctx.device, "henad_readback_failed_test", 3);
+        begin_read_back(&ctx, &mut readback, &[1, 2, 3]);
+        assert_eq!(readback.poll_blocking(&ctx.device), StatsPoll::Landed);
+
+        // A destroyed staging buffer refuses the map.
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        readback.encode_copy(&mut encoder);
+        ctx.queue.submit(Some(encoder.finish()));
+        readback.staging.destroy();
+        readback.begin_map();
+
+        assert_eq!(readback.poll_blocking(&ctx.device), StatsPoll::Failed);
+        assert_eq!(readback.values(), [1, 2, 3], "a failed map leaves the values it found");
+        assert_eq!(readback.poll(&ctx.device), StatsPoll::Failed);
+        assert!(ctx.faults.take().is_some(), "the device reports the refused map");
+    }
+
+    /// The regression. A map given up without being read left the staging buffer mapped or pending, and the next
+    /// copy into it was a validation error.
+    #[test]
+    fn an_abandoned_map_leaves_the_next_readback_working() {
+        let Some(ctx) = headless_context("henad_readback_abandoned_test", wgpu::Features::empty()) else {
+            log::warn!("skipping an_abandoned_map_leaves_the_next_readback_working: no adapter");
+            return;
+        };
+        let mut readback = CounterReadback::new(&ctx.device, "henad_readback_abandoned_test", 3);
+
+        begin_read_back(&ctx, &mut readback, &[1, 2, 3]);
+        readback.abandon_map();
+        assert_eq!(
+            readback.poll(&ctx.device),
+            StatsPoll::Failed,
+            "an abandoned map polls as failed"
+        );
+
+        // This time the map lands before it is given up.
+        begin_read_back(&ctx, &mut readback, &[4, 5, 6]);
+        ctx.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the map runs");
+        readback.abandon_map();
+
+        begin_read_back(&ctx, &mut readback, &[7, 8, 9]);
+        assert_eq!(readback.poll_blocking(&ctx.device), StatsPoll::Landed);
+        assert_eq!(readback.values(), [7, 8, 9]);
+        assert!(ctx.faults.take().is_none(), "a copy went into a mapped staging buffer");
     }
 }

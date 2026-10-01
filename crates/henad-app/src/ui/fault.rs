@@ -24,7 +24,9 @@ pub fn fault_modal(ctx: &Context, app: &mut AppState) {
         .get(app.selected_model)
         .map_or_else(|| "Model".to_owned(), |entry| entry.name.clone());
     let lead = match &fault.kind {
-        FaultKind::Device(_) => format!("GPU reported an error while {} for {subject}.", fault.during),
+        FaultKind::Device(_) | FaultKind::Poll(_) => {
+            format!("GPU reported an error while {} for {subject}.", fault.during)
+        }
         FaultKind::Panic { location: Some(at), .. } => {
             format!("{subject} panicked while {}, at {at}.", fault.during)
         }
@@ -33,6 +35,7 @@ pub fn fault_modal(ctx: &Context, app: &mut AppState) {
     };
     let detail = match &fault.kind {
         FaultKind::Device(error) => error.to_string(),
+        FaultKind::Poll(error) => error.to_string(),
         FaultKind::Panic { message, .. } | FaultKind::Refused(message) => message.clone(),
     };
 

@@ -1,0 +1,31 @@
+# An SIR sweep of the 4 configs listed in sir_design.csv, each run 4 times, 16 runs in all.
+# Run it with `henad-cli --spec crates/henad-explore/specs/sir_table.toml --out sir-table`.
+
+model = "sir"
+
+[set]
+grid_width = 128
+grid_height = 128
+
+[run]
+steps = 800
+replicates = 4
+
+[measure]
+stats_every = 10
+
+[seeds]
+root = 7
+
+[[action]]
+id = "seed_outbreak"
+name = "second_wave"
+tick = 400
+
+# --8<-- [start:table]
+# One config per row. The header names parameter ids, or action.<name> for an action's tick, and a column left out
+# keeps its value from [set], the model's default or the action's tick.
+[[block]]
+design = "table"
+file = "sir_design.csv"    # relative to this file
+# --8<-- [end:table]

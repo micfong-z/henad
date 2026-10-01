@@ -34,12 +34,14 @@ pub(crate) fn layout_entry(i: u32, decl: &BindingDecl) -> wgpu::BindGroupLayoutE
 }
 
 /// Labelled as wgpu would label it, so a message points at something greppable.
+#[derive(Debug)]
 pub struct Alloc {
     pub label: String,
     pub bytes: u64,
 }
 
 /// Counted against a different limit than the buffers' size.
+#[derive(Debug)]
 pub struct PassBindings {
     pub label: String,
     pub storage: u32,
@@ -49,7 +51,7 @@ pub struct PassBindings {
 ///
 /// Reduction intermediates and the engine's own index and scan passes are left out: both are fixed
 /// rather than declared, and both are negligible next to what they sit beside.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Demand {
     pub buffers: Vec<Alloc>,
     /// Already capped by [`crate::display_scale`].

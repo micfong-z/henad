@@ -1,0 +1,44 @@
+# A Pattern Space Exploration (PSE) of the SIR model, looking for as many distinct pairs of epidemic peak and peak
+# tick as the infection and recovery rates can give.
+# It asks for 1200 evaluations of 2 replicates each, 2400 runs in all.
+# Run it with `henad-cli --spec crates/henad-explore/specs/sir_search_pse.toml --out sir-pse`.
+
+model = "sir"
+
+[set]
+grid_width = 64
+grid_height = 64
+
+[run]
+steps = 400
+replicates = 2
+stop = { condition = "Infected <= 0", min_tick = 20 }
+
+[measure]
+stats_every = 5
+series_every = 0
+default_reducers = false
+reducers = [{ column = "Infected", kinds = ["max", "argmax"] }]
+
+[seeds]
+root = 7
+
+# --8<-- [start:search]
+[search]
+algorithm = "pse"
+max_evaluations = 1200
+batch_size = 64
+space = [
+  { param = "infection_rate", range = { min = 0.05, max = 0.9 } },
+  { param = "recovery_rate", range = { min = 0.01, max = 0.3 } },
+]
+# --8<-- [end:search]
+
+# --8<-- [start:pse]
+[search.pse]
+x_axis = { column = "Infected:max", min = 0, max = 4096, cells = 32 }     # the peak, in cells of 128 infected
+y_axis = { column = "Infected:argmax", min = 0, max = 50, cells = 20 }    # the peak's tick, in cells of 2.5 ticks
+aggregate = "median"       # folds each evaluation's replicates into one point
+initial_samples = 256      # candidates drawn at random before any is bred from the archive
+mutation_scale = 0.1       # largest step of a mutated gene, as a fraction of its range
+# --8<-- [end:pse]

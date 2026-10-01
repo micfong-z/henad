@@ -18,6 +18,7 @@ use henad_core::authoring::model::network_model::NetworkModel;
 use henad_core::metadata::{Backend, ModelMetadata, Structure};
 use henad_core::model::{Model as _, SimState};
 use henad_core::params::{ParamDescriptor, ParamValue};
+use henad_core::send_sync::{WasmNotSend, WasmNotSync};
 use henad_core::topology::TopologyHint;
 use henad_core::view::StatDescriptor;
 
@@ -43,11 +44,21 @@ pub enum ModelState {
 ///
 /// Fallible. A model author can get a kernel wrong, and a device can refuse what
 /// [`ModelEntry::shortfalls`] could not know to ask about. Neither may end the process.
-pub type ModelFactory = Box<dyn Fn(&[ParamValue], Option<u64>) -> Result<ModelState, Fault>>;
+pub type ModelFactory = Box<dyn Factory>;
+
+/// Closure behind a [`ModelFactory`].
+pub trait Factory: Fn(&[ParamValue], Option<u64>) -> Result<ModelState, Fault> + WasmNotSend + WasmNotSync {}
+
+impl<F: Fn(&[ParamValue], Option<u64>) -> Result<ModelState, Fault> + WasmNotSend + WasmNotSync> Factory for F {}
 
 /// Captures the same [`GpuContext`] the factory does, so a caller can ask whether a model would
 /// build without holding a device of its own.
-pub type CapacityFn = Box<dyn Fn(&[ParamValue]) -> Demand>;
+pub type CapacityFn = Box<dyn Capacity>;
+
+/// Closure behind a [`CapacityFn`], bounded as [`Factory`] is.
+pub trait Capacity: Fn(&[ParamValue]) -> Demand + WasmNotSend + WasmNotSync {}
+
+impl<F: Fn(&[ParamValue]) -> Demand + WasmNotSend + WasmNotSync> Capacity for F {}
 
 /// An entry in the model registry.
 pub struct ModelEntry {
@@ -82,7 +93,7 @@ impl ModelEntry {
 }
 
 /// Create a `ModelEntry` from a `GridModel` implementation.
-fn register_grid_model<M: GridModel>() -> ModelEntry {
+pub fn register_grid_model<M: GridModel>() -> ModelEntry {
     ModelEntry {
         name: M::NAME.to_owned(),
         id: M::ID.to_owned(),
@@ -108,7 +119,7 @@ fn register_grid_model<M: GridModel>() -> ModelEntry {
 }
 
 /// Create a `ModelEntry` from an `AgentModel` implementation.
-fn register_agent_model<A: AgentModel>() -> ModelEntry {
+pub fn register_agent_model<A: AgentModel>() -> ModelEntry {
     ModelEntry {
         name: A::NAME.to_owned(),
         id: A::ID.to_owned(),
@@ -141,7 +152,7 @@ fn register_agent_model<A: AgentModel>() -> ModelEntry {
 }
 
 /// Create a `ModelEntry` from a `NetworkModel` implementation.
-fn register_network_model<N: NetworkModel>() -> ModelEntry {
+pub fn register_network_model<N: NetworkModel>() -> ModelEntry {
     ModelEntry {
         name: N::NAME.to_owned(),
         id: N::ID.to_owned(),
@@ -170,7 +181,7 @@ fn register_network_model<N: NetworkModel>() -> ModelEntry {
 
 /// Create a `ModelEntry` from a `GpuGridModel` implementation, capturing the injected
 /// device/queue.
-fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
+pub fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
     let model = GpuGridModelDescriptor::<M>::new(ctx.clone());
     let factory_ctx = ctx.clone();
     let capacity_ctx = ctx.clone();
@@ -203,7 +214,7 @@ fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
 
 /// Create a `ModelEntry` from a `GpuAgentModel` implementation, capturing the injected
 /// device/queue.
-fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
+pub fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
     let model = GpuAgentModelDescriptor::<M>::new(ctx.clone());
     let factory_ctx = ctx.clone();
     let capacity_ctx = ctx.clone();
@@ -286,7 +297,7 @@ pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
 
 #[cfg(test)]
 mod tests {
-    use henad_compute::gpu::MAX_STEPS_PER_SUBMISSION;
+    use henad_compute::gpu::{MAX_STEPS_PER_SUBMISSION, StatsPoll, stepping};
 
     use super::*;
 
@@ -562,6 +573,13 @@ mod tests {
         assert!(location.contains("broken.rs"), "{location}");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_model_entry_can_be_shared_between_threads() {
+        fn assert_send_and_sync<T: Send + Sync>() {}
+        assert_send_and_sync::<ModelEntry>();
+    }
+
     #[test]
     fn registry_without_gpu_context_offers_no_gpu_models() {
         let entries = model_registry(None);
@@ -635,6 +653,47 @@ mod tests {
                 "{}: every stat read back zero after a submission of {MAX_STEPS_PER_SUBMISSION} steps, which is what a dropped submission looks like",
                 entry.id
             );
+        }
+    }
+
+    /// A slice sampled through the stats passes alone reads back what the snapshot passes do, display included.
+    #[test]
+    fn a_sampled_slice_reads_back_what_a_snapshot_does() {
+        let Some(ctx) = crate::tests::support::headless_context("sampled_slice_device", wgpu::Features::empty()) else {
+            log::warn!("skipping a_sampled_slice_reads_back_what_a_snapshot_does: no adapter");
+            return;
+        };
+
+        for entry in model_registry(Some(ctx.clone())) {
+            let ModelState::Gpu(mut state) = build(&entry, &defaults(&entry)) else {
+                continue;
+            };
+            for count in [0, 17, MAX_STEPS_PER_SUBMISSION] {
+                let tick = state.tick() + u64::from(count);
+                let submission = stepping::submit_slice(&mut *state, &ctx, count, true);
+                assert!(
+                    state.stats_readback_pending(),
+                    "{}: a sampled slice begins its readback",
+                    entry.id
+                );
+                stepping::await_submission(&ctx, submission).expect("the slice runs");
+                assert_eq!(
+                    state.poll_stats_readback(&ctx.device, false),
+                    StatsPoll::Landed,
+                    "{}: the readback of a finished slice lands on the next poll",
+                    entry.id
+                );
+                assert_eq!(state.tick(), tick, "{}: tick after a slice of {count}", entry.id);
+                let sliced = state.stats();
+                let snapshot = stepping::sample_stats(&mut *state, &ctx);
+                assert_eq!(
+                    format!("{sliced:?}"),
+                    format!("{snapshot:?}"),
+                    "{}: stats at tick {tick}",
+                    entry.id
+                );
+            }
+            assert!(ctx.faults.take().is_none(), "{}: the device raised a fault", entry.id);
         }
     }
 

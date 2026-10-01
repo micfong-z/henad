@@ -2,7 +2,6 @@
 
 pub mod image;
 pub mod metadata;
-pub mod save;
 
 use henad_compute::snapshot::SnapshotView;
 use henad_core::export::{StatsWriteError, StatsWriter, state as state_export};
@@ -12,6 +11,7 @@ use crate::icons::material_design_icons::{
     MDI_ALERT, MDI_CHART_LINE, MDI_RECORD_CIRCLE_OUTLINE, MDI_STOP, MDI_TRAY_ARROW_DOWN,
 };
 use crate::state::AppState;
+use crate::ui::files::SaveTarget;
 
 /// A stat recording.
 pub enum Recording {
@@ -136,7 +136,7 @@ fn stats_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
             format!("{MDI_ALERT} History length is limited."),
         )
         .on_hover_text(format!(
-            "Turn on Unlimited history in the {MDI_CHART_LINE} Charts panel to capture full run history. Alternatively, use the {MDI_RECORD_CIRCLE_OUTLINE} Record button below."
+            "Turn on Unlimited history in the {MDI_CHART_LINE} Charts tab to capture full run history. Alternatively, press {MDI_RECORD_CIRCLE_OUTLINE} Record below."
         ));
     }
 
@@ -232,7 +232,7 @@ fn state_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
             loaded && dims.is_some(),
             egui::Button::new(format!("{MDI_TRAY_ARROW_DOWN} Save image")),
         )
-        .on_hover_text("Capture the layers as a PNG at their own resolution, not the panel's")
+        .on_hover_text("Capture layers as a PNG at native resolution")
         .clicked()
     {
         let name = file_name(app, "viewport", "png");
@@ -248,7 +248,7 @@ fn details_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
         .clicked()
     {
         let json = metadata::run_details(app);
-        app.save(&file_name(app, "run", "json"), json.into_bytes());
+        app.save_as(SaveTarget::Export, &file_name(app, "run", "json"), json.into_bytes());
     }
 }
 
@@ -277,7 +277,7 @@ fn export_history(app: &mut AppState) {
         }
     }
     match writer.into_inner() {
-        Ok((csv, _)) => app.save(&file_name(app, "stats", "csv"), csv),
+        Ok((csv, _)) => app.save_as(SaveTarget::Export, &file_name(app, "stats", "csv"), csv),
         Err(err) => app.export_status = Some(format!("Export failed: {err}")),
     }
 }
@@ -287,7 +287,7 @@ fn save_recording(app: &mut AppState) {
         return;
     };
     let bytes = csv.clone();
-    app.save(&file_name(app, "recording", "csv"), bytes);
+    app.save_as(SaveTarget::Export, &file_name(app, "recording", "csv"), bytes);
 }
 
 fn export_state(app: &mut AppState) {
@@ -321,7 +321,7 @@ fn export_state(app: &mut AppState) {
 
     match written {
         Ok(()) if out.is_empty() => app.export_status = Some("Model exposes no view to export".to_owned()),
-        Ok(()) => app.save(&file_name(app, "state", "txt"), out),
+        Ok(()) => app.save_as(SaveTarget::Export, &file_name(app, "state", "txt"), out),
         Err(err) => app.export_status = Some(format!("Export failed: {err}")),
     }
 }

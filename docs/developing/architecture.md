@@ -6,14 +6,16 @@ icon: material/crane
 
 # Architecture
 
-Henad is a workspace of five crates, arranged along one strict dependency direction.
+Henad is a workspace of six crates, arranged along one strict dependency direction.
 
 ```mermaid
 graph LR
   core["henad-core<br/><small>traits and types</small>"] --> compute["henad-compute<br/><small>engine and runners</small>"]
   compute --> models["henad-models<br/><small>concrete simulations</small>"]
   models --> app["henad-app<br/><small>egui UI</small>"]
-  models --> cli["henad-cli<br/><small>headless bench</small>"]
+  models --> explore["henad-explore<br/><small>sweeps and searches</small>"]
+  explore --> cli["henad-cli<br/><small>headless bench</small>"]
+  explore --> app
 ```
 
 The layers are easiest to follow from the bottom up, since each one depends only on those below it.
@@ -29,6 +31,14 @@ Network models are the exception to the mirroring.
 They run on the CPU only, and their engine has no counterpart in `gpu/`.
 
 **henad-models** holds the ten simulations that ship with the engine.
+**henad-explore** runs parameter sweeps and searches.
+It reads a spec, plans every config and replicate, steps several runs at once and writes each one's results to an output directory.
+A CPU model's runs step in lanes of their own, and a GPU model's runs share the device on tracks.
+It resumes a sweep that stopped part way, and merges the directories of a sweep split into shards.
+A search asks one of four methods for a batch of configs, runs the batch as a sweep runs its configs, and tells the method the results before it asks again.
+The app runs its sweeps through the same crate, on a thread of their own or, in a browser, between frames.
+It also acquires the headless GPU device the command line steps GPU models on.
+The parts of a sweep that need no engine, such as designs, seeds, reducers and summaries, sit in `henad_core::explore`, and so do the search methods.
 **henad-app** and **henad-cli** are the two front ends, one graphical and one headless.
 
 ## Data layout

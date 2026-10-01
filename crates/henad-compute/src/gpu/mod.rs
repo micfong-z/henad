@@ -14,6 +14,8 @@ pub mod grid_engine;
 pub mod limits;
 pub mod primitives;
 pub mod sim_thread;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod stepping;
 pub mod timing;
 pub mod view;
 
@@ -23,6 +25,7 @@ mod tests;
 pub use agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
 pub use capacity::Demand;
 pub use grid_engine::{GpuGridModelDescriptor, GpuGridState};
+pub use primitives::readback::StatsPoll;
 pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 pub use sim_thread::{GpuSimState, GpuStats};
 pub use view::agents::GpuAgents;
@@ -32,6 +35,9 @@ pub use view::display::{DisplayTarget, GpuDisplay};
 use tests::support::headless_context;
 
 pub use sim_thread::GpuSimThread;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::fault::{Fault, FaultSink};
 
@@ -49,6 +55,8 @@ pub struct GpuContext {
     pub target_format: wgpu::TextureFormat,
     /// Landing spot for an error nothing else caught. See [`GpuContext::new`].
     pub faults: FaultSink,
+    /// Set once the device is lost.
+    lost: Arc<AtomicBool>,
 }
 
 impl GpuContext {
@@ -61,6 +69,8 @@ impl GpuContext {
     /// A `GPUInternalError` still ends the web build. wgpu converts an error with
     /// `Error::from_js`. Anything other than a `GPUValidationError` or a `GPUOutOfMemoryError`
     /// panics there. A model provokes those two, and the handler reports them normally.
+    ///
+    /// The context also records the loss of the device. [`Self::is_lost`] reports it.
     pub fn new(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -77,11 +87,25 @@ impl GpuContext {
             log::error!("unhandled GPU error: {error}");
             sink.set_once(Fault::device("running on the GPU", error));
         }));
+        let lost = Arc::new(AtomicBool::new(false));
+        let callback_lost = Arc::clone(&lost);
+        device.set_device_lost_callback(move |reason, message| {
+            log::error!("GPU device lost ({reason:?}): {message}");
+            callback_lost.store(true, Ordering::Release);
+        });
         Self {
             device,
             queue,
             target_format,
             faults,
+            lost,
         }
+    }
+
+    /// Returns whether the device is lost. A lost device runs no more work.
+    ///
+    /// Note that a destroyed device counts as lost once a poll finds its queue empty.
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
     }
 }

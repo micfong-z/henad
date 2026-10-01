@@ -1,6 +1,7 @@
 //! Live throughput and frame-cost readouts.
 
 use crate::state::AppState;
+use crate::ui::KvGridRows;
 use henad_core::helpers::fmt_bytes;
 
 /// A label with dimmed leading zeros.
@@ -35,46 +36,46 @@ fn split_leading_zeros(s: &str) -> (&str, &str) {
     s.split_at(first_sig)
 }
 
-fn row(ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
+fn row(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: impl Into<egui::WidgetText>) {
     ui.label(label);
     ui.label(value);
-    ui.end_row();
+    rows.end_row(ui);
 }
 
-fn padded_row(ui: &mut egui::Ui, label: &str, value: &str) {
+fn padded_row(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: &str) {
     ui.label(label);
     padded_num_label(ui, value);
-    ui.end_row();
+    rows.end_row(ui);
 }
 
 pub fn performance_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    crate::ui::kv_grid(ui, "performance_grid").show(ui, |ui| {
+    crate::ui::kv_grid(ui, "performance_grid").show(ui, |ui, rows| {
         match &app.snapshot {
             Some(snap) => {
-                padded_row(ui, "Tick", &format!("{:09}", snap.tick));
-                padded_row(ui, "TPS", &format!("{:09.0}", snap.actual_tps));
-                row(ui, "Population", format!("{}", snap.population));
-                row(ui, "Sim memory", fmt_bytes(snap.heap_bytes as u64));
+                padded_row(ui, rows, "Tick", &format!("{:09}", snap.tick));
+                padded_row(ui, rows, "TPS", &format!("{:09.0}", snap.actual_tps));
+                row(ui, rows, "Population", format!("{}", snap.population));
+                row(ui, rows, "Sim memory", fmt_bytes(snap.heap_bytes as u64));
             }
-            None => row(ui, "Simulation", "Not loaded"),
+            None => row(ui, rows, "Simulation", "Not loaded"),
         }
 
         let dt = ui.ctx().input(|i| i.stable_dt);
         if dt > 0.0 {
-            padded_row(ui, "FPS", &format!("{:04.0}", 1.0 / dt));
+            padded_row(ui, rows, "FPS", &format!("{:04.0}", 1.0 / dt));
         } else {
-            row(ui, "FPS", "-");
+            row(ui, rows, "FPS", "-");
         }
 
         // 3 integer digits, 1 point, and 1 decimal.
         let engine_ms = app.snapshot.as_ref().map_or(0.0, |s| s.engine_ms);
-        padded_row(ui, "Engine", &format!("{engine_ms:05.1} ms"));
+        padded_row(ui, rows, "Engine", &format!("{engine_ms:05.1} ms"));
         // Shows the last snapshot's own cost.
         let view_ms = app.snapshot.as_ref().map_or(0.0, |s| s.view_ms);
-        padded_row(ui, "Prepare view", &format!("{view_ms:05.1} ms"));
+        padded_row(ui, rows, "Prepare view", &format!("{view_ms:05.1} ms"));
 
-        padded_row(ui, "Render", &format!("{:05.1} ms", app.timings.render_ms));
-        padded_row(ui, "UI", &format!("{:05.1} ms", app.timings.ui_ms));
+        padded_row(ui, rows, "Render", &format!("{:05.1} ms", app.timings.render_ms));
+        padded_row(ui, rows, "UI", &format!("{:05.1} ms", app.timings.ui_ms));
     });
 }
 

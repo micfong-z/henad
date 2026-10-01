@@ -4,6 +4,9 @@ use eframe::egui::{
     style::{Interaction, ScrollStyle, Selection, Spacing, TextCursorStyle, WidgetVisuals, Widgets},
 };
 use eframe::egui_wgpu;
+
+use crate::ui::mcs;
+
 pub fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
@@ -157,7 +160,7 @@ pub fn style() -> Style {
                     },
                     fg_stroke: Stroke {
                         width: 1.0,
-                        color: Color32::from_rgba_premultiplied(189, 189, 189, 255),
+                        color: mcs::GRAY_300,
                     },
                     expansion: 0.0,
                 },
@@ -176,7 +179,7 @@ pub fn style() -> Style {
                     },
                     fg_stroke: Stroke {
                         width: 1.0,
-                        color: Color32::from_rgba_premultiplied(224, 224, 224, 255),
+                        color: mcs::GRAY_200,
                     },
                     expansion: 0.0,
                 },
@@ -195,7 +198,7 @@ pub fn style() -> Style {
                     },
                     fg_stroke: Stroke {
                         width: 1.5,
-                        color: Color32::from_rgba_premultiplied(245, 245, 245, 255),
+                        color: mcs::GRAY_50,
                     },
                     expansion: 1.0,
                 },
@@ -239,18 +242,18 @@ pub fn style() -> Style {
                 },
             },
             selection: Selection {
-                bg_fill: Color32::from_rgba_premultiplied(2, 75, 160, 255),
+                bg_fill: mcs::BLUE_700,
                 stroke: Stroke {
                     width: 1.0,
                     color: Color32::from_rgba_premultiplied(192, 222, 255, 255),
                 },
             },
-            hyperlink_color: Color32::from_rgba_premultiplied(143, 199, 255, 255),
+            hyperlink_color: mcs::BLUE_200,
             faint_bg_color: Color32::from_rgba_premultiplied(5, 5, 5, 0),
             extreme_bg_color: Color32::from_rgba_premultiplied(10, 10, 10, 255),
             code_bg_color: Color32::from_rgba_premultiplied(64, 64, 64, 255),
-            warn_fg_color: Color32::from_rgba_premultiplied(236, 111, 39, 255),
-            error_fg_color: Color32::from_rgba_premultiplied(228, 55, 72, 255),
+            warn_fg_color: mcs::ORANGE_500,
+            error_fg_color: mcs::RED_500,
             window_corner_radius: CornerRadius {
                 nw: 0,
                 ne: 0,
@@ -263,10 +266,10 @@ pub fn style() -> Style {
                 blur: 15,
                 offset: [10, 20],
             },
-            window_fill: Color32::from_rgba_premultiplied(33, 33, 33, 255),
+            window_fill: mcs::GRAY_900,
             window_stroke: Stroke {
                 width: 1.0,
-                color: Color32::from_rgba_premultiplied(66, 66, 66, 255),
+                color: mcs::GRAY_800,
             },
             menu_corner_radius: CornerRadius {
                 nw: 0,
@@ -293,7 +296,7 @@ pub fn style() -> Style {
             button_frame: true,
             collapsing_header_frame: true,
             indent_has_left_vline: true,
-            striped: true,
+            striped: false,
             slider_trailing_fill: true,
             ..Default::default()
         },

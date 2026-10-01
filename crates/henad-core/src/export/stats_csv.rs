@@ -11,6 +11,7 @@
 use std::fmt;
 use std::io::{self, Write};
 
+use crate::export::csv::{escape_field, fmt_f64};
 use crate::view::{StatEntry, StatValue};
 
 /// A stat series could not be written.
@@ -51,11 +52,35 @@ const SUFFIX_SEP: char = '.';
 /// One output column, and the part of the stat series feeding it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Column {
+    /// Column name before CSV escaping.
+    name: String,
     /// Header text, already escaped for CSV.
     header: String,
+    /// Label of the series feeding the column.
+    label: &'static str,
     /// Index into the `Vec<StatEntry>` returned by `stats()`.
     series: usize,
     part: Part,
+}
+
+impl Column {
+    /// Returns this column's value in `stats`, the sample taken at `tick`.
+    fn value(&self, tick: u64, stats: &[StatEntry]) -> Result<f64, StatsWriteError> {
+        let Some(entry) = stats.get(self.series) else {
+            return Err(StatsWriteError::Shape(format!(
+                "stat series count changed mid-run: column '{}' needs series {} but tick {tick} has {}",
+                self.header,
+                self.series,
+                stats.len()
+            )));
+        };
+        part_value(&entry.value, self.part).ok_or_else(|| {
+            StatsWriteError::Shape(format!(
+                "stat series '{}' changed shape mid-run at tick {tick}: column '{}' no longer applies",
+                entry.label, self.header
+            ))
+        })
+    }
 }
 
 /// The scalar pulled out of a [`StatValue`] for one column.
@@ -72,6 +97,120 @@ enum Part {
     BucketTotal,
 }
 
+/// Column layout of a stat series, planned from one sample.
+///
+/// A scalar series is one column, a vector is three (`.x`, `.y` and `.magnitude`), and a histogram
+/// is one per bucket plus `.total`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatColumns {
+    columns: Vec<Column>,
+}
+
+impl StatColumns {
+    /// Derive the column layout from one sample.
+    pub fn plan(stats: &[StatEntry]) -> Self {
+        let mut columns = Vec::new();
+        for (series, entry) in stats.iter().enumerate() {
+            let mut push = |suffix: Option<&str>, part: Part| {
+                let name = match suffix {
+                    Some(suffix) => format!("{}{SUFFIX_SEP}{suffix}", entry.label),
+                    None => entry.label.to_owned(),
+                };
+                let header = escape_field(&name);
+                columns.push(Column {
+                    name,
+                    header,
+                    label: entry.label,
+                    series,
+                    part,
+                });
+            };
+            match &entry.value {
+                StatValue::Scalar(_) => push(None, Part::Scalar),
+                StatValue::Vector2D { .. } => {
+                    push(Some("x"), Part::VecX);
+                    push(Some("y"), Part::VecY);
+                    push(Some("magnitude"), Part::VecMagnitude);
+                }
+                StatValue::Histogram { edges, counts } => {
+                    // Label each bucket by its own range so the columns stay meaningful without the
+                    // reader needing the edge list. `edges` is bucket boundaries, so a bucket has a
+                    // lower and upper edge. Fall back to the index if the edges don't line up.
+                    for bucket in 0..counts.len() {
+                        let range = match (edges.get(bucket), edges.get(bucket + 1)) {
+                            (Some(lo), Some(hi)) => format!("[{}, {})", fmt_f64(*lo), fmt_f64(*hi)),
+                            _ => format!("bucket {bucket}"),
+                        };
+                        push(Some(&range), Part::Bucket(bucket));
+                    }
+                    push(Some("total"), Part::BucketTotal);
+                }
+            }
+        }
+        Self { columns }
+    }
+
+    pub fn len(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+
+    /// Name of column `i` before CSV escaping.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `i` is not below [`Self::len`].
+    pub fn name(&self, i: usize) -> &str {
+        &self.columns[i].name
+    }
+
+    /// Header of column `i`, escaped for CSV.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `i` is not below [`Self::len`].
+    pub fn header(&self, i: usize) -> &str {
+        &self.columns[i].header
+    }
+
+    /// Returns whether column `i` counts a single histogram bucket.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `i` is not below [`Self::len`].
+    pub fn is_bucket(&self, i: usize) -> bool {
+        matches!(self.columns[i].part, Part::Bucket(_))
+    }
+
+    /// Returns the index of the column called `name`.
+    ///
+    /// A bare vector or histogram label resolves to its magnitude or total column, the value
+    /// [`StatValue::scalar`] gives. An exact column name wins over a bare label.
+    pub fn resolve(&self, name: &str) -> Option<usize> {
+        self.columns.iter().position(|column| column.name == name).or_else(|| {
+            self.columns.iter().position(|column| {
+                column.label == name && matches!(column.part, Part::VecMagnitude | Part::BucketTotal)
+            })
+        })
+    }
+
+    /// Replaces the contents of `out` with one value per column, read from the sample `stats` taken at `tick`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatsWriteError::Shape`] when `stats` no longer fits the planned layout.
+    pub fn extract(&self, tick: u64, stats: &[StatEntry], out: &mut Vec<f64>) -> Result<(), StatsWriteError> {
+        out.clear();
+        for column in &self.columns {
+            out.push(column.value(tick, stats)?);
+        }
+        Ok(())
+    }
+}
+
 /// Streams a stat time series to a writer as CSV.
 ///
 /// Construct, [`push`](Self::push) once per sampled tick, then [`finish`](Self::finish). The
@@ -81,7 +220,7 @@ enum Part {
 pub struct StatsWriter<W: Write> {
     out: W,
     /// `None` until the first `push` fixes the layout.
-    columns: Option<Vec<Column>>,
+    columns: Option<StatColumns>,
     rows: u64,
 }
 
@@ -100,32 +239,19 @@ impl<W: Write> StatsWriter<W> {
     /// If writing fails, or if `stats` does not match the layout fixed by the first sample.
     pub fn push(&mut self, tick: u64, stats: &[StatEntry]) -> Result<(), StatsWriteError> {
         if self.columns.is_none() {
-            let columns = plan_columns(stats);
+            let columns = StatColumns::plan(stats);
             write!(self.out, "tick")?;
-            for column in &columns {
+            for column in &columns.columns {
                 write!(self.out, ",{}", column.header)?;
             }
             writeln!(self.out)?;
             self.columns = Some(columns);
         }
-        let columns = self.columns.as_deref().unwrap_or_default();
+        let columns = self.columns.as_ref().map_or(&[][..], |planned| &planned.columns[..]);
 
         write!(self.out, "{tick}")?;
         for column in columns {
-            let Some(entry) = stats.get(column.series) else {
-                return Err(StatsWriteError::Shape(format!(
-                    "stat series count changed mid-run: column '{}' needs series {} but tick {tick} has {}",
-                    column.header,
-                    column.series,
-                    stats.len()
-                )));
-            };
-            let value = extract(&entry.value, column.part).ok_or_else(|| {
-                StatsWriteError::Shape(format!(
-                    "stat series '{}' changed shape mid-run at tick {tick}: column '{}' no longer applies",
-                    entry.label, column.header
-                ))
-            })?;
+            let value = column.value(tick, stats)?;
             write!(self.out, ",{}", fmt_f64(value))?;
         }
         writeln!(self.out)?;
@@ -160,49 +286,9 @@ impl<W: Write> StatsWriter<W> {
     }
 }
 
-/// Derive the column layout from one sample.
-fn plan_columns(stats: &[StatEntry]) -> Vec<Column> {
-    let mut columns = Vec::new();
-    for (series, entry) in stats.iter().enumerate() {
-        let mut push = |suffix: Option<&str>, part: Part| {
-            let name = match suffix {
-                Some(suffix) => format!("{}{SUFFIX_SEP}{suffix}", entry.label),
-                None => entry.label.to_owned(),
-            };
-            columns.push(Column {
-                header: escape_csv(&name),
-                series,
-                part,
-            });
-        };
-        match &entry.value {
-            StatValue::Scalar(_) => push(None, Part::Scalar),
-            StatValue::Vector2D { .. } => {
-                push(Some("x"), Part::VecX);
-                push(Some("y"), Part::VecY);
-                push(Some("magnitude"), Part::VecMagnitude);
-            }
-            StatValue::Histogram { edges, counts } => {
-                // Label each bucket by its own range so the columns stay meaningful without the
-                // reader needing the edge list. `edges` is bucket boundaries, so a bucket has a
-                // lower and upper edge. Fall back to the index if the edges don't line up.
-                for bucket in 0..counts.len() {
-                    let range = match (edges.get(bucket), edges.get(bucket + 1)) {
-                        (Some(lo), Some(hi)) => format!("[{}, {})", fmt_f64(*lo), fmt_f64(*hi)),
-                        _ => format!("bucket {bucket}"),
-                    };
-                    push(Some(&range), Part::Bucket(bucket));
-                }
-                push(Some("total"), Part::BucketTotal);
-            }
-        }
-    }
-    columns
-}
-
 /// Pull one column's scalar out of a stat value. `None` if the value no longer has that part,
 /// which means the series changed shape since the layout was fixed.
-fn extract(value: &StatValue, part: Part) -> Option<f64> {
+fn part_value(value: &StatValue, part: Part) -> Option<f64> {
     match (value, part) {
         (StatValue::Scalar(v), Part::Scalar) => Some(*v),
         (StatValue::Vector2D { x, .. }, Part::VecX) => Some(*x),
@@ -211,30 +297,6 @@ fn extract(value: &StatValue, part: Part) -> Option<f64> {
         (StatValue::Histogram { counts, .. }, Part::Bucket(bucket)) => counts.get(bucket).map(|c| *c as f64),
         (StatValue::Histogram { counts, .. }, Part::BucketTotal) => Some(counts.iter().sum::<u64>() as f64),
         _ => None,
-    }
-}
-
-/// Integral values lose the trailing `.0`, everything else keeps full round-trip precision.
-/// Non-finite values become empty cells, since `NaN` and `inf` are not valid numbers to most
-/// readers and an empty cell is the conventional missing marker.
-fn fmt_f64(value: f64) -> String {
-    if !value.is_finite() {
-        String::new()
-    } else if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{value:.0}")
-    } else {
-        format!("{value}")
-    }
-}
-
-/// Quote a CSV field if it contains a comma, quote, or newline, doubling any inner quotes.
-/// Stat labels are `&'static str` from model source, so this is belt-and-braces. A label with a
-/// comma in it would otherwise silently shift every column right of it.
-fn escape_csv(field: &str) -> String {
-    if field.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", field.replace('"', "\"\""))
-    } else {
-        field.to_owned()
     }
 }
 
@@ -402,6 +464,63 @@ mod tests {
     fn a_model_with_no_stats_still_writes_ticks() {
         let csv = render(&[(0, vec![]), (5, vec![])]);
         assert_eq!(csv, "tick\n0\n5\n");
+    }
+
+    #[test]
+    fn stat_columns_name_what_the_writer_writes() {
+        let stats = vec![
+            scalar("Susceptible, count", 7.0),
+            vec2("V", 3.0, 4.0),
+            hist("H", vec![0.0, 1.0, 2.0], vec![4, 6]),
+        ];
+        let columns = StatColumns::plan(&stats);
+        let mut values = Vec::new();
+        columns
+            .extract(9, &stats, &mut values)
+            .expect("a sample fits its own plan");
+
+        let csv = render(&[(9, stats)]);
+        let headers: Vec<&str> = (0..columns.len()).map(|i| columns.header(i)).collect();
+        assert_eq!(csv.lines().next(), Some(format!("tick,{}", headers.join(",")).as_str()));
+
+        let records = crate::export::csv::parse_records(&csv).expect("the writer writes valid CSV");
+        let names: Vec<&str> = (0..columns.len()).map(|i| columns.name(i)).collect();
+        assert_eq!(records[0][1..], names[..], "names are the headers unescaped");
+        let row: Vec<String> = values.iter().map(|&value| fmt_f64(value)).collect();
+        assert_eq!(records[1][1..], row[..]);
+        assert_eq!(names[0], "Susceptible, count");
+
+        let buckets: Vec<&str> = (0..columns.len())
+            .filter(|&i| columns.is_bucket(i))
+            .map(|i| columns.name(i))
+            .collect();
+        assert_eq!(buckets, ["H.[0, 1)", "H.[1, 2)"]);
+    }
+
+    #[test]
+    fn a_bare_label_resolves_to_the_column_of_its_scalar() {
+        let stats = vec![
+            scalar("S", 1.0),
+            vec2("V", 3.0, 4.0),
+            hist("H", vec![0.0, 1.0, 2.0], vec![4, 6]),
+        ];
+        let columns = StatColumns::plan(&stats);
+        let mut values = Vec::new();
+        columns
+            .extract(0, &stats, &mut values)
+            .expect("a sample fits its own plan");
+        for entry in &stats {
+            let i = columns.resolve(entry.label).expect("every label resolves");
+            assert_eq!(values[i], entry.value.scalar(), "{}", entry.label);
+        }
+        assert_eq!(columns.resolve("V"), columns.resolve("V.magnitude"));
+        assert_eq!(columns.resolve("H"), columns.resolve("H.total"));
+        assert_eq!(columns.resolve("V.y").map(|i| columns.name(i)), Some("V.y"));
+        assert_eq!(columns.resolve("Missing"), None);
+
+        // An exact name wins over a bare label.
+        let shadowed = StatColumns::plan(&[vec2("V", 3.0, 4.0), scalar("V", 1.0)]);
+        assert_eq!(shadowed.resolve("V"), Some(3));
     }
 
     /// The two paths a stat series reaches a file by must produce the same file.

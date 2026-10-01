@@ -1,0 +1,5 @@
+infection_rate,recovery_rate,action.second_wave
+0.1,0.02,200
+0.2,0.05,300
+0.3,0.1,400
+0.5,0.05,600

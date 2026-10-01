@@ -1,0 +1,56 @@
+# A genetic algorithm over the SIR model, looking for the settings and second-wave tick whose epidemic peaks latest.
+# The peak's tick is noisy, so each generation runs its best members again with fresh replicates.
+# It asks for 480 evaluations of 4 replicates each, 1920 runs in all.
+# Run it with `henad-cli --spec crates/henad-explore/specs/sir_search_genetic.toml --out sir-genetic`.
+
+# --8<-- [start:setup]
+model = "sir"
+
+[set]
+grid_width = 64
+grid_height = 64
+
+[run]
+steps = 800
+replicates = 4             # runs of each evaluation, each with the seed of its replicate index
+stop = { condition = "Infected <= 0", min_tick = 20 }
+
+[measure]
+stats_every = 5
+series_every = 0           # no series.csv rows, only the reducers a search reads
+default_reducers = false
+reducers = [{ column = "Infected", kinds = ["max", "argmax"] }]
+
+[seeds]
+root = 1                   # the search draws from this root too
+
+[[action]]
+id = "seed_outbreak"
+name = "second_wave"
+tick = 400
+# --8<-- [end:setup]
+
+# --8<-- [start:search]
+[search]
+algorithm = "genetic"      # "random", "hill_climb", "genetic" or "pse"
+max_evaluations = 480      # candidate evaluations, re-evaluations included
+batch_size = 32            # candidates asked for and run at once
+objective = { column = "Infected:argmax", goal = "maximize", aggregate = "median" }
+space = [
+  { param = "infection_rate", range = { min = 0.05, max = 0.9 } },
+  { param = "recovery_rate", range = { min = 0.01, max = 0.3 } },
+  { param = "initial_infected_pct", range = { min = 0.001, max = 0.05 } },
+  { action = "second_wave", range = { min = 0, max = 400 } },
+]
+# --8<-- [end:search]
+
+# --8<-- [start:genetic]
+[search.genetic]
+population = 32
+elite_count = 2            # best members carried unchanged into the next generation
+tournament_size = 3        # members drawn for each tournament, the best of whom becomes a parent
+crossover_rate = 0.9       # chance that a child has a second parent
+mutation_rate = 0.2        # chance that each gene of a child changes
+mutation_scale = 0.1       # largest step of a changed gene, as a fraction of its range
+reevaluate_fraction = 0.25 # share of each generation run again with fresh replicates, best members first
+# --8<-- [end:genetic]

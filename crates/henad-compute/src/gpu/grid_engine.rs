@@ -15,7 +15,7 @@ use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
 use crate::gpu::GpuContext;
 use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
 use crate::gpu::primitives::pipeline::{compute_pipeline, uniform_buffer};
-use crate::gpu::primitives::readback::CounterReadback;
+use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
 use crate::snapshot::GpuSnapshot;
@@ -603,7 +603,10 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
             pass.set_bind_group(0, self.current_display_bind_group(), &[]);
             pass.dispatch_workgroups(wg_x, wg_y, 1);
         }
+        self.encode_stats_passes(encoder);
+    }
 
+    fn encode_stats_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let (wg_x, wg_y) = self.cell_workgroups();
 
         // Clear -> accumulate -> copy out. wgpu inserts the barriers between these because they
@@ -625,11 +628,11 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
         self.readback.begin_map();
     }
 
-    fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) {
+    fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
         if block {
-            self.readback.poll_blocking(device);
+            self.readback.poll_blocking(device)
         } else {
-            self.readback.poll(device);
+            self.readback.poll(device)
         }
     }
 
