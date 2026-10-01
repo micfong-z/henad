@@ -34,6 +34,16 @@ pub enum ModelState {
     Gpu(Box<dyn GpuSimState>),
 }
 
+/// Prints the backend alone, since a state holds the whole simulation.
+impl std::fmt::Debug for ModelState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cpu(_) => f.debug_tuple("Cpu").finish_non_exhaustive(),
+            Self::Gpu(_) => f.debug_tuple("Gpu").finish_non_exhaustive(),
+        }
+    }
+}
+
 /// A type-erased model factory.
 ///
 /// A boxed closure rather than a bare `fn` pointer, so a GPU-backed entry can *capture* a cloned
@@ -75,6 +85,22 @@ pub struct ModelEntry {
     pub create: ModelFactory,
     /// `None` for a CPU model, which allocates on the host and has no device limit to miss.
     pub capacity: Option<CapacityFn>,
+}
+
+/// Prints the declarations, and leaves out the factory and the capacity closures.
+impl std::fmt::Debug for ModelEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelEntry")
+            .field("name", &self.name)
+            .field("id", &self.id)
+            .field("description", &self.description)
+            .field("param_descriptors", &self.param_descriptors)
+            .field("stat_descriptors", &self.stat_descriptors)
+            .field("action_descriptors", &self.action_descriptors)
+            .field("topology_hint", &self.topology_hint)
+            .field("metadata", &self.metadata)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ModelEntry {

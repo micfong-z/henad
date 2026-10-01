@@ -60,6 +60,7 @@ pub trait FieldLayer: Send + 'static {
 }
 
 /// The empty grid slot, for a model that is agents only.
+#[derive(Debug)]
 pub struct NoField;
 
 impl FieldLayer for NoField {

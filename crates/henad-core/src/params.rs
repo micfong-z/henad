@@ -92,6 +92,7 @@ impl ParamKind {
 ///
 /// Cached so `set_param` can reject a reload-only index without rebuilding the descriptor list
 /// every time a slider moves.
+#[derive(Debug)]
 pub struct ParamStore {
     values: Vec<ParamValue>,
     live: Vec<bool>,
@@ -137,7 +138,7 @@ macro_rules! params {
         $crate::__indices!(0usize, $([$(#[$meta])* $vis $name],)+);
 
         /// This model's own parameters, in index order.
-        fn descriptors() -> ::std::vec::Vec<$crate::params::ParamDescriptor> {
+        fn descriptors() -> ::std::vec::Vec<$crate::__macro_support::ParamDescriptor> {
             ::std::vec![$($descriptor),+]
         }
     };

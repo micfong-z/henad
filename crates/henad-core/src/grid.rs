@@ -1,6 +1,7 @@
 use std::mem;
 
 /// A double-buffered 2D grid with toroidal wrapping.
+#[derive(Debug)]
 pub struct Grid2D<T: Copy + Default> {
     width: u32,
     height: u32,

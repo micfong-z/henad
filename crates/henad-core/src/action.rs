@@ -50,7 +50,7 @@ macro_rules! actions {
         $crate::__indices!(0usize, $([$(#[$meta])* $vis $name],)+);
 
         /// This model's actions, in index order.
-        const ACTION_SPECS: &[$crate::action::ActionDescriptor] = &[$($descriptor),+];
+        const ACTION_SPECS: &[$crate::__macro_support::ActionDescriptor] = &[$($descriptor),+];
     };
 }
 

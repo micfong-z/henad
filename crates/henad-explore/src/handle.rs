@@ -77,6 +77,23 @@ pub struct SweepRunOptions {
     pub wake: Option<WakeFn>,
 }
 
+/// Prints whether a wake callback is set, in place of the callback.
+impl std::fmt::Debug for SweepRunOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SweepRunOptions")
+            .field("concurrency", &self.concurrency)
+            .field("memory_budget", &self.memory_budget)
+            .field("gpu_memory", &self.gpu_memory)
+            .field("retry_failed", &self.retry_failed)
+            .field("series_budget", &self.series_budget)
+            .field("source", &self.source)
+            .field("provenance", &self.provenance)
+            .field("runtime", &self.runtime)
+            .field("wake", &self.wake.is_some())
+            .finish()
+    }
+}
+
 impl Default for SweepRunOptions {
     fn default() -> Self {
         Self {
@@ -210,6 +227,7 @@ impl std::error::Error for SweepStartError {
 /// Handle on a running sweep or search.
 ///
 /// Dropping the handle aborts the sweep. On native it then waits for the sweep's thread to write its files.
+#[derive(Debug)]
 pub struct SweepRun {
     plan: Arc<Plan>,
     /// Plan of a search, `None` for a sweep.

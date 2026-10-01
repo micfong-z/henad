@@ -47,6 +47,7 @@ impl SpringParams {
 ///
 /// Nodes should be added and removed through [`Self::spawn`] and [`Self::retire`],
 /// which keep the lanes and the graph the same length.
+#[derive(Debug)]
 pub struct Nodes<'a, N: NetworkModel + ?Sized> {
     pub lanes: &'a mut N::Lanes,
     pub graph: &'a mut Network,
@@ -79,6 +80,7 @@ impl<N: NetworkModel + ?Sized> Nodes<'_, N> {
 
 // --8<-- [start:node_ctx]
 /// The graph, hot parameters and extent, shared by every node kernel.
+#[derive(Debug)]
 pub struct NodeCtx<'a, N: NetworkModel + ?Sized> {
     pub graph: &'a Network,
     pub params: &'a N::Params,

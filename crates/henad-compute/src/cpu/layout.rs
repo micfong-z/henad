@@ -34,6 +34,7 @@ const MIN_SPEED: f64 = 1e-3;
 const MAX_SPEED: f64 = 1e3;
 
 /// Buffers reused across layout iterations, along with the layout's RNG seed and global speed.
+#[derive(Debug)]
 pub struct LayoutScratch {
     hash: Option<SpatialHash>,
     disp_x: Vec<f32>,

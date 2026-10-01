@@ -34,6 +34,7 @@ henad_core::buffers! {
 }
 // --8<-- [end:buffers]
 
+#[derive(Debug)]
 pub struct GpuBoids;
 
 impl GpuAgentModel for GpuBoids {

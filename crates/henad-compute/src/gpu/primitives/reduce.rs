@@ -8,11 +8,13 @@ use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::shader_bindings::primitives::reduce::ReduceParams;
 
+#[derive(Debug)]
 struct Level {
     groups: (u32, u32),
     bind: wgpu::BindGroup,
 }
 
+#[derive(Debug)]
 pub struct GpuLaneReduce {
     lanes: usize,
     /// The leaf shader must dispatch exactly this, since the group index it writes is

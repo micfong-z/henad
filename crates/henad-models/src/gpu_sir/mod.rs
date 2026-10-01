@@ -84,6 +84,7 @@ fn seed_rng_states(width: u32, height: u32, seed: u64) -> Vec<u32> {
         .collect()
 }
 
+#[derive(Debug)]
 pub struct GpuSir;
 
 impl GpuGridModel for GpuSir {

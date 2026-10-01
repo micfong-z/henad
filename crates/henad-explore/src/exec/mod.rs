@@ -503,6 +503,7 @@ impl std::error::Error for ExecutionError {
 }
 
 /// Runner of batches of one model, with its lane pools built once.
+#[derive(Debug)]
 pub struct Executor<'a> {
     entry: &'a ModelEntry,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]

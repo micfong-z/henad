@@ -31,6 +31,7 @@ pub struct LaneSpec {
 }
 
 /// Model's data structure.
+#[derive(Debug)]
 pub enum Structure {
     Grid {
         neighborhood: NeighborhoodKind,
@@ -66,6 +67,7 @@ pub enum Structure {
 }
 
 /// Model metadata to be displayed in the UI,
+#[derive(Debug)]
 pub struct ModelMetadata {
     pub backend: Backend,
     /// Colours the display layer or the agent population draws from. `None` for a GPU agent

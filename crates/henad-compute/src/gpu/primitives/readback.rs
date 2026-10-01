@@ -26,6 +26,7 @@ pub enum StatsPoll {
 
 /// A GPU-side `u32` accumulator of `count` counters, plus the staging buffer used to read it back
 /// without blocking.
+#[derive(Debug)]
 pub struct CounterReadback {
     /// The reduce shader's output. Cleared to 0 each time, accumulated into, then copied out.
     storage: wgpu::Buffer,

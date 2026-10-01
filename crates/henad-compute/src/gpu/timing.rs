@@ -30,6 +30,7 @@ pub const ADAPTIVE_EMA_ALPHA: f64 = 0.25;
 pub const MAX_BATCH_SIZE: u32 = 4096;
 
 /// GPU timestamp-query resources, created only if the device supports `Features::TIMESTAMP_QUERY`.
+#[derive(Debug)]
 pub struct TimestampQuery {
     query_set: wgpu::QuerySet,
     resolve_buffer: wgpu::Buffer,

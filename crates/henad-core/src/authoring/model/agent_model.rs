@@ -50,6 +50,7 @@ pub trait NeighborIndex: Send + Sync + 'static {
 }
 
 /// For models whose agents never look at one another.
+#[derive(Debug)]
 pub struct NoIndex;
 
 impl NeighborIndex for NoIndex {
@@ -111,6 +112,14 @@ pub struct StepCtx<'a, A: AgentModel + ?Sized> {
     pub index: &'a A::Index,
     pub params: &'a A::Params,
     pub extent: Extent,
+}
+
+impl<A: AgentModel + ?Sized> std::fmt::Debug for StepCtx<'_, A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StepCtx")
+            .field("extent", &self.extent)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A population of agents, optionally over a field.

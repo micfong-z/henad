@@ -46,6 +46,16 @@ pub struct RunCursor {
     phase: Phase,
 }
 
+/// Prints the run, and leaves out the live simulation.
+impl std::fmt::Debug for RunCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunCursor")
+            .field("run", &self.run)
+            .field("run_key", &self.run_key)
+            .finish_non_exhaustive()
+    }
+}
+
 enum Phase {
     Live(Box<LiveRun>),
     /// A run whose build failed, holding the outcome to hand out.

@@ -43,6 +43,7 @@ pub enum Strategy {
 /// Reusable scratch for combining per-agent deposits into a grid.
 ///
 /// Only the chosen arm's buffers get allocated, the other arm's stay empty.
+#[derive(Debug)]
 pub struct ScatterGrid {
     n_cells: usize,
     combine: Combine,

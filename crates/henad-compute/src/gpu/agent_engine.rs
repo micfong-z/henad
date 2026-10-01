@@ -101,6 +101,7 @@ fn stamps(
 }
 
 /// The `Model` half for a [`GpuAgentModel`]: metadata plus a state factory.
+#[derive(Debug)]
 pub struct GpuAgentModelDescriptor<M: GpuAgentModel> {
     ctx: GpuContext,
     _marker: PhantomData<M>,
@@ -191,6 +192,15 @@ pub struct GpuAgentState<M: GpuAgentModel> {
     agents: Sides<Arc<GpuAgents>>,
 
     _marker: PhantomData<M>,
+}
+
+impl<M: GpuAgentModel> std::fmt::Debug for GpuAgentState<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuAgentState")
+            .field("model", &M::ID)
+            .field("tick", &self.tick)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<M: GpuAgentModel> GpuAgentState<M> {

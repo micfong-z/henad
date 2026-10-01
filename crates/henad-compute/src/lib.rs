@@ -31,4 +31,12 @@ pub mod runner;
 pub mod runtime_info;
 pub mod snapshot;
 
-pub use cpu::primitives::lanes_macro::__lanes;
+/// Items the exported macros name through `$crate`, so a caller needs none of them in scope.
+#[doc(hidden)]
+pub mod __macro_support {
+    pub use henad_core::authoring::model::agent_model::{AgentLanes, ChunkTally};
+    pub use henad_core::metadata::LaneSpec;
+    pub use rayon;
+
+    pub use crate::cpu::primitives::chunked::chunk_seed;
+}

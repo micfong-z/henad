@@ -127,6 +127,7 @@ fn optional_cell(value: Option<impl ToString>) -> String {
 }
 
 /// Writer of `evaluations.csv`, `batches.csv` and, for a genetic algorithm, `generations.csv`.
+#[derive(Debug)]
 pub struct SearchTablesWriter<W: Write> {
     evaluations: W,
     batches: W,

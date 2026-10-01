@@ -51,6 +51,7 @@ impl HashGrid {
 }
 
 /// Flat counting-sort grid over agent positions, rebuilt every tick.
+#[derive(Debug)]
 pub struct SpatialHash {
     /// Requested cell size, only kept to detect changes
     cell_size: f32,

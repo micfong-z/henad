@@ -15,6 +15,15 @@ pub struct Driver<L: SimLoop> {
     finished: bool,
 }
 
+/// Prints whether the loop has finished, and leaves out the loop.
+impl<L: SimLoop> std::fmt::Debug for Driver<L> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Driver")
+            .field("finished", &self.finished)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<L: SimLoop> Driver<L> {
     /// `on_fault` is never called. wasm aborts on panic rather than unwinding, so there is nothing
     /// to hand back. The parameter matches the threaded driver and keeps a `cfg` out of the host.

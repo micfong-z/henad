@@ -47,6 +47,16 @@ pub struct PumpedSweep {
     stage: PumpStage,
 }
 
+/// Prints the model and the plan's size, and leaves out the live runs.
+impl std::fmt::Debug for PumpedSweep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PumpedSweep")
+            .field("model", &self.setup.entry.id)
+            .field("runs", &self.setup.plan.run_count())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Model, spec and settings of a pumped sweep.
 struct SweepSetup {
     entry: ModelEntry,

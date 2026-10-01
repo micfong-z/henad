@@ -26,7 +26,7 @@ pub(super) fn due_key(now: u64, max_downtime: u32) -> Option<u64> {
 /// Either way it fits in the buckets, and no two live keys share one.
 /// Each bucket is a doubly linked list threaded through `prev` and `next`. A node moves between buckets in constant
 /// time.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct RetirementRing {
     /// First node in each bucket, or `NIL` if the bucket is empty.
     heads: Vec<u32>,

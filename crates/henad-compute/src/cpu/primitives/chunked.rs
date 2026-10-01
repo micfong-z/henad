@@ -5,9 +5,6 @@ use std::ops::Range;
 use henad_core::authoring::primitives::rng::xorshift64;
 use rayon::prelude::*;
 
-#[doc(hidden)]
-pub use rayon as __rayon;
-
 /// Cells or agents per chunk in a stats reduction.
 pub const STATS_CHUNK: usize = 8192;
 
@@ -28,7 +25,7 @@ macro_rules! for_each_chunk_mut {
         let min_leaf = ($min).max(1);
 
         {
-            use $crate::cpu::primitives::chunked::__rayon::prelude::*;
+            use $crate::__macro_support::rayon::prelude::*;
             $items
                 .par_chunks_mut(chunk)
                 .enumerate()
@@ -44,7 +41,7 @@ macro_rules! for_each_chunk_mut {
         let chunk = ($chunk).max(1);
 
         {
-            use $crate::cpu::primitives::chunked::__rayon::prelude::*;
+            use $crate::__macro_support::rayon::prelude::*;
             $items.par_chunks_mut(chunk).enumerate().for_each(|($c, $slice)| {
                 let $base = $c * chunk;
                 $body
@@ -57,7 +54,7 @@ macro_rules! for_each_chunk_mut {
         let chunk = ($chunk).max(1);
 
         {
-            use $crate::cpu::primitives::chunked::__rayon::prelude::*;
+            use $crate::__macro_support::rayon::prelude::*;
             $a.par_chunks_mut(chunk)
                 .zip($b.par_chunks_mut(chunk))
                 .zip($d.par_chunks_mut(chunk))

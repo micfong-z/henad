@@ -13,7 +13,7 @@ readme = "README.md"
 keywords = ["agent-based-model", "simulation", "boids", "epidemic", "game-of-life"]
 categories = ["simulation", "science"]
 # The consistency tests and their reference fixtures stay in the repository.
-exclude = ["tests/"]
+exclude = ["/tests/"]
 
 [dependencies]
 henad-core = { workspace = true }

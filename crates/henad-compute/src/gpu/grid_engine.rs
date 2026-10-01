@@ -25,7 +25,7 @@ use crate::snapshot::GpuSnapshot;
 /// Hand written rather than generated, since no shader in this crate uses the type and naga drops
 /// what nothing references. `henad_models` sees both sides and asserts they agree.
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Dims {
     pub grid: [u32; 2],
     pub tex: [u32; 2],
@@ -56,6 +56,7 @@ impl ActionPass {
 ///
 /// Holds a cloned [`GpuContext`], which is how the registry hands a device down to a model without
 /// any global state.
+#[derive(Debug)]
 pub struct GpuGridModelDescriptor<M: GpuGridModel> {
     ctx: GpuContext,
     _marker: PhantomData<M>,
@@ -145,6 +146,17 @@ pub struct GpuGridState<M: GpuGridModel> {
     current_is_a: bool,
 
     _marker: PhantomData<M>,
+}
+
+impl<M: GpuGridModel> std::fmt::Debug for GpuGridState<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuGridState")
+            .field("model", &M::ID)
+            .field("tick", &self.tick)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<M: GpuGridModel> GpuGridState<M> {

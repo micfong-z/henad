@@ -49,6 +49,7 @@ henad_core::actions! {
     const RANDOMISE_HEADINGS = ActionDescriptor::new("randomise_headings", "Randomise headings");
 }
 
+#[derive(Debug)]
 pub struct BoidsModel;
 
 /// Turns every boid a fresh way without touching its speed, so a settled flock scatters and
@@ -68,6 +69,7 @@ fn randomise_headings(lanes: &mut BoidLanes, params: &[ParamValue], rng: &mut u6
 }
 
 /// Squared ranges and half extents precomputed, so the inner loop does no setup per neighbour.
+#[derive(Debug)]
 pub struct BoidParams {
     pub visual_range: f32,
     pub visual_sq: f32,

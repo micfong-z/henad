@@ -48,7 +48,7 @@ pub const MAX_STEPS_PER_SUBMISSION: u32 = 64;
 ///
 /// `target_format` is part of the context rather than a per-call argument because a model builds
 /// its display render pipeline once, and a pipeline is tied to its colour target format.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,

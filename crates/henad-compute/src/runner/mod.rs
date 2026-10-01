@@ -43,6 +43,7 @@ pub const MAX_VIEW_BUDGET_MS: f32 = PUMP_BUDGET_MS as f32;
 pub const MAX_VIEW_BUDGET_MS: f32 = f32::INFINITY;
 
 /// What a loop wants after one [`SimLoop::pump`].
+#[derive(Debug)]
 pub enum Pace {
     /// Nothing until a command arrives.
     Idle,
@@ -72,7 +73,7 @@ pub trait SimLoop {
 ///
 /// `fresh` is the newest publish waiting to be taken, `spare` a consumed one handed back for its
 /// buffers. A `fresh` nobody took is stale by definition, so it becomes the next spare.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct SnapshotSlot {
     fresh: Option<Snapshot>,
     spare: Option<Snapshot>,

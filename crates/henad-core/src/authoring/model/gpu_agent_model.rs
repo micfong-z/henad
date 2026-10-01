@@ -48,6 +48,7 @@ use crate::spatial_hash::HashGrid;
 use crate::view::{StatDescriptor, StatValue};
 
 /// One storage buffer of the model's state.
+#[derive(Debug)]
 pub struct BufferSpec {
     pub label: &'static str,
     /// Doubled, for a buffer a pass reads the previous values of while writing this tick's.
@@ -75,9 +76,9 @@ macro_rules! buffers {
         $crate::__indices!(0usize, $([$(#[$meta])* $vis $name],)+);
 
         /// This model's storage buffers, in index order.
-        const SPECS: &[$crate::authoring::model::gpu_agent_model::BufferSpec] = &[
+        const SPECS: &[$crate::__macro_support::BufferSpec] = &[
             $($crate::__buffer_flags!(
-                $crate::authoring::model::gpu_agent_model::BufferSpec {
+                $crate::__macro_support::BufferSpec {
                     label: $label,
                     double_buffered: false,
                     drawable: false,
@@ -94,18 +95,18 @@ macro_rules! __buffer_flags {
     ($spec:expr;) => { $spec };
     ($spec:expr; double_buffered $($rest:ident)*) => {
         $crate::__buffer_flags!(
-            $crate::authoring::model::gpu_agent_model::BufferSpec { double_buffered: true, ..$spec }; $($rest)*
+            $crate::__macro_support::BufferSpec { double_buffered: true, ..$spec }; $($rest)*
         )
     };
     ($spec:expr; drawable $($rest:ident)*) => {
         $crate::__buffer_flags!(
-            $crate::authoring::model::gpu_agent_model::BufferSpec { drawable: true, ..$spec }; $($rest)*
+            $crate::__macro_support::BufferSpec { drawable: true, ..$spec }; $($rest)*
         )
     };
 }
 
 /// A pass's invocation domain.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Domain {
     Agents,
     /// `n` invocations per cell, for a field with `n` layers.
@@ -126,6 +127,7 @@ impl Domain {
 }
 
 /// One compute pass of a step, run in declaration order.
+#[derive(Debug)]
 pub struct PassSpec {
     pub label: &'static str,
     pub shader: &'static str,
@@ -136,6 +138,7 @@ pub struct PassSpec {
 /// The pass that turns state into the display texture, for a model that draws a grid layer.
 ///
 /// Dispatched over [`Geometry::display`], one invocation per texel, not per cell.
+#[derive(Debug)]
 pub struct DisplaySpec {
     pub shader: &'static str,
     pub bindings: &'static [BindingDecl],
@@ -147,6 +150,7 @@ pub struct DisplaySpec {
 ///
 /// The engine owns every level above it, so the leaf only has to write `partials`. Its shader
 /// imports `shared::reduce_tree::block_sum` for the workgroup fold.
+#[derive(Debug)]
 pub struct ReduceSpec {
     pub shader: &'static str,
     pub bindings: &'static [BindingDecl],
@@ -160,6 +164,7 @@ pub struct ReduceSpec {
 /// Dispatched once over its own domain, writing the model's buffers in place, since nothing
 /// ping-pongs afterwards. Its bindings therefore resolve read and write alike to the side that
 /// holds the state now.
+#[derive(Debug)]
 pub struct GpuAgentAction {
     pub desc: ActionDescriptor,
     pub pass: PassSpec,

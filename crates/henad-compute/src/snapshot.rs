@@ -6,6 +6,7 @@ use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::GpuDisplay;
 
 /// Owned data snapshot produced by the sim thread for the UI to consume.
+#[derive(Debug)]
 pub struct Snapshot {
     pub tick: u64,
     pub serial: u64,
@@ -21,6 +22,7 @@ pub struct Snapshot {
     pub stats: Vec<StatEntry>,
 }
 
+#[derive(Debug)]
 pub enum SnapshotView {
     Cpu(CpuLayers),
     /// The model's state never left the GPU, so there are no cells to copy, only a texture to
@@ -30,7 +32,7 @@ pub enum SnapshotView {
 
 /// A CPU model's owned layers, drawn field first and agents over the top. Both optional, so a
 /// composite model can publish both.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct CpuLayers {
     pub grid: Option<GridSnapshot>,
     pub points: Option<PointSnapshot>,
@@ -50,7 +52,7 @@ impl CpuLayers {
 ///
 /// Held by `Arc` so an in-flight egui paint callback keeps the pipeline, texture and lane buffers
 /// alive even if the sim thread is torn down mid-frame.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct GpuSnapshot {
     /// A texture the model's display pass has already written.
     pub display: Option<Arc<GpuDisplay>>,
@@ -65,6 +67,7 @@ impl GpuSnapshot {
 }
 
 /// Owned grid data, cloned from the sim state.
+#[derive(Debug)]
 pub struct GridSnapshot {
     pub width: u32,
     pub height: u32,
@@ -73,7 +76,7 @@ pub struct GridSnapshot {
 }
 
 /// Owned edge list, cloned from the sim state.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct EdgeSnapshot {
     /// Graph version at the time the list was copied.
     pub version: u64,
@@ -86,6 +89,7 @@ pub struct EdgeSnapshot {
 }
 
 /// Owned point cloud data, cloned from the sim state.
+#[derive(Debug)]
 pub struct PointSnapshot {
     pub pos_x: Vec<f32>,
     pub pos_y: Vec<f32>,

@@ -34,6 +34,7 @@ pub trait ScalarFieldSpec: Send + Sync + 'static {
 }
 
 /// Per agent deposit lanes. One cell each, and one value per field.
+#[derive(Debug)]
 pub struct Deposits {
     pub cell: Vec<u32>,
     /// `values[f][i]` is agent `i`'s deposit into field `f`. An agent that writes one field leaves
@@ -53,6 +54,7 @@ impl Deposits {
 }
 
 /// `S::FIELDS` double buffered `f32` grids over one shared scatter scratch.
+#[derive(Debug)]
 pub struct ScalarField<S: ScalarFieldSpec> {
     fields: Vec<Grid2D<f32>>,
     /// Shared by every field. Same dimensions, same combine, and the calls are sequential.
@@ -116,7 +118,7 @@ impl<S: ScalarFieldSpec> ScalarField<S> {
 }
 
 /// The field as an agent kernel sees it.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ScalarRead<'a> {
     fields: &'a Vec<Grid2D<f32>>,
     pub sites: &'a [u8],

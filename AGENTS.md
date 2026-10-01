@@ -329,7 +329,7 @@ Varies one parameter at a time. Other parameters use values from the Parameters 
 ## Commands
 
 ```bash
-./check.sh                    # CI's checks bar the slow ones — run this before considering work done
+./check.sh                    # all CI checks except the slow ones — run this before considering work done
 cargo check --workspace --all-targets
 cargo check -p henad-core -p henad-compute -p henad-models -p henad-explore --all-features --lib \
   --target wasm32-unknown-unknown          # typechecks without atomics; henad-app cannot
@@ -418,6 +418,16 @@ flat `Vec`s, rayon), not from unsafe tricks. The workspace `Cargo.toml` also ena
 `clippy::` lint set (`unwrap_used`, `indexing_slicing = "allow"` is a deliberate exception,
 `missing_errors_doc`, etc.) — run `./check.sh` rather than guessing whether something will pass CI.
 
+Two rules no lint enforces. Every public type of henad-core, henad-compute, henad-models and
+henad-explore implements `Debug`. A type that holds a closure, a trait object, a model's associated
+types or a whole graph writes its own impl ending in `finish_non_exhaustive`, as `ModelEntry`,
+`Network` and the engine states do. `cargo clippy -- -W missing_debug_implementations` lists the
+types that lack one. henad-app is left out, since its public `state` and `ui` modules are app
+internals. And an exported macro names its support items through its crate's `#[doc(hidden)]`
+`__macro_support` module, never through an internal path such as `$crate::cpu::primitives`, and
+names prelude items by their `::core` or `::std` path, as `agent_lanes!` does, so it expands in a
+crate that has shadowed them.
+
 ## Architecture
 
 The workspace has 6 crates with a strict dependency direction:
@@ -460,7 +470,8 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   list the view draws. A full row relocates to the end, the engine repacks after a tick once
   `should_repack()` finds too much stale space, and a full `rebuild()` runs only when the graph
   changes direction. `version()` goes up whenever the edges, their colours or their direction
-  change.
+  change. Those three, `set_directed` and the raw `spawn` and `retire` are `#[doc(hidden)]`, since
+  the engine calls them and a model goes through `Nodes`.
   `explore/` holds the parts of a sweep that need no engine, and builds on wasm like the rest of the
   crate. `value.rs` reads a param value written as text and checks it against its descriptor
   (`parse_value`, `resolve_params`, `parse_overrides`), and `format_value` writes one back. `--set`
@@ -505,6 +516,9 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   holds `PlannedRun`, `RunStatus` (`timed_out` among the failures), `StopReason` and `RunOutcome`,
   `summary.rs` the replicate statistics of `summary.csv` (`RunningMoments`, `student_t_975`,
   `SummaryAccumulator`), and `fingerprint.rs` the FNV-1a hashes naming a schema, a plan and a run.
+  `schema_hashes_are_unchanged_since_0_2_0` (henad-explore's `schema.rs`) pins every example
+  model's schema hash to the value 0.2.0 recorded, through the procedure in
+  `crates/henad-models/tests/fixtures/docs/schema-hashes-0.2.0.md`. Keep it.
   `replay.rs` holds `Replay`, the model, params, seed, schedule and ticks of one run as a live
   simulation rebuilds it, and `Plan::replay(run_id)` builds one from a plan. `plan_hash` leaves out
   the replicate count and the timeout, and a resume can change both. Unlike `DefaultHasher`,
@@ -568,7 +582,8 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
     units of the mean spacing between nodes. `cpu/primitives/` holds `lanes_macro.rs`
     (`agent_lanes!`, for node lanes too), `chunked.rs` (chunk drivers and RNG seeding), `scatter.rs`
     (the many-agents-one-cell write path) and `components.rs` (connected components by min-label
-    propagation). `cpu/sim_thread.rs` is the sim runner, a `SimLoop` with play/pause/TPS-capping,
+    propagation). `AgentModelState` counts its model's own params once at construction, and a step
+    builds no descriptor list. `cpu/sim_thread.rs` is the sim runner, a `SimLoop` with play/pause/TPS-capping,
     driven by whichever `runner::Driver` the target has.
   - `gpu/grid_engine.rs` (`GpuGridState`) and `gpu/agent_engine.rs` (`GpuAgentState`) are the
     engines for the two GPU traits, mirroring their `cpu/` namesakes. `gpu/sim_thread.rs` is the

@@ -77,6 +77,18 @@ pub struct NetworkModelState<N: NetworkModel> {
     layout: LayoutState,
 }
 
+impl<N: NetworkModel> std::fmt::Debug for NetworkModelState<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NetworkModelState")
+            .field("model", &N::ID)
+            .field("tick", &self.tick)
+            .field("extent", &self.extent)
+            .field("graph", &self.graph)
+            .field("params", &self.params)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<N: NetworkModel> NetworkModelState<N> {
     pub fn from_params(params: &[ParamValue]) -> Self {
         Self::from_params_seeded(params, None)

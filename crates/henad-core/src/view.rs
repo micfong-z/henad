@@ -1,4 +1,5 @@
 /// A 2D grid for rendering, each cell a `u8` index into the palette.
+#[derive(Debug)]
 pub struct GridView<'a> {
     pub width: u32,
     pub height: u32,
@@ -10,6 +11,7 @@ pub struct GridView<'a> {
 ///
 /// Both layers are stretched to the same rect, so a composite model wants
 /// `world_w = width as f32`. Nothing checks this across the crate boundary.
+#[derive(Debug)]
 pub struct PointView<'a> {
     pub pos_x: &'a [f32],
     pub pos_y: &'a [f32],
@@ -21,6 +23,7 @@ pub struct PointView<'a> {
 }
 
 /// Edges for rendering. Endpoints are indices into the point view's positions.
+#[derive(Debug)]
 pub struct EdgeView<'a> {
     pub src: &'a [u32],
     pub dst: &'a [u32],
@@ -91,6 +94,7 @@ pub fn stat_entries(descriptors: &'static [StatDescriptor], values: Vec<StatValu
 /// The charts read one `f64` per series per frame, so that is what a sample costs. A series a
 /// scalar cannot round-trip keeps its full value alongside, which is what lets an export carry the
 /// same columns the headless runner writes.
+#[derive(Debug)]
 pub struct StatsHistory {
     /// One column per stat series, each holding `capacity` entries.
     columns: Vec<Vec<f64>>,

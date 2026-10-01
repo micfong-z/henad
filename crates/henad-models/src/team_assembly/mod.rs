@@ -66,11 +66,13 @@ henad_core::params! {
 }
 // --8<-- [end:params]
 
+#[derive(Debug)]
 pub struct TeamAssembly;
 
 /// Hot parameters for one tick.
 ///
 /// Chances are probabilities in `0..=1`. NetLogo's sliders give the same numbers as percentages.
+#[derive(Debug)]
 pub struct TeamParams {
     team_size: u32,
     max_downtime: u32,
@@ -81,7 +83,7 @@ pub struct TeamParams {
 }
 
 /// Model state kept outside the lanes and the graph.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct TeamAux {
     ring: RetirementRing,
     /// Live nodes, listed from the graph on the first tick and kept by the model's own spawns and retirements.

@@ -20,3 +20,11 @@ pub mod view;
 
 /// World size.
 pub use authoring::model::field::Extent;
+
+/// Items the exported macros name through `$crate`, so a caller needs none of them in scope.
+#[doc(hidden)]
+pub mod __macro_support {
+    pub use crate::action::ActionDescriptor;
+    pub use crate::authoring::model::gpu_agent_model::BufferSpec;
+    pub use crate::params::ParamDescriptor;
+}

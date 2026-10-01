@@ -19,6 +19,7 @@ use crate::for_each_chunk_mut;
 pub const GRID_INIT_SEED: u64 = 0xDEAD_BEEF_CAFE_1234;
 
 /// Double-buffered `u8` cells stepped by `M`'s neighbourhood rule.
+#[derive(Debug)]
 pub struct CaField<M: GridModel> {
     grid: Grid2D<u8>,
     /// Advanced once per tick, then fanned out per row by `chunk_seed`.

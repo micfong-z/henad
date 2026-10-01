@@ -49,6 +49,7 @@ const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
 const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
 
+#[derive(Debug)]
 pub struct GpuAnts;
 
 impl GpuAgentModel for GpuAnts {

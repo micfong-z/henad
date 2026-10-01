@@ -78,11 +78,13 @@ henad_core::actions! {
 }
 // --8<-- [end:actions]
 
+#[derive(Debug)]
 pub struct VirusNetwork;
 
 /// Hot parameters for one tick.
 ///
 /// Chances are probabilities in `0..=1`. NetLogo's sliders give the same numbers as percentages.
+#[derive(Debug)]
 pub struct VirusParams {
     pub(crate) spread_chance: f32,
     pub(crate) check_frequency: u32,

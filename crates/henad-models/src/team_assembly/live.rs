@@ -9,7 +9,7 @@ const ABSENT: u32 = u32::MAX;
 ///
 /// Slots are never compacted, so after a large cohort retires most of them are empty.
 /// Drawing from this list instead of from the slots keeps a draw independent of how many slots there are.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct LiveSet {
     list: Vec<u32>,
     /// Position of each slot's node in `list`, or `ABSENT` if the slot is empty.

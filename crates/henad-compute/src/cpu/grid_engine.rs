@@ -19,6 +19,16 @@ pub struct GridModelState<M: GridModel> {
     tick: u64,
 }
 
+impl<M: GridModel> std::fmt::Debug for GridModelState<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GridModelState")
+            .field("model", &M::ID)
+            .field("tick", &self.tick)
+            .field("params", &self.params)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<M: GridModel> GridModelState<M> {
     pub fn from_params(params: &[ParamValue]) -> Self {
         Self::from_params_seeded(params, None)

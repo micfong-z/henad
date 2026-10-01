@@ -48,8 +48,10 @@ henad_core::actions! {
 ///
 /// The reference's biased neighbour tie-break is reproduced rather than corrected, see
 /// `step::advect_agent`.
+#[derive(Debug)]
 pub struct AntsModel;
 
+#[derive(Debug)]
 pub struct AntParams {
     pub w: i32,
     pub h: i32,

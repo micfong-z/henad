@@ -83,6 +83,7 @@ use crate::view::{StatDescriptor, StatValue};
 /// Dispatched over [`GpuGridModel::step_dims`] like a step, but writing the current side in place,
 /// since nothing ping-pongs afterwards. Its bindings therefore resolve read and write alike to the
 /// side that holds the state now.
+#[derive(Debug)]
 pub struct GpuGridAction {
     pub desc: ActionDescriptor,
     pub shader: &'static str,

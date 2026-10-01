@@ -138,8 +138,44 @@ mod tests {
     use henad_models::registry::model_registry;
     use serde_json::json;
 
-    use super::{f32_json, schema_json};
+    use henad_core::explore::fingerprint::schema_hash;
+
+    use super::{f32_json, model_schema, schema_json};
     use crate::probe::ProbeReport;
+
+    /// Each example model's `schema_hash` as Henad 0.2.0 wrote it, at commit 773a7a5.
+    ///
+    /// `crates/henad-models/tests/fixtures/docs/schema-hashes-0.2.0.md` gives the procedure that recorded them.
+    const SCHEMA_HASHES_0_2_0: [(&str, &str); 10] = [
+        ("sir", "6ff1dc3971fd0a96"),
+        ("boids", "ae99f3e0d37c8d3d"),
+        ("game_of_life", "aba7303a467b06bf"),
+        ("ants", "f6eb31e76efdf4cf"),
+        ("virus_network", "77993c7b4047b8bd"),
+        ("team_assembly", "d1724ce65dada5d6"),
+        ("gpu_game_of_life", "461ad8e0d063a398"),
+        ("gpu_sir", "99f14d30367e3743"),
+        ("gpu_boids", "f7328729019009c0"),
+        ("gpu_ants", "b58e8a5a5b6a829e"),
+    ];
+
+    /// Checks that every example model hashes as it did in 0.2.0, so every folder written since still resumes.
+    ///
+    /// Without a device, the GPU models are left out. `HENAD_REQUIRE_GPU` turns that into a failure.
+    #[test]
+    fn schema_hashes_are_unchanged_since_0_2_0() {
+        let gpu = crate::tests::support::headless_device();
+        let has_gpu = gpu.is_some();
+        let registry = model_registry(gpu);
+        for (id, recorded) in SCHEMA_HASHES_0_2_0 {
+            let Some(entry) = registry.iter().find(|entry| entry.id == id) else {
+                assert!(id.starts_with("gpu_") && !has_gpu, "{id} is registered");
+                continue;
+            };
+            let current = format!("{:016x}", schema_hash(&model_schema(entry)));
+            assert_eq!(current, recorded, "{id}'s schema hash moved since 0.2.0");
+        }
+    }
 
     #[test]
     fn every_descriptor_is_listed_with_its_kind_and_bounds() {

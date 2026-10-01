@@ -378,6 +378,7 @@ fn write_error_at(path: &Path) -> impl FnOnce(io::Error) -> OutputError + use<> 
 ///
 /// A run's series is written and flushed before its row in `runs.csv`, so every run in `runs.csv` has its whole
 /// series written.
+#[derive(Debug)]
 pub struct OutputWriter<W: Write> {
     plan: Arc<Plan>,
     runs: RunsWriter<W>,

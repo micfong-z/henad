@@ -80,6 +80,7 @@ pub fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u
     words
 }
 
+#[derive(Debug)]
 pub struct GpuGameOfLife;
 
 impl GpuGridModel for GpuGameOfLife {

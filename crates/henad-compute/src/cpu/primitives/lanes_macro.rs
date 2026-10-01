@@ -34,12 +34,12 @@ macro_rules! agent_lanes {
     ) => {
         $(#[$meta])*
         $vis struct $name {
-            $($(#[$dmeta])* pub $dcur: Vec<$dty>, pub $dnext: Vec<$dty>,)*
-            $($(#[$pmeta])* pub $pname: Vec<$pty>,)*
+            $($(#[$dmeta])* pub $dcur: ::std::vec::Vec<$dty>, pub $dnext: ::std::vec::Vec<$dty>,)*
+            $($(#[$pmeta])* pub $pname: ::std::vec::Vec<$pty>,)*
         }
 
         /// The current side of every double buffered lane, readable by every agent.
-        #[derive(Clone, Copy)]
+        #[derive(::core::clone::Clone, ::core::marker::Copy)]
         $vis struct $read<'a> {
             $(pub $dcur: &'a [$dty],)*
             /// Keeps `'a` used when a model has no double buffered lane.
@@ -61,8 +61,8 @@ macro_rules! agent_lanes {
             /// the chunk index, so which agent sees which stream does not depend on scheduling.
             pub fn run_pass<K, T>(&mut self, chunk_size: usize, seed: u64, tick: u64, kernel: K) -> T
             where
-                K: Fn(usize, usize, $read<'_>, &mut $chunk<'_>, &mut u64) -> T + Send + Sync,
-                T: $crate::__lanes::ChunkTally,
+                K: ::core::ops::Fn(usize, usize, $read<'_>, &mut $chunk<'_>, &mut u64) -> T + ::core::marker::Send + ::core::marker::Sync,
+                T: $crate::__macro_support::ChunkTally,
             {
                 let chunk_size = chunk_size.max(1);
                 let Self { $($dcur, $dnext,)* $($pname,)* } = self;
@@ -76,8 +76,8 @@ macro_rules! agent_lanes {
                 // holds one entry per chunk, not per agent.
                 $(let mut $dnext = $dnext.chunks_mut(chunk_size);)*
                 $(let mut $pname = $pname.chunks_mut(chunk_size);)*
-                let mut views: Vec<$chunk<'_>> = ::std::iter::from_fn(|| {
-                    Some($chunk {
+                let mut views: ::std::vec::Vec<$chunk<'_>> = ::std::iter::from_fn(|| {
+                    ::core::option::Option::Some($chunk {
                         $($dcur: $dnext.next()?,)*
                         $($pname: $pname.next()?,)*
                     })
@@ -86,10 +86,10 @@ macro_rules! agent_lanes {
 
                 let run = |c: usize, view: &mut $chunk<'_>| {
                     let base = c * chunk_size;
-                    let mut rng = $crate::cpu::primitives::chunked::chunk_seed(seed, tick, c);
-                    let mut acc = T::default();
+                    let mut rng = $crate::__macro_support::chunk_seed(seed, tick, c);
+                    let mut acc = <T as ::core::default::Default>::default();
                     for k in 0..view.pos_x.len() {
-                        acc = <T as $crate::__lanes::ChunkTally>::merge(
+                        acc = <T as $crate::__macro_support::ChunkTally>::merge(
                             acc,
                             kernel(base + k, k, read, view, &mut rng),
                         );
@@ -97,25 +97,25 @@ macro_rules! agent_lanes {
                     acc
                 };
 
-                let per_chunk: Vec<T> = {
-                    use $crate::cpu::primitives::chunked::__rayon::prelude::*;
+                let per_chunk: ::std::vec::Vec<T> = {
+                    use $crate::__macro_support::rayon::prelude::*;
                     views.par_iter_mut().enumerate().map(|(c, v)| run(c, v)).collect()
                 };
 
                 per_chunk
                     .into_iter()
-                    .fold(T::default(), <T as $crate::__lanes::ChunkTally>::merge)
+                    .fold(<T as ::core::default::Default>::default(), <T as $crate::__macro_support::ChunkTally>::merge)
             }
         }
 
-        impl $crate::__lanes::AgentLanes for $name {
-            const LANES: &'static [$crate::__lanes::LaneSpec] = &[
-                $($crate::__lanes::LaneSpec {
+        impl $crate::__macro_support::AgentLanes for $name {
+            const LANES: &'static [$crate::__macro_support::LaneSpec] = &[
+                $($crate::__macro_support::LaneSpec {
                     name: ::std::stringify!($dcur),
                     ty: ::std::stringify!($dty),
                     double_buffered: true,
                 },)*
-                $($crate::__lanes::LaneSpec {
+                $($crate::__macro_support::LaneSpec {
                     name: ::std::stringify!($pname),
                     ty: ::std::stringify!($pty),
                     double_buffered: false,
@@ -124,8 +124,9 @@ macro_rules! agent_lanes {
 
             fn alloc(n: usize) -> Self {
                 Self {
-                    $($dcur: vec![<$dty as Default>::default(); n], $dnext: vec![<$dty as Default>::default(); n],)*
-                    $($pname: vec![$pinit; n],)*
+                    $($dcur: ::std::vec![<$dty as ::core::default::Default>::default(); n],
+                      $dnext: ::std::vec![<$dty as ::core::default::Default>::default(); n],)*
+                    $($pname: ::std::vec![$pinit; n],)*
                 }
             }
 
@@ -155,21 +156,14 @@ macro_rules! agent_lanes {
                 if n <= self.len() {
                     return;
                 }
-                $(self.$dcur.resize(n, <$dty as Default>::default());
-                  self.$dnext.resize(n, <$dty as Default>::default());)*
+                $(self.$dcur.resize(n, <$dty as ::core::default::Default>::default());
+                  self.$dnext.resize(n, <$dty as ::core::default::Default>::default());)*
                 $(self.$pname.resize(n, $pinit);)*
             }
 
-            $(fn colors(&self) -> Option<&[u8]> {
-                Some(&self.$color)
+            $(fn colors(&self) -> ::core::option::Option<&[u8]> {
+                ::core::option::Option::Some(&self.$color)
             })?
         }
     };
-}
-
-/// Re-exported so the macro can name these without the caller importing them.
-#[doc(hidden)]
-pub mod __lanes {
-    pub use henad_core::authoring::model::agent_model::{AgentLanes, ChunkTally};
-    pub use henad_core::metadata::LaneSpec;
 }

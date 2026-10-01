@@ -119,6 +119,7 @@ impl Default for GpuStats {
 }
 
 /// GPU-runner-specific commands, on top of the shared [`crate::cpu::sim_thread::SimCommand`].
+#[derive(Debug)]
 pub enum GpuCommand {
     SetBatchSize(u32),
     SetAdaptive(bool),
@@ -661,6 +662,12 @@ pub struct GpuSimThread {
     driver: Driver<Loop>,
     slot: SharedSlot,
     gpu_stats: Arc<Mutex<GpuStats>>,
+}
+
+impl std::fmt::Debug for GpuSimThread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuSimThread").finish_non_exhaustive()
+    }
 }
 
 impl GpuSimThread {

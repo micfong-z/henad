@@ -57,6 +57,7 @@ pub fn header_line(names: &[String]) -> String {
 }
 
 /// Writer of `runs.csv`.
+#[derive(Debug)]
 pub struct RunsWriter<W: Write> {
     dest: W,
     /// Kind of every parameter, in descriptor order.

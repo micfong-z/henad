@@ -12,6 +12,7 @@ use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform
 use crate::gpu::primitives::prefix_scan::PrefixScan;
 use crate::shader_bindings::primitives::hash_count::HashParams;
 
+#[derive(Debug)]
 pub struct GpuSpatialHash {
     grid: HashGrid,
     num_agents: u32,
