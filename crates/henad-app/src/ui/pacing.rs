@@ -56,7 +56,7 @@ fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
     let network = app
         .loaded_model
         .and_then(|i| app.registry.get(i))
-        .is_some_and(|entry| entry.topology_hint.edges);
+        .is_some_and(|entry| entry.topology_hint().edges);
     if network {
         layout_controls(ui, app);
     }

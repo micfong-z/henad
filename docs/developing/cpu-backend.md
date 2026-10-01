@@ -33,7 +33,7 @@ Network models run on the CPU only, and none of the three has a counterpart in `
 ## The engines
 
 Each engine implements the whole of `SimState` for its trait.
-A model therefore implements neither `SimState` nor `Model` itself, which keeps the runner interface out of the authoring surface.
+A model therefore never implements `SimState` itself, which keeps the runner interface out of the authoring surface.
 
 `GridModelState<M>` owns the `Grid2D<u8>`, the parameter store and the tick counter.
 Its step dispatches on `M::NEIGHBORHOOD` once, outside the row loop, and no per-cell work goes on the choice.

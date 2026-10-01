@@ -112,7 +112,11 @@ fn a_result_set_reads_back_every_run_of_a_directory() {
     assert_eq!(set.stat_columns(), ["Susceptible", "Infected", "Recovered"]);
     assert_eq!(set.reducer_columns(), set.manifest().columns.reducers);
     let sir = entry("sir", None);
-    let mut value_columns: Vec<String> = sir.param_descriptors.iter().map(|param| param.id.to_owned()).collect();
+    let mut value_columns: Vec<String> = sir
+        .param_descriptors()
+        .iter()
+        .map(|param| param.id.to_owned())
+        .collect();
     value_columns.push("action.wave".to_owned());
     assert_eq!(set.value_columns(), value_columns);
 

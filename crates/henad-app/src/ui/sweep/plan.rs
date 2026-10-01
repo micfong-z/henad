@@ -678,9 +678,10 @@ mod tests {
     use std::time::Duration;
 
     use henad_compute::cpu::sim_thread::WakeFn;
+    use henad_compute::entry::ModelEntry;
     use henad_core::params::ParamValue;
     use henad_explore::schema::model_schema;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::registry::model_registry;
 
     use super::{NOT_COUNTED, PlanSummary, budget_rows, either_text, samples_text, steps_text};
     use crate::ui::sweep::draft::{DesignTableDraft, DraftAlgorithm, DraftDesign, DraftMode, GridAxis, SweepDraft};
@@ -689,13 +690,13 @@ mod tests {
     fn sir() -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered")
     }
 
     fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
         entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect()
@@ -711,7 +712,7 @@ mod tests {
         edit(panel.draft_mut(&schema), &ids);
         let check = panel.cached_check(&schema, &panel_values);
         let summary = CheckSummary::new(check, &entry, &schema);
-        PlanSummary::for_draft(check, &schema, &entry.name, &summary)
+        PlanSummary::for_draft(check, &schema, entry.name(), &summary)
     }
 
     /// Returns the plan of the draft `panel` holds for `entry`'s model, checked against the model's defaults.
@@ -719,7 +720,7 @@ mod tests {
         let schema = model_schema(entry);
         let check = panel.cached_check(&schema, &default_values(entry));
         let summary = CheckSummary::new(check, entry, &schema);
-        PlanSummary::for_draft(check, &schema, &entry.name, &summary)
+        PlanSummary::for_draft(check, &schema, entry.name(), &summary)
     }
 
     fn value<'a>(plan: &'a PlanSummary, label: &str) -> &'a str {
@@ -951,7 +952,7 @@ mod tests {
     fn the_outputs_per_run_count_each_part_of_a_vector_stat() {
         let entry = model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "boids")
+            .find(|entry| entry.id() == "boids")
             .expect("boids is registered");
         let mut panel = SweepPanel::default();
         assert_eq!(

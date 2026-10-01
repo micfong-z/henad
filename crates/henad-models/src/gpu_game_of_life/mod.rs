@@ -27,11 +27,11 @@
 //! backends therefore start from a **bit-identical** grid and must agree forever after, which is
 //! what `tests::gpu_alive_count_matches_cpu_model` checks.
 
-use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_compute::cpu::grid_engine::grid_init_rng;
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
-use henad_core::authoring::primitives::rng::{mix_seed, xorshift64};
+use henad_core::authoring::primitives::rng::xorshift64;
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -135,12 +135,7 @@ impl GpuGridModel for GpuGameOfLife {
 
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let density = extract_f32(params, PARAM_DENSITY, DEFAULT_DENSITY);
-        vec![seed_random(
-            width,
-            height,
-            density,
-            seed.map_or(GRID_INIT_SEED, mix_seed),
-        )]
+        vec![seed_random(width, height, density, grid_init_rng(seed))]
     }
 
     /// `step.wgsl` reads nothing but `dims: vec2<u32>`.
@@ -445,7 +440,8 @@ mod runner_tests {
 
     use super::GpuGameOfLife;
     use super::tests::{headless_context, params};
-    use crate::registry::{ModelState, model_registry};
+    use crate::registry::model_registry;
+    use henad_compute::entry::ModelState;
     use henad_core::view::StatValue;
 
     /// Spins until the thread publishes a snapshot satisfying `pred`, or the deadline passes.
@@ -554,11 +550,11 @@ mod runner_tests {
         let entries = model_registry(Some(ctx.clone()));
         let entry = entries
             .iter()
-            .find(|e| e.id == "gpu_game_of_life")
+            .find(|e| e.id() == "gpu_game_of_life")
             .expect("a GPU context must make the GPU model selectable");
 
-        // Note there is no context argument here: the registry closure captured its own clone.
-        let built = (entry.create)(&params(32, 32, 0.3), None)
+        let built = entry
+            .build(&params(32, 32, 0.3), None, Some(&ctx))
             .unwrap_or_else(|fault| panic!("the GPU entry's factory failed to build: {fault}"));
         let ModelState::Gpu(mut state) = built else {
             panic!("the GPU entry's factory must yield ModelState::Gpu, not ModelState::Cpu");

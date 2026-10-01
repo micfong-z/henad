@@ -4,7 +4,7 @@
 //! neighbour index does not fix the order within a cell, so trajectories are likely different.
 
 use henad_compute::cpu::agent_engine::{
-    AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
+    NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_init_rng, agent_model_param_descriptors, split_params,
 };
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel as _};
@@ -12,7 +12,6 @@ use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{
     BufferSpec, Domain, Geometry, GpuAgentAction, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
-use henad_core::authoring::primitives::rng::mix_seed;
 use henad_core::helpers::{extract_f32, extract_u32};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -52,6 +51,9 @@ impl GpuAgentModel for GpuBoids {
     const COLOR_BUFFER: usize = COLOR;
 
     const INDEX: bool = true;
+
+    /// The neighbour index leaves the order of boids within a cell to the GPU.
+    const REPLAYS_EXACTLY: bool = false;
 
     // --8<-- [start:passes]
     const STEP_PASSES: &'static [PassSpec] = &[PassSpec {
@@ -106,7 +108,7 @@ impl GpuAgentModel for GpuBoids {
         // Seeding through the model's own `init` is what keeps tick 0 bit identical. A port
         // would be free to drift.
         let mut lanes = BoidLanes::alloc(n);
-        let mut rng = seed.map_or(AGENT_INIT_SEED, mix_seed);
+        let mut rng = agent_init_rng(seed);
         BoidsModel::init(&mut lanes, geom.extent, split_params::<BoidsModel>(params).0, &mut rng);
 
         // The CPU lane holds palette indices, this one is drawn directly so it holds colours.

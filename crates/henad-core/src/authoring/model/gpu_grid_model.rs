@@ -126,6 +126,12 @@ pub trait GpuGridModel: Send + Sync + 'static {
     const DISPLAY_SHADER: &'static str;
     const REDUCE_SHADER: &'static str;
 
+    /// Whether two builds on one seed step through identical states.
+    ///
+    /// A model whose passes leave the order of their writes to the GPU declares `false`. The sweep tests then skip
+    /// the checks that compare two runs on one seed. A rebuilt run of such a model might differ from its recorded row.
+    const REPLAYS_EXACTLY: bool = true;
+
     /// The full descriptor list. Unlike [`crate::authoring::model::grid_model::GridModel`], width and
     /// height are *not* prepended. A GPU model spells its list out, so it can mirror the exact
     /// parameter order of the CPU model it is compared against.

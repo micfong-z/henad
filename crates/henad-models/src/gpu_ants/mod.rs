@@ -6,7 +6,7 @@
 //! unlike [`crate::gpu_boids`] a run does replay.
 
 use henad_compute::cpu::agent_engine::{
-    AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
+    AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_init_rng, agent_model_param_descriptors, split_params,
 };
 use henad_compute::cpu::field::scalar::ScalarFieldSpec as _;
 use henad_core::action::ActionDescriptor;
@@ -137,7 +137,7 @@ impl GpuAgentModel for GpuAnts {
         // Seeding through the model's own `init` is what keeps tick 0 bit identical. A port would
         // be free to drift.
         let mut lanes = AntLanes::alloc(n);
-        let mut rng_state = seed.map_or(AGENT_INIT_SEED, mix_seed);
+        let mut rng_state = agent_init_rng(seed);
         AntsModel::init(
             &mut lanes,
             geom.extent,

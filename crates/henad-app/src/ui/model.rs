@@ -1,19 +1,19 @@
 //! Model selection, and what the selected model declares about itself.
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::capacity::Demand;
 use henad_core::action::Schedule;
 use henad_core::helpers::fmt_bytes;
 use henad_core::metadata::{LaneSpec, Structure};
 use henad_core::params::ParamDescriptor;
 use henad_core::topology::{NeighborhoodKind, TopologyHint};
-use henad_models::registry::ModelEntry;
 
 use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE};
 use crate::state::AppState;
 use crate::ui::{KvGridRows, kv_grid};
 
 pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    let model_names: Vec<&str> = app.registry.iter().map(|m| m.name.as_str()).collect();
+    let model_names: Vec<&str> = app.registry.iter().map(|m| m.name()).collect();
     let mut changed_model = false;
 
     egui::ComboBox::from_label("Select Model")
@@ -40,11 +40,11 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     };
 
     ui.separator();
-    ui.label(entry.description.as_str());
+    ui.label(entry.description());
     ui.separator();
 
     // Recomputed as the sliders move, so the footprint tracks the panel next door.
-    let demand = entry.demand(&app.param_values);
+    let demand = entry.demand(&app.param_values, &app.runtime.granted);
     let storage_limit = app.runtime.granted.max_storage_buffers_per_shader_stage;
 
     let mut scroll = egui::ScrollArea::vertical();
@@ -57,14 +57,14 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     scroll.show(ui, |ui| {
         section(ui, "Identity");
         kv_grid(ui, "model_identity_grid").show(ui, |ui, rows| {
-            row(ui, rows, "Id", entry.id.as_str());
-            row(ui, rows, "Backend", entry.metadata.backend.label());
-            row(ui, rows, "Topology", topology_label(entry.topology_hint));
+            row(ui, rows, "Id", entry.id());
+            row(ui, rows, "Backend", entry.metadata().backend.label());
+            row(ui, rows, "Topology", topology_label(entry.topology_hint()));
         });
 
         ui.add_space(8.0);
         section(ui, "Structure");
-        kv_grid(ui, "model_structure_grid").show(ui, |ui, rows| structure_rows(ui, rows, &entry.metadata.structure));
+        kv_grid(ui, "model_structure_grid").show(ui, |ui, rows| structure_rows(ui, rows, &entry.metadata().structure));
 
         ui.add_space(8.0);
         section(ui, "Interface");
@@ -75,7 +75,7 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
             ui.add_space(8.0);
             section(ui, "Footprint");
             kv_grid(ui, "model_footprint_grid").show(ui, |ui, rows| {
-                footprint_rows(ui, rows, entry.id.as_str(), demand, storage_limit);
+                footprint_rows(ui, rows, entry.id(), demand, storage_limit);
             });
         }
     });
@@ -214,19 +214,19 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
 }
 
 fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) {
-    let descs: &[ParamDescriptor] = &entry.param_descriptors;
+    let descs: &[ParamDescriptor] = entry.param_descriptors();
     let reload = descs.iter().filter(|desc| !desc.is_live()).count();
     row(ui, rows, "Parameters", count_of(descs.len(), reload, "reload"));
 
     ui.label("Statistics");
     ui.horizontal(|ui| {
-        ui.label(entry.stat_descriptors.len().to_string());
-        swatches(ui, entry.stat_descriptors.iter().map(|stat| stat.color));
+        ui.label(entry.stat_descriptors().len().to_string());
+        swatches(ui, entry.stat_descriptors().iter().map(|stat| stat.color));
     });
     rows.end_row(ui);
 
     ui.label("Palette");
-    match entry.metadata.palette {
+    match entry.metadata().palette {
         Some(palette) => {
             ui.horizontal(|ui| {
                 ui.label(palette.len().to_string());
@@ -242,7 +242,7 @@ fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) 
     }
     rows.end_row(ui);
 
-    if let Structure::Network { edge_palette, .. } = &entry.metadata.structure {
+    if let Structure::Network { edge_palette, .. } = &entry.metadata().structure {
         ui.label("Edge palette");
         ui.horizontal(|ui| {
             ui.label(edge_palette.len().to_string());

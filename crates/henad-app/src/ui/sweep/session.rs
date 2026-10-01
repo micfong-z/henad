@@ -109,9 +109,9 @@ impl SweepSession {
     ) -> Result<Self, String> {
         let entry = model_registry(app.gpu_ctx.clone())
             .into_iter()
-            .find(|entry| entry.id == spec.model)
+            .find(|entry| entry.id() == spec.model)
             .ok_or_else(|| format!("{} is unavailable on this device", spec.model))?;
-        let model_name = entry.name.clone();
+        let model_name = entry.name().to_owned();
         let output = match &output_dir {
             None => SweepOutput::Memory,
             #[cfg(not(target_arch = "wasm32"))]
@@ -155,9 +155,9 @@ impl SweepSession {
     pub fn resume_folder(app: &mut AppState, folder: PathBuf, model_id: &str) -> Result<Self, String> {
         let entry = model_registry(app.gpu_ctx.clone())
             .into_iter()
-            .find(|entry| entry.id == model_id)
+            .find(|entry| entry.id() == model_id)
             .ok_or_else(|| format!("{model_id} is unavailable on this device"))?;
-        let model_name = entry.name.clone();
+        let model_name = entry.name().to_owned();
         let options = SweepRunOptions {
             provenance: provenance(),
             runtime: Some(ManifestRuntime::new(Some(&app.runtime))),
@@ -308,8 +308,14 @@ mod tests {
     ///
     /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
     fn headless_app() -> Option<AppState> {
-        match henad_explore::device::acquire_headless() {
-            Ok((ctx, runtime)) => Some(AppState::new(egui::Context::default(), ctx.clone(), Some(ctx), runtime)),
+        match henad_explore::device::acquire_headless(henad_models::example_models().gpu_needs()) {
+            Ok(ctx) => {
+                let runtime = ctx
+                    .runtime_info()
+                    .expect("a headless device carries its runtime info")
+                    .clone();
+                Some(AppState::new(egui::Context::default(), ctx.clone(), Some(ctx), runtime))
+            }
             Err(error) => {
                 let required =
                     std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|value| !value.is_empty() && value != "0");

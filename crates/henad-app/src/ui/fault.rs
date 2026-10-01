@@ -22,7 +22,7 @@ pub fn fault_modal(ctx: &Context, app: &mut AppState) {
     let subject = app
         .registry
         .get(app.selected_model)
-        .map_or_else(|| "Model".to_owned(), |entry| entry.name.clone());
+        .map_or_else(|| "Model".to_owned(), |entry| entry.name().to_owned());
     let lead = match &fault.kind {
         FaultKind::Device(_) | FaultKind::Poll(_) => {
             format!("GPU reported an error while {} for {subject}.", fault.during)

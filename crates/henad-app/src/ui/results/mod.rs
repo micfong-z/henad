@@ -14,13 +14,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Id, Modal};
+use henad_compute::entry::ModelEntry;
 use henad_core::explore::plan::Plan;
 use henad_explore::handle::{DEFAULT_SERIES_BUDGET, SweepEvent};
 use henad_explore::output::memory::SweepFiles;
 use henad_explore::result_set::ResultSet;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
 use henad_explore::sweep::SweepEnd;
-use henad_models::registry::ModelEntry;
 
 use crate::icons::material_design_icons::{MDI_FOLDER_OPEN_OUTLINE, MDI_PLAY};
 use crate::state::{AppState, OpenAt};
@@ -798,6 +798,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
+    use henad_compute::entry::ModelEntry;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::SeriesBuffer;
@@ -812,7 +813,7 @@ mod tests {
     use henad_explore::output::GENERATIONS_FILE;
     use henad_explore::result_set::{DirectorySeries, ResultSet};
     use henad_explore::schema::model_schema;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::registry::model_registry;
 
     use super::{READING_RESULTS, ResultsPanel, ResultsView, SeriesLoad, poll_series_load};
     use crate::ui::files::DialogFile;
@@ -828,7 +829,7 @@ mod tests {
     fn sir() -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered")
     }
 

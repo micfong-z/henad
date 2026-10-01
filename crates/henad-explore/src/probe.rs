@@ -4,6 +4,7 @@ use std::fmt;
 
 use web_time::Instant;
 
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{Fault, STEPPING, catching};
 use henad_compute::gpu::{Demand, GpuContext};
 #[cfg(not(target_arch = "wasm32"))]
@@ -11,7 +12,6 @@ use henad_compute::gpu::{GpuSimState, fault::catching_on, stepping};
 use henad_core::explore::plan::Plan;
 use henad_core::export::StatColumns;
 use henad_core::params::ParamValue;
-use henad_models::registry::{ModelEntry, ModelState};
 
 use crate::output::manifest::now_unix_ms;
 
@@ -52,7 +52,10 @@ impl ProbeReport {
         params: &[ParamValue],
         seed: Option<u64>,
     ) -> Result<Self, ProbeError> {
-        match (entry.create)(params, seed).map_err(ProbeError::Fault)? {
+        if entry.gpu_needs().is_some() && gpu.is_none() {
+            return Err(ProbeError::NoDevice);
+        }
+        match entry.build(params, seed, gpu).map_err(ProbeError::Fault)? {
             ModelState::Cpu(mut state) => {
                 let stats = catching(STEPPING, || {
                     state.prepare_view();
@@ -223,7 +226,7 @@ fn probe_gpu(
         heap_bytes: state.heap_bytes() as u64,
         population: state.population(),
         parallel_jobs: state.parallel_jobs(),
-        demand: entry.demand(params),
+        demand: entry.demand(params, &ctx.device.limits()),
     })
 }
 
@@ -331,7 +334,7 @@ impl std::error::Error for CapacityError {}
 ///
 /// Returns [`CapacityError`] when some config needs more than the device allows.
 pub fn check_capacity(entry: &ModelEntry, plan: &Plan, limits: &wgpu::Limits) -> Result<(), CapacityError> {
-    if entry.capacity.is_none() {
+    if entry.gpu_needs().is_none() {
         return Ok(());
     }
     let mut error = CapacityError {
@@ -353,12 +356,13 @@ pub fn check_capacity(entry: &ModelEntry, plan: &Plan, limits: &wgpu::Limits) ->
 
 #[cfg(test)]
 mod tests {
+    use henad_compute::entry::{ModelEntry, register_grid_model};
     use henad_compute::fault::install_panic_hook;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
     use henad_core::params::ParamValue;
-    use henad_models::registry::{ModelEntry, model_registry, register_grid_model};
+    use henad_models::registry::model_registry;
 
     use super::{MAX_LISTED_CONFIGS, MAX_PROBED_CONFIGS, ProbeError, ProbeReport, check_capacity};
     use crate::schema::model_schema;
@@ -367,7 +371,7 @@ mod tests {
     fn entry(id: &str) -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == id)
+            .find(|entry| entry.id() == id)
             .expect("the model is registered")
     }
 
@@ -411,7 +415,9 @@ mod tests {
             .plan(&model_schema(&gpu_sir))
             .expect("a valid spec");
         let fitting = plan.config(0).expect("the plan has config 0");
-        let demand = gpu_sir.demand(&fitting.params).expect("a GPU model has a demand");
+        let demand = gpu_sir
+            .demand(&fitting.params, &ctx.device.limits())
+            .expect("a GPU model has a demand");
         let largest = demand
             .buffers
             .iter()

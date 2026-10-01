@@ -107,12 +107,13 @@ The baseline caps a storage binding at 128 MiB and a texture side at 8192, where
 The size a run can reach is a property of the hardware, and a fixed baseline would only get in the way.
 
 **Binding counts come from the models.**
-`max_storage_buffers_per_shader_stage` sits at 8 in the baseline, and `raise` asks for precisely the number `registry::gpu_storage_bindings_needed()` derives by walking every model's declared passes, action passes included.
-Today that comes to 8, from `gpu_ants`'s step pass.
+`max_storage_buffers_per_shader_stage` sits at 8 in the baseline, and `raise` asks for precisely the number the host's model set needs.
+Each GPU entry declares its `GpuNeeds`, read from its own pass list, action passes included, and `ModelSet::gpu_needs` merges them.
+For the example models that comes to 8, from `gpu_ants`'s step pass.
 wgpu's own advice is to request only what you need, and a constant would end up either short of a future model or carrying dead headroom.
 
-`raise` takes the count as an argument instead of computing it itself.
-`henad-compute` sits below `henad-models` and cannot see the models, and a host needs the number before it has a device.
+`raise` takes the needs as an argument instead of computing them itself.
+`henad-compute` cannot see which models a host offers, and a host needs the number before it has a device.
 
 !!! warning "Metal shares one argument table"
 

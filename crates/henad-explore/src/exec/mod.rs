@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use web_time::Instant;
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::{Demand, GpuContext, MAX_STEPS_PER_SUBMISSION};
 use henad_compute::runner::CAN_SPAWN_THREADS;
 use henad_core::action::Schedule;
@@ -28,7 +29,6 @@ use henad_core::explore::outcome::{PlannedRun, RunOutcome};
 use henad_core::explore::plan::Plan;
 use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
-use henad_models::registry::ModelEntry;
 
 use crate::cursor::{CursorState, RunCursor};
 use crate::probe::ProbeReport;
@@ -544,7 +544,7 @@ impl<'a> Executor<'a> {
     ) -> Result<Self, ExecutionError> {
         let mut layout = layout;
         let mut pools = Vec::new();
-        match entry.metadata.backend {
+        match entry.metadata().backend {
             Backend::Gpu if gpu.is_none() => return Err(ExecutionError::NoDevice),
             Backend::Gpu => {}
             Backend::Cpu => {
@@ -635,7 +635,7 @@ impl<'a> Executor<'a> {
     ///
     /// Returns [`ExecutionError`] when a lane's thread cannot start or panics outside a run, or `sink` refuses a run.
     pub fn run_batch(&self, requests: &[RunRequest<'_>], sink: &mut dyn RunSink) -> Result<BatchEnd, ExecutionError> {
-        match (self.entry.metadata.backend, self.pools.as_slice()) {
+        match (self.entry.metadata().backend, self.pools.as_slice()) {
             #[cfg(not(target_arch = "wasm32"))]
             (Backend::Gpu, _) => {
                 let ctx = self.gpu.ok_or(ExecutionError::NoDevice)?;
@@ -844,7 +844,10 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
+    use henad_compute::entry::{ModelEntry, ModelState};
+    use henad_compute::fault::Fault;
     use henad_compute::gpu::Demand;
+    use henad_compute::gpu::GpuContext;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::MeasurePlan;
@@ -853,7 +856,8 @@ mod tests {
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
     use henad_core::export::StatColumns;
     use henad_core::metadata::Backend;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_core::params::ParamValue;
+    use henad_models::registry::model_registry;
 
     use super::{
         ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionError, ExecutionLayout, Executor,
@@ -1156,13 +1160,13 @@ mod tests {
     fn entry(id: &str) -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == id)
+            .find(|entry| entry.id() == id)
             .expect("the model is registered")
     }
 
     /// Returns a plan over `entry` with three grid sizes and `replicates` replicates of `steps` steps each.
     fn plan(entry: &ModelEntry, steps: u64, replicates: u64) -> (Plan, Arc<MeasurePlan>) {
-        let mut spec = SweepSpec::new(entry.id.clone());
+        let mut spec = SweepSpec::new(entry.id().to_owned());
         spec.run.steps = steps;
         spec.run.replicates = replicates;
         spec.measure.stats_every = 3;
@@ -1351,10 +1355,13 @@ mod tests {
         let plain = entry("game_of_life");
         let (plan, measure) = plan(&plain, 20, 2);
         // The build panics past the registry's catch, as a fault in the executor itself would.
-        let panicking = ModelEntry {
-            create: Box::new(|_params, _seed| panic!("the lane cannot build a run")),
-            ..plain
-        };
+        let panicking = plain.wrap_factory(|_| {
+            Arc::new(
+                |_params: &[ParamValue], _seed: Option<u64>, _gpu: Option<&GpuContext>| -> Result<ModelState, Fault> {
+                    panic!("the lane cannot build a run")
+                },
+            )
+        });
         let control = SweepControl::new();
         let executor =
             Executor::new(&panicking, None, measure, lanes(3, 1), control.clone()).expect("the lane pools build");

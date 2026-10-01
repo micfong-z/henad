@@ -3,7 +3,7 @@
 //! [`cpu`] and [`gpu`] are siblings, not a base and a specialisation. Each holds its own runner,
 //! its own engines, and its own primitives. [`snapshot`], [`runtime_info`], [`display_scale`] and
 //! [`fault`] are shared, since both backends publish through them. [`runner`] is how either
-//! one gets driven.
+//! one gets driven. [`entry`] type-erases a model behind one entry a host can list and build.
 
 /// Rust generated from this crate's WGSL by `wgsl_bindgen`, in `build.rs`.
 ///
@@ -25,6 +25,7 @@ pub mod shader_bindings {
 
 pub mod cpu;
 pub mod display_scale;
+pub mod entry;
 pub mod fault;
 pub mod gpu;
 pub mod runner;

@@ -12,13 +12,13 @@ use std::time::Duration;
 use web_time::Instant;
 
 use henad_compute::cpu::sim_thread::WakeFn;
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::{Plan, PlanError};
 use henad_core::explore::spec::SweepSpec;
 use henad_core::metadata::Backend;
-use henad_models::registry::ModelEntry;
 
 use crate::exec::{ActiveRun, ActiveRuns, Concurrency, SweepControl};
 use crate::output::OutputError;
@@ -251,8 +251,7 @@ impl SweepRun {
     ///
     /// `gpu` is a device the host shares with the sweep. Note that a fault the device reports outside every error
     /// scope then ends every live run, whichever side raised it. Handed no device, the sweep acquires one on its own
-    /// thread for a GPU model, and builds the model on it from
-    /// [`model_registry`](henad_models::registry::model_registry) by the id of `entry`.
+    /// thread for a GPU model, sized to the entry's [`gpu_needs`](ModelEntry::gpu_needs), and builds `entry` on it.
     ///
     /// Planning happens before this returns. The probe build and the runs happen after it, on native on a thread of
     /// the sweep's own and in a browser in [`Self::update`].
@@ -591,67 +590,50 @@ struct BoundModel {
 impl BoundModel {
     /// Returns `entry` on the device `gpu`, recorded as `runtime`.
     ///
-    /// A GPU model with no `gpu` is built again from the registry on a device acquired here, and the manifest records
-    /// that device in place of `runtime`.
+    /// A GPU model with no `gpu` builds on a device acquired here, and the manifest records that device in place of
+    /// `runtime`.
     ///
     /// # Errors
     ///
-    /// Returns [`OwnDeviceError`] when no device can be acquired, or the registry lacks the model.
+    /// Returns [`OwnDeviceError`] when no device can be acquired.
     fn new(
         entry: ModelEntry,
         gpu: Option<GpuContext>,
         runtime: Option<ManifestRuntime>,
     ) -> Result<Self, OwnDeviceError> {
-        if gpu.is_some() || entry.metadata.backend != Backend::Gpu {
+        let Some(needs) = entry.gpu_needs().filter(|_| gpu.is_none()) else {
             return Ok(Self {
                 entry,
                 gpu,
                 runtime: runtime.unwrap_or_else(|| ManifestRuntime::new(None)),
             });
-        }
-        let (ctx, device_runtime) = crate::device::acquire_headless().map_err(OwnDeviceError::Acquire)?;
-        let entry = henad_models::registry::model_registry(Some(ctx.clone()))
-            .into_iter()
-            .find(|candidate| candidate.id == entry.id)
-            .ok_or_else(|| OwnDeviceError::Unregistered(entry.id.clone()))?;
+        };
+        let ctx = crate::device::acquire_headless(needs).map_err(OwnDeviceError)?;
+        let runtime = ManifestRuntime::new(ctx.runtime_info());
         Ok(Self {
             entry,
             gpu: Some(ctx),
-            runtime: ManifestRuntime::new(Some(&device_runtime)),
+            runtime,
         })
     }
 }
 
-/// Reason a sweep cannot step a GPU model on a device of its own.
+/// Reason a sweep cannot step a GPU model on a device of its own: no device could be acquired.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
-enum OwnDeviceError {
-    /// No device could be acquired, for the reason inside.
-    Acquire(crate::device::DeviceError),
-    /// A model the registry lacks, by its id.
-    Unregistered(String),
-}
+struct OwnDeviceError(crate::device::DeviceError);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl fmt::Display for OwnDeviceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Acquire(_) => f.write_str("cannot acquire a GPU device for the sweep"),
-            Self::Unregistered(id) => write!(
-                f,
-                "model '{id}' is not registered, and cannot be built on the sweep's device"
-            ),
-        }
+        f.write_str("cannot acquire a GPU device for the sweep")
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl std::error::Error for OwnDeviceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Acquire(error) => Some(error),
-            Self::Unregistered(_) => None,
-        }
+        Some(&self.0)
     }
 }
 
@@ -682,13 +664,13 @@ struct SweepLaunch {
 /// Returns [`SweepStartError`] when the spec names another model, or a browser a GPU model, or the spec cannot be
 /// planned.
 fn plan_spec(entry: &ModelEntry, spec: &SweepSpec) -> Result<(Arc<Plan>, Option<Arc<SearchPlan>>), SweepStartError> {
-    if spec.model != entry.id {
+    if spec.model != entry.id() {
         return Err(SweepStartError::ModelMismatch {
             spec_model: spec.model.clone(),
-            entry_model: entry.id.clone(),
+            entry_model: entry.id().to_owned(),
         });
     }
-    if cfg!(target_arch = "wasm32") && entry.metadata.backend == Backend::Gpu {
+    if cfg!(target_arch = "wasm32") && entry.metadata().backend == Backend::Gpu {
         return Err(SweepStartError::GpuNeedsNative);
     }
     if spec.search.is_some() {

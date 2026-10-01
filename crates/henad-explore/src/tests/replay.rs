@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use henad_compute::cpu::sim_thread::SimThread;
+use henad_compute::entry::ModelState;
 use henad_compute::fault::FaultSink;
 use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
 use henad_compute::gpu::stepping;
@@ -16,7 +17,6 @@ use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 use henad_core::explore::value::resolve_params;
 use henad_core::export::stats_csv::StatColumns;
 use henad_core::view::StatEntry;
-use henad_models::registry::ModelState;
 
 use crate::exec::Concurrency;
 use crate::result_set::ResultSet;
@@ -247,7 +247,7 @@ fn a_replayed_run_from_a_result_set_matches_its_row() {
         assert_eq!(outcome.status, RunStatus::Ok);
         let replay = set.replay(&sir, outcome.run.run_id).expect("the run replays");
         assert_eq!(replay.ticks, outcome.ticks);
-        let Ok(ModelState::Cpu(state)) = (sir.create)(&replay.params, Some(replay.seed)) else {
+        let Ok(ModelState::Cpu(state)) = sir.build(&replay.params, Some(replay.seed), None) else {
             panic!("SIR builds on the CPU");
         };
         let mut thread = SimThread::new(state, 60.0, None, FaultSink::new());
@@ -299,7 +299,7 @@ fn a_replayed_gpu_run_from_a_result_set_matches_its_row() {
         let outcome = &recorded.outcome;
         assert_eq!(outcome.status, RunStatus::Ok, "{:?}", outcome.note);
         let replay = set.replay(&gpu_sir, outcome.run.run_id).expect("the run replays");
-        let Ok(ModelState::Gpu(state)) = (gpu_sir.create)(&replay.params, Some(replay.seed)) else {
+        let Ok(ModelState::Gpu(state)) = gpu_sir.build(&replay.params, Some(replay.seed), Some(&ctx)) else {
             panic!("gpu_sir builds on the GPU");
         };
         let settings = GpuBatchSettings {

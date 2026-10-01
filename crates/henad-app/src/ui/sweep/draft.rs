@@ -2503,6 +2503,7 @@ mod tests {
     use std::num::NonZeroUsize;
     use std::time::Duration;
 
+    use henad_compute::entry::ModelEntry;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::MeasurePlan;
@@ -2519,7 +2520,7 @@ mod tests {
     use henad_explore::probe::ProbeReport;
     use henad_explore::schema::model_schema;
     use henad_explore::spec_file::SpecFile;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::registry::model_registry;
 
     use super::{
         COLUMNS_PENDING, DesignTableDraft, DraftAlgorithm, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis,
@@ -2536,20 +2537,20 @@ mod tests {
     fn sir() -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered")
     }
 
     fn boids() -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "boids")
+            .find(|entry| entry.id() == "boids")
             .expect("boids is registered")
     }
 
     fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
         entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect()
@@ -2558,14 +2559,14 @@ mod tests {
     /// Returns the stat columns of a build of `entry` at its default values, as a sweep's probe samples them.
     fn sampled_columns(entry: &ModelEntry) -> StatColumns {
         ProbeReport::build(entry, None, &default_values(entry), None)
-            .unwrap_or_else(|error| panic!("{} does not build: {error}", entry.id))
+            .unwrap_or_else(|error| panic!("{} does not build: {error}", entry.id()))
             .columns
     }
 
     /// Returns SIR's defaults on a 32 by 32 grid, with an infection rate of 0.3 and a recovery rate of 0.05.
     fn panel_values(entry: &ModelEntry) -> Vec<ParamValue> {
         let mut values: Vec<ParamValue> = entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();

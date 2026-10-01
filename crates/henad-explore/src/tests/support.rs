@@ -7,13 +7,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::Plan;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::export::csv::parse_records;
-use henad_models::registry::{ModelEntry, model_registry};
+use henad_models::registry::model_registry;
 
 use henad_compute::fault::FaultSink;
 
@@ -40,8 +41,8 @@ fn gpu_required() -> bool {
 ///
 /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
 pub fn headless_device() -> Option<GpuContext> {
-    match acquire_headless() {
-        Ok((ctx, _)) => Some(ctx),
+    match acquire_headless(henad_models::example_models().gpu_needs()) {
+        Ok(ctx) => Some(ctx),
         Err(error) => {
             assert!(!gpu_required(), "{REQUIRE_GPU} is set but {error}");
             None
@@ -88,7 +89,7 @@ pub fn baseline_device() -> Option<GpuContext> {
 pub fn entry(id: &str, gpu: Option<&GpuContext>) -> ModelEntry {
     model_registry(gpu.cloned())
         .into_iter()
-        .find(|entry| entry.id == id)
+        .find(|entry| entry.id() == id)
         .expect("the model is registered")
 }
 

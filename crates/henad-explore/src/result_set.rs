@@ -12,13 +12,13 @@ use std::fmt;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 
+use henad_compute::entry::ModelEntry;
 use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::{PlannedRun, RunOutcome};
 use henad_core::explore::plan::{Config, Plan, PlanError};
 use henad_core::explore::replay::Replay;
 use henad_core::explore::spec::SweepSpec;
-use henad_models::registry::ModelEntry;
 
 use henad_core::explore::value::parse_value;
 
@@ -335,7 +335,8 @@ impl ResultSet {
     ///
     /// A replay of a run through an entry that does not match might differ from the run.
     pub fn schema_matches(&self, entry: &ModelEntry) -> bool {
-        entry.id == self.manifest.model.id && hex(schema_hash(&model_schema(entry))) == self.manifest.model.schema_hash
+        entry.id() == self.manifest.model.id
+            && hex(schema_hash(&model_schema(entry))) == self.manifest.model.schema_hash
     }
 
     /// Plans the recorded spec against `entry`.
@@ -379,14 +380,14 @@ impl ResultSet {
         let run = recorded.outcome.run;
         let mismatch = || ResultReplayError::Mismatch { run_id: run.run_id };
         let plan = SearchPlan::new(&self.spec, &model_schema(entry)).map_err(ResultReplayError::Search)?;
-        let params = entry.param_descriptors.len();
+        let params = entry.param_descriptors().len();
         if recorded.values.len() != params + plan.base().actions().len() {
             return Err(mismatch());
         }
         let config = Config {
             block: recorded.block,
             params: entry
-                .param_descriptors
+                .param_descriptors()
                 .iter()
                 .zip(&recorded.values)
                 .map(|(descriptor, text)| parse_value(&descriptor.kind, text).ok())

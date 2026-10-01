@@ -8,7 +8,7 @@ use henad_core::view::{GridView, StatEntry, stat_entries};
 
 use crate::cpu::field::CaField;
 
-pub use crate::cpu::field::GRID_INIT_SEED;
+pub use crate::cpu::field::{GRID_INIT_SEED, grid_init_rng};
 
 /// Engine wrapper that implements `SimState` for any `GridModel`.
 pub struct GridModelState<M: GridModel> {

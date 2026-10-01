@@ -13,7 +13,7 @@
 //! RNG buffers together, in lockstep. Only the state buffer (index 0) is visible to the display
 //! and reduce shaders.
 
-use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_compute::cpu::grid_engine::{GRID_INIT_SEED, grid_init_rng};
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
@@ -128,10 +128,8 @@ impl GpuGridModel for GpuSir {
 
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let initial_infected_pct = extract_f32(params, PARAM_INITIAL_INFECTED_PCT, DEFAULT_INITIAL_INFECTED_PCT);
-        let (cells, rng) = match seed {
-            Some(s) => (mix_seed(s), mix_seed(s ^ RNG_INIT_SEED)),
-            None => (GRID_INIT_SEED, RNG_INIT_SEED),
-        };
+        let cells = grid_init_rng(seed);
+        let rng = seed.map_or(RNG_INIT_SEED, |s| mix_seed(s ^ RNG_INIT_SEED));
         vec![
             seed_cells(width, height, initial_infected_pct, cells),
             seed_rng_states(width, height, rng),
@@ -369,7 +367,8 @@ mod runner_tests {
 
     use super::GpuSir;
     use super::tests::{headless_context, params};
-    use crate::registry::{ModelState, model_registry};
+    use crate::registry::model_registry;
+    use henad_compute::entry::ModelState;
     use henad_core::view::StatValue;
 
     fn wait_for(thread: &mut GpuSimThread, timeout: Duration, pred: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
@@ -432,10 +431,11 @@ mod runner_tests {
         let entries = model_registry(Some(ctx.clone()));
         let entry = entries
             .iter()
-            .find(|e| e.id == "gpu_sir")
+            .find(|e| e.id() == "gpu_sir")
             .expect("a GPU context must make the GPU SIR model selectable");
 
-        let built = (entry.create)(&params(32, 32, 0.3, 0.05, 0.1), None)
+        let built = entry
+            .build(&params(32, 32, 0.3, 0.05, 0.1), None, Some(&ctx))
             .unwrap_or_else(|fault| panic!("the GPU SIR entry's factory failed to build: {fault}"));
         let ModelState::Gpu(mut state) = built else {
             panic!("the GPU SIR entry's factory must yield ModelState::Gpu, not ModelState::Cpu");

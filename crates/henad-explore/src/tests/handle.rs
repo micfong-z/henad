@@ -6,15 +6,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use henad_compute::entry::{ModelEntry, register_gpu_grid_model};
 use henad_compute::fault::Fault;
 use henad_compute::runner::{Pace, SimLoop as _};
+use henad_core::authoring::model::binding::BindingDecl;
+use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
 use henad_core::export::csv::parse_records;
-use henad_models::registry::ModelEntry;
+use henad_core::params::{ParamDescriptor, ParamValue};
+use henad_core::view::{StatDescriptor, StatValue};
+use henad_models::gpu_sir::GpuSir;
 
 use crate::exec::{Concurrency, SweepControl};
 use crate::handle::{SweepChannel, SweepEvent, SweepOutput, SweepPhase, SweepRun, SweepRunOptions, SweepStartError};
@@ -642,6 +647,81 @@ fn a_gpu_sweep_handed_no_device_steps_on_its_own() {
         host.faults.take().is_some(),
         "the host's fault stays on the host's device"
     );
+    assert!(
+        record.manifest.runtime.adapter.is_some(),
+        "the manifest records the sweep's device"
+    );
+}
+
+/// GPU SIR under an id the example set does not hold, as a model of a crate downstream registers one.
+struct OutsideGpuSir;
+
+impl GpuGridModel for OutsideGpuSir {
+    const NAME: &'static str = "SIR Epidemic (GPU, outside the example set)";
+    const ID: &'static str = "outside_gpu_sir";
+    const DESCRIPTION: &'static str = GpuSir::DESCRIPTION;
+    const PALETTE: &'static [[u8; 4]] = GpuSir::PALETTE;
+    const WORKGROUP_SIZE: u32 = GpuSir::WORKGROUP_SIZE;
+    const STATS: &'static [StatDescriptor] = GpuSir::STATS;
+    const ACTIONS: &'static [GpuGridAction] = GpuSir::ACTIONS;
+    const BUFFERS: &'static [&'static str] = GpuSir::BUFFERS;
+    const STEP_BINDINGS: &'static [BindingDecl] = GpuSir::STEP_BINDINGS;
+    const DISPLAY_BINDINGS: &'static [BindingDecl] = GpuSir::DISPLAY_BINDINGS;
+    const REDUCE_BINDINGS: &'static [BindingDecl] = GpuSir::REDUCE_BINDINGS;
+    const STEP_SHADER: &'static str = GpuSir::STEP_SHADER;
+    const DISPLAY_SHADER: &'static str = GpuSir::DISPLAY_SHADER;
+    const REDUCE_SHADER: &'static str = GpuSir::REDUCE_SHADER;
+    const REPLAYS_EXACTLY: bool = GpuSir::REPLAYS_EXACTLY;
+
+    fn param_descriptors() -> Vec<ParamDescriptor> {
+        GpuSir::param_descriptors()
+    }
+
+    fn dims(params: &[ParamValue]) -> (u32, u32) {
+        GpuSir::dims(params)
+    }
+
+    fn buffer_lens(width: u32, height: u32) -> Vec<usize> {
+        GpuSir::buffer_lens(width, height)
+    }
+
+    fn step_dims(width: u32, height: u32) -> (u32, u32) {
+        GpuSir::step_dims(width, height)
+    }
+
+    fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
+        GpuSir::seed_buffers(width, height, params, seed)
+    }
+
+    fn step_params_bytes(width: u32, height: u32, params: &[ParamValue]) -> Vec<u8> {
+        GpuSir::step_params_bytes(width, height, params)
+    }
+
+    fn action_params_bytes(action: usize, width: u32, height: u32, params: &[ParamValue], seed: u32) -> Vec<u8> {
+        GpuSir::action_params_bytes(action, width, height, params, seed)
+    }
+
+    fn stats(counts: &[u32]) -> Vec<StatValue> {
+        GpuSir::stats(counts)
+    }
+}
+
+/// A sweep handed no device builds the entry it was handed on its own device, never one looked up by id.
+#[test]
+fn a_gpu_model_outside_the_example_set_sweeps_on_its_own_device() {
+    if headless_device().is_none() {
+        return;
+    }
+    let outside = register_gpu_grid_model::<OutsideGpuSir>();
+    assert!(henad_models::example_models().get(outside.id()).is_none());
+    let mut spec = gpu_sir_spec();
+    spec.model = outside.id().to_owned();
+
+    let mut run = SweepRun::start(outside, None, spec, SweepOutput::Memory, options()).expect("the sweep starts");
+    let events = drain(&mut run);
+    let record = record(&events);
+    assert_eq!((record.report.end, record.report.counts.ok), (SweepEnd::Complete, 2));
+    assert_eq!(record.manifest.model.id, "outside_gpu_sir");
     assert!(
         record.manifest.runtime.adapter.is_some(),
         "the manifest records the sweep's device"

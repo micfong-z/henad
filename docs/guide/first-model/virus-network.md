@@ -778,7 +778,7 @@ Declare the module and register it, and then we can run it.
 pub mod virus;
 ```
 
-``` rust title="crates/henad-models/src/registry.rs"
+``` rust title="crates/henad-models/src/lib.rs"
 register_network_model::<crate::virus::VirusModel>(),
 ```
 

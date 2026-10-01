@@ -22,9 +22,10 @@ pub mod view;
 #[cfg(test)]
 mod tests;
 
-pub use agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
+pub use agent_engine::GpuAgentState;
 pub use capacity::Demand;
-pub use grid_engine::{GpuGridModelDescriptor, GpuGridState};
+pub use grid_engine::GpuGridState;
+pub use limits::GpuNeeds;
 pub use primitives::readback::StatsPoll;
 pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 pub use sim_thread::{GpuSimState, GpuStats};
@@ -40,6 +41,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::fault::{Fault, FaultSink};
+use crate::runtime_info::RuntimeInfo;
 
 /// Steps one command buffer may hold.
 pub const MAX_STEPS_PER_SUBMISSION: u32 = 64;
@@ -57,6 +59,8 @@ pub struct GpuContext {
     pub faults: FaultSink,
     /// Set once the device is lost.
     lost: Arc<AtomicBool>,
+    /// Facts about the host and the adapter, when whoever acquired the device attached them.
+    runtime_info: Option<Arc<RuntimeInfo>>,
 }
 
 impl GpuContext {
@@ -99,7 +103,21 @@ impl GpuContext {
             target_format,
             faults,
             lost,
+            runtime_info: None,
         }
+    }
+
+    /// Returns the context with `info` attached, as [`Self::runtime_info`] reads it back.
+    pub fn with_runtime_info(self, info: RuntimeInfo) -> Self {
+        Self {
+            runtime_info: Some(Arc::new(info)),
+            ..self
+        }
+    }
+
+    /// Facts about the host and the adapter, `None` when nothing attached them.
+    pub fn runtime_info(&self) -> Option<&RuntimeInfo> {
+        self.runtime_info.as_deref()
     }
 
     /// Returns whether the device is lost. A lost device runs no more work.

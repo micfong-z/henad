@@ -281,19 +281,19 @@ First we declare the module,
 pub mod life;
 ```
 
-then we add a line to the registry, next to the entries already there:
+then we add a line to `example_models()`, next to the entries already there:
 
-``` rust title="crates/henad-models/src/registry.rs"
+``` rust title="crates/henad-models/src/lib.rs"
 register_grid_model::<crate::life::LifeModel>(),
 ```
 
 For context, here is the list our line joins:
 
-``` rust title="crates/henad-models/src/registry.rs"
---8<-- "crates/henad-models/src/registry.rs:cpu_entries"
+``` rust title="crates/henad-models/src/lib.rs"
+--8<-- "crates/henad-models/src/lib.rs:cpu_entries"
 ```
 
-`register_grid_model` type-erases the model into a `ModelEntry`.
+`register_grid_model` type-erases the model into a `ModelEntry`, and `example_models()` collects the entries into a `ModelSet`, which refuses a second model with the same ID.
 The name, description, parameters, stat series and topology are all read back off the trait, so an entry carries nothing hand-written that could go wrong.
 
 With the entry in place, we can finally run the model.

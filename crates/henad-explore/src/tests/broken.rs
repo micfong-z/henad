@@ -7,7 +7,10 @@ use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{StatDescriptor, StatEntry, StatValue};
-use henad_models::registry::{ModelEntry, ModelState};
+use std::sync::Arc;
+
+use henad_compute::entry::{ModelEntry, ModelState};
+use henad_compute::gpu::GpuContext;
 
 /// Divides by `init_divisor` while it builds and by `divisor` in every step, so a sweep reaching 0 panics there.
 pub struct DividesByParam;
@@ -94,14 +97,16 @@ pub struct RefusesActions(pub Box<dyn SimState>);
 impl RefusesActions {
     /// Returns `entry` with every CPU state it builds wrapped, so each refuses its actions.
     pub fn wrap(entry: ModelEntry) -> ModelEntry {
-        let create = entry.create;
-        ModelEntry {
-            create: Box::new(move |params: &[ParamValue], seed| match create(params, seed)? {
-                ModelState::Cpu(state) => Ok(ModelState::Cpu(Box::new(Self(state)))),
-                ModelState::Gpu(state) => Ok(ModelState::Gpu(state)),
-            }),
-            ..entry
-        }
+        entry.wrap_factory(|create| {
+            Arc::new(
+                move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| match create(
+                    params, seed, gpu,
+                )? {
+                    ModelState::Cpu(state) => Ok(ModelState::Cpu(Box::new(Self(state)))),
+                    ModelState::Gpu(state) => Ok(ModelState::Gpu(state)),
+                },
+            )
+        })
     }
 }
 

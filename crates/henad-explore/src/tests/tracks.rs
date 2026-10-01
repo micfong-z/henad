@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{BUILDING, Fault, install_panic_hook};
 use henad_compute::gpu::{GpuContext, GpuSimState, StatsPoll, stepping};
 use henad_compute::snapshot::GpuSnapshot;
@@ -20,7 +21,7 @@ use henad_core::metadata::Backend;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
-use henad_models::registry::{ModelEntry, ModelState, model_registry};
+use henad_models::registry::model_registry;
 
 use crate::exec::{ActiveRuns, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, SweepControl};
 use crate::output::manifest::ManifestStatus;
@@ -205,27 +206,27 @@ fn instrument(
     counts: &Arc<StateCounts>,
     misbehavior: impl Fn(&[ParamValue]) -> Misbehavior + Send + Sync + 'static,
 ) -> ModelEntry {
-    let create = model.create;
     let device = ctx.device.clone();
     let counts = Arc::clone(counts);
-    ModelEntry {
-        create: Box::new(move |params: &[ParamValue], seed| match create(params, seed)? {
-            ModelState::Gpu(state) => {
-                let live = counts.live.fetch_add(1, Ordering::Relaxed) + 1;
-                counts.most_live.fetch_max(live, Ordering::Relaxed);
-                Ok(ModelState::Gpu(Box::new(HarnessState {
-                    state,
-                    misbehavior: misbehavior(params),
-                    device: device.clone(),
-                    polls_left: 0,
-                    readback_tick: 0,
-                    counts: Arc::clone(&counts),
-                })))
-            }
-            ModelState::Cpu(state) => Ok(ModelState::Cpu(state)),
-        }),
-        ..model
-    }
+    model.wrap_factory(|create| {
+        Arc::new(
+            move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| match create(params, seed, gpu)? {
+                ModelState::Gpu(state) => {
+                    let live = counts.live.fetch_add(1, Ordering::Relaxed) + 1;
+                    counts.most_live.fetch_max(live, Ordering::Relaxed);
+                    Ok(ModelState::Gpu(Box::new(HarnessState {
+                        state,
+                        misbehavior: misbehavior(params),
+                        device: device.clone(),
+                        polls_left: 0,
+                        readback_tick: 0,
+                        counts: Arc::clone(&counts),
+                    })))
+                }
+                ModelState::Cpu(state) => Ok(ModelState::Cpu(state)),
+            },
+        )
+    })
 }
 
 /// Runs every run of `plan` on `executor`, and returns the outcomes with their timing zeroed.
@@ -496,14 +497,14 @@ fn an_interleaved_queue_executes_every_step() {
     };
     let models: Vec<ModelEntry> = model_registry(Some(ctx.clone()))
         .into_iter()
-        .filter(|model| model.metadata.backend == Backend::Gpu)
+        .filter(|model| model.metadata().backend == Backend::Gpu)
         .collect();
     assert_eq!(models.len(), 4, "every GPU model has a case");
     for model in models {
         let counts = Arc::new(StateCounts::default());
         let model = instrument(model, &ctx, &counts, |_| Misbehavior::default());
-        let mut spec = SweepSpec::new(&model.id);
-        spec.fixed = fixed_by_model(&model.id);
+        let mut spec = SweepSpec::new(model.id());
+        spec.fixed = fixed_by_model(model.id());
         spec.run.steps = 150;
         spec.run.replicates = 8;
         spec.measure.stats_every = 50;
@@ -514,10 +515,10 @@ fn an_interleaved_queue_executes_every_step() {
             counts.most_live.load(Ordering::Relaxed),
             8,
             "{}: every run was live at once",
-            model.id
+            model.id()
         );
         for outcome in &finished {
-            let id = &model.id;
+            let id = model.id();
             assert_eq!(
                 (outcome.status, outcome.ticks),
                 (RunStatus::Ok, 150),
@@ -529,11 +530,11 @@ fn an_interleaved_queue_executes_every_step() {
             assert!(last.iter().any(|&value| value != 0.0), "{id}: {last:?}");
         }
         let final_ticks = counts.final_ticks.lock().expect("the ticks are recorded").clone();
-        assert_eq!(final_ticks.len(), 9, "{}: the probe and 8 runs", model.id);
+        assert_eq!(final_ticks.len(), 9, "{}: the probe and 8 runs", model.id());
         assert!(
             final_ticks[1..].iter().all(|&tick| tick == 150),
             "{}: {final_ticks:?}",
-            model.id
+            model.id()
         );
     }
 }
@@ -553,7 +554,10 @@ fn gpu_admission_respects_the_memory_budget() {
     spec.measure.series_every = 10;
     let (plan, measure) = planned(&model, Some(&ctx), &spec);
     let params = &plan.config(0).expect("the plan has a config").params;
-    let demand = model.demand(params).expect("a GPU model has a demand").bytes();
+    let demand = model
+        .demand(params, &ctx.device.limits())
+        .expect("a GPU model has a demand")
+        .bytes();
 
     let sequential = outcomes(&executor(&model, &ctx, &measure, ONE_TRACK), &plan);
     counts.most_live.store(0, Ordering::Relaxed);
@@ -580,26 +584,26 @@ fn an_out_of_memory_build_waits_for_a_track_to_finish() {
 
     // Each build attempt records whether it was refused and how many states had been dropped before it.
     let attempts = Arc::new(Mutex::new(Vec::<(bool, usize)>::new()));
-    let create = model.create;
     let (build_counts, build_attempts) = (Arc::clone(&counts), Arc::clone(&attempts));
-    let refusing_entry = ModelEntry {
-        create: Box::new(move |params: &[ParamValue], seed| {
-            let refused = build_counts.live.load(Ordering::Relaxed) >= 2;
-            let dropped = build_counts.final_ticks.lock().expect("the ticks are recorded").len();
-            build_attempts
-                .lock()
-                .expect("the attempts are recorded")
-                .push((refused, dropped));
-            if refused {
-                let error = wgpu::Error::OutOfMemory {
-                    source: "the device is out of memory".into(),
-                };
-                return Err(Fault::device(BUILDING, error));
-            }
-            create(params, seed)
-        }),
-        ..model
-    };
+    let refusing_entry = model.clone().wrap_factory(|create| {
+        Arc::new(
+            move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| {
+                let refused = build_counts.live.load(Ordering::Relaxed) >= 2;
+                let dropped = build_counts.final_ticks.lock().expect("the ticks are recorded").len();
+                build_attempts
+                    .lock()
+                    .expect("the attempts are recorded")
+                    .push((refused, dropped));
+                if refused {
+                    let error = wgpu::Error::OutOfMemory {
+                        source: "the device is out of memory".into(),
+                    };
+                    return Err(Fault::device(BUILDING, error));
+                }
+                create(params, seed, gpu)
+            },
+        )
+    });
     counts.most_live.store(0, Ordering::Relaxed);
     let finished = outcomes(&executor(&refusing_entry, &ctx, &measure, tracks(4)), &plan);
     assert_eq!(finished, sequential, "the refused builds ran once a track was free");

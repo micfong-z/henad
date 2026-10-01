@@ -45,6 +45,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 use clap::{ArgGroup, Parser};
 
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::install_panic_hook;
 use henad_compute::gpu::{GpuContext, GpuSimState, stepping};
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
@@ -54,7 +55,7 @@ use henad_core::export::{StatsWriter, state as state_export};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 use henad_explore::device::acquire_headless;
-use henad_models::registry::{ModelEntry, ModelState, model_registry};
+use henad_models::registry::model_registry;
 
 use crate::actions::{BENCH_FIRE, note_refused};
 use crate::explore::{ExploreArgs, LoadedSpec};
@@ -208,17 +209,18 @@ fn main() -> Result<ExitCode> {
 
     // Best-effort headless GPU: acquire a device so GPU models can be listed and run. If none is
     // available (e.g. CI with no GPU), fall back to a CPU-only registry rather than failing.
-    let (gpu_ctx, runtime) = match acquire_headless() {
-        Ok((ctx, runtime)) => (Some(ctx), Some(runtime)),
+    let gpu_ctx = match acquire_headless(henad_models::example_models().gpu_needs()) {
+        Ok(ctx) => Some(ctx),
         Err(err) => {
             eprintln!("note: no GPU available ({err}); GPU models disabled");
-            (None, None)
+            None
         }
     };
+    let runtime = gpu_ctx.as_ref().and_then(GpuContext::runtime_info);
 
     // `force_fallback_adapter: false` does not stop a software rasteriser (lavapipe, WARP) being
     // returned when it is the only adapter present.
-    if let Some(runtime) = &runtime
+    if let Some(runtime) = runtime
         && classify_adapter(&runtime.adapter) == GpuVerdict::Absent
     {
         eprintln!(
@@ -230,9 +232,9 @@ fn main() -> Result<ExitCode> {
 
     if args.info {
         if args.json {
-            json_report::runtime(runtime.as_ref());
+            json_report::runtime(runtime);
         } else {
-            print_runtime_info(runtime.as_ref());
+            print_runtime_info(runtime);
         }
     }
 
@@ -258,14 +260,14 @@ fn main() -> Result<ExitCode> {
     };
     let entry = registry
         .iter()
-        .find(|e| e.id == model_id)
+        .find(|e| e.id() == model_id)
         .with_context(|| format!("unknown model '{model_id}' (try --list)"))?;
 
     match mode {
         Mode::Params if args.json => json_report::emit(&json_report::params(entry, gpu_ctx.as_ref())),
         Mode::Params => print!("{}", params_text(entry)),
-        Mode::Explore => return explore::run(&args, entry, gpu_ctx.as_ref(), runtime.as_ref(), spec),
-        _ => return run_single(entry, &args, mode, gpu_ctx.as_ref(), runtime.as_ref()).map(|()| ExitCode::SUCCESS),
+        Mode::Explore => return explore::run(&args, entry, gpu_ctx.as_ref(), runtime, spec),
+        _ => return run_single(entry, &args, mode, gpu_ctx.as_ref(), runtime).map(|()| ExitCode::SUCCESS),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -279,8 +281,8 @@ fn run_single(
     runtime: Option<&RuntimeInfo>,
 ) -> Result<()> {
     let overrides = parse_overrides(&args.set)?;
-    let params = resolve_params(&entry.param_descriptors, &overrides).map_err(set_error)?;
-    let schedule = Schedule::parse(&args.act, &entry.id, &entry.action_descriptors)?;
+    let params = resolve_params(entry.param_descriptors(), &overrides).map_err(set_error)?;
+    let schedule = Schedule::parse(&args.act, entry.id(), entry.action_descriptors())?;
     if let Some(last) = schedule.last_tick()
         && last > args.warmup + args.steps
     {
@@ -295,7 +297,7 @@ fn run_single(
     if let Some(ctx) = gpu_ctx {
         let shortfalls = entry.shortfalls(&params, &ctx.device.limits());
         if !shortfalls.is_empty() {
-            bail!("'{}' does not fit this device: {}", entry.id, shortfalls.join("; "));
+            bail!("'{}' does not fit this device: {}", entry.id(), shortfalls.join("; "));
         }
     }
 
@@ -359,7 +361,7 @@ fn print_runtime_info(runtime: Option<&RuntimeInfo>) {
 fn print_models(registry: &[ModelEntry]) {
     println!("available models:");
     for entry in registry {
-        let (id, name) = (&entry.id, &entry.name);
+        let (id, name) = (entry.id(), entry.name());
         println!("  {id:<18} {name}");
     }
 }
@@ -371,8 +373,8 @@ fn print_models(registry: &[ModelEntry]) {
 /// read a model's axes (does it have `grid_width`? `num_agents`? at what default?) instead of
 /// hard-coding per-model knowledge or probing with throwaway runs.
 fn params_text(entry: &ModelEntry) -> String {
-    let mut text = format!("parameters for {} ({}):\n", entry.id, entry.name);
-    for (index, desc) in entry.param_descriptors.iter().enumerate() {
+    let mut text = format!("parameters for {} ({}):\n", entry.id(), entry.name());
+    for (index, desc) in entry.param_descriptors().iter().enumerate() {
         let (id, label) = (desc.id, desc.label);
         let apply = if desc.is_live() { "live" } else { "reload" };
         let kind = match &desc.kind {
@@ -399,9 +401,12 @@ fn params_text(entry: &ModelEntry) -> String {
 /// callers use [`new_gpu_state`]. The dispatcher in [`run_benchmark`] routes correctly, so this
 /// only fires for a CPU-only path handed a GPU model, such as `--export`.
 fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -> Result<Box<dyn SimState>> {
-    match (entry.create)(params, seed)? {
+    if entry.gpu_needs().is_some() {
+        bail!("model '{}' is GPU-backed; this path is CPU-only", entry.id());
+    }
+    match entry.build(params, seed, None)? {
         ModelState::Cpu(state) => Ok(state),
-        ModelState::Gpu(_) => bail!("model '{}' is GPU-backed; this path is CPU-only", entry.id),
+        ModelState::Gpu(_) => bail!("model '{}' is GPU-backed; this path is CPU-only", entry.id()),
     }
 }
 
@@ -415,19 +420,19 @@ fn run_benchmark(
     gpu_ctx: Option<&GpuContext>,
     adapter: Option<&str>,
 ) -> Result<()> {
-    let (is_gpu, jobs) = match (entry.create)(params, args.seed)? {
+    let (is_gpu, jobs) = match entry.build(params, args.seed, gpu_ctx)? {
         ModelState::Gpu(_) => (true, None),
         ModelState::Cpu(state) => (false, state.parallel_jobs()),
     };
     if is_gpu {
         let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
         if args.json {
-            json_report::info(&entry.id, "gpu", rayon::current_num_threads(), jobs, adapter);
+            json_report::info(entry.id(), "gpu", rayon::current_num_threads(), jobs, adapter);
         }
         bench_gpu(entry, params, args, schedule, ctx)
     } else {
         if args.json {
-            json_report::info(&entry.id, "cpu", rayon::current_num_threads(), jobs, None);
+            json_report::info(entry.id(), "cpu", rayon::current_num_threads(), jobs, None);
         }
         bench_cpu(entry, params, args, schedule)
     }
@@ -446,7 +451,12 @@ fn rep_seed(base: Option<u64>, rep: u64) -> Option<u64> {
 fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, schedule: &Schedule) -> Result<()> {
     eprintln!(
         "benchmarking {} ({}): {} steps x {} reps, {} warmup, {} global-warmup",
-        entry.name, entry.id, args.steps, args.reps, args.warmup, args.global_warmup
+        entry.name(),
+        entry.id(),
+        args.steps,
+        args.reps,
+        args.warmup,
+        args.global_warmup
     );
     if cfg!(debug_assertions) {
         eprintln!("!!! warning: debug build; use --release for benchmarking !!!");
@@ -534,7 +544,7 @@ fn bench_cpu(entry: &ModelEntry, params: &[ParamValue], args: &Args, schedule: &
             args.steps,
             population,
             grid_dims,
-            &entry.param_descriptors,
+            entry.param_descriptors(),
             params,
             schedule,
         );
@@ -620,7 +630,12 @@ fn bench_gpu(
 ) -> Result<()> {
     eprintln!(
         "benchmarking {} ({}) [GPU]: {} steps x {} reps, {} warmup, {} global-warmup",
-        entry.name, entry.id, args.steps, args.reps, args.warmup, args.global_warmup
+        entry.name(),
+        entry.id(),
+        args.steps,
+        args.reps,
+        args.warmup,
+        args.global_warmup
     );
     if cfg!(debug_assertions) {
         eprintln!("!!! warning: debug build; use --release for benchmarking !!!");
@@ -630,7 +645,7 @@ fn bench_gpu(
     // clocks (DVFS) and pay first-use shader compilation before any timed rep, so rep 1 isn't
     // cold. Off by default, since its cost scales with the workload.
     if args.global_warmup > 0 {
-        let mut warm = new_gpu_state(entry, params, args.seed)?;
+        let mut warm = new_gpu_state(entry, params, args.seed, ctx)?;
         eprint!("  #{: >4}: ", 0);
         let start = Instant::now();
         stepping::run_steps(&mut *warm, ctx, args.global_warmup)?;
@@ -643,7 +658,7 @@ fn bench_gpu(
 
     for rep in 0..args.reps {
         let seed = rep_seed(args.seed, rep);
-        let mut state = new_gpu_state(entry, params, seed)?;
+        let mut state = new_gpu_state(entry, params, seed, ctx)?;
         let (after_warmup, elapsed) = run_gpu_rep(&mut *state, ctx, args.warmup, args.steps, schedule)?;
         population = after_warmup;
         eprintln!("  #{: >4}: {elapsed:>8.3?}", rep + 1);
@@ -655,14 +670,14 @@ fn bench_gpu(
 
     // GPU state exposes no `grid_view()`, so derive dimensions from the resolved params, which
     // are exactly what the model was built from.
-    let grid_dims = grid_dims_from_params(&entry.param_descriptors, params);
+    let grid_dims = grid_dims_from_params(entry.param_descriptors(), params);
     if args.json {
         json_report::summary(
             &samples,
             args.steps,
             population,
             grid_dims,
-            &entry.param_descriptors,
+            entry.param_descriptors(),
             params,
             schedule,
         );
@@ -673,10 +688,15 @@ fn bench_gpu(
 }
 
 /// Create a fresh GPU state from a registry entry. Errors on a CPU-backed model.
-fn new_gpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -> Result<Box<dyn GpuSimState>> {
-    match (entry.create)(params, seed)? {
+fn new_gpu_state(
+    entry: &ModelEntry,
+    params: &[ParamValue],
+    seed: Option<u64>,
+    ctx: &GpuContext,
+) -> Result<Box<dyn GpuSimState>> {
+    match entry.build(params, seed, Some(ctx))? {
         ModelState::Gpu(state) => Ok(state),
-        ModelState::Cpu(_) => bail!("expected a GPU model but '{}' is CPU-backed", entry.id),
+        ModelState::Cpu(_) => bail!("expected a GPU model but '{}' is CPU-backed", entry.id()),
     }
 }
 
@@ -764,10 +784,13 @@ fn export_stats(
 
     eprintln!(
         "exporting stats for {} ({}): {} steps, sampling every {}",
-        entry.name, entry.id, total, args.stats_every
+        entry.name(),
+        entry.id(),
+        total,
+        args.stats_every
     );
 
-    let rows = match (entry.create)(params, args.seed)? {
+    let rows = match entry.build(params, args.seed, gpu_ctx)? {
         ModelState::Cpu(state) => stats_cpu(state, args, schedule, total, writer)?,
         ModelState::Gpu(state) => {
             let ctx = gpu_ctx.context("GPU model selected but no GPU device is available")?;
@@ -895,6 +918,7 @@ mod tests {
     use crate::explore::{self, ExploreArgs};
     use crate::json_report;
     use clap::Parser as _;
+    use henad_compute::entry::{ModelEntry, ModelState};
     use henad_compute::gpu::{GpuContext, GpuSimState};
     use henad_core::action::Schedule;
     use henad_core::explore::seed::run_seed;
@@ -903,7 +927,7 @@ mod tests {
     use henad_core::export::stats_csv::StatsWriter;
     use henad_core::params::ParamValue;
     use henad_explore::device::acquire_headless;
-    use henad_models::registry::{ModelEntry, ModelState, model_registry};
+    use henad_models::registry::model_registry;
     use serde_json::json;
 
     /// Directory under the system's temporary directory, unique to one test, removed with its contents on drop.
@@ -938,7 +962,7 @@ mod tests {
     fn cpu_entry(id: &str) -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == id)
+            .find(|entry| entry.id() == id)
             .expect("the model is registered")
     }
 
@@ -994,11 +1018,11 @@ mod tests {
         assert_eq!(status, ExitCode::SUCCESS);
 
         let overrides = parse_overrides(&args.set).expect("valid");
-        let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
-        let Ok(ModelState::Cpu(state)) = (entry.create)(&params, Some(run_seed(7, 0))) else {
+        let params = resolve_params(entry.param_descriptors(), &overrides).expect("in range");
+        let Ok(ModelState::Cpu(state)) = entry.build(&params, Some(run_seed(7, 0)), None) else {
             panic!("sir builds as a CPU model");
         };
-        let schedule = Schedule::parse(&[], &entry.id, &entry.action_descriptors).expect("no actions");
+        let schedule = Schedule::parse(&[], entry.id(), entry.action_descriptors()).expect("no actions");
         let mut exported_bytes = Vec::new();
         stats_cpu(state, &args, &schedule, 31, StatsWriter::new(&mut exported_bytes)).expect("writes");
         let exported = String::from_utf8(exported_bytes).expect("utf-8");
@@ -1040,11 +1064,11 @@ mod tests {
         assert_eq!(status, ExitCode::SUCCESS);
 
         let overrides = parse_overrides(&args.set).expect("valid");
-        let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
-        let Ok(ModelState::Cpu(state)) = (entry.create)(&params, Some(run_seed(7, 0))) else {
+        let params = resolve_params(entry.param_descriptors(), &overrides).expect("in range");
+        let Ok(ModelState::Cpu(state)) = entry.build(&params, Some(run_seed(7, 0)), None) else {
             panic!("sir builds as a CPU model");
         };
-        let schedule = Schedule::parse(&args.act, &entry.id, &entry.action_descriptors).expect("declared actions");
+        let schedule = Schedule::parse(&args.act, entry.id(), entry.action_descriptors()).expect("declared actions");
         let mut exported_bytes = Vec::new();
         stats_cpu(state, &args, &schedule, 20, StatsWriter::new(&mut exported_bytes)).expect("writes");
         let exported = String::from_utf8(exported_bytes).expect("utf-8");
@@ -1197,21 +1221,21 @@ parameters for virus_network (Virus on a Network):
     fn params_json_lists_every_descriptor() {
         for entry in model_registry(None) {
             let line = json_report::params(&entry, None);
-            assert_eq!(line["kind"], json!("params"), "{}", entry.id);
-            assert_eq!(line["model"], json!(entry.id));
+            assert_eq!(line["kind"], json!("params"), "{}", entry.id());
+            assert_eq!(line["model"], json!(entry.id()));
             let params = line["params"].as_array().expect("params is a list");
             let ids: Vec<&str> = params.iter().filter_map(|param| param["id"].as_str()).collect();
-            let declared: Vec<&str> = entry.param_descriptors.iter().map(|d| d.id).collect();
-            assert_eq!(ids, declared, "{}", entry.id);
+            let declared: Vec<&str> = entry.param_descriptors().iter().map(|d| d.id).collect();
+            assert_eq!(ids, declared, "{}", entry.id());
             for param in params {
                 assert!(param["kind"].is_string() && !param["default"].is_null(), "{param}");
             }
             let columns = line["stat_columns"]
                 .as_array()
                 .expect("the model builds at its defaults");
-            assert!(columns.len() >= entry.stat_descriptors.len(), "{}", entry.id);
+            assert!(columns.len() >= entry.stat_descriptors().len(), "{}", entry.id());
             let actions = line["actions"].as_array().expect("actions is a list");
-            assert_eq!(actions.len(), entry.action_descriptors.len(), "{}", entry.id);
+            assert_eq!(actions.len(), entry.action_descriptors().len(), "{}", entry.id());
         }
     }
 
@@ -1323,14 +1347,14 @@ parameters for virus_network (Virus on a Network):
     fn exported_stats_are_prepared_like_a_publish() {
         let entry = model_registry(None)
             .into_iter()
-            .find(|e| e.id == "team_assembly")
+            .find(|e| e.id() == "team_assembly")
             .expect("team_assembly is registered");
         let overrides =
             parse_overrides(&["num_agents=4".to_owned(), "team_size=4".to_owned(), "p=0".to_owned()]).expect("valid");
-        let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
+        let params = resolve_params(entry.param_descriptors(), &overrides).expect("in range");
         let args = Args::parse_from(["henad-cli", "team_assembly", "--stats-every", "2"]);
-        let schedule = Schedule::parse(&[], &entry.id, &entry.action_descriptors).expect("no actions");
-        let Ok(ModelState::Cpu(state)) = (entry.create)(&params, Some(1)) else {
+        let schedule = Schedule::parse(&[], entry.id(), entry.action_descriptors()).expect("no actions");
+        let Ok(ModelState::Cpu(state)) = entry.build(&params, Some(1), None) else {
             panic!("team_assembly builds as a CPU model");
         };
 
@@ -1373,8 +1397,8 @@ parameters for virus_network (Virus on a Network):
         ///
         /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
         fn new(id: &str) -> Option<Self> {
-            let ctx = match acquire_headless() {
-                Ok((ctx, _)) => ctx,
+            let ctx = match acquire_headless(henad_models::example_models().gpu_needs()) {
+                Ok(ctx) => ctx,
                 Err(err) => {
                     assert!(
                         !gpu_required(),
@@ -1385,16 +1409,16 @@ parameters for virus_network (Virus on a Network):
             };
             let entry = model_registry(Some(ctx.clone()))
                 .into_iter()
-                .find(|e| e.id == id)
+                .find(|e| e.id() == id)
                 .expect("the model is registered");
             let overrides = parse_overrides(&["grid_width=64".to_owned(), "grid_height=64".to_owned()]).expect("valid");
-            let params = resolve_params(&entry.param_descriptors, &overrides).expect("in range");
+            let params = resolve_params(entry.param_descriptors(), &overrides).expect("in range");
             Some(Self { ctx, entry, params })
         }
 
         fn schedule(&self, raw: &[&str]) -> Schedule {
             let raw: Vec<String> = raw.iter().map(|&s| s.to_owned()).collect();
-            Schedule::parse(&raw, &self.entry.id, &self.entry.action_descriptors).expect("declared actions")
+            Schedule::parse(&raw, self.entry.id(), self.entry.action_descriptors()).expect("declared actions")
         }
 
         fn state(&self) -> Box<dyn GpuSimState> {
@@ -1402,8 +1426,8 @@ parameters for virus_network (Virus on a Network):
         }
 
         fn seeded(&self, seed: u64) -> Box<dyn GpuSimState> {
-            let Ok(ModelState::Gpu(state)) = (self.entry.create)(&self.params, Some(seed)) else {
-                panic!("{} builds as a GPU model", self.entry.id);
+            let Ok(ModelState::Gpu(state)) = self.entry.build(&self.params, Some(seed), Some(&self.ctx)) else {
+                panic!("{} builds as a GPU model", self.entry.id());
             };
             state
         }
@@ -1411,7 +1435,7 @@ parameters for virus_network (Virus on a Network):
         /// Returns the stats export's rows for `total` ticks of `state`, without the header.
         fn rows(&self, state: Box<dyn GpuSimState>, every: u64, schedule: &Schedule, total: u64) -> Vec<String> {
             let every = every.to_string();
-            let args = Args::parse_from(["henad-cli", self.entry.id.as_str(), "--stats-every", every.as_str()]);
+            let args = Args::parse_from(["henad-cli", self.entry.id(), "--stats-every", every.as_str()]);
             let mut out = Vec::new();
             stats_gpu(state, &self.ctx, &args, schedule, total, StatsWriter::new(&mut out)).expect("writes");
             let text = String::from_utf8(out).expect("utf-8");

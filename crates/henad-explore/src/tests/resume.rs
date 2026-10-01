@@ -4,11 +4,11 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+use henad_compute::entry::register_grid_model;
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
 use henad_core::explore::plan::Shard;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
-use henad_models::registry::register_grid_model;
 
 use crate::exec::Concurrency;
 use crate::output::manifest::ManifestStatus;

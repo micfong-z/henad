@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use web_time::Instant;
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::fault::install_panic_hook;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runtime_info::RuntimeInfo;
@@ -17,7 +18,6 @@ use henad_core::explore::plan::{Plan, PlanError, PlanWarning, PlannedBlock, Shar
 use henad_core::explore::search::SearchReport;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::metadata::Backend;
-use henad_models::registry::ModelEntry;
 
 use crate::exec::{
     ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionError, ExecutionLayout, Executor, RunRequest, RunSink,
@@ -451,7 +451,11 @@ pub(crate) fn run_in_memory(
     let preparation = SweepPreparation::new(inputs, Some(plan), None)?;
     preparation.announce(inputs.provenance, progress);
     let mut manifest = preparation.manifest(inputs)?;
-    let writer = memory_writer(&preparation.plan, &inputs.entry.param_descriptors, &preparation.measure)?;
+    let writer = memory_writer(
+        &preparation.plan,
+        inputs.entry.param_descriptors(),
+        &preparation.measure,
+    )?;
     let (end, writer) = preparation.run_pending(inputs, writer, progress)?;
     let counts = writer.counts();
     let end = finish_manifest(&mut manifest, end, counts);
@@ -530,7 +534,7 @@ impl SweepPreparation {
         let measure = MeasurePlan::new(plan.run_settings(), plan.measure_settings(), probe.columns.clone())?;
         let resumed = resume_dir
             .map(|output_dir| {
-                let columns = column_names(&entry.param_descriptors, plan.actions(), measure.reducers().names());
+                let columns = column_names(entry.param_descriptors(), plan.actions(), measure.reducers().names());
                 ResumeScan::read(
                     output_dir,
                     &plan,
@@ -560,8 +564,8 @@ impl SweepPreparation {
         let pending_count = pending.len() as u64;
         let (layout, projected_bytes) = sized_layout(entry, gpu, options, sizing_probe, pending_count)?;
         let outline = SweepOutline {
-            model: entry.id.clone(),
-            backend: entry.metadata.backend,
+            model: entry.id().to_owned(),
+            backend: entry.metadata().backend,
             configs: Some(plan.configs().len() as u64),
             replicates: plan.replicates(),
             runs: plan.run_count(),
@@ -676,7 +680,7 @@ impl SweepPreparation {
         if let Some(scan) = &self.resumed {
             scan.repair(dir)?;
         }
-        let params = &inputs.entry.param_descriptors;
+        let params = inputs.entry.param_descriptors();
         let writer = if self.resumed.is_some() {
             dir.append_writer(&self.plan, params)?
         } else {
@@ -803,7 +807,7 @@ pub(crate) fn sized_layout(
     sizing_probe: &ProbeReport,
     runs: u64,
 ) -> Result<(ExecutionLayout, u64), ExploreError> {
-    let backend = entry.metadata.backend;
+    let backend = entry.metadata().backend;
     let detected = ExecutionBudget::detect();
     let unbudgeted = choose_layout(options.concurrency, &detected, backend, sizing_probe, runs);
     let rebuilt = if unbudgeted.cpu_lanes > 1 && unbudgeted.threads_per_lane != detected.workers {
@@ -845,7 +849,7 @@ pub(crate) struct ManifestParts<'a> {
 /// Returns [`OutputError::Manifest`] when the spec cannot be written as JSON.
 pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'_>) -> Result<Manifest, OutputError> {
     let (entry, provenance, options) = (inputs.entry, inputs.provenance, inputs.options);
-    let backend = backend_name(entry.metadata.backend).to_owned();
+    let backend = backend_name(entry.metadata().backend).to_owned();
     let mut spec_file = SpecFile::from(inputs.spec);
     spec_file.execution = ExecutionTable {
         concurrent: options.concurrency,
@@ -887,8 +891,8 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
             debug_build: provenance.debug_build,
         },
         model: ManifestModel {
-            id: entry.id.clone(),
-            name: entry.name.clone(),
+            id: entry.id().to_owned(),
+            name: entry.name().to_owned(),
             backend: backend.clone(),
             schema_hash: hex(parts.plan.schema_hash()),
             schema: schema_json(entry, Some(parts.probe)),

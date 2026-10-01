@@ -1000,8 +1000,8 @@ Declare the module and register it, and then we can run it.
 pub mod gpu_foraging;
 ```
 
-``` rust title="crates/henad-models/src/registry.rs"
-entries.push(register_gpu_agent_model::<crate::gpu_foraging::GpuForagingModel>(&ctx));
+``` rust title="crates/henad-models/src/lib.rs"
+register_gpu_agent_model::<crate::gpu_foraging::GpuForagingModel>(),
 ```
 
 === "Desktop app"

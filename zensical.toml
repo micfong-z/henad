@@ -108,6 +108,7 @@ nav = [
             { "#29, 2026-09-27" = "developing/agent-record/20260927-29-parameter-sweeps.md" },
             { "#30, 2026-10-01" = "developing/agent-record/20261001-30-library-packaging.md" },
             { "#31, 2026-10-01" = "developing/agent-record/20261001-31-library-surface.md" },
+            { "#32, 2026-10-01" = "developing/agent-record/20261001-32-library-entries.md" },
         ] },
     ] },
 ]

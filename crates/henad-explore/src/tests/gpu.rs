@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
+use henad_compute::entry::ModelState;
 use henad_compute::fault::{Fault, FaultSink, STEPPING};
+use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::{GpuSimState, MAX_STEPS_PER_SUBMISSION, StatsPoll};
 use henad_compute::snapshot::GpuSnapshot;
 use henad_core::explore::design::DesignKind;
@@ -13,7 +15,6 @@ use henad_core::explore::stop::StopSpec;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
-use henad_models::registry::{ModelEntry, ModelState};
 
 use crate::exec::{BatchEnd, Concurrency, Executor, GpuTrackDepth, RunRequest, SweepControl};
 use crate::sweep::ExploreError;
@@ -301,18 +302,18 @@ fn a_gpu_fault_while_stepping_records_the_same_outcome_at_any_slice_size() {
     let (plan, measure) = planned(&gpu_sir, Some(&ctx), &spec);
 
     let faults = ctx.faults.clone();
-    let create = gpu_sir.create;
-    let faulting = ModelEntry {
-        create: Box::new(move |params: &[ParamValue], seed| match create(params, seed)? {
-            ModelState::Gpu(state) => Ok(ModelState::Gpu(Box::new(FaultsAtTick {
-                state,
-                faults: faults.clone(),
-                fault_tick: 17,
-            }))),
-            ModelState::Cpu(state) => Ok(ModelState::Cpu(state)),
-        }),
-        ..gpu_sir
-    };
+    let faulting = gpu_sir.wrap_factory(|create| {
+        Arc::new(
+            move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| match create(params, seed, gpu)? {
+                ModelState::Gpu(state) => Ok(ModelState::Gpu(Box::new(FaultsAtTick {
+                    state,
+                    faults: faults.clone(),
+                    fault_tick: 17,
+                }))),
+                ModelState::Cpu(state) => Ok(ModelState::Cpu(state)),
+            },
+        )
+    });
     let outcomes: Vec<_> = [(1, 1), (7, 2), (MAX_STEPS_PER_SUBMISSION, 2)]
         .into_iter()
         .map(|(steps_per_submission, submissions_per_track)| {
@@ -351,13 +352,15 @@ fn a_gpu_fault_while_stepping_records_the_same_outcome_at_any_slice_size() {
 ///
 /// A sample encodes the snapshot passes between two batches of steps. Each case runs one model at each cadence and
 /// compares the rows at the ticks both sample. It also rebuilds the run, samples it along the same cadence and
-/// compares the view read back at the end. `gpu_boids` does not replay exactly and has no case.
+/// compares the view read back at the end. A model that declares it does not replay exactly, as `gpu_boids` does,
+/// has no case.
 mod sampling_cadence_does_not_change_the_trajectory {
+    use henad_compute::entry::ModelState;
     use henad_compute::gpu::view::display::GpuDisplay;
     use henad_compute::gpu::{GpuContext, GpuSimState, stepping};
     use henad_core::explore::spec::SweepSpec;
     use henad_core::metadata::Backend;
-    use henad_models::registry::{ModelState, model_registry};
+    use henad_models::registry::model_registry;
 
     use crate::tests::support::{Collected, ONE_TRACK, entry, headless_device, planned, run_plan};
 
@@ -366,9 +369,6 @@ mod sampling_cadence_does_not_change_the_trajectory {
 
     /// Registered GPU models that replay exactly, one case each.
     const CASES: [&str; 3] = ["gpu_sir", "gpu_game_of_life", "gpu_ants"];
-
-    /// Registered GPU models that do not replay exactly.
-    const EXEMPT: [&str; 1] = ["gpu_boids"];
 
     /// Rows sampled at the ticks every cadence samples, and the view of the final state.
     #[derive(Debug, PartialEq, Eq)]
@@ -404,7 +404,7 @@ mod sampling_cadence_does_not_change_the_trajectory {
 
         let run = plan.run(0).expect("the plan has a run");
         let params = &plan.config(run.config_id).expect("the run's config").params;
-        let Ok(ModelState::Gpu(mut state)) = (model.create)(params, Some(run.seed)) else {
+        let Ok(ModelState::Gpu(mut state)) = model.build(params, Some(run.seed), Some(ctx)) else {
             panic!("{id} builds on the GPU");
         };
         for tick in measure.sample_ticks() {
@@ -563,11 +563,11 @@ mod sampling_cadence_does_not_change_the_trajectory {
         };
         let mut registered: Vec<String> = model_registry(Some(ctx))
             .into_iter()
-            .filter(|model| model.metadata.backend == Backend::Gpu)
-            .map(|model| model.id)
+            .filter(|model| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly)
+            .map(|model| model.id().to_owned())
             .collect();
         registered.sort_unstable();
-        let mut covered: Vec<String> = CASES.iter().chain(&EXEMPT).map(|&id| id.to_owned()).collect();
+        let mut covered: Vec<String> = CASES.iter().map(|&id| id.to_owned()).collect();
         covered.sort_unstable();
         assert_eq!(covered, registered);
     }

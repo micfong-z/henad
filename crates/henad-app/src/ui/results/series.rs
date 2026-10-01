@@ -561,7 +561,7 @@ mod tests {
     fn a_rerun_that_replaces_a_run_refreshes_its_band() {
         let sir = model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered");
         let mut spec = SweepSpec::new("sir");
         spec.run.steps = 10;

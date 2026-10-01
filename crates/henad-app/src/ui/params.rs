@@ -25,7 +25,7 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let descriptors: Vec<_> = app
         .registry
         .get(app.selected_model)
-        .map(|m| m.param_descriptors.clone())
+        .map(|m| m.param_descriptors().to_vec())
         .unwrap_or_default();
 
     // Before the sliders draw: a long slider label widens the region behind it, and the footer
@@ -224,7 +224,7 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let actions: Vec<ActionDescriptor> = app
         .registry
         .get(app.selected_model)
-        .map(|entry| entry.action_descriptors.clone())
+        .map(|entry| entry.action_descriptors().to_vec())
         .unwrap_or_default();
     if actions.is_empty() {
         return;
@@ -476,7 +476,7 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
         let running = app
             .loaded_model
             .and_then(|i| app.registry.get(i))
-            .map_or("Another model", |entry| entry.name.as_str());
+            .map_or("Another model", |entry| entry.name());
         (
             MDI_ALERT,
             warn,
@@ -560,9 +560,9 @@ mod tests {
         let registry = model_registry(None);
         let sliders = registry.iter().flat_map(|entry| {
             entry
-                .param_descriptors
+                .param_descriptors()
                 .iter()
-                .map(move |descriptor| (entry.id.as_str(), descriptor))
+                .map(move |descriptor| (entry.id(), descriptor))
         });
         let mut checked = 0;
         for (model, descriptor) in sliders {
@@ -614,10 +614,10 @@ mod tests {
         let registry = model_registry(None);
         let sir = registry
             .iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered");
         let descriptor = sir
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .find(|descriptor| descriptor.id == "recovery_rate")
             .expect("SIR declares a recovery rate");
@@ -638,15 +638,15 @@ mod tests {
         let registry = model_registry(None);
         let sir = registry
             .iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered");
         let percent = sir
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .find(|descriptor| descriptor.id == "initial_infected_pct")
             .expect("SIR declares its initially infected share");
         let rate = sir
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .find(|descriptor| descriptor.id == "infection_rate")
             .expect("SIR declares an infection rate");

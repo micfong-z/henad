@@ -9,13 +9,13 @@ use std::time::Duration;
 
 use web_time::Instant;
 
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{BUILDING, Fault, FaultKind, STEPPING, catching};
 use henad_core::action::{RefusedActions, Schedule, Scheduled};
 use henad_core::explore::measure::{MeasurePlan, Sampler};
 use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason};
 use henad_core::export::StatsWriteError;
 use henad_core::model::SimState;
-use henad_models::registry::{ModelEntry, ModelState};
 
 use crate::exec::RunRequest;
 
@@ -221,7 +221,9 @@ impl RunCursor {
         timeout: Option<Duration>,
     ) -> Self {
         let started = Instant::now();
-        let built = (entry.create)(request.params, Some(request.run.seed)).and_then(cpu_state);
+        let built = entry
+            .build(request.params, Some(request.run.seed), None)
+            .and_then(cpu_state);
         let build_ms = milliseconds(started.elapsed());
         let phase = match built {
             Ok(state) => Phase::Live(Box::new(LiveRun {
@@ -397,6 +399,7 @@ pub(crate) fn milliseconds(duration: Duration) -> f64 {
 mod tests {
     use std::sync::Arc;
 
+    use henad_compute::entry::{ModelEntry, ModelState, register_grid_model};
     use henad_compute::fault::install_panic_hook;
     use henad_core::action::Schedule;
     use henad_core::explore::measure::MeasurePlan;
@@ -405,7 +408,7 @@ mod tests {
     use henad_core::export::StatColumns;
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
-    use henad_models::registry::{ModelEntry, ModelState, model_registry, register_grid_model};
+    use henad_models::registry::model_registry;
 
     use super::{CursorState, RunCursor};
     use crate::exec::RunRequest;
@@ -416,20 +419,20 @@ mod tests {
     fn entry(id: &str) -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == id)
+            .find(|entry| entry.id() == id)
             .expect("the model is registered")
     }
 
     fn cpu_state(entry: &ModelEntry, params: &[ParamValue]) -> Box<dyn SimState> {
-        match (entry.create)(params, Some(SEED)) {
+        match entry.build(params, Some(SEED), None) {
             Ok(ModelState::Cpu(state)) => state,
-            _ => panic!("{} builds on the CPU", entry.id),
+            _ => panic!("{} builds on the CPU", entry.id()),
         }
     }
 
     fn params(entry: &ModelEntry, width: u32) -> Vec<ParamValue> {
         let mut params: Vec<ParamValue> = entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();

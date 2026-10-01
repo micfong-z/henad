@@ -430,14 +430,28 @@ crate that has shadowed them.
 
 ## Architecture
 
-The workspace has 6 crates with a strict dependency direction:
+The workspace has 6 crates:
 
 ```
-henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  henad-cli
-(traits/types)   (engine/runners)   (concrete sims)   (sweeps)      (headless bench)
-                                                                 ↘  henad-app
-                                                                    (egui UI)
+henad-core ── henad-compute ─┬─ henad-models
+                             └─ henad-explore ─┬─ henad-cli
+                                               └─ henad-app
+henad-core     traits, types and provenance
+henad-compute  engines, runners, model entries and sets
+henad-models   the ten example models, and a path dev-dependency of henad-explore
+henad-explore  sweeps and searches
+henad-cli      headless bench and sweeps, also on henad-models for example_models()
+henad-app      egui UI, also on henad-models for example_models()
 ```
+
+The rule (decision 2.14 of #48): henad-core depends on nothing. Every other normal or build
+dependency runs from a crate to one drawn above it: henad-explore and henad-models onto
+henad-compute, and the hosts onto henad-explore, henad-compute and, for `example_models()`,
+henad-models. henad-models and henad-explore take no normal dependency on each other, and `cargo
+tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency between Henad
+crates that the normal graph does not hold is named here: today the one from henad-explore to
+henad-models, for its tests. henad-explore reaching an example model outside its tests needs the
+maintainer's approval as a new edge.
 
 - **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
   GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
@@ -456,9 +470,13 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   only. `next_index`'s redraw needs a 64-bit product, and WGSL has no 64-bit integers.
   `docs/reference/primitives.md` is the index, marks each Rust-only and WGSL-only entry, and
   records what is deliberately absent.
-  `Model`/`SimState` (`model.rs`) are the _runner_
+  `SimState` (`model.rs`) is the _runner_
   interface the sim thread drives, not an authoring API — that split is why the traits live under
-  `authoring/model/` and this one does not. Also the `Grid2D<T>` double-buffered SoA grid (`grid.rs`),
+  `authoring/model/` and this one does not. `provenance.rs` holds `BuildInfo`, the identity of one
+  compiled crate that `build_info!` returns for the crate it expands in, and `ModelSource`, an
+  entry's type path and the build of the crate that registered it. Their commit, dirty flag and
+  source hash read as unknown, since no build script stamps them yet. Also the `Grid2D<T>`
+  double-buffered SoA grid (`grid.rs`),
   the counting-sort `SpatialHash` and the `HashGrid` cell geometry both backends share
   (`spatial_hash.rs`), the `Network` graph a `NetworkModel` works on (`network.rs`), param
   descriptors and `ParamStore` (`params.rs`), `ActionDescriptor`, the `actions!` macro,
@@ -570,7 +588,15 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   `display_scale.rs` sit above both, since either backend publishes through them. So does `runner/`,
   which owns how a sim loop gets driven and the one place the two ways of driving one differ:
   `runner/mod.rs` holds the `SimLoop` trait, `Pace` and the `SnapshotSlot`, with `runner/thread.rs`
-  the native driver and `runner/frame.rs` the wasm one.
+  the native driver and `runner/frame.rs` the wasm one. `entry/` type-erases a model for a host:
+  `ModelEntry` (declarations behind accessors and an `Arc`, a factory that takes the device at
+  `build`, never at registration), `ModelState`, the five `register_*` generics, and `ModelSet`
+  (`entry/set.rs`), which refuses a duplicate id or one outside the grammar, records its
+  `BuildInfo` on an entry that has none, and merges the entries' `GpuNeeds` for the device request.
+  The `register_*` functions are generic, so the engines and kernels monomorphise in the crate
+  that calls them, never in henad-compute. `wrap_factory` and `Factory` are `#[doc(hidden)]` and
+  public for henad-explore's test harnesses alone. `grid_init_rng` and `agent_init_rng` hold the
+  default-seed rule the CPU engines and the GPU ports share.
   - `cpu/grid_engine.rs` (`GridModelState`), `cpu/agent_engine.rs` (`AgentModelState`) and
     `cpu/network_engine.rs` (`NetworkModelState`) each implement the whole `SimState` for their
     trait. `cpu/field/ca.rs` (`CaField`, a `GridModel` as
@@ -625,9 +651,11 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   live nodes for uniform draws). A GPU model is one `mod.rs` of
   declarations next to its `.wgsl` files. Each GPU port seeds itself through its CPU counterpart's
   `init`, which is what keeps tick 0 bit identical between the two backends and makes them fair to
-  compare — that call is confined to `seed_buffers`. `registry.rs` type-erases every
-  model behind `ModelEntry` so the UI can list/instantiate models without knowing their concrete
-  type.
+  compare — that call is confined to `seed_buffers`. `example_models()` (`lib.rs`) registers all
+  ten into one `ModelSet` with henad-models' own `build_info!()`. `registry.rs` keeps
+  `model_registry` for one milestone, a wrapper over `example_models()` that drops every GPU entry
+  when handed no device, with the registry tests below it. `gpu_boids` declares
+  `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly` reads it.
 - **henad-explore**: sweeps and searches, between henad-models and the two front ends. `sweep.rs`
   (`run_sweep`) plans a `SweepSpec`, checks every config of a GPU model against the device
   (`probe.rs`, `check_capacity`), and builds the first config without a fault (`ProbeReport`) to
@@ -714,9 +742,10 @@ henad-core  →  henad-compute  →  henad-models  →  henad-explore  →  hena
   `SweepRun::start` plans the spec before it returns, and a browser refuses a GPU model with
   `SweepStartError::GpuNeedsNative`. The `gpu` a host passes to `start` or `resume_directory` is a
   device it shares with the sweep, `FaultSink` included. Handed none for a GPU model, the sweep
-  thread acquires a device through `acquire_headless`, rebuilds the entry on it from
-  `model_registry` by id (`BoundModel`), and records that device in the manifest. A device it cannot
-  acquire fails the sweep with `SweepEvent::Failed`.
+  thread acquires a device through `acquire_headless(entry.gpu_needs())`, builds the entry it was
+  handed on it (`BoundModel`), and records that device in the manifest. A device it cannot acquire
+  fails the sweep with `SweepEvent::Failed`. `acquire_headless` returns the `GpuContext` alone,
+  with its `RuntimeInfo` attached and read back through `runtime_info()`.
   `SweepOutput::Memory` writes the four files through the same writers over `Vec<u8>`
   (`output/memory.rs`, `SweepFiles`) and hands them over in the `SweepRecord`.
   `SweepOutput::Directory` is native only. `SweepRunOptions::memory_budget` and `gpu_memory` are
@@ -1029,10 +1058,10 @@ its uniform block is fresh on every press. An action runs between ticks (`SimCom
 runner) and draws from its own stream (`action::action_seed`). Otherwise a press would draw the
 numbers the next tick would have.
 
-`Model`/`SimState` are the runner interface, not a sixth authoring path. Implement one of the
-traits above rather than `SimState` directly.
+`SimState` is the runner interface, not a sixth authoring path. Implement one of the traits above
+rather than `SimState` directly.
 
-Either way, register the new model in `henad-models/src/registry.rs::model_registry()` via the
+Either way, register the new model in `henad-models/src/lib.rs::example_models()` via the
 `register_*` generic for its trait, so it's type-erased into a `ModelEntry` and shows up in the UI.
 Nothing about an entry should be written by hand. Name, params, stats, actions and
 `topology_hint` are all derived from the trait. The registry tests are the safety net that a
@@ -1114,14 +1143,17 @@ is about not undoing them.
   Each command buffer holds the steps of one run, and two runs' buffers are never merged. N runs of
   64 steps in one buffer would trip the watchdog again.
 - **`max_storage_buffers_per_shader_stage` is 8** in `wgpu::Limits::default()` and in the WebGPU
-  baseline. `limits.rs::raise` asks for exactly what the models need, which
-  `registry::gpu_storage_bindings_needed()` derives by walking every model's declared pass list —
-  no constant, because wgpu's own advice is to request only what you need and a constant would be
-  either short of a future model or dead headroom. Today it comes to 8, since `gpu_ants`'s step
-  pass sits at exactly 8. `raise` takes the number rather than knowing it: henad-compute is below
-  henad-models and cannot see the models. `every_gpu_model_builds_on_a_baseline_device` holds the
-  line on a `Limits::default()` device, and asserts in the same breath that `capacity.rs` agrees —
-  build and declared demand pin each other, so an over-reported pass count fails there. Note wgpu
+  baseline. `limits.rs::raise` asks for exactly what the models need, the `GpuNeeds` a host reads
+  from its set through `ModelSet::gpu_needs()` before any device exists. Each GPU entry declares its
+  own from its pass list — no constant, because wgpu's own advice is to request only what you need
+  and a constant would be either short of a future model or dead headroom. For the example models
+  it comes to 8, since `gpu_ants`'s step pass sits at exactly 8. `raise` takes the needs rather
+  than knowing them: henad-compute cannot see which models a host offers.
+  `every_gpu_model_builds_on_a_baseline_device` holds the line on a `Limits::default()` device, and
+  asserts in the same breath that `capacity.rs` agrees — build and declared demand pin each other,
+  so an over-reported pass count fails there.
+  `every_gpu_entry_needs_the_bindings_its_widest_pass_binds` pins each entry's `GpuNeeds` to its
+  demand. Note wgpu
   on Metal shares one argument table across storage + uniform + vertex, so a check counting only
   storage buffers can pass locally and fail there.
 - **`Limits::default()` is not the hardware, and its _size_ limits are what bound a run.** The

@@ -257,7 +257,7 @@ fn file_name(app: &AppState, export_type: &str, ext: &str) -> String {
     let model = app
         .loaded_model
         .and_then(|index| app.registry.get(index))
-        .map_or("model", |entry| entry.id.as_str());
+        .map_or("model", |entry| entry.id());
     let tick = app.snapshot.as_ref().map_or(0, |snap| snap.tick);
     format!("henad-{model}-{export_type}-{tick}.{ext}")
 }

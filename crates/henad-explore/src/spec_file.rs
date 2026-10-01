@@ -1565,7 +1565,7 @@ e = 1e-3
             }
             let entry = registry
                 .iter()
-                .find(|entry| entry.id == spec.model)
+                .find(|entry| entry.id() == spec.model)
                 .expect("an example spec names a registered model");
             let plan = spec
                 .plan(&model_schema(entry))
@@ -1711,7 +1711,7 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
         let registry = henad_models::registry::model_registry(None);
         let sir = registry
             .iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("sir is registered");
         let plan = spec.plan(&model_schema(sir)).expect("the spec plans");
         assert_eq!(plan.configs().len(), 43);
@@ -1824,7 +1824,7 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
         let registry = henad_models::registry::model_registry(None);
         let sir = registry
             .iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("sir is registered");
         let plan_hash = |spec: &SweepSpec| spec.plan(&model_schema(sir)).expect("the spec plans").plan_hash();
         assert_eq!(plan_hash(&back), plan_hash(&spec), "a factorial design draws nothing");

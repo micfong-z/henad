@@ -956,12 +956,13 @@ fn aggregate_row(ui: &mut Ui, layout: &FormLayout, id: Id, aggregate: &mut Aggre
 
 #[cfg(test)]
 mod tests {
+    use henad_compute::entry::ModelEntry;
     use henad_core::explore::search::genetic::GeneticSettings;
     use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
     use henad_core::params::ParamValue;
     use henad_explore::probe::ProbeReport;
     use henad_explore::schema::model_schema;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::registry::model_registry;
 
     use super::{
         AXES_UNSET, OutputChoices, axes_note, batches_feedback, evaluations_feedback, initial_samples_feedback,
@@ -975,7 +976,7 @@ mod tests {
     fn sir() -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered")
     }
 
@@ -1093,11 +1094,11 @@ mod tests {
     fn the_output_lists_offer_the_parts_of_a_vector_stat() {
         let entry = model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "boids")
+            .find(|entry| entry.id() == "boids")
             .expect("boids is registered");
         let schema = model_schema(&entry);
         let values: Vec<ParamValue> = entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();

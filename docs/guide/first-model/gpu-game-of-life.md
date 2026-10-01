@@ -600,20 +600,20 @@ First we declare the module,
 pub mod gpu_life;
 ```
 
-then we add a line to the GPU half of the registry:
+then we add a line to the GPU half of `example_models()`:
 
-``` rust title="crates/henad-models/src/registry.rs"
-entries.push(register_gpu_grid_model::<crate::gpu_life::GpuLifeModel>(&ctx));
+``` rust title="crates/henad-models/src/lib.rs"
+register_gpu_grid_model::<crate::gpu_life::GpuLifeModel>(),
 ```
 
 For context, here is the block our line joins:
 
-``` rust title="crates/henad-models/src/registry.rs"
---8<-- "crates/henad-models/src/registry.rs:gpu_entries"
+``` rust title="crates/henad-models/src/lib.rs"
+--8<-- "crates/henad-models/src/lib.rs:gpu_entries"
 ```
 
-The GPU half is built only when a `GpuContext` exists.
-On a machine with no usable adapter the GPU models are left out of the list entirely, rather than shown and left to fail when selected.
+The entry needs no device, and builds on whichever device the host hands it.
+On a machine with no usable adapter the app and the CLI leave the GPU models out of the list entirely, rather than show them and let them fail when selected.
 A GPU entry also carries a capacity check, so a grid too large for this device disables Build with a readable reason instead of crashing the process.
 
 With the entry in place, we can finally run the model.

@@ -687,6 +687,7 @@ impl SearchCsvTable {
 
 #[cfg(test)]
 mod tests {
+    use henad_compute::entry::register_grid_model;
     use henad_core::authoring::model::grid_model::GridModel;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
@@ -698,7 +699,6 @@ mod tests {
     use henad_core::params::{ParamDescriptor, ParamValue};
     use henad_core::topology::NeighborhoodKind;
     use henad_core::view::{StatDescriptor, StatValue};
-    use henad_models::registry::register_grid_model;
 
     use super::SearchHistory;
     use crate::output::read::ReadError;

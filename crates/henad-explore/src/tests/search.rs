@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runner::{Pace, SimLoop as _};
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
@@ -16,7 +17,6 @@ use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, S
 use henad_core::explore::spec::{ActionSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
 use henad_core::export::csv::{escape_field, parse_records};
-use henad_models::registry::ModelEntry;
 
 use crate::cursor::{CursorState, RunCursor};
 use crate::exec::{Concurrency, RunRequest, SweepControl};
@@ -268,7 +268,7 @@ fn every_example_search_spec_parses() {
         assert_eq!(back, spec, "{name} survives a round trip through TOML");
         let entry = registry
             .iter()
-            .find(|entry| entry.id == spec.model)
+            .find(|entry| entry.id() == spec.model)
             .expect("an example spec names a registered model");
         let plan = SearchPlan::new(&spec, &model_schema(entry))
             .unwrap_or_else(|error| panic!("{name} does not plan: {error:?}"));

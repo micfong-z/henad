@@ -8,10 +8,9 @@ use std::sync::Arc;
 use henad_core::authoring::model::binding::{BindingDecl, buffer_target};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Geometry, GpuAgentModel, PassCtx, PassId};
-use henad_core::model::{Model, SimState};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::topology::TopologyHint;
-use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
+use henad_core::model::SimState;
+use henad_core::params::ParamValue;
+use henad_core::view::{StatEntry, stat_entries};
 
 use crate::display_scale::display_dims;
 use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
@@ -98,63 +97,6 @@ fn stamps(
             beginning_of_pass_write_index: opening.then_some(0),
             end_of_pass_write_index: closing.then_some(1),
         })
-}
-
-/// The `Model` half for a [`GpuAgentModel`]: metadata plus a state factory.
-#[derive(Debug)]
-pub struct GpuAgentModelDescriptor<M: GpuAgentModel> {
-    ctx: GpuContext,
-    _marker: PhantomData<M>,
-}
-
-impl<M: GpuAgentModel> GpuAgentModelDescriptor<M> {
-    pub fn new(ctx: GpuContext) -> Self {
-        Self {
-            ctx,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<M: GpuAgentModel> Model for GpuAgentModelDescriptor<M> {
-    type State = GpuAgentState<M>;
-
-    fn name(&self) -> &'static str {
-        M::NAME
-    }
-
-    fn id(&self) -> &'static str {
-        M::ID
-    }
-
-    fn description(&self) -> &'static str {
-        M::DESCRIPTION
-    }
-
-    /// Everything is reload-only here, because `GpuAgentState::set_param` rejects the lot.
-    fn param_descriptors(&self) -> Vec<ParamDescriptor> {
-        M::param_descriptors()
-            .into_iter()
-            .map(ParamDescriptor::on_reload)
-            .collect()
-    }
-
-    fn stat_descriptors(&self) -> Vec<StatDescriptor> {
-        M::STATS.to_vec()
-    }
-
-    /// A model that declares a display pass draws a grid layer under its agents.
-    fn topology_hint(&self) -> TopologyHint {
-        TopologyHint {
-            grid: M::DISPLAY.is_some(),
-            agents: true,
-            edges: false,
-        }
-    }
-
-    fn create_state(&self, params: &[ParamValue]) -> Self::State {
-        GpuAgentState::new(&self.ctx, params)
-    }
 }
 
 /// GPU-resident state for a [`GpuAgentModel`]. Owned exclusively by the GPU sim thread once

@@ -11,6 +11,13 @@ use henad_core::view::{GridView, PointView, StatEntry, stat_entries};
 /// Default RNG seed.
 pub const AGENT_INIT_SEED: u64 = 0xA175_F01A_6ED5_0001;
 
+/// Returns the state an agent model's RNG starts from: `seed` mixed, or [`AGENT_INIT_SEED`] when it is `None`.
+///
+/// A GPU port that reproduces its CPU model's tick 0 starts from the same state.
+pub fn agent_init_rng(seed: Option<u64>) -> u64 {
+    seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed)
+}
+
 /// Engine wrapper that implements `SimState` for any `AgentModel`.
 pub struct AgentModelState<A: AgentModel> {
     lanes: A::Lanes,
@@ -55,7 +62,7 @@ impl<A: AgentModel> AgentModelState<A> {
         let (own, field_params) = split_params::<A>(params);
         let mut lanes = A::Lanes::alloc(n);
         let actions = action_seed(seed);
-        let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
+        let mut seed = agent_init_rng(seed);
         A::init(&mut lanes, extent, own, &mut seed);
 
         let field = A::Field::new(extent, field_params);
@@ -104,7 +111,7 @@ impl<A: AgentModel> AgentModelState<A> {
 
         let mut lanes = A::Lanes::alloc(n);
         let actions = action_seed(seed);
-        let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
+        let mut seed = agent_init_rng(seed);
         let (own, field_params) = split_params::<A>(params);
 
         // Init is still needed to ensure that seed is advanced to the right value for the first step.

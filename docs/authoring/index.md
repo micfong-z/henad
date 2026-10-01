@@ -31,7 +31,7 @@ Each one seeds itself through that counterpart's `init`, which keeps the pair co
 
 !!! note "`SimState` is not a sixth path"
 
-    `Model` and `SimState` belong to the runner, which drives a state through them.
+    `SimState` belongs to the runner, which drives a state through it.
     Implement one of the five traits above and leave `SimState` to the engine.
 
 ## The five declarations

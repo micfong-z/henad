@@ -3,6 +3,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
 use henad_core::explore::measure::MeasurePlan;
@@ -12,7 +13,6 @@ use henad_core::explore::stop::StopSpec;
 use henad_core::export::csv::parse_records;
 use henad_core::export::state::{point_rows, write_edges, write_grid, write_points};
 use henad_core::model::SimState;
-use henad_models::registry::{ModelEntry, ModelState};
 
 use crate::exec::Concurrency;
 use crate::output::OutputWriter;
@@ -259,7 +259,7 @@ mod sampling_cadence_does_not_change_the_trajectory {
     }
 
     fn trajectory(model: &ModelEntry, fixed_values: &[(&str, &str)], stats_every: u64) -> Trajectory {
-        let mut spec = SweepSpec::new(model.id.clone());
+        let mut spec = SweepSpec::new(model.id().to_owned());
         spec.fixed = fixed(fixed_values);
         spec.run.steps = STEPS;
         spec.measure.stats_every = stats_every;
@@ -286,8 +286,8 @@ mod sampling_cadence_does_not_change_the_trajectory {
 
         let run = plan.run(0).expect("the plan has a run");
         let params = &plan.config(run.config_id).expect("the run's config").params;
-        let Ok(ModelState::Cpu(mut state)) = (model.create)(params, Some(run.seed)) else {
-            panic!("{} builds on the CPU", model.id);
+        let Ok(ModelState::Cpu(mut state)) = model.build(params, Some(run.seed), None) else {
+            panic!("{} builds on the CPU", model.id());
         };
         sample_along(&mut *state, &measure);
         Trajectory {
@@ -337,8 +337,8 @@ mod sampling_cadence_does_not_change_the_trajectory {
     fn every_cpu_model_has_a_case() {
         let mut registered: Vec<String> = henad_models::registry::model_registry(None)
             .into_iter()
-            .filter(|model| model.metadata.backend == henad_core::metadata::Backend::Cpu)
-            .map(|model| model.id)
+            .filter(|model| model.metadata().backend == henad_core::metadata::Backend::Cpu)
+            .map(|model| model.id().to_owned())
             .collect();
         registered.sort_unstable();
         let mut cases = CASES.map(str::to_owned).to_vec();

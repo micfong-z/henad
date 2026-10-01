@@ -79,7 +79,7 @@ pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'sta
     descriptor.required_limits = henad_compute::gpu::limits::raise(
         adapter,
         &descriptor.required_limits,
-        henad_models::registry::gpu_storage_bindings_needed(),
+        henad_models::example_models().gpu_needs(),
     );
     descriptor
 }

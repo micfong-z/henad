@@ -13,6 +13,7 @@ pub mod metadata;
 pub mod model;
 pub mod network;
 pub mod params;
+pub mod provenance;
 pub mod send_sync;
 pub mod spatial_hash;
 pub mod topology;

@@ -1,7 +1,7 @@
 //! Host and adapter facts, gathered once at startup. Shared by the GUI and the headless runner.
 
 /// Host facts, available with or without an adapter.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HostInfo {
     pub os: &'static str,
     pub arch: &'static str,
@@ -38,7 +38,7 @@ fn logical_cpus() -> Option<usize> {
     (cores >= 1.0).then_some(cores as usize)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RuntimeInfo {
     pub host: HostInfo,
     pub adapter: wgpu::AdapterInfo,

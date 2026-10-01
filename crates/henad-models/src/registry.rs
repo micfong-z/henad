@@ -1,346 +1,53 @@
-use henad_compute::cpu::agent_engine::{AgentModelState, agent_model_param_descriptors};
-use henad_compute::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
-use henad_compute::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
-use henad_compute::fault::{BUILDING, Fault, catching};
+//! The example models as a list, for the hosts that still index one.
+
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
-use henad_compute::gpu::agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
-use henad_compute::gpu::capacity::Demand;
-use henad_compute::gpu::fault::catching_on;
-use henad_compute::gpu::grid_engine::{GpuGridModelDescriptor, GpuGridState};
-use henad_compute::gpu::sim_thread::GpuSimState;
-use henad_core::action::ActionDescriptor;
-use henad_core::authoring::model::agent_model::{AgentLanes, AgentModel, NeighborIndex};
-use henad_core::authoring::model::field::FieldLayer;
-use henad_core::authoring::model::gpu_agent_model::GpuAgentModel;
-use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
-use henad_core::authoring::model::grid_model::GridModel;
-use henad_core::authoring::model::network_model::NetworkModel;
-use henad_core::metadata::{Backend, ModelMetadata, Structure};
-use henad_core::model::{Model as _, SimState};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::send_sync::{WasmNotSend, WasmNotSync};
-use henad_core::topology::TopologyHint;
-use henad_core::view::StatDescriptor;
+use henad_core::metadata::Backend;
 
-/// A freshly created simulation state, tagged with which runner can drive it.
+/// Every example model, GPU ones only when `gpu` holds a device.
 ///
-/// The two arms are not interchangeable: a CPU state is stepped one tick per call by
-/// `henad_compute::cpu::sim_thread::SimThread`, while a GPU state has many steps *encoded into one
-/// submission* by `henad_compute::gpu::GpuSimThread`. The factory returns this enum (rather than
-/// a bare `Box<dyn SimState>`) so the caller can pick the right runner without downcasting, and
-/// so it is impossible to hand a GPU state to the CPU thread by mistake.
-pub enum ModelState {
-    Cpu(Box<dyn SimState>),
-    Gpu(Box<dyn GpuSimState>),
-}
-
-/// Prints the backend alone, since a state holds the whole simulation.
-impl std::fmt::Debug for ModelState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Cpu(_) => f.debug_tuple("Cpu").finish_non_exhaustive(),
-            Self::Gpu(_) => f.debug_tuple("Gpu").finish_non_exhaustive(),
-        }
-    }
-}
-
-/// A type-erased model factory.
-///
-/// A boxed closure rather than a bare `fn` pointer, so a GPU-backed entry can *capture* a cloned
-/// [`GpuContext`]. Every model's factory then has the same shape, and nothing has to thread a
-/// context through the app at call time.
-///
-/// The `Option<u64>` is the RNG seed, which defaults to the model's fixed default when `None`.
-///
-/// Fallible. A model author can get a kernel wrong, and a device can refuse what
-/// [`ModelEntry::shortfalls`] could not know to ask about. Neither may end the process.
-pub type ModelFactory = Box<dyn Factory>;
-
-/// Closure behind a [`ModelFactory`].
-pub trait Factory: Fn(&[ParamValue], Option<u64>) -> Result<ModelState, Fault> + WasmNotSend + WasmNotSync {}
-
-impl<F: Fn(&[ParamValue], Option<u64>) -> Result<ModelState, Fault> + WasmNotSend + WasmNotSync> Factory for F {}
-
-/// Captures the same [`GpuContext`] the factory does, so a caller can ask whether a model would
-/// build without holding a device of its own.
-pub type CapacityFn = Box<dyn Capacity>;
-
-/// Closure behind a [`CapacityFn`], bounded as [`Factory`] is.
-pub trait Capacity: Fn(&[ParamValue]) -> Demand + WasmNotSend + WasmNotSync {}
-
-impl<F: Fn(&[ParamValue]) -> Demand + WasmNotSend + WasmNotSync> Capacity for F {}
-
-/// An entry in the model registry.
-pub struct ModelEntry {
-    pub name: String,
-    pub id: String,
-    pub description: String,
-    pub param_descriptors: Vec<ParamDescriptor>,
-    pub stat_descriptors: Vec<StatDescriptor>,
-    /// One-off steps the model offers, in the order the Parameters panel draws their buttons.
-    pub action_descriptors: Vec<ActionDescriptor>,
-    pub topology_hint: TopologyHint,
-    /// Declared facts about the model, derived from its trait consts.
-    pub metadata: ModelMetadata,
-    pub create: ModelFactory,
-    /// `None` for a CPU model, which allocates on the host and has no device limit to miss.
-    pub capacity: Option<CapacityFn>,
-}
-
-/// Prints the declarations, and leaves out the factory and the capacity closures.
-impl std::fmt::Debug for ModelEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ModelEntry")
-            .field("name", &self.name)
-            .field("id", &self.id)
-            .field("description", &self.description)
-            .field("param_descriptors", &self.param_descriptors)
-            .field("stat_descriptors", &self.stat_descriptors)
-            .field("action_descriptors", &self.action_descriptors)
-            .field("topology_hint", &self.topology_hint)
-            .field("metadata", &self.metadata)
-            .finish_non_exhaustive()
-    }
-}
-
-impl ModelEntry {
-    /// Reasons this machine cannot build the model at `params`. Empty when nothing stops it.
-    pub fn shortfalls(&self, params: &[ParamValue], limits: &wgpu::Limits) -> Vec<String> {
-        self.capacity
-            .as_ref()
-            .map_or_else(Vec::new, |capacity| capacity(params).shortfalls(limits))
-    }
-
-    /// Device resources the model would allocate at `params`. `None` for a CPU model, which
-    /// allocates on the host and only knows its footprint once built.
-    pub fn demand(&self, params: &[ParamValue]) -> Option<Demand> {
-        self.capacity.as_ref().map(|capacity| capacity(params))
-    }
-}
-
-/// Create a `ModelEntry` from a `GridModel` implementation.
-pub fn register_grid_model<M: GridModel>() -> ModelEntry {
-    ModelEntry {
-        name: M::NAME.to_owned(),
-        id: M::ID.to_owned(),
-        description: M::DESCRIPTION.to_owned(),
-        param_descriptors: grid_model_param_descriptors::<M>(),
-        stat_descriptors: M::STATS.to_vec(),
-        action_descriptors: M::ACTIONS.to_vec(),
-        topology_hint: TopologyHint::GRID,
-        metadata: ModelMetadata {
-            backend: Backend::Cpu,
-            palette: Some(M::PALETTE),
-            structure: Structure::Grid {
-                neighborhood: M::NEIGHBORHOOD,
-            },
-        },
-        create: Box::new(|params, seed| {
-            catching(BUILDING, || {
-                ModelState::Cpu(Box::new(GridModelState::<M>::from_params_seeded(params, seed)))
-            })
-        }),
-        capacity: None,
-    }
-}
-
-/// Create a `ModelEntry` from an `AgentModel` implementation.
-pub fn register_agent_model<A: AgentModel>() -> ModelEntry {
-    ModelEntry {
-        name: A::NAME.to_owned(),
-        id: A::ID.to_owned(),
-        description: A::DESCRIPTION.to_owned(),
-        param_descriptors: agent_model_param_descriptors::<A>(),
-        stat_descriptors: A::STATS.to_vec(),
-        action_descriptors: A::ACTIONS.to_vec(),
-        topology_hint: TopologyHint {
-            grid: <A::Field as FieldLayer>::HAS_GRID,
-            agents: true,
-            edges: false,
-        },
-        metadata: ModelMetadata {
-            backend: Backend::Cpu,
-            palette: Some(A::PALETTE),
-            structure: Structure::Agents {
-                chunk: A::CHUNK,
-                lanes: <A::Lanes as AgentLanes>::LANES,
-                index: <A::Index as NeighborIndex>::KIND,
-                field: <A::Field as FieldLayer>::KIND,
-            },
-        },
-        create: Box::new(|params, seed| {
-            catching(BUILDING, || {
-                ModelState::Cpu(Box::new(AgentModelState::<A>::from_params_seeded(params, seed)))
-            })
-        }),
-        capacity: None,
-    }
-}
-
-/// Create a `ModelEntry` from a `NetworkModel` implementation.
-pub fn register_network_model<N: NetworkModel>() -> ModelEntry {
-    ModelEntry {
-        name: N::NAME.to_owned(),
-        id: N::ID.to_owned(),
-        description: N::DESCRIPTION.to_owned(),
-        param_descriptors: network_model_param_descriptors::<N>(),
-        stat_descriptors: N::STATS.to_vec(),
-        action_descriptors: N::ACTIONS.to_vec(),
-        topology_hint: TopologyHint::NETWORK,
-        metadata: ModelMetadata {
-            backend: Backend::Cpu,
-            palette: Some(N::PALETTE),
-            structure: Structure::Network {
-                chunk: N::CHUNK,
-                lanes: <N::Lanes as AgentLanes>::LANES,
-                edge_palette: N::EDGE_PALETTE,
-            },
-        },
-        create: Box::new(|params, seed| {
-            catching(BUILDING, || {
-                ModelState::Cpu(Box::new(NetworkModelState::<N>::from_params_seeded(params, seed)))
-            })
-        }),
-        capacity: None,
-    }
-}
-
-/// Create a `ModelEntry` from a `GpuGridModel` implementation, capturing the injected
-/// device/queue.
-pub fn register_gpu_grid_model<M: GpuGridModel>(ctx: &GpuContext) -> ModelEntry {
-    let model = GpuGridModelDescriptor::<M>::new(ctx.clone());
-    let factory_ctx = ctx.clone();
-    let capacity_ctx = ctx.clone();
-    ModelEntry {
-        name: model.name().to_owned(),
-        id: model.id().to_owned(),
-        description: model.description().to_owned(),
-        param_descriptors: model.param_descriptors(),
-        stat_descriptors: model.stat_descriptors(),
-        action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
-        topology_hint: model.topology_hint(),
-        metadata: ModelMetadata {
-            backend: Backend::Gpu,
-            palette: Some(M::PALETTE),
-            structure: Structure::GpuGrid {
-                buffers: M::BUFFERS,
-                workgroup: M::WORKGROUP_SIZE,
-            },
-        },
-        create: Box::new(move |params, seed| {
-            catching_on(&factory_ctx, BUILDING, || {
-                ModelState::Gpu(Box::new(GpuGridState::<M>::new_seeded(&factory_ctx, params, seed)))
-            })
-        }),
-        capacity: Some(Box::new(move |params| {
-            GpuGridState::<M>::demand(params, &capacity_ctx.device.limits())
-        })),
-    }
-}
-
-/// Create a `ModelEntry` from a `GpuAgentModel` implementation, capturing the injected
-/// device/queue.
-pub fn register_gpu_agent_model<M: GpuAgentModel>(ctx: &GpuContext) -> ModelEntry {
-    let model = GpuAgentModelDescriptor::<M>::new(ctx.clone());
-    let factory_ctx = ctx.clone();
-    let capacity_ctx = ctx.clone();
-    ModelEntry {
-        name: model.name().to_owned(),
-        id: model.id().to_owned(),
-        description: model.description().to_owned(),
-        param_descriptors: model.param_descriptors(),
-        stat_descriptors: model.stat_descriptors(),
-        action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
-        topology_hint: model.topology_hint(),
-        metadata: ModelMetadata {
-            backend: Backend::Gpu,
-            // A GPU agent model's shaders write RGBA themselves.
-            palette: None,
-            structure: Structure::GpuAgents {
-                buffers: M::BUFFERS,
-                passes: M::STEP_PASSES,
-                index: M::INDEX,
-                display: M::DISPLAY.is_some(),
-                counters: M::COUNTERS,
-            },
-        },
-        create: Box::new(move |params, seed| {
-            catching_on(&factory_ctx, BUILDING, || {
-                ModelState::Gpu(Box::new(GpuAgentState::<M>::new_seeded(&factory_ctx, params, seed)))
-            })
-        }),
-        capacity: Some(Box::new(move |params| {
-            GpuAgentState::<M>::demand(params, &capacity_ctx.device.limits())
-        })),
-    }
-}
-
-/// Storage buffers the widest pass of any GPU model binds.
-///
-/// Needed before a device exists, so before there is a [`GpuContext`] to build a registry with.
-/// The list below must stay in step with [`model_registry`]'s, which
-/// `the_declared_binding_need_matches_the_registry` enforces.
-pub fn gpu_storage_bindings_needed() -> u32 {
-    [
-        GpuGridState::<crate::gpu_game_of_life::GpuGameOfLife>::max_storage_bindings(),
-        GpuGridState::<crate::gpu_sir::GpuSir>::max_storage_bindings(),
-        GpuAgentState::<crate::gpu_boids::GpuBoids>::max_storage_bindings(),
-        GpuAgentState::<crate::gpu_ants::GpuAnts>::max_storage_bindings(),
-    ]
-    .into_iter()
-    .max()
-    .unwrap_or(0)
-}
-
-/// Every available model.
-///
-/// GPU-backed models are included only when a [`GpuContext`] is supplied. Without one they are
-/// *omitted entirely* rather than listed and then made to fail on selection. A model the user can
-/// see in the dropdown should always be one they can actually run.
+/// Without a device the GPU models are left out, so a host lists only models it can run.
+#[expect(clippy::needless_pass_by_value)]
 pub fn model_registry(gpu: Option<GpuContext>) -> Vec<ModelEntry> {
-    let mut entries = vec![
-        // --8<-- [start:cpu_entries]
-        register_grid_model::<crate::sir::SirGridModel>(),
-        register_agent_model::<crate::boids::BoidsModel>(),
-        register_grid_model::<crate::game_of_life::GameOfLifeModel>(),
-        register_agent_model::<crate::ants::AntsModel>(),
-        register_network_model::<crate::virus_network::VirusNetwork>(),
-        register_network_model::<crate::team_assembly::TeamAssembly>(),
-        // --8<-- [end:cpu_entries]
-    ];
-
-    // --8<-- [start:gpu_entries]
-    if let Some(ctx) = gpu {
-        entries.push(register_gpu_grid_model::<crate::gpu_game_of_life::GpuGameOfLife>(&ctx));
-        entries.push(register_gpu_grid_model::<crate::gpu_sir::GpuSir>(&ctx));
-        entries.push(register_gpu_agent_model::<crate::gpu_boids::GpuBoids>(&ctx));
-        entries.push(register_gpu_agent_model::<crate::gpu_ants::GpuAnts>(&ctx));
-    }
-    // --8<-- [end:gpu_entries]
-
-    entries
+    crate::example_models()
+        .iter()
+        .filter(|entry| gpu.is_some() || entry.metadata().backend != Backend::Gpu)
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use henad_compute::entry::{ModelState, register_grid_model};
+    use henad_compute::fault::{BUILDING, catching};
     use henad_compute::gpu::{MAX_STEPS_PER_SUBMISSION, StatsPoll, stepping};
+    use henad_core::metadata::Structure;
+    use henad_core::model::SimState;
+    use henad_core::params::ParamValue;
+    use henad_core::topology::TopologyHint;
 
     use super::*;
 
-    /// Every entry, GPU ones included when this machine can give a device.
+    /// A baseline device, or `None` when this machine cannot give one.
     ///
     /// The device asks for `Limits::default()`, so a GPU model that only fits a raised limit fails
     /// to build here. That is deliberate: every model is meant to run on a stock WebGPU device.
-    fn all_entries() -> Vec<ModelEntry> {
-        model_registry(crate::tests::support::headless_context(
-            "registry_test_device",
-            wgpu::Features::empty(),
-        ))
+    fn device() -> Option<GpuContext> {
+        crate::tests::support::headless_context("registry_test_device", wgpu::Features::empty())
+    }
+
+    /// Every entry, GPU ones included when `gpu` holds a device.
+    fn all_entries(gpu: Option<&GpuContext>) -> Vec<ModelEntry> {
+        model_registry(gpu.cloned())
+    }
+
+    fn is_gpu(entry: &ModelEntry) -> bool {
+        entry.metadata().backend == Backend::Gpu
     }
 
     fn defaults(entry: &ModelEntry) -> Vec<ParamValue> {
         entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|desc| desc.kind.default_value())
             .collect()
@@ -348,8 +55,10 @@ mod tests {
 
     /// A model that cannot build from its own defaults has already failed. The tests below treat
     /// a `Fault` as a failure rather than threading it through.
-    fn build(entry: &ModelEntry, values: &[ParamValue]) -> ModelState {
-        (entry.create)(values, None).unwrap_or_else(|fault| panic!("{}: {fault}", entry.id))
+    fn build(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuContext>) -> ModelState {
+        entry
+            .build(values, None, gpu)
+            .unwrap_or_else(|fault| panic!("{}: {fault}", entry.id()))
     }
 
     /// Both arms are a `SimState`, which is where the contracts below live.
@@ -364,17 +73,18 @@ mod tests {
     /// two disagreeing means the panel lies about what an edit does.
     #[test]
     fn declared_apply_mode_matches_what_the_state_accepts() {
-        for entry in all_entries() {
+        let gpu = device();
+        for entry in all_entries(gpu.as_ref()) {
             let values = defaults(&entry);
-            let mut created = build(&entry, &values);
+            let mut created = build(&entry, &values, gpu.as_ref());
             let state = sim_state(&mut created);
 
-            for (i, desc) in entry.param_descriptors.iter().enumerate() {
+            for (i, desc) in entry.param_descriptors().iter().enumerate() {
                 assert_eq!(
                     state.set_param(i, &values[i]),
                     desc.is_live(),
                     "{}: parameter '{}' is declared {:?} but set_param disagrees",
-                    entry.id,
+                    entry.id(),
                     desc.id,
                     desc.apply
                 );
@@ -387,30 +97,30 @@ mod tests {
     fn declared_topology_matches_the_views_the_state_returns() {
         for entry in model_registry(None) {
             let values = defaults(&entry);
-            let ModelState::Cpu(state) = build(&entry, &values) else {
+            let ModelState::Cpu(state) = build(&entry, &values, None) else {
                 continue;
             };
 
             assert_eq!(
                 state.grid_view().is_some(),
-                entry.topology_hint.grid,
+                entry.topology_hint().grid,
                 "{}: declares grid={} but grid_view() disagrees",
-                entry.id,
-                entry.topology_hint.grid
+                entry.id(),
+                entry.topology_hint().grid
             );
             assert_eq!(
                 state.point_view().is_some(),
-                entry.topology_hint.agents,
+                entry.topology_hint().agents,
                 "{}: declares agents={} but point_view() disagrees",
-                entry.id,
-                entry.topology_hint.agents
+                entry.id(),
+                entry.topology_hint().agents
             );
             assert_eq!(
                 state.edge_view().is_some(),
-                entry.topology_hint.edges,
+                entry.topology_hint().edges,
                 "{}: declares edges={} but edge_view() disagrees",
-                entry.id,
-                entry.topology_hint.edges
+                entry.id(),
+                entry.topology_hint().edges
             );
         }
     }
@@ -419,14 +129,15 @@ mod tests {
     /// mean a GPU model rather than a CPU one that reports nothing.
     #[test]
     fn only_a_cpu_model_reports_how_far_a_step_splits() {
-        for entry in all_entries() {
+        let gpu = device();
+        for entry in all_entries(gpu.as_ref()) {
             let values = defaults(&entry);
-            let mut created = build(&entry, &values);
+            let mut created = build(&entry, &values, gpu.as_ref());
             let cpu = matches!(created, ModelState::Cpu(_));
             let jobs = sim_state(&mut created).parallel_jobs();
 
-            assert_eq!(jobs.is_some(), cpu, "{}: reports {jobs:?}", entry.id);
-            assert!(jobs.is_none_or(|n| n > 0), "{}: a step splits into no jobs", entry.id);
+            assert_eq!(jobs.is_some(), cpu, "{}: reports {jobs:?}", entry.id());
+            assert!(jobs.is_none_or(|n| n > 0), "{}: a step splits into no jobs", entry.id());
         }
     }
 
@@ -434,35 +145,47 @@ mod tests {
     /// wrong backend for a whole release without anything else noticing.
     #[test]
     fn declared_metadata_matches_the_entry_it_describes() {
-        for entry in all_entries() {
-            let (backend, structure) = (entry.metadata.backend, &entry.metadata.structure);
+        let device = device();
+        for entry in all_entries(device.as_ref()) {
+            let (backend, structure) = (entry.metadata().backend, &entry.metadata().structure);
             let gpu = matches!(backend, Backend::Gpu);
 
             assert_eq!(
                 gpu,
-                entry.capacity.is_some(),
+                entry.demand(&defaults(&entry), &wgpu::Limits::default()).is_some(),
                 "{}: declares {backend:?} but only a GPU entry carries a capacity",
-                entry.id
+                entry.id()
             );
             assert_eq!(
                 gpu,
-                matches!(build(&entry, &defaults(&entry)), ModelState::Gpu(_)),
+                entry.gpu_needs().is_some(),
+                "{}: declares {backend:?} but only a GPU entry declares device needs",
+                entry.id()
+            );
+            assert_eq!(
+                gpu,
+                matches!(build(&entry, &defaults(&entry), device.as_ref()), ModelState::Gpu(_)),
                 "{}: declares {backend:?} but its factory returns the other arm",
-                entry.id
+                entry.id()
+            );
+            assert!(
+                gpu || entry.metadata().replays_exactly,
+                "{}: a CPU model replays exactly",
+                entry.id()
             );
 
-            let hint = entry.topology_hint;
+            let hint = entry.topology_hint();
             let agrees = match structure {
                 Structure::Grid { .. } | Structure::GpuGrid { .. } => hint == TopologyHint::GRID,
                 Structure::Agents { .. } | Structure::GpuAgents { .. } => hint.agents,
                 Structure::Network { .. } => hint.agents && hint.edges,
             };
-            assert!(agrees, "{}: declared structure and topology disagree", entry.id);
+            assert!(agrees, "{}: declared structure and topology disagree", entry.id());
 
             assert!(
                 gpu == matches!(structure, Structure::GpuGrid { .. } | Structure::GpuAgents { .. }),
                 "{}: declares {backend:?} but a structure for the other backend",
-                entry.id
+                entry.id()
             );
         }
     }
@@ -471,24 +194,25 @@ mod tests {
     /// two disagreeing means a button that quietly does nothing.
     #[test]
     fn every_declared_action_is_accepted_by_the_state() {
-        for entry in all_entries() {
+        let gpu = device();
+        for entry in all_entries(gpu.as_ref()) {
             let values = defaults(&entry);
-            let mut created = build(&entry, &values);
-            let declared = entry.action_descriptors.len();
+            let mut created = build(&entry, &values, gpu.as_ref());
+            let declared = entry.action_descriptors().len();
             let state = sim_state(&mut created);
 
-            for (i, action) in entry.action_descriptors.iter().enumerate() {
+            for (i, action) in entry.action_descriptors().iter().enumerate() {
                 assert!(
                     state.act(i),
                     "{}: declares action '{}' at index {i} but the state refuses it",
-                    entry.id,
+                    entry.id(),
                     action.id
                 );
             }
             assert!(
                 !state.act(declared),
                 "{}: accepts an action past the {declared} it declares",
-                entry.id
+                entry.id()
             );
         }
     }
@@ -496,12 +220,12 @@ mod tests {
     /// Ids reach the CLI through `--act`, where two the same would be ambiguous.
     #[test]
     fn action_ids_are_unique_within_a_model() {
-        for entry in all_entries() {
-            let mut ids: Vec<&str> = entry.action_descriptors.iter().map(|a| a.id).collect();
+        for entry in crate::example_models().iter() {
+            let mut ids: Vec<&str> = entry.action_descriptors().iter().map(|a| a.id).collect();
             let declared = ids.len();
             ids.sort_unstable();
             ids.dedup();
-            assert_eq!(ids.len(), declared, "{}: declares the same action id twice", entry.id);
+            assert_eq!(ids.len(), declared, "{}: declares the same action id twice", entry.id());
         }
     }
 
@@ -509,11 +233,11 @@ mod tests {
     /// slice.
     #[test]
     fn a_declared_palette_has_colours_in_it() {
-        for entry in all_entries() {
-            let Some(palette) = entry.metadata.palette else {
+        for entry in crate::example_models().iter() {
+            let Some(palette) = entry.metadata().palette else {
                 continue;
             };
-            assert!(!palette.is_empty(), "{}: declares an empty palette", entry.id);
+            assert!(!palette.is_empty(), "{}: declares an empty palette", entry.id());
         }
     }
 
@@ -522,16 +246,17 @@ mod tests {
     /// either way, hence this.
     #[test]
     fn every_declared_stat_series_gets_a_value() {
-        for entry in all_entries() {
+        let gpu = device();
+        for entry in all_entries(gpu.as_ref()) {
             let values = defaults(&entry);
-            let mut created = build(&entry, &values);
+            let mut created = build(&entry, &values, gpu.as_ref());
             let state = sim_state(&mut created);
             assert_eq!(
                 state.stats().len(),
-                entry.stat_descriptors.len(),
+                entry.stat_descriptors().len(),
                 "{}: declares {} stat series but produced {} values",
-                entry.id,
-                entry.stat_descriptors.len(),
+                entry.id(),
+                entry.stat_descriptors().len(),
                 state.stats().len()
             );
         }
@@ -541,25 +266,26 @@ mod tests {
     /// than through `grid_view`/`point_view`, so that is what the hint has to agree with.
     #[test]
     fn declared_topology_matches_the_layers_a_gpu_state_publishes() {
-        for entry in all_entries() {
+        let gpu = device();
+        for entry in all_entries(gpu.as_ref()) {
             let values = defaults(&entry);
-            let ModelState::Gpu(state) = build(&entry, &values) else {
+            let ModelState::Gpu(state) = build(&entry, &values, gpu.as_ref()) else {
                 continue;
             };
             let view = state.view();
             assert_eq!(
                 view.display.is_some(),
-                entry.topology_hint.grid,
+                entry.topology_hint().grid,
                 "{}: declares grid={} but its snapshot disagrees",
-                entry.id,
-                entry.topology_hint.grid
+                entry.id(),
+                entry.topology_hint().grid
             );
             assert_eq!(
                 view.agents.is_some(),
-                entry.topology_hint.agents,
+                entry.topology_hint().agents,
                 "{}: declares agents={} but its snapshot disagrees",
-                entry.id,
-                entry.topology_hint.agents
+                entry.id(),
+                entry.topology_hint().agents
             );
         }
     }
@@ -569,7 +295,7 @@ mod tests {
     #[test]
     fn a_model_that_panics_while_building_comes_back_as_a_fault() {
         let entry = register_grid_model::<crate::tests::broken::DividesByZero>();
-        let Err(fault) = (entry.create)(&defaults(&entry), None) else {
+        let Err(fault) = entry.build(&defaults(&entry), None, None) else {
             panic!("the broken model should not have built");
         };
         assert_eq!(fault.during, BUILDING);
@@ -585,7 +311,7 @@ mod tests {
 
         install_panic_hook();
         let entry = register_grid_model::<crate::tests::broken::DividesByZeroMidStep>();
-        let ModelState::Cpu(mut state) = build(&entry, &defaults(&entry)) else {
+        let ModelState::Cpu(mut state) = build(&entry, &defaults(&entry), None) else {
             panic!("a GridModel registers as a CPU entry");
         };
         let outcome: Result<(), _> = catching(STEPPING, || state.step());
@@ -610,11 +336,13 @@ mod tests {
     fn registry_without_gpu_context_offers_no_gpu_models() {
         let entries = model_registry(None);
         assert!(
-            !entries.iter().any(|e| e.id == "gpu_game_of_life" || e.id == "gpu_sir"),
+            !entries
+                .iter()
+                .any(|e| e.id() == "gpu_game_of_life" || e.id() == "gpu_sir"),
             "a GPU model must not appear in the dropdown when there is no device to run it on"
         );
         assert!(
-            entries.iter().any(|e| e.id == "game_of_life"),
+            entries.iter().any(|e| e.id() == "game_of_life"),
             "CPU models must still be registered without a GPU context"
         );
     }
@@ -624,21 +352,20 @@ mod tests {
     /// own `max_storage_buffers_per_shader_stage`, which is 8 here.
     #[test]
     fn every_gpu_model_builds_on_a_baseline_device() {
-        let entries = all_entries();
-        let gpu: Vec<&ModelEntry> = entries.iter().filter(|e| e.id.starts_with("gpu_")).collect();
-        if gpu.is_empty() {
+        let Some(ctx) = device() else {
             log::warn!("skipping every_gpu_model_builds_on_a_baseline_device: no adapter");
             return;
-        }
-        for entry in gpu {
+        };
+        let entries = all_entries(Some(&ctx));
+        for entry in entries.iter().filter(|entry| is_gpu(entry)) {
             let params = defaults(entry);
             // The two pin each other: under-report a pass and the build fails, over-report one
             // and the assert does.
-            let _built = build(entry, &params);
+            let _built = build(entry, &params, Some(&ctx));
             assert!(
                 entry.shortfalls(&params, &wgpu::Limits::default()).is_empty(),
                 "{}: builds on a baseline device but its declared demand says it should not: {:?}",
-                entry.id,
+                entry.id(),
                 entry.shortfalls(&params, &wgpu::Limits::default())
             );
         }
@@ -656,7 +383,7 @@ mod tests {
         };
 
         for entry in model_registry(Some(ctx.clone())) {
-            let ModelState::Gpu(mut state) = build(&entry, &defaults(&entry)) else {
+            let ModelState::Gpu(mut state) = build(&entry, &defaults(&entry), Some(&ctx)) else {
                 continue;
             };
             let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -672,12 +399,12 @@ mod tests {
                 state.tick(),
                 u64::from(MAX_STEPS_PER_SUBMISSION),
                 "{}: tick after one full submission",
-                entry.id
+                entry.id()
             );
             assert!(
                 state.stats().iter().any(|stat| stat.value.scalar() != 0.0),
                 "{}: every stat read back zero after a submission of {MAX_STEPS_PER_SUBMISSION} steps, which is what a dropped submission looks like",
-                entry.id
+                entry.id()
             );
         }
     }
@@ -691,7 +418,7 @@ mod tests {
         };
 
         for entry in model_registry(Some(ctx.clone())) {
-            let ModelState::Gpu(mut state) = build(&entry, &defaults(&entry)) else {
+            let ModelState::Gpu(mut state) = build(&entry, &defaults(&entry), Some(&ctx)) else {
                 continue;
             };
             for count in [0, 17, MAX_STEPS_PER_SUBMISSION] {
@@ -700,26 +427,26 @@ mod tests {
                 assert!(
                     state.stats_readback_pending(),
                     "{}: a sampled slice begins its readback",
-                    entry.id
+                    entry.id()
                 );
                 stepping::await_submission(&ctx, submission).expect("the slice runs");
                 assert_eq!(
                     state.poll_stats_readback(&ctx.device, false),
                     StatsPoll::Landed,
                     "{}: the readback of a finished slice lands on the next poll",
-                    entry.id
+                    entry.id()
                 );
-                assert_eq!(state.tick(), tick, "{}: tick after a slice of {count}", entry.id);
+                assert_eq!(state.tick(), tick, "{}: tick after a slice of {count}", entry.id());
                 let sliced = state.stats();
                 let snapshot = stepping::sample_stats(&mut *state, &ctx);
                 assert_eq!(
                     format!("{sliced:?}"),
                     format!("{snapshot:?}"),
                     "{}: stats at tick {tick}",
-                    entry.id
+                    entry.id()
                 );
             }
-            assert!(ctx.faults.take().is_none(), "{}: the device raised a fault", entry.id);
+            assert!(ctx.faults.take().is_none(), "{}: the device raised a fault", entry.id());
         }
     }
 
@@ -727,60 +454,46 @@ mod tests {
     /// thread.
     #[test]
     fn every_gpu_entry_reports_its_capacity() {
-        let entries = all_entries();
-        let gpu: Vec<&ModelEntry> = entries.iter().filter(|e| e.id.starts_with("gpu_")).collect();
-        if gpu.is_empty() {
-            log::warn!("skipping every_gpu_entry_reports_its_capacity: no adapter");
-            return;
+        let baseline = wgpu::Limits::default();
+        let models = crate::example_models();
+        for entry in models.iter().filter(|entry| is_gpu(entry)) {
+            let demand = entry
+                .demand(&defaults(entry), &baseline)
+                .expect("a GPU entry declares its capacity");
+            assert!(demand.bytes() > 0, "{}: a GPU model allocates something", entry.id());
         }
-        for entry in gpu {
-            let capacity = entry.capacity.as_ref().expect("a GPU entry declares its capacity");
+        for entry in models.iter().filter(|entry| !is_gpu(entry)) {
             assert!(
-                capacity(&defaults(entry)).bytes() > 0,
-                "{}: a GPU model allocates something",
-                entry.id
-            );
-        }
-        for entry in entries.iter().filter(|e| !e.id.starts_with("gpu_")) {
-            assert!(
-                entry.capacity.is_none(),
+                entry.demand(&defaults(entry), &baseline).is_none(),
                 "{}: a CPU model has no device demand",
-                entry.id
+                entry.id()
             );
         }
     }
 
-    /// `gpu_storage_bindings_needed` reads a hand-written list of model types. Forget to add a
-    /// model to it and the device comes out too narrow, which shows up as a validation error.
+    /// The device a host requests reads the set's needs, so an entry that declares fewer storage
+    /// buffers than its widest pass binds builds on a device too narrow for it.
     #[test]
-    fn the_declared_binding_need_matches_the_registry() {
-        let entries = all_entries();
-        let gpu: Vec<&ModelEntry> = entries.iter().filter(|e| e.id.starts_with("gpu_")).collect();
-        if gpu.is_empty() {
-            log::warn!("skipping the_declared_binding_need_matches_the_registry: no adapter");
-            return;
+    fn every_gpu_entry_needs_the_bindings_its_widest_pass_binds() {
+        let models = crate::example_models();
+        let mut widest_overall = 0;
+        for entry in models.iter().filter(|entry| is_gpu(entry)) {
+            let demand = entry
+                .demand(&defaults(entry), &wgpu::Limits::default())
+                .expect("a GPU entry declares its capacity");
+            let widest = demand.passes.iter().map(|pass| pass.storage).max().unwrap_or(0);
+            let needs = entry.gpu_needs().expect("a GPU entry declares its needs");
+            assert_eq!(needs.storage_buffers(), widest, "{}: declared needs", entry.id());
+            widest_overall = widest_overall.max(widest);
         }
-        let widest = gpu
-            .iter()
-            .filter_map(|entry| entry.capacity.as_ref().map(|capacity| capacity(&defaults(entry))))
-            .flat_map(|demand| demand.passes.into_iter().map(|pass| pass.storage))
-            .max()
-            .unwrap_or(0);
-        assert_eq!(
-            gpu_storage_bindings_needed(),
-            widest,
-            "a registered GPU model is missing from gpu_storage_bindings_needed's list"
-        );
+        assert_eq!(models.gpu_needs().storage_buffers(), widest_overall);
     }
 
     /// Reported, not built. Otherwise the Build button hands wgpu a bind group it rejects.
     #[test]
     fn a_model_too_large_for_the_device_is_reported() {
-        let entries = all_entries();
-        let Some(entry) = entries.iter().find(|e| e.id == "gpu_sir") else {
-            log::warn!("skipping a_model_too_large_for_the_device_is_reported: no adapter");
-            return;
-        };
+        let models = crate::example_models();
+        let entry = models.get("gpu_sir").expect("gpu_sir is an example model");
         // Baseline limits, so this is issue #9's 6000x6000 case rather than the machine's.
         let baseline = wgpu::Limits::default();
         let mut params = defaults(entry);
@@ -796,5 +509,67 @@ mod tests {
             entry.shortfalls(&defaults(entry), &baseline).is_empty(),
             "the default params fit a baseline device"
         );
+    }
+
+    #[test]
+    fn every_example_model_joins_the_set() {
+        let models = crate::example_models();
+        assert_eq!(models.len(), 10);
+        for entry in &models {
+            assert_eq!(entry.source().package(), "henad-models", "{}", entry.id());
+            assert!(
+                entry.source().type_path().starts_with("henad_models::"),
+                "{}",
+                entry.id()
+            );
+        }
+    }
+
+    /// A host that takes one model from the example set records henad-models as its source, so a later change to its
+    /// kernel there still shows in the host's results.
+    #[test]
+    fn an_example_entry_inserted_into_another_set_keeps_its_source() {
+        use henad_compute::entry::ModelSet;
+        use henad_core::provenance::BuildInfo;
+
+        let host = BuildInfo::__from_env("host", "1.0.0", None, None, None, None, false);
+        let sir = crate::example_models()
+            .get("sir")
+            .expect("sir is an example model")
+            .clone();
+        let mut models = ModelSet::new(host);
+        models.insert(sir).expect("the host's set holds no sir yet");
+        let source = models.get("sir").expect("sir joined the set").source();
+        assert_eq!(
+            (source.package(), source.version()),
+            ("henad-models", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(source.type_path(), "henad_models::sir::SirGridModel");
+    }
+
+    /// A host without a device can still list a GPU model. Building one then has to come back as a fault, never as a
+    /// panic.
+    #[test]
+    fn a_gpu_entry_refuses_to_build_without_a_device() {
+        let models = crate::example_models();
+        for entry in models.iter().filter(|entry| is_gpu(entry)) {
+            let Err(fault) = entry.build(&defaults(entry), None, None) else {
+                panic!("{} built with no device", entry.id());
+            };
+            assert_eq!(fault.during, BUILDING, "{}", entry.id());
+            assert!(
+                matches!(
+                    models.lookup(entry.id(), None),
+                    Err(henad_compute::entry::ModelLookupError::NeedsGpu { .. })
+                ),
+                "{}",
+                entry.id()
+            );
+            assert!(
+                matches!(fault.kind, henad_compute::fault::FaultKind::Refused(_)),
+                "{}: {fault:?}",
+                entry.id()
+            );
+        }
     }
 }

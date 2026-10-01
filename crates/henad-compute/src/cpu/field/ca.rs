@@ -18,6 +18,13 @@ use crate::for_each_chunk_mut;
 /// therefore be checked against the CPU model as an oracle.
 pub const GRID_INIT_SEED: u64 = 0xDEAD_BEEF_CAFE_1234;
 
+/// Returns the state a grid model's RNG starts from: `seed` mixed, or [`GRID_INIT_SEED`] when it is `None`.
+///
+/// A GPU port that reproduces its CPU model's tick 0 starts from the same state.
+pub fn grid_init_rng(seed: Option<u64>) -> u64 {
+    seed.map_or(GRID_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed)
+}
+
 /// Double-buffered `u8` cells stepped by `M`'s neighbourhood rule.
 #[derive(Debug)]
 pub struct CaField<M: GridModel> {
@@ -49,7 +56,7 @@ impl<M: GridModel> CaField<M> {
     pub fn with_seed(extent: Extent, params: &[ParamValue], seed: Option<u64>) -> Self {
         let (width, height) = extent.cells();
         let mut grid = Grid2D::new(width, height);
-        let mut seed = seed.map_or(GRID_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
+        let mut seed = grid_init_rng(seed);
         M::init(&mut grid, params, &mut seed);
         Self {
             grid,

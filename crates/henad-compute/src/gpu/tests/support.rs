@@ -38,7 +38,7 @@ pub fn headless_context(label: &str, required_features: wgpu::Features) -> Optio
         label: Some(label),
         required_features,
         // No binding count: henad-compute cannot see the models, and its own tests bind few.
-        required_limits: crate::gpu::limits::raise(&adapter, &wgpu::Limits::default(), 0),
+        required_limits: crate::gpu::limits::raise(&adapter, &wgpu::Limits::default(), crate::gpu::GpuNeeds::default()),
         ..Default::default()
     }));
     if let Err(err) = &device {

@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use web_time::Instant;
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::fault::install_panic_hook;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runtime_info::RuntimeInfo;
@@ -39,7 +40,6 @@ use henad_core::explore::search::{
 };
 use henad_core::explore::seed::search_seed;
 use henad_core::explore::spec::SweepSpec;
-use henad_models::registry::ModelEntry;
 
 use crate::exec::{BatchEnd, Executor, RunRequest, RunSink};
 use crate::output::manifest::{
@@ -1120,7 +1120,7 @@ impl SearchPreparation {
         let watched_reducers = plan.watched_reducers(&measure)?;
         let resumed = resume_dir
             .map(|output_dir| {
-                let params = &entry.param_descriptors;
+                let params = entry.param_descriptors();
                 let columns = column_names(params, base.actions(), measure.reducers().names());
                 RecordedSearch::read(
                     output_dir,
@@ -1143,8 +1143,8 @@ impl SearchPreparation {
         let batch_runs = (plan.search.batch_size as u64).saturating_mul(plan.replicates());
         let (layout, projected_bytes) = sized_layout(entry, gpu, options, &probe, pending.min(batch_runs))?;
         let outline = SweepOutline {
-            model: entry.id.clone(),
-            backend: entry.metadata.backend,
+            model: entry.id().to_owned(),
+            backend: entry.metadata().backend,
             configs: None,
             replicates: plan.replicates(),
             runs: plan.run_count(),
@@ -1251,7 +1251,7 @@ impl SearchPreparation {
         &self,
         inputs: &SweepInputs<'_>,
     ) -> Result<(SearchWriters<Vec<u8>>, Manifest), ExploreError> {
-        let params = &inputs.entry.param_descriptors;
+        let params = inputs.entry.param_descriptors();
         let writer = memory_writer(&self.plan.base, params, &self.measure)?;
         let generations = writes_generations(&self.plan).then(Vec::new);
         let tables = SearchTablesWriter::new(
@@ -1326,7 +1326,7 @@ impl SearchPreparation {
         progress: &mut dyn Progress,
         standing: &mut Option<ManifestSearch>,
     ) -> Result<(BatchEnd, ResultCounts, SearchSession, SearchReport), ExploreError> {
-        let params = &inputs.entry.param_descriptors;
+        let params = inputs.entry.param_descriptors();
         let executor = self.executor(inputs)?;
         let fresh_tables = match &self.resumed {
             Some(resumed) => {

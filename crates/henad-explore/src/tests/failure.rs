@@ -2,10 +2,10 @@
 
 use std::num::NonZeroUsize;
 
+use henad_compute::entry::register_grid_model;
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
 use henad_core::explore::spec::{BlockSpec, SweepSpec};
-use henad_models::registry::register_grid_model;
 
 use crate::exec::Concurrency;
 use crate::output::manifest::{Manifest, ManifestStatus};

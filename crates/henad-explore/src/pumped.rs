@@ -8,12 +8,12 @@ use std::sync::Arc;
 
 use web_time::Instant;
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::fault::install_panic_hook;
 use henad_compute::runner::{PUMP_BUDGET_MS, Pace, SimLoop};
 use henad_core::explore::plan::{Plan, Shard};
 use henad_core::explore::spec::SweepSpec;
 use henad_core::metadata::Backend;
-use henad_models::registry::ModelEntry;
 
 use crate::cursor::{CursorState, RunCursor};
 use crate::exec::{ActiveRuns, BatchEnd, Concurrency, ExecutionError, RunRequest, RunWatch, SliceSize, SweepControl};
@@ -51,7 +51,7 @@ pub struct PumpedSweep {
 impl std::fmt::Debug for PumpedSweep {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PumpedSweep")
-            .field("model", &self.setup.entry.id)
+            .field("model", &self.setup.entry.id())
             .field("runs", &self.setup.plan.run_count())
             .finish_non_exhaustive()
     }
@@ -169,7 +169,7 @@ impl PumpedSweep {
         channel: SweepChannel,
         options: SweepRunOptions,
     ) -> Result<Self, SweepStartError> {
-        if entry.metadata.backend == Backend::Gpu {
+        if entry.metadata().backend == Backend::Gpu {
             return Err(SweepStartError::GpuNeedsNative);
         }
         let active_runs = ActiveRuns::new();
@@ -227,7 +227,7 @@ impl PumpedSweep {
         let opened = preparation.manifest(&inputs).and_then(|manifest| {
             let writer = memory_writer(
                 preparation.plan(),
-                &inputs.entry.param_descriptors,
+                inputs.entry.param_descriptors(),
                 preparation.measure(),
             )?;
             Ok((manifest, writer))
@@ -501,13 +501,13 @@ mod tests {
     use std::sync::mpsc::Receiver;
     use std::time::Duration;
 
+    use henad_compute::entry::{ModelEntry, register_grid_model};
     use henad_compute::fault::install_panic_hook;
     use henad_compute::runner::{Pace, SimLoop as _};
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, SearchSpec};
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
-    use henad_models::registry::{ModelEntry, register_grid_model};
 
     use super::{PumpedSweep, SweepCommand};
     use crate::handle::{SweepChannel, SweepEvent, SweepRunOptions};

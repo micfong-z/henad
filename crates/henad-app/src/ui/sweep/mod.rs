@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use egui::{CentralPanel, Frame, Id, Margin, Panel, ScrollArea};
 use henad_compute::cpu::sim_thread::{SimCommand, WakeFn};
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_core::action::Schedule;
 use henad_core::explore::plan::{ModelSchema, PlanWarning};
@@ -33,7 +34,6 @@ use henad_explore::output::{MANIFEST_FILE, OutputDir};
 use henad_explore::probe::ProbeReport;
 use henad_explore::schema::model_schema;
 use henad_explore::spec_file::SpecFile;
-use henad_models::registry::ModelEntry;
 use serde::Deserialize;
 
 use crate::icons::material_design_icons::MDI_FLASK_OUTLINE;
@@ -108,8 +108,8 @@ impl ColumnsBuild {
     #[cfg(not(target_arch = "wasm32"))]
     fn start(entry: &ModelEntry, wake: &WakeFn) -> Self {
         let (sender, receiver) = flume::bounded(1);
-        let model_id = entry.id.clone();
-        let backend = entry.metadata.backend;
+        let model_id = entry.id().to_owned();
+        let backend = entry.metadata().backend;
         let wake = Arc::clone(wake);
         let spawned = std::thread::Builder::new()
             .name("henad-stat-columns".to_owned())
@@ -127,7 +127,7 @@ impl ColumnsBuild {
 
     #[cfg(target_arch = "wasm32")]
     fn start(entry: &ModelEntry, _wake: &WakeFn) -> Self {
-        Self::Sampled(match entry.metadata.backend {
+        Self::Sampled(match entry.metadata().backend {
             Backend::Cpu => sampled_stat_columns(entry, None),
             Backend::Gpu => None,
         })
@@ -259,12 +259,12 @@ impl SweepPanel {
     fn learn_stat_columns(&mut self, entry: &ModelEntry, wake: &WakeFn) {
         let build = self
             .column_builds
-            .entry(entry.id.clone())
+            .entry(entry.id().to_owned())
             .or_insert_with(|| ColumnsBuild::start(entry, wake));
         build.poll();
         let draft = self
             .drafts
-            .entry(entry.id.clone())
+            .entry(entry.id().to_owned())
             .or_insert_with(|| SweepDraft::new(&model_schema(entry)));
         match &*build {
             #[cfg(not(target_arch = "wasm32"))]
@@ -317,12 +317,12 @@ impl SweepPanel {
 #[cfg(not(target_arch = "wasm32"))]
 fn default_stat_columns(model_id: &str, backend: Backend) -> Option<StatColumns> {
     let gpu = match backend {
-        Backend::Gpu => Some(henad_explore::device::acquire_headless().ok()?.0),
+        Backend::Gpu => Some(henad_explore::device::acquire_headless(henad_models::example_models().gpu_needs()).ok()?),
         Backend::Cpu => None,
     };
     let entry = henad_models::registry::model_registry(gpu.clone())
         .into_iter()
-        .find(|entry| entry.id == model_id)?;
+        .find(|entry| entry.id() == model_id)?;
     sampled_stat_columns(&entry, gpu.as_ref())
 }
 
@@ -331,7 +331,7 @@ fn default_stat_columns(model_id: &str, backend: Backend) -> Option<StatColumns>
 /// A GPU model builds on `gpu`.
 fn sampled_stat_columns(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Option<StatColumns> {
     let values: Vec<ParamValue> = entry
-        .param_descriptors
+        .param_descriptors()
         .iter()
         .map(|descriptor| descriptor.kind.default_value())
         .collect();
@@ -460,7 +460,7 @@ impl CheckSummary {
         {
             warnings.push("Initial samples cover every evaluation. The search will be entirely random.".to_owned());
         }
-        if cfg!(target_arch = "wasm32") && entry.metadata.backend == Backend::Gpu {
+        if cfg!(target_arch = "wasm32") && entry.metadata().backend == Backend::Gpu {
             issues.push(DraftIssue::new(
                 draft::DraftSite::Sweep,
                 "GPU sweeps are unavailable in a browser.",
@@ -617,7 +617,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     // Every text the panels draw is built here. The form borrows the draft once they have drawn.
     let check = app.sweep.cached_check(&schema, &app.param_values);
     let summary = CheckSummary::new(check, entry, &schema);
-    let plan = PlanSummary::for_draft(check, &schema, &entry.name, &summary);
+    let plan = PlanSummary::for_draft(check, &schema, entry.name(), &summary);
     let sections = builder::SectionSummaries::new(check, &schema, &summary);
     let mode = check.draft.mode;
     let steps_per_run = check.draft.warmup.saturating_add(check.draft.steps);
@@ -627,7 +627,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     let results = app
         .results
         .store()
-        .filter(|store| store.model_id == entry.id && !store.runs().is_empty());
+        .filter(|store| store.model_id == entry.id() && !store.runs().is_empty());
     let ctx = ui.ctx().clone();
     let mut plan_open = plan_open(&ctx);
 
@@ -648,9 +648,9 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
 
     header_panel(ui, |ui| {
         let header = BuilderHeader {
-            model_name: &entry.name,
+            model_name: entry.name(),
             notification: status.as_deref(),
-            gpu_refused: cfg!(target_arch = "wasm32") && entry.metadata.backend == Backend::Gpu,
+            gpu_refused: cfg!(target_arch = "wasm32") && entry.metadata().backend == Backend::Gpu,
             plan_fits: form.plan_fits,
         };
         if header::builder_header(ui, &header, &mut draft.mode, &mut plan_open, request) {
@@ -905,7 +905,7 @@ fn start(app: &mut AppState) {
     let kept = KeptDraft {
         draft: check.draft.clone(),
         panel_values: check.panel_values.clone(),
-        plan: PlanSummary::for_draft(check, &schema, &entry.name, &summary),
+        plan: PlanSummary::for_draft(check, &schema, entry.name(), &summary),
     };
     let spec = planned.spec.clone();
     let noun = if planned.search_plan.is_some() {
@@ -928,7 +928,11 @@ fn start(app: &mut AppState) {
     }
     match SweepSession::start(app, spec, execution, output_dir) {
         Ok(mut session) => {
-            if let Some(model_index) = app.registry.iter().position(|entry| entry.id == session.plan().model()) {
+            if let Some(model_index) = app
+                .registry
+                .iter()
+                .position(|entry| entry.id() == session.plan().model())
+            {
                 let entry = &app.registry[model_index];
                 if let Some(search_plan) = session.search_plan() {
                     let search_plan = Arc::clone(search_plan);
@@ -961,13 +965,13 @@ fn save_spec(app: &mut AppState) {
         let draft = app.sweep.draft_mut(&schema).clone();
         (draft, app.param_values.clone())
     };
-    let Some(entry) = app.registry.iter().find(|entry| entry.id == draft.model_id) else {
+    let Some(entry) = app.registry.iter().find(|entry| entry.id() == draft.model_id) else {
         return;
     };
     let schema = model_schema(entry);
     let name = match draft.mode {
-        DraftMode::Sweep => format!("henad-{}-sweep.toml", entry.id),
-        DraftMode::Search => format!("henad-{}-search.toml", entry.id),
+        DraftMode::Sweep => format!("henad-{}-sweep.toml", entry.id()),
+        DraftMode::Search => format!("henad-{}-search.toml", entry.id()),
     };
     match draft.to_toml(&schema, &panel_values) {
         Ok(text) => app.save_as(SaveTarget::SweepSpec, &name, text.into_bytes()),
@@ -1063,7 +1067,7 @@ fn read_spec(app: &mut AppState, file: &DialogFile) -> Result<(), String> {
         SpecFile::parse(text)
     }
     .map_err(|error| describe_error(&error))?;
-    let Some(index) = app.registry.iter().position(|entry| entry.id == spec_file.model) else {
+    let Some(index) = app.registry.iter().position(|entry| entry.id() == spec_file.model) else {
         return Err(format!("Spec is for {}, unavailable on this device", spec_file.model));
     };
     let (draft, panel_values) = SweepDraft::from_spec_file(spec_file, &model_schema(&app.registry[index]))?;
@@ -1094,7 +1098,10 @@ fn select_model(app: &mut AppState, index: usize) {
 fn edit_sweep(app: &mut AppState) {
     let kept = app.sweep.session.as_ref().and_then(|session| session.kept.as_deref());
     let reselect = kept.and_then(|kept| {
-        let index = app.registry.iter().position(|entry| entry.id == kept.draft.model_id)?;
+        let index = app
+            .registry
+            .iter()
+            .position(|entry| entry.id() == kept.draft.model_id)?;
         let panel_values = || kept.panel_values.iter().cloned().map(Some).collect::<Vec<_>>();
         (index != app.selected_model).then(|| (index, panel_values()))
     });
@@ -1112,7 +1119,7 @@ fn apply_panel_values(app: &mut AppState, panel_values: &[Option<ParamValue>]) {
     };
     let loaded = app.selection_is_loaded();
     let mut sent_live = false;
-    for (index, (value, descriptor)) in panel_values.iter().zip(&entry.param_descriptors).enumerate() {
+    for (index, (value, descriptor)) in panel_values.iter().zip(entry.param_descriptors()).enumerate() {
         let Some(value) = value else {
             continue;
         };
@@ -1316,11 +1323,11 @@ mod tests {
     fn a_start_failure_lasts_until_the_draft_changes() {
         let sir = model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered");
         let schema = model_schema(&sir);
         let panel_values: Vec<ParamValue> = sir
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();
@@ -1339,11 +1346,11 @@ mod tests {
     fn a_check_lists_its_issues_by_section_and_counts_them() {
         let sir = model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered");
         let schema = model_schema(&sir);
         let panel_values: Vec<ParamValue> = sir
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();
@@ -1370,11 +1377,11 @@ mod tests {
     fn a_draft_waits_for_the_build_of_its_columns() {
         let boids = model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "boids")
+            .find(|entry| entry.id() == "boids")
             .expect("boids is registered");
         let schema = model_schema(&boids);
         let panel_values: Vec<ParamValue> = boids
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();
@@ -1385,7 +1392,7 @@ mod tests {
         let (sender, receiver) = flume::bounded(1);
         panel
             .column_builds
-            .insert(boids.id.clone(), ColumnsBuild::Running(receiver));
+            .insert(boids.id().to_owned(), ColumnsBuild::Running(receiver));
         panel.learn_stat_columns(&boids, &wake);
         let check = panel.cached_check(&schema, &panel_values);
         assert_eq!(check.result.as_ref().err().map(Vec::as_slice), Some(&pending[..]));
@@ -1401,7 +1408,7 @@ mod tests {
         let (sender, receiver) = flume::bounded::<Option<StatColumns>>(1);
         panel
             .column_builds
-            .insert(boids.id.clone(), ColumnsBuild::Running(receiver));
+            .insert(boids.id().to_owned(), ColumnsBuild::Running(receiver));
         panel.learn_stat_columns(&boids, &wake);
         assert!(panel.cached_check(&schema, &panel_values).result.is_err());
         drop(sender);

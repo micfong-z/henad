@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runtime_info::RuntimeInfo;
 use henad_core::action::ScheduleError;
@@ -39,7 +40,6 @@ use henad_explore::schema::backend_name;
 use henad_explore::search_run::{SearchOutline, SearchUpdate, run_search};
 use henad_explore::spec_file::{DesignTableFile, ExecutionTable, SpecFile};
 use henad_explore::sweep::{Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, run_sweep};
-use henad_models::registry::ModelEntry;
 
 use crate::Args;
 use crate::json_report;
@@ -245,7 +245,7 @@ pub fn run(
             .with_context(|| format!("cannot read '{}'", loaded.path.display()))?;
         (sweep, source, execution)
     } else {
-        let sweep = spec_from_flags(args, &entry.id)?;
+        let sweep = spec_from_flags(args, entry.id())?;
         let source = flags_source(args, &sweep);
         (sweep, source, ExecutionTable::default())
     };
@@ -263,7 +263,7 @@ pub fn run(
     if cfg!(debug_assertions) && !args.explore.dry_run {
         eprintln!("!!! warning: debug build. Runs will step slowly and timings will be unreliable. Use --release !!!");
     }
-    let mut reporter = Reporter::new(&entry.name, args, source.path.is_some());
+    let mut reporter = Reporter::new(entry.name(), args, source.path.is_some());
     let explore = if sweep.search.is_some() { run_search } else { run_sweep };
     let report = explore(
         entry,
@@ -1305,7 +1305,7 @@ mod tests {
         );
         let sir = model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("sir is registered");
         let plan = spec.plan(&model_schema(&sir)).expect("sir declares seed_outbreak");
         let ticks: Vec<&[u64]> = plan
@@ -1704,7 +1704,7 @@ mod tests {
         let registry = model_registry(None);
         let sir = registry
             .iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("sir is registered");
         let dry_run = henad_explore::sweep::SweepOptions {
             dry_run: true,

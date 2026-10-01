@@ -848,7 +848,7 @@ That finishes the model. Declare the module and register it, and then we can run
 pub mod foraging;
 ```
 
-``` rust title="crates/henad-models/src/registry.rs"
+``` rust title="crates/henad-models/src/lib.rs"
 register_agent_model::<crate::foraging::ForagingModel>(),
 ```
 

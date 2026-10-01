@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use henad_compute::entry::ModelEntry;
 use henad_core::explore::factor::FactorTarget;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::RunOutcome;
@@ -29,7 +30,6 @@ use henad_explore::output::search_tables::SearchHistory;
 use henad_explore::result_set::ResultSet;
 use henad_explore::schema::model_schema;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
-use henad_models::registry::ModelEntry;
 
 use crate::ui::sweep::draft::describe_error;
 
@@ -542,12 +542,12 @@ impl ResultsStore {
         folder: Option<PathBuf>,
         series_budget: usize,
     ) -> Self {
-        let value_columns = plan_value_columns(&plan, &entry.param_descriptors);
-        let texts = plan_texts(&plan, &entry.param_descriptors);
+        let value_columns = plan_value_columns(&plan, entry.param_descriptors());
+        let texts = plan_texts(&plan, entry.param_descriptors());
         let mut store = Self {
             source: ResultsSource::Sweep,
-            model_id: entry.id.clone(),
-            model_name: entry.name.clone(),
+            model_id: entry.id().to_owned(),
+            model_name: entry.name().to_owned(),
             model_index: Some(model_index),
             schema_matches: true,
             complete: false,
@@ -555,7 +555,7 @@ impl ResultsStore {
             action_labels: action_labels(plan.actions(), entry),
             plan: Ok(ReplayPlan::Sweep(plan)),
             search: None,
-            descriptors: entry.param_descriptors.clone(),
+            descriptors: entry.param_descriptors().to_vec(),
             value_columns,
             stat_columns: Vec::new(),
             reducer_columns: Vec::new(),
@@ -608,7 +608,7 @@ impl ResultsStore {
     ) -> Self {
         let model = &set.manifest().model;
         let (model_id, model_name) = (model.id.clone(), model.name.clone());
-        let model_index = registry.iter().position(|entry| entry.id == model_id);
+        let model_index = registry.iter().position(|entry| entry.id() == model_id);
         let entry = model_index.map(|index| &registry[index]);
         let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry));
         let search = set
@@ -632,14 +632,20 @@ impl ResultsStore {
             None => Err(format!("{model_name} is unavailable on this device")),
             Some(entry) if search.is_some() => SearchPlan::new(set.spec(), &model_schema(entry))
                 .map(|search_plan| ReplayPlan::Search(Arc::new(search_plan)))
-                .map_err(|error| format!("{} refuses this search's spec: {}", entry.name, describe_error(&error))),
+                .map_err(|error| {
+                    format!(
+                        "{} refuses this search's spec: {}",
+                        entry.name(),
+                        describe_error(&error)
+                    )
+                }),
             Some(entry) => set
                 .plan(entry)
                 .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
-                .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name, describe_error(&error))),
+                .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error))),
         };
         let mut texts = match (&plan, entry) {
-            (Ok(ReplayPlan::Sweep(plan)), Some(entry)) if schema_matches => plan_texts(plan, &entry.param_descriptors),
+            (Ok(ReplayPlan::Sweep(plan)), Some(entry)) if schema_matches => plan_texts(plan, entry.param_descriptors()),
             _ => BTreeMap::new(),
         };
         let mut store = Self {
@@ -652,7 +658,9 @@ impl ResultsStore {
             folder: set.dir().map(Path::to_path_buf),
             plan,
             search,
-            descriptors: entry.map(|entry| entry.param_descriptors.clone()).unwrap_or_default(),
+            descriptors: entry
+                .map(|entry| entry.param_descriptors().to_vec())
+                .unwrap_or_default(),
             action_labels: entry.map_or_else(BTreeMap::new, |entry| action_labels(&set.spec().actions, entry)),
             value_columns: set.value_columns().to_vec(),
             stat_columns: set.stat_columns().to_vec(),
@@ -1582,7 +1590,7 @@ fn action_labels(actions: &[ActionSpec], entry: &ModelEntry) -> BTreeMap<String,
         .iter()
         .filter_map(|action| {
             let declared = entry
-                .action_descriptors
+                .action_descriptors()
                 .iter()
                 .find(|declared| declared.id == action.id)?;
             let label = action_label(declared.label, &action.id, &action.name);
@@ -1719,6 +1727,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
+    use henad_compute::entry::ModelEntry;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::SeriesBuffer;
@@ -1729,7 +1738,7 @@ mod tests {
     use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
     use henad_explore::schema::model_schema;
     use henad_explore::search_run::{EvaluatedCandidate, EvaluationReading, SearchPlan, SearchUpdate};
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::registry::model_registry;
 
     use super::{
         BandKind, HeatColor, HeatQuery, ResponseQuery, ResultsAxis, ResultsStore, RunsColumn, RunsFilter, RunsSort,
@@ -1741,7 +1750,7 @@ mod tests {
     fn sir() -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered")
     }
 
@@ -1999,7 +2008,7 @@ mod tests {
         assert_eq!(store.config_values(0), None, "no batch has ended");
 
         let mut params: Vec<ParamValue> = sir
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();
@@ -2031,7 +2040,7 @@ mod tests {
     /// Candidates from 3000 on come from block 1. A search has one block, and the store takes any.
     fn drawn_config(entry: &ModelEntry, candidate_id: u64, state: &mut u64) -> Config {
         let params = entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| {
                 let fixed = descriptor.id == "gain_resistance_chance"
@@ -2197,7 +2206,7 @@ mod tests {
     fn virus_search() -> (ModelEntry, Arc<SearchPlan>) {
         let entry = model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "virus_network")
+            .find(|entry| entry.id() == "virus_network")
             .expect("Virus on a Network is registered");
         let mut spec = SweepSpec::new("virus_network");
         spec.actions = vec![ActionSpec::new("rewire", 0)];
@@ -2441,7 +2450,7 @@ mod tests {
 
     /// Returns the parameters of `entry` with a default Recovery Rate of 0.1, as an earlier version of SIR declared.
     fn params_before_change(entry: &ModelEntry) -> Vec<ParamDescriptor> {
-        let mut params = entry.param_descriptors.clone();
+        let mut params = entry.param_descriptors().to_vec();
         let recovery = params
             .iter_mut()
             .find(|param| param.id == "recovery_rate")
@@ -2937,13 +2946,13 @@ mod tests {
     #[test]
     fn a_run_opened_from_a_folder_replays_to_its_row() {
         use henad_compute::cpu::sim_thread::SimThread;
+        use henad_compute::entry::ModelState;
         use henad_compute::fault::FaultSink;
         use henad_core::explore::stop::StopSpec;
         use henad_core::export::stats_csv::StatColumns;
         use henad_explore::progress::NoProgress;
         use henad_explore::result_set::ResultSet;
         use henad_explore::sweep::{SweepOptions, run_sweep};
-        use henad_models::registry::ModelState;
 
         use crate::ui::results::store::ResultsSource;
 
@@ -2976,7 +2985,7 @@ mod tests {
         };
         let sir = registry
             .iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered");
         let source = henad_explore::sweep::SpecSource::default();
         let provenance = henad_explore::sweep::Provenance::default();
@@ -3011,7 +3020,7 @@ mod tests {
         for outcome in store.runs() {
             let run_id = outcome.run.run_id;
             let replay = store.replay(run_id).expect("the run replays");
-            let Ok(ModelState::Cpu(state)) = (sir.create)(&replay.params, Some(replay.seed)) else {
+            let Ok(ModelState::Cpu(state)) = sir.build(&replay.params, Some(replay.seed), None) else {
                 panic!("SIR builds on the CPU");
             };
             // Open at end steps to the tick the run ended on. A stop condition can end it before the plan's last tick.

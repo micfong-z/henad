@@ -1,13 +1,37 @@
 //! Device limits the GPU models need above the WebGPU baseline.
 //!
 //! Sizes go to the adapter's report, counts to exactly the models' needs, since wgpu's own
-//! advice is to request no more than that. `raise` takes the count rather than knowing it, since
-//! henad-compute cannot see the models and a host needs the number before it has a device.
+//! advice is to request no more than that. `raise` takes the needs rather than knowing them, since
+//! henad-compute cannot see the models and a host needs them before it has a device.
 
-/// Raises `base` to the models' requirements, clamped to the adapter's.
-///
-/// `storage_buffers` comes from `henad_models::registry::gpu_storage_bindings_needed()`.
-pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits, storage_buffers: u32) -> wgpu::Limits {
+/// Device capabilities a set of models needs above the WebGPU baseline, known before any device exists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GpuNeeds {
+    storage_buffers: u32,
+}
+
+impl GpuNeeds {
+    /// Returns needs of `storage_buffers` storage buffers per shader stage.
+    pub const fn with_storage_buffers(storage_buffers: u32) -> Self {
+        Self { storage_buffers }
+    }
+
+    /// Storage buffers the widest pass binds per shader stage.
+    pub fn storage_buffers(&self) -> u32 {
+        self.storage_buffers
+    }
+
+    /// Returns needs covering both `self` and `other`.
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            storage_buffers: self.storage_buffers.max(other.storage_buffers),
+        }
+    }
+}
+
+/// Raises `base` to the models' `needs`, clamped to the adapter's.
+pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits, needs: GpuNeeds) -> wgpu::Limits {
+    let storage_buffers = needs.storage_buffers();
     let available = adapter.limits();
     // Otherwise this only surfaces much later, as a bind group layout failing validation.
     if available.max_storage_buffers_per_shader_stage < storage_buffers {
@@ -33,7 +57,7 @@ pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits, storage_buffers: u32)
 
 #[cfg(test)]
 mod tests {
-    use super::raise;
+    use super::{GpuNeeds, raise};
 
     fn adapter() -> Option<wgpu::Adapter> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -49,7 +73,7 @@ mod tests {
         };
         let available = adapter.limits();
         // Far past any adapter, so this tests the clamp rather than the input.
-        let raised = raise(&adapter, &wgpu::Limits::default(), 4096);
+        let raised = raise(&adapter, &wgpu::Limits::default(), GpuNeeds::with_storage_buffers(4096));
         assert!(
             raised.max_texture_dimension_2d <= available.max_texture_dimension_2d
                 && raised.max_storage_buffer_binding_size <= available.max_storage_buffer_binding_size
@@ -67,7 +91,7 @@ mod tests {
             return;
         };
         let available = adapter.limits();
-        let raised = raise(&adapter, &wgpu::Limits::default(), 0);
+        let raised = raise(&adapter, &wgpu::Limits::default(), GpuNeeds::default());
         assert_eq!(raised.max_texture_dimension_2d, available.max_texture_dimension_2d);
         assert_eq!(
             raised.max_storage_buffer_binding_size,
@@ -84,7 +108,7 @@ mod tests {
             return;
         };
         let base = wgpu::Limits::default();
-        let raised = raise(&adapter, &base, 0);
+        let raised = raise(&adapter, &base, GpuNeeds::default());
         assert_eq!(
             raised.max_storage_buffers_per_shader_stage,
             base.max_storage_buffers_per_shader_stage
@@ -103,7 +127,7 @@ mod tests {
             log::warn!("skipping a_need_above_the_baseline_raises_only_the_count: adapter too small");
             return;
         }
-        let raised = raise(&adapter, &base, want);
+        let raised = raise(&adapter, &base, GpuNeeds::with_storage_buffers(want));
         assert_eq!(raised.max_storage_buffers_per_shader_stage, want);
         assert_eq!(
             raised.max_compute_workgroups_per_dimension, base.max_compute_workgroups_per_dimension,

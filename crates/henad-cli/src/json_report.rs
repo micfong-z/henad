@@ -6,12 +6,12 @@
 
 use std::time::Duration;
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runtime_info::{HostInfo, RuntimeInfo};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_explore::probe::ProbeReport;
 use henad_explore::schema::schema_json;
-use henad_models::registry::ModelEntry;
 use serde_json::{Map, Value, json};
 
 /// Emitted once, before any rep.
@@ -149,7 +149,7 @@ fn params_object(descriptors: &[ParamDescriptor], params: &[ParamValue]) -> Valu
 /// The line carries `stat_columns` from a build at the defaults, and leaves them out when that build fails.
 pub fn params(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Value {
     let defaults: Vec<ParamValue> = entry
-        .param_descriptors
+        .param_descriptors()
         .iter()
         .map(|descriptor| descriptor.kind.default_value())
         .collect();
@@ -159,7 +159,7 @@ pub fn params(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Value {
             let error = anyhow::Error::new(error);
             eprintln!(
                 "note: '{}' failed to build with default parameters ({error:#}), so stat_columns is omitted",
-                entry.id
+                entry.id()
             );
             None
         }

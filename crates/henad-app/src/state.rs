@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use egui::TextureHandle;
 use henad_compute::cpu::sim_thread::{SimCommand, SimThread, WakeFn};
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{BUILDING, Fault, catching};
 use henad_compute::snapshot::Snapshot;
 use henad_core::action::Schedule;
@@ -12,7 +13,7 @@ use henad_core::explore::replay::Replay;
 use henad_core::params::ParamValue;
 use henad_core::view::StatsHistory;
 use henad_explore::output::memory::SweepFiles;
-use henad_models::registry::{ModelEntry, ModelState, model_registry};
+use henad_models::registry::model_registry;
 
 use crate::sim_runner::SimRunner;
 use crate::ui::agent_layer::AgentLayer;
@@ -190,7 +191,7 @@ impl AppState {
         let registry = model_registry(gpu_ctx.clone());
         let param_values: Vec<ParamValue> = registry
             .first()
-            .map(|m| m.param_descriptors.iter().map(|p| p.kind.default_value()).collect())
+            .map(|m| m.param_descriptors().iter().map(|p| p.kind.default_value()).collect())
             .unwrap_or_default();
 
         Self {
@@ -278,7 +279,7 @@ impl AppState {
             return;
         };
 
-        let stats_history = StatsHistory::new(entry.stat_descriptors.clone(), self.history_capacity);
+        let stats_history = StatsHistory::new(entry.stat_descriptors().to_vec(), self.history_capacity);
 
         match self.build_runner(entry, &self.repaint_waker()) {
             Ok(mut runner) => {
@@ -323,10 +324,10 @@ impl AppState {
     /// Returns a message when this device has no model `replay.model`, or the model declares another number of
     /// parameters. A build that fails goes to the fault modal instead, and leaves no run open.
     pub fn open_run(&mut self, replay: Replay, start: OpenAt) -> Result<(), String> {
-        let Some(model_index) = self.registry.iter().position(|entry| entry.id == replay.model) else {
+        let Some(model_index) = self.registry.iter().position(|entry| entry.id() == replay.model) else {
             return Err(format!("{} is unavailable on this device", replay.model));
         };
-        let declared = self.registry[model_index].param_descriptors.len();
+        let declared = self.registry[model_index].param_descriptors().len();
         if replay.params.len() != declared {
             return Err(format!(
                 "This run sets {} parameters, but {} has {declared}",
@@ -399,7 +400,7 @@ impl AppState {
     ///
     /// If the model's kernels panic, or the GPU refuses to build it, or the model is not compatible with this machine.
     fn build_runner(&self, entry: &ModelEntry, wake: &WakeFn) -> Result<SimRunner, Fault> {
-        match (entry.create)(&self.param_values, self.seed)? {
+        match entry.build(&self.param_values, self.seed, self.gpu_ctx.as_ref())? {
             ModelState::Cpu(state) => catching(BUILDING, || {
                 let mut thread = SimThread::new(
                     state,
@@ -410,7 +411,7 @@ impl AppState {
                 if self.uncapped {
                     thread.send(SimCommand::SetUncapped(true));
                 }
-                if entry.topology_hint.edges {
+                if entry.topology_hint().edges {
                     thread.send(self.layout_command());
                 }
                 SimRunner::Cpu(thread)
@@ -483,7 +484,11 @@ impl AppState {
         let Some(entry) = self.registry.get(self.selected_model) else {
             return;
         };
-        self.param_values = entry.param_descriptors.iter().map(|p| p.kind.default_value()).collect();
+        self.param_values = entry
+            .param_descriptors()
+            .iter()
+            .map(|p| p.kind.default_value())
+            .collect();
         self.pending_reload = vec![false; self.param_values.len()];
     }
 

@@ -8,6 +8,7 @@ use std::path::Path;
 
 use egui::containers::Sides;
 use egui::{Align, Button, ComboBox, DragValue, Id, Label, Layout, RadioButton, RichText, TextEdit, TextStyle, vec2};
+use henad_compute::entry::ModelEntry;
 use henad_core::explore::plan::ModelSchema;
 use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
 use henad_core::explore::stop::{Comparator, Comparison};
@@ -16,7 +17,6 @@ use henad_core::helpers::fmt_bytes;
 use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
 use henad_explore::exec::Concurrency;
-use henad_models::registry::ModelEntry;
 
 use crate::icons::material_design_icons::{
     MDI_CLOSE, MDI_DELETE_OUTLINE, MDI_DICE_5, MDI_FILE_DELIMITED_OUTLINE, MDI_FOLDER_OUTLINE, MDI_PLUS,
@@ -1207,7 +1207,7 @@ fn ticks_drag_value(ticks: &mut u64) -> DragValue<'_> {
 
 fn first_stat(entry: &ModelEntry) -> String {
     entry
-        .stat_descriptors
+        .stat_descriptors()
         .first()
         .map(|stat| stat.label.to_owned())
         .unwrap_or_default()
@@ -1219,7 +1219,7 @@ fn stat_combo(ui: &mut egui::Ui, id: Id, entry: &ModelEntry, column: &mut String
         .truncate()
         .selected_text(column.as_str())
         .show_ui(ui, |ui| {
-            for stat in &entry.stat_descriptors {
+            for stat in entry.stat_descriptors() {
                 if ui.selectable_label(column == stat.label, stat.label).clicked() {
                     stat.label.clone_into(column);
                 }
@@ -1532,7 +1532,7 @@ fn execution_section(
     input: &FormInput<'_>,
     request: &mut Option<SweepRequest>,
 ) {
-    concurrency_row(ui, &rows.layout, draft, input.entry.metadata.backend);
+    concurrency_row(ui, &rows.layout, draft, input.entry.metadata().backend);
     budget_row(ui, &rows.layout, draft);
     results_rows(ui, rows, draft, input, request);
 }
@@ -1790,13 +1790,14 @@ mod tests {
     use std::time::Duration;
 
     use egui::accesskit;
+    use henad_compute::entry::ModelEntry;
     use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
     use henad_core::explore::stop::Comparator;
     use henad_core::metadata::Backend;
     use henad_core::params::ParamValue;
     use henad_explore::exec::Concurrency;
     use henad_explore::schema::model_schema;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::registry::model_registry;
 
     use super::{
         FormInput, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, SectionSummaries, SeedField, banner_line, comparator_item,
@@ -1818,13 +1819,13 @@ mod tests {
     fn sir() -> ModelEntry {
         model_registry(None)
             .into_iter()
-            .find(|entry| entry.id == "sir")
+            .find(|entry| entry.id() == "sir")
             .expect("SIR is registered")
     }
 
     fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
         entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect()
@@ -2282,7 +2283,7 @@ mod tests {
         *panel.draft_mut(&schema) = draft;
         let check = panel.cached_check(&schema, &panel_values);
         let summary = CheckSummary::new(check, entry, &schema);
-        let plan = PlanSummary::for_draft(check, &schema, &entry.name, &summary);
+        let plan = PlanSummary::for_draft(check, &schema, entry.name(), &summary);
         let sections = SectionSummaries::new(check, &schema, &summary);
         let input = FormInput {
             entry,

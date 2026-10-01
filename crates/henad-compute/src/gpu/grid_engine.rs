@@ -7,10 +7,9 @@ use std::sync::Arc;
 
 use henad_core::authoring::model::binding::{BindingDecl, buffer_target};
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
-use henad_core::model::{Model, SimState};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::topology::TopologyHint;
-use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
+use henad_core::model::SimState;
+use henad_core::params::ParamValue;
+use henad_core::view::{StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
 use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
@@ -49,63 +48,6 @@ struct ActionPass {
 impl ActionPass {
     fn bind(&self, a_is_current: bool) -> &wgpu::BindGroup {
         if a_is_current { &self.bind_a } else { &self.bind_b }
-    }
-}
-
-/// The `Model` half for a [`GpuGridModel`]: metadata plus a state factory.
-///
-/// Holds a cloned [`GpuContext`], which is how the registry hands a device down to a model without
-/// any global state.
-#[derive(Debug)]
-pub struct GpuGridModelDescriptor<M: GpuGridModel> {
-    ctx: GpuContext,
-    _marker: PhantomData<M>,
-}
-
-impl<M: GpuGridModel> GpuGridModelDescriptor<M> {
-    pub fn new(ctx: GpuContext) -> Self {
-        Self {
-            ctx,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<M: GpuGridModel> Model for GpuGridModelDescriptor<M> {
-    type State = GpuGridState<M>;
-
-    fn name(&self) -> &'static str {
-        M::NAME
-    }
-
-    fn id(&self) -> &'static str {
-        M::ID
-    }
-
-    fn description(&self) -> &'static str {
-        M::DESCRIPTION
-    }
-
-    /// Everything is reload-only here, because `GpuGridState::set_param` rejects the lot.
-    fn param_descriptors(&self) -> Vec<ParamDescriptor> {
-        M::param_descriptors()
-            .into_iter()
-            .map(ParamDescriptor::on_reload)
-            .collect()
-    }
-
-    fn stat_descriptors(&self) -> Vec<StatDescriptor> {
-        M::STATS.to_vec()
-    }
-
-    /// Still a 2D grid, just getting its pixels from a texture instead of a cell buffer. The UI
-    /// branches on the *snapshot* variant, not on this hint.
-    fn topology_hint(&self) -> TopologyHint {
-        TopologyHint::GRID
-    }
-
-    fn create_state(&self, params: &[ParamValue]) -> Self::State {
-        GpuGridState::new(&self.ctx, params)
     }
 }
 

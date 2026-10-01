@@ -5,7 +5,7 @@
 use std::fmt;
 
 use henad_compute::fault::FaultSink;
-use henad_compute::gpu::GpuContext;
+use henad_compute::gpu::{GpuContext, GpuNeeds};
 use henad_compute::runtime_info::RuntimeInfo;
 
 /// Failure to acquire a headless device.
@@ -41,21 +41,21 @@ impl std::error::Error for DeviceError {
     }
 }
 
-/// Acquires a headless GPU device, the same thing eframe does for henad-app minus any window or
-/// surface. `henad-compute` never creates a device, so a non-GUI runner must.
+/// Acquires a headless device for `needs`, with its adapter's [`RuntimeInfo`] attached to the context.
 ///
-/// The device is requested at the WebGPU baseline on every backend, raised by
+/// This is the device eframe acquires for henad-app, minus any window or surface. `henad-compute` never creates a
+/// device, so a non-GUI runner must.
+///
+/// The device is requested at the WebGPU baseline on every backend, raised to `needs` by
 /// [`henad_compute::gpu::limits::raise`]. Note that an adapter below the baseline, as a GL adapter can be, gets no
 /// device here. henad-app takes a lower base for a GL adapter, draws with it and runs no GPU model on it.
-///
-/// The adapter is dropped here, so `RuntimeInfo` has to be captured.
 ///
 /// # Errors
 ///
 /// Returns [`DeviceError::NoAdapter`] when this machine offers no suitable adapter,
 /// [`DeviceError::BelowBaseline`] for an adapter below the baseline, and [`DeviceError::NoDevice`] when the adapter
 /// creates no device.
-pub fn acquire_headless() -> Result<(GpuContext, RuntimeInfo), DeviceError> {
+pub fn acquire_headless(needs: GpuNeeds) -> Result<GpuContext, DeviceError> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -64,11 +64,7 @@ pub fn acquire_headless() -> Result<(GpuContext, RuntimeInfo), DeviceError> {
         ..Default::default()
     }))
     .map_err(DeviceError::NoAdapter)?;
-    let required_limits = henad_compute::gpu::limits::raise(
-        &adapter,
-        &wgpu::Limits::default(),
-        henad_models::registry::gpu_storage_bindings_needed(),
-    );
+    let required_limits = henad_compute::gpu::limits::raise(&adapter, &wgpu::Limits::default(), needs);
     if let Some(limit) = short_limit(&required_limits, &adapter.limits()) {
         return Err(DeviceError::BelowBaseline {
             adapter: adapter.get_info().name,
@@ -87,10 +83,7 @@ pub fn acquire_headless() -> Result<(GpuContext, RuntimeInfo), DeviceError> {
     let runtime = RuntimeInfo::collect(&adapter, &device);
     // No surface exists, so `target_format` is arbitrary: the models' display texture is an
     // offscreen Rgba8Unorm target, never a swapchain, and a headless run never reads it back.
-    Ok((
-        GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, FaultSink::new()),
-        runtime,
-    ))
+    Ok(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, FaultSink::new()).with_runtime_info(runtime))
 }
 
 /// Returns the name of the first limit of `required` that `available` falls short of, or `None` when it offers them
