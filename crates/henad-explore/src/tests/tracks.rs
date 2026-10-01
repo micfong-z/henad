@@ -416,8 +416,8 @@ fn blocking_rows(
 ) -> Vec<(u64, Vec<f64>)> {
     let config = plan.config(run.config_id).expect("the run's config");
     let schedule = plan.schedule(config);
-    let Ok(ModelState::Gpu(mut state)) = (model.create)(&config.params, Some(run.seed)) else {
-        panic!("{} builds on the GPU", model.id);
+    let Ok(ModelState::Gpu(mut state)) = model.build(&config.params, Some(run.seed), Some(ctx)) else {
+        panic!("{} builds on the GPU", model.id());
     };
     let mut refused = stepping::run_due(&mut *state, ctx, &schedule).len();
     let mut rows = Vec::new();
@@ -433,7 +433,7 @@ fn blocking_rows(
             .expect("the layout holds");
         rows.push((tick, row.clone()));
     }
-    assert_eq!(refused, 0, "{} takes its action", model.id);
+    assert_eq!(refused, 0, "{} takes its action", model.id());
     rows
 }
 
