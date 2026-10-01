@@ -1,7 +1,7 @@
 use crate::icons::material_design_icons::{
     MDI_FAST_FORWARD, MDI_FLASK_OUTLINE, MDI_PAUSE, MDI_PLAY, MDI_RESTART, MDI_SKIP_NEXT, MDI_TRAY_REMOVE,
 };
-use crate::state::AppState;
+use crate::state::{AppState, setup_message};
 use crate::ui::params::{INVALID_SEED, parse_seed};
 use crate::ui::{add_progress_bar, mcs};
 
@@ -76,7 +76,10 @@ fn build_refusal(app: &AppState, shortfalls: &[String]) -> Option<String> {
     if !shortfalls.is_empty() {
         return Some(format!("Too large for this device: {}", shortfalls.join("; ")));
     }
-    parse_seed(&app.seed_text).is_err().then(|| INVALID_SEED.to_owned())
+    if parse_seed(&app.seed_text).is_err() {
+        return Some(INVALID_SEED.to_owned());
+    }
+    app.build_setup()?.err().map(|error| setup_message(&error))
 }
 
 /// Draws the Run to tick row, or the progress of a pending run to a tick with its Cancel button.

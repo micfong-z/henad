@@ -1,5 +1,6 @@
 //! Checks that the live loops replay a run as a sweep and `--export-stats` step it.
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use henad_compute::cpu::sim_thread::SimThread;
@@ -7,6 +8,7 @@ use henad_compute::entry::ModelState;
 use henad_compute::fault::FaultSink;
 use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
 use henad_compute::gpu::stepping;
+use henad_compute::simulation::RunSetup;
 use henad_compute::snapshot::Snapshot;
 use henad_core::action::{Fire, Schedule};
 use henad_core::explore::design::DesignKind;
@@ -245,7 +247,7 @@ fn a_replayed_run_from_a_result_set_matches_its_row() {
     for recorded in set.runs() {
         let outcome = &recorded.outcome;
         assert_eq!(outcome.status, RunStatus::Ok);
-        let replay = set.replay(&sir, outcome.run.run_id).expect("the run replays");
+        let replay = set.replay(sir.schema(), outcome.run.run_id).expect("the run replays");
         assert_eq!(replay.ticks, outcome.ticks);
         let Ok(ModelState::Cpu(state)) = sir.build(&replay.params, Some(replay.seed), None) else {
             panic!("SIR builds on the CPU");
@@ -298,7 +300,9 @@ fn a_replayed_gpu_run_from_a_result_set_matches_its_row() {
     for recorded in set.runs() {
         let outcome = &recorded.outcome;
         assert_eq!(outcome.status, RunStatus::Ok, "{:?}", outcome.note);
-        let replay = set.replay(&gpu_sir, outcome.run.run_id).expect("the run replays");
+        let replay = set
+            .replay(gpu_sir.schema(), outcome.run.run_id)
+            .expect("the run replays");
         let Ok(ModelState::Gpu(state)) = gpu_sir.build(&replay.params, Some(replay.seed), Some(&ctx)) else {
             panic!("gpu_sir builds on the GPU");
         };
@@ -318,5 +322,74 @@ fn a_replayed_gpu_run_from_a_result_set_matches_its_row() {
             "run {}: the live loop ends on its row's series",
             outcome.run.run_id
         );
+    }
+}
+
+/// Checks that a [`Simulation`] stepped from a planned run's replay samples the series the run cursor wrote, actions
+/// at tick 0, mid-run and on the last tick included.
+///
+/// The simulation samples every fifth tick through `run_sampled`, and the sweep's own sampler keeps the ticks the
+/// sweep samples, from the warm-up on.
+#[test]
+fn a_simulation_follows_the_run_cursor() {
+    let sir = entry("sir", None);
+    let mut spec = SweepSpec::new("sir");
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32"), ("recovery_rate", "0.05")]);
+    spec.run.warmup = 5;
+    spec.run.steps = 26;
+    spec.run.replicates = 2;
+    spec.measure.stats_every = 5;
+    spec.measure.series_every = 5;
+    spec.seeds.root = 4;
+    spec.actions = vec![
+        ActionSpec {
+            name: "wave".to_owned(),
+            ..ActionSpec::new("seed_outbreak", 0)
+        },
+        ActionSpec {
+            name: "last".to_owned(),
+            ..ActionSpec::new("seed_outbreak", 31)
+        },
+    ];
+    spec.blocks = vec![BlockSpec {
+        design: DesignKind::Factorial,
+        factors: vec![FactorSpec::action("wave", values(&["0", "12"]))],
+        design_seed: None,
+    }];
+    let (plan, measure) = planned(&sir, None, &spec);
+    let mut outcomes = Collected::default();
+    run_plan(&sir, None, &plan, &measure, lanes(1, 1), &mut outcomes);
+
+    let sample_ticks: Vec<u64> = measure.sample_ticks().collect();
+    assert_eq!(
+        sample_ticks,
+        [5, 10, 15, 20, 25, 30, 31],
+        "the last tick is off the sampling boundary"
+    );
+    for outcome in &outcomes.0 {
+        let run_id = outcome.run.run_id;
+        assert_eq!(outcome.status, RunStatus::Ok, "run {run_id}");
+        let replay = plan.replay(run_id).expect("the run is planned");
+        let mut simulation = RunSetup::from_replay(&sir, &replay)
+            .expect("the replay fits SIR")
+            .build(None)
+            .expect("SIR builds");
+        let mut sampler = Sampler::new(Arc::clone(&measure));
+        let flow = simulation
+            .run_sampled(replay.ticks, 5, |sample| {
+                if sample_ticks.contains(&sample.tick()) {
+                    let stops = sampler
+                        .push(sample.tick(), sample.entries())
+                        .expect("the stats fit the columns");
+                    assert!(!stops, "the spec has no stop condition");
+                }
+                ControlFlow::<()>::Continue(())
+            })
+            .expect("SIR steps");
+        assert!(flow.is_continue());
+        assert_eq!(simulation.tick(), replay.ticks);
+        let followed = sampler.finish();
+        assert_eq!(followed.series, outcome.series, "run {run_id}");
+        assert_eq!(followed.reducers, outcome.reducers, "run {run_id}");
     }
 }

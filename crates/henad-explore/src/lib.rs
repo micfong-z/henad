@@ -1,5 +1,7 @@
 //! Parameter sweeps and searches over Henad models.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod benchmark;
 pub mod cursor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod device;

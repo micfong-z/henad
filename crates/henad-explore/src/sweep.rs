@@ -1,6 +1,9 @@
 //! Sweeps that plan a spec against a model, run every planned run and write the results to a directory or to memory.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::borrow::Cow;
 use std::fmt;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,20 +12,26 @@ use std::time::Duration;
 use web_time::Instant;
 
 use henad_compute::entry::ModelEntry;
-use henad_compute::fault::install_panic_hook;
 use henad_compute::gpu::GpuContext;
-use henad_compute::runtime_info::RuntimeInfo;
 use henad_core::explore::measure::{MeasureError, MeasurePlan};
-use henad_core::explore::outcome::{PlannedRun, RunOutcome};
+use henad_core::explore::outcome::PlannedRun;
+#[cfg(not(target_arch = "wasm32"))]
+use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::{Plan, PlanError, PlanWarning, PlannedBlock, Shard};
 use henad_core::explore::search::SearchReport;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::metadata::Backend;
 
 use crate::exec::{
-    ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionError, ExecutionLayout, Executor, RunRequest, RunSink,
-    SweepControl, choose_layout, gpu_memory_budget,
+    ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionError, ExecutionLayout, SweepControl, choose_layout,
+    gpu_memory_budget,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::exec::{Executor, RunRequest, RunSink};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::handle::SweepOutput;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::output::OutputWriter;
 use crate::output::manifest::{
     FORMAT, FORMAT_VERSION, Manifest, ManifestBlock, ManifestColumns, ManifestDesignTable, ManifestEngine,
     ManifestExecution, ManifestMode, ManifestModel, ManifestPlan, ManifestRuntime, ManifestSearch, ManifestSeeds,
@@ -31,10 +40,12 @@ use crate::output::manifest::{
 use crate::output::memory::SweepFiles;
 use crate::output::resume::{ResumeError, ResumeScan};
 use crate::output::runs_csv::column_names;
-use crate::output::{OutputDir, OutputError, OutputWriter, runs_csv, series_csv};
+use crate::output::{OutputDir, OutputError, runs_csv, series_csv};
 use crate::probe::{CapacityError, ProbeError, ProbeReport, TimedProbe, check_capacity};
-use crate::progress::{Progress, ProgressEvent, ProgressMeter};
-use crate::schema::{backend_name, model_schema, schema_json};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::progress::ProgressMeter;
+use crate::progress::{Progress, ProgressEvent};
+use crate::schema::{backend_name, schema_json};
 use crate::search_run::{SearchOutline, SearchPlanError};
 use crate::spec_file::{DesignTableFile, ExecutionTable, SpecFile};
 
@@ -51,7 +62,7 @@ pub struct SpecSource {
 
 impl SpecSource {
     /// Returns the source of `file`, read from `path` as the text `toml`.
-    pub fn loaded(path: &Path, toml: String, file: &SpecFile) -> Self {
+    pub(crate) fn loaded(path: &Path, toml: String, file: &SpecFile) -> Self {
         Self {
             path: Some(path.to_owned()),
             toml: Some(toml),
@@ -110,10 +121,12 @@ pub struct Provenance {
 }
 
 /// Settings of a sweep that never change its results.
-#[derive(Debug, Clone, Default)]
+///
+/// [`Self::new`] returns the defaults, and a caller sets the other fields by assignment. A spec file's `[execution]`
+/// table goes in through [`Self::apply_execution`], before the caller's own settings.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SweepOptions {
-    /// Directory the results go in. A dry run needs none.
-    pub output_dir: Option<PathBuf>,
     pub concurrency: Concurrency,
     /// Bytes of host memory the live runs can hold together, `None` for no limit. The lanes are sized from the probed
     /// run, and a probed run larger than the budget leaves one lane.
@@ -121,8 +134,6 @@ pub struct SweepOptions {
     /// Cap on the bytes of device memory the live GPU runs hold together, `None` for the device's largest buffer. A
     /// run larger than the cap runs alone.
     pub gpu_memory: Option<u64>,
-    /// Whether to plan and probe the sweep and stop there, writing nothing.
-    pub dry_run: bool,
     /// Switch that pauses or aborts the sweep from another thread.
     pub control: SweepControl,
     /// Share of the plan's runs the sweep runs.
@@ -134,7 +145,39 @@ pub struct SweepOptions {
     /// Whether a resume runs again the runs that ended on a fault. A run that timed out always runs again.
     pub retry_failed: bool,
     /// Table each run in progress is listed in, `None` when nothing watches the runs.
-    pub active_runs: Option<ActiveRuns>,
+    pub(crate) active_runs: Option<ActiveRuns>,
+    /// Spec file the sweep was read from, for the manifest.
+    pub spec_source: SpecSource,
+    /// Build of the host and its command line, for the manifest.
+    pub provenance: Provenance,
+}
+
+impl SweepOptions {
+    /// Returns the options at their defaults, recording `provenance` in every manifest the sweep writes.
+    pub fn new(provenance: Provenance) -> Self {
+        Self {
+            concurrency: Concurrency::Auto,
+            memory_budget: None,
+            gpu_memory: None,
+            control: SweepControl::new(),
+            shard: Shard::WHOLE,
+            resume: false,
+            retry_failed: false,
+            active_runs: None,
+            spec_source: SpecSource::default(),
+            provenance,
+        }
+    }
+
+    /// Copies the concurrency and memory settings of a spec's `[execution]` table into the options.
+    ///
+    /// Note that this overwrites all three. A caller with settings of its own applies the table first and its own
+    /// settings after it.
+    pub fn apply_execution(&mut self, execution: &ExecutionTable) {
+        self.concurrency = execution.concurrent;
+        self.memory_budget = execution.memory;
+        self.gpu_memory = execution.gpu_memory;
+    }
 }
 
 /// Size and layout of a planned sweep or search.
@@ -256,8 +299,6 @@ pub enum ExploreError {
     Probe(ProbeError),
     /// Reducers that do not bind to the columns of the probe build.
     Measure(MeasureError),
-    /// A sweep with no output directory that is not a dry run.
-    NoOutput,
     /// A directory the sweep cannot resume into, for the reason inside.
     Resume(ResumeError),
     /// Results that cannot be written.
@@ -266,6 +307,9 @@ pub enum ExploreError {
     Execution(ExecutionError),
     /// A search spec the model or the options refuse, for the reason inside.
     Search(SearchPlanError),
+    /// A GPU model handed no device, on a machine where none can be acquired.
+    #[cfg(not(target_arch = "wasm32"))]
+    Device(crate::device::DeviceError),
 }
 
 impl fmt::Display for ExploreError {
@@ -275,11 +319,12 @@ impl fmt::Display for ExploreError {
             Self::Capacity(_) => f.write_str("the sweep does not fit this GPU"),
             Self::Probe(_) => f.write_str("cannot probe the model"),
             Self::Measure(_) => f.write_str("cannot bind the reducers to the model's stat columns"),
-            Self::NoOutput => f.write_str("a sweep needs an output directory unless it is a dry run"),
             Self::Resume(_) => f.write_str("cannot resume the sweep"),
             Self::Output(_) => f.write_str("cannot write the results"),
             Self::Execution(_) => f.write_str("cannot run the sweep"),
             Self::Search(_) => f.write_str("cannot plan the search"),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Device(_) => f.write_str("cannot acquire a GPU device for the sweep"),
         }
     }
 }
@@ -291,11 +336,12 @@ impl std::error::Error for ExploreError {
             Self::Capacity(error) => Some(error),
             Self::Probe(error) => Some(error),
             Self::Measure(error) => Some(error),
-            Self::NoOutput => None,
             Self::Resume(error) => Some(error),
             Self::Output(error) => Some(error),
             Self::Execution(error) => Some(error),
             Self::Search(error) => Some(error),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Device(error) => Some(error),
         }
     }
 }
@@ -348,107 +394,177 @@ impl From<SearchPlanError> for ExploreError {
     }
 }
 
-/// Plans `spec` against `entry`, runs the planned runs of `options.shard` and writes the results to
-/// `options.output_dir`.
+/// Runs the sweep, or the search a spec with a `[search]` table describes, and blocks until it ends. Native only.
 ///
-/// The sweep plans the spec, checks every config against the device, probes the first config without a fault and
-/// the last config, and chooses a layout from the larger probe. It then writes the manifest with status `running`,
+/// A sweep plans the spec, checks every config against the device, probes the first config without a fault and the
+/// last config, and chooses a layout from the larger probe. It then writes the manifest with status `running`,
 /// streams each run to `runs.csv` and `series.csv` in plan order, rebuilds `summary.csv` from `runs.csv`, and
-/// replaces the manifest with its final status. A dry run stops after the probe and writes nothing.
+/// replaces the manifest with its final status. Runs reach the output in plan order whatever order they finish in,
+/// and a search's in the order it asks for them.
 ///
-/// With `options.resume`, a directory holding runs of the same plan keeps the runs its [`ResumeScan`] keeps, and
-/// the sweep runs the rest. Both tables then list every run in order of its id, as a sweep run in one go would.
+/// `gpu` is the device a GPU model steps on. A GPU model handed no device gets one acquired for its
+/// [`ModelEntry::gpu_needs`], and the manifest records the adapter of the device the sweep steps on. A bare
+/// [`SweepSpec`] carries no execution settings. [`LoadedSpec`](crate::spec_file::LoadedSpec) keeps a spec file's
+/// `[execution]` table for [`SweepOptions::apply_execution`].
 ///
-/// `gpu` is the device a GPU model steps on, and `runtime` describes it. `source` and `provenance` go into the
-/// manifest as they are. A run that faults is recorded with its status, and the sweep carries on. A sweep that fails
-/// once its manifest is written marks the manifest `failed` when it can.
+/// With `options.resume`, a directory holding runs of the same plan keeps the runs its [`ResumeScan`] keeps, and the
+/// sweep runs the rest. Both tables then list every run in order of its id, as a sweep run in one go would. A run
+/// that faults is recorded with its status, and the sweep carries on. A sweep that fails once its manifest is written
+/// marks the manifest `failed` when it can.
 ///
 /// # Errors
 ///
-/// Returns [`ExploreError`] when the spec cannot be planned, a config does not fit the device, the probe build
-/// fails, the output directory holds results and is not resumed, the directory cannot be resumed, the results cannot
-/// be written, or a batch cannot run.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the model and device, the spec and its record, and the host's settings"
-)]
-pub fn run_sweep(
-    entry: &ModelEntry,
+/// Returns [`ExploreError`] when no device can be acquired, the spec cannot be planned, a config does not fit the
+/// device, the probe build fails, the output directory holds results and is not resumed, the directory cannot be
+/// resumed, the results cannot be written, or a batch cannot run.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_spec(
+    model: &ModelEntry,
     gpu: Option<&GpuContext>,
-    runtime: Option<&RuntimeInfo>,
     spec: &SweepSpec,
-    source: &SpecSource,
-    provenance: &Provenance,
+    output: SweepOutput,
     options: &SweepOptions,
     progress: &mut dyn Progress,
-) -> Result<SweepReport, ExploreError> {
-    install_panic_hook();
-    let output_dir = match (options.output_dir.as_deref(), options.dry_run) {
-        (_, true) => None,
-        (Some(output_dir), false) => Some(output_dir),
-        (None, false) => return Err(ExploreError::NoOutput),
+) -> Result<SweepRecord, ExploreError> {
+    use crate::search_run::{run_search_in_memory, run_search_into_directory};
+
+    let device = sweep_device(model, gpu)?;
+    let gpu = device.as_deref();
+    let runtime = ManifestRuntime::new(gpu.and_then(GpuContext::runtime_info));
+    let dir = match output {
+        SweepOutput::Memory => None,
+        SweepOutput::Directory(dir) => Some(dir),
     };
-    let runtime = ManifestRuntime::new(runtime);
+    let folder = dir.as_deref();
     let inputs = SweepInputs {
-        entry,
+        entry: model,
         gpu,
         runtime: &runtime,
         spec,
-        source,
-        provenance,
+        source: &options.spec_source,
+        provenance: &options.provenance,
         options,
+        folder,
+        dry_run: false,
     };
-    let preparation = SweepPreparation::new(&inputs, None, None)?;
-    preparation.announce(provenance, progress);
-    let Some(output_dir) = output_dir else {
-        let report = preparation.report(SweepEnd::Planned, ResultCounts::default(), None);
-        progress.report(&ProgressEvent::Ended(&report));
-        return Ok(report);
-    };
-    let record = preparation.write_directory(&inputs, output_dir, progress)?;
-    progress.report(&ProgressEvent::Ended(&record.report));
-    Ok(record.report)
+    match (folder, spec.search.is_some()) {
+        (None, false) => run_in_memory(&inputs, None, progress),
+        (Some(dir), false) => run_into_directory(&inputs, None, dir, progress),
+        (None, true) => run_search_in_memory(&inputs, None, progress),
+        (Some(dir), true) => run_search_into_directory(&inputs, None, dir, progress),
+    }
 }
 
-/// Runs `plan`, the plan of `inputs.spec`, into the directory `output_dir` as [`run_sweep`] does, and returns its
-/// record.
+/// Plans `spec` and probes its configs as `--dry-run` does, writing nothing. Native only.
+///
+/// A GPU model handed no device gets one acquired for its [`ModelEntry::gpu_needs`], since a probe builds the model.
+/// With `folder` and without `options.resume`, refuses a folder that holds results, as `--out` does. With both, reads
+/// the folder as a resume would, counts the runs it would skip and run, and compares the recorded builds.
 ///
 /// # Errors
 ///
-/// Returns the errors of [`run_sweep`].
+/// Returns [`ExploreError`] when no device can be acquired, the spec cannot be planned, a config does not fit the
+/// device, the probe build fails, `folder` holds results and is not resumed, or `folder` cannot be resumed.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn plan_spec(
+    model: &ModelEntry,
+    gpu: Option<&GpuContext>,
+    spec: &SweepSpec,
+    folder: Option<&Path>,
+    options: &SweepOptions,
+    progress: &mut dyn Progress,
+) -> Result<SweepReport, ExploreError> {
+    use crate::search_run::SearchPreparation;
+
+    let device = sweep_device(model, gpu)?;
+    let gpu = device.as_deref();
+    let runtime = ManifestRuntime::new(gpu.and_then(GpuContext::runtime_info));
+    let inputs = SweepInputs {
+        entry: model,
+        gpu,
+        runtime: &runtime,
+        spec,
+        source: &options.spec_source,
+        provenance: &options.provenance,
+        options,
+        folder,
+        dry_run: true,
+    };
+    let report = if spec.search.is_some() {
+        let preparation = SearchPreparation::new(&inputs, None, None)?;
+        preparation.announce(&options.provenance, progress);
+        preparation.report(SweepEnd::Planned, ResultCounts::default(), None)
+    } else {
+        let preparation = SweepPreparation::new(&inputs, None, None)?;
+        preparation.announce(&options.provenance, progress);
+        preparation.report(SweepEnd::Planned, ResultCounts::default(), None)
+    };
+    progress.report(&ProgressEvent::Ended(&report));
+    Ok(report)
+}
+
+/// Returns the device a sweep of `entry` steps on: `gpu` for a GPU model, or a device acquired for its needs when it
+/// is handed none.
+///
+/// Returns `None` for a CPU model, whatever `gpu` is. A CPU sweep steps on no device, and its manifest records no
+/// adapter.
+///
+/// # Errors
+///
+/// Returns [`ExploreError::Device`] when a GPU model needs a device and none can be acquired.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn sweep_device<'a>(
+    entry: &ModelEntry,
+    gpu: Option<&'a GpuContext>,
+) -> Result<Option<Cow<'a, GpuContext>>, ExploreError> {
+    match (entry.gpu_needs(), gpu) {
+        (None, _) => Ok(None),
+        (Some(_), Some(ctx)) => Ok(Some(Cow::Borrowed(ctx))),
+        (Some(needs), None) => {
+            let ctx = crate::device::acquire_headless(needs).map_err(ExploreError::Device)?;
+            Ok(Some(Cow::Owned(ctx)))
+        }
+    }
+}
+
+/// Runs the plan of `inputs.spec` into the directory `output_dir`, as [`run_spec`] does, and returns its record.
+///
+/// `plan`, when given, is the plan of `inputs.spec`, and the spec is planned here otherwise.
+///
+/// # Errors
+///
+/// Returns the errors of [`run_spec`].
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_into_directory(
     inputs: &SweepInputs<'_>,
-    plan: Arc<Plan>,
+    plan: Option<Arc<Plan>>,
     output_dir: &Path,
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
-    install_panic_hook();
-    let preparation = SweepPreparation::new(inputs, Some(plan), None)?;
+    let preparation = SweepPreparation::new(inputs, plan, None)?;
     preparation.announce(inputs.provenance, progress);
     let record = preparation.write_directory(inputs, output_dir, progress)?;
     progress.report(&ProgressEvent::Ended(&record.report));
     Ok(record)
 }
 
-/// Runs `plan`, the plan of `inputs.spec`, holding its four files in memory, and returns its record.
+/// Runs the plan of `inputs.spec`, holding its four files in memory, and returns its record.
 ///
-/// The files hold the bytes a directory would. The caller's `inputs.options` names no output directory and no
-/// resume.
+/// `plan`, when given, is the plan of `inputs.spec`, and the spec is planned here otherwise. The files hold the bytes
+/// a directory would. The caller's `inputs` name no folder.
 ///
 /// # Errors
 ///
-/// Returns the errors of [`run_sweep`] that do not come from a directory.
+/// Returns the errors of [`run_spec`] that do not come from a directory.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_in_memory(
     inputs: &SweepInputs<'_>,
-    plan: Arc<Plan>,
+    plan: Option<Arc<Plan>>,
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
     use crate::output::memory::memory_writer;
 
-    install_panic_hook();
-    let preparation = SweepPreparation::new(inputs, Some(plan), None)?;
+    let preparation = SweepPreparation::new(inputs, plan, None)?;
     preparation.announce(inputs.provenance, progress);
     let mut manifest = preparation.manifest(inputs)?;
     let writer = memory_writer(
@@ -479,6 +595,10 @@ pub(crate) struct SweepInputs<'a> {
     pub(crate) source: &'a SpecSource,
     pub(crate) provenance: &'a Provenance,
     pub(crate) options: &'a SweepOptions,
+    /// Directory the results go in or a dry run reads, `None` for a sweep held in memory.
+    pub(crate) folder: Option<&'a Path>,
+    /// Whether the sweep is planned and probed and stops there, writing nothing.
+    pub(crate) dry_run: bool,
 }
 
 /// A sweep planned, checked and probed, with its layout chosen.
@@ -506,22 +626,22 @@ impl SweepPreparation {
         probe: Option<TimedProbe>,
     ) -> Result<Self, ExploreError> {
         let (entry, gpu, options) = (inputs.entry, inputs.gpu, inputs.options);
-        if inputs.spec.search.is_some() {
-            return Err(ExploreError::Search(SearchPlanError::NotASweep));
-        }
+        debug_assert!(
+            inputs.spec.search.is_none(),
+            "a spec with a [search] table runs as a search"
+        );
         let (started, started_unix_ms, probe) = match probe {
             Some(timed) => (timed.started, timed.started_unix_ms, Some(timed.report)),
             None => (Instant::now(), now_unix_ms(), None),
         };
         let plan = match plan {
             Some(plan) => plan,
-            None => Arc::new(inputs.spec.plan(&model_schema(entry))?),
+            None => Arc::new(inputs.spec.plan(&entry.schema())?),
         };
-        let resume_dir = options
-            .output_dir
-            .as_deref()
+        let resume_dir = inputs
+            .folder
             .filter(|output_dir| options.resume && OutputDir::holds_results(output_dir));
-        if let (None, Some(output_dir)) = (resume_dir, &options.output_dir) {
+        if let (None, Some(output_dir)) = (resume_dir, inputs.folder) {
             OutputDir::check_free(output_dir)?;
         }
         if let Some(ctx) = gpu {
@@ -580,7 +700,7 @@ impl SweepPreparation {
                 .map(|column| measure.columns().name(column).to_owned())
                 .collect(),
             reducer_columns: measure.reducers().names().to_vec(),
-            dry_run: options.dry_run,
+            dry_run: inputs.dry_run,
             search: None,
         };
         Ok(Self {
@@ -635,6 +755,7 @@ impl SweepPreparation {
 
     /// Writes the manifest with status `running`, runs every pending run into `output_dir` and replaces the manifest
     /// with the sweep's final status.
+    #[cfg(not(target_arch = "wasm32"))]
     fn write_directory(
         &self,
         inputs: &SweepInputs<'_>,
@@ -671,6 +792,7 @@ impl SweepPreparation {
     /// summary.
     ///
     /// Returns the end of the batch and the counts of the rows `runs.csv` holds.
+    #[cfg(not(target_arch = "wasm32"))]
     fn run_into(
         &self,
         dir: &OutputDir,
@@ -704,6 +826,7 @@ impl SweepPreparation {
     /// Runs every pending run and commits each to `writer` in plan order, reporting each to `progress`.
     ///
     /// Returns the end of the batch and the writer.
+    #[cfg(not(target_arch = "wasm32"))]
     fn run_pending<W: Write>(
         &self,
         inputs: &SweepInputs<'_>,
@@ -943,12 +1066,14 @@ pub(crate) fn finish_manifest(manifest: &mut Manifest, end: BatchEnd, counts: Re
 }
 
 /// Sink that writes each run to the output and reports the sweep's progress.
+#[cfg(not(target_arch = "wasm32"))]
 struct SweepSink<'s, W: Write> {
     writer: OutputWriter<W>,
     progress: &'s mut dyn Progress,
     meter: ProgressMeter,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<W: Write> RunSink for SweepSink<'_, W> {
     fn commit(&mut self, outcome: RunOutcome) -> io::Result<()> {
         self.writer.write_run(&outcome)?;
@@ -977,13 +1102,19 @@ mod tests {
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
 
-    use super::{ExploreError, SpecSource, SweepEnd, SweepOptions, SweepWarning, run_sweep};
+    use std::path::Path;
+
+    use henad_compute::entry::ModelEntry;
+
+    use super::{
+        ExploreError, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, SweepWarning, plan_spec, run_spec,
+    };
     use crate::exec::Concurrency;
+    use crate::handle::SweepOutput;
     use crate::output::manifest::{Manifest, ManifestStatus};
     use crate::output::{MANIFEST_FILE, OutputError, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
     use crate::probe::ProbeReport;
     use crate::progress::{NoProgress, Progress, ProgressEvent};
-    use crate::schema::model_schema;
     use crate::spec_file::SpecFile;
     use crate::tests::support::{ScratchDir, entry, provenance};
 
@@ -1025,12 +1156,27 @@ mod tests {
         spec
     }
 
-    fn options(output_dir: Option<PathBuf>, dry_run: bool) -> SweepOptions {
-        SweepOptions {
-            output_dir,
-            dry_run,
-            ..SweepOptions::default()
-        }
+    fn options() -> SweepOptions {
+        SweepOptions::new(provenance())
+    }
+
+    /// Runs `spec` over `entry` into `output_dir` with `options`, reporting to `progress`.
+    fn run_into(
+        entry: &ModelEntry,
+        spec: &SweepSpec,
+        output_dir: &Path,
+        options: &SweepOptions,
+        progress: &mut dyn Progress,
+    ) -> Result<SweepReport, ExploreError> {
+        run_spec(
+            entry,
+            None,
+            spec,
+            SweepOutput::Directory(output_dir.to_owned()),
+            options,
+            progress,
+        )
+        .map(|record| record.report)
     }
 
     #[test]
@@ -1038,14 +1184,12 @@ mod tests {
         let sir = entry("sir", None);
         let scratch = ScratchDir::new("dry-run");
         let mut progress = Recorded::default();
-        let report = run_sweep(
+        let report = plan_spec(
             &sir,
             None,
-            None,
             &small_sweep(),
-            &SpecSource::default(),
-            &provenance(),
-            &options(Some(scratch.path().to_owned()), true),
+            Some(scratch.path()),
+            &options(),
             &mut progress,
         )
         .expect("the dry run plans");
@@ -1058,19 +1202,62 @@ mod tests {
         assert_eq!((report.counts.rows, report.output_dir), (0, None));
         assert!(!scratch.path().exists(), "a dry run writes nothing");
         assert_eq!(progress.0, ["planned 4", "ended Planned"]);
+    }
 
-        let error = run_sweep(
-            &sir,
-            None,
-            None,
-            &small_sweep(),
-            &SpecSource::default(),
-            &provenance(),
-            &options(None, false),
-            &mut NoProgress,
-        )
-        .expect_err("no output directory");
-        assert!(matches!(error, ExploreError::NoOutput), "{error:?}");
+    /// Progress that keeps the outline a sweep announces.
+    #[derive(Default)]
+    struct Outlined(Option<SweepOutline>);
+
+    impl Progress for Outlined {
+        fn report(&mut self, event: &ProgressEvent<'_>) {
+            if let ProgressEvent::Planned(outline) = event {
+                self.0 = Some((*outline).clone());
+            }
+        }
+    }
+
+    /// Checks that a dry run plans what the sweep or search it stands for announces, a dry run's flag aside.
+    #[test]
+    fn plan_spec_matches_a_dry_run() {
+        let sir = entry("sir", None);
+        let scratch = ScratchDir::new("plan-spec");
+        let mut search = small_sweep();
+        search.blocks.clear();
+        search.search = Some(henad_core::explore::search::SearchSpec {
+            algorithm: henad_core::explore::search::SearchAlgorithm::Random,
+            max_evaluations: 4,
+            batch_size: 2,
+            objective: Some(henad_core::explore::search::Objective {
+                column: "Infected:max".to_owned(),
+                goal: henad_core::explore::search::Goal::Minimize,
+                aggregate: henad_core::explore::search::Aggregate::Mean,
+            }),
+            space: vec![FactorSpec::param(
+                "infection_rate",
+                LevelSpec::Range {
+                    min: 0.1,
+                    max: 0.5,
+                    step: None,
+                },
+            )],
+        });
+        for (name, spec) in [("sweep", small_sweep()), ("search", search)] {
+            let planned = plan_spec(&sir, None, &spec, None, &options(), &mut NoProgress).expect("the spec plans");
+            let mut announced = Outlined::default();
+            let report =
+                run_into(&sir, &spec, &scratch.path().join(name), &options(), &mut announced).expect("the spec runs");
+            assert_eq!(report.end, SweepEnd::Complete, "{name}");
+            let announced = announced.0.expect("a sweep announces its outline");
+            assert!(planned.outline.dry_run && !announced.dry_run, "{name}");
+            assert_eq!(
+                SweepOutline {
+                    dry_run: false,
+                    ..planned.outline
+                },
+                announced,
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -1085,24 +1272,13 @@ mod tests {
         spec.run.replicates = 2;
         let two_lanes = SweepOptions {
             concurrency: Concurrency::Fixed(NonZeroUsize::new(2).expect("2 is above 0")),
-            dry_run: true,
-            ..SweepOptions::default()
+            ..options()
         };
-        let report = run_sweep(
-            &ants,
-            None,
-            None,
-            &spec,
-            &SpecSource::default(),
-            &provenance(),
-            &two_lanes,
-            &mut NoProgress,
-        )
-        .expect("the dry run plans");
+        let report = plan_spec(&ants, None, &spec, None, &two_lanes, &mut NoProgress).expect("the dry run plans");
         let layout = report.outline.layout;
         assert_eq!(layout.cpu_lanes, 2);
 
-        let plan = spec.plan(&model_schema(&ants)).expect("a valid spec");
+        let plan = spec.plan(&ants.schema()).expect("a valid spec");
         let probe = ProbeReport::for_plan(&ants, None, &plan).expect("ants builds");
         let lane = probe
             .rebuilt_on(&ants, layout.threads_per_lane)
@@ -1126,21 +1302,10 @@ mod tests {
             }];
             let one_lane = SweepOptions {
                 concurrency: Concurrency::Fixed(NonZeroUsize::MIN),
-                dry_run: true,
-                ..SweepOptions::default()
+                ..options()
             };
-            let report = run_sweep(
-                &life,
-                None,
-                None,
-                &spec,
-                &SpecSource::default(),
-                &provenance(),
-                &one_lane,
-                &mut NoProgress,
-            )
-            .expect("the dry run plans");
-            let plan = spec.plan(&model_schema(&life)).expect("a valid spec");
+            let report = plan_spec(&life, None, &spec, None, &one_lane, &mut NoProgress).expect("the dry run plans");
+            let plan = spec.plan(&life.schema()).expect("a valid spec");
             let wide = usize::from(widths[0] == "16");
             let run = plan.run(wide as u64).expect("each config has a run");
             let params = &plan.config(run.config_id).expect("the run's config").params;
@@ -1160,18 +1325,11 @@ mod tests {
             tables: Vec::new(),
         };
         let mut progress = Recorded::default();
-        let sweep_options = options(Some(scratch.path().to_owned()), false);
-        let report = run_sweep(
-            &sir,
-            None,
-            None,
-            &spec,
-            &source,
-            &provenance(),
-            &sweep_options,
-            &mut progress,
-        )
-        .expect("the sweep runs");
+        let sweep_options = SweepOptions {
+            spec_source: source.clone(),
+            ..options()
+        };
+        let report = run_into(&sir, &spec, scratch.path(), &sweep_options, &mut progress).expect("the sweep runs");
         assert_eq!(report.end, SweepEnd::Complete);
         assert_eq!(report.output_dir.as_deref(), Some(scratch.path()));
         assert_eq!(
@@ -1206,17 +1364,8 @@ mod tests {
             "fixed values come back by id"
         );
 
-        let again = run_sweep(
-            &sir,
-            None,
-            None,
-            &spec,
-            &source,
-            &provenance(),
-            &sweep_options,
-            &mut NoProgress,
-        )
-        .expect_err("the directory holds results");
+        let again = run_into(&sir, &spec, scratch.path(), &sweep_options, &mut NoProgress)
+            .expect_err("the directory holds results");
         assert!(
             matches!(again, ExploreError::Output(OutputError::HoldsResults { .. })),
             "{again:?}"
@@ -1227,19 +1376,10 @@ mod tests {
     fn an_aborted_sweep_says_so_and_keeps_its_headers() {
         let sir = entry("sir", None);
         let scratch = ScratchDir::new("aborted");
-        let sweep_options = options(Some(scratch.path().to_owned()), false);
+        let sweep_options = options();
         sweep_options.control.abort();
-        let report = run_sweep(
-            &sir,
-            None,
-            None,
-            &small_sweep(),
-            &SpecSource::default(),
-            &provenance(),
-            &sweep_options,
-            &mut NoProgress,
-        )
-        .expect("an aborted sweep is not an error");
+        let report = run_into(&sir, &small_sweep(), scratch.path(), &sweep_options, &mut NoProgress)
+            .expect("an aborted sweep is not an error");
         assert_eq!((report.end, report.counts.rows), (SweepEnd::Aborted, 0));
         let text = std::fs::read_to_string(scratch.path().join(MANIFEST_FILE)).expect("the manifest is written");
         let manifest: Manifest = serde_json::from_str(&text).expect("the manifest reads back");

@@ -15,9 +15,7 @@ use crate::output::read::ReadError;
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::progress::{Progress, ProgressEvent};
 use crate::result_set::{ResultReplayError, ResultSet, ResultSetError, read_directory_series};
-use crate::schema::model_schema;
-use crate::sweep::SweepOptions;
-use crate::tests::support::{ScratchDir, entry, sweep_with};
+use crate::tests::support::{ScratchDir, entry, sweep_options, sweep_with};
 
 fn values(raw: &[&str]) -> LevelSpec {
     LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
@@ -69,12 +67,16 @@ fn run_sir_sweep(dir: &Path) -> Vec<RunOutcome> {
 
 /// Runs `spec` over SIR into `dir` and returns its committed outcomes.
 fn run_sweep(dir: &Path, spec: &SweepSpec) -> Vec<RunOutcome> {
-    let options = SweepOptions {
-        output_dir: Some(dir.to_owned()),
-        ..SweepOptions::default()
-    };
     let mut outcomes = Outcomes::default();
-    sweep_with(&entry("sir", None), None, spec, &options, &mut outcomes).expect("the sweep runs");
+    sweep_with(
+        &entry("sir", None),
+        None,
+        spec,
+        dir,
+        &sweep_options(false),
+        &mut outcomes,
+    )
+    .expect("the sweep runs");
     outcomes.0
 }
 
@@ -389,20 +391,24 @@ fn a_result_set_replays_each_run_as_its_plan_does() {
     run_sir_sweep(scratch.path());
     let set = ResultSet::open_dir(scratch.path(), usize::MAX).expect("the directory reads");
     let sir = entry("sir", None);
-    assert!(set.schema_matches(&sir));
-    assert!(!set.schema_matches(&entry("game_of_life", None)));
+    assert!(set.schema_matches(sir.schema()));
+    assert!(!set.schema_matches(entry("game_of_life", None).schema()));
 
-    let plan = sir_spec().plan(&model_schema(&sir)).expect("a valid spec");
-    assert_eq!(set.plan(&sir).as_ref(), Ok(&plan));
+    let plan = sir_spec().plan(&sir.schema()).expect("a valid spec");
+    assert_eq!(set.plan(sir.schema()).as_ref(), Ok(&plan));
     for run_id in 0..6 {
-        assert_eq!(set.replay(&sir, run_id).ok(), plan.replay(run_id), "run {run_id}");
+        assert_eq!(
+            set.replay(sir.schema(), run_id).ok(),
+            plan.replay(run_id),
+            "run {run_id}"
+        );
     }
     assert!(matches!(
-        set.replay(&sir, 6),
+        set.replay(sir.schema(), 6),
         Err(ResultReplayError::UnknownRun { run_id: 6 })
     ));
     assert!(matches!(
-        set.replay(&entry("game_of_life", None), 0),
+        set.replay(entry("game_of_life", None).schema(), 0),
         Err(ResultReplayError::Plan(_))
     ));
 }
@@ -429,9 +435,9 @@ fn a_sweep_replay_refuses_a_row_of_another_sweep() {
     for run_id in 0..6 {
         let position = run_id as usize;
         assert_eq!(mixed.runs()[position].outcome.run, own.runs()[position].outcome.run);
-        assert!(own.replay(&sir, run_id).is_ok(), "run {run_id}");
+        assert!(own.replay(sir.schema(), run_id).is_ok(), "run {run_id}");
         assert!(
-            matches!(mixed.replay(&sir, run_id), Err(ResultReplayError::Mismatch { run_id: id }) if id == run_id),
+            matches!(mixed.replay(sir.schema(), run_id), Err(ResultReplayError::Mismatch { run_id: id }) if id == run_id),
             "run {run_id}"
         );
     }

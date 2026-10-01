@@ -205,8 +205,8 @@ impl Schedule {
     /// `start + 1..=start + count`. A run of no steps fires nothing under either rule.
     pub fn fire_ticks(&self, start: u64, count: u64, fire: Fire) -> Vec<u64> {
         let window = match fire {
-            Fire::BeforeStep => start..start + count,
-            Fire::AfterStep => start + 1..start + count + 1,
+            Fire::BeforeStep => start..start.saturating_add(count),
+            Fire::AfterStep => start.saturating_add(1)..start.saturating_add(count).saturating_add(1),
         };
         let mut ticks: Vec<u64> = self
             .entries

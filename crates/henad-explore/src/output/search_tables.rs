@@ -280,7 +280,7 @@ fn write_generation(dest: &mut impl Write, generation: &GenerationSummary) -> io
 /// # Errors
 ///
 /// Returns the error of a write or the flush.
-pub fn write_ranking<W: Write>(
+pub(crate) fn write_ranking<W: Write>(
     mut dest: W,
     ranking: &[RankingEntry],
     configs: &BTreeMap<u64, Config>,
@@ -315,7 +315,7 @@ pub fn write_ranking<W: Write>(
 /// # Errors
 ///
 /// Returns the error of a write or the flush.
-pub fn write_archive<W: Write>(
+pub(crate) fn write_archive<W: Write>(
     mut dest: W,
     settings: &PatternSpaceSettings,
     archive: &[ArchiveEntry],
@@ -704,9 +704,7 @@ mod tests {
     use crate::output::read::ReadError;
     use crate::progress::{Progress, ProgressEvent};
     use crate::result_set::ResultSet;
-    use crate::search_run::run_search;
-    use crate::sweep::{SpecSource, SweepOptions};
-    use crate::tests::support::{ScratchDir, provenance};
+    use crate::tests::support::{ScratchDir, sweep_options, sweep_with};
 
     /// Model whose parameters share their ids with the columns `evaluations.csv` writes after a config.
     ///
@@ -833,23 +831,10 @@ mod tests {
             ),
         ] {
             let output_dir = scratch.path().join(name);
-            let options = SweepOptions {
-                output_dir: Some(output_dir.clone()),
-                ..SweepOptions::default()
-            };
             let mut recorder = HistoryRecorder::default();
             let spec = trailing_names_search(algorithm);
-            run_search(
-                &entry,
-                None,
-                None,
-                &spec,
-                &SpecSource::default(),
-                &provenance(),
-                &options,
-                &mut recorder,
-            )
-            .expect("the search runs");
+            sweep_with(&entry, None, &spec, &output_dir, &sweep_options(false), &mut recorder)
+                .expect("the search runs");
             let history = ResultSet::open_dir(&output_dir, usize::MAX)
                 .expect("the folder reads back")
                 .search_history()

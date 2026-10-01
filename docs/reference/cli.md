@@ -142,6 +142,11 @@ An edge whose end has no finite position, such as a reused slot the model has no
 The CLI never runs the app's spring layout, and a network model's points sit where the model placed them.
 `--export` works on CPU models only.
 
+Both exports step the model as a program does, through `henad_compute::simulation::Simulation`.
+`Simulation::write_state` writes the bytes `--export` writes, and `Simulation::run_sampled` takes the samples `--export-stats` writes.
+Tick 0's actions fire before the first step, so `--export --steps 0 --act seed_outbreak@0` writes the grid after the outbreak.
+A CPU model's run enters the worker pool once for all its steps and samples.
+
 For a CPU model, `--export-stats` prepares the model's view before each sample, as the app does before it publishes a snapshot.
 A stat computed during that preparation, such as Team Assembly's component stats, is then current in every row.
 Each sample also pays for the preparation, and `--stats-every` spaces the samples out.

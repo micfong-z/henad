@@ -16,17 +16,17 @@ use henad_core::explore::spec::SweepSpec;
 use henad_core::export::csv::parse_records;
 use henad_models::example_models;
 
-use henad_compute::fault::FaultSink;
+use henad_compute::fault::{FaultSink, install_panic_hook};
 
 use crate::device::acquire_headless;
 use crate::exec::{ActiveRun, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, RunSink, SweepControl};
+use crate::handle::SweepOutput;
 use crate::output::manifest::Manifest;
 use crate::output::runs_csv::{OUTCOME_COLUMNS, TIMING_COLUMNS};
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::probe::ProbeReport;
 use crate::progress::{NoProgress, Progress, ProgressEvent};
-use crate::schema::model_schema;
-use crate::sweep::{ExploreError, Provenance, SpecSource, SweepOptions, SweepReport, SweepWarning, run_sweep};
+use crate::sweep::{ExploreError, Provenance, SweepOptions, SweepReport, SweepWarning, plan_spec, run_spec};
 
 const REQUIRE_GPU: &str = "HENAD_REQUIRE_GPU";
 
@@ -141,6 +141,8 @@ pub fn provenance() -> Provenance {
 
 /// Runs `spec` over `entry` into `output_dir` at `concurrency`, reporting nowhere.
 ///
+/// The panic hook is installed first, as a host's `main` installs it, so a fault carries the site of its panic.
+///
 /// # Panics
 ///
 /// Panics when the sweep fails.
@@ -151,25 +153,14 @@ pub fn sweep(
     output_dir: &Path,
     concurrency: Concurrency,
 ) -> SweepReport {
-    let options = SweepOptions {
-        output_dir: Some(output_dir.to_owned()),
-        concurrency,
-        ..SweepOptions::default()
-    };
-    run_sweep(
-        entry,
-        gpu,
-        None,
-        spec,
-        &SpecSource::default(),
-        &provenance(),
-        &options,
-        &mut NoProgress,
-    )
-    .expect("the sweep runs")
+    let mut options = sweep_options(false);
+    options.concurrency = concurrency;
+    sweep_with(entry, gpu, spec, output_dir, &options, &mut NoProgress).expect("the sweep runs")
 }
 
-/// Runs `spec` over `entry` with `options`, reporting to `progress`.
+/// Runs `spec` over `entry` into `output_dir` with `options`, reporting to `progress`.
+///
+/// The panic hook is installed first, as in [`sweep`].
 ///
 /// # Errors
 ///
@@ -178,28 +169,35 @@ pub fn sweep_with(
     entry: &ModelEntry,
     gpu: Option<&GpuContext>,
     spec: &SweepSpec,
+    output_dir: &Path,
     options: &SweepOptions,
     progress: &mut dyn Progress,
 ) -> Result<SweepReport, ExploreError> {
-    run_sweep(
-        entry,
-        gpu,
-        None,
-        spec,
-        &SpecSource::default(),
-        &provenance(),
-        options,
-        progress,
-    )
+    install_panic_hook();
+    let output = SweepOutput::Directory(output_dir.to_owned());
+    run_spec(entry, gpu, spec, output, options, progress).map(|record| record.report)
 }
 
-/// Returns the options of a sweep into `output_dir`, resumed when `resume` is set.
-pub fn sweep_options(output_dir: &Path, resume: bool) -> SweepOptions {
-    SweepOptions {
-        output_dir: Some(output_dir.to_owned()),
-        resume,
-        ..SweepOptions::default()
-    }
+/// Plans `spec` over `entry` as a dry run reads `folder`, reporting to `progress`.
+///
+/// # Errors
+///
+/// Returns the error of the plan.
+pub fn dry_run(
+    entry: &ModelEntry,
+    spec: &SweepSpec,
+    folder: Option<&Path>,
+    options: &SweepOptions,
+    progress: &mut dyn Progress,
+) -> Result<SweepReport, ExploreError> {
+    plan_spec(entry, None, spec, folder, options, progress)
+}
+
+/// Returns the options of a sweep for this build, resumed when `resume` is set.
+pub fn sweep_options(resume: bool) -> SweepOptions {
+    let mut options = SweepOptions::new(provenance());
+    options.resume = resume;
+    options
 }
 
 /// Progress that keeps the ids of the committed runs and the warnings.
@@ -433,7 +431,7 @@ pub fn ticks_seen(active_runs: impl Fn() -> Vec<ActiveRun>) -> BTreeMap<u64, BTr
 ///
 /// Panics when the spec cannot be planned or the probe fails.
 pub fn planned(entry: &ModelEntry, gpu: Option<&GpuContext>, spec: &SweepSpec) -> (Plan, Arc<MeasurePlan>) {
-    let plan = spec.plan(&model_schema(entry)).expect("a valid spec");
+    let plan = spec.plan(&entry.schema()).expect("a valid spec");
     let probe = ProbeReport::for_plan(entry, gpu, &plan).expect("the probe builds");
     let measure =
         MeasurePlan::new(plan.run_settings(), plan.measure_settings(), probe.columns).expect("the columns bind");

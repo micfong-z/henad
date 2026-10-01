@@ -92,7 +92,8 @@ fn a_gpu_config_that_does_not_fit_is_refused_before_any_run() {
         &gpu_sir,
         Some(&ctx),
         &spec,
-        &sweep_options(scratch.path(), false),
+        scratch.path(),
+        &sweep_options(false),
         &mut progress,
     )
     .expect_err("a 6000 by 6000 grid passes the baseline's binding size");
@@ -350,7 +351,7 @@ fn a_gpu_fault_while_stepping_records_the_same_outcome_at_any_slice_size() {
 
 /// Checks that sampling a GPU run every tick or every tenth tick leaves it on the same trajectory.
 ///
-/// A sample encodes the snapshot passes between two batches of steps. Each case runs one model at each cadence and
+/// A sample encodes the stats passes between two batches of steps. Each case runs one model at each cadence and
 /// compares the rows at the ticks both sample. It also rebuilds the run, samples it along the same cadence and
 /// compares the view read back at the end. A model that declares it does not replay exactly, as `gpu_boids` does,
 /// has no case.
@@ -412,6 +413,12 @@ mod sampling_cadence_does_not_change_the_trajectory {
             stepping::run_steps(&mut *state, ctx, steps).expect("the steps run");
             assert!(!stepping::sample_stats(&mut *state, ctx).is_empty());
         }
+        // A sample records the stats passes alone, and the display pass of a snapshot draws the view read below.
+        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("henad_test_display"),
+        });
+        state.encode_snapshot_passes(&mut encoder);
+        ctx.queue.submit(Some(encoder.finish()));
         Trajectory {
             rows,
             view: view_bytes(&*state, ctx),
@@ -586,4 +593,40 @@ mod sampling_cadence_does_not_change_the_trajectory {
             &[("num_agents", "1000"), ("world_width", "64"), ("world_height", "64")],
         );
     }
+}
+
+/// Checks that a sweep records the adapter of the context it is handed for a GPU model, and none for a CPU model
+/// handed the same context, which steps on no device.
+#[test]
+fn a_sweep_records_the_adapter_of_the_context_it_steps_on() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
+    let adapter = ctx
+        .runtime_info()
+        .expect("a headless device carries its runtime info")
+        .adapter
+        .name
+        .clone();
+    let scratch = ScratchDir::new("sweep-adapter");
+    let gpu_dir = scratch.path().join("gpu");
+    sweep(
+        &entry("gpu_sir", Some(&ctx)),
+        Some(&ctx),
+        &gpu_sir_spec(),
+        &gpu_dir,
+        Concurrency::Auto,
+    );
+    let recorded = crate::tests::support::manifest(&gpu_dir).runtime.adapter;
+    assert_eq!(recorded, Some(adapter));
+
+    let mut cpu_spec = SweepSpec::new("sir");
+    cpu_spec.fixed = vec![
+        ("grid_width".to_owned(), "16".to_owned()),
+        ("grid_height".to_owned(), "16".to_owned()),
+    ];
+    cpu_spec.run.steps = 4;
+    let cpu_dir = scratch.path().join("cpu");
+    sweep(&entry("sir", None), Some(&ctx), &cpu_spec, &cpu_dir, Concurrency::Auto);
+    assert!(crate::tests::support::manifest(&cpu_dir).runtime.adapter.is_none());
 }

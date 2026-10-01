@@ -611,7 +611,17 @@ its tests needs the maintainer's approval as a new edge.
   in the crate that calls them. henad-compute instantiates none outside its own tests.
   `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for henad-explore's test harnesses
   alone. `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU
-  ports share.
+  ports share. `simulation.rs` is the programmatic API over an entry. `RunSetup`
+  (`ModelEntry::setup`) holds values by id, a seed and scheduled actions, each checked when set
+  (`set` through `check_value`, `set_text` through `parse_value`, `from_parts` and `from_replay`
+  for positional values). `RunSetup::build` fires tick 0's actions before it returns, and a
+  `Simulation` fires each later tick's after the step that reaches it (`Fire::AfterStep`), testing
+  the schedule once per stretch. On native a CPU `Simulation` runs each call's model code inside
+  one `rayon::scope` (`run_sampled` once for the whole call, its callback inside it, hence the
+  `WasmNotSend` bounds), and a GPU one runs on the calling thread inside `catching_on`. A refused
+  scheduled action is a `Fault`. `StatSample` reads stats by label, `views` prepares at the read,
+  and `write_state` is `--export`'s writer. `ParamValue` has exactly three `From` impls (`f32`,
+  `u32`, `bool`), and `an_unsuffixed_literal_sets_a_parameter` fails to compile on a fourth.
   - `cpu/grid_engine.rs` (`GridModelState`), `cpu/agent_engine.rs` (`AgentModelState`) and
     `cpu/network_engine.rs` (`NetworkModelState`) each implement the whole `SimState` for their
     trait. `cpu/field/ca.rs` (`CaField`, a `GridModel` as
@@ -675,7 +685,12 @@ its tests needs the maintainer's approval as a new edge.
   `src/tests/registry.rs` and run over `example_models()`. `gpu_boids` declares
   `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly` reads it.
 - **henad-explore**: sweeps and searches, a sibling of henad-models over henad-compute, below the
-  two front ends. `sweep.rs` (`run_sweep`) plans a `SweepSpec`, checks every config of a GPU model
+  two front ends. `sweep.rs` holds `run_spec`, which runs a sweep, or a search for a spec with a
+  `[search]` table, into a `SweepOutput`, and `plan_spec`, the dry run, which reads a folder as a
+  resume would. Both acquire a device for a GPU model handed none (`sweep_device`), and the
+  manifest records the adapter of the context the sweep steps on. `SweepOptions::new(provenance)`
+  gives the defaults, and `apply_execution` copies a spec's `[execution]` table, which a host
+  applies before its own settings. A sweep plans a `SweepSpec`, checks every config of a GPU model
   against the device (`probe.rs`, `check_capacity`), and builds the first config without a fault
   (`ProbeReport`) to fix the stat columns and bind the reducers and the stop condition. It builds
   the last config as well, and the larger of the two sizes the lanes or tracks and the projected
@@ -684,8 +699,11 @@ its tests needs the maintainer's approval as a new edge.
   the memory cap reads that build. It then writes the manifest, runs every pending run, rebuilds the
   summary and replaces the manifest. A sweep that fails after the manifest exists marks it `failed`
   when it can. A dry run stops after the probes. `spec_file.rs` is the TOML form of a spec
-  (`SpecFile`). Every table is `deny_unknown_fields`. A param value stays the text `--set` takes,
-  and a spec file and a command line hand `parse_value` the same text. A `table` block's `file` is
+  (`SpecFile`), and `LoadedSpec` a spec file read whole, with its `SpecSource` and
+  `ExecutionTable`. No library call installs the panic hook. A host's `main` does, and the
+  test helpers `support::sweep` and `sweep_with` install it before each sweep. Every table is
+  `deny_unknown_fields`. A param value stays the text `--set` takes, and a spec file and a command
+  line hand `parse_value` the same text. A `table` block's `file` is
   read relative to the spec file, and only a table design's. A path that is absolute or holds `.` or
   `..` is refused (`SpecFileError::TablePath`). The manifest's copy of the spec carries the table
   inline as `table_text`, and the writer emits `design_seed` for a sampled design alone. `specs/`
@@ -709,7 +727,7 @@ its tests needs the maintainer's approval as a new edge.
   starts its slices at one step. A slice carried over from a lighter run once held off a pause for
   minutes. `exec/cpu.rs` runs one `thread::scope` lane per rayon pool, each pool built once in
   `Executor::new` with `threads_per_lane` workers, and each run built and stepped inside
-  `pool.install`. A single lane runs inside `rayon::scope` on the global pool, as `bench_cpu` does.
+  `pool.install`. A single lane runs inside `rayon::scope` on the global pool.
   A panic on a lane's thread or in the sink aborts the `SweepControl` (`AbortOnPanic`). The other
   lanes then stop within a slice instead of stepping runs nobody commits. `exec/gpu.rs`
   (`run_on_tracks`) is the counterpart of `exec/cpu.rs` for a GPU model. Error scopes are
@@ -761,8 +779,9 @@ its tests needs the maintainer's approval as a new edge.
   model with `SweepStartError::GpuNeedsNative`. The `gpu` a host passes to `start` or
   `resume_directory` is a device it shares with the sweep, `FaultSink` included. Handed none for a
   GPU model, the sweep thread acquires a device sized to the entry's `GpuNeeds` through
-  `acquire_headless`, builds the entry it was handed on it (`BoundModel`), and records that device
-  in the manifest. A device it cannot acquire fails the sweep with `SweepEvent::Failed`.
+  `acquire_headless`, builds the entry it was handed on it (`sweep_device`), and records that device
+  in the manifest. `SweepRunOptions::new(provenance)` gives the defaults, and its `spec_source`
+  goes into the manifest. A device it cannot acquire fails the sweep with `SweepEvent::Failed`.
   `acquire_headless` returns the `GpuContext` alone, with its `RuntimeInfo` attached and read back
   through `runtime_info()`.
   `SweepOutput::Memory` writes the four files through the same writers over `Vec<u8>`
@@ -805,7 +824,7 @@ its tests needs the maintainer's approval as a new edge.
   `stepping::sample_stats`. `gpu_boids` matches only in the parts the engine owns, every `runs.csv`
   field up to `population` and the run and tick of each series row, and
   `interleaved_gpu_boids_runs_commit_in_plan_order` pins them. Keep them.
-  `search_run.rs` (`run_search`) runs a spec with a `[search]` table. `SearchPlan` plans the fixed
+  `search_run.rs` runs a spec with a `[search]` table, behind `run_spec`. `SearchPlan` plans the fixed
   values and actions as a one-config `Plan`, and a search spec with blocks is refused. It resolves
   the space, checks that every watched column is a reducer column, and hashes the settings that fix
   the trajectory with `search_hash`. Unlike `plan_hash`, that hash covers the replicate count, and
@@ -864,8 +883,12 @@ its tests needs the maintainer's approval as a new edge.
   compute support, and this device has none", with no full stop. `select_model` loads the defaults
   and clears the schedule, for the Model panel and the Sweep tab alike, and an id the set lacks
   leaves no values. `AppState` also holds the values the next build reads: `param_values`, the Seed
-  field's `seed` with its raw `seed_text`, and the scheduled actions in `schedule`. `build_runner`
-  passes `seed` to the entry's factory, and `reset_simulation` sends `SimCommand::SetSchedule` to
+  field's `seed` with its raw `seed_text`, and the scheduled actions in `schedule`.
+  `AppState::build_setup` checks all three through `RunSetup::from_parts`. Playback's
+  `build_refusal` shows a `SetupError` as Build's disabled reason (`setup_message`), as it shows
+  `INVALID_SEED`, `reset_simulation` builds nothing while the check fails, and `open_run` refuses
+  a replay `RunSetup::from_replay` refuses. `build_runner` builds the checked setup, and
+  `reset_simulation` sends `SimCommand::SetSchedule` to
   the new runner when the schedule is not empty, then records `loaded_seed` and `loaded_schedule`.
   `seed_pending` and `schedule_pending` compare each with its loaded copy, and the Reload needed
   notice counts both. A `None` seed is the model's default, the constant `henad-cli` uses without
@@ -921,8 +944,9 @@ its tests needs the maintainer's approval as a new edge.
   `row_levels` caps at `MAX_DRAFT_LEVELS` only a range the draft lists, and a range with no step
   under a sampled design or a search can be any size. `SweepDraft::tick_source` (`TickSource`)
   gives an action's tick as fixed, varied or taken from the design table's `action.<name>` column.
-  Save spec (`to_toml`) also refuses what the loader would, a reversed window or a threshold that is
-  not finite, and reads its own TOML back as a check. The draft keeps a loaded spec's `[execution]`
+  Save spec (`to_toml`) writes through `henad_explore::spec_file::LoadedSpec::to_toml`, with the
+  draft's execution table. It also refuses what the loader would, a reversed window or a threshold
+  that is not finite, and reads its own TOML back as a check. The draft keeps a loaded spec's `[execution]`
   `memory` and `gpu_memory` (`memory_budget`, `gpu_memory_budget`). Save spec writes them back,
   Start passes them to `SweepRunOptions` through `SessionExecution`, the Plan lists them, and the
   Execution section shows them read-only beside a clear button. `MIN_TIMEOUT_SECONDS` bounds only
@@ -997,8 +1021,12 @@ its tests needs the maintainer's approval as a new edge.
   steps, and one due on that tick runs after the timer stops. The GPU path fires the same ticks.
   The GPU benchmark fires before the step and the GPU stats export after it, one `action::Fire`
   rule per run, as the two CPU loops do. Otherwise two runs back to back both fire the tick they
-  share. `actions.rs` holds the benchmark's rule, `BENCH_FIRE`, and prints the actions a model
-  refuses. A GPU run steps through `gpu/stepping.rs` on a device from henad-explore's
+  share. The benchmark is `henad_explore::benchmark::run_benchmark` (`benchmark.rs`), which holds
+  the rule, `BENCH_FIRE`, and reports each repetition through a callback as it finishes, so a run
+  killed part way has printed every repetition it finished. `--export` and `--export-stats` step a
+  `Simulation` (`run_to` and `write_state`, `run_sampled`). The shared `params_by_id_json` and
+  `scheduled_actions_json` sit in henad-explore's `output/details.rs`, for the CLI's summary and the
+  app's run details. A GPU run steps through `gpu/stepping.rs` on a device from henad-explore's
   `acquire_headless`, sized to `example_models().gpu_needs()`. The CLI resolves its positional id
   through `ModelSet::lookup`, and refuses an id outside the set ("this build does not include
   model 'x' (try --list)") apart from a GPU model on a machine without a device. `--list` prints
@@ -1019,7 +1047,8 @@ its tests needs the maintainer's approval as a new edge.
   or as `explore_*` JSON lines, and exits 3 (`SOME_RUNS_NOT_OK`) when a sweep ran to its end with a
   run not `ok`, or a merge lacks a run. A sweep seeds its runs with `run_seed`, and the benchmark
   keeps the `base + i` that `benchmarks/protocol.md` fixes.
-  A spec with a `[search]` table goes to `run_search` in place of `run_sweep`. Its plan lists the
+  It applies a spec's `[execution]` table, then the flags it was given, and calls `run_spec`, or
+  `plan_spec` for `--dry-run`. A spec with a `[search]` table runs as a search. Its plan lists the
   batch size, the objective or the axes, the space and the search seed, and `--json` adds an
   `explore_search_batch` line per batch.
   `--params --json` (`json_report::params`) prints `schema_json` with a `kind` of `params`.
@@ -1310,7 +1339,7 @@ through the same `pump`, and the frame driver cuts it at `PUMP_BUDGET_MS` like a
 
 A sweep started from the app runs off the UI thread as well, through
 `henad_explore::handle::SweepRun`. On native the handle spawns a thread that runs the sweep as
-`run_sweep` does (`run_in_memory` or `run_into_directory`), lanes or tracks and all, and its
+`run_spec` does (`run_in_memory` or `run_into_directory`), lanes or tracks and all, and its
 `SweepControl` holds or ends every run between two slices of steps. In a browser it wraps a
 `runner::Driver<PumpedSweep>`, and `HenadApp::logic` pumps it each frame through
 `ui::sweep::update` and `SweepRun::update`. Either way the host reads `SweepEvent`s from an

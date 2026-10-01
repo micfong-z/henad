@@ -19,6 +19,7 @@ use henad_core::authoring::model::gpu_agent_model::GpuAgentModel;
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
 use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::authoring::model::network_model::NetworkModel;
+use henad_core::explore::plan::ModelSchema;
 use henad_core::metadata::{Backend, ModelMetadata, Structure};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -37,6 +38,7 @@ use crate::gpu::fault::catching_on;
 use crate::gpu::grid_engine::GpuGridState;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::{GpuContext, GpuNeeds};
+use crate::simulation::RunSetup;
 
 /// A freshly built simulation state, tagged with the runner that can drive it.
 ///
@@ -156,6 +158,16 @@ impl ModelEntry {
         &self.parts.metadata
     }
 
+    /// Declarations a plan checks a spec against, readable with no device.
+    pub fn schema(&self) -> ModelSchema<'_> {
+        ModelSchema {
+            id: &self.parts.id,
+            params: &self.parts.param_descriptors,
+            stats: &self.parts.stat_descriptors,
+            actions: &self.parts.action_descriptors,
+        }
+    }
+
     /// Device needs above the WebGPU baseline. `None` for a CPU model.
     pub fn gpu_needs(&self) -> Option<GpuNeeds> {
         self.parts.gpu_needs
@@ -176,7 +188,12 @@ impl ModelEntry {
         self.parts.action_descriptors.iter().position(|action| action.id == id)
     }
 
-    /// Builds the model from positional values, unchecked.
+    /// Returns a setup at the declared defaults, the default seed and no actions.
+    pub fn setup(&self) -> RunSetup {
+        RunSetup::new(self.clone())
+    }
+
+    /// Builds the model from positional values, unchecked. [`RunSetup`] is the checked path.
     ///
     /// A CPU model ignores `gpu`, and a GPU model builds on it.
     ///

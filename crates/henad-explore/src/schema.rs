@@ -4,7 +4,6 @@ use serde_json::{Map, Value, json};
 
 use henad_compute::entry::ModelEntry;
 use henad_core::explore::fingerprint::schema_hash;
-use henad_core::explore::plan::ModelSchema;
 use henad_core::metadata::Backend;
 use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind};
 
@@ -12,16 +11,6 @@ use crate::probe::ProbeReport;
 
 /// Version of the object [`schema_json`] returns.
 pub const SCHEMA_VERSION: u64 = 1;
-
-/// Returns the declarations of `entry`, as a plan checks a spec against them.
-pub fn model_schema(entry: &ModelEntry) -> ModelSchema<'_> {
-    ModelSchema {
-        id: entry.id(),
-        params: entry.param_descriptors(),
-        stats: entry.stat_descriptors(),
-        actions: entry.action_descriptors(),
-    }
-}
 
 /// Returns the parameters, stats and actions of `entry` as one JSON object.
 ///
@@ -50,7 +39,7 @@ pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
         "model": entry.id(),
         "name": entry.name(),
         "backend": backend_name(entry.metadata().backend),
-        "schema_hash": format!("{:016x}", schema_hash(&model_schema(entry))),
+        "schema_hash": format!("{:016x}", schema_hash(&entry.schema())),
         "params": params,
         "stats": stats,
         "actions": actions,
@@ -140,7 +129,7 @@ mod tests {
 
     use henad_core::explore::fingerprint::schema_hash;
 
-    use super::{f32_json, model_schema, schema_json};
+    use super::{f32_json, schema_json};
     use crate::probe::ProbeReport;
 
     /// Each example model's `schema_hash` as Henad 0.2.0 wrote it, at commit 773a7a5.
@@ -167,7 +156,7 @@ mod tests {
         let models = example_models();
         for (id, recorded) in SCHEMA_HASHES_0_2_0 {
             let entry = models.get(id).unwrap_or_else(|| panic!("{id} is registered"));
-            let current = format!("{:016x}", schema_hash(&model_schema(entry)));
+            let current = format!("{:016x}", schema_hash(&entry.schema()));
             assert_eq!(current, recorded, "{id}'s schema hash moved since 0.2.0");
         }
     }

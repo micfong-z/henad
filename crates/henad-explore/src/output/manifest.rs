@@ -496,14 +496,14 @@ impl Add for ResultCounts {
 }
 
 /// Returns the system clock in milliseconds since the Unix epoch. A clock set before the epoch reads as 0.
-pub fn now_unix_ms() -> u64 {
+pub(crate) fn now_unix_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since_epoch| {
         u64::try_from(since_epoch.as_millis()).unwrap_or(u64::MAX)
     })
 }
 
 /// Returns `unix_ms` as an RFC 3339 timestamp in UTC with milliseconds, as in `2026-09-27T08:30:00.250Z`.
-pub fn rfc3339(unix_ms: u64) -> String {
+pub(crate) fn rfc3339(unix_ms: u64) -> String {
     let seconds = unix_ms / 1000;
     let (year, month, day) = civil_date(seconds / 86_400);
     let second_of_day = seconds % 86_400;

@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -19,10 +20,6 @@ use std::sync::Arc;
 
 use web_time::Instant;
 
-use henad_compute::entry::ModelEntry;
-use henad_compute::fault::install_panic_hook;
-use henad_compute::gpu::GpuContext;
-use henad_compute::runtime_info::RuntimeInfo;
 use henad_core::action::Schedule;
 use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::fingerprint::{run_key, search_hash};
@@ -41,10 +38,11 @@ use henad_core::explore::search::{
 use henad_core::explore::seed::search_seed;
 use henad_core::explore::spec::SweepSpec;
 
-use crate::exec::{BatchEnd, Executor, RunRequest, RunSink};
+use crate::exec::{BatchEnd, RunRequest};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::exec::{Executor, RunSink};
 use crate::output::manifest::{
-    Manifest, ManifestAxisRanges, ManifestMode, ManifestPlan, ManifestRuntime, ManifestSearch, ResultCounts,
-    now_unix_ms,
+    Manifest, ManifestAxisRanges, ManifestMode, ManifestPlan, ManifestSearch, ResultCounts, now_unix_ms,
 };
 use crate::output::memory::{SweepFiles, memory_writer};
 use crate::output::read::{ReadError, RunsCsv, SeriesScan, parse_one};
@@ -56,11 +54,12 @@ use crate::output::{
     OutputWriter, RUNS_FILE, SERIES_FILE, runs_csv, series_csv, table_paths,
 };
 use crate::probe::{ProbeReport, TimedProbe, check_capacity};
-use crate::progress::{Progress, ProgressEvent, ProgressMeter};
-use crate::schema::model_schema;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::progress::ProgressMeter;
+use crate::progress::{Progress, ProgressEvent};
 use crate::sweep::{
-    ExploreError, ManifestParts, Provenance, SpecSource, SweepEnd, SweepInputs, SweepOptions, SweepOutline,
-    SweepRecord, SweepReport, SweepWarning, finish_manifest, hex, running_manifest, sized_layout,
+    ExploreError, ManifestParts, Provenance, SweepEnd, SweepInputs, SweepOutline, SweepRecord, SweepReport,
+    SweepWarning, finish_manifest, hex, running_manifest, sized_layout,
 };
 
 /// A search spec checked against a model, with its space resolved.
@@ -229,8 +228,6 @@ impl SearchPlan {
 pub enum SearchPlanError {
     /// A spec with no `[search]` table, handed to a search.
     NotASearch,
-    /// A spec with a `[search]` table, handed to a sweep.
-    NotASweep,
     /// A search spec that lists blocks as well.
     Blocks,
     /// Fixed values or actions the model refuses, for the reason inside.
@@ -253,7 +250,6 @@ impl fmt::Display for SearchPlanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotASearch => f.write_str("the spec has no [search] table"),
-            Self::NotASweep => f.write_str("the spec has a [search] table, and runs as a search"),
             Self::Blocks => f.write_str("a search selects its own configs and takes no blocks"),
             Self::Plan(_) => f.write_str("cannot plan the search's fixed values and actions"),
             Self::Settings(_) => f.write_str("search settings"),
@@ -282,7 +278,6 @@ impl std::error::Error for SearchPlanError {
             Self::Settings(error) => Some(error),
             Self::Space(error) => Some(error),
             Self::NotASearch
-            | Self::NotASweep
             | Self::Blocks
             | Self::UnknownColumn { .. }
             | Self::TooManyRuns
@@ -419,6 +414,7 @@ struct BatchRun {
 
 impl AskedBatch {
     /// Returns the requests of the runs left to run, in run order.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn requests(&self) -> Vec<RunRequest<'_>> {
         self.runs[self.recorded_values.len()..]
             .iter()
@@ -802,6 +798,7 @@ pub(crate) struct RecordedRun {
 
 /// Runs a directory holds for a resumed search, from run 0 in order, and the repair its tables need.
 #[derive(Debug)]
+#[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser resumes no folder"))]
 pub(crate) struct RecordedSearch {
     /// Manifest the directory holds.
     pub(crate) recorded: Manifest,
@@ -929,6 +926,7 @@ impl RecordedSearch {
     }
 
     /// Cuts the tables of `dir` to the runs kept, or removes both when they are written afresh.
+    #[cfg(not(target_arch = "wasm32"))]
     fn repair(&self, dir: &OutputDir) -> Result<(), OutputError> {
         for (file, length) in [(RUNS_FILE, self.runs_bytes), (SERIES_FILE, self.series_bytes)] {
             let path = dir.path().join(file);
@@ -949,101 +947,51 @@ impl RecordedSearch {
     }
 }
 
-/// Plans `spec` against `entry` as a search, runs it and writes the results to `options.output_dir`.
+/// Runs the search of `inputs.spec` into the directory `output_dir`, and returns its record.
 ///
 /// The search plans its fixed values and actions, checks their config against the device, probes it, and chooses a
 /// layout for one batch of runs. It then writes the manifest with status `running`, and streams each run to
 /// `runs.csv` and `series.csv` and each batch to the search tables. Once the budget is spent it writes `best.csv` or
-/// `archive.csv`, rebuilds `summary.csv` and replaces the manifest with its final status. A dry run stops after the
-/// probe and writes nothing.
+/// `archive.csv`, rebuilds `summary.csv` and replaces the manifest with its final status.
 ///
-/// With `options.resume`, a directory holding runs of the same search is replayed, as the module documentation
-/// describes. A search runs whole, so `options.shard` must be the whole plan, and it never retries failed runs.
+/// `plan`, when given, is the search plan of `inputs.spec`, and the spec is planned here otherwise. With
+/// `options.resume`, a directory holding runs of the same search is replayed, as the module documentation describes.
+/// A search runs whole, so `options.shard` must be the whole plan, and it never retries failed runs.
 ///
 /// # Errors
 ///
 /// Returns [`ExploreError`] when the search cannot be planned, its config does not fit the device, the probe build
 /// fails, a watched column names no reducer, the output directory holds results and is not resumed, the directory
 /// cannot be resumed, the results cannot be written, or a batch cannot run.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the model and device, the spec and its record, and the host's settings"
-)]
-pub fn run_search(
-    entry: &ModelEntry,
-    gpu: Option<&GpuContext>,
-    runtime: Option<&RuntimeInfo>,
-    spec: &SweepSpec,
-    source: &SpecSource,
-    provenance: &Provenance,
-    options: &SweepOptions,
-    progress: &mut dyn Progress,
-) -> Result<SweepReport, ExploreError> {
-    install_panic_hook();
-    let output_dir = match (options.output_dir.as_deref(), options.dry_run) {
-        (_, true) => None,
-        (Some(output_dir), false) => Some(output_dir),
-        (None, false) => return Err(ExploreError::NoOutput),
-    };
-    let runtime = ManifestRuntime::new(runtime);
-    let inputs = SweepInputs {
-        entry,
-        gpu,
-        runtime: &runtime,
-        spec,
-        source,
-        provenance,
-        options,
-    };
-    let preparation = SearchPreparation::new(&inputs, None, None)?;
-    preparation.announce(provenance, progress);
-    let Some(output_dir) = output_dir else {
-        let report = preparation.report(SweepEnd::Planned, ResultCounts::default(), None);
-        progress.report(&ProgressEvent::Ended(&report));
-        return Ok(report);
-    };
-    let record = preparation.write_directory(&inputs, output_dir, progress)?;
-    progress.report(&ProgressEvent::Ended(&record.report));
-    Ok(record.report)
-}
-
-/// Runs `plan`, the search of `inputs.spec`, into the directory `output_dir` as [`run_search`] does, and returns its
-/// record.
-///
-/// # Errors
-///
-/// Returns the errors of [`run_search`].
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_search_into_directory(
     inputs: &SweepInputs<'_>,
-    plan: Arc<SearchPlan>,
+    plan: Option<Arc<SearchPlan>>,
     output_dir: &Path,
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
-    install_panic_hook();
-    let preparation = SearchPreparation::new(inputs, Some(plan), None)?;
+    let preparation = SearchPreparation::new(inputs, plan, None)?;
     preparation.announce(inputs.provenance, progress);
     let record = preparation.write_directory(inputs, output_dir, progress)?;
     progress.report(&ProgressEvent::Ended(&record.report));
     Ok(record)
 }
 
-/// Runs `plan`, the search of `inputs.spec`, holding its files in memory, and returns its record.
+/// Runs the search of `inputs.spec`, holding its files in memory, and returns its record.
 ///
-/// The files hold the bytes a directory would. The caller's `inputs.options` names no output directory and no
-/// resume.
+/// `plan`, when given, is the search plan of `inputs.spec`, and the spec is planned here otherwise. The files hold the
+/// bytes a directory would. The caller's `inputs` name no folder.
 ///
 /// # Errors
 ///
-/// Returns the errors of [`run_search`] that do not come from a directory.
+/// Returns the errors of [`run_search_into_directory`] that do not come from a directory.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_search_in_memory(
     inputs: &SweepInputs<'_>,
-    plan: Arc<SearchPlan>,
+    plan: Option<Arc<SearchPlan>>,
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
-    install_panic_hook();
-    let preparation = SearchPreparation::new(inputs, Some(plan), None)?;
+    let preparation = SearchPreparation::new(inputs, plan, None)?;
     preparation.announce(inputs.provenance, progress);
     let (mut output, manifest) = preparation.memory_output(inputs)?;
     let executor = preparation.executor(inputs)?;
@@ -1099,13 +1047,12 @@ impl SearchPreparation {
         };
         let plan = match plan {
             Some(plan) => plan,
-            None => Arc::new(SearchPlan::new(inputs.spec, &model_schema(entry))?),
+            None => Arc::new(SearchPlan::new(inputs.spec, &entry.schema())?),
         };
-        let resume_dir = options
-            .output_dir
-            .as_deref()
+        let resume_dir = inputs
+            .folder
             .filter(|output_dir| options.resume && OutputDir::holds_results(output_dir));
-        if let (None, Some(output_dir)) = (resume_dir, &options.output_dir) {
+        if let (None, Some(output_dir)) = (resume_dir, inputs.folder) {
             OutputDir::check_free(output_dir)?;
         }
         let base = plan.base();
@@ -1159,7 +1106,7 @@ impl SearchPreparation {
                 .map(|column| measure.columns().name(column).to_owned())
                 .collect(),
             reducer_columns: measure.reducers().names().to_vec(),
-            dry_run: options.dry_run,
+            dry_run: inputs.dry_run,
             search: Some(plan.outline()),
         };
         Ok(Self {
@@ -1278,6 +1225,7 @@ impl SearchPreparation {
 
     /// Writes the manifest with status `running`, runs the search into `output_dir` and replaces the manifest with
     /// the search's final status.
+    #[cfg(not(target_arch = "wasm32"))]
     fn write_directory(
         &self,
         inputs: &SweepInputs<'_>,
@@ -1319,6 +1267,7 @@ impl SearchPreparation {
     ///
     /// Returns the end of the search, the counts of the rows `runs.csv` holds, the session and its final report.
     /// `standing` receives the manifest's record of the search once the batches stop, with an error or without.
+    #[cfg(not(target_arch = "wasm32"))]
     fn run_into(
         &self,
         dir: &OutputDir,
@@ -1392,6 +1341,7 @@ impl SearchPreparation {
     /// # Errors
     ///
     /// Returns the error of [`Executor::new`].
+    #[cfg(not(target_arch = "wasm32"))]
     fn executor<'a>(&self, inputs: &SweepInputs<'a>) -> Result<Executor<'a>, ExploreError> {
         let options = inputs.options;
         let executor = Executor::new(
@@ -1411,6 +1361,7 @@ impl SearchPreparation {
     /// `output` and reporting both to `progress`.
     ///
     /// Returns the end of the batches.
+    #[cfg(not(target_arch = "wasm32"))]
     fn run_all<W: Write>(
         &self,
         executor: &Executor<'_>,
@@ -1513,6 +1464,7 @@ fn table_error(path: &Path, source: io::Error) -> ExploreError {
 }
 
 /// Sink that writes each run of a batch and keeps its watched values, in request order.
+#[cfg(not(target_arch = "wasm32"))]
 struct SearchSink<'s, W: Write> {
     batch: &'s AskedBatch,
     writer: &'s mut OutputWriter<W>,
@@ -1524,6 +1476,7 @@ struct SearchSink<'s, W: Write> {
     meter: &'s mut ProgressMeter,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<W: Write> RunSink for SearchSink<'_, W> {
     fn commit(&mut self, outcome: RunOutcome) -> io::Result<()> {
         self.writer

@@ -3,6 +3,8 @@
 use henad_compute::entry::{ModelState, register_grid_model};
 use henad_compute::fault::{BUILDING, catching};
 use henad_compute::gpu::{MAX_STEPS_PER_SUBMISSION, StatsPoll, stepping};
+use henad_compute::simulation::RunSetup;
+use henad_core::action::Schedule;
 use henad_core::metadata::Structure;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
@@ -59,6 +61,21 @@ fn sim_state(state: &mut ModelState) -> &mut dyn SimState {
 
 /// The UI labels parameters from the descriptor and the state decides what it accepts, so the
 /// two disagreeing means the panel lies about what an edit does.
+/// Checks that the checked setup path accepts every example model's declared defaults, as the app's Build reads them.
+///
+/// A default outside its own bounds, or of another kind than its descriptor, would leave Build disabled on a fresh
+/// selection.
+#[test]
+fn every_default_setup_passes_the_checks_of_from_parts() {
+    for entry in crate::example_models().iter() {
+        let setup = entry.setup();
+        assert_eq!(setup.values(), defaults(entry), "{}", entry.id());
+        let checked = RunSetup::from_parts(entry, setup.values(), None, Schedule::default())
+            .unwrap_or_else(|error| panic!("{}: {error:?}", entry.id()));
+        assert_eq!(checked.values(), setup.values(), "{}", entry.id());
+    }
+}
+
 #[test]
 fn declared_apply_mode_matches_what_the_state_accepts() {
     let gpu = device();

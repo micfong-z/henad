@@ -961,7 +961,6 @@ mod tests {
     use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
     use henad_core::params::ParamValue;
     use henad_explore::probe::ProbeReport;
-    use henad_explore::schema::model_schema;
     use henad_models::example_models;
 
     use super::{
@@ -979,7 +978,7 @@ mod tests {
 
     fn search_draft(algorithm: DraftAlgorithm) -> SweepDraft {
         let entry = sir();
-        let mut draft = SweepDraft::new(&model_schema(&entry));
+        let mut draft = SweepDraft::new(&entry.schema());
         draft.mode = DraftMode::Search;
         draft.search.algorithm = algorithm;
         draft
@@ -1059,7 +1058,7 @@ mod tests {
     #[test]
     fn the_output_lists_offer_what_the_runs_do_not_record_yet() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = search_draft(DraftAlgorithm::Random);
         let choices = OutputChoices::of(&draft, &schema);
         assert_eq!(
@@ -1090,7 +1089,7 @@ mod tests {
     #[test]
     fn the_output_lists_offer_the_parts_of_a_vector_stat() {
         let entry = example_models().get("boids").cloned().expect("boids is registered");
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let values: Vec<ParamValue> = entry
             .param_descriptors()
             .iter()

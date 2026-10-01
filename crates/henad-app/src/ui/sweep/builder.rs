@@ -1796,7 +1796,6 @@ mod tests {
     use henad_core::metadata::Backend;
     use henad_core::params::ParamValue;
     use henad_explore::exec::Concurrency;
-    use henad_explore::schema::model_schema;
     use henad_models::example_models;
 
     use super::{
@@ -1831,7 +1830,7 @@ mod tests {
     /// Returns the section summaries of the draft that `edit` makes of a new SIR draft.
     fn summaries_of(edit: impl FnOnce(&mut SweepDraft)) -> SectionSummaries {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = default_values(&entry);
         let mut panel = SweepPanel::default();
         edit(panel.draft_mut(&schema));
@@ -1843,7 +1842,7 @@ mod tests {
     /// Returns the formula under the Design field of the draft that `edit` makes of a new SIR draft.
     fn formula_of(edit: impl FnOnce(&mut SweepDraft)) -> String {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         edit(&mut draft);
         let planned = draft
@@ -1983,7 +1982,7 @@ mod tests {
             "3 configurations, one per row"
         );
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         assert_eq!(
             formula_of(|draft| {
                 vary(draft, INFECTION_RATE, "0.1, 0.2");
@@ -1998,7 +1997,7 @@ mod tests {
     #[test]
     fn a_table_names_the_parameters_and_ticks_its_columns_set() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.add_action(&schema, 0, 10);
         let table = |text: &str| DesignTableDraft {
@@ -2110,7 +2109,7 @@ mod tests {
     #[test]
     fn a_banner_line_names_the_row_its_issue_belongs_to() {
         let sir = sir();
-        let schema = model_schema(&sir);
+        let schema = sir.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.add_action(&schema, 0, 10);
         let infection = schema
@@ -2274,7 +2273,7 @@ mod tests {
     ///
     /// With `hovered`, the pointer then rests on that control until its tooltip shows.
     fn draw_form(entry: &ModelEntry, draft: SweepDraft, hovered: Option<FormControl<'_>>) -> DrawnForm {
-        let schema = model_schema(entry);
+        let schema = entry.schema();
         let panel_values = default_values(entry);
         let mut panel = SweepPanel::default();
         *panel.draft_mut(&schema) = draft;
@@ -2361,7 +2360,7 @@ mod tests {
     #[test]
     fn the_outputs_section_shows_that_its_columns_are_pending() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.columns_pending = true;
         let texts = draw_form(&entry, draft, None).texts;
@@ -2384,7 +2383,7 @@ mod tests {
     #[test]
     fn drawing_the_form_leaves_a_loaded_value_alone() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut loaded = SweepDraft::new(&schema);
         loaded.design = DraftDesign::LatinHypercube;
         loaded.samples = 2_000_000;
@@ -2437,7 +2436,7 @@ mod tests {
     #[test]
     fn a_tick_row_under_a_design_table_says_where_its_tick_comes_from() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let under_table = |text: &str| {
             let mut draft = SweepDraft::new(&schema);
             draft.add_action(&schema, 0, 10);
@@ -2496,7 +2495,7 @@ mod tests {
     #[test]
     fn a_timeout_issue_shows_under_its_field_and_names_its_row() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.timeout_s = Some(f64::INFINITY);
         let issues = draft.issues(&schema);

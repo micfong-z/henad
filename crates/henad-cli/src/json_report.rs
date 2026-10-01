@@ -10,9 +10,10 @@ use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runtime_info::{HostInfo, RuntimeInfo};
 use henad_core::params::{ParamDescriptor, ParamValue};
+use henad_explore::output::details::{ChoiceForm, params_by_id_json, scheduled_actions_json};
 use henad_explore::probe::ProbeReport;
 use henad_explore::schema::schema_json;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 /// Emitted once, before any rep.
 pub fn info(model: &str, variant: &str, threads: usize, parallel_jobs: Option<usize>, adapter: Option<&str>) {
@@ -112,36 +113,10 @@ pub fn summary(
         "updates_per_sec": if mean > 0.0 { Some(steps_per_rep as f64 * population as f64 / mean) } else { None },
         "grid_w": grid_dims.map(|(w, _)| w),
         "grid_h": grid_dims.map(|(_, h)| h),
-        "params": params_object(descriptors, params),
-        "actions": actions_array(schedule),
+        "params": params_by_id_json(descriptors, params, ChoiceForm::Index),
+        "actions": scheduled_actions_json(schedule),
     });
     emit(&line);
-}
-
-/// The `--act` schedule this run replayed, so a row says what was done to it.
-fn actions_array(schedule: &henad_core::action::Schedule) -> Value {
-    Value::Array(
-        schedule
-            .entries()
-            .iter()
-            .map(|a| json!({ "id": a.id, "tick": a.tick }))
-            .collect(),
-    )
-}
-
-/// Resolved parameters keyed by id, so a row stays interpretable after a model's defaults change.
-fn params_object(descriptors: &[ParamDescriptor], params: &[ParamValue]) -> Value {
-    let mut map = Map::new();
-    for (desc, value) in descriptors.iter().zip(params) {
-        let value = match *value {
-            ParamValue::F32(v) => json!(v),
-            ParamValue::U32(v) => json!(v),
-            ParamValue::Bool(v) => json!(v),
-            ParamValue::Choice(v) => json!(v),
-        };
-        map.insert(desc.id.to_owned(), value);
-    }
-    Value::Object(map)
 }
 
 /// Returns the `--params --json` line: the parameters, stats and actions of `entry`.

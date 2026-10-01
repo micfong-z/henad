@@ -173,7 +173,8 @@ pub fn run_due<'s>(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &'s 
 
 /// Returns the stats of the state's current tick, blocking until the GPU reads them back.
 ///
-/// A readback still in flight is collected first. Otherwise the sample's copy would be skipped, and the stats
+/// The sample records the stats passes alone, as a sweep track's does, with no display pass. A readback still in
+/// flight is collected first. Otherwise the sample's copy would be skipped, and the stats
 /// returned would be the older sample's. Note that a fault the sample raises is left for the next [`wait`] to report.
 pub fn sample_stats(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Vec<StatEntry> {
     if state.stats_readback_pending() {
@@ -182,7 +183,7 @@ pub fn sample_stats(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Vec<StatEn
     let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("henad_gpu_stats_sample"),
     });
-    state.encode_snapshot_passes(&mut encoder);
+    state.encode_stats_passes(&mut encoder);
     ctx.queue.submit(Some(encoder.finish()));
     state.begin_stats_readback();
     state.poll_stats_readback(&ctx.device, true);

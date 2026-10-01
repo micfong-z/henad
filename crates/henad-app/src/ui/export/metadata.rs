@@ -1,8 +1,7 @@
 //! Exported metadata about a run.
 
-use henad_core::action::Schedule;
-use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
-use serde_json::{Map, Value, json};
+use henad_explore::output::details::{ChoiceForm, params_by_id_json, scheduled_actions_json};
+use serde_json::json;
 
 use crate::state::AppState;
 
@@ -19,11 +18,11 @@ pub fn run_details(app: &AppState) -> String {
         "model": entry.map(|e| e.id()),
         "model_name": entry.map(|e| e.name()),
         "backend": entry.map(|e| e.metadata().backend.label()),
-        "params": entry.map(|e| params_object(e.param_descriptors(), &app.param_values)),
+        "params": entry.map(|e| params_by_id_json(e.param_descriptors(), &app.param_values, ChoiceForm::Name)),
         "params_match_running_model": app.selection_is_loaded() && !app.pending_reload.iter().any(|p| *p),
         // Null with a model loaded is the model's default seed.
         "seed": entry.and(app.loaded_seed),
-        "scheduled_actions": entry.map(|_| scheduled_actions(&app.loaded_schedule)),
+        "scheduled_actions": entry.map(|_| scheduled_actions_json(&app.loaded_schedule)),
         "tick": app.snapshot.as_ref().map(|snap| snap.tick),
         "population": app.snapshot.as_ref().map(|snap| snap.population),
         "ticks_per_snapshot": app.ticks_per_snapshot,
@@ -39,29 +38,4 @@ pub fn run_details(app: &AppState) -> String {
     });
 
     format!("{details:#}\n")
-}
-
-fn scheduled_actions(schedule: &Schedule) -> Value {
-    schedule
-        .entries()
-        .iter()
-        .map(|entry| json!({ "id": entry.id, "tick": entry.tick }))
-        .collect()
-}
-
-fn params_object(descriptors: &[ParamDescriptor], params: &[ParamValue]) -> Value {
-    let mut map = Map::new();
-    for (desc, value) in descriptors.iter().zip(params) {
-        let value = match *value {
-            ParamValue::F32(v) => json!(v),
-            ParamValue::U32(v) => json!(v),
-            ParamValue::Bool(v) => json!(v),
-            ParamValue::Choice(index) => match &desc.kind {
-                ParamKind::Choice { options, .. } => options.get(index).map_or_else(|| json!(index), |o| json!(o)),
-                _ => json!(index),
-            },
-        };
-        map.insert(desc.id.to_owned(), value);
-    }
-    Value::Object(map)
 }

@@ -680,7 +680,6 @@ mod tests {
     use henad_compute::cpu::sim_thread::WakeFn;
     use henad_compute::entry::ModelEntry;
     use henad_core::params::ParamValue;
-    use henad_explore::schema::model_schema;
     use henad_models::example_models;
 
     use super::{NOT_COUNTED, PlanSummary, budget_rows, either_text, samples_text, steps_text};
@@ -702,7 +701,7 @@ mod tests {
     /// Returns the plan of the draft that `edit` makes of a new SIR draft.
     fn plan_of(edit: impl FnOnce(&mut crate::ui::sweep::draft::SweepDraft, &[&str])) -> PlanSummary {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = default_values(&entry);
         let ids: Vec<&str> = schema.params.iter().map(|descriptor| descriptor.id).collect();
         let mut panel = SweepPanel::default();
@@ -714,7 +713,7 @@ mod tests {
 
     /// Returns the plan of the draft `panel` holds for `entry`'s model, checked against the model's defaults.
     fn plan_of_panel(panel: &mut SweepPanel, entry: &ModelEntry) -> PlanSummary {
-        let schema = model_schema(entry);
+        let schema = entry.schema();
         let check = panel.cached_check(&schema, &default_values(entry));
         let summary = CheckSummary::new(check, entry, &schema);
         PlanSummary::for_draft(check, &schema, entry.name(), &summary)
@@ -737,7 +736,7 @@ mod tests {
     fn the_plan_lists_each_action_on_its_own_line_and_numbers_a_repeat() {
         let plan = plan_of(|draft, _| {
             let entry = sir();
-            let schema = model_schema(&entry);
+            let schema = entry.schema();
             draft.add_action(&schema, 0, 0);
             draft.add_action(&schema, 0, 100);
             draft.actions[1].vary_tick = true;
@@ -872,7 +871,7 @@ mod tests {
     fn actions_row(edit: impl FnOnce(&mut crate::ui::sweep::draft::SweepDraft)) -> String {
         let plan = plan_of(|draft, _| {
             let entry = sir();
-            draft.add_action(&model_schema(&entry), 0, 50);
+            draft.add_action(&entry.schema(), 0, 50);
             edit(draft);
         });
         value(&plan, "Actions").to_owned()
@@ -905,7 +904,7 @@ mod tests {
     fn a_range_searched_past_the_listed_values_reads_as_words() {
         let plan = plan_of(|draft, _| {
             let entry = sir();
-            draft.add_action(&model_schema(&entry), 0, 50);
+            draft.add_action(&entry.schema(), 0, 50);
             draft.actions[0].vary_tick = true;
             draft.actions[0].ticks_text = "0:2000000".to_owned();
             draft.mode = DraftMode::Search;
@@ -972,7 +971,7 @@ mod tests {
 
     #[test]
     fn the_plan_lists_each_loaded_budget() {
-        let mut draft = SweepDraft::new(&model_schema(&sir()));
+        let mut draft = SweepDraft::new(&sir().schema());
         assert!(budget_rows(&draft).is_empty(), "a draft without budgets lists none");
         draft.memory_budget = Some(4 << 30);
         draft.gpu_memory_budget = Some(2 << 30);

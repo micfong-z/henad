@@ -19,7 +19,7 @@ pub struct SeriesWriter<W: Write> {
 }
 
 /// Returns the header line of `series.csv` for the stat layout `columns`, with its line ending.
-pub fn header_line(columns: &StatColumns) -> String {
+pub(crate) fn header_line(columns: &StatColumns) -> String {
     let mut line = SERIES_ID_COLUMNS.join(",");
     for column in 0..columns.len() {
         line.push(',');

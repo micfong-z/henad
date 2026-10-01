@@ -8,7 +8,6 @@ use henad_core::explore::spec::SweepSpec;
 use henad_core::params::ParamValue;
 use henad_explore::exec::Concurrency;
 use henad_explore::handle::{SweepEvent, SweepOutput, SweepPhase, SweepProgress, SweepRun, SweepRunOptions};
-use henad_explore::output::manifest::ManifestRuntime;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
 use henad_explore::sweep::{Provenance, SweepEnd, SweepOutline, SweepReport};
 
@@ -115,15 +114,11 @@ impl SweepSession {
             #[cfg(target_arch = "wasm32")]
             Some(_) => return Err("Writing results to a folder is unavailable in a browser".to_owned()),
         };
-        let options = SweepRunOptions {
-            concurrency: execution.concurrency,
-            memory_budget: execution.memory_budget,
-            gpu_memory: execution.gpu_memory_budget,
-            provenance: provenance(),
-            runtime: Some(ManifestRuntime::new(Some(&app.runtime))),
-            wake: Some(app.repaint_waker()),
-            ..SweepRunOptions::default()
-        };
+        let mut options = SweepRunOptions::new(provenance());
+        options.concurrency = execution.concurrency;
+        options.memory_budget = execution.memory_budget;
+        options.gpu_memory = execution.gpu_memory_budget;
+        options.wake = Some(app.repaint_waker());
         let run = SweepRun::start(entry, None, spec, output, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
         Ok(Self {
@@ -151,12 +146,8 @@ impl SweepSession {
     pub fn resume_folder(app: &mut AppState, folder: PathBuf, model_id: &str) -> Result<Self, String> {
         let entry = app.lookup(model_id).map_err(|error| lookup_message(&error))?.clone();
         let model_name = entry.name().to_owned();
-        let options = SweepRunOptions {
-            provenance: provenance(),
-            runtime: Some(ManifestRuntime::new(Some(&app.runtime))),
-            wake: Some(app.repaint_waker()),
-            ..SweepRunOptions::default()
-        };
+        let mut options = SweepRunOptions::new(provenance());
+        options.wake = Some(app.repaint_waker());
         let run = SweepRun::resume_directory(entry, None, &folder, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
         Ok(Self {

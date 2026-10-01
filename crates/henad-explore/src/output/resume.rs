@@ -460,7 +460,8 @@ mod tests {
             &life,
             None,
             &spec,
-            &sweep_options(scratch.path(), true),
+            scratch.path(),
+            &sweep_options(true),
             &mut NoProgress,
         )
         .expect_err("a run id written twice");

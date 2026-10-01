@@ -22,11 +22,10 @@ use henad_core::metadata::Backend;
 
 use crate::exec::{ActiveRun, ActiveRuns, Concurrency, SweepControl};
 use crate::output::OutputError;
-use crate::output::manifest::{ManifestError, ManifestRuntime};
+use crate::output::manifest::ManifestError;
 use crate::progress::{Progress, ProgressEvent};
 #[cfg(target_arch = "wasm32")]
 use crate::pumped::{PumpedSweep, SweepCommand};
-use crate::schema::model_schema;
 use crate::search_run::{SearchPlan, SearchPlanError, SearchUpdate};
 use crate::spec_file::SpecFileError;
 use crate::sweep::{Provenance, SpecSource, SweepEnd, SweepOutline, SweepRecord, SweepWarning};
@@ -50,7 +49,12 @@ pub enum SweepOutput {
 }
 
 /// Settings of a sweep a [`SweepRun`] runs. None of them change its results.
+///
+/// [`Self::new`] returns the defaults, and a caller sets the other fields by assignment. A spec file's `[execution]`
+/// settings go in before the caller's own, in the order
+/// [`SweepOptions::apply_execution`](crate::sweep::SweepOptions::apply_execution) sets them.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct SweepRunOptions {
     /// Number of runs stepped at once on native. A browser steps one run at a time whatever this asks.
     pub concurrency: Concurrency,
@@ -66,13 +70,9 @@ pub struct SweepRunOptions {
     /// every series.
     pub series_budget: usize,
     /// Spec file the sweep was read from, for the manifest.
-    pub source: SpecSource,
+    pub spec_source: SpecSource,
     /// Build of the host, for the manifest.
     pub provenance: Provenance,
-    /// Host and device the manifest records, this host alone when `None`.
-    ///
-    /// A GPU model on a device the sweep acquires records that device in its place.
-    pub runtime: Option<ManifestRuntime>,
     /// Called after each event, so an idle host comes to collect it. It must not block.
     pub wake: Option<WakeFn>,
 }
@@ -86,25 +86,24 @@ impl std::fmt::Debug for SweepRunOptions {
             .field("gpu_memory", &self.gpu_memory)
             .field("retry_failed", &self.retry_failed)
             .field("series_budget", &self.series_budget)
-            .field("source", &self.source)
+            .field("spec_source", &self.spec_source)
             .field("provenance", &self.provenance)
-            .field("runtime", &self.runtime)
             .field("wake", &self.wake.is_some())
             .finish()
     }
 }
 
-impl Default for SweepRunOptions {
-    fn default() -> Self {
+impl SweepRunOptions {
+    /// Returns the options at their defaults, recording `provenance` in every manifest the sweep writes.
+    pub fn new(provenance: Provenance) -> Self {
         Self {
             concurrency: Concurrency::Auto,
             memory_budget: None,
             gpu_memory: None,
             retry_failed: false,
             series_budget: DEFAULT_SERIES_BUDGET,
-            source: SpecSource::default(),
-            provenance: Provenance::default(),
-            runtime: None,
+            spec_source: SpecSource::default(),
+            provenance,
             wake: None,
         }
     }
@@ -268,7 +267,7 @@ impl SweepRun {
         output: SweepOutput,
         options: SweepRunOptions,
     ) -> Result<Self, SweepStartError> {
-        let (plan, search_plan) = plan_spec(&entry, &spec)?;
+        let (plan, search_plan) = plan_for_start(&entry, &spec)?;
         match &output {
             SweepOutput::Memory => {}
             #[cfg(not(target_arch = "wasm32"))]
@@ -299,7 +298,7 @@ impl SweepRun {
     /// Resumes the sweep whose results the directory `dir` holds, running only the runs it lacks.
     ///
     /// The spec, source and shard come from the directory's manifest, and the sweep runs as
-    /// [`crate::sweep::run_sweep`] resumes one. `gpu` is the device a GPU model steps on, as in [`Self::start`].
+    /// [`crate::sweep::run_spec`] resumes one. `gpu` is the device a GPU model steps on, as in [`Self::start`].
     ///
     /// # Errors
     ///
@@ -321,10 +320,10 @@ impl SweepRun {
         let spec = SpecFile::from_json(&manifest.spec)
             .and_then(SpecFile::into_spec)
             .map_err(SweepStartError::Spec)?;
-        let (plan, search_plan) = plan_spec(&entry, &spec)?;
+        let (plan, search_plan) = plan_for_start(&entry, &spec)?;
         let shard = manifest.shard.to_shard().ok_or(SweepStartError::Shard)?;
         let options = SweepRunOptions {
-            source: SpecSource::from(&manifest.spec_source),
+            spec_source: SpecSource::from(&manifest.spec_source),
             ..options
         };
         Self::launch(SweepLaunch {
@@ -451,8 +450,9 @@ impl SweepRun {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn launch(launch: SweepLaunch) -> Result<Self, SweepStartError> {
+        use crate::output::manifest::ManifestRuntime;
         use crate::search_run::{run_search_in_memory, run_search_into_directory};
-        use crate::sweep::{SweepInputs, SweepOptions, run_in_memory, run_into_directory};
+        use crate::sweep::{SweepInputs, SweepOptions, run_in_memory, run_into_directory, sweep_device};
         use henad_compute::fault::catching;
 
         let (mut channel, events, shared_progress) = SweepChannel::open(&launch.options);
@@ -460,21 +460,16 @@ impl SweepRun {
         let active_runs = ActiveRuns::new();
         let plan = Arc::clone(&launch.plan);
         let search_plan = launch.search_plan.clone();
-        let sweep_options = SweepOptions {
-            output_dir: match &launch.output {
-                SweepOutput::Memory => None,
-                SweepOutput::Directory(dir) => Some(dir.clone()),
-            },
-            concurrency: launch.options.concurrency,
-            memory_budget: launch.options.memory_budget,
-            gpu_memory: launch.options.gpu_memory,
-            dry_run: false,
-            control: control.clone(),
-            shard: launch.shard,
-            resume: launch.resume,
-            retry_failed: launch.options.retry_failed,
-            active_runs: Some(active_runs.clone()),
-        };
+        let mut sweep_options = SweepOptions::new(launch.options.provenance.clone());
+        sweep_options.concurrency = launch.options.concurrency;
+        sweep_options.memory_budget = launch.options.memory_budget;
+        sweep_options.gpu_memory = launch.options.gpu_memory;
+        sweep_options.control = control.clone();
+        sweep_options.shard = launch.shard;
+        sweep_options.resume = launch.resume;
+        sweep_options.retry_failed = launch.options.retry_failed;
+        sweep_options.active_runs = Some(active_runs.clone());
+        sweep_options.spec_source = launch.options.spec_source.clone();
         let thread = std::thread::Builder::new()
             .name("henad-sweep".to_owned())
             .spawn(move || {
@@ -485,31 +480,36 @@ impl SweepRun {
                     plan,
                     search_plan,
                     output,
-                    options,
                     ..
                 } = launch;
-                let bound = match catching(ACQUIRING_DEVICE, || BoundModel::new(entry, gpu, options.runtime)) {
-                    Ok(Ok(bound)) => bound,
+                let device = match catching(ACQUIRING_DEVICE, || sweep_device(&entry, gpu.as_ref())) {
+                    Ok(Ok(device)) => device,
                     Ok(Err(error)) => return channel.fail(&error),
                     Err(fault) => return channel.fail(&fault),
                 };
-                let inputs = SweepInputs {
-                    entry: &bound.entry,
-                    gpu: bound.gpu.as_ref(),
-                    runtime: &bound.runtime,
-                    spec: &spec,
-                    source: &options.source,
-                    provenance: &options.provenance,
-                    options: &sweep_options,
+                let gpu = device.as_deref();
+                let runtime = ManifestRuntime::new(gpu.and_then(GpuContext::runtime_info));
+                let folder = match &output {
+                    SweepOutput::Memory => None,
+                    SweepOutput::Directory(dir) => Some(dir.as_path()),
                 };
-                let ran = catching(RUNNING_SWEEP, || match (&output, search_plan) {
-                    (SweepOutput::Memory, None) => run_in_memory(&inputs, plan, &mut channel),
-                    (SweepOutput::Directory(dir), None) => run_into_directory(&inputs, plan, dir, &mut channel),
-                    (SweepOutput::Memory, Some(search_plan)) => {
-                        run_search_in_memory(&inputs, search_plan, &mut channel)
-                    }
-                    (SweepOutput::Directory(dir), Some(search_plan)) => {
-                        run_search_into_directory(&inputs, search_plan, dir, &mut channel)
+                let inputs = SweepInputs {
+                    entry: &entry,
+                    gpu,
+                    runtime: &runtime,
+                    spec: &spec,
+                    source: &sweep_options.spec_source,
+                    provenance: &sweep_options.provenance,
+                    options: &sweep_options,
+                    folder,
+                    dry_run: false,
+                };
+                let ran = catching(RUNNING_SWEEP, || match (folder, search_plan) {
+                    (None, None) => run_in_memory(&inputs, Some(plan), &mut channel),
+                    (Some(dir), None) => run_into_directory(&inputs, Some(plan), dir, &mut channel),
+                    (None, Some(search_plan)) => run_search_in_memory(&inputs, Some(search_plan), &mut channel),
+                    (Some(dir), Some(search_plan)) => {
+                        run_search_into_directory(&inputs, Some(search_plan), dir, &mut channel)
                     }
                 });
                 match ran {
@@ -578,65 +578,6 @@ const RUNNING_SWEEP: &str = "running the sweep";
 #[cfg(not(target_arch = "wasm32"))]
 const ACQUIRING_DEVICE: &str = "acquiring the sweep's GPU device";
 
-/// Model a sweep builds its runs from, with the device they step on and the host and device its manifest records.
-#[cfg(not(target_arch = "wasm32"))]
-struct BoundModel {
-    entry: ModelEntry,
-    gpu: Option<GpuContext>,
-    runtime: ManifestRuntime,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl BoundModel {
-    /// Returns `entry` on the device `gpu`, recorded as `runtime`.
-    ///
-    /// A GPU model with no `gpu` builds on a device acquired here, and the manifest records that device in place of
-    /// `runtime`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OwnDeviceError`] when no device can be acquired.
-    fn new(
-        entry: ModelEntry,
-        gpu: Option<GpuContext>,
-        runtime: Option<ManifestRuntime>,
-    ) -> Result<Self, OwnDeviceError> {
-        let Some(needs) = entry.gpu_needs().filter(|_| gpu.is_none()) else {
-            return Ok(Self {
-                entry,
-                gpu,
-                runtime: runtime.unwrap_or_else(|| ManifestRuntime::new(None)),
-            });
-        };
-        let ctx = crate::device::acquire_headless(needs).map_err(OwnDeviceError)?;
-        let runtime = ManifestRuntime::new(ctx.runtime_info());
-        Ok(Self {
-            entry,
-            gpu: Some(ctx),
-            runtime,
-        })
-    }
-}
-
-/// Reason a sweep cannot step a GPU model on a device of its own: no device could be acquired.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug)]
-struct OwnDeviceError(crate::device::DeviceError);
-
-#[cfg(not(target_arch = "wasm32"))]
-impl fmt::Display for OwnDeviceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("cannot acquire a GPU device for the sweep")
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl std::error::Error for OwnDeviceError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
 /// Sweep to launch, planned.
 ///
 /// A browser runs the whole plan of a CPU model into memory, so the fields that choose otherwise are native only.
@@ -656,14 +597,17 @@ struct SweepLaunch {
     resume: bool,
 }
 
-/// Returns the plan of `spec` over `entry`, and for a search its search plan. For a search, the first plan is the
-/// search plan's base.
+/// Returns the plan of `spec` over `entry` that a handle starts, and for a search its search plan. For a search, the
+/// first plan is the search plan's base.
 ///
 /// # Errors
 ///
 /// Returns [`SweepStartError`] when the spec names another model, or a browser a GPU model, or the spec cannot be
 /// planned.
-fn plan_spec(entry: &ModelEntry, spec: &SweepSpec) -> Result<(Arc<Plan>, Option<Arc<SearchPlan>>), SweepStartError> {
+fn plan_for_start(
+    entry: &ModelEntry,
+    spec: &SweepSpec,
+) -> Result<(Arc<Plan>, Option<Arc<SearchPlan>>), SweepStartError> {
     if spec.model != entry.id() {
         return Err(SweepStartError::ModelMismatch {
             spec_model: spec.model.clone(),
@@ -674,10 +618,10 @@ fn plan_spec(entry: &ModelEntry, spec: &SweepSpec) -> Result<(Arc<Plan>, Option<
         return Err(SweepStartError::GpuNeedsNative);
     }
     if spec.search.is_some() {
-        let search_plan = SearchPlan::new(spec, &model_schema(entry)).map_err(SweepStartError::Search)?;
+        let search_plan = SearchPlan::new(spec, &entry.schema()).map_err(SweepStartError::Search)?;
         return Ok((Arc::clone(search_plan.base()), Some(Arc::new(search_plan))));
     }
-    let plan = spec.plan(&model_schema(entry)).map_err(SweepStartError::Plan)?;
+    let plan = spec.plan(&entry.schema()).map_err(SweepStartError::Plan)?;
     Ok((Arc::new(plan), None))
 }
 

@@ -45,16 +45,16 @@ const SLICE_TARGET_MS: f64 = 20.0;
 /// Most steps one slice can take.
 const MAX_SLICE_STEPS: u64 = 1 << 20;
 
-/// Most GPU tracks [`choose_layout`] picks on its own.
-pub const MAX_AUTO_GPU_TRACKS: usize = 4;
+/// Most GPU tracks `choose_layout` picks on its own.
+pub(crate) const MAX_AUTO_GPU_TRACKS: usize = 4;
 
-/// Population from which [`choose_layout`] gives a GPU run the device to itself.
-pub const LARGE_GPU_POPULATION: u64 = 1 << 20;
+/// Population from which `choose_layout` gives a GPU run the device to itself.
+pub(crate) const LARGE_GPU_POPULATION: u64 = 1 << 20;
 
 /// Number of runs a sweep keeps going at once.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Concurrency {
-    /// Chosen from a probe build by [`choose_layout`].
+    /// Chosen from a probe build by `choose_layout`.
     #[default]
     Auto,
     /// This many CPU lanes, or GPU tracks for a GPU model.
@@ -85,22 +85,22 @@ impl FromStr for Concurrency {
 
 /// Machine resources a sweep can spread its runs over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExecutionBudget {
+pub(crate) struct ExecutionBudget {
     /// Worker threads the runs share.
-    pub workers: usize,
+    pub(crate) workers: usize,
     /// Bytes of host memory the live runs can hold together, `None` for no limit. The lanes are sized from the probed
     /// run, and a probed run larger than the budget leaves one lane.
-    pub memory_budget: Option<u64>,
+    pub(crate) memory_budget: Option<u64>,
     /// Bytes of device memory the live GPU runs can hold together, `None` for no limit. A run larger than the budget
     /// runs alone.
-    pub gpu_memory_budget: Option<u64>,
+    pub(crate) gpu_memory_budget: Option<u64>,
     /// Whether lanes can run on threads of their own.
-    pub can_spawn_threads: bool,
+    pub(crate) can_spawn_threads: bool,
 }
 
 impl ExecutionBudget {
     /// Returns the width of rayon's global pool as the workers, with no memory budget.
-    pub fn detect() -> Self {
+    pub(crate) fn detect() -> Self {
         Self {
             workers: rayon::current_num_threads(),
             memory_budget: None,
@@ -154,7 +154,7 @@ impl ExecutionLayout {
 /// A GPU model gets as many tracks as the GPU memory budget holds runs like the probe, up to
 /// [`MAX_AUTO_GPU_TRACKS`], and one track from a population of [`LARGE_GPU_POPULATION`]. [`Concurrency::Fixed`] sets
 /// the track count instead. The tracks are capped by `runs`.
-pub fn choose_layout(
+pub(crate) fn choose_layout(
     concurrency: Concurrency,
     resources: &ExecutionBudget,
     backend: Backend,
@@ -864,7 +864,6 @@ mod tests {
         LARGE_GPU_POPULATION, ReorderBuffer, RunRequest, RunSink, SliceSize, SweepControl, choose_layout,
     };
     use crate::probe::ProbeReport;
-    use crate::schema::model_schema;
     use crate::tests::support::{lanes, tracks};
 
     fn probe(parallel_jobs: Option<usize>, population: u64, heap_bytes: u64) -> ProbeReport {
@@ -1177,7 +1176,7 @@ mod tests {
             )],
             design_seed: None,
         }];
-        let plan = spec.plan(&model_schema(entry)).expect("a valid spec");
+        let plan = spec.plan(&entry.schema()).expect("a valid spec");
         let probe = ProbeReport::for_plan(entry, None, &plan).expect("the probe builds");
         let measure =
             MeasurePlan::new(plan.run_settings(), plan.measure_settings(), probe.columns).expect("the columns bind");
@@ -1289,7 +1288,7 @@ mod tests {
                 .to_vec(),
             design_seed: None,
         }];
-        let plan = spec.plan(&model_schema(&entry)).expect("a valid spec");
+        let plan = spec.plan(&entry.schema()).expect("a valid spec");
         let probe = ProbeReport::for_plan(&entry, None, &plan).expect("the probe builds");
         let measure = Arc::new(
             MeasurePlan::new(plan.run_settings(), plan.measure_settings(), probe.columns).expect("the columns bind"),

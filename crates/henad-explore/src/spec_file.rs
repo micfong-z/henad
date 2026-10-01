@@ -28,6 +28,7 @@ use henad_core::explore::spec::{ActionSpec, BlockSpec, MeasureSettings, RunSetti
 use henad_core::explore::stop::{StopError, StopSpec};
 
 use crate::exec::Concurrency;
+use crate::sweep::SpecSource;
 
 /// A sweep spec as a TOML file writes it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1020,6 +1021,8 @@ pub enum SpecFileError {
     /// A factor of the search space on the parameter or action `target_name`, with none or several of `values`,
     /// `range` and `levels`.
     SearchFactorLevels { target_name: String },
+    /// A spec that cannot be written as TOML, for the reason in `source`.
+    Write { source: toml::ser::Error },
 }
 
 impl fmt::Display for SpecFileError {
@@ -1051,6 +1054,7 @@ impl fmt::Display for SpecFileError {
                 f,
                 "factor '{target_name}' of the search space needs exactly one of values, range and levels"
             ),
+            Self::Write { .. } => f.write_str("cannot write the spec as TOML"),
         }
     }
 }
@@ -1063,6 +1067,7 @@ impl std::error::Error for SpecFileError {
             Self::Json { source } => Some(source),
             Self::Reducer(error) => Some(error),
             Self::Stop(error) => Some(error),
+            Self::Write { source } => Some(source),
             Self::TablePath { .. }
             | Self::FactorTarget { .. }
             | Self::FactorLevels { .. }
@@ -1072,6 +1077,69 @@ impl std::error::Error for SpecFileError {
             | Self::SearchFactorTarget
             | Self::SearchFactorLevels { .. } => None,
         }
+    }
+}
+
+/// A spec file read whole: the spec, the text it was read from, and its execution settings.
+#[derive(Debug, Clone)]
+pub struct LoadedSpec {
+    pub spec: SweepSpec,
+    /// Path, text and design tables of the file, as a manifest records them.
+    pub spec_source: SpecSource,
+    /// The file's `[execution]` table, which [`SweepOptions::apply_execution`] applies.
+    ///
+    /// [`SweepOptions::apply_execution`]: crate::sweep::SweepOptions::apply_execution
+    pub execution: ExecutionTable,
+}
+
+impl LoadedSpec {
+    /// Reads the file at `path`, reading a table design's file relative to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`SpecFile::load`] and [`SpecFile::into_spec`].
+    pub fn read(path: &Path) -> Result<Self, SpecFileError> {
+        let (file, text) = SpecFile::load(path)?;
+        let spec_source = SpecSource::loaded(path, text, &file);
+        Self::from_file(file, spec_source)
+    }
+
+    /// Reads spec text that names no table file.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`SpecFile::parse`] and [`SpecFile::into_spec`]. A block that names a table `file` is
+    /// refused, since no file is read. A table design given inline as `table_text` is read.
+    pub fn parse(text: &str) -> Result<Self, SpecFileError> {
+        let file = SpecFile::parse(text)?;
+        let spec_source = SpecSource {
+            path: None,
+            toml: Some(text.to_owned()),
+            tables: Vec::new(),
+        };
+        Self::from_file(file, spec_source)
+    }
+
+    /// Writes the spec and its execution table as spec-file text, as the app's Save spec does.
+    ///
+    /// A table design's rows are written inline, as a manifest records them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpecFileError::Write`] when the spec cannot be written as TOML.
+    pub fn to_toml(&self) -> Result<String, SpecFileError> {
+        let mut file = SpecFile::from(&self.spec);
+        file.execution = self.execution;
+        file.to_toml().map_err(|source| SpecFileError::Write { source })
+    }
+
+    fn from_file(file: SpecFile, spec_source: SpecSource) -> Result<Self, SpecFileError> {
+        let execution = file.execution;
+        Ok(Self {
+            spec: file.into_spec()?,
+            spec_source,
+            execution,
+        })
     }
 }
 
@@ -1337,7 +1405,6 @@ mod tests {
 
     use super::{DesignTableFile, ExecutionTable, SpecFile, SpecFileError, SpecValue};
     use crate::exec::Concurrency;
-    use crate::schema::model_schema;
     use crate::tests::support::ScratchDir;
 
     const SWEEP: &str = r#"
@@ -1567,7 +1634,7 @@ e = 1e-3
                 .get(&spec.model)
                 .expect("an example spec names a registered model");
             let plan = spec
-                .plan(&model_schema(entry))
+                .plan(&entry.schema())
                 .unwrap_or_else(|error| panic!("{} does not plan: {error:?}", path.display()));
             let name = path.file_name().map(|name| name.to_string_lossy().into_owned());
             planned.push((name.unwrap_or_default(), plan.configs().len(), plan.run_count()));
@@ -1709,7 +1776,7 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
         assert_eq!(back, spec, "{text}");
         let models = henad_models::example_models();
         let sir = models.get("sir").expect("sir is registered");
-        let plan = spec.plan(&model_schema(sir)).expect("the spec plans");
+        let plan = spec.plan(&sir.schema()).expect("the spec plans");
         assert_eq!(plan.configs().len(), 43);
     }
 
@@ -1819,7 +1886,7 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
         assert_eq!(back.blocks[0].design_seed, None, "{text}");
         let models = henad_models::example_models();
         let sir = models.get("sir").expect("sir is registered");
-        let plan_hash = |spec: &SweepSpec| spec.plan(&model_schema(sir)).expect("the spec plans").plan_hash();
+        let plan_hash = |spec: &SweepSpec| spec.plan(&sir.schema()).expect("the spec plans").plan_hash();
         assert_eq!(plan_hash(&back), plan_hash(&spec), "a factorial design draws nothing");
     }
 

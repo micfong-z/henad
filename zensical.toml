@@ -111,6 +111,7 @@ nav = [
             { "#32, 2026-10-01" = "developing/agent-record/20261001-32-library-entries.md" },
             { "#33, 2026-10-01" = "developing/agent-record/20261001-33-library-hosts.md" },
             { "#34, 2026-10-01" = "developing/agent-record/20261001-34-library-shaders.md" },
+            { "#35, 2026-10-01" = "developing/agent-record/20261001-35-library-api.md" },
         ] },
     ] },
 ]

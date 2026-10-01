@@ -10,6 +10,7 @@
 //! both are complete, then both are renamed into place and the marker is removed. A process that ends between the
 //! marker and its removal leaves the replacement for [`OutputDir::open`] to finish.
 
+pub mod details;
 pub mod manifest;
 pub mod memory;
 pub mod read;
@@ -74,7 +75,7 @@ fn staged_path(dir: &Path, file: &str) -> PathBuf {
 /// Returns the paths of `runs.csv` and `series.csv` in the directory at `path`, as they stand.
 ///
 /// A staged table stands in for its original while a replacement waits to be finished.
-pub fn table_paths(path: &Path) -> (PathBuf, PathBuf) {
+pub(crate) fn table_paths(path: &Path) -> (PathBuf, PathBuf) {
     let complete = path.join(STAGED_MARKER).exists();
     let current = |file: &str| {
         let staged = staged_path(path, file);
@@ -362,7 +363,7 @@ impl OutputDir {
 /// # Errors
 ///
 /// Returns [`OutputError::Manifest`] when the manifest cannot be serialized.
-pub fn manifest_text(manifest: &Manifest) -> Result<String, OutputError> {
+pub(crate) fn manifest_text(manifest: &Manifest) -> Result<String, OutputError> {
     let mut text = serde_json::to_string_pretty(manifest).map_err(OutputError::Manifest)?;
     text.push('\n');
     Ok(text)

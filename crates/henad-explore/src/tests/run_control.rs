@@ -164,7 +164,8 @@ fn an_action_due_after_the_last_tick_is_warned_about() {
         &sir,
         None,
         &wave_spec(&["10", "41", "90"]),
-        &sweep_options(scratch.path(), false),
+        scratch.path(),
+        &sweep_options(false),
         &mut progress,
     )
     .expect("the sweep runs");

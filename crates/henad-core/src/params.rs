@@ -77,6 +77,26 @@ pub enum ParamValue {
     Choice(usize),
 }
 
+// The set of conversions is closed. An unsuffixed literal infers `u32` or `f32` only while exactly one integer and
+// one float conversion exist, and a fourth one such as `From<usize>` stops `set("grid_width", 256)` compiling.
+impl From<f32> for ParamValue {
+    fn from(value: f32) -> Self {
+        Self::F32(value)
+    }
+}
+
+impl From<u32> for ParamValue {
+    fn from(value: u32) -> Self {
+        Self::U32(value)
+    }
+}
+
+impl From<bool> for ParamValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
 impl ParamKind {
     pub fn default_value(&self) -> ParamValue {
         match *self {

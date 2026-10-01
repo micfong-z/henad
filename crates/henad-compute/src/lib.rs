@@ -3,7 +3,8 @@
 //! [`cpu`] and [`gpu`] are siblings, not a base and a specialisation. Each holds its own runner,
 //! its own engines, and its own primitives. [`snapshot`], [`runtime_info`], [`display_scale`] and
 //! [`fault`] are shared, since both backends publish through them. [`runner`] is how either
-//! one gets driven. [`entry`] type-erases a model behind one entry a host can list and build.
+//! one gets driven. [`entry`] type-erases a model behind one entry a host can list and build, and
+//! [`simulation`] builds one with checked values and steps it from a program.
 
 /// Brings in the Rust that henad-build generated from the crate's WGSL, as the modules `shader_bindings` and
 /// `binding_decls`.
@@ -74,6 +75,7 @@ pub mod fault;
 pub mod gpu;
 pub mod runner;
 pub mod runtime_info;
+pub mod simulation;
 pub mod snapshot;
 
 /// Items the code [`include_shaders!`] brings in names through `$crate`.

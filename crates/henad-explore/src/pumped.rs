@@ -9,9 +9,8 @@ use std::sync::Arc;
 use web_time::Instant;
 
 use henad_compute::entry::ModelEntry;
-use henad_compute::fault::install_panic_hook;
 use henad_compute::runner::{PUMP_BUDGET_MS, Pace, SimLoop};
-use henad_core::explore::plan::{Plan, Shard};
+use henad_core::explore::plan::Plan;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::metadata::Backend;
 
@@ -24,9 +23,7 @@ use crate::output::memory::{SweepFiles, memory_writer};
 use crate::probe::{PlanProbe, TimedProbe};
 use crate::progress::{Progress as _, ProgressEvent};
 use crate::search_run::{AskedBatch, SearchPlan, SearchPreparation, SearchWriters, watched_values};
-use crate::sweep::{
-    ExploreError, Provenance, SpecSource, SweepInputs, SweepOptions, SweepPreparation, SweepRecord, finish_manifest,
-};
+use crate::sweep::{ExploreError, SweepInputs, SweepOptions, SweepPreparation, SweepRecord, finish_manifest};
 
 /// Wall time in milliseconds one slice of steps aims to take.
 const PUMP_SLICE_MS: f64 = PUMP_BUDGET_MS / 2.0;
@@ -64,8 +61,6 @@ struct SweepSetup {
     plan: Arc<Plan>,
     /// Plan of a search, `None` for a sweep.
     search_plan: Option<Arc<SearchPlan>>,
-    source: SpecSource,
-    provenance: Provenance,
     runtime: ManifestRuntime,
     options: SweepOptions,
     active_runs: ActiveRuns,
@@ -78,9 +73,11 @@ impl SweepSetup {
             gpu: None,
             runtime: &self.runtime,
             spec: &self.spec,
-            source: &self.source,
-            provenance: &self.provenance,
+            source: &self.options.spec_source,
+            provenance: &self.options.provenance,
             options: &self.options,
+            folder: None,
+            dry_run: false,
         }
     }
 
@@ -173,27 +170,19 @@ impl PumpedSweep {
             return Err(SweepStartError::GpuNeedsNative);
         }
         let active_runs = ActiveRuns::new();
-        let sweep_options = SweepOptions {
-            output_dir: None,
-            concurrency: Concurrency::Fixed(std::num::NonZeroUsize::MIN),
-            memory_budget: options.memory_budget,
-            gpu_memory: options.gpu_memory,
-            dry_run: false,
-            control: SweepControl::new(),
-            shard: Shard::WHOLE,
-            resume: false,
-            retry_failed: false,
-            active_runs: Some(active_runs.clone()),
-        };
+        let mut sweep_options = SweepOptions::new(options.provenance);
+        sweep_options.concurrency = Concurrency::Fixed(std::num::NonZeroUsize::MIN);
+        sweep_options.memory_budget = options.memory_budget;
+        sweep_options.gpu_memory = options.gpu_memory;
+        sweep_options.active_runs = Some(active_runs.clone());
+        sweep_options.spec_source = options.spec_source;
         Ok(Self {
             setup: SweepSetup {
                 entry,
                 spec,
                 plan,
                 search_plan,
-                source: options.source,
-                provenance: options.provenance,
-                runtime: options.runtime.unwrap_or_else(|| ManifestRuntime::new(None)),
+                runtime: ManifestRuntime::new(None),
                 options: sweep_options,
                 active_runs,
             },
@@ -448,17 +437,14 @@ impl SimLoop for PumpedSweep {
         let control = &self.setup.options.control;
         let pumped = match &mut self.stage {
             PumpStage::Ended => return Pace::Idle,
-            PumpStage::Probing(probe) => {
-                install_panic_hook();
-                match probe.step(&self.setup.entry, None, self.setup.probed_plan()) {
-                    Ok(None) => return Pace::Now,
-                    Ok(Some(timed)) => {
-                        self.stage = PumpStage::Probed(Box::new(timed));
-                        return Pace::Now;
-                    }
-                    Err(error) => Err(error.into()),
+            PumpStage::Probing(probe) => match probe.step(&self.setup.entry, None, self.setup.probed_plan()) {
+                Ok(None) => return Pace::Now,
+                Ok(Some(timed)) => {
+                    self.stage = PumpStage::Probed(Box::new(timed));
+                    return Pace::Now;
                 }
-            }
+                Err(error) => Err(error.into()),
+            },
             PumpStage::Probed(_) => {
                 if let PumpStage::Probed(timed) = std::mem::replace(&mut self.stage, PumpStage::Ended) {
                     self.prepare(*timed);
@@ -513,7 +499,6 @@ mod tests {
     use crate::handle::{SweepChannel, SweepEvent, SweepRunOptions};
     use crate::output::manifest::now_unix_ms;
     use crate::probe::MAX_PROBED_CONFIGS;
-    use crate::schema::model_schema;
     use crate::search_run::SearchPlan;
     use crate::sweep::SweepEnd;
     use crate::tests::broken::DividesByParam;
@@ -523,10 +508,7 @@ mod tests {
     const MAX_PUMPS: usize = 10_000;
 
     fn options() -> SweepRunOptions {
-        SweepRunOptions {
-            provenance: provenance(),
-            ..SweepRunOptions::default()
-        }
+        SweepRunOptions::new(provenance())
     }
 
     fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -538,7 +520,7 @@ mod tests {
 
     /// Returns a pumped sweep of `spec` over `entry`, a search when `spec` has one, and the receiver of its events.
     fn pumped(entry: ModelEntry, spec: SweepSpec) -> (PumpedSweep, Receiver<SweepEvent>) {
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let (plan, search_plan) = if spec.search.is_some() {
             let search_plan = Arc::new(SearchPlan::new(&spec, &schema).expect("a valid search"));
             (Arc::clone(search_plan.base()), Some(search_plan))

@@ -94,7 +94,7 @@ impl SweepFiles {
 /// # Errors
 ///
 /// Returns [`OutputError::Write`] when a header cannot be written.
-pub fn memory_writer(
+pub(crate) fn memory_writer(
     plan: &Arc<Plan>,
     params: &[ParamDescriptor],
     measure: &MeasurePlan,

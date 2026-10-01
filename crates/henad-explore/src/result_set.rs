@@ -12,11 +12,10 @@ use std::fmt;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 
-use henad_compute::entry::ModelEntry;
 use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::{PlannedRun, RunOutcome};
-use henad_core::explore::plan::{Config, Plan, PlanError};
+use henad_core::explore::plan::{Config, ModelSchema, Plan, PlanError};
 use henad_core::explore::replay::Replay;
 use henad_core::explore::spec::SweepSpec;
 
@@ -33,7 +32,6 @@ use crate::output::series_csv::SERIES_ID_COLUMNS;
 use crate::output::{
     ARCHIVE_FILE, BATCHES_FILE, BEST_FILE, EVALUATIONS_FILE, GENERATIONS_FILE, MANIFEST_FILE, RUNS_FILE, SERIES_FILE,
 };
-use crate::schema::model_schema;
 use crate::search_run::{SearchPlan, SearchPlanError};
 use crate::spec_file::{SpecFile, SpecFileError};
 use crate::sweep::hex;
@@ -331,24 +329,24 @@ impl ResultSet {
         self.manifest.status == ManifestStatus::Complete
     }
 
-    /// Returns whether `entry` declares the parameters, stats and actions the sweep ran with.
+    /// Returns whether `schema` declares the parameters, stats and actions the sweep ran with.
     ///
-    /// A replay of a run through an entry that does not match might differ from the run.
-    pub fn schema_matches(&self, entry: &ModelEntry) -> bool {
-        entry.id() == self.manifest.model.id
-            && hex(schema_hash(&model_schema(entry))) == self.manifest.model.schema_hash
+    /// A replay of a run through a model that does not match might differ from the run. A host passes
+    /// `entry.schema()` for a [`ModelEntry`](henad_compute::entry::ModelEntry).
+    pub fn schema_matches(&self, schema: ModelSchema<'_>) -> bool {
+        schema.id == self.manifest.model.id && hex(schema_hash(&schema)) == self.manifest.model.schema_hash
     }
 
-    /// Plans the recorded spec against `entry`.
+    /// Plans the recorded spec against `schema`.
     ///
     /// # Errors
     ///
     /// Returns [`PlanError`] when the model refuses the spec.
-    pub fn plan(&self, entry: &ModelEntry) -> Result<Plan, PlanError> {
-        self.spec.plan(&model_schema(entry))
+    pub fn plan(&self, schema: ModelSchema<'_>) -> Result<Plan, PlanError> {
+        self.spec.plan(&schema)
     }
 
-    /// Returns the [`Replay`] of run `run_id` through `entry`.
+    /// Returns the [`Replay`] of run `run_id` through the model `schema` declares.
     ///
     /// The spec is planned afresh on each call. A host that replays several runs of a sweep plans once with
     /// [`Self::plan`] and calls [`Plan::replay`]. A search's run is rebuilt from the config its row records.
@@ -358,16 +356,16 @@ impl ResultSet {
     /// Returns [`ResultReplayError`] when the model refuses the spec, `runs.csv` holds no run `run_id`, or the plan
     /// gives the run another config, replicate, seed or run key than its row. The run key covers the config's
     /// parameter values and action ticks. It also hashes the model's declarations, so it is compared only while
-    /// [`Self::schema_matches`] holds for `entry`.
-    pub fn replay(&self, entry: &ModelEntry, run_id: u64) -> Result<Replay, ResultReplayError> {
+    /// [`Self::schema_matches`] holds for `schema`.
+    pub fn replay(&self, schema: ModelSchema<'_>, run_id: u64) -> Result<Replay, ResultReplayError> {
         let recorded = self.run(run_id).ok_or(ResultReplayError::UnknownRun { run_id })?;
         if self.is_search() {
-            return self.search_replay(entry, recorded);
+            return self.search_replay(schema, recorded);
         }
-        let plan = self.plan(entry).map_err(ResultReplayError::Plan)?;
+        let plan = self.plan(schema).map_err(ResultReplayError::Plan)?;
         match plan.run(run_id) {
             Some(planned)
-                if planned == recorded.outcome.run && self.key_matches(entry, plan.run_key(&planned), recorded) =>
+                if planned == recorded.outcome.run && self.key_matches(schema, plan.run_key(&planned), recorded) =>
             {
                 plan.replay(run_id).ok_or(ResultReplayError::Mismatch { run_id })
             }
@@ -376,18 +374,18 @@ impl ResultSet {
     }
 
     /// Returns the [`Replay`] of `recorded`, a run of a search, from the config its row records.
-    fn search_replay(&self, entry: &ModelEntry, recorded: &RunRow) -> Result<Replay, ResultReplayError> {
+    fn search_replay(&self, schema: ModelSchema<'_>, recorded: &RunRow) -> Result<Replay, ResultReplayError> {
         let run = recorded.outcome.run;
         let mismatch = || ResultReplayError::Mismatch { run_id: run.run_id };
-        let plan = SearchPlan::new(&self.spec, &model_schema(entry)).map_err(ResultReplayError::Search)?;
-        let params = entry.param_descriptors().len();
+        let plan = SearchPlan::new(&self.spec, &schema).map_err(ResultReplayError::Search)?;
+        let params = schema.params.len();
         if recorded.values.len() != params + plan.base().actions().len() {
             return Err(mismatch());
         }
         let config = Config {
             block: recorded.block,
-            params: entry
-                .param_descriptors()
+            params: schema
+                .params
                 .iter()
                 .zip(&recorded.values)
                 .map(|(descriptor, text)| parse_value(&descriptor.kind, text).ok())
@@ -399,16 +397,16 @@ impl ResultSet {
                 .collect::<Option<_>>()
                 .ok_or_else(mismatch)?,
         };
-        if !self.key_matches(entry, plan.run_key(&run, &config), recorded) {
+        if !self.key_matches(schema, plan.run_key(&run, &config), recorded) {
             return Err(mismatch());
         }
         Ok(plan.replay(&run, &config))
     }
 
-    /// Returns whether `key`, the key a plan through `entry` gives `recorded`, matches the key its row holds. Any key
-    /// matches once `entry` no longer declares what the sweep ran with.
-    fn key_matches(&self, entry: &ModelEntry, key: u64, recorded: &RunRow) -> bool {
-        !self.schema_matches(entry) || key == recorded.outcome.run_key
+    /// Returns whether `key`, the key a plan through `schema` gives `recorded`, matches the key its row holds. Any key
+    /// matches once `schema` no longer declares what the sweep ran with.
+    fn key_matches(&self, schema: ModelSchema<'_>, key: u64, recorded: &RunRow) -> bool {
+        !self.schema_matches(schema) || key == recorded.outcome.run_key
     }
 
     /// Returns whether the results are a search's.

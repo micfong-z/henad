@@ -14,10 +14,10 @@ use crate::exec::Concurrency;
 use crate::output::manifest::ManifestStatus;
 use crate::output::resume::ResumeError;
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
-use crate::sweep::{ExploreError, Provenance, SpecSource, SweepOptions, SweepWarning, run_sweep};
+use crate::sweep::{ExploreError, SweepOptions, SweepWarning};
 use crate::tests::broken::DividesByParam;
 use crate::tests::support::{
-    OutputTables, Recorder, ScratchDir, entry, manifest, provenance, sweep, sweep_options, sweep_with,
+    OutputTables, Recorder, ScratchDir, dry_run, entry, manifest, sweep, sweep_options, sweep_with,
 };
 
 fn values(raw: &[&str]) -> LevelSpec {
@@ -53,11 +53,10 @@ fn resume(entry_id: &str, spec: &SweepSpec, output_dir: &Path, options: SweepOpt
     let model = entry(entry_id, None);
     let mut progress = Recorder::default();
     let options = SweepOptions {
-        output_dir: Some(output_dir.to_owned()),
         resume: true,
         ..options
     };
-    sweep_with(&model, None, spec, &options, &mut progress).expect("the sweep resumes");
+    sweep_with(&model, None, spec, output_dir, &options, &mut progress).expect("the sweep resumes");
     progress.committed
 }
 
@@ -97,7 +96,7 @@ fn a_resumed_sweep_skips_finished_runs_and_matches_a_fresh_one() {
     series.push_str("5,1");
     fs::write(resumed_dir.join(SERIES_FILE), series).expect("series.csv gains a partial line");
 
-    let committed = resume("sir", &spec, &resumed_dir, SweepOptions::default());
+    let committed = resume("sir", &spec, &resumed_dir, sweep_options(false));
     assert_eq!(committed, [2, 3, 4, 5], "runs 0 and 1 were kept");
     assert_eq!(OutputTables::read(&resumed_dir), OutputTables::read(&fresh_dir));
     let recorded = manifest(&resumed_dir);
@@ -111,7 +110,7 @@ fn a_resumed_sweep_skips_finished_runs_and_matches_a_fresh_one() {
     assert_eq!(recorded.results.map(|results| results.rows), Some(6));
 
     assert!(
-        resume("sir", &spec, &resumed_dir, SweepOptions::default()).is_empty(),
+        resume("sir", &spec, &resumed_dir, sweep_options(false)).is_empty(),
         "a complete directory has nothing left to run"
     );
     assert_eq!(OutputTables::read(&resumed_dir), OutputTables::read(&fresh_dir));
@@ -128,26 +127,10 @@ fn a_dry_run_counts_the_runs_a_resume_skips_and_changes_nothing() {
     fs::write(scratch.path().join(RUNS_FILE), &cut).expect("runs.csv is cut");
     let series = fs::read(scratch.path().join(SERIES_FILE)).expect("series.csv is written");
 
-    let options = SweepOptions {
-        dry_run: true,
-        ..sweep_options(scratch.path(), true)
-    };
+    let mut options = sweep_options(true);
+    options.provenance.commit = "other".to_owned();
     let mut progress = Recorder::default();
-    let provenance = Provenance {
-        commit: "other".to_owned(),
-        ..provenance()
-    };
-    let report = run_sweep(
-        &sir,
-        None,
-        None,
-        &spec,
-        &SpecSource::default(),
-        &provenance,
-        &options,
-        &mut progress,
-    )
-    .expect("the dry run plans");
+    let report = dry_run(&sir, &spec, Some(scratch.path()), &options, &mut progress).expect("the dry run plans");
     assert_eq!((report.outline.skipped, report.outline.pending), (3, 3));
     assert_eq!(
         progress.warnings,
@@ -186,7 +169,8 @@ fn resume_refuses_a_changed_spec() {
             &sir,
             None,
             &changed,
-            &sweep_options(scratch.path(), true),
+            scratch.path(),
+            &sweep_options(true),
             &mut Recorder::default(),
         )
         .expect_err("another plan");
@@ -197,9 +181,10 @@ fn resume_refuses_a_changed_spec() {
     }
     let sharded = SweepOptions {
         shard: Shard::new(1, 2).expect("a valid shard"),
-        ..sweep_options(scratch.path(), true)
+        ..sweep_options(true)
     };
-    let error = sweep_with(&sir, None, &spec, &sharded, &mut Recorder::default()).expect_err("another shard");
+    let error =
+        sweep_with(&sir, None, &spec, scratch.path(), &sharded, &mut Recorder::default()).expect_err("another shard");
     assert!(
         matches!(error, ExploreError::Resume(ResumeError::ShardChanged { .. })),
         "{error:?}"
@@ -211,7 +196,7 @@ fn resume_refuses_a_changed_spec() {
     let mut timed = spec.clone();
     timed.run.timeout = Some(Duration::from_secs(600));
     assert!(
-        resume("sir", &timed, scratch.path(), SweepOptions::default()).is_empty(),
+        resume("sir", &timed, scratch.path(), sweep_options(false)).is_empty(),
         "the timeout is no part of the plan"
     );
 }
@@ -244,10 +229,10 @@ fn retry_failed_reruns_only_failures() {
     let resumed = |retry_failed: bool| {
         let options = SweepOptions {
             retry_failed,
-            ..sweep_options(scratch.path(), true)
+            ..sweep_options(true)
         };
         let mut progress = Recorder::default();
-        sweep_with(&model, None, &spec, &options, &mut progress).expect("the sweep resumes");
+        sweep_with(&model, None, &spec, scratch.path(), &options, &mut progress).expect("the sweep resumes");
         progress.committed
     };
     assert!(resumed(false).is_empty(), "a failed run counts as finished");
@@ -271,7 +256,7 @@ fn raising_replicates_on_resume_runs_only_the_new_ones() {
     let scratch = ScratchDir::new("more-replicates");
     let resumed_dir = scratch.path().join("resumed");
     sweep(&sir, None, &sir_spec(2), &resumed_dir, Concurrency::Auto);
-    let committed = resume("sir", &sir_spec(3), &resumed_dir, SweepOptions::default());
+    let committed = resume("sir", &sir_spec(3), &resumed_dir, sweep_options(false));
     assert_eq!(committed, [2, 5, 8], "replicate 2 of each config");
 
     let fresh_dir = scratch.path().join("fresh");
@@ -289,7 +274,8 @@ fn raising_replicates_on_resume_runs_only_the_new_ones() {
         &sir,
         None,
         &sir_spec(1),
-        &sweep_options(&resumed_dir, true),
+        &resumed_dir,
+        &sweep_options(true),
         &mut Recorder::default(),
     )
     .expect_err("fewer replicates");
@@ -332,7 +318,7 @@ fn a_run_past_its_timeout_is_recorded_and_resume_retries_it() {
     }
     assert!(timed_out.run_column("note")[0].starts_with("timed out after 0 s"));
 
-    let committed = resume("sir", &sir_spec(2), &resumed_dir, SweepOptions::default());
+    let committed = resume("sir", &sir_spec(2), &resumed_dir, sweep_options(false));
     assert_eq!(committed, [0, 1, 2, 3, 4, 5], "a timed-out run is never finished");
     let fresh_dir = scratch.path().join("fresh");
     sweep(&sir, None, &sir_spec(2), &fresh_dir, Concurrency::Auto);

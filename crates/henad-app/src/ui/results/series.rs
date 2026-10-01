@@ -435,7 +435,6 @@ mod tests {
     use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
     use henad_core::explore::plan::Plan;
     use henad_core::explore::spec::SweepSpec;
-    use henad_explore::schema::model_schema;
     use henad_models::example_models;
 
     use super::{ConfigBand, SeriesPlot, SeriesView, center_line, draw_plot, thin_band};
@@ -565,7 +564,7 @@ mod tests {
         spec.run.replicates = 2;
         spec.measure.stats_every = 10;
         spec.measure.series_every = 10;
-        let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
+        let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
         let mut store = ResultsStore::for_sweep(Arc::clone(&plan), &sir, None, usize::MAX);
         store.set_columns(&["Susceptible", "Infected", "Recovered"].map(str::to_owned), &[]);
         store.push_run(run(&plan, 0, 2.0), false);

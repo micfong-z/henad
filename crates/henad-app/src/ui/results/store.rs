@@ -28,7 +28,6 @@ use henad_core::explore::value::{format_value, parse_value};
 use henad_core::params::ParamDescriptor;
 use henad_explore::output::search_tables::SearchHistory;
 use henad_explore::result_set::ResultSet;
-use henad_explore::schema::model_schema;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
 
 use crate::state::lookup_message;
@@ -598,7 +597,7 @@ impl ResultsStore {
         let recorded = &set.manifest().model;
         let (model_id, model_name) = (recorded.id.clone(), recorded.name.clone());
         let entry = model.as_ref().ok().copied();
-        let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry));
+        let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry.schema()));
         let search = set
             .spec()
             .search
@@ -618,7 +617,7 @@ impl ResultsStore {
             });
         let plan = match model {
             Err(error) => Err(lookup_message(&error)),
-            Ok(entry) if search.is_some() => SearchPlan::new(set.spec(), &model_schema(entry))
+            Ok(entry) if search.is_some() => SearchPlan::new(set.spec(), &entry.schema())
                 .map(|search_plan| ReplayPlan::Search(Arc::new(search_plan)))
                 .map_err(|error| {
                     format!(
@@ -628,7 +627,7 @@ impl ResultsStore {
                     )
                 }),
             Ok(entry) => set
-                .plan(entry)
+                .plan(entry.schema())
                 .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
                 .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error))),
         };
@@ -1723,7 +1722,6 @@ mod tests {
     use henad_core::explore::search::{Aggregate, CandidateOrigin, Goal, Objective, SearchAlgorithm, SearchSpec};
     use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
     use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
-    use henad_explore::schema::model_schema;
     use henad_explore::search_run::{EvaluatedCandidate, EvaluationReading, SearchPlan, SearchUpdate};
     use henad_models::example_models;
 
@@ -1760,7 +1758,7 @@ mod tests {
     /// Returns the plan of an SIR factorial over `factors` with `replicates` runs per config.
     fn plan(entry: &ModelEntry, factors: Vec<FactorSpec>, replicates: u64) -> Arc<Plan> {
         let spec = factorial_spec(factors, replicates);
-        Arc::new(spec.plan(&model_schema(entry)).expect("a valid spec"))
+        Arc::new(spec.plan(&entry.schema()).expect("a valid spec"))
     }
 
     /// Returns a store for `plan` whose runs record one reducer, `Infected:max`.
@@ -1977,7 +1975,7 @@ mod tests {
     #[test]
     fn a_search_candidate_lists_its_searched_values_once_its_batch_ends() {
         let sir = sir();
-        let schema = model_schema(&sir);
+        let schema = sir.schema();
         let mut spec = SweepSpec::new("sir");
         spec.search = Some(random_search(vec![FactorSpec::param(
             "infection_rate",
@@ -2202,7 +2200,7 @@ mod tests {
                 step: None,
             },
         )]));
-        let search_plan = SearchPlan::new(&spec, &model_schema(&entry)).expect("a valid search");
+        let search_plan = SearchPlan::new(&spec, &entry.schema()).expect("a valid search");
         (entry, Arc::new(search_plan))
     }
 
@@ -2449,7 +2447,7 @@ mod tests {
     fn schema_with<'a>(entry: &'a ModelEntry, params: &'a [ParamDescriptor]) -> ModelSchema<'a> {
         ModelSchema {
             params,
-            ..model_schema(entry)
+            ..entry.schema()
         }
     }
 
@@ -2487,7 +2485,7 @@ mod tests {
         )]));
         let params = params_before_change(&sir);
         let recorded_plan = SearchPlan::new(&spec, &schema_with(&sir, &params)).expect("a valid search");
-        let search_plan = SearchPlan::new(&spec, &model_schema(&sir)).expect("a valid search");
+        let search_plan = SearchPlan::new(&spec, &sir.schema()).expect("a valid search");
         let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, None, usize::MAX);
         let mut values: Vec<ParamValue> = params.iter().map(|param| param.kind.default_value()).collect();
         values[2] = ParamValue::F32(0.25);
@@ -2637,7 +2635,7 @@ mod tests {
         // Configs 0 and 1 vary the infection rate, and configs 2 and 3 the recovery rate. Configs 1 and 2 are the
         // baseline both blocks share.
         spec.blocks = vec![block(&["0.1", "0.3"], &["0.05"]), block(&["0.3"], &["0.05", "0.1"])];
-        let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
+        let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
         let mut store = store(&sir, Arc::clone(&plan), usize::MAX);
         for (run_id, value) in [10.0, 14.0, 20.0, 22.0, 20.0, 22.0, 40.0, 44.0].into_iter().enumerate() {
             store.push_run(outcome(&plan, run_id as u64, RunStatus::Ok, value, &[0.0]), false);
@@ -2821,7 +2819,7 @@ mod tests {
             factors: names.map(|name| FactorSpec::action(name, values(&["0", "5"]))).to_vec(),
             design_seed: None,
         }];
-        let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
+        let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
         let store = store(&sir, plan, usize::MAX);
         let labels: Vec<&str> = store.axes().iter().map(|axis| axis.label.as_str()).collect();
         assert_eq!(
@@ -2877,7 +2875,7 @@ mod tests {
             factors: vec![FactorSpec::param("infection_rate", values(&["0.3", "0.45"]))],
             design_seed: None,
         }];
-        let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
+        let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
         let mut store = store(&sir, Arc::clone(&plan), usize::MAX);
         let mut stopped = outcome(&plan, 1, RunStatus::Ok, 1.0, &[1.0]);
         stopped.ticks = 25;
@@ -2934,9 +2932,10 @@ mod tests {
         use henad_compute::fault::FaultSink;
         use henad_core::explore::stop::StopSpec;
         use henad_core::export::stats_csv::StatColumns;
+        use henad_explore::handle::SweepOutput;
         use henad_explore::progress::NoProgress;
         use henad_explore::result_set::ResultSet;
-        use henad_explore::sweep::{SweepOptions, run_sweep};
+        use henad_explore::sweep::{SweepOptions, run_spec};
 
         use crate::ui::results::store::ResultsSource;
 
@@ -2963,14 +2962,10 @@ mod tests {
         }];
         let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-results-{}", std::process::id())));
         drop(std::fs::remove_dir_all(&folder.0));
-        let options = SweepOptions {
-            output_dir: Some(folder.0.clone()),
-            ..SweepOptions::default()
-        };
+        let options = SweepOptions::new(henad_explore::sweep::Provenance::default());
         let sir = models.get("sir").expect("SIR is registered");
-        let source = henad_explore::sweep::SpecSource::default();
-        let provenance = henad_explore::sweep::Provenance::default();
-        run_sweep(sir, None, None, &spec, &source, &provenance, &options, &mut NoProgress).expect("the sweep runs");
+        let output = SweepOutput::Directory(folder.0.clone());
+        run_spec(sir, None, &spec, output, &options, &mut NoProgress).expect("the sweep runs");
 
         let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
         let store = ResultsStore::from_result_set(

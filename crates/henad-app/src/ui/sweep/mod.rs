@@ -31,7 +31,6 @@ use henad_core::params::ParamValue;
 use henad_explore::output::manifest::{ManifestMode, ManifestStatus};
 use henad_explore::output::{MANIFEST_FILE, OutputDir};
 use henad_explore::probe::ProbeReport;
-use henad_explore::schema::model_schema;
 use henad_explore::spec_file::SpecFile;
 use serde::Deserialize;
 
@@ -263,7 +262,7 @@ impl SweepPanel {
         let draft = self
             .drafts
             .entry(entry.id().to_owned())
-            .or_insert_with(|| SweepDraft::new(&model_schema(entry)));
+            .or_insert_with(|| SweepDraft::new(&entry.schema()));
         match &*build {
             #[cfg(not(target_arch = "wasm32"))]
             ColumnsBuild::Running(_) => draft.columns_pending = true,
@@ -609,7 +608,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
         return;
     };
     let entry = &entry;
-    let schema = model_schema(entry);
+    let schema = entry.schema();
     let wake = app.repaint_waker();
     app.sweep.learn_stat_columns(entry, &wake);
     // Every text the panels draw is built here. The form borrows the draft once they have drawn.
@@ -892,7 +891,7 @@ fn start(app: &mut AppState) {
         return;
     };
     let entry = &entry;
-    let schema = model_schema(entry);
+    let schema = entry.schema();
     let wake = app.repaint_waker();
     app.sweep.learn_stat_columns(entry, &wake);
     app.sweep.clear_check();
@@ -955,14 +954,14 @@ fn save_spec(app: &mut AppState) {
         let Some(entry) = app.selected_entry().cloned() else {
             return;
         };
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let draft = app.sweep.draft_mut(&schema).clone();
         (draft, app.param_values.clone())
     };
     let Some(entry) = app.models.get(&draft.model_id) else {
         return;
     };
-    let schema = model_schema(entry);
+    let schema = entry.schema();
     let name = match draft.mode {
         DraftMode::Sweep => format!("henad-{}-sweep.toml", entry.id()),
         DraftMode::Search => format!("henad-{}-search.toml", entry.id()),
@@ -1041,7 +1040,7 @@ pub fn receive_open(app: &mut AppState, target: OpenTarget, result: OpenResult) 
 /// Returns the draft of the selected model.
 fn selected_draft(app: &mut AppState) -> Option<&mut SweepDraft> {
     let entry = app.models.get(app.selected_model.as_deref()?)?;
-    Some(app.sweep.draft_mut(&model_schema(entry)))
+    Some(app.sweep.draft_mut(&entry.schema()))
 }
 
 /// Selects the model a spec file names, and replaces its draft and Parameters tab values with the spec's.
@@ -1063,7 +1062,7 @@ fn read_spec(app: &mut AppState, file: &DialogFile) -> Result<(), String> {
     .map_err(|error| describe_error(&error))?;
     let entry = app.lookup(&spec_file.model).map_err(|error| lookup_message(&error))?;
     let model_id = entry.id().to_owned();
-    let (draft, panel_values) = SweepDraft::from_spec_file(spec_file, &model_schema(entry))?;
+    let (draft, panel_values) = SweepDraft::from_spec_file(spec_file, &entry.schema())?;
     app.select_model(&model_id);
     apply_panel_values(app, &panel_values);
     app.sweep.drafts.insert(draft.model_id.clone(), draft);
@@ -1164,7 +1163,6 @@ mod tests {
     use henad_core::params::ParamValue;
     use henad_explore::output::manifest::ManifestMode;
     use henad_explore::output::{EVALUATIONS_FILE, MANIFEST_FILE, RUNS_FILE};
-    use henad_explore::schema::model_schema;
     use henad_models::example_models;
 
     use super::{
@@ -1298,7 +1296,7 @@ mod tests {
     #[test]
     fn a_start_failure_lasts_until_the_draft_changes() {
         let sir = example_models().get("sir").cloned().expect("SIR is registered");
-        let schema = model_schema(&sir);
+        let schema = sir.schema();
         let panel_values: Vec<ParamValue> = sir
             .param_descriptors()
             .iter()
@@ -1318,7 +1316,7 @@ mod tests {
     #[test]
     fn a_check_lists_its_issues_by_section_and_counts_them() {
         let sir = example_models().get("sir").cloned().expect("SIR is registered");
-        let schema = model_schema(&sir);
+        let schema = sir.schema();
         let panel_values: Vec<ParamValue> = sir
             .param_descriptors()
             .iter()
@@ -1346,7 +1344,7 @@ mod tests {
     #[test]
     fn a_draft_waits_for_the_build_of_its_columns() {
         let boids = example_models().get("boids").cloned().expect("boids is registered");
-        let schema = model_schema(&boids);
+        let schema = boids.schema();
         let panel_values: Vec<ParamValue> = boids
             .param_descriptors()
             .iter()

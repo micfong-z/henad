@@ -831,9 +831,9 @@ fn a_lost_device_leaves_a_directory_a_resume_completes() {
     let options = SweepOptions {
         concurrency: Concurrency::Fixed(2.try_into().expect("2 is above 0")),
         active_runs: Some(active_runs.clone()),
-        ..sweep_options(&lost_dir, false)
+        ..sweep_options(false)
     };
-    let report = sweep_with(&losing, Some(&ctx), &spec, &options, &mut NoProgress)
+    let report = sweep_with(&losing, Some(&ctx), &spec, &lost_dir, &options, &mut NoProgress)
         .expect("a lost device ends the sweep without an error of its own");
     assert!(active_runs.list().is_empty(), "no run is left in progress");
     assert_eq!(active_runs.waiting_count(), 0, "no lost run waits to be committed");
@@ -849,9 +849,10 @@ fn a_lost_device_leaves_a_directory_a_resume_completes() {
     let gpu_sir = entry("gpu_sir", Some(&fresh_ctx));
     let resumed = SweepOptions {
         concurrency: options.concurrency,
-        ..sweep_options(&lost_dir, true)
+        ..sweep_options(true)
     };
-    let report = sweep_with(&gpu_sir, Some(&fresh_ctx), &spec, &resumed, &mut NoProgress).expect("the resume runs");
+    let report =
+        sweep_with(&gpu_sir, Some(&fresh_ctx), &spec, &lost_dir, &resumed, &mut NoProgress).expect("the resume runs");
     assert_eq!((report.end, report.counts.ok), (SweepEnd::Complete, 8));
     let fresh_dir = scratch.path().join("fresh");
     sweep(&gpu_sir, Some(&fresh_ctx), &spec, &fresh_dir, options.concurrency);

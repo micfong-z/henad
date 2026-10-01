@@ -165,7 +165,8 @@ fn a_sweep_that_fails_once_its_manifest_is_written_is_marked_failed() {
         &model,
         None,
         &spec,
-        &sweep_options(scratch.path(), true),
+        scratch.path(),
+        &sweep_options(true),
         &mut Recorder::default(),
     )
     .expect_err("summary.csv cannot be written");

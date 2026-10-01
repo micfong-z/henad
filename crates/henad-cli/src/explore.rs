@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::io::{self, IsTerminal as _};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -16,7 +16,6 @@ use serde_json::{Value, json};
 
 use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
-use henad_compute::runtime_info::RuntimeInfo;
 use henad_core::action::ScheduleError;
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, FactorTarget, LevelSpec};
@@ -33,13 +32,16 @@ use henad_core::explore::spec::{
 use henad_core::explore::stop::StopSpec;
 use henad_core::explore::value::parse_overrides;
 use henad_explore::exec::{Concurrency, ExecutionLayout};
+use henad_explore::handle::SweepOutput;
 use henad_explore::merge::{MergeReport, merge};
 use henad_explore::output::manifest::ResultCounts;
 use henad_explore::progress::{Progress, ProgressEvent, ProgressUpdate};
 use henad_explore::schema::backend_name;
-use henad_explore::search_run::{SearchOutline, SearchUpdate, run_search};
-use henad_explore::spec_file::{DesignTableFile, ExecutionTable, SpecFile};
-use henad_explore::sweep::{Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, run_sweep};
+use henad_explore::search_run::{SearchOutline, SearchUpdate};
+use henad_explore::spec_file::{DesignTableFile, LoadedSpec};
+use henad_explore::sweep::{
+    Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, plan_spec, run_spec,
+};
 
 use crate::Args;
 use crate::json_report;
@@ -191,35 +193,6 @@ impl ExploreArgs {
     }
 }
 
-/// A spec file read from disk.
-#[derive(Debug, Clone)]
-pub struct LoadedSpec {
-    path: PathBuf,
-    text: String,
-    file: SpecFile,
-}
-
-impl LoadedSpec {
-    /// Reads the spec file at `path`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the file cannot be read or is not a spec file.
-    pub fn load(path: &Path) -> Result<Self> {
-        let (file, text) = SpecFile::load(path)?;
-        Ok(Self {
-            path: path.to_owned(),
-            text,
-            file,
-        })
-    }
-
-    /// Id of the model the spec runs.
-    pub fn model(&self) -> &str {
-        &self.file.model
-    }
-}
-
 /// Runs the sweep the flags or `spec` describe over `entry`, and returns the exit status.
 ///
 /// The status is success when every run is `ok`, and [`SOME_RUNS_NOT_OK`] when the sweep ran to its end with some
@@ -229,53 +202,57 @@ impl LoadedSpec {
 ///
 /// Returns an error when the flags or the spec cannot make a sweep, the sweep cannot be planned, or its results
 /// cannot be written.
-pub fn run(
-    args: &Args,
-    entry: &ModelEntry,
-    gpu: Option<&GpuContext>,
-    runtime: Option<&RuntimeInfo>,
-    spec: Option<LoadedSpec>,
-) -> Result<ExitCode> {
-    let (sweep, source, execution) = if let Some(loaded) = spec {
-        let execution = loaded.file.execution;
-        let source = SpecSource::loaded(&loaded.path, loaded.text, &loaded.file);
-        let sweep = loaded
-            .file
-            .into_spec()
-            .with_context(|| format!("cannot read '{}'", loaded.path.display()))?;
-        (sweep, source, execution)
-    } else {
-        let sweep = spec_from_flags(args, entry.id())?;
-        let source = flags_source(args, &sweep);
-        (sweep, source, ExecutionTable::default())
-    };
-    let options = SweepOptions {
-        output_dir: args.explore.out.clone(),
-        concurrency: args.explore.concurrent.unwrap_or(execution.concurrent),
-        memory_budget: args.explore.memory.or(execution.memory),
-        gpu_memory: args.explore.gpu_memory.or(execution.gpu_memory),
-        dry_run: args.explore.dry_run,
-        shard: args.explore.shard.unwrap_or_default(),
-        resume: args.explore.resume,
-        retry_failed: args.explore.retry_failed,
-        ..SweepOptions::default()
-    };
+pub fn run(args: &Args, entry: &ModelEntry, gpu: Option<&GpuContext>, spec: Option<LoadedSpec>) -> Result<ExitCode> {
+    let (sweep, options) = sweep_and_options(args, entry, spec)?;
     if cfg!(debug_assertions) && !args.explore.dry_run {
         eprintln!("!!! warning: debug build. Runs will step slowly and timings will be unreliable. Use --release !!!");
     }
-    let mut reporter = Reporter::new(entry.name(), args, source.path.is_some());
-    let explore = if sweep.search.is_some() { run_search } else { run_sweep };
-    let report = explore(
-        entry,
-        gpu,
-        runtime,
-        &sweep,
-        &source,
-        &provenance(),
-        &options,
-        &mut reporter,
-    )?;
+    let mut reporter = Reporter::new(entry.name(), args, options.spec_source.path.is_some());
+    let report = match &args.explore.out {
+        _ if args.explore.dry_run => {
+            plan_spec(entry, gpu, &sweep, args.explore.out.as_deref(), &options, &mut reporter)?
+        }
+        Some(output_dir) => {
+            let output = SweepOutput::Directory(output_dir.clone());
+            run_spec(entry, gpu, &sweep, output, &options, &mut reporter)?.report
+        }
+        None => bail!("a sweep needs an output directory unless it is a dry run"),
+    };
     exit_status(report.end, &report.counts)
+}
+
+/// Returns the sweep the flags or `spec` describe, and its options.
+///
+/// A spec's `[execution]` table goes in first, and each of `--concurrent`, `--memory` and `--gpu-memory` given on
+/// the command line then replaces its setting.
+///
+/// # Errors
+///
+/// Returns an error when the flags cannot make a sweep.
+fn sweep_and_options(args: &Args, entry: &ModelEntry, spec: Option<LoadedSpec>) -> Result<(SweepSpec, SweepOptions)> {
+    let mut options = SweepOptions::new(provenance());
+    let sweep = if let Some(loaded) = spec {
+        options.apply_execution(&loaded.execution);
+        options.spec_source = loaded.spec_source;
+        loaded.spec
+    } else {
+        let sweep = spec_from_flags(args, entry.id())?;
+        options.spec_source = flags_source(args, &sweep);
+        sweep
+    };
+    if let Some(concurrency) = args.explore.concurrent {
+        options.concurrency = concurrency;
+    }
+    if let Some(memory) = args.explore.memory {
+        options.memory_budget = Some(memory);
+    }
+    if let Some(gpu_memory) = args.explore.gpu_memory {
+        options.gpu_memory = Some(gpu_memory);
+    }
+    options.shard = args.explore.shard.unwrap_or_default();
+    options.resume = args.explore.resume;
+    options.retry_failed = args.explore.retry_failed;
+    Ok((sweep, options))
 }
 
 /// Merges the shard directories `--merge` names into the `--out` directory, and returns the exit status.
@@ -1133,14 +1110,14 @@ mod tests {
     use henad_core::explore::seed::SeedScheme;
     use henad_core::explore::spec::ActionSpec;
     use henad_core::explore::stop::StopSpec;
+    use henad_explore::exec::Concurrency;
     use henad_explore::output::manifest::ResultCounts;
-    use henad_explore::schema::model_schema;
-    use henad_explore::sweep::SweepEnd;
+    use henad_explore::sweep::{Provenance, SweepEnd, SweepOptions, plan_spec};
     use henad_models::example_models;
 
     use super::{
         LoadedSpec, PatternAxis, SOME_RUNS_NOT_OK, axis_text, exit_status, fixed_actions, format_bytes, format_seconds,
-        parse_vary, plan_text, spec_from_flags,
+        parse_vary, plan_text, spec_from_flags, sweep_and_options,
     };
     use crate::{Args, Mode};
 
@@ -1304,7 +1281,7 @@ mod tests {
             [action("seed_outbreak", 40), action("seed_outbreak_2", 80)]
         );
         let sir = example_models().get("sir").cloned().expect("sir is registered");
-        let plan = spec.plan(&model_schema(&sir)).expect("sir declares seed_outbreak");
+        let plan = spec.plan(&sir.schema()).expect("sir declares seed_outbreak");
         let ticks: Vec<&[u64]> = plan
             .configs()
             .iter()
@@ -1696,22 +1673,16 @@ mod tests {
             eprintln!("note: skipped, {} is absent", path.display());
             return;
         }
-        let loaded = LoadedSpec::load(&path).expect("the example spec reads");
-        let spec = loaded.file.clone().into_spec().expect("a search spec");
+        let loaded = LoadedSpec::read(&path).expect("the example spec reads");
         let models = example_models();
         let sir = models.get("sir").expect("sir is registered");
-        let dry_run = henad_explore::sweep::SweepOptions {
-            dry_run: true,
-            ..henad_explore::sweep::SweepOptions::default()
-        };
-        let report = henad_explore::search_run::run_search(
+        let options = SweepOptions::new(Provenance::default());
+        let report = plan_spec(
             sir,
             None,
+            &loaded.spec,
             None,
-            &spec,
-            &henad_explore::sweep::SpecSource::default(),
-            &henad_explore::sweep::Provenance::default(),
-            &dry_run,
+            &options,
             &mut henad_explore::progress::NoProgress,
         )
         .expect("the search plans");
@@ -1734,5 +1705,43 @@ mod tests {
 
         let args = Args::try_parse_from(["henad-cli", "--spec", "s.toml", "--dry-run"]).expect("a dry run parses");
         assert_eq!(Mode::of(&args), Mode::Explore);
+    }
+
+    /// Checks that a flag given on the command line replaces the spec table's setting, `--concurrent auto` included,
+    /// and that a setting no flag gives keeps the table's value.
+    #[test]
+    fn an_explicit_concurrent_auto_overrides_the_spec_table() {
+        let dir = std::env::temp_dir().join(format!("henad-cli-execution-table-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the scratch directory can be made");
+        let path = dir.join("spec.toml");
+        std::fs::write(
+            &path,
+            "model = \"sir\"\n[execution]\nconcurrent = 4\nmemory = 1000\ngpu_memory = 2000\n",
+        )
+        .expect("the spec can be written");
+        let spec_arg = path.to_str().expect("the temporary directory is UTF-8");
+        let entry = example_models().get("sir").cloned().expect("sir is registered");
+        let options = |extra: &[&str]| {
+            let mut line = vec!["henad-cli", "--spec", spec_arg, "--dry-run"];
+            line.extend(extra);
+            let args = Args::try_parse_from(line).expect("the line parses");
+            let loaded = LoadedSpec::read(&path).expect("the spec reads");
+            sweep_and_options(&args, &entry, Some(loaded)).expect("a sweep").1
+        };
+
+        let from_table = options(&[]);
+        assert_eq!(from_table.concurrency.to_string(), "4");
+        assert_eq!(
+            (from_table.memory_budget, from_table.gpu_memory),
+            (Some(1000), Some(2000))
+        );
+
+        let overridden = options(&["--concurrent", "auto", "--memory", "500"]);
+        assert_eq!(overridden.concurrency, Concurrency::Auto);
+        assert_eq!(
+            (overridden.memory_budget, overridden.gpu_memory),
+            (Some(500), Some(2000))
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

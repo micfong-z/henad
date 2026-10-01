@@ -361,7 +361,7 @@ pub struct SeriesSegment {
 /// # Errors
 ///
 /// Returns the error of a read or a write, and [`io::ErrorKind::InvalidData`] for a line with no run id.
-pub fn merge_series(
+pub(crate) fn merge_series(
     dest: &mut dyn Write,
     header: &str,
     segments: &[SeriesSegment],

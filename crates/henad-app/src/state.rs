@@ -7,6 +7,7 @@ use egui::TextureHandle;
 use henad_compute::cpu::sim_thread::{SimCommand, SimThread, WakeFn};
 use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelState};
 use henad_compute::fault::{BUILDING, Fault, catching};
+use henad_compute::simulation::{RunSetup, SetupError};
 use henad_compute::snapshot::Snapshot;
 use henad_core::action::Schedule;
 use henad_core::explore::replay::Replay;
@@ -255,7 +256,19 @@ impl AppState {
         }
     }
 
+    /// Tears down the live simulation and builds the selected model from the fields the next build reads.
+    ///
+    /// Does nothing when [`Self::build_setup`] refuses the fields. Build is disabled then, with the reason
+    /// [`setup_message`] gives.
     pub fn reset_simulation(&mut self) {
+        let setup = match self.build_setup() {
+            Some(Ok(setup)) => Some(setup),
+            Some(Err(error)) => {
+                log::warn!("Build refused: {}", setup_message(&error));
+                return;
+            }
+            None => None,
+        };
         self.settle_opened_run();
         self.stop_recording();
         // Drop existing sim thread. For a GPU model this also releases its buffers/pipelines, but any paint callback
@@ -277,13 +290,13 @@ impl AppState {
             layer.clear();
         }
 
-        let Some(entry) = self.selected_entry() else {
+        let Some(setup) = setup else {
             return;
         };
 
-        let stats_history = StatsHistory::new(entry.stat_descriptors().to_vec(), self.history_capacity);
+        let stats_history = StatsHistory::new(setup.entry().stat_descriptors().to_vec(), self.history_capacity);
 
-        match self.build_runner(entry, &self.repaint_waker()) {
+        match self.build_runner(&setup, &self.repaint_waker()) {
             Ok(mut runner) => {
                 if !self.schedule.is_empty() {
                     runner.send(SimCommand::SetSchedule(self.schedule.clone()));
@@ -338,6 +351,9 @@ impl AppState {
                 replay.model
             ));
         }
+
+        let entry = self.lookup(&replay.model).map_err(|error| lookup_message(&error))?;
+        RunSetup::from_replay(entry, &replay).map_err(|error| setup_message(&error))?;
 
         self.opened_run = None;
         self.selected_model = Some(replay.model.clone());
@@ -401,8 +417,9 @@ impl AppState {
     /// # Errors
     ///
     /// If the model's kernels panic, or the GPU refuses to build it, or the model is not compatible with this machine.
-    fn build_runner(&self, entry: &ModelEntry, wake: &WakeFn) -> Result<SimRunner, Fault> {
-        match entry.build(&self.param_values, self.seed, self.gpu_ctx.as_ref())? {
+    fn build_runner(&self, setup: &RunSetup, wake: &WakeFn) -> Result<SimRunner, Fault> {
+        let entry = setup.entry();
+        match entry.build(setup.values(), setup.seed(), self.gpu_ctx.as_ref())? {
             ModelState::Cpu(state) => catching(BUILDING, || {
                 let mut thread = SimThread::new(
                     state,
@@ -504,6 +521,19 @@ impl AppState {
     /// Entry of the selected model.
     pub fn selected_entry(&self) -> Option<&ModelEntry> {
         self.models.get(self.selected_model.as_deref()?)
+    }
+
+    /// Returns the setup the next build reads, checked against the selected model, or `None` with no model selected.
+    ///
+    /// The setup holds `param_values`, `seed` and `schedule`, each checked as [`RunSetup::from_parts`] checks them.
+    pub fn build_setup(&self) -> Option<Result<RunSetup, SetupError>> {
+        let entry = self.selected_entry()?;
+        Some(RunSetup::from_parts(
+            entry,
+            &self.param_values,
+            self.seed,
+            self.schedule.clone(),
+        ))
     }
 
     /// Entry of the model the live simulation was built from.
@@ -667,6 +697,15 @@ pub fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
 /// Returns `error` capitalised, as in "This build does not include model 'x'".
 pub fn lookup_message(error: &ModelLookupError) -> String {
     crate::ui::sweep::draft::capitalize(&error.to_string())
+}
+
+/// Returns `error` as Build's disabled reason, as in `Parameter 'infection_rate': 2 is outside 0..=1`.
+pub fn setup_message(error: &SetupError) -> String {
+    use crate::ui::sweep::draft::describe_error;
+    match error {
+        SetupError::Param(reason) => describe_error(reason),
+        other => describe_error(other),
+    }
 }
 
 #[cfg(test)]

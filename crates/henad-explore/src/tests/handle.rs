@@ -28,10 +28,10 @@ use crate::output::memory::SweepFiles;
 use crate::output::{MANIFEST_FILE, OutputError, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::pumped::PumpedSweep;
 use crate::result_set::ResultSet;
-use crate::schema::model_schema;
 use crate::sweep::{SweepEnd, SweepOptions, SweepRecord};
 use crate::tests::support::{
-    CommitLimit, ScratchDir, entry, headless_device, provenance, sweep, sweep_with, ticks_seen, without_timing,
+    CommitLimit, ScratchDir, entry, headless_device, provenance, sweep, sweep_options, sweep_with, ticks_seen,
+    without_timing,
 };
 
 /// Longest a test waits for a sweep to reach a state.
@@ -98,10 +98,7 @@ fn stopping_then_endless_spec() -> SweepSpec {
 }
 
 fn options() -> SweepRunOptions {
-    SweepRunOptions {
-        provenance: provenance(),
-        ..SweepRunOptions::default()
-    }
+    SweepRunOptions::new(provenance())
 }
 
 /// Receives the events of `run` until its last one, and returns them.
@@ -316,7 +313,7 @@ fn pump_until_idle(sweep: &mut PumpedSweep, events: &std::sync::mpsc::Receiver<S
 fn the_pumped_sweep_writes_what_a_directory_sweep_writes() {
     let spec = sir_spec(2);
     let sir = entry("sir", None);
-    let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
+    let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
     let (channel, events, _) = SweepChannel::open(&options());
     let mut pumped = PumpedSweep::new(sir, spec.clone(), plan, None, channel, options()).expect("a CPU model pumps");
     let pumped_events = pump_until_idle(&mut pumped, &events);
@@ -343,7 +340,7 @@ fn the_pumped_sweep_writes_what_a_directory_sweep_writes() {
 fn a_paused_pumped_sweep_does_no_work_until_resumed() {
     let spec = endless_spec();
     let life = entry("game_of_life", None);
-    let plan = Arc::new(spec.plan(&model_schema(&life)).expect("a valid spec"));
+    let plan = Arc::new(spec.plan(&life.schema()).expect("a valid spec"));
     let (channel, events, _) = SweepChannel::open(&options());
     let mut pumped = PumpedSweep::new(life, spec, plan, None, channel, options()).expect("a CPU model pumps");
     for _ in 0..20 {
@@ -379,7 +376,7 @@ fn the_pumped_sweep_refuses_a_gpu_model() {
     };
     let gpu_sir = entry("gpu_sir", Some(&ctx));
     let spec = SweepSpec::new("gpu_sir");
-    let plan = Arc::new(spec.plan(&model_schema(&gpu_sir)).expect("a valid spec"));
+    let plan = Arc::new(spec.plan(&gpu_sir.schema()).expect("a valid spec"));
     let (channel, _events, _) = SweepChannel::open(&options());
     let refused = PumpedSweep::new(gpu_sir, spec, plan, None, channel, options());
     assert!(matches!(refused, Err(SweepStartError::GpuNeedsNative)));
@@ -552,15 +549,15 @@ fn a_resumed_directory_runs_only_the_runs_it_lacks() {
     // One lane aborts once two runs are written, before the third starts.
     let control = SweepControl::new();
     let aborted = SweepOptions {
-        output_dir: Some(resumed_dir.clone()),
         concurrency: Concurrency::Fixed(std::num::NonZeroUsize::MIN),
         control: control.clone(),
-        ..SweepOptions::default()
+        ..sweep_options(false)
     };
     let report = sweep_with(
         &entry("sir", None),
         None,
         &spec,
+        &resumed_dir,
         &aborted,
         &mut CommitLimit::new(control, 2),
     )

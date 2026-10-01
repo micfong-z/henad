@@ -807,7 +807,7 @@ mod tests {
     use henad_explore::handle::{SweepEvent, SweepOutput, SweepRun, SweepRunOptions};
     use henad_explore::output::GENERATIONS_FILE;
     use henad_explore::result_set::{DirectorySeries, ResultSet};
-    use henad_explore::schema::model_schema;
+    use henad_explore::sweep::Provenance;
     use henad_models::example_models;
 
     use super::{READING_RESULTS, ResultsPanel, ResultsView, SeriesLoad, poll_series_load};
@@ -838,7 +838,7 @@ mod tests {
             )],
             design_seed: None,
         }];
-        Arc::new(spec.plan(&model_schema(sir)).expect("a valid spec"))
+        Arc::new(spec.plan(&sir.schema()).expect("a valid spec"))
     }
 
     /// Returns run `run_id` of `plan` with `series`.
@@ -963,8 +963,9 @@ mod tests {
                 ScratchFolder(std::env::temp_dir().join(format!("henad-app-search-{name}-{}", std::process::id())));
             drop(std::fs::remove_dir_all(&folder.0));
             let output = SweepOutput::Directory(folder.0.clone());
-            let mut run = SweepRun::start(sir(), None, search_spec(algorithm), output, SweepRunOptions::default())
-                .expect("the search starts");
+            let options = SweepRunOptions::new(Provenance::default());
+            let mut run =
+                SweepRun::start(sir(), None, search_spec(algorithm), output, options).expect("the search starts");
             let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));
             let mut panel = ResultsPanel::default();
             panel.begin_search(search_plan, &sir(), Some(folder.0.clone()));
@@ -1076,8 +1077,14 @@ mod tests {
     /// first generation of 32.
     fn short_genetic_search() -> ResultsPanel {
         let spec = search_spec(SearchAlgorithm::Genetic(GeneticSettings::default()));
-        let mut run = SweepRun::start(sir(), None, spec, SweepOutput::Memory, SweepRunOptions::default())
-            .expect("the search starts");
+        let mut run = SweepRun::start(
+            sir(),
+            None,
+            spec,
+            SweepOutput::Memory,
+            SweepRunOptions::new(Provenance::default()),
+        )
+        .expect("the search starts");
         let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));
         let mut panel = ResultsPanel::default();
         panel.begin_search(search_plan, &sir(), None);
@@ -1100,8 +1107,14 @@ mod tests {
         if let Some(search) = &mut spec.search {
             search.max_evaluations = 12;
         }
-        let mut run = SweepRun::start(sir(), None, spec, SweepOutput::Memory, SweepRunOptions::default())
-            .expect("the search starts");
+        let mut run = SweepRun::start(
+            sir(),
+            None,
+            spec,
+            SweepOutput::Memory,
+            SweepRunOptions::new(Provenance::default()),
+        )
+        .expect("the search starts");
         let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));
         let mut events = Vec::new();
         let started = std::time::Instant::now();

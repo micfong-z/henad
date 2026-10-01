@@ -3,5 +3,6 @@
 
 pub mod broken;
 mod registry;
+mod simulation;
 pub mod support;
 pub mod tutorial;
