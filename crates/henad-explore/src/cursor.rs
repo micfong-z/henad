@@ -221,9 +221,13 @@ impl RunCursor {
         timeout: Option<Duration>,
     ) -> Self {
         let started = Instant::now();
-        let built = entry
-            .build(request.params, Some(request.run.seed), None)
-            .and_then(cpu_state);
+        let built = if entry.gpu_needs().is_some() {
+            Err(Fault::refused(BUILDING, GPU_REFUSAL))
+        } else {
+            entry
+                .build(request.params, Some(request.run.seed), None)
+                .and_then(cpu_state)
+        };
         let build_ms = milliseconds(started.elapsed());
         let phase = match built {
             Ok(state) => Phase::Live(Box::new(LiveRun {
@@ -408,7 +412,7 @@ mod tests {
     use henad_core::export::StatColumns;
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{CursorState, RunCursor};
     use crate::exec::RunRequest;
@@ -417,10 +421,7 @@ mod tests {
     const SEED: u64 = 11;
 
     fn entry(id: &str) -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == id)
-            .expect("the model is registered")
+        example_models().get(id).cloned().expect("the model is registered")
     }
 
     fn cpu_state(entry: &ModelEntry, params: &[ParamValue]) -> Box<dyn SimState> {

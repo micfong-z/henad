@@ -135,7 +135,7 @@ fn f32_json(value: f32) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
     use serde_json::json;
 
     use henad_core::explore::fingerprint::schema_hash;
@@ -161,17 +161,12 @@ mod tests {
 
     /// Checks that every example model hashes as it did in 0.2.0, so every folder written since still resumes.
     ///
-    /// Without a device, the GPU models are left out. `HENAD_REQUIRE_GPU` turns that into a failure.
+    /// A schema reads only declarations, and the GPU models are checked without a device.
     #[test]
     fn schema_hashes_are_unchanged_since_0_2_0() {
-        let gpu = crate::tests::support::headless_device();
-        let has_gpu = gpu.is_some();
-        let registry = model_registry(gpu);
+        let models = example_models();
         for (id, recorded) in SCHEMA_HASHES_0_2_0 {
-            let Some(entry) = registry.iter().find(|entry| entry.id() == id) else {
-                assert!(id.starts_with("gpu_") && !has_gpu, "{id} is registered");
-                continue;
-            };
+            let entry = models.get(id).unwrap_or_else(|| panic!("{id} is registered"));
             let current = format!("{:016x}", schema_hash(&model_schema(entry)));
             assert_eq!(current, recorded, "{id}'s schema hash moved since 0.2.0");
         }
@@ -179,8 +174,9 @@ mod tests {
 
     #[test]
     fn every_descriptor_is_listed_with_its_kind_and_bounds() {
-        for entry in model_registry(None) {
-            let schema = schema_json(&entry, None);
+        let models = example_models();
+        for entry in models.iter().filter(|entry| entry.gpu_needs().is_none()) {
+            let schema = schema_json(entry, None);
             let params = schema["params"].as_array().expect("params is a list");
             assert_eq!(params.len(), entry.param_descriptors().len(), "{}", entry.id());
             for (index, param) in params.iter().enumerate() {
@@ -196,9 +192,9 @@ mod tests {
 
     #[test]
     fn a_probe_adds_the_stat_columns() {
-        let entry = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "sir")
+        let entry = henad_models::example_models()
+            .get("sir")
+            .cloned()
             .expect("sir is registered");
         let defaults: Vec<_> = entry
             .param_descriptors()

@@ -1,0 +1,4 @@
+parameters for game_of_life (Game of Life):
+  index=0 id=grid_width kind=u32 default=1024 min=1 max=10000 apply=reload label="Grid Width"
+  index=1 id=grid_height kind=u32 default=1024 min=1 max=10000 apply=reload label="Grid Height"
+  index=2 id=density kind=f32 default=0.3 min=0 max=1 apply=reload label="Initial Density"

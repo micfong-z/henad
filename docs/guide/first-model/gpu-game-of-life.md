@@ -393,7 +393,7 @@ impl GpuGridModel for GpuLifeModel {
 }
 ```
 
-1. The shipped port already holds `gpu_game_of_life`, and IDs have to be unique across the registry, so we need a different one while both stay registered.
+1. The shipped port already holds `gpu_game_of_life`, and a model set holds each ID once, so we need a different one while both stay registered.
 
 ### Colours
 
@@ -593,7 +593,7 @@ use henad_core::view::{StatDescriptor, StatValue};
 
 ## Running it
 
-The model compiles, but the app can only pick models it finds in the registry, so we have to register it.
+The model compiles, but the app can only pick models from the set it was handed, so we have to register it.
 First we declare the module,
 
 ``` rust title="crates/henad-models/src/lib.rs"
@@ -613,7 +613,7 @@ For context, here is the block our line joins:
 ```
 
 The entry needs no device, and builds on whichever device the host hands it.
-On a machine with no usable adapter the app and the CLI leave the GPU models out of the list entirely, rather than show them and let them fail when selected.
+On a machine with no usable adapter the app and the CLI leave the GPU models out of their lists, and a GPU model asked for by ID is refused with a message saying it needs a GPU.
 A GPU entry also carries a capacity check, so a grid too large for this device disables Build with a readable reason instead of crashing the process.
 
 With the entry in place, we can finally run the model.

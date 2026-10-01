@@ -360,7 +360,7 @@ mod sampling_cadence_does_not_change_the_trajectory {
     use henad_compute::gpu::{GpuContext, GpuSimState, stepping};
     use henad_core::explore::spec::SweepSpec;
     use henad_core::metadata::Backend;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use crate::tests::support::{Collected, ONE_TRACK, entry, headless_device, planned, run_plan};
 
@@ -558,11 +558,8 @@ mod sampling_cadence_does_not_change_the_trajectory {
 
     #[test]
     fn every_gpu_model_that_replays_has_a_case() {
-        let Some(ctx) = headless_device() else {
-            return;
-        };
-        let mut registered: Vec<String> = model_registry(Some(ctx))
-            .into_iter()
+        let mut registered: Vec<String> = example_models()
+            .iter()
             .filter(|model| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly)
             .map(|model| model.id().to_owned())
             .collect();

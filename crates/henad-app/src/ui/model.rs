@@ -2,7 +2,6 @@
 
 use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::capacity::Demand;
-use henad_core::action::Schedule;
 use henad_core::helpers::fmt_bytes;
 use henad_core::metadata::{LaneSpec, Structure};
 use henad_core::params::ParamDescriptor;
@@ -12,30 +11,40 @@ use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE};
 use crate::state::AppState;
 use crate::ui::{KvGridRows, kv_grid};
 
+/// Text the Model panel shows when no model of the set runs on this machine.
+const NO_MODEL_RUNS: &str = "No model in this build runs on this device. GPU models need a compute-capable adapter.";
+
 pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    let model_names: Vec<&str> = app.registry.iter().map(|m| m.name()).collect();
-    let mut changed_model = false;
+    let offered: Vec<(String, String)> = app
+        .offered_models()
+        .map(|entry| (entry.id().to_owned(), entry.name().to_owned()))
+        .collect();
+    if offered.is_empty() {
+        ui.label(NO_MODEL_RUNS);
+        return;
+    }
+    let selected_name = app.selected_entry().map_or("None", ModelEntry::name).to_owned();
+    let mut picked = None;
 
     egui::ComboBox::from_label("Select Model")
-        .selected_text(model_names.get(app.selected_model).copied().unwrap_or("None"))
+        .selected_text(selected_name)
         // As tall as the window allows. The model list outgrows egui's default of 200 points.
         .height(ui.ctx().content_rect().height())
         .show_ui(ui, |ui| {
-            for (i, name) in model_names.iter().enumerate() {
-                if ui.selectable_value(&mut app.selected_model, i, *name).changed() {
-                    changed_model = true;
+            for (id, name) in &offered {
+                let selected = app.selected_model.as_deref() == Some(id.as_str());
+                if ui.selectable_label(selected, name).clicked() && !selected {
+                    picked = Some(id.clone());
                 }
             }
         });
 
-    if changed_model {
-        app.load_default_params();
-        // Entries index the previous model's actions.
-        app.schedule = Schedule::default();
-        app.schedule_action_input = 0;
+    let changed_model = picked.is_some();
+    if let Some(id) = picked {
+        app.select_model(&id);
     }
 
-    let Some(entry) = app.registry.get(app.selected_model) else {
+    let Some(entry) = app.selected_entry() else {
         return;
     };
 

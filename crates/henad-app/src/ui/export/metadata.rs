@@ -8,7 +8,7 @@ use crate::state::AppState;
 
 /// Exported metadata about a run as JSON.
 pub fn run_details(app: &AppState) -> String {
-    let entry = app.loaded_model.and_then(|index| app.registry.get(index));
+    let entry = app.loaded_entry();
     let host = &app.runtime.host;
     let adapter = &app.runtime.adapter;
 

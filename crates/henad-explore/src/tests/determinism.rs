@@ -335,8 +335,8 @@ mod sampling_cadence_does_not_change_the_trajectory {
 
     #[test]
     fn every_cpu_model_has_a_case() {
-        let mut registered: Vec<String> = henad_models::registry::model_registry(None)
-            .into_iter()
+        let mut registered: Vec<String> = henad_models::example_models()
+            .iter()
             .filter(|model| model.metadata().backend == henad_core::metadata::Backend::Cpu)
             .map(|model| model.id().to_owned())
             .collect();

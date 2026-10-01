@@ -58,9 +58,9 @@ impl fmt::Debug for ModelState {
     }
 }
 
-/// Closure behind a model's factory. A CPU model ignores the device. Public for [`ModelEntry::wrap_factory`] alone.
+/// Closure behind a model's factory.
 ///
-/// The `Option<u64>` is the seed, which falls back to the model's default when `None`.
+/// A CPU model ignores the device. Public for [`ModelEntry::wrap_factory`] alone. The `Option<u64>` is the seed, which falls back to the model's default when `None`.
 #[doc(hidden)]
 pub trait Factory:
     Fn(&[ParamValue], Option<u64>, Option<&GpuContext>) -> Result<ModelState, Fault> + WasmNotSend + WasmNotSync
@@ -161,8 +161,7 @@ impl ModelEntry {
         self.parts.gpu_needs
     }
 
-    /// Where the model's code came from: its type path always, and the registering crate's build once a set records
-    /// it.
+    /// Origin of the model's code: its type path always, and the registering crate's build once a set records it.
     pub fn source(&self) -> &ModelSource {
         &self.parts.source
     }
@@ -193,13 +192,14 @@ impl ModelEntry {
         (self.parts.factory)(params, seed, gpu)
     }
 
-    /// Device resources the model would allocate at `params` on a device with `limits`. `None` for a CPU model,
-    /// which allocates on the host and only knows its footprint once built.
+    /// Returns the device resources the model would allocate at `params` on a device with `limits`.
+    ///
+    /// Returns `None` for a CPU model. It allocates on the host and knows its footprint only once built.
     pub fn demand(&self, params: &[ParamValue], limits: &wgpu::Limits) -> Option<Demand> {
         self.parts.capacity.as_ref().map(|capacity| capacity(params, limits))
     }
 
-    /// Reasons a device with `limits` cannot build the model at `params`. Empty when nothing stops it.
+    /// Returns the reasons a device with `limits` cannot build the model at `params`, none when nothing stops it.
     pub fn shortfalls(&self, params: &[ParamValue], limits: &wgpu::Limits) -> Vec<String> {
         self.demand(params, limits)
             .map_or_else(Vec::new, |demand| demand.shortfalls(limits))

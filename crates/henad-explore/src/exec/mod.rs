@@ -857,7 +857,7 @@ mod tests {
     use henad_core::export::StatColumns;
     use henad_core::metadata::Backend;
     use henad_core::params::ParamValue;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{
         ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionError, ExecutionLayout, Executor,
@@ -1158,10 +1158,7 @@ mod tests {
     }
 
     fn entry(id: &str) -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == id)
-            .expect("the model is registered")
+        example_models().get(id).cloned().expect("the model is registered")
     }
 
     /// Returns a plan over `entry` with three grid sizes and `replicates` replicates of `steps` steps each.

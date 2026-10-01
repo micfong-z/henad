@@ -1,13 +1,13 @@
 //! A headless benchmark runner for Henad models.
 //!
-//! The non-GUI sibling of `henad-app`. It builds a model from the shared [`model_registry`] and
+//! The non-GUI sibling of `henad-app`. It builds a model from the example models' [`ModelSet`] and
 //! steps its `SimState` in a bare loop, with no rendering, no `SimThread` and no pacing, so a
 //! measurement times nothing but `state.step()`.
 //!
 //! Both CPU and GPU models run. GPU support needs a `wgpu::Device`, which `henad-compute` never
-//! creates itself, so this binary acquires one headlessly (see [`acquire_headless`]) and hands the
-//! resulting [`GpuContext`] to [`model_registry`]. Without a device the registry falls back to
-//! CPU-only. GPU stepping does *not* go through `SimState::step()`, which would leave one
+//! creates itself, so this binary acquires one headlessly (see [`acquire_headless`]) for the set's
+//! needs, and builds a GPU model on the resulting [`GpuContext`]. Without a device `--list` leaves
+//! the GPU models out, and naming one is refused. GPU stepping does *not* go through `SimState::step()`, which would leave one
 //! unwaited submission per step. See [`stepping::run_steps`].
 //!
 //! ```text
@@ -42,10 +42,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{ArgGroup, Parser};
 
-use henad_compute::entry::{ModelEntry, ModelState};
+use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelState};
 use henad_compute::fault::install_panic_hook;
 use henad_compute::gpu::{GpuContext, GpuSimState, stepping};
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
@@ -55,7 +55,6 @@ use henad_core::export::{StatsWriter, state as state_export};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 use henad_explore::device::acquire_headless;
-use henad_models::registry::model_registry;
 
 use crate::actions::{BENCH_FIRE, note_refused};
 use crate::explore::{ExploreArgs, LoadedSpec};
@@ -207,9 +206,11 @@ fn main() -> Result<ExitCode> {
         return explore::merge_shards(&args);
     }
 
+    let models = henad_models::example_models();
+
     // Best-effort headless GPU: acquire a device so GPU models can be listed and run. If none is
-    // available (e.g. CI with no GPU), fall back to a CPU-only registry rather than failing.
-    let gpu_ctx = match acquire_headless(henad_models::example_models().gpu_needs()) {
+    // available (e.g. CI with no GPU), list and run the CPU models alone rather than failing.
+    let gpu_ctx = match acquire_headless(models.gpu_needs()) {
         Ok(ctx) => Some(ctx),
         Err(err) => {
             eprintln!("note: no GPU available ({err}); GPU models disabled");
@@ -238,11 +239,9 @@ fn main() -> Result<ExitCode> {
         }
     }
 
-    let registry = model_registry(gpu_ctx.clone());
-
     match mode {
         Mode::List => {
-            print_models(&registry);
+            print_models(offered(&models, gpu_ctx.as_ref()));
             return Ok(ExitCode::SUCCESS);
         }
         Mode::InfoOnly => return Ok(ExitCode::SUCCESS),
@@ -258,10 +257,10 @@ fn main() -> Result<ExitCode> {
         (None, Some(spec)) => spec.model(),
         (None, None) => bail!("a model id is required (try --list)"),
     };
-    let entry = registry
-        .iter()
-        .find(|e| e.id() == model_id)
-        .with_context(|| format!("unknown model '{model_id}' (try --list)"))?;
+    let entry = models.lookup(model_id, gpu_ctx.as_ref()).map_err(|error| match error {
+        ModelLookupError::NotInSet { .. } => anyhow!("{error} (try --list)"),
+        _ => anyhow!(error),
+    })?;
 
     match mode {
         Mode::Params if args.json => json_report::emit(&json_report::params(entry, gpu_ctx.as_ref())),
@@ -357,10 +356,16 @@ fn print_runtime_info(runtime: Option<&RuntimeInfo>) {
     }
 }
 
-/// Print every registered model's id and human name.
-fn print_models(registry: &[ModelEntry]) {
+/// Returns the models of `models` that run with `gpu`, in the set's order. A GPU model runs only on a device.
+fn offered<'a>(models: &'a ModelSet, gpu: Option<&GpuContext>) -> impl Iterator<Item = &'a ModelEntry> + 'a {
+    let device = gpu.is_some();
+    models.iter().filter(move |entry| device || entry.gpu_needs().is_none())
+}
+
+/// Print the id and human name of each model in `entries`.
+fn print_models<'a>(entries: impl Iterator<Item = &'a ModelEntry>) {
     println!("available models:");
-    for entry in registry {
+    for entry in entries {
         let (id, name) = (entry.id(), entry.name());
         println!("  {id:<18} {name}");
     }
@@ -397,7 +402,7 @@ fn params_text(entry: &ModelEntry) -> String {
     text
 }
 
-/// Create a fresh CPU state from a registry entry. Errors on a GPU-backed model, for which
+/// Create a fresh CPU state from a model entry. Errors on a GPU-backed model, for which
 /// callers use [`new_gpu_state`]. The dispatcher in [`run_benchmark`] routes correctly, so this
 /// only fires for a CPU-only path handed a GPU model, such as `--export`.
 fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -> Result<Box<dyn SimState>> {
@@ -410,7 +415,7 @@ fn new_cpu_state(entry: &ModelEntry, params: &[ParamValue], seed: Option<u64>) -
     }
 }
 
-/// Dispatch to the CPU or GPU benchmark depending on which backend the registry entry produces.
+/// Dispatch to the CPU or GPU benchmark depending on which backend the model entry produces.
 /// The probe state created here is thrown away, and each per-rep loop builds its own.
 fn run_benchmark(
     entry: &ModelEntry,
@@ -687,7 +692,7 @@ fn bench_gpu(
     Ok(())
 }
 
-/// Create a fresh GPU state from a registry entry. Errors on a CPU-backed model.
+/// Create a fresh GPU state from a model entry. Errors on a CPU-backed model.
 fn new_gpu_state(
     entry: &ModelEntry,
     params: &[ParamValue],
@@ -927,7 +932,7 @@ mod tests {
     use henad_core::export::stats_csv::StatsWriter;
     use henad_core::params::ParamValue;
     use henad_explore::device::acquire_headless;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
     use serde_json::json;
 
     /// Directory under the system's temporary directory, unique to one test, removed with its contents on drop.
@@ -960,10 +965,7 @@ mod tests {
     }
 
     fn cpu_entry(id: &str) -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == id)
-            .expect("the model is registered")
+        example_models().get(id).cloned().expect("the model is registered")
     }
 
     /// Returns the lines of a sweep's `series.csv`, header included, without the `run_id` column.
@@ -1219,8 +1221,9 @@ parameters for virus_network (Virus on a Network):
 
     #[test]
     fn params_json_lists_every_descriptor() {
-        for entry in model_registry(None) {
-            let line = json_report::params(&entry, None);
+        let models = example_models();
+        for entry in super::offered(&models, None) {
+            let line = json_report::params(entry, None);
             assert_eq!(line["kind"], json!("params"), "{}", entry.id());
             assert_eq!(line["model"], json!(entry.id()));
             let params = line["params"].as_array().expect("params is a list");
@@ -1345,9 +1348,9 @@ parameters for virus_network (Virus on a Network):
     /// Rows land at tick 0, at tick 2 on the sampling boundary, and at the final tick 3 off it.
     #[test]
     fn exported_stats_are_prepared_like_a_publish() {
-        let entry = model_registry(None)
-            .into_iter()
-            .find(|e| e.id() == "team_assembly")
+        let entry = example_models()
+            .get("team_assembly")
+            .cloned()
             .expect("team_assembly is registered");
         let overrides =
             parse_overrides(&["num_agents=4".to_owned(), "team_size=4".to_owned(), "p=0".to_owned()]).expect("valid");
@@ -1407,10 +1410,7 @@ parameters for virus_network (Virus on a Network):
                     return None;
                 }
             };
-            let entry = model_registry(Some(ctx.clone()))
-                .into_iter()
-                .find(|e| e.id() == id)
-                .expect("the model is registered");
+            let entry = example_models().get(id).cloned().expect("the model is registered");
             let overrides = parse_overrides(&["grid_width=64".to_owned(), "grid_height=64".to_owned()]).expect("valid");
             let params = resolve_params(entry.param_descriptors(), &overrides).expect("in range");
             Some(Self { ctx, entry, params })

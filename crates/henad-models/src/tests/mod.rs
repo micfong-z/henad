@@ -2,5 +2,6 @@
 //! crate.
 
 pub mod broken;
+mod registry;
 pub mod support;
 pub mod tutorial;

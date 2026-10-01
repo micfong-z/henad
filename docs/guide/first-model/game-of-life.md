@@ -114,7 +114,7 @@ impl GridModel for LifeModel {
 ```
 
 1. The ID is the model's handle, and you can run this model with `cargo run -p henad-cli -- [ID]`.
-   IDs have to be unique across the registry, and because the default Game of Life already has `game_of_life` by default, we need a different ID while both models stay registered.
+   A model set holds each ID once, and the example Game of Life already has `game_of_life`, so we need a different ID while both models stay registered.
 2. The description shows up next to the model in the picker, so keep it to one line saying what the model actually is.
 
 ### Colours
@@ -274,7 +274,7 @@ use henad_core::view::{StatDescriptor, StatValue};
 
 ## Running it
 
-The model compiles, but the app can only pick models it finds in the registry, so we have to register it.
+The model compiles, but the app can only pick models from the set it was handed, so we have to register it.
 First we declare the module,
 
 ``` rust title="crates/henad-models/src/lib.rs"
@@ -293,7 +293,8 @@ For context, here is the list our line joins:
 --8<-- "crates/henad-models/src/lib.rs:cpu_entries"
 ```
 
-`register_grid_model` type-erases the model into a `ModelEntry`, and `example_models()` collects the entries into a `ModelSet`, which refuses a second model with the same ID.
+`register_grid_model` type-erases the model into a `ModelEntry`, and `example_models()` collects the entries into a `ModelSet`.
+A set refuses a second model with an ID it already holds.
 The name, description, parameters, stat series and topology are all read back off the trait, so an entry carries nothing hand-written that could go wrong.
 
 With the entry in place, we can finally run the model.

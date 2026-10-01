@@ -321,7 +321,7 @@ impl GpuAgentModel for GpuForagingModel {
 }
 ```
 
-1. The shipped port already uses the id `gpu_ants`, and ids have to be unique across the registry.
+1. The shipped port already uses the id `gpu_ants`, and a model set holds each id once.
 2. Reused wholesale from the CPU model, so both backends chart the same three series in the same colours.
 3. The list `buffers!` emitted.
 4. Which two of the drawable buffers the renderer reads.

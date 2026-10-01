@@ -12,6 +12,8 @@ documentation = "https://docs.rs/henad-cli"
 readme = "README.md"
 keywords = ["agent-based-model", "simulation", "benchmark", "parameter-sweep", "cli"]
 categories = ["simulation", "science", "command-line-utilities"]
+# The golden tests and their 0.2.0 reference output stay in the repository.
+exclude = ["/tests/"]
 
 [[bin]]
 name = "henad-cli"

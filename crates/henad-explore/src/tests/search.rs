@@ -248,7 +248,7 @@ impl SearchTables {
 #[test]
 fn every_example_search_spec_parses() {
     let specs = Path::new(env!("CARGO_MANIFEST_DIR")).join("specs");
-    let registry = henad_models::registry::model_registry(None);
+    let models = henad_models::example_models();
     let mut planned = Vec::new();
     for file in std::fs::read_dir(&specs).expect("the specs directory exists") {
         let path = file.expect("the directory lists").path();
@@ -266,9 +266,8 @@ fn every_example_search_spec_parses() {
             .and_then(SpecFile::into_spec)
             .expect("the written spec reads back");
         assert_eq!(back, spec, "{name} survives a round trip through TOML");
-        let entry = registry
-            .iter()
-            .find(|entry| entry.id() == spec.model)
+        let entry = models
+            .get(&spec.model)
             .expect("an example spec names a registered model");
         let plan = SearchPlan::new(&spec, &model_schema(entry))
             .unwrap_or_else(|error| panic!("{name} does not plan: {error:?}"));

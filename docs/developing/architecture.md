@@ -6,16 +6,19 @@ icon: material/crane
 
 # Architecture
 
-Henad is a workspace of six crates, arranged along one strict dependency direction.
+Henad is a workspace of six crates.
+henad-core depends on no other crate, and every other dependency runs from a crate to one nearer henad-core in the graph below.
+henad-models and henad-explore take no dependency on each other, and the two front ends reach the example models only for `example_models()`.
 
 ```mermaid
 graph LR
-  core["henad-core<br/><small>traits and types</small>"] --> compute["henad-compute<br/><small>engine and runners</small>"]
-  compute --> models["henad-models<br/><small>concrete simulations</small>"]
-  models --> app["henad-app<br/><small>egui UI</small>"]
-  models --> explore["henad-explore<br/><small>sweeps and searches</small>"]
+  core["henad-core<br/><small>traits and types</small>"] --> compute["henad-compute<br/><small>engine, runners and model entries</small>"]
+  compute --> models["henad-models<br/><small>example models</small>"]
+  compute --> explore["henad-explore<br/><small>sweeps and searches</small>"]
   explore --> cli["henad-cli<br/><small>headless bench</small>"]
-  explore --> app
+  explore --> app["henad-app<br/><small>egui UI</small>"]
+  models -- "example_models()" --> cli
+  models -- "example_models()" --> app
 ```
 
 The layers are easiest to follow from the bottom up, since each one depends only on those below it.
@@ -37,7 +40,7 @@ A CPU model's runs step in lanes of their own, and a GPU model's runs share the 
 It resumes a sweep that stopped part way, and merges the directories of a sweep split into shards.
 A search asks one of four methods for a batch of configs, runs the batch as a sweep runs its configs, and tells the method the results before it asks again.
 The app runs its sweeps through the same crate, on a thread of their own or, in a browser, between frames.
-It also acquires the headless GPU device the command line steps GPU models on.
+It also acquires a headless GPU device for the command line and for any sweep handed no device, as the app's sweeps are.
 The parts of a sweep that need no engine, such as designs, seeds, reducers and summaries, sit in `henad_core::explore`, and so do the search methods.
 **henad-app** and **henad-cli** are the two front ends, one graphical and one headless.
 

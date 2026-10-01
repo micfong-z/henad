@@ -445,8 +445,8 @@ henad-app      egui UI, also on henad-models for example_models()
 ```
 
 The rule (decision 2.14 of #48): henad-core depends on nothing. Every other normal or build
-dependency runs from a crate to one drawn above it: henad-explore and henad-models onto
-henad-compute, and the hosts onto henad-explore, henad-compute and, for `example_models()`,
+dependency runs from a crate to one nearer henad-core in the tree: henad-explore and henad-models
+onto henad-compute, and the hosts onto henad-explore, henad-compute and, for `example_models()`,
 henad-models. henad-models and henad-explore take no normal dependency on each other, and `cargo
 tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency between Henad
 crates that the normal graph does not hold is named here: today the one from henad-explore to
@@ -589,14 +589,15 @@ maintainer's approval as a new edge.
   which owns how a sim loop gets driven and the one place the two ways of driving one differ:
   `runner/mod.rs` holds the `SimLoop` trait, `Pace` and the `SnapshotSlot`, with `runner/thread.rs`
   the native driver and `runner/frame.rs` the wasm one. `entry/` type-erases a model for a host:
-  `ModelEntry` (declarations behind accessors and an `Arc`, a factory that takes the device at
-  `build`, never at registration), `ModelState`, the five `register_*` generics, and `ModelSet`
-  (`entry/set.rs`), which refuses a duplicate id or one outside the grammar, records its
-  `BuildInfo` on an entry that has none, and merges the entries' `GpuNeeds` for the device request.
-  The `register_*` functions are generic, so the engines and kernels monomorphise in the crate
-  that calls them, never in henad-compute. `wrap_factory` and `Factory` are `#[doc(hidden)]` and
-  public for henad-explore's test harnesses alone. `grid_init_rng` and `agent_init_rng` hold the
-  default-seed rule the CPU engines and the GPU ports share.
+  `ModelEntry` (declarations behind accessors and an `Arc`, and a factory that takes the device at
+  `build`), `ModelState`, the five `register_*` generics, and `ModelSet` (`entry/set.rs`). An entry
+  holds no device from its registration. A set refuses a duplicate id or one outside the grammar,
+  records its `BuildInfo` on an entry that has none, and merges the entries' `GpuNeeds` for the
+  device request. The `register_*` functions are generic, and the engines and kernels monomorphise
+  in the crate that calls them. henad-compute instantiates none outside its own tests.
+  `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for henad-explore's test harnesses
+  alone. `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU
+  ports share.
   - `cpu/grid_engine.rs` (`GridModelState`), `cpu/agent_engine.rs` (`AgentModelState`) and
     `cpu/network_engine.rs` (`NetworkModelState`) each implement the whole `SimState` for their
     trait. `cpu/field/ca.rs` (`CaField`, a `GridModel` as
@@ -652,25 +653,24 @@ maintainer's approval as a new edge.
   declarations next to its `.wgsl` files. Each GPU port seeds itself through its CPU counterpart's
   `init`, which is what keeps tick 0 bit identical between the two backends and makes them fair to
   compare — that call is confined to `seed_buffers`. `example_models()` (`lib.rs`) registers all
-  ten into one `ModelSet` with henad-models' own `build_info!()`. `registry.rs` keeps
-  `model_registry` for one milestone, a wrapper over `example_models()` that drops every GPU entry
-  when handed no device, with the registry tests below it. `gpu_boids` declares
+  ten into one `ModelSet` with henad-models' own `build_info!()`. The registry tests sit in
+  `src/tests/registry.rs` and run over `example_models()`. `gpu_boids` declares
   `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly` reads it.
-- **henad-explore**: sweeps and searches, between henad-models and the two front ends. `sweep.rs`
-  (`run_sweep`) plans a `SweepSpec`, checks every config of a GPU model against the device
-  (`probe.rs`, `check_capacity`), and builds the first config without a fault (`ProbeReport`) to
-  fix the stat columns and bind the reducers and the stop condition. It builds the last config as
-  well, and the larger of the two sizes the lanes or tracks and the projected memory. A config that
-  faults is left for its runs to record. A scatter grid sizes its scratch to the pool. Lanes
-  narrower than the global pool get the probe rebuilt on a pool of their width, and the memory cap
-  reads that build. It then writes the manifest, runs every pending run, rebuilds the summary and
-  replaces the manifest. A sweep that fails after the manifest exists marks it `failed` when it can.
-  A dry run stops after the probes. `spec_file.rs` is the TOML form of a spec (`SpecFile`). Every
-  table is `deny_unknown_fields`. A param value stays the text `--set` takes, and a spec file and a
-  command line hand `parse_value` the same text. A `table` block's `file` is read relative to the
-  spec file, and only a table design's. A path that is absolute or holds `.` or `..` is refused
-  (`SpecFileError::TablePath`). The manifest's copy of the spec carries the table inline as
-  `table_text`, and the writer emits `design_seed` for a sampled design alone. `specs/`
+- **henad-explore**: sweeps and searches, a sibling of henad-models over henad-compute, below the
+  two front ends. `sweep.rs` (`run_sweep`) plans a `SweepSpec`, checks every config of a GPU model
+  against the device (`probe.rs`, `check_capacity`), and builds the first config without a fault
+  (`ProbeReport`) to fix the stat columns and bind the reducers and the stop condition. It builds
+  the last config as well, and the larger of the two sizes the lanes or tracks and the projected
+  memory. A config that faults is left for its runs to record. A scatter grid sizes its scratch to
+  the pool. Lanes narrower than the global pool get the probe rebuilt on a pool of their width, and
+  the memory cap reads that build. It then writes the manifest, runs every pending run, rebuilds the
+  summary and replaces the manifest. A sweep that fails after the manifest exists marks it `failed`
+  when it can. A dry run stops after the probes. `spec_file.rs` is the TOML form of a spec
+  (`SpecFile`). Every table is `deny_unknown_fields`. A param value stays the text `--set` takes,
+  and a spec file and a command line hand `parse_value` the same text. A `table` block's `file` is
+  read relative to the spec file, and only a table design's. A path that is absolute or holds `.` or
+  `..` is refused (`SpecFileError::TablePath`). The manifest's copy of the spec carries the table
+  inline as `table_text`, and the writer emits `design_seed` for a sampled design alone. `specs/`
   holds real spec files and a design table. The docs include each spec by `--8<--` region and the
   table whole, and a test plans the specs. `schema.rs` (`schema_json`) is the `--params --json`
   object, also embedded in the manifest. `cursor.rs` (`RunCursor`) owns one CPU run from its build
@@ -736,16 +736,17 @@ maintainer's approval as a new edge.
   with no window or surface, at the WebGPU baseline raised by `gpu::limits::raise`. An adapter
   below the baseline, as a GL adapter can be, gets `DeviceError::BelowBaseline`, and the CLI then
   runs CPU models only. It is native only. `pollster` blocks on the request, and a browser cannot
-  block. The crate is in the wasm typecheck with the three below it. Native-only code sits behind
-  `#[cfg(not(target_arch = "wasm32"))]`. `handle.rs` (`SweepRun`) is a host's handle on a sweep,
-  with one API on native and in a browser, described under "Sim runs off the UI thread".
-  `SweepRun::start` plans the spec before it returns, and a browser refuses a GPU model with
-  `SweepStartError::GpuNeedsNative`. The `gpu` a host passes to `start` or `resume_directory` is a
-  device it shares with the sweep, `FaultSink` included. Handed none for a GPU model, the sweep
-  thread acquires a device through `acquire_headless(entry.gpu_needs())`, builds the entry it was
-  handed on it (`BoundModel`), and records that device in the manifest. A device it cannot acquire
-  fails the sweep with `SweepEvent::Failed`. `acquire_headless` returns the `GpuContext` alone,
-  with its `RuntimeInfo` attached and read back through `runtime_info()`.
+  block. The crate is in the wasm typecheck with henad-core, henad-compute and henad-models.
+  Native-only code sits behind `#[cfg(not(target_arch = "wasm32"))]`. `handle.rs` (`SweepRun`) is a
+  host's handle on a sweep, with one API on native and in a browser, described under "Sim runs off
+  the UI thread". `SweepRun::start` plans the spec before it returns, and a browser refuses a GPU
+  model with `SweepStartError::GpuNeedsNative`. The `gpu` a host passes to `start` or
+  `resume_directory` is a device it shares with the sweep, `FaultSink` included. Handed none for a
+  GPU model, the sweep thread acquires a device sized to the entry's `GpuNeeds` through
+  `acquire_headless`, builds the entry it was handed on it (`BoundModel`), and records that device
+  in the manifest. A device it cannot acquire fails the sweep with `SweepEvent::Failed`.
+  `acquire_headless` returns the `GpuContext` alone, with its `RuntimeInfo` attached and read back
+  through `runtime_info()`.
   `SweepOutput::Memory` writes the four files through the same writers over `Vec<u8>`
   (`output/memory.rs`, `SweepFiles`) and hands them over in the `SweepRecord`.
   `SweepOutput::Directory` is native only. `SweepRunOptions::memory_budget` and `gpu_memory` are
@@ -816,7 +817,9 @@ maintainer's approval as a new edge.
   `a_resume_that_meets_a_changed_run_leaves_the_directory_alone` and
   `a_gpu_search_writes_the_same_tables_on_any_track_count`. Keep them.
 - **henad-app**: eframe/egui desktop+web GUI. `HenadApp` (`lib.rs`) owns the `SimThread` and
-  polls snapshots each frame; `ui/` has one file per panel or window (`menu_bar.rs`, `model.rs`,
+  polls snapshots each frame. `HenadApp::new` takes the `ModelSet` the host offers, and
+  `wgpu_configuration` takes the set's `GpuNeeds` for the device request. `main.rs` passes
+  `example_models()` to both; `ui/` has one file per panel or window (`menu_bar.rs`, `model.rs`,
   `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`, `charts.rs`,
   `performance.rs`, `system.rs`, `fault.rs`, `about.rs`). The Export tab lives in a directory,
   `export/`. Its `mod.rs` draws the tab and writes the stat series and final state, `image.rs`
@@ -834,7 +837,14 @@ maintainer's approval as a new edge.
   needs `DownlevelFlags::VERTEX_STORAGE`, and WebGL2 lacks it. Without that flag there is no edge
   layer, and a network model runs with its edges undrawn. `world.wgsl` holds the helpers both
   shaders `#import`, including `is_placed`, the finiteness test that hides a retired node.
-  `state.rs` (`AppState`) holds the values the next build reads: `param_values`, the Seed field's
+  `state.rs` (`AppState`) holds the set as `models` and keys the selection by id:
+  `selected_model` and `loaded_model` are `Option<String>`, resolved at use through
+  `selected_entry`, `loaded_entry` and `lookup`. `offered_models` hides a GPU model where the
+  adapter has no compute, and the app opens on the first offered model, or with none selected and
+  `NO_MODEL_RUNS` in the Model panel. A missing id reads as `lookup_message` words it, "This build
+  does not include model 'x'." or "Model 'x' needs a GPU, and this machine has none."
+  `select_model` loads the defaults and clears the schedule, for the Model panel and the Sweep tab
+  alike. `AppState` also holds the values the next build reads: `param_values`, the Seed field's
   `seed` with its raw `seed_text`, and the scheduled actions in `schedule`. `build_runner` passes
   `seed` to the entry's factory, and `reset_simulation` sends `SimCommand::SetSchedule` to the new
   runner when the schedule is not empty, then records `loaded_seed` and `loaded_schedule`.
@@ -970,7 +980,10 @@ maintainer's approval as a new edge.
   rule per run, as the two CPU loops do. Otherwise two runs back to back both fire the tick they
   share. `actions.rs` holds the benchmark's rule, `BENCH_FIRE`, and prints the actions a model
   refuses. A GPU run steps through `gpu/stepping.rs` on a device from henad-explore's
-  `acquire_headless`. The CLI never publishes and never lays out a network.
+  `acquire_headless`, sized to `example_models().gpu_needs()`. The CLI resolves its positional id
+  through `ModelSet::lookup`, and refuses an id outside the set ("this build does not include
+  model 'x' (try --list)") apart from a GPU model on a machine without a device. `--list` prints
+  only the models this machine can run. The CLI never publishes and never lays out a network.
   `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
   publish would.
   `explore.rs` is the sweep mode. `--out`, `--spec` or `--dry-run` selects it (`Mode::Explore`), and
@@ -992,6 +1005,8 @@ maintainer's approval as a new edge.
   `explore_search_batch` line per batch.
   `--params --json` (`json_report::params`) prints `schema_json` with a `kind` of `params`.
   `scripts/bench_matrix.py` parses the text `--params` prints, and that text is unchanged.
+  `tests/golden.rs` compares `--list`, `--params` and `--params --json` byte for byte with what
+  0.2.0 printed, recorded in `tests/golden/` by the procedure in its `README.md`. Keep them.
   `build.rs` stamps `HENAD_COMMIT` for the manifest, as henad-app's does.
 
 ### Adding a new model
@@ -1153,9 +1168,8 @@ is about not undoing them.
   asserts in the same breath that `capacity.rs` agrees — build and declared demand pin each other,
   so an over-reported pass count fails there.
   `every_gpu_entry_needs_the_bindings_its_widest_pass_binds` pins each entry's `GpuNeeds` to its
-  demand. Note wgpu
-  on Metal shares one argument table across storage + uniform + vertex, so a check counting only
-  storage buffers can pass locally and fail there.
+  demand. Note wgpu on Metal shares one argument table across storage + uniform + vertex, so a
+  check counting only storage buffers can pass locally and fail there.
 - **`Limits::default()` is not the hardware, and its _size_ limits are what bound a run.** The
   baseline caps one storage binding at 128 MiB, one buffer at 256 MiB and a texture side at 8192,
   where an M4 Pro offers 4 GiB, 14.3 GB and 16384. `limits.rs::raise` takes all three to whatever

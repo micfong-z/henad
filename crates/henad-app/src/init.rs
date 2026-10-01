@@ -4,6 +4,7 @@ use eframe::egui::{
     style::{Interaction, ScrollStyle, Selection, Spacing, TextCursorStyle, WidgetVisuals, Widgets},
 };
 use eframe::egui_wgpu;
+use henad_compute::gpu::GpuNeeds;
 
 use crate::ui::mcs;
 
@@ -52,22 +53,23 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// The wgpu setup both entry points use. Only the device request differs from egui's default.
-pub fn wgpu_configuration() -> egui_wgpu::WgpuConfiguration {
+/// The wgpu setup both entry points use, with a device sized to `needs`. Only the device request differs from
+/// egui's default.
+pub fn wgpu_configuration(needs: GpuNeeds) -> egui_wgpu::WgpuConfiguration {
     egui_wgpu::WgpuConfiguration {
         wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
-            device_descriptor: std::sync::Arc::new(device_descriptor),
+            device_descriptor: std::sync::Arc::new(move |adapter| device_descriptor(adapter, needs)),
             ..egui_wgpu::WgpuSetupCreateNew::without_display_handle()
         }),
         ..Default::default()
     }
 }
 
-/// The device Henad asks for, on top of what egui would have requested.
+/// The device Henad asks for to run models that need `needs`, on top of what egui would have requested.
 ///
 /// `raise` clamps to what the adapter offers. On the web the adapter reports the browser's
 /// ceiling, well under the hardware's.
-pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+pub fn device_descriptor(adapter: &wgpu::Adapter, needs: GpuNeeds) -> wgpu::DeviceDescriptor<'static> {
     let base = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     let mut descriptor = (base.device_descriptor)(adapter);
     // Feeds the GPU time/step readout, "N/A" without it. Reading the timestamps back blocks, and
@@ -76,11 +78,7 @@ pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'sta
     if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
         descriptor.required_features |= wgpu::Features::TIMESTAMP_QUERY;
     }
-    descriptor.required_limits = henad_compute::gpu::limits::raise(
-        adapter,
-        &descriptor.required_limits,
-        henad_models::example_models().gpu_needs(),
-    );
+    descriptor.required_limits = henad_compute::gpu::limits::raise(adapter, &descriptor.required_limits, needs);
     descriptor
 }
 

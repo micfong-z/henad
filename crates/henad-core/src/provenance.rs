@@ -2,7 +2,7 @@
 //!
 //! A [`BuildInfo`] names one compiled crate: its package, its version and, once a build script stamps it, its
 //! commit, a dirty flag and a hash of its sources. [`build_info!`](crate::build_info) returns the one of the crate it
-//! expands in. A [`ModelSource`] names where a model's code came from: the type registered, and the build of the
+//! expands in. A [`ModelSource`] names the origin of a model's code: the type registered, and the build of the
 //! crate that registered it.
 
 use std::borrow::Cow;
@@ -140,7 +140,7 @@ macro_rules! build_info {
     };
 }
 
-/// Where a model's code came from.
+/// Origin of a model's code.
 ///
 /// Registration records the model's type path. The registering crate's build is recorded once the entry joins a
 /// model set, and the accessors that read it return empty text or `None` until then.

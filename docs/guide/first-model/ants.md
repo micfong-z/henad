@@ -366,7 +366,7 @@ impl AgentModel for ForagingModel {
 }
 ```
 
-1. The shipped model already uses the id `ants`, and ids have to be unique across the registry.
+1. The shipped model already uses the id `ants`, and a model set holds each id once.
 2. The number of agents per chunk. There is more to say about this value [below](#deciding-on-chunk).
 3. The engine prepends agent count, world width and world height to the parameter list, and these three consts supply their defaults and the upper bound.
 4. `NoField` places agents in empty space, `ScalarField<S>` places the kind of field we just wrote, and `CaField<M>` (**C**ellular **a**utomata **Field**) places a whole grid model underneath a population as the underlying field.

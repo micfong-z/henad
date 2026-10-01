@@ -1,0 +1,6 @@
+parameters for sir (SIR Epidemic):
+  index=0 id=grid_width kind=u32 default=1024 min=1 max=10000 apply=reload label="Grid Width"
+  index=1 id=grid_height kind=u32 default=1024 min=1 max=10000 apply=reload label="Grid Height"
+  index=2 id=infection_rate kind=f32 default=0.3 min=0 max=1 apply=live label="Infection Rate"
+  index=3 id=recovery_rate kind=f32 default=0.05 min=0 max=1 apply=live label="Recovery Rate"
+  index=4 id=initial_infected_pct kind=f32 default=0.01 min=0 max=1 apply=reload format=percent label="Initial Infected"

@@ -181,7 +181,7 @@ impl NetworkModel for VirusModel {
 }
 ```
 
-1. The shipped model already uses the ID `virus_network`, and IDs have to be unique across the registry.
+1. The shipped model already uses the ID `virus_network`, and a model set holds each ID once.
 2. The engine prepends the node count, world width and world height to the parameter list, and these two consts supply their defaults.
    `MAX_NODES` sets the upper bound, and we keep its default of ten million.
 3. The world is only used for drawing.

@@ -11,9 +11,8 @@ use henad_explore::handle::{SweepEvent, SweepOutput, SweepPhase, SweepProgress, 
 use henad_explore::output::manifest::ManifestRuntime;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
 use henad_explore::sweep::{Provenance, SweepEnd, SweepOutline, SweepReport};
-use henad_models::registry::model_registry;
 
-use crate::state::AppState;
+use crate::state::{AppState, lookup_message};
 use crate::ui::results::ResultsPanel;
 use crate::ui::sweep::draft::{SweepDraft, capitalize, describe_error};
 use crate::ui::sweep::plan::PlanSummary;
@@ -100,17 +99,14 @@ impl SweepSession {
     ///
     /// # Errors
     ///
-    /// Returns a message when this device has no such model, or the sweep cannot start.
+    /// Returns a message when this build or this machine has no such model, or the sweep cannot start.
     pub fn start(
         app: &mut AppState,
         spec: SweepSpec,
         execution: SessionExecution,
         output_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
-        let entry = model_registry(app.gpu_ctx.clone())
-            .into_iter()
-            .find(|entry| entry.id() == spec.model)
-            .ok_or_else(|| format!("{} is unavailable on this device", spec.model))?;
+        let entry = app.lookup(&spec.model).map_err(|error| lookup_message(&error))?.clone();
         let model_name = entry.name().to_owned();
         let output = match &output_dir {
             None => SweepOutput::Memory,
@@ -150,13 +146,10 @@ impl SweepSession {
     ///
     /// # Errors
     ///
-    /// Returns a message when this device has no such model, or the sweep cannot resume.
+    /// Returns a message when this build or this machine has no such model, or the sweep cannot resume.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn resume_folder(app: &mut AppState, folder: PathBuf, model_id: &str) -> Result<Self, String> {
-        let entry = model_registry(app.gpu_ctx.clone())
-            .into_iter()
-            .find(|entry| entry.id() == model_id)
-            .ok_or_else(|| format!("{model_id} is unavailable on this device"))?;
+        let entry = app.lookup(model_id).map_err(|error| lookup_message(&error))?.clone();
         let model_name = entry.name().to_owned();
         let options = SweepRunOptions {
             provenance: provenance(),
@@ -308,13 +301,20 @@ mod tests {
     ///
     /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
     fn headless_app() -> Option<AppState> {
-        match henad_explore::device::acquire_headless(henad_models::example_models().gpu_needs()) {
+        let models = henad_models::example_models();
+        match henad_explore::device::acquire_headless(models.gpu_needs()) {
             Ok(ctx) => {
                 let runtime = ctx
                     .runtime_info()
                     .expect("a headless device carries its runtime info")
                     .clone();
-                Some(AppState::new(egui::Context::default(), ctx.clone(), Some(ctx), runtime))
+                Some(AppState::new(
+                    egui::Context::default(),
+                    models,
+                    ctx.clone(),
+                    Some(ctx),
+                    runtime,
+                ))
             }
             Err(error) => {
                 let required =

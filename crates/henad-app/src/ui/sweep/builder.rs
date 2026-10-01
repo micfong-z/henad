@@ -1797,7 +1797,7 @@ mod tests {
     use henad_core::params::ParamValue;
     use henad_explore::exec::Concurrency;
     use henad_explore::schema::model_schema;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{
         FormInput, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, SectionSummaries, SeedField, banner_line, comparator_item,
@@ -1817,10 +1817,7 @@ mod tests {
     const RECOVERY_RATE: usize = 3;
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {

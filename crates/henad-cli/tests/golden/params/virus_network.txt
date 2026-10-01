@@ -1,0 +1,13 @@
+parameters for virus_network (Virus on a Network):
+  index=0 id=num_agents kind=u32 default=10000 min=1 max=10000000 apply=reload label="Number of Nodes"
+  index=1 id=world_width kind=f32 default=1000 min=1 max=10000 apply=reload label="World Width"
+  index=2 id=world_height kind=f32 default=1000 min=1 max=10000 apply=reload label="World Height"
+  index=3 id=average_node_degree kind=u32 default=6 min=1 max=20 apply=reload label="Average Node Degree"
+  index=4 id=initial_outbreak_size kind=u32 default=3 min=1 max=10000 apply=reload label="Initial Outbreak Size"
+  index=5 id=virus_spread_chance kind=f32 default=0.025 min=0 max=1 apply=live format=percent label="Virus Spread Chance"
+  index=6 id=virus_check_frequency kind=u32 default=1 min=1 max=20 apply=live label="Virus Check Frequency"
+  index=7 id=recovery_chance kind=f32 default=0.05 min=0 max=1 apply=live format=percent label="Recovery Chance"
+  index=8 id=gain_resistance_chance kind=f32 default=0.05 min=0 max=1 apply=live format=percent label="Gain Resistance Chance"
+  index=9 id=directed kind=bool default=false apply=live label="Directed"
+  index=10 id=network kind=choice default=0 options=Random|Geometric apply=reload label="Network"
+  index=11 id=keep_rewiring kind=bool default=false apply=live label="Keep Rewiring"

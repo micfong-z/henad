@@ -6,9 +6,10 @@
 fn main() -> eframe::Result {
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
 
+    let models = henad_models::example_models();
     let native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        wgpu_options: henad_app::wgpu_configuration(),
+        wgpu_options: henad_app::wgpu_configuration(models.gpu_needs()),
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([400.0, 300.0])
             .with_min_inner_size([300.0, 220.0])
@@ -24,7 +25,7 @@ fn main() -> eframe::Result {
         "Henad Engine",
         native_options,
         Box::new(|cc| {
-            let mut app = henad_app::HenadApp::new(cc);
+            let mut app = henad_app::HenadApp::new(cc, models);
             if let Some(folder) = results_folder {
                 app.open_results(folder);
             }
@@ -61,11 +62,6 @@ fn main() {
     // Redirect `log` message to `console.log` and friends:
     eframe::WebLogger::init(log::LevelFilter::Debug).ok();
 
-    let web_options = eframe::WebOptions {
-        wgpu_options: henad_app::wgpu_configuration(),
-        ..Default::default()
-    };
-
     wasm_bindgen_futures::spawn_local(async {
         let window = web_sys::window().expect("No window");
         let document = window.document().expect("No document");
@@ -80,6 +76,12 @@ fn main() {
             log::error!("thread pool init failed, models will run on one core: {err:?}");
         }
 
+        let models = henad_models::example_models();
+        let web_options = eframe::WebOptions {
+            wgpu_options: henad_app::wgpu_configuration(models.gpu_needs()),
+            ..Default::default()
+        };
+
         let canvas = document
             .get_element_by_id("the_canvas_id")
             .expect("Failed to find the_canvas_id")
@@ -90,7 +92,7 @@ fn main() {
             .start(
                 canvas,
                 web_options,
-                Box::new(|cc| Ok(Box::new(henad_app::HenadApp::new(cc)))),
+                Box::new(|cc| Ok(Box::new(henad_app::HenadApp::new(cc, models)))),
             )
             .await;
 

@@ -1550,7 +1550,7 @@ e = 1e-3
     #[test]
     fn every_example_spec_parses_and_plans() {
         let specs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("specs");
-        let registry = henad_models::registry::model_registry(None);
+        let models = henad_models::example_models();
         let mut planned = Vec::new();
         for file in std::fs::read_dir(&specs).expect("the specs directory exists") {
             let path = file.expect("the directory lists").path();
@@ -1563,9 +1563,8 @@ e = 1e-3
             if spec.search.is_some() {
                 continue;
             }
-            let entry = registry
-                .iter()
-                .find(|entry| entry.id() == spec.model)
+            let entry = models
+                .get(&spec.model)
                 .expect("an example spec names a registered model");
             let plan = spec
                 .plan(&model_schema(entry))
@@ -1708,11 +1707,8 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
             .and_then(SpecFile::into_spec)
             .expect("the written file reads back");
         assert_eq!(back, spec, "{text}");
-        let registry = henad_models::registry::model_registry(None);
-        let sir = registry
-            .iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("sir is registered");
+        let models = henad_models::example_models();
+        let sir = models.get("sir").expect("sir is registered");
         let plan = spec.plan(&model_schema(sir)).expect("the spec plans");
         assert_eq!(plan.configs().len(), 43);
     }
@@ -1821,11 +1817,8 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
             .and_then(SpecFile::into_spec)
             .expect("the written file reads back");
         assert_eq!(back.blocks[0].design_seed, None, "{text}");
-        let registry = henad_models::registry::model_registry(None);
-        let sir = registry
-            .iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("sir is registered");
+        let models = henad_models::example_models();
+        let sir = models.get("sir").expect("sir is registered");
         let plan_hash = |spec: &SweepSpec| spec.plan(&model_schema(sir)).expect("the spec plans").plan_hash();
         assert_eq!(plan_hash(&back), plan_hash(&spec), "a factorial design draws nothing");
     }

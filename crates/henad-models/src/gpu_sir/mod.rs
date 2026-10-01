@@ -367,7 +367,6 @@ mod runner_tests {
 
     use super::GpuSir;
     use super::tests::{headless_context, params};
-    use crate::registry::model_registry;
     use henad_compute::entry::ModelState;
     use henad_core::view::StatValue;
 
@@ -428,10 +427,9 @@ mod runner_tests {
             return;
         };
 
-        let entries = model_registry(Some(ctx.clone()));
-        let entry = entries
-            .iter()
-            .find(|e| e.id() == "gpu_sir")
+        let models = crate::example_models();
+        let entry = models
+            .lookup("gpu_sir", Some(&ctx))
             .expect("a GPU context must make the GPU SIR model selectable");
 
         let built = entry

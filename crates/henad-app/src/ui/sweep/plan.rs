@@ -681,17 +681,14 @@ mod tests {
     use henad_compute::entry::ModelEntry;
     use henad_core::params::ParamValue;
     use henad_explore::schema::model_schema;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{NOT_COUNTED, PlanSummary, budget_rows, either_text, samples_text, steps_text};
     use crate::ui::sweep::draft::{DesignTableDraft, DraftAlgorithm, DraftDesign, DraftMode, GridAxis, SweepDraft};
     use crate::ui::sweep::{CheckSummary, SweepPanel};
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
@@ -950,10 +947,7 @@ mod tests {
 
     #[test]
     fn the_outputs_per_run_count_each_part_of_a_vector_stat() {
-        let entry = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "boids")
-            .expect("boids is registered");
+        let entry = example_models().get("boids").cloned().expect("boids is registered");
         let mut panel = SweepPanel::default();
         assert_eq!(
             value(&plan_of_panel(&mut panel, &entry), "Outputs per run"),

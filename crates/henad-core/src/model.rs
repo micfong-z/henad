@@ -2,7 +2,7 @@ use crate::params::ParamValue;
 use crate::send_sync::WasmNotSend;
 use crate::view::{EdgeView, GridView, PointView, StatEntry};
 
-/// Object-safe, so the registry can type-erase every model behind one state.
+/// Object-safe, so a model entry can type-erase every model behind one state.
 pub trait SimState: WasmNotSend + 'static {
     fn step(&mut self);
     fn tick(&self) -> u64;

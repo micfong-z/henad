@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Id, Modal};
-use henad_compute::entry::ModelEntry;
+use henad_compute::entry::{ModelEntry, ModelLookupError};
 use henad_core::explore::plan::Plan;
 use henad_explore::handle::{DEFAULT_SERIES_BUDGET, SweepEvent};
 use henad_explore::output::memory::SweepFiles;
@@ -146,23 +146,16 @@ pub struct ResultsPanel {
 }
 
 impl ResultsPanel {
-    /// Clears the results for the sweep of `plan` that is about to start, over `entry`, the model at `model_index`
-    /// in the registry, whose files go to `folder`.
-    pub fn begin_sweep(&mut self, plan: Arc<Plan>, entry: &ModelEntry, model_index: usize, folder: Option<PathBuf>) {
-        let store = ResultsStore::for_sweep(plan, entry, model_index, folder, DEFAULT_SERIES_BUDGET);
+    /// Clears the results for the sweep of `plan` that is about to start, over `entry`, whose files go to `folder`.
+    pub fn begin_sweep(&mut self, plan: Arc<Plan>, entry: &ModelEntry, folder: Option<PathBuf>) {
+        let store = ResultsStore::for_sweep(plan, entry, folder, DEFAULT_SERIES_BUDGET);
         self.set_store(store);
     }
 
-    /// Clears the results for the search of `search_plan` that is about to start, over `entry`, the model at
-    /// `model_index` in the registry, whose files go to `folder`.
-    pub fn begin_search(
-        &mut self,
-        search_plan: Arc<SearchPlan>,
-        entry: &ModelEntry,
-        model_index: usize,
-        folder: Option<PathBuf>,
-    ) {
-        let store = ResultsStore::for_search(search_plan, entry, model_index, folder, DEFAULT_SERIES_BUDGET);
+    /// Clears the results for the search of `search_plan` that is about to start, over `entry`, whose files go to
+    /// `folder`.
+    pub fn begin_search(&mut self, search_plan: Arc<SearchPlan>, entry: &ModelEntry, folder: Option<PathBuf>) {
+        let store = ResultsStore::for_search(search_plan, entry, folder, DEFAULT_SERIES_BUDGET);
         self.set_store(store);
     }
 
@@ -297,10 +290,11 @@ impl ResultsPanel {
         }
     }
 
-    /// Shows the results `set`, read from `source`, replaying through the models of `registry`.
-    fn show_result_set(&mut self, set: ResultSet, source: ResultsSource, registry: &[ModelEntry]) {
+    /// Shows the results `set`, read from `source`, replaying through `model`, the sweep's model as this app finds
+    /// it.
+    fn show_result_set(&mut self, set: ResultSet, source: ResultsSource, model: Result<&ModelEntry, ModelLookupError>) {
         let search = SearchView::for_result_set(&set);
-        let store = ResultsStore::from_result_set(set, source, registry, DEFAULT_SERIES_BUDGET);
+        let store = ResultsStore::from_result_set(set, source, model, DEFAULT_SERIES_BUDGET);
         self.set_store(store);
         self.search = search;
     }
@@ -382,7 +376,8 @@ fn read_files(app: &mut AppState, files: Vec<DialogFile>) {
 
 /// Shows `set`, read from `source`, and brings the Results tab to the front.
 fn show_results(app: &mut AppState, set: ResultSet, source: ResultsSource) {
-    app.results.show_result_set(set, source, &app.registry);
+    let model = app.models.lookup(&set.manifest().model.id, app.gpu_ctx.as_ref());
+    app.results.show_result_set(set, source, model);
     app.focus_request = Some(Tab::Results);
 }
 
@@ -578,7 +573,7 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
             cfg!(not(target_arch = "wasm32"))
                 && matches!(store.source, ResultsSource::Folder(_))
                 && !store.complete
-                && store.model_index.is_some()
+                && app.lookup(&store.model_id).is_ok()
         });
         if resumable {
             let noun = if panel.store.as_ref().is_some_and(ResultsStore::is_search) {
@@ -813,7 +808,7 @@ mod tests {
     use henad_explore::output::GENERATIONS_FILE;
     use henad_explore::result_set::{DirectorySeries, ResultSet};
     use henad_explore::schema::model_schema;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{READING_RESULTS, ResultsPanel, ResultsView, SeriesLoad, poll_series_load};
     use crate::ui::files::DialogFile;
@@ -827,10 +822,7 @@ mod tests {
     }
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     /// Returns the plan of SIR over two infection rates with `replicates` runs each.
@@ -873,7 +865,7 @@ mod tests {
         let plan = plan(&sir, 1);
 
         let mut panel = ResultsPanel::default();
-        panel.begin_sweep(Arc::clone(&plan), &sir, 0, None);
+        panel.begin_sweep(Arc::clone(&plan), &sir, None);
         let (sender, receiver) = flume::bounded(1);
         panel.series_load = Some(SeriesLoad {
             kept_runs: BTreeSet::new(),
@@ -881,7 +873,7 @@ mod tests {
             receiver,
         });
 
-        panel.begin_sweep(Arc::clone(&plan), &sir, 0, None);
+        panel.begin_sweep(Arc::clone(&plan), &sir, None);
         let store = panel.store.as_mut().expect("the sweep's store");
         store.push_run(outcome(&plan, 0, series(1.0)), false);
 
@@ -965,7 +957,7 @@ mod tests {
 
     #[test]
     fn a_search_held_live_matches_its_folder_and_replays_from_either() {
-        let registry = model_registry(None);
+        let models = example_models();
         for (name, algorithm) in compared_searches() {
             let folder =
                 ScratchFolder(std::env::temp_dir().join(format!("henad-app-search-{name}-{}", std::process::id())));
@@ -975,7 +967,7 @@ mod tests {
                 .expect("the search starts");
             let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));
             let mut panel = ResultsPanel::default();
-            panel.begin_search(search_plan, &sir(), 0, Some(folder.0.clone()));
+            panel.begin_search(search_plan, &sir(), Some(folder.0.clone()));
             assert_eq!(
                 panel.view,
                 ResultsView::Search,
@@ -995,8 +987,12 @@ mod tests {
 
             let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
             let command = first_run_command(&set);
-            let opened =
-                ResultsStore::from_result_set(set, ResultsSource::Folder(folder.0.clone()), &registry, 1 << 20);
+            let opened = ResultsStore::from_result_set(
+                set,
+                ResultsSource::Folder(folder.0.clone()),
+                models.lookup("sir", None),
+                1 << 20,
+            );
             for store in [live, &opened] {
                 assert!(store.is_search(), "{name}");
                 assert_eq!(store.runs().len(), 12, "{name}: every run of every evaluation");
@@ -1084,7 +1080,7 @@ mod tests {
             .expect("the search starts");
         let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));
         let mut panel = ResultsPanel::default();
-        panel.begin_search(search_plan, &sir(), 0, None);
+        panel.begin_search(search_plan, &sir(), None);
         let started = std::time::Instant::now();
         while !run.is_ended() {
             let events: Vec<SweepEvent> = std::iter::from_fn(|| run.try_recv()).collect();
@@ -1119,8 +1115,8 @@ mod tests {
         }
 
         let (mut together, mut one_at_a_time) = (ResultsPanel::default(), ResultsPanel::default());
-        together.begin_search(Arc::clone(&search_plan), &sir(), 0, None);
-        one_at_a_time.begin_search(search_plan, &sir(), 0, None);
+        together.begin_search(Arc::clone(&search_plan), &sir(), None);
+        one_at_a_time.begin_search(search_plan, &sir(), None);
         for event in &events {
             one_at_a_time.ingest([event.clone()]);
         }
@@ -1198,13 +1194,13 @@ mod tests {
         assert!(log.history.generations.is_empty(), "no generation finished");
         assert!(!live.search.generations_missing, "a live search has every table");
 
-        let registry = model_registry(None);
+        let models = example_models();
         let open = |files: Vec<DialogFile>| {
             let names = files.iter().map(|file| file.name.clone()).collect();
             let entries = files.into_iter().map(|file| (file.name, file.bytes)).collect();
             let set = ResultSet::from_files(entries, usize::MAX).expect("the files read");
             let mut panel = ResultsPanel::default();
-            panel.show_result_set(set, ResultsSource::Files(names), &registry);
+            panel.show_result_set(set, ResultsSource::Files(names), models.lookup("sir", None));
             panel
         };
         let whole = open(picked_files(&live, ""));
@@ -1239,7 +1235,7 @@ mod tests {
 
         let sir = sir();
         panel.hold_picked_files(files);
-        panel.begin_sweep(plan(&sir, 1), &sir, 0, None);
+        panel.begin_sweep(plan(&sir, 1), &sir, None);
         assert!(panel.picked_files.is_none(), "a sweep that starts drops them");
     }
 
@@ -1248,7 +1244,7 @@ mod tests {
         let sir = sir();
         let plan = plan(&sir, 2);
         let mut panel = ResultsPanel::default();
-        panel.begin_sweep(Arc::clone(&plan), &sir, 0, None);
+        panel.begin_sweep(Arc::clone(&plan), &sir, None);
         let store = panel.store.as_mut().expect("the sweep's store");
         for run_id in 0..4 {
             store.push_run(outcome(&plan, run_id, SeriesBuffer::new(3)), true);

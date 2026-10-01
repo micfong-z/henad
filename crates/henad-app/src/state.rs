@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use egui::TextureHandle;
 use henad_compute::cpu::sim_thread::{SimCommand, SimThread, WakeFn};
-use henad_compute::entry::{ModelEntry, ModelState};
+use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelState};
 use henad_compute::fault::{BUILDING, Fault, catching};
 use henad_compute::snapshot::Snapshot;
 use henad_core::action::Schedule;
@@ -13,7 +13,6 @@ use henad_core::explore::replay::Replay;
 use henad_core::params::ParamValue;
 use henad_core::view::StatsHistory;
 use henad_explore::output::memory::SweepFiles;
-use henad_models::registry::model_registry;
 
 use crate::sim_runner::SimRunner;
 use crate::ui::agent_layer::AgentLayer;
@@ -60,10 +59,13 @@ impl FrameTimings {
 pub struct AppState {
     /// Kept so a freshly built sim thread can be handed a repaint waker.
     egui_ctx: egui::Context,
-    pub registry: Vec<ModelEntry>,
-    pub selected_model: usize,
+    /// Every model the host offers, GPU ones included where this machine cannot run them.
+    pub models: ModelSet,
+    /// Id of the model the panels show, `None` when no offered model runs on this machine.
+    pub selected_model: Option<String>,
     pub param_values: Vec<ParamValue>,
-    pub loaded_model: Option<usize>,
+    /// Id of the model the live simulation was built from.
+    pub loaded_model: Option<String>,
     pub pending_reload: Vec<bool>,
     /// Seed of the next build, `None` for the model's default seed.
     pub seed: Option<u64>,
@@ -125,7 +127,7 @@ pub struct AppState {
     pub logo_texture: Option<TextureHandle>,
     pub timings: FrameTimings,
     /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
-    /// switch. `None` where the adapter cannot run compute shaders.
+    /// switch. `None` where the adapter cannot run compute shaders, and the GPU models are then hidden.
     pub gpu_ctx: Option<GpuContext>,
     /// A viewport capture waiting on the GPU.
     pub capture: Option<PendingCapture>,
@@ -157,8 +159,6 @@ pub enum OpenAt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenedRun {
     pub replay: Replay,
-    /// Registry index of the replay's model.
-    pub model_index: usize,
     /// Whether a live edit, an action or a build from other values has left the run's trajectory.
     pub modified: bool,
 }
@@ -181,24 +181,26 @@ pub enum PointRenderMode {
 
 impl AppState {
     /// `render_ctx` always exists, eframe is wgpu-only here. `gpu_ctx` is `None` on an adapter
-    /// without compute. GPU models then stay out of the registry, and rendering is unaffected.
+    /// without compute. GPU models are then hidden from the Model panel, and rendering is unaffected.
+    ///
+    /// The app opens on the first model of `models` that runs on this machine, and with nothing selected when none
+    /// does.
     pub fn new(
         egui_ctx: egui::Context,
+        models: ModelSet,
         render_ctx: GpuContext,
         gpu_ctx: Option<GpuContext>,
         runtime: RuntimeInfo,
     ) -> Self {
-        let registry = model_registry(gpu_ctx.clone());
-        let param_values: Vec<ParamValue> = registry
-            .first()
-            .map(|m| m.param_descriptors().iter().map(|p| p.kind.default_value()).collect())
-            .unwrap_or_default();
+        let first = offered(&models, gpu_ctx.as_ref()).next();
+        let selected_model = first.map(|entry| entry.id().to_owned());
+        let param_values: Vec<ParamValue> = first.map(default_values).unwrap_or_default();
 
         Self {
             egui_ctx,
             pending_reload: vec![false; param_values.len()],
-            registry,
-            selected_model: 0,
+            models,
+            selected_model,
             param_values,
             loaded_model: None,
             seed: None,
@@ -275,7 +277,7 @@ impl AppState {
             layer.clear();
         }
 
-        let Some(entry) = self.registry.get(self.selected_model) else {
+        let Some(entry) = self.selected_entry() else {
             return;
         };
 
@@ -296,7 +298,7 @@ impl AppState {
 
         self.stats_history = Some(stats_history);
         self.sim_running = false;
-        self.loaded_model = Some(self.selected_model);
+        self.loaded_model.clone_from(&self.selected_model);
         self.pending_reload = vec![false; self.param_values.len()];
         self.loaded_seed = self.seed;
         self.loaded_schedule = self.schedule.clone();
@@ -310,7 +312,7 @@ impl AppState {
         let Some(run) = &mut self.opened_run else {
             return;
         };
-        if run.model_index != self.selected_model {
+        if self.selected_model.as_deref() != Some(run.replay.model.as_str()) {
             self.opened_run = None;
             return;
         }
@@ -321,13 +323,14 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// Returns a message when this device has no model `replay.model`, or the model declares another number of
-    /// parameters. A build that fails goes to the fault modal instead, and leaves no run open.
+    /// Returns a message when this build or this machine has no model `replay.model`, or the model declares another
+    /// number of parameters. A build that fails goes to the fault modal instead, and leaves no run open.
     pub fn open_run(&mut self, replay: Replay, start: OpenAt) -> Result<(), String> {
-        let Some(model_index) = self.registry.iter().position(|entry| entry.id() == replay.model) else {
-            return Err(format!("{} is unavailable on this device", replay.model));
-        };
-        let declared = self.registry[model_index].param_descriptors().len();
+        let declared = self
+            .lookup(&replay.model)
+            .map_err(|error| lookup_message(&error))?
+            .param_descriptors()
+            .len();
         if replay.params.len() != declared {
             return Err(format!(
                 "This run sets {} parameters, but {} has {declared}",
@@ -337,7 +340,7 @@ impl AppState {
         }
 
         self.opened_run = None;
-        self.selected_model = model_index;
+        self.selected_model = Some(replay.model.clone());
         self.param_values.clone_from(&replay.params);
         self.pending_reload = vec![false; declared];
         self.seed = Some(replay.seed);
@@ -354,7 +357,6 @@ impl AppState {
         }
         self.opened_run = Some(OpenedRun {
             replay,
-            model_index,
             modified: false,
         });
         self.focus_request = Some(Tab::Viewport);
@@ -417,8 +419,8 @@ impl AppState {
                 SimRunner::Cpu(thread)
             }),
             ModelState::Gpu(state) => {
-                // Unreachable in practice. Without a context the registry never offers a GPU
-                // entry to select.
+                // Unreachable in practice. Without a context the Model panel hides every GPU entry,
+                // and an entry built without one returns a fault.
                 let Some(ctx) = self.gpu_ctx.clone() else {
                     return Err(Fault::refused(BUILDING, "no GPU context is available"));
                 };
@@ -481,14 +483,10 @@ impl AppState {
     }
 
     pub fn load_default_params(&mut self) {
-        let Some(entry) = self.registry.get(self.selected_model) else {
+        let Some(entry) = self.selected_entry() else {
             return;
         };
-        self.param_values = entry
-            .param_descriptors()
-            .iter()
-            .map(|p| p.kind.default_value())
-            .collect();
+        self.param_values = default_values(entry);
         self.pending_reload = vec![false; self.param_values.len()];
     }
 
@@ -508,12 +506,51 @@ impl AppState {
     }
 
     pub fn selection_is_loaded(&self) -> bool {
-        self.loaded_model == Some(self.selected_model)
+        self.loaded_model.is_some() && self.loaded_model == self.selected_model
+    }
+
+    /// Entry of the selected model.
+    pub fn selected_entry(&self) -> Option<&ModelEntry> {
+        self.models.get(self.selected_model.as_deref()?)
+    }
+
+    /// Entry of the model the live simulation was built from.
+    pub fn loaded_entry(&self) -> Option<&ModelEntry> {
+        self.models.get(self.loaded_model.as_deref()?)
+    }
+
+    /// Returns the models of the set that run on this machine, in the set's order.
+    pub fn offered_models(&self) -> impl Iterator<Item = &ModelEntry> + '_ {
+        offered(&self.models, self.gpu_ctx.as_ref())
+    }
+
+    /// Returns entry `id`, or the reason this build or this machine cannot run it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelLookupError::NotInSet`] for a model the host does not offer, and
+    /// [`ModelLookupError::NeedsGpu`] for a GPU model on an adapter without compute.
+    pub fn lookup(&self, id: &str) -> Result<&ModelEntry, ModelLookupError> {
+        self.models.lookup(id, self.gpu_ctx.as_ref())
+    }
+
+    /// Selects model `id` with its default values and no scheduled actions.
+    ///
+    /// The model selected already keeps its values.
+    pub fn select_model(&mut self, id: &str) {
+        if self.selected_model.as_deref() == Some(id) {
+            return;
+        }
+        self.selected_model = Some(id.to_owned());
+        self.load_default_params();
+        // Entries index the previous model's actions.
+        self.schedule = Schedule::default();
+        self.schedule_action_input = 0;
     }
 
     /// Reasons this machine cannot build the selection. Always empty for a CPU model.
     pub fn selection_shortfalls(&self) -> Vec<String> {
-        self.registry.get(self.selected_model).map_or_else(Vec::new, |entry| {
+        self.selected_entry().map_or_else(Vec::new, |entry| {
             entry.shortfalls(&self.param_values, &self.runtime.granted)
         })
     }
@@ -625,13 +662,105 @@ impl AppState {
     }
 }
 
+/// Returns the models of `models` that run with `gpu`, in the set's order.
+///
+/// A GPU model runs only where the adapter has compute.
+pub fn offered<'a>(models: &'a ModelSet, gpu: Option<&GpuContext>) -> impl Iterator<Item = &'a ModelEntry> + 'a {
+    let compute = gpu.is_some();
+    models
+        .iter()
+        .filter(move |entry| compute || entry.gpu_needs().is_none())
+}
+
+/// Returns the default value of every parameter of `entry`.
+pub fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
+    entry
+        .param_descriptors()
+        .iter()
+        .map(|descriptor| descriptor.kind.default_value())
+        .collect()
+}
+
+/// Returns `error` as a sentence, as in "This build does not include model 'x'."
+pub fn lookup_message(error: &ModelLookupError) -> String {
+    format!("{}.", crate::ui::sweep::draft::capitalize(&error.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use henad_core::action::{Schedule, Scheduled};
     use henad_core::explore::replay::Replay;
     use henad_core::params::ParamValue;
 
-    use super::OpenedRun;
+    use super::{AppState, OpenAt, OpenedRun};
+
+    /// Returns an app over a headless device whose adapter, as the app sees it, cannot run compute shaders, or `None`
+    /// to skip on a machine without a device.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
+    fn app_without_compute() -> Option<AppState> {
+        let models = henad_models::example_models();
+        match henad_explore::device::acquire_headless(models.gpu_needs()) {
+            Ok(ctx) => {
+                let runtime = ctx
+                    .runtime_info()
+                    .expect("a headless device carries its runtime info")
+                    .clone();
+                Some(AppState::new(egui::Context::default(), models, ctx, None, runtime))
+            }
+            Err(error) => {
+                let required =
+                    std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|value| !value.is_empty() && value != "0");
+                assert!(!required, "HENAD_REQUIRE_GPU is set but {error}");
+                None
+            }
+        }
+    }
+
+    /// Returns a replay of model `model` with no parameters.
+    fn replay_of(model: &str) -> Replay {
+        Replay {
+            model: model.to_owned(),
+            params: Vec::new(),
+            seed: 1,
+            schedule: Schedule::default(),
+            ticks: 10,
+            label: "Sweep run 0".to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_app_without_compute_hides_gpu_models_and_names_each_missing_one() {
+        let Some(mut app) = app_without_compute() else {
+            return;
+        };
+        let offered: Vec<&str> = app.offered_models().map(|entry| entry.id()).collect();
+        assert_eq!(
+            offered,
+            ["sir", "boids", "game_of_life", "ants", "virus_network", "team_assembly"]
+        );
+        assert_eq!(
+            app.selected_model.as_deref(),
+            Some("sir"),
+            "the first model that runs here"
+        );
+
+        assert_eq!(
+            app.open_run(replay_of("gpu_sir"), OpenAt::Start),
+            Err("Model 'gpu_sir' needs a GPU, and this machine has none.".to_owned())
+        );
+        assert_eq!(
+            app.open_run(replay_of("absent"), OpenAt::Start),
+            Err("This build does not include model 'absent'.".to_owned())
+        );
+        assert_eq!(
+            app.selected_model.as_deref(),
+            Some("sir"),
+            "a refused run selects nothing"
+        );
+    }
 
     #[test]
     fn a_build_follows_the_run_only_from_its_own_values() {
@@ -650,7 +779,6 @@ mod tests {
                 ticks: 300,
                 label: "Sweep run 0: config 0, replicate 0".to_owned(),
             },
-            model_index: 0,
             modified: false,
         };
 

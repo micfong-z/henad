@@ -1,12 +1,12 @@
 ---
-title: Default models
-description: The ten models that ship with Henad, and every parameter each one declares.
+title: Example models
+description: The ten example models that ship with Henad, and every parameter each one declares.
 icon: material/cube-outline
 ---
 
-# The models
+# Example models
 
-Ten models ship in the registry.
+Ten example models ship with Henad, in the set `henad_models::example_models()` returns.
 Six of them run on the CPU, and four of those six have a GPU port running the same simulation entirely in compute shaders.
 The two network models run on the CPU only.
 
@@ -97,7 +97,7 @@ The `randomise_headings` action points every boid in a random direction without 
 
 ### Ant Foraging
 
-A population over a pheromone field, the one composite model in the registry.
+A population over a pheromone field, the one composite example model.
 Ants deposit into a scalar field that decays each tick, then steer by the values they read back.
 
 | Id | Kind | Default | Range |

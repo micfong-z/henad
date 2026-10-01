@@ -440,7 +440,6 @@ mod runner_tests {
 
     use super::GpuGameOfLife;
     use super::tests::{headless_context, params};
-    use crate::registry::model_registry;
     use henad_compute::entry::ModelState;
     use henad_core::view::StatValue;
 
@@ -536,10 +535,9 @@ mod runner_tests {
         }
     }
 
-    /// With a context, the GPU entry is offered by the registry, its factory yields a
+    /// With a context, a lookup in the example set returns the GPU entry, its factory yields a
     /// `ModelState::Gpu` (so `HenadApp` routes it to the GPU thread rather than the CPU one), and
-    /// the state it builds is drivable. The mirror of
-    /// `registry::tests::registry_without_gpu_context_offers_no_gpu_models`.
+    /// the state it builds is drivable.
     #[test]
     fn registry_with_gpu_context_offers_a_drivable_gpu_model() {
         let Some(ctx) = headless_context() else {
@@ -547,10 +545,9 @@ mod runner_tests {
             return;
         };
 
-        let entries = model_registry(Some(ctx.clone()));
-        let entry = entries
-            .iter()
-            .find(|e| e.id() == "gpu_game_of_life")
+        let models = crate::example_models();
+        let entry = models
+            .lookup("gpu_game_of_life", Some(&ctx))
             .expect("a GPU context must make the GPU model selectable");
 
         let built = entry

@@ -34,6 +34,7 @@ pub use crate::init::wgpu_configuration;
 use crate::sim_runner::SimRunner;
 use crate::state::AppState;
 use crate::ui::dock::{Tab, default_dock_state, focus_tab};
+use henad_compute::entry::ModelSet;
 use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::runner::CAN_SPAWN_THREADS;
 use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
@@ -67,7 +68,11 @@ pub struct HenadApp {
 }
 
 impl HenadApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    /// Returns the app offering `models`, on the device eframe created from [`wgpu_configuration`].
+    ///
+    /// Note that the device has to be requested for `models.gpu_needs()`. Otherwise a GPU model that binds more
+    /// storage buffers than the WebGPU baseline allows will fail to build.
+    pub fn new(cc: &eframe::CreationContext<'_>, models: ModelSet) -> Self {
         install_panic_hook();
 
         let render_state = &cc
@@ -97,6 +102,7 @@ impl HenadApp {
             dock: default_dock_state(),
             state: AppState::new(
                 cc.egui_ctx.clone(),
+                models,
                 render_ctx,
                 gpu_ctx,
                 RuntimeInfo::collect(&render_state.adapter, &render_state.device),

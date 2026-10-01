@@ -2520,7 +2520,7 @@ mod tests {
     use henad_explore::probe::ProbeReport;
     use henad_explore::schema::model_schema;
     use henad_explore::spec_file::SpecFile;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{
         COLUMNS_PENDING, DesignTableDraft, DraftAlgorithm, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis,
@@ -2535,17 +2535,11 @@ mod tests {
     const RECOVERY_RATE: usize = 3;
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn boids() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "boids")
-            .expect("boids is registered")
+        example_models().get("boids").cloned().expect("boids is registered")
     }
 
     fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {

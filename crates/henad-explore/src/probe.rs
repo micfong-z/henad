@@ -362,17 +362,14 @@ mod tests {
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
     use henad_core::params::ParamValue;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{MAX_LISTED_CONFIGS, MAX_PROBED_CONFIGS, ProbeError, ProbeReport, check_capacity};
     use crate::schema::model_schema;
     use crate::tests::broken::DividesByParam;
 
     fn entry(id: &str) -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == id)
-            .expect("the model is registered")
+        example_models().get(id).cloned().expect("the model is registered")
     }
 
     #[test]

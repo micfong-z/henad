@@ -17,6 +17,8 @@ henad-cli [OPTIONS] [MODEL]
 ```
 
 `MODEL` is a model id, as printed by `--list`.
+On a machine without a compute adapter `--list` leaves the GPU models out, and naming one is refused with the message that it needs a GPU.
+An id the build does not include is refused as well.
 A sweep or search read from `--spec` takes the model from the spec file, and `MODEL` can be left out.
 
 !!! warning "Release mode"
@@ -28,7 +30,7 @@ A sweep or search read from `--spec` takes the model from the spec file, and `MO
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--list` | | Print the available model ids and exit |
+| `--list` | | Print the ids of the models this machine can run and exit |
 | `--params` | | Print the model's parameters, with kinds, defaults and ranges, and exit. With `--json`, print them as [one JSON line](#parameters-as-json) |
 | `--info` | | Print host and GPU details. Without a model or a sweep, prints and exits. Otherwise, prints as a provenance header |
 | `--json` | | Emit one JSON object per line instead of the human report, for a driver to parse |

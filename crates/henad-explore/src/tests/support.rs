@@ -14,7 +14,7 @@ use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::Plan;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::export::csv::parse_records;
-use henad_models::registry::model_registry;
+use henad_models::example_models;
 
 use henad_compute::fault::FaultSink;
 
@@ -41,7 +41,7 @@ fn gpu_required() -> bool {
 ///
 /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
 pub fn headless_device() -> Option<GpuContext> {
-    match acquire_headless(henad_models::example_models().gpu_needs()) {
+    match acquire_headless(example_models().gpu_needs()) {
         Ok(ctx) => Some(ctx),
         Err(error) => {
             assert!(!gpu_required(), "{REQUIRE_GPU} is set but {error}");
@@ -81,16 +81,16 @@ pub fn baseline_device() -> Option<GpuContext> {
     }
 }
 
-/// Returns the registry entry of model `id`, registered with `gpu` as its device.
+/// Returns example model `id`, as a host with `gpu` as its device finds it.
 ///
 /// # Panics
 ///
-/// Panics when no model has the id.
+/// Panics when no model has the id, or for a GPU model when `gpu` is `None`.
 pub fn entry(id: &str, gpu: Option<&GpuContext>) -> ModelEntry {
-    model_registry(gpu.cloned())
-        .into_iter()
-        .find(|entry| entry.id() == id)
-        .expect("the model is registered")
+    example_models()
+        .lookup(id, gpu)
+        .cloned()
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// Path under the system's temporary directory, unique to one test, removed with its contents on drop.

@@ -14,15 +14,15 @@ use crate::gpu::{GpuContext, GpuNeeds};
 #[derive(Debug, Clone)]
 pub struct ModelSet {
     /// Build recorded on every entry inserted without one.
-    source: BuildInfo,
+    build: BuildInfo,
     entries: Vec<ModelEntry>,
 }
 
 impl ModelSet {
-    /// Returns an empty set that records `source` as the build of every entry inserted without one.
-    pub fn new(source: BuildInfo) -> Self {
+    /// Returns an empty set that records `build` as the build of every entry inserted without one.
+    pub fn new(build: BuildInfo) -> Self {
         Self {
-            source,
+            build,
             entries: Vec::new(),
         }
     }
@@ -43,7 +43,7 @@ impl ModelSet {
         let entry = if entry.source().build().is_some() {
             entry
         } else {
-            let source = entry.source().clone().__with_build(self.source);
+            let source = entry.source().clone().__with_build(self.build);
             entry.with_source(source)
         };
         self.entries.push(entry);
@@ -96,7 +96,7 @@ impl ModelSet {
         self.entries.is_empty()
     }
 
-    /// Needs of every GPU entry, merged. The device a host requests before any model builds.
+    /// Returns the merged needs of every GPU entry. A host requests its device for them before any model builds.
     pub fn gpu_needs(&self) -> GpuNeeds {
         self.entries
             .iter()
@@ -138,7 +138,10 @@ fn check_id(id: &str) -> Result<(), ModelSetError> {
     match chars.next() {
         None => invalid("is empty"),
         Some(first) if !first.is_ascii_lowercase() => invalid("does not start with a lowercase ASCII letter"),
-        Some(_) if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') => {
+        Some(_)
+            if !chars
+                .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_') =>
+        {
             invalid("holds a character other than a lowercase ASCII letter, a digit or an underscore")
         }
         Some(_) => Ok(()),
@@ -172,7 +175,7 @@ impl fmt::Display for ModelSetError {
             ),
             Self::InvalidId { id, reason } => write!(
                 f,
-                "model id '{id}' {reason}. An id is a lowercase ASCII letter, then lowercase letters, digits and underscores"
+                "model id '{id}' {reason} (an id is a lowercase ASCII letter, then lowercase letters, digits and underscores)"
             ),
         }
     }

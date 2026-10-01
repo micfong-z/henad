@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use henad_compute::entry::ModelEntry;
+use henad_compute::entry::{ModelEntry, ModelLookupError};
 use henad_core::explore::factor::FactorTarget;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::RunOutcome;
@@ -31,6 +31,7 @@ use henad_explore::result_set::ResultSet;
 use henad_explore::schema::model_schema;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
 
+use crate::state::lookup_message;
 use crate::ui::sweep::draft::describe_error;
 
 /// Level id of a config on an axis whose column the config lacks.
@@ -490,8 +491,6 @@ pub struct ResultsStore {
     pub model_id: String,
     /// Name of the model as the sweep recorded it.
     pub model_name: String,
-    /// Index of the model in the app's registry, `None` when this device lacks it.
-    pub model_index: Option<usize>,
     /// Whether the model declares the parameters, stats and actions the sweep ran with.
     pub schema_matches: bool,
     /// Whether every run of the sweep is held.
@@ -533,22 +532,14 @@ pub struct ResultsStore {
 }
 
 impl ResultsStore {
-    /// Returns an empty store for the sweep of `plan` over `entry`, the model at `model_index` in the registry, whose
-    /// files go to `folder`.
-    pub fn for_sweep(
-        plan: Arc<Plan>,
-        entry: &ModelEntry,
-        model_index: usize,
-        folder: Option<PathBuf>,
-        series_budget: usize,
-    ) -> Self {
+    /// Returns an empty store for the sweep of `plan` over `entry`, whose files go to `folder`.
+    pub fn for_sweep(plan: Arc<Plan>, entry: &ModelEntry, folder: Option<PathBuf>, series_budget: usize) -> Self {
         let value_columns = plan_value_columns(&plan, entry.param_descriptors());
         let texts = plan_texts(&plan, entry.param_descriptors());
         let mut store = Self {
             source: ResultsSource::Sweep,
             model_id: entry.id().to_owned(),
             model_name: entry.name().to_owned(),
-            model_index: Some(model_index),
             schema_matches: true,
             complete: false,
             folder,
@@ -575,12 +566,10 @@ impl ResultsStore {
         store
     }
 
-    /// Returns an empty store for the search of `search_plan` over `entry`, the model at `model_index` in the
-    /// registry, whose files go to `folder`.
+    /// Returns an empty store for the search of `search_plan` over `entry`, whose files go to `folder`.
     pub fn for_search(
         search_plan: Arc<SearchPlan>,
         entry: &ModelEntry,
-        model_index: usize,
         folder: Option<PathBuf>,
         series_budget: usize,
     ) -> Self {
@@ -590,7 +579,7 @@ impl ResultsStore {
             history: SearchHistory::default(),
             table_error: None,
         };
-        let mut store = Self::for_sweep(base, entry, model_index, folder, series_budget);
+        let mut store = Self::for_sweep(base, entry, folder, series_budget);
         store.set_configs(BTreeMap::new());
         store.plan = Ok(ReplayPlan::Search(search_plan));
         store.search = Some(search);
@@ -599,17 +588,16 @@ impl ResultsStore {
 
     /// Returns a store of the runs `set` read from `source`, holding at most `series_budget` bytes of series.
     ///
-    /// The runs replay through the model of the same id in `registry`, when there is one.
+    /// The runs replay through `model`, the sweep's model as the app finds it.
     pub fn from_result_set(
         set: ResultSet,
         source: ResultsSource,
-        registry: &[ModelEntry],
+        model: Result<&ModelEntry, ModelLookupError>,
         series_budget: usize,
     ) -> Self {
-        let model = &set.manifest().model;
-        let (model_id, model_name) = (model.id.clone(), model.name.clone());
-        let model_index = registry.iter().position(|entry| entry.id() == model_id);
-        let entry = model_index.map(|index| &registry[index]);
+        let recorded = &set.manifest().model;
+        let (model_id, model_name) = (recorded.id.clone(), recorded.name.clone());
+        let entry = model.as_ref().ok().copied();
         let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry));
         let search = set
             .spec()
@@ -628,9 +616,9 @@ impl ResultsStore {
                     table_error: Some(describe_error(&error)),
                 },
             });
-        let plan = match entry {
-            None => Err(format!("{model_name} is unavailable on this device")),
-            Some(entry) if search.is_some() => SearchPlan::new(set.spec(), &model_schema(entry))
+        let plan = match model {
+            Err(error) => Err(lookup_message(&error)),
+            Ok(entry) if search.is_some() => SearchPlan::new(set.spec(), &model_schema(entry))
                 .map(|search_plan| ReplayPlan::Search(Arc::new(search_plan)))
                 .map_err(|error| {
                     format!(
@@ -639,7 +627,7 @@ impl ResultsStore {
                         describe_error(&error)
                     )
                 }),
-            Some(entry) => set
+            Ok(entry) => set
                 .plan(entry)
                 .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
                 .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error))),
@@ -652,7 +640,6 @@ impl ResultsStore {
             source,
             model_id,
             model_name,
-            model_index,
             schema_matches,
             complete: set.is_complete(),
             folder: set.dir().map(Path::to_path_buf),
@@ -1738,7 +1725,7 @@ mod tests {
     use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
     use henad_explore::schema::model_schema;
     use henad_explore::search_run::{EvaluatedCandidate, EvaluationReading, SearchPlan, SearchUpdate};
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{
         BandKind, HeatColor, HeatQuery, ResponseQuery, ResultsAxis, ResultsStore, RunsColumn, RunsFilter, RunsSort,
@@ -1748,10 +1735,7 @@ mod tests {
     const STATS: [&str; 3] = ["Susceptible", "Infected", "Recovered"];
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn values(raw: &[&str]) -> LevelSpec {
@@ -1781,7 +1765,7 @@ mod tests {
 
     /// Returns a store for `plan` whose runs record one reducer, `Infected:max`.
     fn store(entry: &ModelEntry, plan: Arc<Plan>, series_budget: usize) -> ResultsStore {
-        let mut store = ResultsStore::for_sweep(plan, entry, 0, None, series_budget);
+        let mut store = ResultsStore::for_sweep(plan, entry, None, series_budget);
         let stats = STATS.map(str::to_owned);
         store.set_columns(&stats, &["Infected:max".to_owned()]);
         store
@@ -2004,7 +1988,7 @@ mod tests {
             },
         )]));
         let search_plan = SearchPlan::new(&spec, &schema).expect("a valid search");
-        let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, 0, None, usize::MAX);
+        let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, None, usize::MAX);
         assert_eq!(store.config_values(0), None, "no batch has ended");
 
         let mut params: Vec<ParamValue> = sir
@@ -2204,9 +2188,9 @@ mod tests {
     /// Returns Virus on a Network and a random search of it over the virus spread chance, which fires the rewire
     /// action.
     fn virus_search() -> (ModelEntry, Arc<SearchPlan>) {
-        let entry = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "virus_network")
+        let entry = example_models()
+            .get("virus_network")
+            .cloned()
             .expect("Virus on a Network is registered");
         let mut spec = SweepSpec::new("virus_network");
         spec.actions = vec![ActionSpec::new("rewire", 0)];
@@ -2278,7 +2262,7 @@ mod tests {
         batches: &[ToldBatch],
         reruns: &[RunOutcome],
     ) -> ResultsStore {
-        let mut store = ResultsStore::for_search(Arc::clone(search_plan), entry, 0, None, usize::MAX);
+        let mut store = ResultsStore::for_search(Arc::clone(search_plan), entry, None, usize::MAX);
         for outcome in batches.iter().flat_map(|told| &told.runs).chain(reruns) {
             store.push_run(outcome.clone(), false);
         }
@@ -2293,7 +2277,7 @@ mod tests {
     fn search_batches_extend_the_store_as_one_pass_builds_it() {
         let (entry, search_plan) = virus_search();
         let batches = told_batches(&entry);
-        let mut store = ResultsStore::for_search(Arc::clone(&search_plan), &entry, 0, None, usize::MAX);
+        let mut store = ResultsStore::for_search(Arc::clone(&search_plan), &entry, None, usize::MAX);
         let (mut in_place, mut moved_levels) = (0, 0);
         for (index, told) in batches.iter().enumerate() {
             for outcome in &told.runs {
@@ -2341,7 +2325,7 @@ mod tests {
 
         let (entry, search_plan) = virus_search();
         let batches = told_batches(&entry);
-        let new_store = || ResultsStore::for_search(Arc::clone(&search_plan), &entry, 0, None, usize::MAX);
+        let new_store = || ResultsStore::for_search(Arc::clone(&search_plan), &entry, None, usize::MAX);
         let (mut together, mut one_at_a_time) = (new_store(), new_store());
         let (mut start, mut group_size, mut group_count) = (0, 1, 0);
         let (mut joined_groups, mut in_place, mut moved_levels) = (0, 0, 0);
@@ -2504,7 +2488,7 @@ mod tests {
         let params = params_before_change(&sir);
         let recorded_plan = SearchPlan::new(&spec, &schema_with(&sir, &params)).expect("a valid search");
         let search_plan = SearchPlan::new(&spec, &model_schema(&sir)).expect("a valid search");
-        let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, 0, None, usize::MAX);
+        let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, None, usize::MAX);
         let mut values: Vec<ParamValue> = params.iter().map(|param| param.kind.default_value()).collect();
         values[2] = ParamValue::F32(0.25);
         let config = Config {
@@ -2956,7 +2940,7 @@ mod tests {
 
         use crate::ui::results::store::ResultsSource;
 
-        let registry = model_registry(None);
+        let models = example_models();
         let mut spec = SweepSpec::new("sir");
         spec.fixed = [("grid_width", "32"), ("grid_height", "32"), ("recovery_rate", "0.1")]
             .map(|(id, value)| (id.to_owned(), value.to_owned()))
@@ -2983,16 +2967,18 @@ mod tests {
             output_dir: Some(folder.0.clone()),
             ..SweepOptions::default()
         };
-        let sir = registry
-            .iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("SIR is registered");
+        let sir = models.get("sir").expect("SIR is registered");
         let source = henad_explore::sweep::SpecSource::default();
         let provenance = henad_explore::sweep::Provenance::default();
         run_sweep(sir, None, None, &spec, &source, &provenance, &options, &mut NoProgress).expect("the sweep runs");
 
         let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
-        let store = ResultsStore::from_result_set(set, ResultsSource::Folder(folder.0.clone()), &registry, usize::MAX);
+        let store = ResultsStore::from_result_set(
+            set,
+            ResultsSource::Folder(folder.0.clone()),
+            models.lookup("sir", None),
+            usize::MAX,
+        );
         assert_eq!(store.runs().len(), 8);
         assert!(store.complete && store.schema_matches);
         assert!(

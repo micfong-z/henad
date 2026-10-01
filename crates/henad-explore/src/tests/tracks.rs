@@ -21,7 +21,7 @@ use henad_core::metadata::Backend;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
-use henad_models::registry::model_registry;
+use henad_models::example_models;
 
 use crate::exec::{ActiveRuns, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, SweepControl};
 use crate::output::manifest::ManifestStatus;
@@ -495,9 +495,10 @@ fn an_interleaved_queue_executes_every_step() {
         "gpu_boids" => fixed_values(&[("num_agents", "2000"), ("world_width", "400"), ("world_height", "400")]),
         _ => panic!("{id} has no case"),
     };
-    let models: Vec<ModelEntry> = model_registry(Some(ctx.clone()))
-        .into_iter()
+    let models: Vec<ModelEntry> = example_models()
+        .iter()
         .filter(|model| model.metadata().backend == Backend::Gpu)
+        .cloned()
         .collect();
     assert_eq!(models.len(), 4, "every GPU model has a case");
     for model in models {

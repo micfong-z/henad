@@ -962,7 +962,7 @@ mod tests {
     use henad_core::params::ParamValue;
     use henad_explore::probe::ProbeReport;
     use henad_explore::schema::model_schema;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{
         AXES_UNSET, OutputChoices, axes_note, batches_feedback, evaluations_feedback, initial_samples_feedback,
@@ -974,10 +974,7 @@ mod tests {
     use crate::ui::sweep::layout::Note;
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn search_draft(algorithm: DraftAlgorithm) -> SweepDraft {
@@ -1092,10 +1089,7 @@ mod tests {
 
     #[test]
     fn the_output_lists_offer_the_parts_of_a_vector_stat() {
-        let entry = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "boids")
-            .expect("boids is registered");
+        let entry = example_models().get("boids").cloned().expect("boids is registered");
         let schema = model_schema(&entry);
         let values: Vec<ParamValue> = entry
             .param_descriptors()

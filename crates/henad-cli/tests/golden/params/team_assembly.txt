@@ -1,0 +1,8 @@
+parameters for team_assembly (Team Assembly):
+  index=0 id=num_agents kind=u32 default=4 min=1 max=10000000 apply=reload label="Number of Nodes"
+  index=1 id=world_width kind=f32 default=100 min=1 max=10000 apply=reload label="World Width"
+  index=2 id=world_height kind=f32 default=100 min=1 max=10000 apply=reload label="World Height"
+  index=3 id=team_size kind=u32 default=4 min=3 max=8 apply=live label="Team Size"
+  index=4 id=max_downtime kind=u32 default=40 min=7 max=1000000 apply=live label="Max Downtime"
+  index=5 id=p kind=f32 default=0.4 min=0 max=1 apply=live format=percent label="Incumbent Chance"
+  index=6 id=q kind=f32 default=0.65 min=0 max=1 apply=live format=percent label="Collaborator Chance"

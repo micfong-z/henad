@@ -52,7 +52,7 @@ The core of the Game of Life model looks like this:
     
     The desktop app, the browser build, and the headless benchmark runner.
 
--   **[The models](reference/models.md)**
+-   **[Example models](reference/models.md)**
     
     Ten models ship with the engine, six on the CPU and four on the GPU.
 

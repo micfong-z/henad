@@ -23,8 +23,7 @@ const SEED_FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(4, 2);
 
 pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let descriptors: Vec<_> = app
-        .registry
-        .get(app.selected_model)
+        .selected_entry()
         .map(|m| m.param_descriptors().to_vec())
         .unwrap_or_default();
 
@@ -222,8 +221,7 @@ pub(crate) fn draw_seed(previous: Option<u64>) -> u64 {
 /// once the model is built.
 fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let actions: Vec<ActionDescriptor> = app
-        .registry
-        .get(app.selected_model)
+        .selected_entry()
         .map(|entry| entry.action_descriptors().to_vec())
         .unwrap_or_default();
     if actions.is_empty() {
@@ -473,10 +471,7 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
             format!("Parameters will be applied after {MDI_RESTART}\u{a0}Build."),
         )
     } else if !app.selection_is_loaded() {
-        let running = app
-            .loaded_model
-            .and_then(|i| app.registry.get(i))
-            .map_or("Another model", |entry| entry.name());
+        let running = app.loaded_entry().map_or("Another model", |entry| entry.name());
         (
             MDI_ALERT,
             warn,
@@ -514,7 +509,7 @@ mod tests {
     use henad_core::action::{Schedule, Scheduled};
     use henad_core::explore::value::parse_value;
     use henad_core::params::{ParamKind, ParamValue};
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{
         INVALID_SEED, decimal_value, dice_button, display_value, f32_slider, parse_seed, percent_decimals,
@@ -557,8 +552,8 @@ mod tests {
 
     #[test]
     fn a_slider_leaves_a_value_alone_until_it_is_edited() {
-        let registry = model_registry(None);
-        let sliders = registry.iter().flat_map(|entry| {
+        let models = example_models();
+        let sliders = models.iter().flat_map(|entry| {
             entry
                 .param_descriptors()
                 .iter()
@@ -611,11 +606,8 @@ mod tests {
 
     #[test]
     fn a_stepped_value_is_the_one_a_spec_writes() {
-        let registry = model_registry(None);
-        let sir = registry
-            .iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("SIR is registered");
+        let models = example_models();
+        let sir = models.get("sir").expect("SIR is registered");
         let descriptor = sir
             .param_descriptors()
             .iter()
@@ -635,11 +627,8 @@ mod tests {
 
     #[test]
     fn a_percentage_shows_as_the_panel_writes_it() {
-        let registry = model_registry(None);
-        let sir = registry
-            .iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("SIR is registered");
+        let models = example_models();
+        let sir = models.get("sir").expect("SIR is registered");
         let percent = sir
             .param_descriptors()
             .iter()

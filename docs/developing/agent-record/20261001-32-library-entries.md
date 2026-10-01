@@ -6,7 +6,7 @@ icon: material/package-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#48"
-state: M3 implemented, `./check.sh` with HENAD_REQUIRE_GPU=1 and the docs build green, `--export-stats` identical to M2 for every model
+state: M3 implemented, `./check.sh` with HENAD_REQUIRE_GPU=1 and the docs build green, `--export-stats` identical to M2 for every model, gpu_boids on its engine-owned columns alone
 baseline_commit: 21b1f6e
 delta_state: uncommitted on `48-library`, in three handovers
 ---
@@ -42,7 +42,8 @@ henad-core held the `Model` trait, implemented only by `GpuGridModelDescriptor` 
   `ModelSource` holds a type path and an optional build, and reads the build's package, version, commit, dirty flag and hash through accessors that return empty text or `None` until a set records one.
 - `ModelMetadata` gains `replays_exactly`, and it and `Structure` derive `Clone`.
 - `GpuGridModel` and `GpuAgentModel` gain `const REPLAYS_EXACTLY: bool = true`.
-- The `Model` trait is gone. `model.rs` holds `SimState` alone.
+- The `Model` trait is gone.
+  `model.rs` holds `SimState` alone.
 
 ### henad-compute
 
@@ -126,8 +127,10 @@ The work is handed over in three parts, so the call-shape rewrites of the tests 
 2. `a_pipelined_gpu_sample_matches_a_blocking_one`, whose helper `blocking_rows` calls `model.build(.., Some(ctx))` and `model.id()`.
 3. `ants_results_do_not_depend_on_lane_width` (`ants.param_descriptors()`), `a_replay_of_a_planned_run_matches_its_sweep_row` (`sir.build(.., None)`) and `a_gpu_schedule_matches_export_stats` (`gpu_sir.build(.., Some(&ctx))`).
 
-Every other pinned test kept its body. Their helpers, such as `instrument` and the test support's `entry`, changed in the first part.
+Every other pinned test kept its body.
+Their helpers, such as `instrument` and the test support's `entry`, changed in the first part.
 The test targets of henad-explore compile only once all three parts are in, since the API change and the rewrites cannot both compile against one API.
+The parts were committed as 5a056ec, 571f6a0 and 6d9d3b7, and the first two build their libraries but not their test targets.
 
 ### Docs
 
@@ -160,7 +163,11 @@ The test targets of henad-explore compile only once all three parts are in, sinc
 │   │   ├── gpu/mod.rs                  ~ runtime info on GpuContext, - descriptor re-exports
 │   │   ├── gpu/{grid,agent}_engine.rs  - GpuGridModelDescriptor, GpuAgentModelDescriptor
 │   │   ├── cpu/field/ca.rs             ~ grid_init_rng
+│   │   ├── cpu/field/mod.rs            ~ re-exports grid_init_rng
+│   │   ├── cpu/grid_engine.rs          ~ re-exports grid_init_rng
 │   │   ├── cpu/agent_engine.rs         ~ agent_init_rng
+│   │   ├── cpu/mod.rs                  ~ re-exports both init rng helpers and AGENT_INIT_SEED
+│   │   ├── gpu/tests/support.rs        ~ raise with GpuNeeds
 │   │   └── runtime_info.rs             ~ Clone
 │   ├── henad-models/src/
 │   │   ├── lib.rs                      ~ example_models(), with the snippet regions

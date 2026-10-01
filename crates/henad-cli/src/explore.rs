@@ -1136,7 +1136,7 @@ mod tests {
     use henad_explore::output::manifest::ResultCounts;
     use henad_explore::schema::model_schema;
     use henad_explore::sweep::SweepEnd;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{
         LoadedSpec, PatternAxis, SOME_RUNS_NOT_OK, axis_text, exit_status, fixed_actions, format_bytes, format_seconds,
@@ -1303,10 +1303,7 @@ mod tests {
             spec.actions,
             [action("seed_outbreak", 40), action("seed_outbreak_2", 80)]
         );
-        let sir = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("sir is registered");
+        let sir = example_models().get("sir").cloned().expect("sir is registered");
         let plan = spec.plan(&model_schema(&sir)).expect("sir declares seed_outbreak");
         let ticks: Vec<&[u64]> = plan
             .configs()
@@ -1701,11 +1698,8 @@ mod tests {
         }
         let loaded = LoadedSpec::load(&path).expect("the example spec reads");
         let spec = loaded.file.clone().into_spec().expect("a search spec");
-        let registry = model_registry(None);
-        let sir = registry
-            .iter()
-            .find(|entry| entry.id() == "sir")
-            .expect("sir is registered");
+        let models = example_models();
+        let sir = models.get("sir").expect("sir is registered");
         let dry_run = henad_explore::sweep::SweepOptions {
             dry_run: true,
             ..henad_explore::sweep::SweepOptions::default()
