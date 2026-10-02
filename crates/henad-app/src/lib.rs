@@ -43,6 +43,9 @@ pub fn requested_threads(search: &str, available: usize) -> usize {
 
 use crate::state::FrameTimings;
 
+/// Build of this app. A sweep's manifest, the run details and the About window record it as the host's.
+pub(crate) const HOST_BUILD: henad_core::provenance::BuildInfo = henad_core::build_info!();
+
 /// Longest time between two repaints while a sweep runs on a thread of its own.
 const SWEEP_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 

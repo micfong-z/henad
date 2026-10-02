@@ -13,10 +13,16 @@ Most of what surrounds that string is generated at build time, and this page cov
 
 A crate's `build.rs` runs henad-build over its shaders, and `include_shaders!` at the crate root brings the output in as two modules, `shader_bindings` and `binding_decls`.
 henad-build is a build dependency, of the same release as henad-compute.
+The app's build script is an example, with its shaders under `src/ui`:
 
-``` rust title="build.rs"
---8<-- "crates/henad-models/build.rs:shader_build"
+``` rust title="crates/henad-app/build.rs"
+--8<-- "crates/henad-app/build.rs:build_script"
 ```
+
+`stamp_commit` records the commit the crate was built from, whether its sources differed from that commit, and a hash of its sources, and a sweep's manifest records them beside each model the crate registers.
+A crate without shaders keeps its `build.rs` for the stamp, and drops the `ShaderBuild` line.
+A file a model reads at compile time, through `include_bytes!` or `include_str!`, belongs under `src`, where the stamp sees it.
+A model crate keeps its shaders under `src` and passes `"src"` to `discover`.
 
 ``` rust title="src/lib.rs"
 --8<-- "crates/henad-models/src/lib.rs:include_shaders"

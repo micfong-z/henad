@@ -963,7 +963,7 @@ mod tests {
                 ScratchFolder(std::env::temp_dir().join(format!("henad-app-search-{name}-{}", std::process::id())));
             drop(std::fs::remove_dir_all(&folder.0));
             let output = SweepOutput::Directory(folder.0.clone());
-            let options = SweepRunOptions::new(Provenance::default());
+            let options = SweepRunOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
             let mut run =
                 SweepRun::start(sir(), None, search_spec(algorithm), output, options).expect("the search starts");
             let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));
@@ -1082,7 +1082,7 @@ mod tests {
             None,
             spec,
             SweepOutput::Memory,
-            SweepRunOptions::new(Provenance::default()),
+            SweepRunOptions::new(Provenance::new(henad_core::build_info!(), Vec::new())),
         )
         .expect("the search starts");
         let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));
@@ -1112,7 +1112,7 @@ mod tests {
             None,
             spec,
             SweepOutput::Memory,
-            SweepRunOptions::new(Provenance::default()),
+            SweepRunOptions::new(Provenance::new(henad_core::build_info!(), Vec::new())),
         )
         .expect("the search starts");
         let search_plan = Arc::clone(run.search_plan().expect("the spec is a search"));

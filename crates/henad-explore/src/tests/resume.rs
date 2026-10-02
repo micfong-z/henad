@@ -11,13 +11,14 @@ use henad_core::explore::plan::Shard;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 
 use crate::exec::Concurrency;
-use crate::output::manifest::ManifestStatus;
+use crate::output::manifest::{BuildRole, ManifestStatus, RecordedBuild};
 use crate::output::resume::ResumeError;
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::sweep::{ExploreError, SweepOptions, SweepWarning};
 use crate::tests::broken::DividesByParam;
 use crate::tests::support::{
-    OutputTables, Recorder, ScratchDir, dry_run, entry, manifest, sweep, sweep_options, sweep_with,
+    OutputTables, Recorder, ScratchDir, dry_run, entry, manifest, other_engine, provenance, sweep, sweep_options,
+    sweep_with,
 };
 
 fn values(raw: &[&str]) -> LevelSpec {
@@ -128,15 +129,17 @@ fn a_dry_run_counts_the_runs_a_resume_skips_and_changes_nothing() {
     let series = fs::read(scratch.path().join(SERIES_FILE)).expect("series.csv is written");
 
     let mut options = sweep_options(true);
-    options.provenance.commit = "other".to_owned();
+    options.provenance = provenance().with_engine(other_engine());
     let mut progress = Recorder::default();
     let report = dry_run(&sir, &spec, Some(scratch.path()), &options, &mut progress).expect("the dry run plans");
     assert_eq!((report.outline.skipped, report.outline.pending), (3, 3));
     assert_eq!(
         progress.warnings,
-        [SweepWarning::CommitChanged {
-            recorded: "test".to_owned(),
-            current: "other".to_owned(),
+        [SweepWarning::BuildChanged {
+            role: BuildRole::Engine,
+            recorded: Box::new(RecordedBuild::engine()),
+            current: Box::new(other_engine()),
+            between_shards: false,
         }]
     );
     assert_eq!(

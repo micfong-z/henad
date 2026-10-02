@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use henad_core::explore::plan::Shard;
 
 use crate::output::manifest::{
-    Manifest, ManifestError, ManifestMode, ManifestStatus, ManifestTimestamps, ResultCounts, now_unix_ms, rfc3339,
+    BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, ManifestTimestamps, RecordedBuild, ResultCounts,
+    now_unix_ms, rfc3339,
 };
 use crate::output::read::{ReadError, RunRecord, RunsCsv, SeriesScan, SeriesSegment, merge_series};
 use crate::output::runs_csv::header_line;
@@ -46,7 +47,9 @@ struct ShardInput {
 /// Merges the shard directories `shard_dirs` into `output_dir`. The output directory must hold no results.
 ///
 /// Rows of a run whose `runs.csv` row is missing, and a partial last record, are left out. A plan run that no input
-/// holds is reported as a [`ProgressEvent::Warned`] and marks the merged manifest `incomplete`. A resume of the
+/// holds is reported as a [`ProgressEvent::Warned`] and marks the merged manifest `incomplete`. Shards whose
+/// sessions ran different engine or model builds are reported as a [`SweepWarning::BuildChanged`] for each build
+/// that differs from the lowest shard's. A resume of the
 /// merged directory runs it. A merge that fails once its manifest is written marks the manifest `failed` when it can.
 ///
 /// # Errors
@@ -68,6 +71,9 @@ pub fn merge(
         return Err(MergeError::NoInputs);
     };
     check_shards(&shards)?;
+    for warning in build_warnings(&shards) {
+        progress.report(&ProgressEvent::Warned(&warning));
+    }
     let (runs_header, series_header) = common_headers(&shards)?;
     let plan_runs = first.manifest.plan.runs;
     let (records, counts) = merged_records(&shards, plan_runs, first.manifest.plan.replicates)?;
@@ -285,17 +291,45 @@ fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
     Ok(())
 }
 
+/// Returns a [`SweepWarning::BuildChanged`] for each engine or model build the shards' sessions record that differs
+/// from the first build recorded for its role, the lowest shard's.
+fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
+    let mut warnings = Vec::new();
+    for role in [BuildRole::Engine, BuildRole::Model] {
+        let mut builds: Vec<RecordedBuild> = Vec::new();
+        for build in shards.iter().flat_map(|input| input.manifest.recorded_builds(role)) {
+            if !builds.iter().any(|known| known.same_build(&build)) {
+                builds.push(build);
+            }
+        }
+        if let Some((first, others)) = builds.split_first() {
+            warnings.extend(others.iter().map(|other| SweepWarning::BuildChanged {
+                role,
+                recorded: Box::new(first.clone()),
+                current: Box::new(other.clone()),
+                between_shards: true,
+            }));
+        }
+    }
+    warnings
+}
+
 /// Returns the manifest of the merged directory while it is written, based on the manifest of the lowest shard.
 ///
-/// The merge holds the whole plan, lists every session of every shard, and keeps the execution and runtime of the
-/// lowest shard.
+/// The merge holds the whole plan, lists every session of every shard with the builds it ran, and keeps the
+/// execution and runtime of the lowest shard. A shard's session that records no engine build takes the one its
+/// shard's manifest reads for it.
 fn merged_manifest(shards: &[ShardInput], shard_dirs: &[PathBuf]) -> Manifest {
     let mut manifest = shards[0].manifest.clone();
     manifest.status = ManifestStatus::Running;
     manifest.shard = Shard::WHOLE.into();
     manifest.sessions = shards
         .iter()
-        .flat_map(|input| input.manifest.sessions.iter().cloned())
+        .flat_map(|input| {
+            let mut recorded = input.manifest.clone();
+            recorded.record_session_engines();
+            recorded.sessions
+        })
         .collect();
     let started = shards
         .iter()

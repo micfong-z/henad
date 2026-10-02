@@ -22,6 +22,10 @@ pub mod view;
 /// World size.
 pub use authoring::model::field::Extent;
 
+/// Version of henad-core. The crate has no build script to stamp a [`provenance::BuildInfo`].
+#[doc(hidden)]
+pub const __VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Items the exported macros name through `$crate`, so a caller needs none of them in scope.
 #[doc(hidden)]
 pub mod __macro_support {

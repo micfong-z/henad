@@ -78,6 +78,10 @@ pub mod runtime_info;
 pub mod simulation;
 pub mod snapshot;
 
+/// henad-compute's build, whose source hash covers its own `src` and manifest alone.
+#[doc(hidden)]
+pub const __COMPUTE_BUILD: henad_core::provenance::BuildInfo = henad_core::build_info!();
+
 /// Items the code [`include_shaders!`] brings in names through `$crate`.
 #[doc(hidden)]
 pub mod __shader_support {

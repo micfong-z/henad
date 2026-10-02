@@ -3,15 +3,21 @@
 [Henad](https://github.com/micfong-z/henad) is a parallel agent-based modelling engine, built to run millions of agents at interactive speeds on one machine.
 
 This crate runs from a model crate's build script.
+`stamp_commit` records the commit the crate was built from, whether its sources differed from that commit, and a hash of its sources.
+A sweep's manifest records them beside each model the crate registers.
 `ShaderBuild` finds the crate's WGSL shaders, composes each with the shared modules a shader reaches through `#import henad::<module>`, and writes the Rust bindings that `henad::include_shaders!` brings into the crate.
 
 ```rust,no_run
 // build.rs
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    henad_build::stamp_commit();
     henad_build::ShaderBuild::discover("src")?.generate()?;
     Ok(())
 }
 ```
+
+A crate without shaders keeps the build script for its stamp, and drops the `ShaderBuild` line.
+A file a model reads at compile time belongs under `src`, where the stamp sees it.
 
 Use the same 0.x of `henad` and `henad-build`.
 The [shaders guide](https://micfong-z.github.io/henad/authoring/shaders/) explains the naming rules and the imports.

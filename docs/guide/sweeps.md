@@ -493,7 +493,7 @@ sir-sweep/
 : One row per config, with the mean, standard deviation, count and 95% confidence interval of every reducer over the replicates.
 
 `manifest.json`
-: Record of the sweep: the model and its schema, the resolved settings, the command line, the seed formula, the build and the machine.
+: Record of the sweep: the model and its schema, the resolved settings, the command line, the seed formula, the builds that ran it and the machine.
 
 The [CLI reference](../reference/cli.md#output-directory) lists every column.
 
@@ -517,6 +517,7 @@ All three CSV files come out the same byte for byte at any `--concurrent`, apart
 
     `gpu_boids` is the one model whose runs differ between two sweeps with the same settings.
     Its neighbour index leaves the order of the boids within a cell open, and the order changes from run to run.
+    Its manifest records `replays_exactly` as `false`, and the app's Results tab notes beside a run that the opened run might differ from its row.
 
 ### CPU lanes
 
@@ -577,7 +578,7 @@ A sweep can stop part way through: the process is killed, the machine restarts, 
 Run the same command again with `--resume`, and the sweep carries on where it stopped:
 
 ``` bash
-cargo run --release -p henad-cli -- sir \
+cargo run --release --locked -p henad-cli -- sir \
   --vary infection_rate=0.1:0.5:0.1 --reps 5 --steps 500 --out sir-sweep --resume
 ```
 
@@ -590,7 +591,11 @@ The plan counts the runs the directory holds and the runs left:
 A resume first checks that the directory holds the same sweep.
 The model and its declarations, the configs, the steps, the sampling, the stop condition and reducers, the actions, the seeds and the shard all have to match, and a resume of anything else is refused.
 Only the replicate count and the timeout can change.
-A different build of Henad gets a warning, and the manifest's `sessions` lists every process that wrote runs, with its commit.
+The manifest's `sessions` lists every process that wrote runs, with three builds each: Henad's, the binary's and that of the crate that registered the model.
+A build records its commit, whether the sources differed from the commit, and a hash of the sources.
+A resume warns when Henad's build or the model's differs from one a session recorded, and goes ahead.
+An uncommitted edit to a kernel counts as a different build, since its source hash changes.
+The [CLI reference](../reference/cli.md#builds) gives the fields and the rule that compares two builds.
 
 The resume then repairs what a cut-off write left behind.
 A partial last line of `runs.csv` is dropped, and so are the rows of `series.csv` whose run never reached `runs.csv`.
@@ -609,7 +614,7 @@ Five replicates can turn out too few, with confidence intervals too wide to tell
 Resume with a higher `--reps`, and only the new replicates run:
 
 ``` bash
-cargo run --release -p henad-cli -- sir \
+cargo run --release --locked -p henad-cli -- sir \
   --vary infection_rate=0.1:0.5:0.1 --reps 8 --steps 500 --out sir-sweep --resume
 ```
 
@@ -625,7 +630,7 @@ A sweep too large for one machine can be split into shards, each run on a machin
 `--shard I/N` runs only the runs whose `run_id` leaves remainder `I` when divided by `N`, and writes them to a directory of its own:
 
 ``` bash
-cargo run --release -p henad-cli -- \
+cargo run --release --locked -p henad-cli -- \
   --spec crates/henad-explore/specs/sir_sweep.toml --shard 0/4 --out shard-0
 ```
 
@@ -633,12 +638,17 @@ Taking every `N`th run spreads the configs, heavy and light alike, evenly over t
 Once every shard has finished, `--merge` joins them:
 
 ``` bash
-cargo run --release -p henad-cli -- --merge shard-0 shard-1 shard-2 shard-3 --out sir-sweep
+cargo run --release --locked -p henad-cli -- --merge shard-0 shard-1 shard-2 shard-3 --out sir-sweep
 ```
 
 `--merge` checks that the directories hold different shards of one plan, all at one replicate count.
 It interleaves `runs.csv` and `series.csv` back into run order, rebuilds `summary.csv`, and lists the merged directories in the manifest under `merged_shards`.
 The merged CSV files are the same as those of the sweep run in one piece, apart from the timing columns.
+A merge warns when the shards ran different builds of Henad or of the model.
+
+Build every shard, and every later resume, from one commit with `--locked`.
+Cargo then builds from the committed `Cargo.lock` and refuses to change it.
+A lockfile updated on one machine changes the source hash of the build there, and the merge or resume warns that the build changed.
 
 A merge with a shard missing still writes what it has.
 It warns about the missing runs, marks the manifest `incomplete` and exits with status 3.
@@ -651,7 +661,7 @@ To add replicates, merge the shards first, then resume the merged directory.
 ### A Slurm array job
 
 On a cluster that runs [Slurm](https://slurm.schedmd.com), an array job runs one shard per task.
-Build the CLI once with `cargo build --release -p henad-cli`, then submit this script with `sbatch` from the repository root:
+Build the CLI once with `cargo build --release --locked -p henad-cli`, then submit this script with `sbatch` from the repository root:
 
 ``` bash title="sweep.sbatch"
 #!/bin/bash

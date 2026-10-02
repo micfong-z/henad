@@ -1969,6 +1969,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
+ "henad-build",
  "henad-compute",
  "henad-core",
  "henad-explore",
@@ -2004,6 +2005,7 @@ version = "0.2.0"
 name = "henad-explore"
 version = "0.2.0"
 dependencies = [
+ "henad-build",
  "henad-compute",
  "henad-core",
  "henad-models",

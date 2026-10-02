@@ -1,0 +1,3 @@
+# Reference output that tests compare byte for byte. Git keeps their line endings as committed.
+crates/henad-explore/tests/fixtures/** -text
+crates/henad-cli/tests/golden/** -text

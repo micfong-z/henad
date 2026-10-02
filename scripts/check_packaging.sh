@@ -57,6 +57,12 @@ for crate in crates:
         if '"../' in line or '".."' in line:
             errors.append(f"{script}:{number}: a path that climbs out of {crate}")
 
+# The stamps reach henad-explore's siblings through git, never by climbing out of the crate directory.
+for source in sorted(Path("crates/henad-build/src/stamp").rglob("*.rs")):
+    for number, line in enumerate(source.read_text().splitlines(), 1):
+        if '"../' in line or '".."' in line:
+            errors.append(f"{source}:{number}: a path that climbs out of the stamped crate")
+
 for error in errors:
     print(error, file=sys.stderr)
 sys.exit(1 if errors else 0)

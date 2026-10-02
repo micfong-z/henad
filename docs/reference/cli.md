@@ -525,8 +525,8 @@ The 95% confidence interval for the mean is `mean ± t * sd / sqrt(n)`, where `t
 | `format`, `format_version` | `henad-explore` and 1 |
 | `mode` | `sweep`, or `search` for a [search](#search-tables) |
 | `status` | `running` until the sweep ends, then `complete`, `aborted` for a sweep stopped before its last run, `failed` for a sweep or merge an error ended outside any run, or `incomplete` for a sweep that lost its GPU device or a merge that lacks some runs |
-| `engine` | Name, version, commit, commit date and whether the build was a debug build |
-| `model` | Id, name, backend, schema hash, and the schema [`--params --json`](#parameters-as-json) prints |
+| `engine` | The [build](#builds) of Henad that wrote the manifest last, under the name `henad` |
+| `model` | Id, name, backend, schema hash, the schema [`--params --json`](#parameters-as-json) prints, and `replays_exactly`, whether two builds of the model on one seed step through identical states |
 | `spec` | The sweep in the form of a spec file, flags included, with a design table's text under `table_text` |
 | `spec_source` | Path and text of the spec file, and the path and hash of each design table it reads. `path` and `toml` are `null` for a sweep from flags, and `tables` lists its `--design` file |
 | `argv` | The command line |
@@ -537,13 +537,46 @@ The 95% confidence interval for the mean is `mean ± t * sd / sqrt(n)`, where `t
 | `execution` | Backend, concurrency, lanes, threads per lane, GPU runs at once, projected bytes, and the memory and GPU memory budgets |
 | `runtime` | Operating system, architecture, logical cpus, worker threads, and the GPU adapter with its limits when there is one |
 | `timestamps` | Start and end, in milliseconds since the Unix epoch and as RFC 3339 text in UTC |
-| `sessions` | One entry per process that wrote runs to the directory, with its start, its commit, the runs it kept as `skipped` and the runs it wrote as `ran` |
+| `sessions` | One entry per process that wrote runs to the directory, with its start, the engine's commit, the runs it kept as `skipped` and the runs it wrote as `ran`, and the [builds](#builds) it ran as `engine`, `host` and `model_source` |
 | `results` | Row counts `rows`, `ok`, `non_finite` and `failed`, `null` while the sweep runs |
 | `merged_shards` | Directories a merge read, as `--merge` names them. `null` for a sweep that ran in the directory |
 | `search` | A search's budget and standing, described under [search tables](#search-tables). `null` for a sweep |
 
 A failed sweep or merge marks its manifest `failed` when the manifest can still be written.
 A directory in any status can be [resumed](#resuming), a `complete` one included.
+
+#### Builds
+
+Each session records three builds.
+`engine` is Henad itself, `host` is the binary that ran the session, such as `henad-cli`, and `model_source` is the crate that registered the model.
+Each build has these fields.
+
+| Field | Content |
+|---|---|
+| `name` | Package name, `henad` for the engine |
+| `version` | Package version |
+| `commit` | Short commit hash, empty when the build could not learn it |
+| `commit_date` | Date of the commit, empty in a build from a registry download |
+| `dirty` | Whether the crate's sources, manifest or lockfile differed from the commit. `null` when the build could not tell |
+| `source_hash` | Hash of the crate's files under `src`, its manifest and, outside a package, its lockfile, as 16 hexadecimal digits |
+| `debug_build` | Whether the build was a debug build |
+| `type_path` | Type path of the registered model, for `model_source` alone |
+| `crate_hashes` | Hash of the sources of henad-compute and henad-explore, for the engine alone |
+| `crate_versions` | Version of henad-core, henad-build, henad-compute and henad-explore, for the engine alone |
+
+A build script stamps these fields when the crate's `build.rs` calls `henad_build::stamp_commit()`.
+The commit comes from the package's `.cargo_vcs_info.json`, as in a registry download, or else from git when git tracks the crate.
+Outside both the commit stays empty, and the source hash alone identifies the build.
+Dotfiles and editor backups under `src` change neither the hash nor the dirty flag.
+
+Two builds are the same when they share their package and version, and every engine crate's version and source hash that both record.
+Then two builds that each record a clean commit compare by commit alone.
+A commit is clean when `dirty` reads `false`, or when the build records neither `dirty` nor `source_hash`, as a 0.2 session does.
+Otherwise the source hashes decide, and two builds with neither a commit nor a source hash are never the same.
+
+A manifest from Henad 0.2 records no builds in its sessions.
+Each of its sessions reads as an engine build of its own commit and the version of the `engine` block, and records no model build.
+The first resume by a later Henad writes that build into the session.
 
 ### Resuming
 
@@ -554,7 +587,9 @@ The resume reads the manifest first.
 It refuses a directory whose plan hash, model schema hash or shard differs from the sweep's.
 The plan hash covers the model, the configs, the design seeds, the fixed values, the actions, the steps and warm-up, the sampling and series cadence, the stop condition, the reducers, and the seed root and scheme.
 It leaves out the replicate count and the timeout, and a resume can change both.
-A build whose commit differs from the last session's gets a warning.
+The engine and the model are compared with every build a session recorded for them, and each build that differs gets a warning.
+The host is recorded and never compared.
+The resume goes ahead either way.
 
 The resume then repairs the tables.
 A partial last record of `runs.csv` or `series.csv` is cut off, and so are the series rows of any run with no row in `runs.csv`.
@@ -588,6 +623,7 @@ Both tables are staged and renamed into place together, as a resume that rewrite
 The merged manifest is that of the lowest shard, with shard 0 of 1, the sessions of every shard, and the inputs under `merged_shards`.
 
 A run of the plan that no input holds is reported as a warning, and the merged manifest reads `incomplete`.
+Shards whose sessions ran different engine or model builds get a warning for each build that differs from the lowest shard's.
 `--resume` on the merged directory, without `--shard`, runs the missing runs.
 The merged files are the same as those of the sweep run in one piece, apart from the timing columns.
 
@@ -625,6 +661,7 @@ Under `--json`, the sweep and the merge write JSON lines to stdout in place of t
 | `explore_search_batch` | Once per batch of a search, after its runs | See [search progress](#search-progress) |
 | `explore_end` | Once, at the end | `end` (`planned`, `complete`, `aborted` or `device_lost`), `rows`, `skipped`, `ok`, `non_finite`, `failed`, `elapsed_s`, and `output_dir`, `null` for a dry run. A search adds the fields of [search progress](#search-progress) |
 | `explore_merge` | Once, at the end of a merge | `inputs`, `rows`, `ok`, `non_finite`, `failed`, `missing`, `output_dir` |
+| `explore_warning` | Once per warning, beside its text on stderr | `warning` (`plan`, `build_changed` or `missing_runs`) and `message`. A `build_changed` warning adds `role` (`engine` or `model`), the `recorded` and `current` [builds](#builds), and `between_shards`, `true` when a merge found `current` in another shard |
 
 `skipped` counts the runs a resume kept, and `pending` the runs left to run.
 The counts of `explore_end` and `explore_merge` cover every row of `runs.csv`, the rows a resume kept included.

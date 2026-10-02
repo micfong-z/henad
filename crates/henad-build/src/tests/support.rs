@@ -35,6 +35,11 @@ impl Scratch {
         Self { path }
     }
 
+    /// Directory of the scratch crate.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Shader root of the scratch crate.
     pub(crate) fn root(&self) -> PathBuf {
         self.path.join("src")

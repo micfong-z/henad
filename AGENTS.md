@@ -433,12 +433,12 @@ crate that has shadowed them.
 The workspace has 7 crates:
 
 ```
-henad-core ─┬─ henad-build      (build dependency of every crate with WGSL)
+henad-core ─┬─ henad-build      (build dependency of every crate with WGSL or a stamp)
             └─ henad-compute ─┬─ henad-models
                               └─ henad-explore ─┬─ henad-cli
                                                 └─ henad-app
 henad-core     traits, types, provenance and the shared WGSL as text
-henad-build    the shader bindings a build script generates
+henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!
 henad-models   the ten example models, and a path dev-dependency of henad-explore
 henad-explore  sweeps and searches
@@ -449,8 +449,8 @@ henad-app      egui UI, also on henad-models for example_models()
 The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core
 alone. Every other normal or build dependency runs from a crate to one drawn above it:
 henad-explore and henad-models onto henad-compute, the hosts onto henad-explore,
-henad-compute and, for `example_models()`, henad-models, and any crate with WGSL onto
-henad-build. henad-models and henad-explore take no normal dependency on each other, and
+henad-compute and, for `example_models()`, henad-models, and any crate with WGSL or a build
+stamp onto henad-build. henad-models and henad-explore take no normal dependency on each other, and
 `cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency
 between Henad crates that the normal graph does not hold is named here: today the one from
 henad-explore to henad-models, for its tests. henad-explore reaching an example model outside
@@ -481,8 +481,10 @@ its tests needs the maintainer's approval as a new edge.
   interface the sim thread drives, not an authoring API — that split is why the traits live under
   `authoring/model/` and this one does not. `provenance.rs` holds `BuildInfo`, the identity of one
   compiled crate that `build_info!` returns for the crate it expands in, and `ModelSource`, an
-  entry's type path and the build of the crate that registered it. Their commit, dirty flag and
-  source hash read as unknown, since no build script stamps them yet. Also the `Grid2D<T>`
+  entry's type path and the build of the crate that registered it. A build script stamps the
+  commit, the dirty flag and the source hash through henad-build, and they read as unknown in a
+  crate whose script does not. `__VERSION` is henad-core's version, which has no build script.
+  Also the `Grid2D<T>`
   double-buffered SoA grid (`grid.rs`),
   the counting-sort `SpatialHash` and the `HashGrid` cell geometry both backends share
   (`spatial_hash.rs`), the `Network` graph a `NetworkModel` works on (`network.rs`), param
@@ -592,9 +594,29 @@ its tests needs the maintainer's approval as a new edge.
   `ShaderBuild` and `ShaderBuildError`, `paths.rs` the walk of a shader root and the Rust names a
   path becomes (`check_components`, `check_reserved`, `check_collisions`), `binding_lines.rs` the
   private reader of `@group(0)` lines, and `output.rs` the shared-module copies, the stamp and the
-  two generated files. Its tests sit in `src/tests/`: the path checks, the reader against the
-  layout `wgsl_bindgen` generates, and whole generations (`a_second_build_reruns_nothing`,
-  `a_shader_added_between_builds_is_generated`, `a_crate_without_shaders_builds`). Keep them.
+  two generated files. `stamp/` holds the build stamps: `stamp_commit` for a host or model crate,
+  and the hidden `stamp_engine_commit` (henad-explore) and `stamp_source_hash` (henad-compute,
+  henad-models). `stamp/mod.rs` picks the source of a stamp by `StampScope`: a package's
+  `.cargo_vcs_info.json` first, then git when `git ls-files --error-unmatch Cargo.toml` succeeds,
+  and for the engine only when `--show-prefix` is `crates/henad-explore/`. `stamp/files.rs` lists
+  and hashes the files under `src` and the manifest (`Cargo.toml.orig` in a package), with the
+  nearest `Cargo.lock` outside a package, CRLF read as LF, and a file that vanishes mid-read
+  skipped. Dotfiles, `~` and `.swp` backups (`is_excluded`) and symlinks to a directory or to
+  nothing (`is_link_to_no_file`) are left out of the hash and the dirty flag alike. `stamp/git.rs`
+  asks git, with `GIT_OPTIONAL_LOCKS=0`, for the commit (the full hash cut to eight characters),
+  the dirty flag (`status --porcelain -z --untracked-files=all`) and the paths a commit changes,
+  resolved through `--git-path` and `--git-common-dir`, so packed refs and a linked worktree stay
+  watched. A git before 2.31 echoes `--path-format=absolute` back, and the paths are then joined
+  onto the crate's directory (`echoes_path_format`). In Henad's checkout the
+  engine's hash covers henad-core, henad-build, henad-compute and henad-explore with the lockfile,
+  and `HENAD_BUILD_CRATE_HASH` covers henad-explore alone. `scripts/check_packaging.sh` refuses a
+  `"../` path in `stamp/`. Its tests sit in `src/tests/`: the path checks, the reader against the
+  layout `wgsl_bindgen` generates, whole generations (`a_second_build_reruns_nothing`,
+  `a_shader_added_between_builds_is_generated`, `a_crate_without_shaders_builds`), and the stamps
+  in scratch repositories (`stamp.rs`), with
+  `a_commit_changes_a_watched_path_under_packed_refs_and_in_a_worktree` and
+  `the_engine_stamp_reads_cargo_vcs_info`, which runs `cargo package --no-verify` on the engine's
+  crates and compares the tarball's crate hash with the checkout's. Keep them.
 - **henad-compute**: the engine machinery that turns an authoring impl into something runnable.
   `cpu/` and `gpu/` are **siblings**, not a base and a specialisation, and mirror each other:
   each has its own `sim_thread.rs` (runner), its `*_engine.rs` (authoring trait → runnable state)
@@ -767,12 +789,27 @@ its tests needs the maintainer's approval as a new edge.
   `OutputDir::open` finishes a rename a process left part done. `merge.rs` joins shard directories
   of one plan, replicate count and shard count, merges both tables by run id, rebuilds the summary
   and records the inputs in `merged_shards`. Missing runs are a warning and an `incomplete`
-  manifest. A resume of the merged directory fills them in. `progress.rs` is the `Progress` trait
-  the host renders. The library never prints. `device.rs` (`acquire_headless`) acquires a GPU device
-  with no window or surface, at the WebGPU baseline raised by `gpu::limits::raise`. An adapter
-  below the baseline, as a GL adapter can be, gets `DeviceError::BelowBaseline`, and the CLI then
-  runs CPU models only. It is native only. `pollster` blocks on the request, and a browser cannot
-  block. The crate is in the wasm typecheck with henad-core, henad-compute and henad-models.
+  manifest. A resume of the merged directory fills them in. Provenance: `ENGINE_BUILD` (`lib.rs`) is
+  Henad's build, stamped by henad-explore's `build.rs`, and `RecordedBuild::engine()` records it
+  under the name `henad` with `crate_versions` and `crate_hashes` (henad-compute's from the hidden
+  `__COMPUTE_BUILD`). `Provenance::new(host, arguments)` holds it beside the host's build. Every
+  manifest session records `engine`, `host` and `model_source` as `RecordedBuild`s, and
+  `model.replays_exactly` reads `true` when absent. `RecordedBuild::same_build` compares package,
+  version, the engine crates' versions and hashes, then the commits of two clean builds, then the
+  source hashes, and two unidentified builds are never the same. A commit with `dirty: null` counts
+  as clean only without a source hash, as in a 0.2 session. A resume, a search resume and a
+  merge warn `SweepWarning::BuildChanged` for each differing build of `BuildRole::Engine` or `Model`
+  (`build_warnings`, `Manifest::recorded_builds`), a merge's with `between_shards` set. The host is never compared. A 0.2 session reads
+  as the engine build of its commit and the folder's version, and a resume or a merge writes that
+  build into it (`record_session_engines`). `ResultSet::recorded_builds` reads them.
+  `a_0_2_0_manifest_still_resumes` resumes the 0.2.0 folder in `tests/fixtures/`, recorded by the
+  procedure in its `README.md`, and `tests/provenance.rs` holds the comparisons. Keep them.
+  `progress.rs` is the `Progress` trait the host renders. The library never prints. `device.rs`
+  (`acquire_headless`) acquires a GPU device with no window or surface, at the WebGPU baseline
+  raised by `gpu::limits::raise`. An adapter below the baseline, as a GL adapter can be, gets
+  `DeviceError::BelowBaseline`, and the CLI then runs CPU models only. It is native only. `pollster`
+  blocks on the request, and a browser cannot block. The crate is in the wasm typecheck with
+  henad-core, henad-compute and henad-models.
   Native-only code sits behind `#[cfg(not(target_arch = "wasm32"))]`. `handle.rs` (`SweepRun`) is a
   host's handle on a sweep, with one API on native and in a browser, described under "Sim runs off
   the UI thread". `SweepRun::start` plans the spec before it returns, and a browser refuses a GPU
@@ -912,7 +949,9 @@ its tests needs the maintainer's approval as a new edge.
   `DockArea::show_inside`. The panels draw while the dock is borrowed. `OpenedRun` names the run in
   Playback. A live param edit, an action press or a build from other values marks it modified
   (`settle_opened_run`), and a build of another model or Offload drops it. `export/metadata.rs`
-  writes the loaded `seed` (null for the default) and `scheduled_actions`.
+  writes the loaded `seed` (null for the default), `scheduled_actions`, and the `host` and
+  `model_source` builds. `HOST_BUILD` (`lib.rs`) is the app's `build_info!()`, which the About
+  window, the run details and a sweep's manifest read.
   `ui/sweep/` is the Sweep tab. `mod.rs` holds `SweepPanel` and `sweep_ui`, which splits the tab
   into four egui panels: a header and a footer of fixed height (`header.rs`, `footer.rs`), a Plan
   panel on the right while the tab is wide enough (`PLAN_PANEL_BREAKPOINT`), and a central scroll
@@ -991,11 +1030,13 @@ its tests needs the maintainer's approval as a new edge.
   `AppState::open_run`. Open at end steps to the run's recorded ticks, which a stop condition can
   bring early. The store refuses to replay a run whose plan gives another run key than its row,
   while the model's schema matches the sweep's. After a model change the replay opens under the
-  table's warning. Copy command puts an equivalent `henad-cli --export-stats` line on the
-  clipboard, which samples from tick 0 on the CLI's own cadence. Open results reads a folder on a
-  thread of its own on native and the picked files in a browser, on the frame after the one that
-  first shows "Reading results" (`hold_picked_files`, `due_picked_files`). `ui::results::poll` takes
-  the `egui::Context` for it.
+  table's warning, as it does when Henad's or the model's build differs from any a session recorded
+  (`ResultsStore::changed_builds`). A model the entry or the manifest declares does not replay
+  exactly gets a note beside Open (`replays_exactly`). Copy command puts an equivalent `henad-cli
+  --export-stats` line on the clipboard, which samples from tick 0 on the CLI's own cadence. Open
+  results reads a folder on a thread of its own on native and the picked files in a browser, on the
+  frame after the one that first shows "Reading results" (`hold_picked_files`, `due_picked_files`).
+  `ui::results::poll` takes the `egui::Context` for it.
   Resume sweep resumes an incomplete folder through `SweepRun::resume_directory`, and the folder is
   read again once that sweep ends. `henad-app --open DIR` opens a folder at start.
   `ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
@@ -1055,7 +1096,9 @@ its tests needs the maintainer's approval as a new edge.
   `scripts/bench_matrix.py` parses the text `--params` prints, and that text is unchanged.
   `tests/golden.rs` compares `--list`, `--params` and `--params --json` byte for byte with what
   0.2.0 printed, recorded in `tests/golden/` by the procedure in its `README.md`. Keep them.
-  `build.rs` stamps `HENAD_COMMIT` for the manifest, as henad-app's does.
+  `build.rs` calls `henad_build::stamp_commit`, as henad-app's does, and `build_info!()` is the
+  host build the manifest and the About window record. Under `--json` each `SweepWarning` also
+  prints as an `explore_warning` line (`warning_json`).
 
 ### Adding a new model
 
@@ -1269,6 +1312,8 @@ is about not undoing them.
   `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as
   `shader_bindings` and `binding_decls`, each under one allow list, `unsafe_code` included. The
   macro and the generated code name `include!`, `concat!`, `env!` and `assert!` through `::core`.
+  henad-compute and henad-models also call the hidden `stamp_source_hash`, and henad-explore's
+  `build.rs` calls `stamp_engine_commit` alone.
   henad-compute names its entry points with `ShaderBuild::new("src/gpu")`, and the other two use
   `discover` over `src` and `src/ui`: every `.wgsl` file without a `#define_import_path` line.
   `discover` refuses a path component that is no Rust identifier or is a keyword, names that

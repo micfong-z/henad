@@ -1,17 +1,21 @@
 //! Build-script support for Henad model crates.
 //!
-//! [`ShaderBuild`] generates the Rust bindings of a crate's WGSL shaders, from its build script. Each shader is
-//! composed with the shared modules it reaches through `#import henad::<module>`, whose text comes from henad-core's
-//! [`SHARED_WGSL_MODULES`]. henad-compute's `include_shaders!` then brings the two generated files into the crate, as
-//! the modules `shader_bindings` and `binding_decls`.
+//! [`stamp_commit`] records the commit a crate was built from, a dirty flag and a hash of its sources, for
+//! `henad::build_info!` to read. [`ShaderBuild`] generates the Rust bindings of a crate's WGSL shaders, from its build
+//! script. Each shader is composed with the shared modules it reaches through `#import henad::<module>`, whose text
+//! comes from henad-core's [`SHARED_WGSL_MODULES`]. henad-compute's `include_shaders!` then brings the two generated
+//! files into the crate, as the modules `shader_bindings` and `binding_decls`.
 //!
 //! ```no_run
 //! // build.rs
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     henad_build::stamp_commit();
 //!     henad_build::ShaderBuild::discover("src")?.generate()?;
 //!     Ok(())
 //! }
 //! ```
+//!
+//! A crate without shaders keeps the build script for its stamp, and drops the `ShaderBuild` line.
 //!
 //! # Names
 //!
@@ -49,12 +53,49 @@
 mod binding_lines;
 mod output;
 mod paths;
+mod stamp;
 
 #[cfg(test)]
 mod tests;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+
+/// Stamps the crate whose build script calls it with its commit, a dirty flag and a hash of its sources.
+///
+/// Sets `HENAD_BUILD_COMMIT`, `HENAD_BUILD_COMMIT_DATE`, `HENAD_BUILD_DIRTY` and `HENAD_BUILD_SOURCE_HASH`, and has
+/// Cargo rerun the script when any of them can change. `henad::build_info!` reads the four.
+///
+/// The commit comes from the package's `.cargo_vcs_info.json`, as in a registry download, or else from git when git
+/// tracks the crate's `Cargo.toml`. Outside both the commit stays empty and the dirty flag unknown. The source hash is
+/// computed in every case, and tells two builds apart where no commit can: an uncommitted edit, or a project not
+/// under git.
+///
+/// Note that the dirty flag and the source hash cover the files under `src`, the manifest and, outside a package, the
+/// nearest `Cargo.lock`. Dotfiles and editor backups stay out of both. A file a model reads at compile time, through
+/// `include_bytes!` or `include_str!`, belongs under `src` for the stamp to see it. Data a model reads at run time
+/// from a path is recorded by no stamp.
+pub fn stamp_commit() {
+    stamp::print(stamp::StampScope::Commit);
+}
+
+/// Sets the stamp of [`stamp_commit`] for henad-explore, whose stamp stands for the engine.
+///
+/// Git's answer is kept only inside Henad's own tree, where the dirty flag and the source hash cover henad-core,
+/// henad-build, henad-compute and henad-explore with the workspace's lockfile. Also sets `HENAD_BUILD_CRATE_HASH`,
+/// the hash of henad-explore's own `src` and manifest, and `HENAD_BUILD_STAMP_VERSION`, henad-build's own version.
+#[doc(hidden)]
+pub fn stamp_engine_commit() {
+    stamp::print(stamp::StampScope::Engine);
+}
+
+/// Sets the source hash over the crate's own `src` and manifest, and the commit only from a `.cargo_vcs_info.json`.
+///
+/// Watches no git path and no lockfile. For henad-compute and henad-models.
+#[doc(hidden)]
+pub fn stamp_source_hash() {
+    stamp::print(stamp::StampScope::SourceHash);
+}
 
 /// One crate's shader-binding generation, run from its build script.
 #[derive(Debug, Clone)]

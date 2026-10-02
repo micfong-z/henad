@@ -99,15 +99,25 @@ fn decode_logo() -> ColorImage {
 }
 
 fn build_info() -> Vec<(&'static str, String)> {
-    let commit = match (env!("HENAD_COMMIT"), env!("HENAD_COMMIT_DATE")) {
+    let build = crate::HOST_BUILD;
+    let mut commit = match (build.commit(), build.commit_date()) {
         ("", _) => "Unknown".to_owned(),
         (commit, "") => commit.to_owned(),
         (commit, date) => format!("{commit} ({date})"),
     };
+    if build.dirty() == Some(true) {
+        commit.push_str(", modified");
+    }
 
     vec![
         ("Version", env!("CARGO_PKG_VERSION").to_owned()),
         ("Commit", commit),
+        (
+            "Sources",
+            build
+                .source_hash()
+                .map_or_else(|| "Unknown".to_owned(), |hash| format!("{hash:016x}")),
+        ),
         (
             "Build",
             if cfg!(debug_assertions) { "Debug" } else { "Release" }.to_owned(),

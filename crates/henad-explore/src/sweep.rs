@@ -21,6 +21,7 @@ use henad_core::explore::plan::{Plan, PlanError, PlanWarning, PlannedBlock, Shar
 use henad_core::explore::search::SearchReport;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::metadata::Backend;
+use henad_core::provenance::BuildInfo;
 
 use crate::exec::{
     ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionError, ExecutionLayout, SweepControl, choose_layout,
@@ -33,9 +34,10 @@ use crate::handle::SweepOutput;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::output::OutputWriter;
 use crate::output::manifest::{
-    FORMAT, FORMAT_VERSION, Manifest, ManifestBlock, ManifestColumns, ManifestDesignTable, ManifestEngine,
+    BuildRole, FORMAT, FORMAT_VERSION, Manifest, ManifestBlock, ManifestColumns, ManifestDesignTable,
     ManifestExecution, ManifestMode, ManifestModel, ManifestPlan, ManifestRuntime, ManifestSearch, ManifestSeeds,
-    ManifestSession, ManifestSpecSource, ManifestStatus, ManifestTimestamps, ResultCounts, now_unix_ms, rfc3339,
+    ManifestSession, ManifestSpecSource, ManifestStatus, ManifestTimestamps, RecordedBuild, ResultCounts, now_unix_ms,
+    rfc3339,
 };
 use crate::output::memory::SweepFiles;
 use crate::output::resume::{ResumeError, ResumeScan};
@@ -108,16 +110,45 @@ impl From<&ManifestSpecSource> for SpecSource {
     }
 }
 
-/// Build of the host binary and its command line.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Builds of Henad and of the host binary, and the host's command line, for the manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provenance {
-    pub engine_name: String,
-    pub engine_version: String,
-    /// Short hash of the commit the host was built from, empty when unknown.
-    pub commit: String,
-    pub commit_date: String,
-    pub debug_build: bool,
-    pub argv: Vec<String>,
+    engine: RecordedBuild,
+    host: RecordedBuild,
+    arguments: Vec<String>,
+}
+
+impl Provenance {
+    /// Returns the provenance of a sweep that the host binary `host` runs with the command line `arguments`.
+    ///
+    /// The engine's build is [`ENGINE_BUILD`](crate::ENGINE_BUILD), as [`RecordedBuild::engine`] records it. A host
+    /// passes `henad_core::build_info!()` from its own crate.
+    pub fn new(host: BuildInfo, arguments: Vec<String>) -> Self {
+        Self {
+            engine: RecordedBuild::engine(),
+            host: RecordedBuild::from(&host),
+            arguments,
+        }
+    }
+
+    pub fn engine(&self) -> &RecordedBuild {
+        &self.engine
+    }
+
+    pub fn host(&self) -> &RecordedBuild {
+        &self.host
+    }
+
+    /// Command line of the host binary.
+    pub fn arguments(&self) -> &[String] {
+        &self.arguments
+    }
+
+    /// Returns the provenance with `engine` in place of Henad's own build.
+    #[cfg(test)]
+    pub(crate) fn with_engine(self, engine: RecordedBuild) -> Self {
+        Self { engine, ..self }
+    }
 }
 
 /// Settings of a sweep that never change its results.
@@ -218,8 +249,18 @@ pub struct SweepOutline {
 pub enum SweepWarning {
     /// A warning of the plan.
     Plan(PlanWarning),
-    /// A resumed directory whose last session ran the build `recorded`, and this one is `current`.
-    CommitChanged { recorded: String, current: String },
+    /// A directory whose sessions so far ran the build `recorded` for `role`, and a build `current` that differs.
+    ///
+    /// A resume and a search resume compare the build that runs, `current`, against every build the sessions
+    /// record. A merge compares its shards' builds with one another. It names the lowest shard's build `recorded` and
+    /// another shard's `current`, and sets `between_shards`.
+    BuildChanged {
+        role: BuildRole,
+        recorded: Box<RecordedBuild>,
+        current: Box<RecordedBuild>,
+        /// Whether `current` is another shard's build, met by a merge, in place of the build that runs.
+        between_shards: bool,
+    },
     /// Runs of the plan that no merged directory holds, `count` in all. `first` lists the lowest ids.
     MissingRuns { count: u64, first: Vec<u64> },
 }
@@ -228,10 +269,42 @@ impl fmt::Display for SweepWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Plan(warning) => warning.fmt(f),
-            Self::CommitChanged { recorded, current } => write!(
-                f,
-                "the directory's runs so far came from build {recorded}, and this build is {current}"
-            ),
+            Self::BuildChanged {
+                role,
+                recorded,
+                current,
+                between_shards,
+            } => {
+                let (recorded_text, current_text) = (recorded.describe(), current.describe());
+                if *between_shards {
+                    write!(
+                        f,
+                        "the shards ran different {} builds: {recorded_text} in the lowest shard, and \
+                         {current_text} in another",
+                        role.as_str()
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "the directory's runs so far came from the {} build {recorded_text}, and this build is \
+                         {current_text}",
+                        role.as_str()
+                    )?;
+                }
+                if recorded_text == current_text
+                    && let Some(difference) = recorded.crate_difference(current)
+                {
+                    write!(f, ". They differ in {difference}")?;
+                }
+                if *role == BuildRole::Model && !(recorded.is_identified() && current.is_identified()) {
+                    write!(
+                        f,
+                        ". The model's build records no commit or source hash. Call `henad_build::stamp_commit()` \
+                         in the build script of the crate that registers it"
+                    )?;
+                }
+                Ok(())
+            }
             Self::MissingRuns { count, first } => {
                 let first: Vec<String> = first.iter().map(ToString::to_string).collect();
                 let (runs, verb, pronoun) = if *count == 1 {
@@ -492,11 +565,11 @@ pub fn plan_spec(
     };
     let report = if spec.search.is_some() {
         let preparation = SearchPreparation::new(&inputs, None, None)?;
-        preparation.announce(&options.provenance, progress);
+        preparation.announce(&inputs, progress);
         preparation.report(SweepEnd::Planned, ResultCounts::default(), None)
     } else {
         let preparation = SweepPreparation::new(&inputs, None, None)?;
-        preparation.announce(&options.provenance, progress);
+        preparation.announce(&inputs, progress);
         preparation.report(SweepEnd::Planned, ResultCounts::default(), None)
     };
     progress.report(&ProgressEvent::Ended(&report));
@@ -542,7 +615,7 @@ pub(crate) fn run_into_directory(
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
     let preparation = SweepPreparation::new(inputs, plan, None)?;
-    preparation.announce(inputs.provenance, progress);
+    preparation.announce(inputs, progress);
     let record = preparation.write_directory(inputs, output_dir, progress)?;
     progress.report(&ProgressEvent::Ended(&record.report));
     Ok(record)
@@ -565,7 +638,7 @@ pub(crate) fn run_in_memory(
     use crate::output::memory::memory_writer;
 
     let preparation = SweepPreparation::new(inputs, plan, None)?;
-    preparation.announce(inputs.provenance, progress);
+    preparation.announce(inputs, progress);
     let mut manifest = preparation.manifest(inputs)?;
     let writer = memory_writer(
         &preparation.plan,
@@ -731,24 +804,20 @@ impl SweepPreparation {
         &self.pending
     }
 
-    /// Reports the outline, then each warning of the plan and of a resume under another build than `provenance`.
-    pub(crate) fn announce(&self, provenance: &Provenance, progress: &mut dyn Progress) {
+    /// Reports the outline, then each warning of the plan and of a resume under another build than the engine or
+    /// model build of `inputs`.
+    pub(crate) fn announce(&self, inputs: &SweepInputs<'_>, progress: &mut dyn Progress) {
         progress.report(&ProgressEvent::Planned(&self.outline));
-        for warning in self.warnings(provenance) {
+        for warning in self.warnings(inputs.provenance, inputs.entry) {
             progress.report(&ProgressEvent::Warned(&warning));
         }
     }
 
-    /// Returns the warnings of the plan, and of a resume under another build than `provenance`.
-    fn warnings(&self, provenance: &Provenance) -> Vec<SweepWarning> {
+    /// Returns the warnings of the plan, and of a resume under another build than `provenance` or `entry`'s.
+    fn warnings(&self, provenance: &Provenance, entry: &ModelEntry) -> Vec<SweepWarning> {
         let mut warnings: Vec<SweepWarning> = self.plan.warnings().iter().cloned().map(SweepWarning::Plan).collect();
-        if let Some(scan) = &self.resumed
-            && scan.recorded.engine.commit != provenance.commit
-        {
-            warnings.push(SweepWarning::CommitChanged {
-                recorded: scan.recorded.engine.commit.clone(),
-                current: provenance.commit.clone(),
-            });
+        if let Some(scan) = &self.resumed {
+            warnings.extend(build_warnings(&scan.recorded, provenance, entry));
         }
         warnings
     }
@@ -949,6 +1018,27 @@ pub(crate) fn sized_layout(
     Ok((layout, layout.projected_bytes(run_probe)))
 }
 
+/// Returns a [`SweepWarning::BuildChanged`] for each build `recorded`'s sessions hold that differs from the engine
+/// build of `provenance`, or from the build that registered `entry`.
+pub(crate) fn build_warnings(recorded: &Manifest, provenance: &Provenance, entry: &ModelEntry) -> Vec<SweepWarning> {
+    let model = RecordedBuild::from(entry.source());
+    [(BuildRole::Engine, provenance.engine()), (BuildRole::Model, &model)]
+        .into_iter()
+        .flat_map(|(role, current)| {
+            recorded
+                .recorded_builds(role)
+                .into_iter()
+                .filter(|build| !build.same_build(current))
+                .map(move |build| SweepWarning::BuildChanged {
+                    role,
+                    recorded: Box::new(build),
+                    current: Box::new(current.clone()),
+                    between_shards: false,
+                })
+        })
+        .collect()
+}
+
 /// Parts of a manifest that differ between a sweep and a search.
 pub(crate) struct ManifestParts<'a> {
     pub(crate) mode: ManifestMode,
@@ -985,19 +1075,20 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
     let spec = serde_json::to_value(&spec_file).map_err(OutputError::Manifest)?;
     let session = ManifestSession {
         started: rfc3339(parts.started_unix_ms),
-        commit: provenance.commit.clone(),
+        commit: provenance.engine().commit.clone(),
         skipped: outline.skipped,
         ran: 0,
+        engine: Some(provenance.engine().clone()),
+        host: Some(provenance.host().clone()),
+        model_source: Some(RecordedBuild::from(entry.source())),
     };
     let (started_unix_ms, sessions, merged_shards) = match parts.recorded {
         Some(recorded) => {
-            let mut sessions = recorded.sessions.clone();
+            let mut recorded = recorded.clone();
+            recorded.record_session_engines();
+            let mut sessions = recorded.sessions;
             sessions.push(session);
-            (
-                recorded.timestamps.started_unix_ms,
-                sessions,
-                recorded.merged_shards.clone(),
-            )
+            (recorded.timestamps.started_unix_ms, sessions, recorded.merged_shards)
         }
         None => (parts.started_unix_ms, vec![session], None),
     };
@@ -1006,23 +1097,18 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
         format_version: FORMAT_VERSION,
         mode: parts.mode,
         status: ManifestStatus::Running,
-        engine: ManifestEngine {
-            name: provenance.engine_name.clone(),
-            version: provenance.engine_version.clone(),
-            commit: provenance.commit.clone(),
-            commit_date: provenance.commit_date.clone(),
-            debug_build: provenance.debug_build,
-        },
+        engine: provenance.engine().clone(),
         model: ManifestModel {
             id: entry.id().to_owned(),
             name: entry.name().to_owned(),
             backend: backend.clone(),
             schema_hash: hex(parts.plan.schema_hash()),
             schema: schema_json(entry, Some(parts.probe)),
+            replays_exactly: entry.metadata().replays_exactly,
         },
         spec,
         spec_source: inputs.source.into(),
-        argv: provenance.argv.clone(),
+        argv: provenance.arguments().to_vec(),
         plan: parts.manifest_plan.clone(),
         seeds: ManifestSeeds {
             root: seeds.root,

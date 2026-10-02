@@ -21,7 +21,7 @@ use henad_core::explore::spec::SweepSpec;
 
 use henad_core::explore::value::parse_value;
 
-use crate::output::manifest::{Manifest, ManifestError, ManifestMode, ManifestStatus};
+use crate::output::manifest::{BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, RecordedBuild};
 use crate::output::read::{ReadError, parse_one, record_ends};
 use crate::output::runs_csv::{ID_COLUMNS, NOTE_COLUMN, OUTCOME_COLUMNS};
 use crate::output::search_tables::{
@@ -277,6 +277,14 @@ impl ResultSet {
 
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    /// Returns every distinct build the manifest's sessions record for `role`, in session order.
+    ///
+    /// A session of a 0.2 manifest records no builds, and reads as the engine build of its own commit and the
+    /// manifest's engine version, with no model build.
+    pub fn recorded_builds(&self, role: BuildRole) -> Vec<RecordedBuild> {
+        self.manifest.recorded_builds(role)
     }
 
     /// Spec the sweep ran, as its manifest records it.

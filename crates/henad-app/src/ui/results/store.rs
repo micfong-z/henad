@@ -26,6 +26,7 @@ use henad_core::explore::spec::{ACTION_COLUMN_PREFIX, ActionSpec};
 use henad_core::explore::summary::{ReplicateSummary, RunningMoments};
 use henad_core::explore::value::{format_value, parse_value};
 use henad_core::params::ParamDescriptor;
+use henad_explore::output::manifest::{BuildRole, RecordedBuild};
 use henad_explore::output::search_tables::SearchHistory;
 use henad_explore::result_set::ResultSet;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
@@ -483,6 +484,23 @@ impl SortValue {
     }
 }
 
+/// Returns the roles whose current build, Henad's or the one that registered `entry`, differs from any build a
+/// session of `set` recorded for that role.
+fn changed_builds(set: &ResultSet, entry: &ModelEntry) -> Vec<BuildRole> {
+    [
+        (BuildRole::Engine, RecordedBuild::engine()),
+        (BuildRole::Model, RecordedBuild::from(entry.source())),
+    ]
+    .into_iter()
+    .filter(|(role, current)| {
+        set.recorded_builds(*role)
+            .iter()
+            .any(|recorded| !recorded.same_build(current))
+    })
+    .map(|(role, _)| role)
+    .collect()
+}
+
 /// Runs, configs and series of one sweep.
 #[derive(Debug)]
 pub struct ResultsStore {
@@ -492,6 +510,12 @@ pub struct ResultsStore {
     pub model_name: String,
     /// Whether the model declares the parameters, stats and actions the sweep ran with.
     pub schema_matches: bool,
+    /// Roles whose current build differs from a build some session of the sweep recorded, the engine's before the
+    /// model's.
+    pub changed_builds: Vec<BuildRole>,
+    /// Whether two builds of the model on one seed step through identical states, as the model and the sweep both
+    /// declare.
+    pub replays_exactly: bool,
     /// Whether every run of the sweep is held.
     pub complete: bool,
     /// Folder that holds the sweep's files, `None` for a sweep held in memory or picked files.
@@ -540,6 +564,8 @@ impl ResultsStore {
             model_id: entry.id().to_owned(),
             model_name: entry.name().to_owned(),
             schema_matches: true,
+            changed_builds: Vec::new(),
+            replays_exactly: entry.metadata().replays_exactly,
             complete: false,
             folder,
             action_labels: action_labels(plan.actions(), entry),
@@ -598,6 +624,8 @@ impl ResultsStore {
         let (model_id, model_name) = (recorded.id.clone(), recorded.name.clone());
         let entry = model.as_ref().ok().copied();
         let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry.schema()));
+        let changed_builds = entry.map_or_else(Vec::new, |entry| changed_builds(&set, entry));
+        let replays_exactly = recorded.replays_exactly && entry.is_none_or(|entry| entry.metadata().replays_exactly);
         let search = set
             .spec()
             .search
@@ -640,6 +668,8 @@ impl ResultsStore {
             model_id,
             model_name,
             schema_matches,
+            changed_builds,
+            replays_exactly,
             complete: set.is_complete(),
             folder: set.dir().map(Path::to_path_buf),
             plan,
@@ -2926,6 +2956,62 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn a_replay_warns_on_a_build_from_any_session() {
+        use henad_explore::handle::SweepOutput;
+        use henad_explore::output::manifest::BuildRole;
+        use henad_explore::progress::NoProgress;
+        use henad_explore::result_set::ResultSet;
+        use henad_explore::sweep::{Provenance, SweepOptions, run_spec};
+        use serde_json::Value;
+
+        use crate::ui::results::store::ResultsSource;
+
+        let models = example_models();
+        let sir = models.get("sir").expect("SIR is registered");
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = [("grid_width", "8"), ("grid_height", "8")]
+            .map(|(id, value)| (id.to_owned(), value.to_owned()))
+            .to_vec();
+        spec.run.steps = 3;
+        let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-builds-{}", std::process::id())));
+        drop(std::fs::remove_dir_all(&folder.0));
+        let mut options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
+        for replicates in [1, 2] {
+            spec.run.replicates = replicates;
+            let output = SweepOutput::Directory(folder.0.clone());
+            run_spec(sir, None, &spec, output, &options, &mut NoProgress).expect("the sweep runs");
+            options.resume = true;
+        }
+        let open = || {
+            let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
+            ResultsStore::from_result_set(
+                set,
+                ResultsSource::Folder(folder.0.clone()),
+                models.lookup("sir", None),
+                usize::MAX,
+            )
+        };
+        let store = open();
+        assert_eq!(store.changed_builds, []);
+        assert!(store.replays_exactly);
+
+        // The first of two sessions ran another engine, and the second this one.
+        let path = folder.0.join("manifest.json");
+        let mut manifest: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("the manifest is written")).expect("JSON");
+        manifest["sessions"][0]["engine"]["version"] = Value::from("0.1.0");
+        manifest["model"]["replays_exactly"] = Value::from(false);
+        std::fs::write(&path, manifest.to_string()).expect("the manifest can be written");
+        let store = open();
+        assert_eq!(store.changed_builds, [BuildRole::Engine]);
+        assert!(
+            !store.replays_exactly,
+            "the manifest declares the model does not replay exactly"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn a_run_opened_from_a_folder_replays_to_its_row() {
         use henad_compute::cpu::sim_thread::SimThread;
         use henad_compute::entry::ModelState;
@@ -2962,7 +3048,10 @@ mod tests {
         }];
         let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-results-{}", std::process::id())));
         drop(std::fs::remove_dir_all(&folder.0));
-        let options = SweepOptions::new(henad_explore::sweep::Provenance::default());
+        let options = SweepOptions::new(henad_explore::sweep::Provenance::new(
+            henad_core::build_info!(),
+            Vec::new(),
+        ));
         let sir = models.get("sir").expect("SIR is registered");
         let output = SweepOutput::Directory(folder.0.clone());
         run_spec(sir, None, &spec, output, &options, &mut NoProgress).expect("the sweep runs");

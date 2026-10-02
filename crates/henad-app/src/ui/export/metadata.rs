@@ -1,6 +1,7 @@
 //! Exported metadata about a run.
 
 use henad_explore::output::details::{ChoiceForm, params_by_id_json, scheduled_actions_json};
+use henad_explore::output::manifest::RecordedBuild;
 use serde_json::json;
 
 use crate::state::AppState;
@@ -15,9 +16,11 @@ pub fn run_details(app: &AppState) -> String {
         "engine": "henad",
         "engine_version": env!("CARGO_PKG_VERSION"),
         "debug_build": cfg!(debug_assertions),
+        "host": RecordedBuild::from(&crate::HOST_BUILD),
         "model": entry.map(|e| e.id()),
         "model_name": entry.map(|e| e.name()),
         "backend": entry.map(|e| e.metadata().backend.label()),
+        "model_source": entry.map(|e| RecordedBuild::from(e.source())),
         "params": entry.map(|e| params_by_id_json(e.param_descriptors(), &app.param_values, ChoiceForm::Name)),
         "params_match_running_model": app.selection_is_loaded() && !app.pending_reload.iter().any(|p| *p),
         // Null with a model loaded is the model's default seed.

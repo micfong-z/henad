@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use egui_extras::{Column, TableBuilder};
 use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
+use henad_explore::output::manifest::BuildRole;
 use web_time::Instant;
 
 use crate::icons::material_design_icons::{
@@ -353,13 +354,34 @@ pub fn detail_strip(ui: &mut egui::Ui, store: &ResultsStore, run_id: u64, reques
     });
     if let Some(refusal) = refusal {
         ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {refusal}"));
-    } else if !store.schema_matches {
-        let noun = if store.is_search() { "search" } else { "sweep" };
+        return;
+    }
+    if let Some(change) = replay_change(store) {
+        ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {change}"));
+    }
+    if !store.replays_exactly {
         ui.colored_label(
             ui.visuals().warn_fg_color,
-            format!("{MDI_ALERT} Model parameters changed since this {noun}. The replay might differ."),
+            format!("{MDI_ALERT} This model does not replay exactly. The opened run might differ from its row."),
         );
     }
+}
+
+/// Returns the warning that a replay of the store's runs might differ, `None` when the model's parameters and every
+/// recorded build match the current ones.
+fn replay_change(store: &ResultsStore) -> Option<String> {
+    let noun = if store.is_search() { "search" } else { "sweep" };
+    let changed = if !store.schema_matches {
+        "Model parameters changed"
+    } else {
+        match store.changed_builds.as_slice() {
+            [] => return None,
+            [BuildRole::Engine] => "Henad build changed",
+            [BuildRole::Model] => "Model build changed",
+            _ => "Henad and model builds changed",
+        }
+    };
+    Some(format!("{changed} since this {noun}. The replay might differ."))
 }
 
 #[cfg(test)]

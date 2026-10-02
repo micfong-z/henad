@@ -212,7 +212,7 @@ impl PumpedSweep {
             Ok(preparation) => preparation,
             Err(error) => return self.fail(&error),
         };
-        preparation.announce(inputs.provenance, &mut self.channel);
+        preparation.announce(&inputs, &mut self.channel);
         let opened = preparation.manifest(&inputs).and_then(|manifest| {
             let writer = memory_writer(
                 preparation.plan(),
@@ -243,7 +243,7 @@ impl PumpedSweep {
             Ok(preparation) => preparation,
             Err(error) => return self.fail(&error),
         };
-        preparation.announce(inputs.provenance, &mut self.channel);
+        preparation.announce(&inputs, &mut self.channel);
         match preparation.memory_output(&inputs) {
             Ok((output, manifest)) => {
                 self.stage = PumpStage::Searching(Box::new(SearchQueue {

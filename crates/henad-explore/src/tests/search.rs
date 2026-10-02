@@ -21,7 +21,7 @@ use henad_core::export::csv::{escape_field, parse_records};
 use crate::cursor::{CursorState, RunCursor};
 use crate::exec::{Concurrency, RunRequest, SweepControl};
 use crate::handle::{SweepChannel, SweepEvent, SweepOutput, SweepRun, SweepRunOptions};
-use crate::output::manifest::{Manifest, ManifestAxisRanges, ManifestMode, ManifestStatus};
+use crate::output::manifest::{BuildRole, Manifest, ManifestAxisRanges, ManifestMode, ManifestStatus, RecordedBuild};
 use crate::output::resume::ResumeError;
 use crate::output::search_tables::SearchHistory;
 use crate::output::{
@@ -33,10 +33,10 @@ use crate::pumped::PumpedSweep;
 use crate::result_set::ResultSet;
 use crate::search_run::{EvaluationReading, SearchPlan, SearchPlanError};
 use crate::spec_file::SpecFile;
-use crate::sweep::{ExploreError, SweepEnd, SweepOptions, SweepReport};
+use crate::sweep::{ExploreError, SweepEnd, SweepOptions, SweepReport, SweepWarning};
 use crate::tests::support::{
-    CommitLimit, OutputTables, ScratchDir, dry_run, entry, headless_device, planned, provenance, sweep, sweep_options,
-    without_timing,
+    CommitLimit, OutputTables, Recorder, ScratchDir, dry_run, entry, headless_device, other_engine, planned,
+    provenance, sweep, sweep_options, without_timing,
 };
 
 /// Longest a test waits for a search to end.
@@ -455,6 +455,43 @@ fn a_dry_run_counts_the_runs_a_search_resume_skips() {
     assert!(
         matches!(error, ExploreError::Output(OutputError::HoldsResults { .. })),
         "{error:?}"
+    );
+}
+
+#[test]
+fn a_search_resume_under_another_engine_build_warns() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-resume-build");
+    let spec = search_spec(SearchAlgorithm::Random, 12);
+    let control = SweepControl::new();
+    let interrupted = SweepOptions {
+        concurrency: lane_count(1),
+        control: control.clone(),
+        ..sweep_options(false)
+    };
+    let mut abort = CommitLimit::new(control, 5);
+    search_with(&sir, None, &spec, scratch.path(), &interrupted, &mut abort).expect("an abort is not an error");
+
+    let resume = SweepOptions {
+        provenance: provenance().with_engine(other_engine()),
+        ..sweep_options(true)
+    };
+    let mut progress = Recorder::default();
+    let report = search_with(&sir, None, &spec, scratch.path(), &resume, &mut progress).expect("the search resumes");
+    assert_eq!(report.end, SweepEnd::Complete);
+    assert_eq!(
+        progress.warnings,
+        [SweepWarning::BuildChanged {
+            role: BuildRole::Engine,
+            recorded: Box::new(RecordedBuild::engine()),
+            current: Box::new(other_engine()),
+            between_shards: false,
+        }]
+    );
+    let manifest = Manifest::read(&scratch.path().join(MANIFEST_FILE)).expect("the manifest reads back");
+    assert_eq!(
+        manifest.recorded_builds(BuildRole::Engine),
+        [RecordedBuild::engine(), other_engine()]
     );
 }
 

@@ -40,7 +40,7 @@ use henad_explore::schema::backend_name;
 use henad_explore::search_run::{SearchOutline, SearchUpdate};
 use henad_explore::spec_file::{DesignTableFile, LoadedSpec};
 use henad_explore::sweep::{
-    Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, plan_spec, run_spec,
+    Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, SweepWarning, plan_spec, run_spec,
 };
 
 use crate::Args;
@@ -265,7 +265,7 @@ fn sweep_and_options(args: &Args, entry: &ModelEntry, spec: Option<LoadedSpec>) 
 /// Returns an error when the directories cannot be merged.
 pub fn merge_shards(args: &Args) -> Result<ExitCode> {
     let output_dir = args.explore.out.as_deref().context("--merge requires --out")?;
-    let report = merge(&args.explore.merge, output_dir, &mut WarningPrinter)?;
+    let report = merge(&args.explore.merge, output_dir, &mut WarningPrinter { json: args.json })?;
     if args.json {
         json_report::emit(&merge_json(&report, args.explore.merge.len()));
     } else {
@@ -474,16 +474,10 @@ fn parse_timeout(raw: &str) -> Result<Duration, String> {
 
 /// Returns the build of this binary and its command line.
 fn provenance() -> Provenance {
-    Provenance {
-        engine_name: "henad".to_owned(),
-        engine_version: env!("CARGO_PKG_VERSION").to_owned(),
-        commit: env!("HENAD_COMMIT").to_owned(),
-        commit_date: env!("HENAD_COMMIT_DATE").to_owned(),
-        debug_build: cfg!(debug_assertions),
-        argv: std::env::args_os()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect(),
-    }
+    let arguments = std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    Provenance::new(henad_core::build_info!(), arguments)
 }
 
 /// Progress of a sweep as JSON lines on stdout, or as text on stderr.
@@ -671,6 +665,9 @@ impl Progress for Reporter {
             ProgressEvent::Warned(warning) => {
                 self.clear_line();
                 eprintln!("warning: {warning}");
+                if self.json {
+                    json_report::emit(&warning_json(warning));
+                }
             }
             ProgressEvent::RunCommitted(outcome) => self.committed(outcome),
             ProgressEvent::Progressed(update) => self.progressed(update),
@@ -680,15 +677,50 @@ impl Progress for Reporter {
     }
 }
 
-/// Progress that prints a merge's warnings and nothing else.
-struct WarningPrinter;
+/// Progress that prints a merge's warnings and nothing else, each also as a JSON line under `--json`.
+struct WarningPrinter {
+    json: bool,
+}
 
 impl Progress for WarningPrinter {
     fn report(&mut self, event: &ProgressEvent<'_>) {
         if let ProgressEvent::Warned(warning) = event {
             eprintln!("warning: {warning}");
+            if self.json {
+                json_report::emit(&warning_json(warning));
+            }
         }
     }
+}
+
+/// Returns the `explore_warning` line of `warning`.
+///
+/// `warning` names its kind, `message` holds the text the warning prints, and a `build_changed` warning adds its
+/// `role`, the `recorded` and `current` builds as the manifest records them, and `between_shards`, true when a merge
+/// found `current` in another shard.
+fn warning_json(warning: &SweepWarning) -> Value {
+    let mut line = json!({
+        "kind": "explore_warning",
+        "message": warning.to_string(),
+    });
+    let kind = match warning {
+        SweepWarning::Plan(_) => "plan",
+        SweepWarning::MissingRuns { .. } => "missing_runs",
+        SweepWarning::BuildChanged {
+            role,
+            recorded,
+            current,
+            between_shards,
+        } => {
+            line["role"] = json!(role.as_str());
+            line["between_shards"] = json!(between_shards);
+            line["recorded"] = serde_json::to_value(recorded.as_ref()).unwrap_or_default();
+            line["current"] = serde_json::to_value(current.as_ref()).unwrap_or_default();
+            "build_changed"
+        }
+    };
+    line["warning"] = json!(kind);
+    line
 }
 
 /// Returns the plan of a sweep over the model named `model_name`, as the lines a person reads.
@@ -1112,12 +1144,12 @@ mod tests {
     use henad_core::explore::stop::StopSpec;
     use henad_explore::exec::Concurrency;
     use henad_explore::output::manifest::ResultCounts;
-    use henad_explore::sweep::{Provenance, SweepEnd, SweepOptions, plan_spec};
+    use henad_explore::sweep::{SweepEnd, SweepOptions, plan_spec};
     use henad_models::example_models;
 
     use super::{
         LoadedSpec, PatternAxis, SOME_RUNS_NOT_OK, axis_text, exit_status, fixed_actions, format_bytes, format_seconds,
-        parse_vary, plan_text, spec_from_flags, sweep_and_options,
+        parse_vary, plan_text, provenance, spec_from_flags, sweep_and_options,
     };
     use crate::{Args, Mode};
 
@@ -1676,7 +1708,7 @@ mod tests {
         let loaded = LoadedSpec::read(&path).expect("the example spec reads");
         let models = example_models();
         let sir = models.get("sir").expect("sir is registered");
-        let options = SweepOptions::new(Provenance::default());
+        let options = SweepOptions::new(provenance());
         let report = plan_spec(
             sir,
             None,
@@ -1709,6 +1741,30 @@ mod tests {
 
     /// Checks that a flag given on the command line replaces the spec table's setting, `--concurrent auto` included,
     /// and that a setting no flag gives keeps the table's value.
+    #[test]
+    fn a_build_change_prints_as_an_explore_warning_line() {
+        use henad_explore::output::manifest::{BuildRole, RecordedBuild};
+        use henad_explore::sweep::SweepWarning;
+
+        let current = RecordedBuild::engine();
+        let mut recorded = current.clone();
+        recorded.version = "0.1.0".to_owned();
+        let warning = SweepWarning::BuildChanged {
+            role: BuildRole::Engine,
+            recorded: Box::new(recorded),
+            current: Box::new(current),
+            between_shards: false,
+        };
+        let line = super::warning_json(&warning);
+        assert_eq!(line["kind"], "explore_warning");
+        assert_eq!(line["warning"], "build_changed");
+        assert_eq!(line["role"], "engine");
+        assert_eq!(line["recorded"]["version"], "0.1.0");
+        assert_eq!(line["current"]["name"], "henad");
+        assert_eq!(line["between_shards"], false);
+        assert_eq!(line["message"], warning.to_string());
+    }
+
     #[test]
     fn an_explicit_concurrent_auto_overrides_the_spec_table() {
         let dir = std::env::temp_dir().join(format!("henad-cli-execution-table-{}", std::process::id()));

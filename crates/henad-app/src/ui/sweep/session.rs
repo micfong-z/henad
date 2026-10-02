@@ -260,18 +260,12 @@ impl SweepSession {
     }
 }
 
-/// Returns the build of this app for a sweep's manifest.
+/// Returns the build of this app and its command line for a sweep's manifest.
 fn provenance() -> Provenance {
-    Provenance {
-        engine_name: "henad".to_owned(),
-        engine_version: env!("CARGO_PKG_VERSION").to_owned(),
-        commit: env!("HENAD_COMMIT").to_owned(),
-        commit_date: env!("HENAD_COMMIT_DATE").to_owned(),
-        debug_build: cfg!(debug_assertions),
-        argv: std::env::args_os()
-            .map(|argument| argument.to_string_lossy().into_owned())
-            .collect(),
-    }
+    let arguments = std::env::args_os()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+    Provenance::new(crate::HOST_BUILD, arguments)
 }
 
 #[cfg(test)]

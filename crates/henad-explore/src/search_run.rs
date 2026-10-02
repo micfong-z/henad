@@ -58,8 +58,8 @@ use crate::probe::{ProbeReport, TimedProbe, check_capacity};
 use crate::progress::ProgressMeter;
 use crate::progress::{Progress, ProgressEvent};
 use crate::sweep::{
-    ExploreError, ManifestParts, Provenance, SweepEnd, SweepInputs, SweepOutline, SweepRecord, SweepReport,
-    SweepWarning, finish_manifest, hex, running_manifest, sized_layout,
+    ExploreError, ManifestParts, SweepEnd, SweepInputs, SweepOutline, SweepRecord, SweepReport, SweepWarning,
+    build_warnings, finish_manifest, hex, running_manifest, sized_layout,
 };
 
 /// A search spec checked against a model, with its space resolved.
@@ -971,7 +971,7 @@ pub(crate) fn run_search_into_directory(
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
     let preparation = SearchPreparation::new(inputs, plan, None)?;
-    preparation.announce(inputs.provenance, progress);
+    preparation.announce(inputs, progress);
     let record = preparation.write_directory(inputs, output_dir, progress)?;
     progress.report(&ProgressEvent::Ended(&record.report));
     Ok(record)
@@ -992,7 +992,7 @@ pub(crate) fn run_search_in_memory(
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
     let preparation = SearchPreparation::new(inputs, plan, None)?;
-    preparation.announce(inputs.provenance, progress);
+    preparation.announce(inputs, progress);
     let (mut output, manifest) = preparation.memory_output(inputs)?;
     let executor = preparation.executor(inputs)?;
     let end = preparation.run_all(&executor, &mut output, progress)?;
@@ -1121,8 +1121,9 @@ impl SearchPreparation {
         })
     }
 
-    /// Reports the outline, then each warning of the plan and of a resume under another build than `provenance`.
-    pub(crate) fn announce(&self, provenance: &Provenance, progress: &mut dyn Progress) {
+    /// Reports the outline, then each warning of the plan and of a resume under another build than the engine or
+    /// model build of `inputs`.
+    pub(crate) fn announce(&self, inputs: &SweepInputs<'_>, progress: &mut dyn Progress) {
         progress.report(&ProgressEvent::Planned(&self.outline));
         let mut warnings: Vec<SweepWarning> = self
             .plan
@@ -1132,13 +1133,8 @@ impl SearchPreparation {
             .cloned()
             .map(SweepWarning::Plan)
             .collect();
-        if let Some(resumed) = &self.resumed
-            && resumed.recorded.engine.commit != provenance.commit
-        {
-            warnings.push(SweepWarning::CommitChanged {
-                recorded: resumed.recorded.engine.commit.clone(),
-                current: provenance.commit.clone(),
-            });
+        if let Some(resumed) = &self.resumed {
+            warnings.extend(build_warnings(&resumed.recorded, inputs.provenance, inputs.entry));
         }
         for warning in &warnings {
             progress.report(&ProgressEvent::Warned(warning));

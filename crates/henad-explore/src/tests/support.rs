@@ -21,7 +21,7 @@ use henad_compute::fault::{FaultSink, install_panic_hook};
 use crate::device::acquire_headless;
 use crate::exec::{ActiveRun, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, RunSink, SweepControl};
 use crate::handle::SweepOutput;
-use crate::output::manifest::Manifest;
+use crate::output::manifest::{Manifest, RecordedBuild};
 use crate::output::runs_csv::{OUTCOME_COLUMNS, TIMING_COLUMNS};
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::probe::ProbeReport;
@@ -127,16 +127,18 @@ fn remove(path: &Path) {
     }
 }
 
-/// Returns a record of a build that is not a real one.
+/// Returns an engine build that [`RecordedBuild::same_build`] tells apart from Henad's own, clean or dirty.
+pub fn other_engine() -> RecordedBuild {
+    let mut other = RecordedBuild::engine();
+    other.commit = "0ther000".to_owned();
+    other.dirty = Some(false);
+    other.source_hash = Some(other.source_hash.unwrap_or_default() ^ 1);
+    other
+}
+
+/// Returns the provenance of a sweep the tests run, with henad-explore's own build as the host's.
 pub fn provenance() -> Provenance {
-    Provenance {
-        engine_name: "henad".to_owned(),
-        engine_version: "0.0.0-test".to_owned(),
-        commit: "test".to_owned(),
-        commit_date: String::new(),
-        debug_build: cfg!(debug_assertions),
-        argv: vec!["henad-explore-tests".to_owned()],
-    }
+    Provenance::new(henad_core::build_info!(), vec!["henad-explore-tests".to_owned()])
 }
 
 /// Runs `spec` over `entry` into `output_dir` at `concurrency`, reporting nowhere.
