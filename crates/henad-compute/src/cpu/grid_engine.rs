@@ -293,7 +293,8 @@ mod tests {
     /// stepped across many must agree bit for bit.
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
-        let params = vec![ParamValue::U32(64), ParamValue::U32(64)];
+        // A 128-column grid holds 64 rows a job, and 1024 rows split into 16 jobs.
+        let params = vec![ParamValue::U32(128), ParamValue::U32(1024)];
         let run = |threads: usize| -> Vec<u8> {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
