@@ -8,8 +8,13 @@ icon: material/expansion-card
 
 In this tutorial we'll build Conway's Game of Life (Life) on the GPU from scratch, where the grid lives in a storage buffer, every step is a compute dispatch, and the cells never leave the GPU.
 
+!!! info "Henad 0.3"
+
+    This page describes Henad 0.3.
+
 This page assumes you have worked through our [CPU Grid Model](game-of-life.md) tutorial first.
 We will reuse its palette, and use it as a cross-check for correctness.
+Every file on this page goes under `src/` in the same project, made from the template as [Your own project](../your-project.md) describes.
 
 You'll also need a machine with a GPU that wgpu can drive with compute support, which it reaches through Vulkan, Metal or DirectX 12.
 
@@ -40,7 +45,7 @@ The three shaders differ in how they are dispatched:
 
 The Henad engine handles the rest of the simulation, such as allocating both sides of the state buffer and swapping them after every step, building every pipeline and bind group from the shaders, batching steps into submissions, the display texture, and the snapshot the UI draws.
 
-Let's get started by creating `crates/henad-models/src/gpu_life/`, containing `mod.rs`, `step.wgsl`, `display.wgsl` and `reduce.wgsl`.
+Let's get started by creating `src/gpu_life/`, containing `mod.rs`, `step.wgsl`, `display.wgsl` and `reduce.wgsl`.
 
 ## Update rule `step.wgsl`
 
@@ -77,7 +82,7 @@ BITS    0 ...... 31 │ 0 ...... 31 │ ... │ 0 ........................... 31
 
 The shader binds the two sides of the state buffer and a small uniform:
 
-``` { .wgsl .annotate title="crates/henad-models/src/gpu_life/step.wgsl" }
+``` { .wgsl .annotate title="src/gpu_life/step.wgsl" }
 @group(0) @binding(0) var<storage, read> state_in: array<u32>; // (1)!
 @group(0) @binding(1) var<storage, read_write> state_out: array<u32>;
 @group(0) @binding(2) var<uniform> params: vec2<u32>; // (2)!
@@ -114,7 +119,7 @@ Every other count keeps its exact value in `sb0` to `sb2`.
 
 Summing one-bit inputs into a bit-sliced count is a job for a carry-save adder, and an adder is nothing but XOR and AND:
 
-``` { .wgsl .annotate title="crates/henad-models/src/gpu_life/step.wgsl" }
+``` { .wgsl .annotate title="src/gpu_life/step.wgsl" }
 // One column of the adder tree: `sum` is the weight-w result, `carry` feeds weight 2w.
 struct Adder {
     sum: u32,
@@ -138,7 +143,7 @@ Before any adding, each invocation gathers its neighbourhood.
 For a word of cells, the west neighbour of every cell is the same word shifted left by one bit, with bit 0 filled in from the previous word, and similarly for the east.
 A small struct carries the three words of one row:
 
-``` wgsl title="crates/henad-models/src/gpu_life/step.wgsl"
+``` wgsl title="src/gpu_life/step.wgsl"
 // Preloaded row window, with west and east being the cells shifted by 1 bit left and right, respectively.
 struct Row {
     cells: u32, // bit j = cell (word*32 + j)
@@ -149,7 +154,7 @@ struct Row {
 
 ### Loading a row
 
-``` { .wgsl .annotate title="crates/henad-models/src/gpu_life/step.wgsl" }
+``` { .wgsl .annotate title="src/gpu_life/step.wgsl" }
 fn load_row(row: u32, word: u32, stride: u32, width: u32) -> Row {
     let base = row * stride;
     let mid = state_in[base + word];
@@ -181,7 +186,7 @@ fn load_row(row: u32, word: u32, stride: u32, width: u32) -> Row {
 
 ### The entry point
 
-``` { .wgsl .annotate title="crates/henad-models/src/gpu_life/step.wgsl" }
+``` { .wgsl .annotate title="src/gpu_life/step.wgsl" }
 @compute
 @workgroup_size(16, 16) // (1)!
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -251,7 +256,7 @@ It compiles to a few dozen bitwise instructions per word, with no loop and no br
 On the CPU the engine built our display texture for us, indexing `PALETTE` by the cell value.
 On the GPU we need to draw our texture instead, because only the model knows how a word of bits maps to colours.
 
-``` { .wgsl .annotate title="crates/henad-models/src/gpu_life/display.wgsl" }
+``` { .wgsl .annotate title="src/gpu_life/display.wgsl" }
 #import henad::dims::{Dims, cell_at} // (1)!
 @group(0) @binding(0) var<storage, read> state: array<u32>;
 @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
@@ -297,7 +302,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 We would like to display a count of cells alive in the statistics.
 On the CPU we counted with `reduce_chunks` at publish time, and the GPU equivalent is a reduction pass that runs at the same snapshot cadence:
 
-``` { .wgsl .annotate title="crates/henad-models/src/gpu_life/reduce.wgsl" }
+``` { .wgsl .annotate title="src/gpu_life/reduce.wgsl" }
 #import henad::dims::Dims
 
 @group(0) @binding(0) var<storage, read> state: array<u32>;
@@ -349,7 +354,7 @@ fn main(
 
 With the three shaders written, let's start on `mod.rs`.
 
-``` rust title="crates/henad-models/src/gpu_life/mod.rs"
+``` rust title="src/gpu_life/mod.rs"
 use henad::authoring::prelude::*;
 
 pub struct GpuLifeModel;
@@ -363,12 +368,12 @@ A GPU model is const metadata with a few pure functions, and every buffer lives 
 This won't compile yet.
 Let's run `cargo check` and see what the compiler says is missing:
 
-``` text title="cargo check -p henad-models"
+``` text title="cargo check"
 error[E0046]: not all trait items implemented, missing: `NAME`, `ID`, `DESCRIPTION`, `PALETTE`, `STATS`,
               `BUFFERS`, `STEP_BINDINGS`, `DISPLAY_BINDINGS`, `REDUCE_BINDINGS`, `STEP_SHADER`,
               `DISPLAY_SHADER`, `REDUCE_SHADER`, `param_descriptors`, `dims`, `seed_buffers`,
               `step_params_bytes`, `stats`
- --> crates/henad-models/src/gpu_life/mod.rs:5:1
+ --> src/gpu_life/mod.rs:5:1
   |
 5 | impl GpuGridModel for GpuLifeModel {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing 17 items in implementation
@@ -385,7 +390,7 @@ We'll work down the list for the rest of this tutorial.
 
 The `impl` starts with the `NAME`, `ID` and `DESCRIPTION` of the model, exactly as on the CPU.
 
-``` { .rust .annotate title="crates/henad-models/src/gpu_life/mod.rs" }
+``` { .rust .annotate title="src/gpu_life/mod.rs" }
 impl GpuGridModel for GpuLifeModel {
     const NAME: &'static str = "Game of Life (GPU)";
     const ID: &'static str = "gpu_life"; // (1)!
@@ -393,7 +398,7 @@ impl GpuGridModel for GpuLifeModel {
 }
 ```
 
-1. The shipped port already holds `gpu_game_of_life`, and a model set holds each ID once, so we need a different one while both stay registered.
+1. The example port already holds `gpu_game_of_life`. A model set holds each ID once, and our ID differs so that the guide's models can sit in one set beside the example models, as the guide's parity tests in Henad's repository run them.
 
 ### Colours
 
@@ -401,7 +406,7 @@ The stats UI still reads `PALETTE`, even though the display shader carries its o
 Back on the CPU page we left the palette outside the `impl` block for exactly this moment.
 Make it `pub` in `life.rs`,
 
-``` rust title="crates/henad-models/src/life.rs" hl_lines="1"
+``` rust title="src/life.rs" hl_lines="1"
 pub const PALETTE: [[u8; 4]; 2] = [
     [0x15, 0x15, 0x15, 0xFF], // Dead
     [0x00, 0xE6, 0x76, 0xFF], // Alive
@@ -410,11 +415,11 @@ pub const PALETTE: [[u8; 4]; 2] = [
 
 and point the trait at it, so the chart shows the same colours on both backends:
 
-``` rust title="crates/henad-models/src/gpu_life/mod.rs"
+``` rust title="src/gpu_life/mod.rs"
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
 ```
 
-``` rust title="crates/henad-models/src/gpu_life/mod.rs"
+``` rust title="src/gpu_life/mod.rs"
 use crate::life::PALETTE;
 ```
 
@@ -422,7 +427,7 @@ use crate::life::PALETTE;
 
 Next come the declarations with no CPU counterpart, the buffers the step ping-pongs and the three shaders we wrote:
 
-``` { .rust .annotate title="crates/henad-models/src/gpu_life/mod.rs" }
+``` { .rust .annotate title="src/gpu_life/mod.rs" }
     const BUFFERS: &'static [&'static str] = &["state"]; // (1)!
 
     const STEP_SHADER: &'static str = crate::shader_bindings::gpu_life::step::SHADER_STRING; // (2)!
@@ -439,12 +444,13 @@ Next come the declarations with no CPU counterpart, the buffers the step ping-po
 3. Each shader's `@group(0)` declarations in `@binding` order, read off the source at build time, so the Rust side cannot disagree with the WGSL about what is bound where.
 
 Both modules are generated when the crate builds.
-The crate's `build.rs` runs henad-build over every `.wgsl` file under `src`, and `include_shaders!` at the top of `lib.rs` brings the output in:
+The template's `build.rs` is already in the project and runs henad-build over the shaders, and `henad::include_shaders!()` at the top of `src/lib.rs` brings the output in:
 
-``` rust title="crates/henad-models/build.rs"
---8<-- "crates/henad-models/build.rs:shader_build"
+``` rust title="build.rs"
+--8<-- "templates/model-project/build.rs"
 ```
 
+It finds every `.wgsl` file under `src` itself, so a new shader needs no edit to the build file.
 Our three shaders are already part of it, with nothing to list.
 Each one's path decides its names, so `gpu_life/step.wgsl` becomes `shader_bindings::gpu_life::step` and `GPU_LIFE_STEP`.
 The [shaders page](../../authoring/shaders.md#generated-from-the-wgsl) has the rules a path follows.
@@ -467,7 +473,7 @@ The [shaders page](../../authoring/shaders.md#generated-from-the-wgsl) has the r
 
 Unlike a CPU grid model, nothing is prepended to a GPU model's parameter list, so width and height are ours to declare:
 
-``` rust title="crates/henad-models/src/gpu_life/mod.rs"
+``` rust title="src/gpu_life/mod.rs"
 henad::params! {
     const GRID_WIDTH = u32_param("grid_width", "Grid Width", 1024, 1, 16_384);
     const GRID_HEIGHT = u32_param("grid_height", "Grid Height", 1024, 1, 16_384);
@@ -479,7 +485,7 @@ The range goes up to 16384 a side, well past the CPU model's 10000, because the 
 
 Three functions then tell the engine how big everything is:
 
-``` { .rust .annotate title="crates/henad-models/src/gpu_life/mod.rs" }
+``` { .rust .annotate title="src/gpu_life/mod.rs" }
     fn param_descriptors() -> Vec<ParamDescriptor> {
         descriptors()
     }
@@ -506,7 +512,7 @@ Three functions then tell the engine how big everything is:
 
 `words_per_row` is the one helper the layout needs:
 
-``` rust title="crates/henad-models/src/gpu_life/mod.rs"
+``` rust title="src/gpu_life/mod.rs"
 /// Words per padded row. 32 cells to a `u32`, rounded up.
 pub fn words_per_row(width: u32) -> usize {
     (width as usize).div_ceil(32)
@@ -519,19 +525,19 @@ On the CPU the engine handed `init` a grid and a generator.
 Here we build the initial buffer contents ourselves, on the CPU, and the engine uploads them once at construction.
 For now the density stays hard-coded, as it did on the CPU page:
 
-``` { .rust .annotate title="crates/henad-models/src/gpu_life/mod.rs" }
+``` { .rust .annotate title="src/gpu_life/mod.rs" }
     fn seed_buffers(width: u32, height: u32, _params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
-        let rng = seed.map_or(GRID_INIT_SEED, mix_seed); // (1)!
+        let rng = grid_init_rng(seed); // (1)!
         vec![seed_random(width, height, 0.3, rng)] // (2)!
     }
 ```
 
-1. `seed` is `Some` when a caller asks for a particular run, and `None` from the app. Without one we fall back to `GRID_INIT_SEED`, the same constant the CPU engine seeded our `init` with, so the app shows the same opening grid on both backends.
+1. `seed` is `Some` when a caller asks for a particular run, and `None` while the app's Seed field reads Default. `grid_init_rng` mixes a given seed and falls back to `GRID_INIT_SEED` without one, exactly as the CPU engine seeded our `init`, so both backends open on the same grid for the same seed.
 2. One vector per entry of `BUFFERS`, each exactly as long as `buffer_lens` said.
 
 The fill itself is the CPU `init` again, storing bits instead of bytes:
 
-``` { .rust .annotate title="crates/henad-models/src/gpu_life/mod.rs" }
+``` { .rust .annotate title="src/gpu_life/mod.rs" }
 fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u32> {
     let threshold = (density * u32::MAX as f32) as u32; // (1)!
     let stride = words_per_row(width);
@@ -558,7 +564,7 @@ We'll get real value out of that under [Testing](#testing).
 
 Three items are left: the stat series, the step's uniform and `stats` itself.
 
-``` { .rust .annotate title="crates/henad-models/src/gpu_life/mod.rs" }
+``` { .rust .annotate title="src/gpu_life/mod.rs" }
     const STATS: &'static [StatDescriptor] = &[StatDescriptor::new("Alive", PALETTE[1])]; // (1)!
 
     fn step_params_bytes(width: u32, height: u32, _params: &[ParamValue]) -> Vec<u8> { // (2)!
@@ -574,31 +580,29 @@ Three items are left: the stat series, the step's uniform and `stats` itself.
 2. The step's uniform block as raw bytes. `params` in `step.wgsl` is a `vec2<u32>`, and two `u32`s laid end to end are exactly that.
 3. `counts` holds one entry per series, read back from the reduce pass. It arrives through an asynchronous readback rather than a stall, so a reported stat is a few milliseconds stale, and reads zero until the first readback lands.
 
-The prelude holds every other name these use, and the CPU engine's default seed takes one more import, after which the file compiles:
-
-``` rust title="crates/henad-models/src/gpu_life/mod.rs"
-use henad::authoring::GRID_INIT_SEED;
-```
+The prelude holds every name these use, `grid_init_rng` included, so the file compiles.
 
 ## Running it
 
 The model compiles, but the app can only pick models from the set it was handed, so we have to register it.
-First we declare the module,
+We register it in `models()` in `src/lib.rs`, as on the [CPU page](game-of-life.md#running-it).
+That page shows the template's `src/lib.rs` whole.
+First we declare the module next to `mod life;`,
 
-``` rust title="crates/henad-models/src/lib.rs"
-pub mod gpu_life;
+``` rust title="src/lib.rs"
+mod gpu_life;
 ```
 
-then we add a line to the GPU half of `example_models()`:
+then we import the function that registers a GPU grid model, if `src/lib.rs` does not import it already,
 
-``` rust title="crates/henad-models/src/lib.rs"
-register_gpu_grid_model::<crate::gpu_life::GpuLifeModel>(),
+``` rust title="src/lib.rs"
+use henad::authoring::register_gpu_grid_model;
 ```
 
-For context, here is the block our line joins:
+and add a line to `models()`, next to the `insert` lines already there:
 
-``` rust title="crates/henad-models/src/lib.rs"
---8<-- "crates/henad-models/src/lib.rs:gpu_entries"
+``` rust title="src/lib.rs"
+    models.insert(register_gpu_grid_model::<gpu_life::GpuLifeModel>())?;
 ```
 
 The entry needs no device, and builds on whichever device the host hands it.
@@ -611,17 +615,17 @@ Make sure that `--release` is present to reach full performance.
 === "Desktop app"
 
     ``` bash
-    cargo run --release --bin henad-app
+    cargo run --release
     ```
 
-    Our model shows up as the second Game of Life (GPU) in the picker.
+    Our model shows up as Game of Life (GPU) in the picker.
     Press Build, then play, and once it runs try a 16384×16384 grid, which is 268 million cells.
     See [App tour](../app.md) for a quick overview of the UI.
 
 === "Headless"
 
     ``` bash
-    cargo run --release -p henad-cli -- gpu_life --steps 1000 --reps 3
+    cargo run --release --bin my-model-cli -- gpu_life --steps 1000 --reps 3
     ```
 
     Add `--set grid_width=8192 --set grid_height=8192` to see the model at scale, and `--global-warmup 1000` in front of `--steps`.
@@ -630,10 +634,10 @@ Make sure that `--release` is present to reach full performance.
 === "Browser"
 
     ``` bash
-    ./scripts/build_web.sh serve --release
+    scripts/build_web.sh serve --release
     ```
 
-    Then open `http://localhost:8080`.
+    Then open `http://127.0.0.1:8081`.
     The GPU models appear in the browser too, as long as it exposes WebGPU with compute support.
     See [App tour](../app.md) for a quick overview of the UI.
 
@@ -645,7 +649,7 @@ We are now good to implement the missing features: a way to change the starting 
 Let's deal with the density first.
 As on the CPU page, we hoist the hard-coded `0.3` out of the seeding and declare it as a parameter:
 
-``` rust title="crates/henad-models/src/gpu_life/mod.rs" hl_lines="4"
+``` rust title="src/gpu_life/mod.rs" hl_lines="4"
 henad::params! {
     const GRID_WIDTH = u32_param("grid_width", "Grid Width", 1024, 1, 16_384);
     const GRID_HEIGHT = u32_param("grid_height", "Grid Height", 1024, 1, 16_384);
@@ -658,10 +662,10 @@ Every parameter of a GPU model applies on reload whatever we declare, because th
 
 Then we read the value where the grid is seeded:
 
-``` rust title="crates/henad-models/src/gpu_life/mod.rs" hl_lines="1 2 4"
+``` rust title="src/gpu_life/mod.rs" hl_lines="1 2 4"
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let density = extract_f32(params, DENSITY, 0.3);
-        let rng = seed.map_or(GRID_INIT_SEED, mix_seed);
+        let rng = grid_init_rng(seed);
         vec![seed_random(width, height, density, rng)]
     }
 ```
@@ -669,10 +673,10 @@ Then we read the value where the grid is seeded:
 `f32_param` and `extract_f32` both come from the prelude, next to the two we already use.
 
 An operator sees exactly the three we declared, in the order we declared them.
-Here it is for the shipped port, which declares the same list:
+Here it is for our model:
 
-``` text title="cargo run -p henad-cli -- gpu_game_of_life --params"
-parameters for gpu_game_of_life (Game of Life (GPU)):
+``` text title="cargo run --bin my-model-cli -- gpu_life --params"
+parameters for gpu_life (Game of Life (GPU)):
   index=0 id=grid_width kind=u32 default=1024 min=1 max=16384 apply=reload label="Grid Width"
   index=1 id=grid_height kind=u32 default=1024 min=1 max=16384 apply=reload label="Grid Height"
   index=2 id=density kind=f32 default=0.3 min=0 max=1 apply=reload label="Initial Density"
@@ -690,7 +694,7 @@ To convince ourselves the shaders are right, let's write a test.
 Life draws no random numbers during a step, and we seeded the grid from the same generator as the CPU model, so the two backends should produce the same results.
 That makes the CPU model a correctness oracle for this one, and the test is just a comparison:
 
-``` { .rust .annotate title="crates/henad-models/src/gpu_life/mod.rs" }
+``` { .rust .annotate title="src/gpu_life/mod.rs" }
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -761,7 +765,11 @@ mod tests {
 3. Both models take the same parameter vector, thanks to the list we spelled out.
 4. One step per submission here, for simplicity. The real runner encodes many steps per submission, capped at 64, because one oversized submission can trip the OS GPU watchdog and silently zero every later readback.
 
-Registering the model also opted us into the registry tests, which build every GPU model on a stock baseline device and check that the capacity check agrees with what actually builds.
+Registering the model also opted us into the template's test.
+The test runs the [testing kit](../../authoring/testing.md) over every model in `models()`.
+Where a device exists, it builds every GPU model on a stock baseline device and checks that the capacity check agrees with what actually builds.
+It also checks that one submission of 64 steps reads back what 64 single steps do.
+Run both tests with `cargo test`.
 
 ## The finished files
 
@@ -794,7 +802,7 @@ Here is everything we wrote on this page, gathered into four files.
 The listings above are stored in the repository at [`examples/tutorial/src/gpu_life/`](https://github.com/micfong-z/henad/tree/master/examples/tutorial/src/gpu_life/).
 The three shaders there are copies of the shipped port's own, at [`crates/henad-models/src/gpu_game_of_life/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_game_of_life), since a shader carries no model ID and what we wrote is the same file line for line.
 
-The actual default model is at [`crates/henad-models/src/gpu_game_of_life/mod.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/gpu_game_of_life/mod.rs).
+The example model is at [`crates/henad-models/src/gpu_game_of_life/mod.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/gpu_game_of_life/mod.rs).
 It runs under its own ID, and its tests pin the adder tree and the ragged wrap.
 
 ## Next

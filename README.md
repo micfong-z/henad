@@ -42,18 +42,26 @@ Use any device with a CPU and optionally a GPU, and any OS that can build [wgpu]
 >
 > Consider running Henad natively for maximum performance.
 
-### Native
+### Installing
 
-Then, clone the repository and run:
+Install the app and the command line from crates.io, at the opt-level every Henad number is measured at:
+
+```bash
+cargo install --locked --config 'profile.release.opt-level=2' henad-app henad-cli
+```
+
+Then run the app, or a model headlessly with an id from `--list`:
+
+```bash
+henad-app
+henad-cli --list
+henad-cli boids --steps 100 --reps 3
+```
+
+### From a clone
 
 ```bash
 cargo run --release --bin henad-app
-```
-
-Alternatively, if you wish to run in headless mode, use a model id from `--list` and run:
-
-```bash
-cargo run --release --bin henad-cli -- --list
 cargo run --release --bin henad-cli -- boids --steps 100 --reps 3
 ```
 
@@ -75,9 +83,17 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
   --component rust-src,clippy --target wasm32-unknown-unknown
 ```
 
+## Your own models
+
+A project of your own starts from the template in [`templates/model-project`](templates/model-project), with its own models, app, command line, web build, tests and CI, on the crates published to crates.io.
+[Your own project](https://micfong-z.github.io/henad/guide/your-project/) fetches it, and the first-model guide adds models to it step by step.
+
+A Rust program depends on the [`henad`](crates/henad) crate, which builds, steps and sweeps models and opens the app on a run.
+[Using Henad from code](https://micfong-z.github.io/henad/guide/library/) walks through a program.
+
 ## Documentation
 
-Full documentation is at https://micfong-z.github.io/henad/, covering installation, the models that ship with the engine, and how to write your own.
+Full documentation is at https://micfong-z.github.io/henad/, covering installation, the example models, and how to write your own.
 It is built from `docs/` with [Zensical](https://zensical.org):
 
 ```bash

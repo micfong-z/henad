@@ -30,18 +30,21 @@ fn param_descriptors() -> Vec<ParamDescriptor> {
 ```
 
 Both backends then take the same vector in the same order, and moving a slider on one gives you the same simulation on the other.
-Read the engine's own three parameters back out by the names `cpu::agent_engine` gives them, and route the rest through the CPU model's `from_params`.
+Read the engine's own three parameters back out by the names `henad::authoring` gives them, `NUM_AGENTS`, `WORLD_WIDTH` and `WORLD_HEIGHT`, and route the rest through the CPU model's `from_params`.
 
 ## Seed through the CPU `init`
 
 ```rust
 fn seed_buffers(geom: &Geometry, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u8>> {
     let mut lanes = BoidLanes::alloc(geom.num_agents as usize);
-    let mut rng = seed.map_or(AGENT_INIT_SEED, mix_seed);
+    let mut rng = agent_init_rng(seed);
     BoidsModel::init(&mut lanes, geom.extent, split_params::<BoidsModel>(params).0, &mut rng);
     // ... pack the lanes into the buffer layout the shaders read
 }
 ```
+
+`agent_init_rng` starts the generator where the CPU engine starts it for the same seed, and `grid_init_rng` does the same for a grid model.
+Both sit in the authoring prelude.
 
 This call belongs in `seed_buffers` and nowhere else in a port.
 Confining it there means the initial state is imported rather than reimplemented, and the port has no room to drift from its counterpart.
@@ -117,4 +120,4 @@ For correctness, compare like with like: the same backend, the same seed, and th
 
 - [Shaders and bindings](shaders.md) covers the WGSL side.
 - [Determinism and testing](determinism.md) covers the oracles a diverging port needs.
-- [Registering a model](registering.md) describes the last step for either backend.
+- [Model sets](model-sets.md) describes the last step for either backend.

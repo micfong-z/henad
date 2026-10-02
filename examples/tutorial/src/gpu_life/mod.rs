@@ -6,7 +6,6 @@
 //! The three shaders beside this file are copies of the shipped model's own. A shader carries no
 //! id, so what the page writes is `gpu_game_of_life/*.wgsl` line for line.
 
-use henad::authoring::GRID_INIT_SEED;
 use henad::authoring::prelude::*;
 
 use crate::life::PALETTE;
@@ -57,7 +56,7 @@ impl GpuGridModel for GpuLifeModel {
 
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let density = extract_f32(params, DENSITY, 0.3);
-        let rng = seed.map_or(GRID_INIT_SEED, mix_seed);
+        let rng = grid_init_rng(seed);
         vec![seed_random(width, height, density, rng)]
     }
 

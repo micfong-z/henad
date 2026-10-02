@@ -13,6 +13,10 @@ A sweep builds a model many times over a set of parameter values, and writes eve
 A search picks its parameter values a batch at a time, from the results of the batches before.
 A project with models of its own can [host the same command line](#hosting-the-command-line) over them.
 
+!!! info "Henad 0.3"
+
+    This page describes Henad 0.3.
+
 ```text
 henad-cli [OPTIONS] [MODEL]
 ```
@@ -1060,8 +1064,15 @@ Every sweep records that build as its [`host`](#builds), and `--version` prints 
 The command name defaults to the host's package name, and `CliOptions::command_name` sets another.
 The `info` line of [`--json`](#machine-readable-output) keeps reporting Henad's own version as `engine_version`.
 
-The default `example-models` feature brings in the example models and builds the `henad-cli` binary.
-A host leaves it off, and then depends on neither:
+A host usually reaches it through the facade, with `henad`'s `cli` feature on, as the [template](../guide/your-project.md)'s command line does:
+
+```rust title="src/bin/my-model-cli.rs"
+--8<-- "templates/model-project/src/bin/my-model-cli.rs"
+```
+
+A host that depends on henad-cli itself turns off its default `example-models` feature.
+That feature brings in the example models and builds the `henad-cli` binary.
+It then depends on neither:
 
 ```toml
 [dependencies.henad-cli]

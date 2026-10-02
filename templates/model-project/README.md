@@ -29,7 +29,8 @@ A full rebrand renames these:
 - the product name passed to `AppOptions::new`.
 <!-- --8<-- [end:rename] -->
 
-The product name is the app's window title, and names the folder where the native app keeps its settings.
+The product name is the app's window title, and names the folder where the native app keeps its settings, with each space turned into a dash.
+"My Model" keeps its settings in a folder named `My-Model`.
 
 ## Running
 

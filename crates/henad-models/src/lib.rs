@@ -2,9 +2,7 @@
 //!
 //! [`example_models`] returns all ten as a [`ModelSet`], the set the app and the CLI offer.
 
-// --8<-- [start:include_shaders]
 henad_compute::include_shaders!();
-// --8<-- [end:include_shaders]
 
 pub mod ants;
 pub mod boids;

@@ -89,6 +89,15 @@ and the named region is marked in the source with a pair of comments:
 
 Those two lines are a build directive rather than a comment, and are the one exception to the
 comment rules below. Do not include by line range, which is also supported and drifts silently.
+A whole-file include strips the markers, so a page can show a file whole and in parts.
+
+The template's regions take each file's comment form, `# --8<-- [start:profile]` in TOML and
+shell and `<!-- --8<-- [start:fetch] -->` in HTML and Markdown, so a user's copy stays readable.
+Its Rust files carry no markers and are included whole. `crates/henad/examples/complete.rs` carries
+regions for `guide/library.md`, and its README copy leaves the marker lines out. Every page that
+includes template or tutorial code opens with an `!!! info "Henad 0.3"` admonition naming the
+release it describes, since the site deploys from `master` and can run ahead of crates.io. An
+unused region is deleted with its include.
 
 ## Cross-engine benchmarks
 
@@ -405,6 +414,14 @@ ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py
 Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` builds without serving)
 Preview a release's notes: `python3 scripts/changelog_section.py 0.1.0` (what the tag build puts in
 the release body; it refuses a section with no date)
+Cut a release: `docs/developing/releasing.md` holds the order (bump the version, every requirement
+and the template's three, regenerate `docs/license.html`, `cargo update --workspace`, date the
+CHANGELOG, commit and push, run the checklist on that commit, then tag), the checklist the
+maintainer copies into an issue per release (both verified packaging passes in a fresh
+`CARGO_TARGET_DIR`, `gh workflow run ci.yml --ref <branch>` for the `downstream` job, `cargo
+semver-checks` and a WGSL diff on a patch release, `cargo publish --workspace --dry-run --locked`),
+the paced publish and the stability policy. The maintainer runs every publish by hand. Never tag,
+publish or bump the version unasked.
 Regenerate the third-party licence page: `cargo about generate about.hbs -o docs/license.html`
 (needs `cargo-about`, pinned to 0.9.1 in CI; the `lint` job fails when the committed page and the
 dependency tree disagree). A crate shipping two files under one licence gets a `clarify` entry in
@@ -1243,7 +1260,9 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   adds nothing on wasm32. No feature changes a bound, a layout or a result. `examples/complete.rs`
   is the program a newcomer reads first, and `README.md`, which the crate doc includes with `app`
   and `example-models` both on, holds a copy in a `rust,no_run` fence.
-  `the_readme_program_matches_the_example` (`lib.rs`) holds the two equal byte for byte.
+  `the_readme_program_matches_the_example` (`lib.rs`) holds the two equal byte for byte, apart
+  from the example's `// --8<--` lines, which the README copy leaves out. The program prints with
+  `writeln!` to standard output and carries no lint attribute, so it copies into any crate.
   `tests/facade_paths.rs` compiles against facade paths alone, for the items the tutorial never
   names. It defines no model, needs no build script and never builds on a device, and its parts
   that need an entry compile in a module no test calls. Keep both.
@@ -1287,6 +1306,11 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   which `scripts/check_packaging.sh` checks, and `./check.sh` never builds it.
 
 ### Adding a new model
+
+A user's model lives in a project made from `templates/model-project`, and the guide's pages under
+`docs/guide/first-model/` add one there: a file or directory under `src/`, a `mod` line and an
+`insert` line in `models()` in `src/lib.rs`, and no build file, since `ShaderBuild::discover("src")`
+finds every shader. An example model of Henad's own goes into henad-models instead, as below.
 
 Pick the trait matching the topology and the backend. All five are const metadata plus pure
 functions. The engine owns allocation, buffering, chunking, RNG seeding, param storage, the views,
@@ -1353,13 +1377,18 @@ numbers the next tick would have.
 `SimState` is the runner interface, not a sixth authoring path. Implement one of the traits above
 rather than `SimState` directly.
 
-Either way, register the new model in `henad-models/src/lib.rs::example_models()` via the
+A GPU port that leaves the order of its writes to the device declares `REPLAYS_EXACTLY = false`,
+as `gpu_boids` does, and the kit then skips the checks that compare two runs of one seed. A port
+seeds itself through its CPU model's `init` from `grid_init_rng(seed)` or `agent_init_rng(seed)`.
+
+Either way, register an example model in `henad-models/src/lib.rs::example_models()` via the
 `register_*` generic for its trait, so it's type-erased into a `ModelEntry` and shows up in the UI.
 Nothing about an entry should be written by hand. Name, params, stats, actions and
 `topology_hint` are all derived from the trait. The registry tests run the testing kit over the
-set. It is the safety net that a model's declared params, topology, actions and stat series match
-what its state actually does, that its results do not depend on the thread count, and, when a
-device is available, that a GPU entry builds on a baseline device and runs a full submission.
+set, as the template's `every_model_conforms` does over a project's `models()`. It is the safety
+net that a model's declared params, topology, actions and stat series match what its state
+actually does, that its results do not depend on the thread count, and, when a device is
+available, that a GPU entry builds on a baseline device and runs a full submission.
 
 ### Performance-critical paths — read before touching
 

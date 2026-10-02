@@ -8,8 +8,12 @@ icon: material/grid
 
 In this tutorial we'll build Conway's Game of Life (Life) on the CPU from scratch, which automatically uses all available cores.
 
-Before starting, you'll need a working checkout of the repository.
-See [Installation](../installation.md) for instructions.
+!!! info "Henad 0.3"
+
+    This page describes Henad 0.3.
+
+Before starting, set up a project of your own from the template, as [Your own project](../your-project.md) describes.
+Every file on this page goes under that project's `src/`.
 
 ## What we will write
 
@@ -31,7 +35,7 @@ None of those machinery will appear in our code.
 
 ## Update rule `step_cell`
 
-Let's begin by making a file at `crates/henad-models/src/life.rs`.
+Let's begin by making a file at `src/life.rs`.
 
 Let's write down the update rule for a single cell first, since that's the most obvious part of the model.
 In Life, the rules are as follows:[^1]
@@ -43,7 +47,7 @@ In Life, the rules are as follows:[^1]
 
 A cell holds a single `u8`, so we can give the two states names and write the rule as a plain function:
 
-``` { .rust .annotate title="crates/henad-models/src/life.rs" }
+``` { .rust .annotate title="src/life.rs" }
 const DEAD: u8 = 0;
 const ALIVE: u8 = 1;
 
@@ -70,7 +74,7 @@ We just need a few more pieces to register this model for actual use.
 
 Now that the rule exists, let's actually start to implement the trait.
 
-``` rust title="crates/henad-models/src/life.rs"
+``` rust title="src/life.rs"
 use henad::authoring::prelude::*;
 
 pub struct LifeModel;
@@ -85,11 +89,11 @@ A model in Henad is just const metadata plus pure functions, and the grid data i
 This won't compile yet, because the `impl` block is still empty.
 Let's run `cargo check` and see what the compiler says is missing:
 
-``` text title="cargo check -p henad-models"
+``` text title="cargo check"
 error[E0046]: not all trait items implemented, missing: `NAME`, `ID`, `DESCRIPTION`, `PALETTE`,
               `NEIGHBORHOOD`, `STATS`, `Params`, `param_descriptors`, `from_params`, `init`,
               `step_cell`, `stats`
-  --> crates/henad-models/src/life.rs:6:1
+  --> src/life.rs:6:1
    |
  6 | impl GridModel for LifeModel {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing 12 items in implementation
@@ -104,9 +108,9 @@ We'll work down the list for the rest of this tutorial.
 
 ### Identity
 
-The `impl` starts with the `NAME`, `ID` and `DESCRIPTION` of the model, which are used in the model picker and `henad-cli --list`.
+The `impl` starts with the `NAME`, `ID` and `DESCRIPTION` of the model, which are used in the model picker and the command line's `--list`.
 
-``` { .rust .annotate title="crates/henad-models/src/life.rs" }
+``` { .rust .annotate title="src/life.rs" }
 impl GridModel for LifeModel {
     const NAME: &'static str = "Game of Life";
     const ID: &'static str = "life"; // (1)!
@@ -114,8 +118,8 @@ impl GridModel for LifeModel {
 }
 ```
 
-1. The ID is the model's handle, and you can run this model with `cargo run -p henad-cli -- [ID]`.
-   A model set holds each ID once, and the example Game of Life already has `game_of_life`, so we need a different ID while both models stay registered.
+1. The ID is the model's handle, and you can run this model with `cargo run --release --bin my-model-cli -- [ID]`.
+   The example Game of Life already has `game_of_life`. A model set holds each ID once, and our ID differs so that the guide's models can sit in one set beside the example models, as the guide's parity tests in Henad's repository run them.
 2. The description shows up next to the model in the picker, so keep it to one line saying what the model actually is.
 
 ### Colours
@@ -124,7 +128,7 @@ Next comes `PALETTE`, which the renderer indexes by the cell value itself.
 A cell holding `1` is drawn in `PALETTE[1]`, so the order of the palette entries has to match the order we gave `DEAD` and `ALIVE`.
 Each entry is four RGBA bytes.
 
-``` rust title="crates/henad-models/src/life.rs"
+``` rust title="src/life.rs"
 const PALETTE: [[u8; 4]; 2] = [
     [0x15, 0x15, 0x15, 0xFF], // Dead
     [0x00, 0xE6, 0x76, 0xFF], // Alive
@@ -134,7 +138,7 @@ const PALETTE: [[u8; 4]; 2] = [
 We placed this outside the `impl` block since later on we can `pub` and then reference it from in the [GPU implementation](gpu-game-of-life.md).
 Then we point the trait at the array.
 
-``` rust title="crates/henad-models/src/life.rs"
+``` rust title="src/life.rs"
     const PALETTE: &'static [[u8; 4]] = &PALETTE;
 ```
 
@@ -144,7 +148,7 @@ The `NEIGHBORHOOD` const decides how long the slice passed to `step_cell` is, an
 
 We will be using the Moore neighbourhood, so the slice passed to `step_cell` will always have eight entries.
 
-``` rust title="crates/henad-models/src/life.rs"
+``` rust title="src/life.rs"
     const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
 ```
 
@@ -178,7 +182,7 @@ Life doesn't need to know which neighbour is which, only how many are alive, but
 We already wrote `step_cell` at the top of the page, but the trait's version takes two more arguments.
 Let's move the function into the impl block and extend its signature:
 
-``` { .rust .annotate title="crates/henad-models/src/life.rs" }
+``` { .rust .annotate title="src/life.rs" }
     fn step_cell(cell: u8, neighbors: &[u8], _params: &(), _rng: &mut u64) -> u8 { // (1)!
         let alive_count: u8 = neighbors.iter().map(|&n| n & 1).sum();
         match (cell, alive_count) {
@@ -192,7 +196,7 @@ Let's move the function into the impl block and extend its signature:
 
 Two associated items are required, but we won't implement this in this tutorial.
 
-``` rust title="crates/henad-models/src/life.rs"
+``` rust title="src/life.rs"
     type Params = ();
 
     fn from_params(_params: &[ParamValue]) {}
@@ -209,7 +213,7 @@ Two associated items are required, but we won't implement this in this tutorial.
 
     The struct is also the home for anything the rule would otherwise recompute per cell, such as a squared radius or a reciprocal.
 
-    The default SIR model has a concrete example.
+    The example SIR model has a concrete example.
     It declares a `SirParams` struct holding its two probabilities and extracts them like this:
 
     ```rust title="crates/henad-models/src/sir.rs"
@@ -234,7 +238,7 @@ Two associated items are required, but we won't implement this in this tutorial.
 We just need to implement `init`, `stats` and `param_descriptors`, which are all straightforward.
 The first is `init`, which fills the grid before tick 0, and starting with about a third of the cells alive gives Life a reasonable opening state:
 
-``` { .rust .annotate title="crates/henad-models/src/life.rs" }
+``` { .rust .annotate title="src/life.rs" }
     fn init(grid: &mut Grid2D<u8>, _params: &[ParamValue], rng: &mut u64) {
         let threshold = (0.3 * u32::MAX as f32) as u32; // (1)!
         for cell in grid.current_mut().iter_mut() {
@@ -248,7 +252,7 @@ The first is `init`, which fills the grid before tick 0, and starting with about
 
 The [statistics](#statistics) can also wait until later in the tutorial, so for now we just return an empty list and an empty vector.
 
-``` rust title="crates/henad-models/src/life.rs"
+``` rust title="src/life.rs"
     const STATS: &'static [StatDescriptor] = &[];
 
     fn stats(_grid: &Grid2D<u8>) -> Vec<StatValue> {
@@ -265,27 +269,35 @@ The prelude already holds every name these functions use, so the file compiles.
 ## Running it
 
 The model compiles, but the app can only pick models from the set it was handed, so we have to register it.
-First we declare the module,
+The template's `src/lib.rs` builds that set in `models()`, and the app, the command line and the tests all read it.
+First we declare the module next to the template's own,
 
-``` rust title="crates/henad-models/src/lib.rs"
-pub mod life;
+``` rust title="src/lib.rs"
+mod life;
 ```
 
-then we add a line to `example_models()`, next to the entries already there:
+then we import the function that registers a grid model, if `src/lib.rs` does not import it already,
 
-``` rust title="crates/henad-models/src/lib.rs"
-register_grid_model::<crate::life::LifeModel>(),
+``` rust title="src/lib.rs"
+use henad::authoring::register_grid_model;
 ```
 
-For context, here is the list our line joins:
+and add a line to `models()`, next to the `insert` lines already there:
 
-``` rust title="crates/henad-models/src/lib.rs"
---8<-- "crates/henad-models/src/lib.rs:cpu_entries"
+``` rust title="src/lib.rs"
+    models.insert(register_grid_model::<life::LifeModel>())?;
 ```
 
-`register_grid_model` type-erases the model into a `ModelEntry`, and `example_models()` collects the entries into a `ModelSet`.
+For context, here is the template's `src/lib.rs` before our three lines join it:
+
+``` rust title="src/lib.rs"
+--8<-- "templates/model-project/src/lib.rs"
+```
+
+`register_grid_model` type-erases the model into a `ModelEntry`, and `models()` collects the entries into a `ModelSet`.
 A set refuses a second model with an ID it already holds.
 The name, description, parameters, stat series and topology are all read back off the trait, so an entry carries nothing hand-written that could go wrong.
+[Model sets](../../authoring/model-sets.md) covers the set in full.
 
 With the entry in place, we can finally run the model.
 Make sure that `--release` is present to reach full performance.
@@ -293,16 +305,16 @@ Make sure that `--release` is present to reach full performance.
 === "Desktop app"
 
     ``` bash
-    cargo run --release --bin henad-app
+    cargo run --release
     ```
 
-    Our model shows up as the second Game of Life in the picker.
+    Our model shows up as Game of Life in the picker, beside the template's Vote models.
     See [App tour](../app.md) for a quick overview of the UI.
 
 === "Headless"
 
     ``` bash
-    cargo run --release -p henad-cli -- life --steps 500 --reps 3
+    cargo run --release --bin my-model-cli -- life --steps 500 --reps 3
     ```
 
     This runs with no rendering, no sim thread and no pacing, so the reported number measures nothing but `step()`.
@@ -311,10 +323,10 @@ Make sure that `--release` is present to reach full performance.
 === "Browser"
 
     ``` bash
-    ./scripts/build_web.sh serve --release
+    scripts/build_web.sh serve --release
     ```
 
-    Then open `http://localhost:8080`.
+    Then open `http://127.0.0.1:8081`.
     See [App tour](../app.md) for a quick overview of the UI.
 
 You should see gliders crawling across the viewport.
@@ -325,7 +337,7 @@ We are now good to implement the missing features: a way to change the starting 
 Let's deal with the density first.
 To make it adjustable, we hoist the hard-coded `0.3` out of `init` and declare it as a parameter:
 
-``` rust title="crates/henad-models/src/life.rs"
+``` rust title="src/life.rs"
 henad::params! {
     const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)).on_reload();
 }
@@ -341,7 +353,7 @@ This will affect its appearance in the UI.
 
 Next we forward the descriptors and read the value in `init`:
 
-``` rust title="crates/henad-models/src/life.rs" hl_lines="2 6"
+``` rust title="src/life.rs" hl_lines="2 6"
     fn param_descriptors() -> Vec<ParamDescriptor> {
         descriptors()
     }
@@ -359,10 +371,10 @@ Next we forward the descriptors and read the value in `init`:
 
 Grid width and height belong to every grid model, so the engine prepends them rather than making each model declare its own.
 An operator sees the composed list.
-Here it is for the default Game of Life, which declares exactly what we just wrote:
+Here it is for our model:
 
-``` text title="cargo run -p henad-cli -- game_of_life --params"
-parameters for game_of_life (Game of Life):
+``` text title="cargo run --bin my-model-cli -- life --params"
+parameters for life (Game of Life):
   index=0 id=grid_width kind=u32 default=1024 min=1 max=10000 apply=reload label="Grid Width"
   index=1 id=grid_height kind=u32 default=1024 min=1 max=10000 apply=reload label="Grid Height"
   index=2 id=density kind=f32 default=0.3 min=0 max=1 apply=reload label="Initial Density"
@@ -379,7 +391,7 @@ parameters for game_of_life (Game of Life):
 The statistics is the last missing piece.
 `STATS` declares the series once, and `stats` returns bare numbers in that same order, which keeps labels and colours in one place so that a series cannot end up mislabelled.
 
-``` rust title="crates/henad-models/src/life.rs"
+``` rust title="src/life.rs"
     const STATS: &'static [StatDescriptor] = &[StatDescriptor::new("Alive", PALETTE[1])];
 
     fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
@@ -389,7 +401,7 @@ The statistics is the last missing piece.
 
 Good news is that the engine provides us with a parallel reduction primitive `reduce_chunks`, so we can count the alive cells in parallel without writing any threading code ourselves.
 
-``` { .rust .annotate title="crates/henad-models/src/life.rs" }
+``` { .rust .annotate title="src/life.rs" }
 fn count_alive(cells: &[u8]) -> u64 {
     reduce_chunks(
         cells.len(),
@@ -415,7 +427,7 @@ To convince ourselves the rule is right, let's write a test.
 A [blinker](https://conwaylife.com/wiki/Blinker) is three cells in a row, and it rotates every tick before coming back to its original shape after two.
 That small pattern can catch a wrong neighbour order, a missing wrap and a swapped buffer all in one go.
 
-``` { .rust .annotate title="crates/henad-models/src/life.rs" }
+``` { .rust .annotate title="src/life.rs" }
 #[test]
 fn a_blinker_rotates_and_comes_back() {
     use henad::engine::GridModelState;
@@ -462,7 +474,10 @@ fn a_blinker_rotates_and_comes_back() {
 
 A pattern touching the edge exercises the wrap instead, and that behaviour belongs in a case of its own.
 
-Registering the model also opted us into the registry tests, which check that a model's declared parameters, topology and stat series match what its state actually produces.
+Registering the model also opted us into the template's test.
+The test runs the [testing kit](../../authoring/testing.md) over every model in `models()`.
+It checks that a model's declared parameters, topology and stat series match what its state actually produces, and that its results do not depend on the thread count.
+Run both tests with `cargo test`.
 
 ## The finished file
 
@@ -476,7 +491,7 @@ Here is everything we wrote on this page, gathered into one file.
 
 The listing above is stored in the repository at [`examples/tutorial/src/life.rs`](https://github.com/micfong-z/henad/blob/master/examples/tutorial/src/life.rs).
 
-The actual default model is at [`crates/henad-models/src/game_of_life.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/game_of_life.rs).
+The example model is at [`crates/henad-models/src/game_of_life.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/game_of_life.rs).
 It runs under its own ID, with a `pub` palette that its GPU port reuses.
 
 Notice that we only wrote **49** lines for the entire model (excluding imports and the test, and still a lot of lines only contain a single curly brace).

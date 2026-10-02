@@ -1,21 +1,29 @@
 ---
 title: Running Henad
-description: How to run Henad on your machine.
+description: How to run Henad's app, web app and command line on your machine.
 icon: material/play-outline
 ---
 
 # Running Henad
 
-Before running Henad, you need to [install Henad](installation.md) first.
-If you just want to try out Henad with the default models, you can use [the web app](https://henad.micfong.space) instead.
+Before running Henad, [install it](installation.md) or clone the repository.
+If you just want to try out Henad with the example models, you can use [the web app](https://henad.micfong.space) instead.
 
 ## Desktop app
 
-To run the desktop app, use the following command:
+With the app installed, run:
+
+``` bash
+henad-app
+```
+
+From a clone of the repository, run:
 
 ``` bash
 cargo run --release --bin henad-app
 ```
+
+In a [project of your own](your-project.md), `cargo run --release` runs the project's app over its own models.
 
 !!! warning "Release mode"
 
@@ -26,7 +34,7 @@ See [app tour](app.md) for an introduction of the UI.
 
 ## Web app
 
-To build the web app, use the following command:
+To build the web app from a clone, use the following command:
 
 ``` bash
 ./scripts/build_web.sh serve --release   # starts server at http://localhost:8080
@@ -60,8 +68,10 @@ This is mainly for benchmarking purposes, but it can also be used if you want to
 Run the following command to see the available flags:
 
 ``` bash
-cargo run --release -p henad-cli -- --help
+henad-cli --help
 ```
+
+From a clone, write `cargo run --release -p henad-cli --` in place of `henad-cli`, and in a project of your own, `cargo run --release --bin my-model-cli --`.
 
 See [the Henad CLI reference](../reference/cli.md) for more details.
 See [parameter sweeps](sweeps.md) for running a model over many parameter values and seeds at once, and [searching a model](search.md) for letting Henad pick the values.

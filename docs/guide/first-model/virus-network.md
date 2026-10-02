@@ -9,7 +9,12 @@ icon: material/graph-outline
 In this tutorial we'll build the Virus on a Network model on the CPU from scratch, and it will automatically use all available cores.
 This is classified as a **network model**, where every agent is a node and nodes are joined by edges.
 
+!!! info "Henad 0.3"
+
+    This page describes Henad 0.3.
+
 This page assumes you have worked through our [CPU Agent model](ants.md) tutorial first, since a network model keeps its nodes in lanes the same way.
+Every file on this page goes under `src/` in the project you set up from the template, as [Your own project](../your-project.md) describes.
 
 ## What is Virus on a Network?
 
@@ -66,14 +71,14 @@ flowchart LR
 These pieces, plus `act` for a button press, are the ones we need to write ourselves.
 The Henad engine handles the rest of the simulation, such as storing the graph, switching it between directed and undirected, splitting nodes across cores, handing each chunk its own random number generator, arranging the nodes on screen, and the snapshot the UI draws.
 
-Let's set up by making a file at `crates/henad-models/src/virus.rs`.
+Let's set up by making a file at `src/virus.rs`.
 
 ## Node states (lanes)
 
 A node needs to remember its state and how long ago it last ran a virus check.
 We can declare this in lane form as follows:
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 use henad::agent_lanes;
 
 agent_lanes! {
@@ -116,7 +121,7 @@ A `dual` lane also takes no initial value.
 Both of its sides start at the type's default, 0 for a `u8`.
 Our states start from that default, with 0 for susceptible:
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
 pub const SUSCEPTIBLE: u8 = 0;
 pub const INFECTED: u8 = 1;
 pub const RESISTANT: u8 = 2;
@@ -130,7 +135,7 @@ pub const PALETTE: [[u8; 4]; 3] = [
 
 Edges get a colour too, one byte per edge, and it indexes a palette of its own:
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
 pub const EDGE_OPEN: u8 = 0;
 pub const EDGE_BLOCKED: u8 = 1;
 
@@ -147,7 +152,7 @@ Edges are drawn under the nodes.
 
 This is very similar to [Implementing `AgentModel`](ants.md#implementing-agentmodel).
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
 use henad::authoring::prelude::*;
 
 pub struct VirusModel;
@@ -160,7 +165,7 @@ We'll fill in that empty `impl` over the rest of this tutorial.
 
 ### Identity and metadata
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 impl NetworkModel for VirusModel {
     const NAME: &'static str = "Virus on a Network";
     const ID: &'static str = "virus"; // (1)!
@@ -181,7 +186,7 @@ impl NetworkModel for VirusModel {
 }
 ```
 
-1. The shipped model already uses the ID `virus_network`, and a model set holds each ID once.
+1. The example model already uses the ID `virus_network`. A model set holds each ID once, and our ID differs so that the guide's models can sit in one set beside the example models, as the guide's parity tests in Henad's repository run them.
 2. The engine prepends the node count, world width and world height to the parameter list, and these two consts supply their defaults.
    `MAX_NODES` sets the upper bound, and we keep its default of ten million.
 3. The world is only used for drawing.
@@ -199,7 +204,7 @@ The prelude holds every other name that `impl` relies on, `Extent`, `Nodes`, `No
 
 The model declares eight parameters of its own:
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
 henad::params! {
     const AVERAGE_NODE_DEGREE = u32_param("average_node_degree", "Average Node Degree", 6, 1, 20).on_reload();
     const INITIAL_OUTBREAK_SIZE =
@@ -227,10 +232,10 @@ The model still reads `0.025`, and `--set virus_spread_chance=0.1` on the comman
 `bool_param` declares a bool parameter, and the Parameters tab draws it as a checkbox.
 Both of ours are live, and can be flipped while the model runs.
 
-The shipped model prints the same list, with one extra entry at index 10:
+Here is the full list for our model:
 
-``` text title="cargo run -p henad-cli -- virus_network --params" hl_lines="2 3 4"
-parameters for virus_network (Virus on a Network):
+``` text title="cargo run --bin my-model-cli -- virus --params" hl_lines="2 3 4"
+parameters for virus (Virus on a Network):
   index=0 id=num_agents kind=u32 default=10000 min=1 max=10000000 apply=reload label="Number of Nodes"
   index=1 id=world_width kind=f32 default=1000 min=1 max=10000 apply=reload label="World Width"
   index=2 id=world_height kind=f32 default=1000 min=1 max=10000 apply=reload label="World Height"
@@ -241,24 +246,23 @@ parameters for virus_network (Virus on a Network):
   index=7 id=recovery_chance kind=f32 default=0.05 min=0 max=1 apply=live format=percent label="Recovery Chance"
   index=8 id=gain_resistance_chance kind=f32 default=0.05 min=0 max=1 apply=live format=percent label="Gain Resistance Chance"
   index=9 id=directed kind=bool default=false apply=live label="Directed"
-  index=10 id=network kind=choice default=0 options=Random|Geometric apply=reload label="Network"
-  index=11 id=keep_rewiring kind=bool default=false apply=live label="Keep Rewiring"
+  index=10 id=keep_rewiring kind=bool default=false apply=live label="Keep Rewiring"
 ```
 
 The highlighted lines are the three the engine prepends.
 The node count keeps the ID `num_agents`, the same one an agent model uses.
 
-!!! tip "What is index 10?"
+!!! tip "The example model's Network parameter"
 
-    The shipped model declares one more parameter than ours, a `choice_param` named Network.
+    The example model declares one more parameter than ours, a `choice_param` named Network.
     It picks between the random graph we write below and a random geometric graph.
     The geometric graph joins every pair of nodes closer than some distance.
     The geometric generator lives in [`crates/henad-models/src/virus_network/wiring.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/virus_network/wiring.rs).
-    Our list has no Network entry, and ends with Keep Rewiring at index 10.
+    Its list holds Network at index 10, and Keep Rewiring moves to index 11.
 
 #### Hot parameters
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
 pub struct VirusParams {
     spread_chance: f32,
     check_frequency: u32,
@@ -291,7 +295,7 @@ Nothing in `VirusParams` depends on the size of the world.
 
 One more function reads the hot parameters:
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
     fn directed(params: &VirusParams) -> bool {
         params.directed
     }
@@ -315,7 +319,7 @@ It receives a `Nodes` instead of the lanes alone.
 A `Nodes` bundles mutable access to the lanes, the graph and the aux.
 The graph starts out with every node and no edges.
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 /// Fraction of the world that nodes are placed in. The rest is a margin along the borders.
 const PLACED: f32 = 0.95;
 
@@ -360,7 +364,7 @@ Both draws come from the prelude.
 Rule 1 joins random pairs of nodes.
 We need two small helpers first:
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 /// Draws two distinct nodes uniformly at random.
 fn random_pair(n: u32, rng: &mut u64) -> (u32, u32) {
     let a = next_index(rng, n);
@@ -383,7 +387,7 @@ fn joined(graph: &Network, a: u32, b: u32) -> bool {
 
 Then the generator itself:
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 /// Joins random pairs of nodes until the average degree reaches `degree`.
 fn random_graph(graph: &mut Network, degree: u32, rng: &mut u64) {
     let n = graph.slot_count() as u64; // (1)!
@@ -418,7 +422,7 @@ We could pick nodes at random and draw again on a repeat, but that slows down ba
 Most draws then land on a node that is already infected.
 Floyd's sampling picks `count` distinct nodes with exactly `count` draws:
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 /// Infects `count` distinct nodes, like NetLogo's `n-of`.
 fn infect_distinct(state: &mut [u8], count: u32, rng: &mut u64) {
     let n = state.len() as u32;
@@ -441,7 +445,7 @@ The state lane doubles as the record of which nodes are already picked.
 The node pass takes the role `step_cell` played on the grid page.
 One node decides its own next state and timer, and writes nothing else.
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 #[inline]
 fn step_node(
     i: usize,
@@ -503,7 +507,7 @@ Either way, every infected neighbour gives a susceptible node one independent ch
 
 As with the ants, the `run_pass` method generated by `agent_lanes!` handles the chunking and the seeding.
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
     fn run_node_pass(lanes: &mut VirusLanes, ctx: &NodeCtx<'_, Self>, seed: u64, tick: u64) {
         let (graph, params) = (ctx.graph, ctx.params); // (1)!
         lanes.run_pass(Self::CHUNK, seed, tick, |i, k, read, out, rng| {
@@ -527,7 +531,7 @@ Edge colours only matter when something draws them.
 
 First, the rule for a single edge:
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
 /// Returns the colour of an edge between nodes in states `a` and `b`.
 fn edge_color(a: u8, b: u8) -> u8 {
     if a == RESISTANT || b == RESISTANT {
@@ -540,7 +544,7 @@ fn edge_color(a: u8, b: u8) -> u8 {
 
 Then a first version of `prepare_view` that walks every edge:
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
     fn prepare_view(nodes: &mut Nodes<'_, Self>, _tick: u64) {
         let state = &nodes.lanes.state; // (1)!
         nodes.graph.update_colors(|src, dst, color| { // (2)!
@@ -569,7 +573,7 @@ This works, but it walks the edges on a single core.
 At the default degree of 6, the edge list holds three edges for every node.
 Let's split it into chunks instead, the way Life counted its cells:
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 /// Number of edges per chunk of the recolour pass.
 const EDGE_CHUNK: usize = 8192;
 
@@ -605,7 +609,7 @@ fn recolor(src: &[u32], dst: &[u32], color: &mut [u8], state: &[u8]) -> bool {
 
 `prepare_view` then shrinks to a single call:
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
     fn prepare_view(nodes: &mut Nodes<'_, Self>, _tick: u64) {
         let state = &nodes.lanes.state;
         nodes
@@ -614,7 +618,7 @@ fn recolor(src: &[u32], dst: &[u32], color: &mut [u8], state: &[u8]) -> bool {
     }
 ```
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
 use henad::for_each_chunk_mut;
 ```
 
@@ -624,7 +628,7 @@ use henad::for_each_chunk_mut;
 
 We report how many nodes are in each state.
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
     fn stats(lanes: &VirusLanes, _graph: &Network, (): &()) -> Vec<StatValue> { // (1)!
         count_states(&lanes.state)
             .into_iter()
@@ -638,7 +642,7 @@ We report how many nodes are in each state.
 
 The count is a parallel reduction, like the one in Life:
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 /// Returns the numbers of susceptible, infected and resistant nodes.
 fn count_states(state: &[u8]) -> [u64; 3] {
     reduce_chunks(
@@ -669,7 +673,7 @@ It picks an edge at random and moves it to a random pair of nodes that are not j
 
 This follows `rewire-a-link` from NetLogo's [Diffusion on a Directed Network](https://ccl.northwestern.edu/netlogo/models/DiffusiononaDirectedNetwork) model, except that any pair that is not joined can receive the edge.
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 /// Number of draws a rewire makes before giving up.
 const REWIRE_TRIES: u32 = 64;
 
@@ -702,18 +706,18 @@ The edge count stays the same, and so does the average degree.
 An action is a one-off change to the state that the user triggers between two ticks.
 Declaring one works much like declaring parameters:
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 henad::actions! {
     const REWIRE = ActionDescriptor::new("rewire", "Rewire a link"); // (1)!
 }
 ```
 
-1. `henad-cli --act` matches on the ID, and the label goes on the button.
+1. The command line's `--act` matches on the ID, and the label goes on the button.
 
 `actions!` gives each entry a `const` holding its index, and collects the descriptors into `ACTION_SPECS`.
 The impl points `ACTIONS` at that list and runs the rewire when the button is pressed:
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
     const ACTIONS: &'static [ActionDescriptor] = ACTION_SPECS;
 
     #[expect(clippy::single_match, reason = "for future multi-action extendability")] // (1)!
@@ -742,7 +746,7 @@ The button stays disabled until the model is built.
 
 The Keep Rewiring parameter runs the same rewire once per tick, in the global pass:
 
-``` rust title="crates/henad-models/src/virus.rs"
+``` rust title="src/virus.rs"
     fn run_global_pass(nodes: &mut Nodes<'_, Self>, params: &VirusParams, _extent: Extent, rng: &mut u64, _tick: u64) {
         if params.keep_rewiring {
             rewire(nodes.graph, &nodes.lanes.state, rng);
@@ -755,30 +759,39 @@ The global pass sees the states the last tick left behind, and draws from a rand
 ## Running it
 
 That finishes the model.
-Declare the module and register it, and then we can run it.
+Register it in `src/lib.rs` as on the [Life page](game-of-life.md#running-it), and then we can run it.
+We declare the module,
 
-``` rust title="crates/henad-models/src/lib.rs"
-pub mod virus;
+``` rust title="src/lib.rs"
+mod virus;
 ```
 
-``` rust title="crates/henad-models/src/lib.rs"
-register_network_model::<crate::virus::VirusModel>(),
+import the function that registers a network model,
+
+``` rust title="src/lib.rs"
+use henad::authoring::register_network_model;
+```
+
+and add a line to `models()`:
+
+``` rust title="src/lib.rs"
+    models.insert(register_network_model::<virus::VirusModel>())?;
 ```
 
 === "Desktop app"
 
     ``` bash
-    cargo run --release --bin henad-app
+    cargo run --release
     ```
 
-    Pick the second Virus on a Network, press Build, and set it playing.
+    Pick Virus on a Network, press Build, and set it playing.
     The three infected nodes turn a good part of the graph red, and the red then fades as more and more nodes turn grey.
     See [App tour](../app.md) for a quick overview of the UI.
 
 === "Headless"
 
     ``` bash
-    cargo run --release -p henad-cli -- virus --steps 1000 --reps 3
+    cargo run --release --bin my-model-cli -- virus --steps 1000 --reps 3
     ```
 
     A timed run never publishes a snapshot, and the timing leaves out `prepare_view` and the layout.
@@ -786,16 +799,16 @@ register_network_model::<crate::virus::VirusModel>(),
     To press Rewire a link part way through a run, name the action and the tick:
 
     ``` bash
-    cargo run --release -p henad-cli -- virus --steps 1000 --act rewire@500
+    cargo run --release --bin my-model-cli -- virus --steps 1000 --act rewire@500
     ```
 
 === "Browser"
 
     ``` bash
-    ./scripts/build_web.sh serve --release
+    scripts/build_web.sh serve --release
     ```
 
-    Then open `http://localhost:8080`.
+    Then open `http://127.0.0.1:8081`.
     See [App tour](../app.md) for a quick overview of the UI.
 
 ### Layout
@@ -815,7 +828,7 @@ A virus is random, but a spread chance of 1 and a recovery chance of 0 take the 
 The virus then moves exactly one edge per tick.
 A path of five nodes, with the outbreak at one end and a resistant node in the middle, checks rules 2 and 4 in one go.
 
-``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
+``` { .rust .annotate title="src/virus.rs" }
 #[test]
 fn the_virus_walks_a_path_and_stops_at_a_resistant_node() {
     use henad::engine::NetworkModelState;
@@ -881,8 +894,10 @@ fn the_virus_walks_a_path_and_stops_at_a_resistant_node() {
    `Network::new(5, false)` holds five nodes and no edges.
 4. The test calls `prepare_view` itself, the way a publish would, before it reads the colours.
 
-Registering the model also opted us into the registry tests.
-They check that its declared parameters, topology, stat series and actions match what its state actually does.
+Registering the model also opted us into the template's test.
+The test runs the [testing kit](../../authoring/testing.md) over every model in `models()`.
+It checks that the model's declared parameters, topology, stat series and actions match what its state actually does, and that its results do not depend on the thread count.
+Run both tests with `cargo test`.
 
 ## The finished file
 
@@ -896,7 +911,7 @@ Here is everything we wrote on this page, gathered into one file.
 
 The listing above is stored in the repository at [`examples/tutorial/src/virus.rs`](https://github.com/micfong-z/henad/blob/master/examples/tutorial/src/virus.rs).
 
-The actual default model is at [`crates/henad-models/src/virus_network/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/virus_network).
+The example model is at [`crates/henad-models/src/virus_network/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/virus_network).
 It splits the same code across four files, and adds the geometric generator.
 
 ## Next
@@ -904,6 +919,6 @@ It splits the same code across four files, and adds the geometric generator.
 - [Writing a GPU grid model](gpu-game-of-life.md) and [writing a GPU agent model](gpu-ants.md) take the grid and agent models onto the GPU.
   Henad has no GPU trait for network models.
 - [Network models](../../authoring/network-models.md) covers the `NetworkModel` trait from the reference side.
-- The shipped Team Assembly model, in [`crates/henad-models/src/team_assembly/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/team_assembly), is a second network model, one that spawns and retires nodes as it runs.
+- The example Team Assembly model, in [`crates/henad-models/src/team_assembly/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/team_assembly), is a second network model, one that spawns and retires nodes as it runs.
 
 [^1]: Stonedahl, F.; Wilensky, U. (2008). _[NetLogo Virus on a Network model](https://ccl.northwestern.edu/netlogo/models/VirusonaNetwork)_. Center for Connected Learning and Computer-Based Modeling, Northwestern University, Evanston, IL.

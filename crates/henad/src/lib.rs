@@ -276,12 +276,21 @@ mod tests {
         lines.take_while(|line| line.trim_end() != "```").collect()
     }
 
+    /// Returns the example without the snippet markers that the guide includes its regions by.
+    fn example_program(example: &str) -> String {
+        example
+            .split_inclusive('\n')
+            .filter(|line| !line.trim_start().starts_with("// --8<--"))
+            .collect()
+    }
+
     #[test]
     fn the_readme_program_matches_the_example() {
         let readme = readme_program(include_str!("../README.md"));
         assert!(
-            readme == include_str!("../examples/complete.rs"),
-            "README.md's program differs from examples/complete.rs, and the two are held equal byte for byte"
+            readme == example_program(include_str!("../examples/complete.rs")),
+            "README.md's program differs from examples/complete.rs, and the two are held equal byte for byte, \
+             apart from the example's snippet markers"
         );
     }
 }

@@ -43,11 +43,19 @@ Pick the method by the question:
 
 Let's find the SIR epidemic that peaks latest.
 The infection rate, the recovery rate, the share of cells infected at the start and the tick of a second outbreak all move the peak, and they act on each other.
-Henad ships a spec that searches all four with a genetic algorithm:
+Here is a spec that searches all four with a genetic algorithm.
+Henad's repository keeps it at `crates/henad-explore/specs/sir_search_genetic.toml`.
+
+??? example "`sir_search_genetic.toml`"
+
+    ``` toml
+    --8<-- "crates/henad-explore/specs/sir_search_genetic.toml"
+    ```
+
+Save it as `sir_search_genetic.toml` and run it:
 
 ``` bash
-cargo run --release -p henad-cli -- \
-  --spec crates/henad-explore/specs/sir_search_genetic.toml --out sir-genetic
+cargo run --release -p henad-cli -- --spec sir_search_genetic.toml --out sir-genetic
 ```
 
 The search prints its plan before the first run:
@@ -84,7 +92,7 @@ It has eight runs where the spec asks for four, for the reason given under [nois
 
 We will go through the spec a part at a time.
 
-``` toml title="crates/henad-explore/specs/sir_search_genetic.toml"
+``` toml title="sir_search_genetic.toml"
 --8<-- "crates/henad-explore/specs/sir_search_genetic.toml:setup"
 ```
 
@@ -292,16 +300,24 @@ Pattern Space Exploration (PSE), `algorithm = "pse"`, looks for variety.
 It covers two outputs with a grid of cells, and tries to land candidates in as many cells as it can.
 The filled cells map the pairs of the two outputs the model can produce, each with a config that produces it.
 
-Henad ships a PSE of SIR over the peak and the tick of the peak:
+Here is a PSE of SIR over the peak and the tick of the peak.
+Henad's repository keeps it at `crates/henad-explore/specs/sir_search_pse.toml`.
+
+??? example "`sir_search_pse.toml`"
+
+    ``` toml
+    --8<-- "crates/henad-explore/specs/sir_search_pse.toml"
+    ```
+
+Save it as `sir_search_pse.toml` and run it:
 
 ``` bash
-cargo run --release -p henad-cli -- \
-  --spec crates/henad-explore/specs/sir_search_pse.toml --out sir-pse
+cargo run --release -p henad-cli -- --spec sir_search_pse.toml --out sir-pse
 ```
 
 Above its `[search]` table, the spec reads like the genetic one, with 400 steps, two replicates and no action.
 
-``` toml title="crates/henad-explore/specs/sir_search_pse.toml"
+``` toml title="sir_search_pse.toml"
 --8<-- "crates/henad-explore/specs/sir_search_pse.toml:search"
 ```
 
@@ -452,8 +468,7 @@ The latest peaks come from infection rates near the bottom of the range.
 A search stopped part way resumes with `--resume`, as a sweep does:
 
 ``` bash
-cargo run --release -p henad-cli -- \
-  --spec crates/henad-explore/specs/sir_search_genetic.toml --out sir-genetic --resume
+cargo run --release --locked -p henad-cli -- --spec sir_search_genetic.toml --out sir-genetic --resume
 ```
 
 A method picks its candidates from its seed and from the results it is told, and a resume replays it from the start.

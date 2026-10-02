@@ -1,12 +1,13 @@
 ---
 title: Example models
-description: The ten example models that ship with Henad, and every parameter each one declares.
+description: The ten example models, and every parameter each one declares.
 icon: material/cube-outline
 ---
 
 # Example models
 
-Ten example models ship with Henad, in the set `henad::models::example_models()` returns.
+Henad has ten example models, in the set `henad::models::example_models()` returns, and its own app and command line offer them.
+A project of your own offers its own models, and can [add some or all of these](../authoring/model-sets.md#the-example-models).
 Six of them run on the CPU, and four of those six have a GPU port running the same simulation entirely in compute shaders.
 The two network models run on the CPU only.
 

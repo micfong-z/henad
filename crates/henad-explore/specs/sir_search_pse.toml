@@ -1,7 +1,7 @@
 # A Pattern Space Exploration (PSE) of the SIR model, looking for as many distinct pairs of epidemic peak and peak
 # tick as the infection and recovery rates can give.
 # It asks for 1200 evaluations of 2 replicates each, 2400 runs in all.
-# Run it with `henad-cli --spec crates/henad-explore/specs/sir_search_pse.toml --out sir-pse`.
+# Run it with `henad-cli --spec sir_search_pse.toml --out sir-pse`.
 
 model = "sir"
 

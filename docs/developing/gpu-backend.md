@@ -24,7 +24,9 @@ gpu/
 
 Nothing in this directory creates a `wgpu::Device`.
 The device is injected through `GpuContext`, cloned from whoever owns acquisition, which keeps the crate free of any dependency on egui or eframe.
-Models still live in `henad-models`, where they contribute shaders, seed data and metadata, and every wgpu object is built here.
+Models live in the crate that registers them, henad-models for the example models and a project's own crate for the rest.
+They contribute shaders, seed data and metadata, and every wgpu object is built here.
+A GPU entry builds on whatever device the host hands it, and the host learns from `ModelSet::gpu_needs` what to ask for before it has one.
 
 ## The engines
 

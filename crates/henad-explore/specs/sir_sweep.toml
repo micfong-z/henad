@@ -1,6 +1,6 @@
 # An SIR sweep of 88 configs, 45 from a factorial block, 3 from a zip block and 40 from a Latin hypercube block.
 # Each config runs 8 replicates, 704 runs in all.
-# Run it with `henad-cli --spec crates/henad-explore/specs/sir_sweep.toml --out sir-sweep`.
+# Run it with `henad-cli --spec sir_sweep.toml --out sir-sweep`.
 
 # --8<-- [start:model]
 model = "sir"

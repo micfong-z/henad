@@ -15,6 +15,9 @@ When the configs worth running depend on the results, a [search](search.md) pick
 Before we start, make sure you can [run the CLI](running.md#cli).
 Every example here uses SIR, but any model that `--list` prints works the same way.
 
+The commands below run the CLI from a clone of Henad's repository, as `cargo run --release -p henad-cli --`.
+With the CLI installed, write `henad-cli` in place of that, and in a [project of your own](your-project.md), `cargo run --release --bin my-model-cli --`.
+
 ## A first sweep
 
 Let's see how the size of an SIR epidemic depends on the infection rate:
@@ -169,11 +172,19 @@ Open the directory in the [Results tab](app.md#opening-results), select the run,
 
 A sweep with many settings is easier to keep in a file.
 A spec file is TOML, and holds every setting that changes a result.
-Henad ships one for SIR:
+Here is one for SIR.
+Henad's repository keeps it at `crates/henad-explore/specs/sir_sweep.toml`.
+
+??? example "`sir_sweep.toml`"
+
+    ``` toml
+    --8<-- "crates/henad-explore/specs/sir_sweep.toml"
+    ```
+
+Save it as `sir_sweep.toml` and run it:
 
 ``` bash
-cargo run --release -p henad-cli -- \
-  --spec crates/henad-explore/specs/sir_sweep.toml --out sir-spec
+cargo run --release -p henad-cli -- --spec sir_sweep.toml --out sir-spec
 ```
 
 The spec names its own model, and the command line leaves it out.
@@ -181,7 +192,7 @@ The spec names its own model, and the command line leaves it out.
 
 We will go through the file one table at a time.
 
-``` toml title="crates/henad-explore/specs/sir_sweep.toml"
+``` toml title="sir_sweep.toml"
 --8<-- "crates/henad-explore/specs/sir_sweep.toml:model"
 ```
 
@@ -396,7 +407,7 @@ The refusal goes in the run's `note` column, and the run stays `ok`.
 A design can come from somewhere else: another tool's sampler, a table of cases from a paper, or the points of an earlier sweep worth a closer look.
 A design table holds one config per row:
 
-```text title="crates/henad-explore/specs/sir_design.csv"
+```text title="sir_design.csv"
 --8<-- "crates/henad-explore/specs/sir_design.csv"
 ```
 
@@ -411,13 +422,22 @@ The table is then the sweep's only block, and row `i` is config `i` of the sweep
 There an `action.NAME` column names an action `--act` adds, by its id.
 A spec file names its table in a block:
 
-``` toml title="crates/henad-explore/specs/sir_table.toml"
+``` toml title="sir_table.toml"
 --8<-- "crates/henad-explore/specs/sir_table.toml:table"
 ```
 
+Save the table as `sir_design.csv`, and the whole spec below as `sir_table.toml` beside it.
+
+??? example "`sir_table.toml`"
+
+    ``` toml
+    --8<-- "crates/henad-explore/specs/sir_table.toml"
+    ```
+
+Then run it:
+
 ``` bash
-cargo run --release -p henad-cli -- \
-  --spec crates/henad-explore/specs/sir_table.toml --out sir-table
+cargo run --release -p henad-cli -- --spec sir_table.toml --out sir-table
 ```
 
 `file` is relative to the spec file, and cannot be absolute or hold `..`.
@@ -630,8 +650,7 @@ A sweep too large for one machine can be split into shards, each run on a machin
 `--shard I/N` runs only the runs whose `run_id` leaves remainder `I` when divided by `N`, and writes them to a directory of its own:
 
 ``` bash
-cargo run --release --locked -p henad-cli -- \
-  --spec crates/henad-explore/specs/sir_sweep.toml --shard 0/4 --out shard-0
+cargo run --release --locked -p henad-cli -- --spec sir_sweep.toml --shard 0/4 --out shard-0
 ```
 
 Taking every `N`th run spreads the configs, heavy and light alike, evenly over the shards.
@@ -661,7 +680,7 @@ To add replicates, merge the shards first, then resume the merged directory.
 ### A Slurm array job
 
 On a cluster that runs [Slurm](https://slurm.schedmd.com), an array job runs one shard per task.
-Build the CLI once with `cargo build --release --locked -p henad-cli`, then submit this script with `sbatch` from the repository root:
+Build the CLI once with `cargo build --release --locked -p henad-cli`, then submit this script with `sbatch` from the repository root, with `sir_sweep.toml` saved there:
 
 ``` bash title="sweep.sbatch"
 #!/bin/bash
@@ -670,7 +689,7 @@ Build the CLI once with `cargo build --release --locked -p henad-cli`, then subm
 #SBATCH --cpus-per-task=16
 #SBATCH --time=02:00:00
 
-target/release/henad-cli --spec crates/henad-explore/specs/sir_sweep.toml \
+target/release/henad-cli --spec sir_sweep.toml \
   --shard "$SLURM_ARRAY_TASK_ID/8" --threads "$SLURM_CPUS_PER_TASK" \
   --out "sir-sweep/shard-$SLURM_ARRAY_TASK_ID" --resume
 ```

@@ -857,15 +857,17 @@ For run 6 of the [first sweep](sweeps.md#a-first-sweep) in the sweeps guide, the
 henad-cli sir --seed 16795053913516373515 --set infection_rate=0.2 --warmup 0 --steps 500 --export-stats run-6.csv
 ```
 
-Run it as `target/release/henad-cli` after a release build, or put `cargo run --release -p henad-cli --` in place of `henad-cli`.
+With the CLI installed, it runs as it is.
+From a clone, run it as `target/release/henad-cli` after a release build, or put `cargo run --release -p henad-cli --` in place of `henad-cli`.
 
 The <span class="ui" markdown>:material-play-circle-outline: Playback</span> tab names the opened run, as in **Sweep run 6: config 1, replicate 1**, or **Search run 6: candidate 1, replicate 2** for a run of a search.
 A live parameter edit or an action press adds **(modified)** to the name.
-GPU Boids is the one model whose runs do not replay, for the reason under [Seed](#seed).
+GPU Boids is the one example model whose runs do not replay, for the reason under [Seed](#seed).
+A model that declares it does not replay exactly shows a note beside <span class="ui" markdown>:material-play-box-outline: Open</span> saying so.
 
 The three buttons are disabled when this device lacks the run's model, such as a GPU model on a machine without a suitable GPU.
 They are also disabled when the model refuses the sweep's spec, for example after a parameter was removed, and the reason shows below them.
-A warning shows when the model's parameters changed after the sweep ran, and the replay might then differ.
+A warning shows when the model's parameters changed after the sweep ran, or when the build of Henad or of the model differs from every build the sweep recorded, and the replay might then differ.
 
 ### Opening results
 

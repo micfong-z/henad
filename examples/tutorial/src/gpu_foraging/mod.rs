@@ -106,7 +106,7 @@ impl GpuAgentModel for GpuForagingModel {
         let n_cells = geom.n_cells as usize;
 
         let mut lanes = AntLanes::alloc(n);
-        let mut rng_state = seed.map_or(AGENT_INIT_SEED, mix_seed);
+        let mut rng_state = agent_init_rng(seed);
         ForagingModel::init(
             &mut lanes,
             geom.extent,

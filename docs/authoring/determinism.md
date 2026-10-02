@@ -23,7 +23,7 @@ Float addition is not associative, so if any of these folded in arrival order in
 
 ## The thread-count test
 
-The testing kit's `ThreadCount` check runs this comparison on every CPU model, at a size that splits a step into 14 jobs.
+The `ThreadCount` check of the [testing kit](testing.md) runs this comparison on every CPU model, at a size that splits a step into 14 jobs.
 Both agent models carry a `results_do_not_depend_on_the_thread_count` test of their own as well, for a busier configuration than the kit's.
 If your model draws random numbers during a step, consider one for it too.
 
@@ -110,61 +110,8 @@ Team Assembly keeps them in, since its own tick places newcomers and neither tes
 
 ## The testing kit
 
-`henad::testing`, behind the facade's `testing` feature, checks a model's entry against what its state does.
-A model's tests take `henad` as a dev-dependency with that feature on, and call `assert_set_conforms` over their model set.
-It panics with every failure, and a set that passes prints which checks each model skipped.
-`check_model_set` returns the same report without asserting anything.
-The example models' test takes the report, to check each model's skipped checks as well.
-
-```rust
---8<-- "crates/henad-models/src/tests/registry.rs:kit"
-```
-
-`headless_test_device` returns a device for the request, or `None` on a machine without one, and the GPU checks are then skipped.
-With `HENAD_REQUIRE_GPU` set, a missing device fails the test instead, and so does every check a missing device would skip.
-`TestDeviceRequest::baseline()` asks for the limits a browser offers.
-A model that needs more takes `TestDeviceRequest::raised(models.gpu_needs())`, and a browser without those limits will refuse it.
-
-| Check | Pins |
-|---|---|
-| `ModelId`, `ParamIds`, `StatLabels`, `ActionIds` | The id meets the grammar, and no parameter, stat or action id is declared twice |
-| `Palette` | A declared palette has colours |
-| `Metadata` | The backend, the structure, the topology hint and the device demand agree |
-| `DefaultSetup` | The declared defaults pass `RunSetup::from_parts`, as the app's Build checks them |
-| `DefaultsFit` | A GPU model's defaults fit a stock WebGPU device, checked without building |
-| `ApplyModes` | A live parameter is accepted and a reload one is refused, exactly as declared |
-| `Views` | The factory returns the declared backend, and its grid, point or edge views match the topology hint |
-| `ParallelJobs` | Only a CPU model reports how many jobs a step splits into |
-| `Actions` | Every declared action is accepted and an index past the last is refused, on a GPU model at its declared defaults |
-| `StatCount` | `STATS.len()` matches what `stats` returns |
-| `ThreadCount` | A CPU model's stats and exported state are the same at 1 and 7 threads |
-| `SameSeed`, `SeedSensitivity` | Two runs on one seed agree, and two seeds differ in some stat or in the exported state |
-| `SamplingCadence` | A run sampled every tick ends where a run sampled every seventh tick ends |
-| `BaselineBuild` | A GPU model builds on the device exactly when the capacity check says it fits |
-| `FullSubmission` | One submission of 64 steps reads back what 64 submissions of one step do, the OS watchdog trap of the [GPU backend](../developing/gpu-backend.md) |
-| `SampledSlice` | A sampled slice of steps reads back what a snapshot does |
-
-A check that builds the model sets the grid, population and world sizes small, so a model whose defaults hold ten million agents needs no settings.
-`ThreadCount` sets the size itself, so that a step splits into 14 jobs.
-At one job a kernel that shares state between chunks agrees with itself at any thread count.
-The GPU checks build at the declared defaults, the size the app builds first.
-
-A check the model cannot meet for an honest reason takes an exemption, recorded in the model's report.
-
-```rust
---8<-- "crates/henad-explore/src/tests/kit.rs:exempt"
-```
-
-A model whose defaults need a device raised past the baseline fails `DefaultsFit`, and exempts it with its reason.
-A browser refuses to build such a model at its defaults, and the exemption records that in the model's report.
-
-A GPU model skips `ThreadCount`, since a pool width never reaches its kernels.
-A model that declares `REPLAYS_EXACTLY = false` skips `SameSeed`, `SeedSensitivity` and `SamplingCadence`.
-An exemption of a check that does not apply to the model fails that check, and the report of a set names every model the settings name and the set lacks.
-`CheckSettings::set_text` sets a parameter in every check that builds the model, as `--set` reads it.
-`check_model` returns the report instead of panicking, and its caller installs the panic hook first, through `henad::install_panic_hook`, or a kernel panic's failure names no `file:line`.
-
-See [registering a model](registering.md).
+The [testing kit](testing.md) runs the thread-count, seed and sampling comparisons on every model of a set, beside the checks of its declarations.
+A project made from the template runs it from `cargo test`.
 
 ## Checking the rule itself
 

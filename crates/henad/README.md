@@ -25,8 +25,7 @@ The program below builds an example model, runs it, reads its statistics, edits 
 // build at 3 where Henad measures at 2. A crate that registers models of its own also calls
 // `henad_build::stamp_commit()` from build.rs, with henad-build under [build-dependencies]. This one registers none.
 
-#![expect(clippy::print_stdout, reason = "the program reports on standard output")]
-
+use std::io::Write as _;
 use std::ops::ControlFlow;
 
 use henad::prelude::*;
@@ -35,32 +34,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     henad::install_panic_hook();
     let models = henad::models::example_models();
     let sir = models.get("sir").ok_or("the example set holds SIR")?;
+    let mut out = std::io::stdout();
 
-    // SIR on a 256 by 256 grid with seed 7, an outbreak at tick 100, stepped to tick 300.
+    // SIR on a 256 by 256 grid with seed 7. One cell in a thousand starts infected, an outbreak at tick 50 adds more,
+    // and an infection rate of 0.05 spreads the epidemic slowly up to tick 100.
     let mut simulation = sir
         .setup()
         .set("grid_width", 256u32)?
         .set("grid_height", 256u32)?
-        .set_text("infection_rate", "0.3")?
+        .set("initial_infected_pct", 0.001f32)?
+        .set_text("infection_rate", "0.05")?
         .with_seed(7)
-        .act_at("seed_outbreak", 100)?
+        .act_at("seed_outbreak", 50)?
         .build(None)?;
-    simulation.run_to(300)?;
+    simulation.run_to(100)?;
     let stats = simulation.stats()?;
-    println!("tick {}: {:?} infected", stats.tick(), stats.scalar("Infected"));
+    let susceptible = stats.scalar("Susceptible");
+    writeln!(out, "tick {}: {susceptible:?} susceptible", stats.tick())?;
 
-    // A live edit and a second outbreak, then up to 200 more ticks sampled every 50, stopping once nobody is infected.
-    simulation.set_param("infection_rate", 0.1f32)?;
+    // A more infectious variant arrives. A live edit raises the infection rate and a second outbreak seeds it. Up to
+    // 400 more ticks follow, sampled every 20, stopping once nobody is infected.
+    simulation.set_param("infection_rate", 0.3f32)?;
     simulation.act("seed_outbreak")?;
-    let flow = simulation.run_sampled(500, 50, |sample| {
-        println!("tick {}: {:?} infected", sample.tick(), sample.scalar("Infected"));
+    let mut samples = Vec::new();
+    let flow = simulation.run_sampled(500, 20, |sample| {
+        samples.push((sample.tick(), sample.scalar("Susceptible"), sample.scalar("Infected")));
         match sample.scalar("Infected") {
             Some(infected) if infected < 1.0 => ControlFlow::Break(sample.tick()),
             _ => ControlFlow::Continue(()),
         }
     })?;
+    for (tick, susceptible, infected) in samples {
+        writeln!(out, "tick {tick}: {susceptible:?} susceptible, {infected:?} infected")?;
+    }
     if let ControlFlow::Break(tick) = flow {
-        println!("the outbreak ended by tick {tick}");
+        writeln!(out, "the epidemic ended by tick {tick}")?;
     }
 
     // Three infection rates, four replicates each, written to a folder.
@@ -90,15 +98,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &options,
         &mut NoProgress,
     )?;
-    println!("{} of {} runs ok", record.report.counts.ok, record.report.counts.rows);
+    let counts = &record.report.counts;
+    writeln!(out, "{} of {} runs ok", counts.ok, counts.rows)?;
 
-    // Read the folder back, rebuild run 5 headlessly, then open the app on the same run.
+    // Read the folder back and rebuild run 5 headlessly.
     let results = ResultSet::open_dir(&folder, 64 << 20)?;
     let replay = results.replay(sir.schema(), 5)?;
     let mut rebuilt = RunSetup::from_replay(sir, &replay)?.build(None)?;
     rebuilt.run_to(replay.ticks)?;
-    println!("run 5 ends with {:?} infected", rebuilt.stats()?.scalar("Infected"));
+    let infected = rebuilt.stats()?.scalar("Infected");
+    writeln!(out, "run 5 ends with {infected:?} infected")?;
 
+    // Then open the app on the same run.
     let options = AppOptions::new(models, "SIR study", henad::build_info!()).opening(AppOpening::Run {
         replay,
         open_at: OpenAt::Start,

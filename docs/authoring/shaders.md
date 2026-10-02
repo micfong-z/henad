@@ -9,23 +9,27 @@ icon: material/code-braces
 Both GPU traits hand the engine WGSL as a `&'static str`, because `henad-core` depends on nothing, not even wgpu, and therefore cannot name wgpu types.
 Most of what surrounds that string is generated at build time, and this page covers the generated part.
 
+!!! info "Henad 0.3"
+
+    This page describes Henad 0.3.
+
 ## Generated from the WGSL
 
-A crate's `build.rs` runs henad-build over its shaders, and `include_shaders!` at the crate root brings the output in as two modules, `shader_bindings` and `binding_decls`.
-henad-build is a build dependency, of the same release as henad-compute.
-The app's build script is an example, with its shaders under `src/ui`:
+A crate's `build.rs` runs henad-build over its shaders, and `henad::include_shaders!()` at the crate root brings the output in as two modules, `shader_bindings` and `binding_decls`.
+henad-build is a build dependency, of the same release as `henad`.
+A project made from the [template](../guide/your-project.md) has both already:
 
-``` rust title="crates/henad-app/build.rs"
---8<-- "crates/henad-app/build.rs:build_script"
+``` rust title="build.rs"
+--8<-- "templates/model-project/build.rs"
 ```
 
 `stamp_commit` records the commit the crate was built from, whether its sources differed from that commit, and a hash of its sources, and a sweep's manifest records them beside each model the crate registers.
-A crate without shaders keeps its `build.rs` for the stamp, and drops the `ShaderBuild` line.
+A crate without shaders keeps its `build.rs` for the stamp, and drops the `ShaderBuild` line and `henad::include_shaders!()`.
 A file a model reads at compile time, through `include_bytes!` or `include_str!`, belongs under `src`, where the stamp sees it.
 A model crate keeps its shaders under `src` and passes `"src"` to `discover`.
 
 ``` rust title="src/lib.rs"
---8<-- "crates/henad-models/src/lib.rs:include_shaders"
+henad::include_shaders!();
 ```
 
 `ShaderBuild::discover` takes every `.wgsl` file under `src` without a `#define_import_path` line as an entry point, and a new shader joins the bindings the next time the crate builds.
@@ -48,6 +52,10 @@ The shader source a model declares comes from the same place, as `SHADER_STRING`
 
 An imported constant or type reaches the generated bindings exactly when an entry point references it, since naga keeps only what an entry point references.
 A type or a constant no shader in the crate uses has no Rust twin.
+
+The generated bindings define a module named `henad` of their own, for the shared modules below.
+Code inside `include_shaders!` reaches Henad through `$crate`, and a hand-written module that includes the generated files itself names Henad as `::henad`.
+A bare `use henad::...` there is ambiguous between the two, and fails with E0659.
 
 !!! note "Deny unsafe code, never forbid it"
 
@@ -128,7 +136,7 @@ A grid model's shaders dispatch 2D directly and declare a `@workgroup_size(N, N)
 A shader is composed from its imports and re-emitted by naga, so the text the engine compiles is not the file as you wrote it, and a WGSL error names the composed text rather than your source.
 
 ```bash
-HENAD_DUMP_WGSL=/tmp/wgsl cargo run --release -p henad-app
+HENAD_DUMP_WGSL=/tmp/wgsl cargo run --release
 ```
 
 With that variable set, every shader the engine compiles lands in `<dir>/<label>.wgsl`, which lets you read a validation error against the composed source as ordinary text.

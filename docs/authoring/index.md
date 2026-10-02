@@ -74,4 +74,4 @@ If you have not written a model before, the three CPU tutorials each build one e
 
 ## Then
 
-Once your model runs, [register it](registering.md) so that it appears in the app and the CLI, check it against the [determinism contract](determinism.md), and read [writing fast models](performance.md) before you scale it up.
+Once your model runs, [register it](model-sets.md) so that it appears in the app and the CLI, [test it](testing.md), check it against the [determinism contract](determinism.md), and read [writing fast models](performance.md) before you scale it up.
