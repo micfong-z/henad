@@ -1,0 +1,24 @@
+# A factorial over the initial density, 5 configs of 4 replicates each, 20 runs in all.
+# Run it with `cargo run --release --bin my-model-cli -- --spec specs/vote.toml --out runs/vote`.
+
+model = "vote"
+
+[set]
+grid_width = 256
+grid_height = 256
+
+[run]
+steps = 200
+replicates = 4
+
+[measure]
+stats_every = 5
+
+[seeds]
+root = 1
+
+[[block]]
+design = "factorial"
+factors = [
+  { param = "density", values = [0.45, 0.48, 0.5, 0.52, 0.55] },
+]

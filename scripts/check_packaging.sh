@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks that every crate packages on its own. The workspace versions agree, each crate carries the
-# licence texts, and no source or build script reads a file outside its crate. Only a verified
-# `cargo package` builds a crate from its tarball, and the release checklist runs it by hand.
+# licence texts, no source or build script reads a file outside its crate, and the template's release
+# profile equals the root's. Only a verified `cargo package` builds a crate from its tarball, and the
+# release checklist runs it by hand.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -63,6 +64,15 @@ for source in sorted(Path("crates/henad-build/src/stamp").rglob("*.rs")):
     for number, line in enumerate(source.read_text().splitlines(), 1):
         if '"../' in line or '".."' in line:
             errors.append(f"{source}:{number}: a path that climbs out of the stamped crate")
+
+# The template builds its models at the root's release opt-level, so a downstream model runs as fast as an example one.
+template = tomllib.loads(Path("templates/model-project/Cargo.toml").read_text())
+root_release = root.get("profile", {}).get("release")
+template_release = template.get("profile", {}).get("release")
+if template_release != root_release:
+    errors.append(
+        f"templates/model-project/Cargo.toml: `[profile.release]` is {template_release}, and needs to equal the root's {root_release}"
+    )
 
 for error in errors:
     print(error, file=sys.stderr)

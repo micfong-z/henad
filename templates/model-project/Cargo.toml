@@ -1,0 +1,54 @@
+[package]
+name = "my-model"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+default-run = "my-model"
+
+[features]
+default = ["app", "cli"]
+app = ["henad/app"]
+cli = ["henad/cli"]
+
+[[bin]]
+name = "my-model"
+path = "src/main.rs"
+required-features = ["app"]
+
+[[bin]]
+name = "my-model-cli"
+path = "src/bin/my-model-cli.rs"
+required-features = ["cli"]
+
+[dependencies]
+henad = "0.2"
+log = "0.4"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+
+[build-dependencies]
+henad-build = "0.2"
+
+[dev-dependencies]
+henad = { version = "0.2", features = ["testing"] }
+
+[lints.rust]
+# The generated shader bindings lift this lint for their own module. `forbid` would refuse that.
+unsafe_code = "deny"
+
+# --8<-- [start:profile]
+# The kernels expand in this crate, through `agent_lanes!` and the engine generics, at this crate's opt-level.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 2
+# --8<-- [end:profile]

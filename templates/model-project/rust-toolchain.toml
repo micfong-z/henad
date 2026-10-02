@@ -1,0 +1,6 @@
+# The stable toolchain of native builds, as Henad pins it. `scripts/build_web.sh` alone selects the nightly in
+# `scripts/web-toolchain`.
+[toolchain]
+channel = "1.97"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]

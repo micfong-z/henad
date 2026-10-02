@@ -104,7 +104,8 @@ Two rules that are easy to break. A port is written the way a competent user of 
 write it, using only its documented API, since the engine is being measured as its users meet it.
 And no engine's stock flocking or foraging example is used: that would compare two simulations, not
 two engines. `benchmarks/krabmaga` is outside the cargo workspace (`exclude` in the root
-`Cargo.toml`), so `./check.sh` never builds it.
+`Cargo.toml`), so `./check.sh` never builds it. `templates/model-project` sits in the same
+`exclude`.
 
 ## Writing style
 
@@ -344,7 +345,8 @@ cargo check -p henad --lib --target wasm32-unknown-unknown   # the facade, never
 cargo check -p henad --features example-models,testing --lib --target wasm32-unknown-unknown
 cargo test -p henad --doc --features example-models,app      # compiles the README program
 ./scripts/build_web.sh build  # builds the WASM/web target
-./scripts/check_packaging.sh  # workspace versions, licence copies, paths that climb out of a crate
+./scripts/check_packaging.sh  # workspace versions, licence copies, paths that climb out of a crate,
+                              # the template's [profile.release] held equal to the root's
 cargo deny --locked check     # advisories, licences and sources
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
@@ -357,8 +359,23 @@ installed. CI alone runs `cargo package --workspace --exclude henad-tutorial --n
 `cargo check -p henad` with no features and then with each feature alone (`features`), clippy on
 the pinned nightly for wasm32 with `RUSTFLAGS="-C target-feature=+atomics,+bulk-memory"` and a
 `CARGO_TARGET_DIR` of its own, over `-p henad-app` and over `-p henad --features app,example-models`
-(`lint`), and henad-app's wasm32 docs on the pinned nightly with the atomics flags in `RUSTFLAGS`
-and `RUSTDOCFLAGS` (`docs`).
+(`lint`), `actionlint` over `templates/model-project/.github/workflows/*.yml` (`lint`), and
+henad-app's wasm32 docs on the pinned nightly with the atomics flags in `RUSTFLAGS` and
+`RUSTDOCFLAGS` (`docs`). The `downstream` job runs on `workflow_dispatch` alone, and the release
+checklist starts it. It runs the verified packaging in two fresh target directories, copies the
+template outside the checkout, pins `henad` and `henad-build` to `=<version>`, patches every crate
+it uses to the unpacked tarballs under the verify directory's `package/`, and generates a lock.
+Then, in order: both `henad` and `henad-build` resolve with a null `source`, henad-models is
+absent, strict clippy (`-D unreachable_pub -D unused_qualifications`), `scripts/ci.sh test` under
+`HENAD_REQUIRE_GPU=1`, a second `cargo build -v` with nothing `Dirty`, `Compiling` or `Running`, a
+stable wasm32 check of the library with `--no-default-features` and `RUSTFLAGS=""`, `ci.sh
+lint-web`, `build_web.sh` refusing `RUSTFLAGS`, `ci.sh web`, a comment appended to `src/vote.rs`
+recompiling no henad crate, an unreferenced shader added under `src/probe/` compiling under
+`-D warnings`, the CLI's dry run of `specs/vote.toml`, and the CPU-only crate (`gpu_vote`, its
+lines and the `ShaderBuild` line removed) sweeping and resuming with no `build_changed` warning.
+The wasm32 steps run before any step changes the copy. To run it by hand, run each step's script
+from `ci.yml` with `RUNNER_TEMP` set to a directory outside any git work tree, and pass
+`--allow-dirty` to `cargo package` on an uncommitted tree.
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
@@ -412,7 +429,8 @@ would otherwise outrank the `RUSTFLAGS` it sets.
 ### Environment variables
 
 - `HENAD_REQUIRE_GPU=1` turns "no adapter on this machine" from a silent test skip into a failure.
-  CI sets it on all three platforms, so run the GPU tests with it before calling them green.
+  CI sets it on all three platforms, so run the GPU tests with it before calling them green. The
+  Linux runner gets lavapipe from `templates/model-project/scripts/install-lavapipe.sh`.
 - `HENAD_DUMP_WGSL=<dir>` writes every shader the engine compiles to `<dir>/<label>.wgsl`. Each
   file holds the module composed from a shader's `#import`s and re-emitted by naga. A validation
   error quotes that text, and its line numbers do not match the shader as written.
@@ -1246,6 +1264,27 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `tests/kit.rs` runs `assert_set_conforms` over `models()`. The `package` job excludes it,
   `scripts/check_packaging.sh` reads `crates/` alone, and `about.toml`'s `[private] ignore` keeps
   it off the licence page. Keep the three test files.
+- **The template** (`templates/model-project`, package `my-model`, `publish = false`): the project
+  a user fetches from a release tag and builds on the published crates, outside the workspace
+  through the root `exclude`. It depends on `henad` and `henad-build` alone, at the workspace's
+  major and minor (`"0.2"` until M11 moves both), with the app and the CLI behind its own default
+  features `app` and `cli`. `src/vote.rs` (`Vote`, a `GridModel`) and `src/gpu_vote/` (`GpuVote`,
+  its `GpuGridModel` port seeded through `Vote::init`) follow the tutorial's import shape, and
+  `models()` (`src/lib.rs`) inserts each on a line of its own. The test at the foot of `lib.rs`
+  runs `assert_set_conforms` over `models()` and names no model. `src/main.rs` and
+  `src/bin/my-model-cli.rs` are the app and the CLI over `henad::app` and `henad::cli`, under the
+  product name "My Model". `build.rs` calls `stamp_commit` and `ShaderBuild::discover("src")`,
+  and ends in `Ok(())`, so a crate without shaders deletes one line. `.cargo/config.toml` holds the
+  wasm32 rustflags, and `scripts/build_web.sh` refuses an inherited `RUSTFLAGS` or
+  `CARGO_ENCODED_RUSTFLAGS` rather than drop them. `scripts/ci.sh` runs the stages `lint`,
+  `lint-web`, `test` and `web` (all four without an argument), with `--locked` once a lock exists,
+  and `.github/workflows/ci.yml` runs them under `HENAD_REQUIRE_GPU=1` on lavapipe.
+  `scripts/install-lavapipe.sh` holds the Mesa and gfx-rs/ci-build pins, and Henad's own `test`
+  job calls it. `.github/dependabot.yml` groups `henad` and `henad-build`. `README.md` holds the
+  `fetch`, `rename`, `run` and `update` regions, `Cargo.toml` the `profile` region, and the guide
+  will include them. The template ships no `Cargo.lock`, and its `.gitignore` never lists one.
+  `rustfmt.toml` sets the 120 columns Henad formats at. Its `[profile.release]` equals the root's,
+  which `scripts/check_packaging.sh` checks, and `./check.sh` never builds it.
 
 ### Adding a new model
 

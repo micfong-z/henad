@@ -1,8 +1,9 @@
 [workspace]
 members = ["crates/*", "examples/tutorial"]
 # Reference implementations for the cross-engine comparison. They pull in another engine's
-# dependency tree and lint settings, and nothing here builds or tests them.
-exclude = ["benchmarks/krabmaga"]
+# dependency tree and lint settings, and nothing here builds or tests them. The template is a
+# project of its own, on the published crates, and the `downstream` CI job builds it.
+exclude = ["benchmarks/krabmaga", "templates/model-project"]
 resolver = "3"
 
 [workspace.package]

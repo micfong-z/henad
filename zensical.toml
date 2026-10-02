@@ -118,6 +118,7 @@ nav = [
             { "#39, 2026-10-02" = "developing/agent-record/20261002-39-library-testing-kit.md" },
             { "#40, 2026-10-02" = "developing/agent-record/20261002-40-library-facade.md" },
             { "#41, 2026-10-02" = "developing/agent-record/20261002-41-library-tutorial.md" },
+            { "#42, 2026-10-02" = "developing/agent-record/20261002-42-library-template.md" },
         ] },
     ] },
 ]

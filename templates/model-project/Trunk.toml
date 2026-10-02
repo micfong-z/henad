@@ -1,0 +1,8 @@
+[build]
+filehash = false
+
+# The worker pool shares memory with the page, which a browser allows only on a cross-origin-isolated page. A host
+# serving `dist/` has to send these two headers as well.
+[serve]
+port = 8081
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }

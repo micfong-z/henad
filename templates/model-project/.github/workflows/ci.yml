@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: lint, test and web build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # Threads on the web need a std rebuilt with atomics, which needs the nightly with `rust-src`.
+      - name: Install the web toolchain
+        run: |
+          rustup toolchain install "$(cat scripts/web-toolchain)" --profile minimal \
+            --component rust-src,clippy --target wasm32-unknown-unknown
+
+      - name: Install Trunk
+        run: |
+          version="$(cat scripts/trunk-version)"
+          curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xzf - -C "$HOME/.cargo/bin"
+
+      # The runner has no GPU. Without a driver, the GPU checks of the test stage would be skipped.
+      - name: Install lavapipe
+        run: scripts/install-lavapipe.sh
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Lint
+        run: scripts/ci.sh lint
+
+      - name: Lint the web build
+        run: scripts/ci.sh lint-web
+
+      # A missing adapter fails the GPU checks in place of skipping them.
+      - name: Test
+        env:
+          HENAD_REQUIRE_GPU: "1"
+        run: scripts/ci.sh test
+
+      # The release build, which applies `data-wasm-opt`. GitHub Pages cannot send the two cross-origin headers the
+      # thread pool needs, and a site deployed there needs a service worker such as coi-serviceworker to add them.
+      - name: Web build
+        run: scripts/ci.sh web
