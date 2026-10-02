@@ -21,6 +21,9 @@ henad-build = { path = "crates/henad-build", version = "0.2.0" }
 henad-compute = { path = "crates/henad-compute", version = "0.2.0" }
 henad-models = { path = "crates/henad-models", version = "0.2.0" }
 henad-explore = { path = "crates/henad-explore", version = "0.2.0" }
+# The facade alone takes the two hosts, without the example models their binaries need.
+henad-cli = { path = "crates/henad-cli", version = "0.2.0", default-features = false }
+henad-app = { path = "crates/henad-app", version = "0.2.0", default-features = false }
 egui = "0.36.1"
 eframe = { version = "0.36.1", default-features = false, features = [
     "wgpu",

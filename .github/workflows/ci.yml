@@ -43,6 +43,30 @@ jobs:
       - name: wasm typecheck
         run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-explore --all-features --lib --target wasm32-unknown-unknown
 
+      # Without `--all-features`, which would turn on the facade's `app` and with it henad-app. henad-cli sits behind
+      # a native target gate and never joins.
+      - name: Facade wasm typecheck
+        run: |
+          cargo check --locked -p henad --lib --target wasm32-unknown-unknown
+          cargo check --locked -p henad --features example-models,testing --lib --target wasm32-unknown-unknown
+
+      - name: Install nightly
+        run: |
+          rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+            --component rust-src,clippy --target wasm32-unknown-unknown
+
+      # The `cfg` branches only a threaded web build compiles. Stable never sets `target_feature = "atomics"`, and no
+      # build-std is needed to lint. A target directory of its own keeps the native cache valid.
+      - name: clippy with atomics
+        env:
+          CARGO_TARGET_DIR: target/clippy-atomics
+          RUSTFLAGS: -C target-feature=+atomics,+bulk-memory
+        run: |
+          export RUSTUP_TOOLCHAIN="$(cat templates/model-project/scripts/web-toolchain)"
+          cargo clippy --locked -p henad-app --target wasm32-unknown-unknown -- -D warnings -W clippy::all
+          cargo clippy --locked -p henad --features app,example-models --target wasm32-unknown-unknown \
+            -- -D warnings -W clippy::all
+
       # The release workflow runs this extractor on a tag push, where a parsing bug would surface
       # at the worst possible moment.
       - name: Changelog extractor
@@ -153,6 +177,10 @@ jobs:
       - name: Doc tests
         run: cargo test --locked --workspace --doc
 
+      # The README program. The workspace's doc tests turn on neither feature and compile the short crate doc alone.
+      - name: Facade doc test
+        run: cargo test --locked -p henad --doc --features example-models,app
+
   ports:
     name: reference ports build
     runs-on: ubuntu-24.04
@@ -255,6 +283,31 @@ jobs:
       - name: Package
         if: steps.manifests.outputs.changed == 'true'
         run: cargo package --workspace --exclude henad-tutorial --no-verify --locked
+
+  # Every feature of the facade builds alone, so none leans on another for an item it names.
+  features:
+    name: facade features
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # `app` links eframe, which needs the X11 and xkb libraries.
+      - name: Install eframe build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check
+        run: |
+          cargo check --locked -p henad
+          for feature in example-models app cli testing; do
+            cargo check --locked -p henad --features "$feature"
+          done
 
   # Holds the declared `rust-version` true.
   msrv:

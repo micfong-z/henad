@@ -1923,6 +1923,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "henad"
+version = "0.2.0"
+dependencies = [
+ "bytemuck",
+ "henad-app",
+ "henad-cli",
+ "henad-compute",
+ "henad-core",
+ "henad-explore",
+ "henad-models",
+]
+
+[[package]]
 name = "henad-app"
 version = "0.2.0"
 dependencies = [

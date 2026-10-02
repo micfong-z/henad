@@ -340,6 +340,9 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
 cargo test --workspace --all-targets
 cargo test --workspace --doc
+cargo check -p henad --lib --target wasm32-unknown-unknown   # the facade, never with --all-features
+cargo check -p henad --features example-models,testing --lib --target wasm32-unknown-unknown
+cargo test -p henad --doc --features example-models,app      # compiles the README program
 ./scripts/build_web.sh build  # builds the WASM/web target
 ./scripts/check_packaging.sh  # workspace versions, licence copies, paths that climb out of a crate
 cargo deny --locked check     # advisories, licences and sources
@@ -350,9 +353,12 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
 
 `./check.sh` runs every line above but the install, and skips `cargo deny` where cargo-deny is not
 installed. CI alone runs `cargo package --workspace --exclude henad-tutorial --no-verify --locked`
-(the `package` job, on manifest changes), `cargo +1.95 check --workspace --locked` (`msrv`), and
-henad-app's wasm32 docs on the pinned nightly with the atomics flags in `RUSTFLAGS` and
-`RUSTDOCFLAGS` (`docs`).
+(the `package` job, on manifest changes), `cargo +1.95 check --workspace --locked` (`msrv`),
+`cargo check -p henad` with no features and then with each feature alone (`features`), clippy on
+the pinned nightly for wasm32 with `RUSTFLAGS="-C target-feature=+atomics,+bulk-memory"` and a
+`CARGO_TARGET_DIR` of its own, over `-p henad-app` and over `-p henad --features app,example-models`
+(`lint`), and henad-app's wasm32 docs on the pinned nightly with the atomics flags in `RUSTFLAGS`
+and `RUSTDOCFLAGS` (`docs`).
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
@@ -433,13 +439,14 @@ crate that has shadowed them.
 
 ## Architecture
 
-The workspace has 7 crates:
+The workspace has 8 crates:
 
 ```
 henad-core ─┬─ henad-build      (build dependency of every crate with WGSL or a stamp)
             └─ henad-compute ─┬─ henad-models
                               └─ henad-explore ─┬─ henad-cli
                                                 └─ henad-app
+henad (facade): core, compute and explore, plus models, app and cli behind features
 henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!
@@ -447,6 +454,7 @@ henad-models   the ten example models, and a path dev-dependency of henad-explor
 henad-explore  sweeps, searches and the testing kit
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models
+henad          the facade, one module tree over the others, the crate a program depends on
 ```
 
 The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
@@ -455,7 +463,10 @@ henad-models onto henad-compute, the hosts onto henad-explore, henad-compute and
 `example_models()`, henad-models, and any crate with WGSL or a build stamp onto henad-build.
 henad-cli and henad-app take henad-models only behind their default `example-models` feature, and
 `cargo tree -p henad-cli --no-default-features -e normal -i henad-models` prints nothing, as does
-the same line for henad-app. henad-models and henad-explore take no normal dependency on each other,
+the same line for henad-app. The facade takes henad-models, henad-app and henad-cli only behind its
+features, and the two hosts with `default-features = false`, so
+`cargo tree -p henad --features app,cli -e normal -i henad-models` prints nothing. henad-models and
+henad-explore take no normal dependency on each other,
 and `cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency
 between Henad crates that the normal graph does not hold is named here: today the one from
 henad-explore to henad-models, for its tests, the one from henad-models to henad-explore with its
@@ -1197,6 +1208,24 @@ an example model outside its tests needs the maintainer's approval as a new edge
   prints as an `explore_warning` line (`warning_json`). `existing_invocations_keep_their_mode`
   reads the command lines of `lib.rs`, which holds the crate doc, and of `docs/reference/cli.md`,
   and its floor is the 13 documented lines that are not sweeps. Keep it.
+- **henad**: the facade, the crate a program depends on. Its one `lib.rs` re-exports and defines
+  nothing else: the root items and macros, `params`, `stats`, `views`, `action`, `gpu`, `runner`,
+  `engine`, `explore`, `benchmark` (native), `authoring` with its `primitives` and `prelude`, the
+  gated `models` (`example-models`), `app` (`app`), `cli` (`cli`) and `testing` (`testing`), and
+  `henad::prelude`. Each re-export fixes its item's one documented path, and the guides name items
+  by these paths alone. `henad::explore` keeps henad-core's planning modules as modules (`spec`,
+  `plan`, `search` and the rest), and `henad::authoring` globs henad-core's `authoring::model`
+  modules and `helpers` flat, under `#![deny(ambiguous_glob_reexports)]`, so a name two of them
+  share fails the build. The root macros reach the root through a glob of the private
+  `root_macros`, since henad-core's `params` names a module as well as the macro, and the facade's
+  own `params` module shadows the module. henad-cli sits under a native target table, and `cli`
+  adds nothing on wasm32. No feature changes a bound, a layout or a result. `examples/complete.rs`
+  is the program a newcomer reads first, and `README.md`, which the crate doc includes with `app`
+  and `example-models` both on, holds a copy in a `rust,no_run` fence.
+  `the_readme_program_matches_the_example` (`lib.rs`) holds the two equal byte for byte.
+  `tests/facade_paths.rs` compiles against facade paths alone, for the items the tutorial never
+  names. It defines no model, needs no build script and never builds on a device, and its parts
+  that need an entry compile in a module no test calls. Keep both.
 
 ### Adding a new model
 

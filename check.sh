@@ -6,6 +6,9 @@ cargo check --quiet --workspace --all-targets
 # Everything under henad-app still typechecks without atomics. henad-app itself cannot, since
 # `wasm-bindgen-rayon` refuses to compile without them.
 cargo check --quiet -p henad-core -p henad-compute -p henad-models -p henad-explore --all-features --lib --target wasm32-unknown-unknown
+# The facade joins without `--all-features`, which would turn on `app` and with it henad-app.
+cargo check --quiet -p henad --lib --target wasm32-unknown-unknown
+cargo check --quiet -p henad --features example-models,testing --lib --target wasm32-unknown-unknown
 cargo fmt --all -- --check
 ./scripts/check_packaging.sh
 # CI runs cargo-deny on every pull request, and a machine without it skips the check here.
@@ -15,6 +18,8 @@ fi
 cargo clippy --quiet --workspace --all-targets --all-features --  -D warnings -W clippy::all
 cargo test --quiet --workspace --all-targets --all-features
 cargo test --quiet --workspace --doc
+# The README program, which the workspace's doc tests leave out with both of the facade's features off.
+cargo test --quiet -p henad --doc --features example-models,app
 RUSTDOCFLAGS="-D warnings" cargo doc --quiet --workspace --no-deps --all-features
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ./scripts/build_web.sh build
