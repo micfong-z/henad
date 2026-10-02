@@ -326,10 +326,12 @@ impl OutputDir {
     pub fn write_manifest(&self, manifest: &Manifest) -> Result<(), OutputError> {
         let text = manifest_text(manifest)?;
         let partial = self.path.join(format!("{MANIFEST_FILE}.partial"));
-        let mut file = File::create(&partial).map_err(write_error_at(&partial))?;
-        file.write_all(text.as_bytes()).map_err(write_error_at(&partial))?;
-        file.sync_all().map_err(write_error_at(&partial))?;
-        drop(file);
+        // The file closes at the end of the block, before the rename.
+        {
+            let mut file = File::create(&partial).map_err(write_error_at(&partial))?;
+            file.write_all(text.as_bytes()).map_err(write_error_at(&partial))?;
+            file.sync_all().map_err(write_error_at(&partial))?;
+        }
         let manifest_path = self.path.join(MANIFEST_FILE);
         std::fs::rename(&partial, &manifest_path).map_err(write_error_at(&manifest_path))
     }

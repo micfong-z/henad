@@ -205,7 +205,7 @@ impl GpuAgentModel for GpuAnts {
                 height: geom.height,
                 n_cells: geom.n_cells,
                 _pad: 0,
-                tex: [geom.display.0, geom.display.1],
+                tex: geom.display.into(),
                 _pad2: [0; 2],
                 palette: packed_cell_palette(),
             })

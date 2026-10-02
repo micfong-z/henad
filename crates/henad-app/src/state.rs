@@ -555,6 +555,13 @@ impl AppState {
     ///
     /// A sim thread or a sweep calls it after publishing, so an idle UI picks the result up next frame instead of
     /// waiting for whatever input event happens to arrive.
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "atomics"),
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "a `WakeFn` is not `Send` on wasm with atomics"
+        )
+    )]
     pub fn repaint_waker(&self) -> WakeFn {
         let ctx = self.egui_ctx.clone();
         Arc::new(move || ctx.request_repaint())

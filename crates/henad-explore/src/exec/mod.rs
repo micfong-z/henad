@@ -198,7 +198,7 @@ pub(crate) fn choose_layout(
             let threads = jobs.div_ceil(JOBS_PER_THREAD).clamp(1, workers);
             (workers / threads, threads)
         }
-        Concurrency::Fixed(lanes) => (lanes.get(), (workers / lanes.get()).max(1)),
+        Concurrency::Fixed(lanes) => (lanes.get(), (workers / lanes).max(1)),
     };
     let lanes_by_memory = match resources.memory_budget {
         Some(budget) if probe.heap_bytes > 0 => usize::try_from(budget / probe.heap_bytes).unwrap_or(usize::MAX),

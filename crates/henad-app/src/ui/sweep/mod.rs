@@ -133,8 +133,8 @@ impl ColumnsBuild {
     }
 
     /// Takes the columns of a build that has reported since the last poll.
+    #[cfg(not(target_arch = "wasm32"))]
     fn poll(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Self::Running(receiver) = self {
             match receiver.try_recv() {
                 Ok(columns) => *self = Self::Sampled(columns),
@@ -261,6 +261,7 @@ impl SweepPanel {
             .column_builds
             .entry(entry.id().to_owned())
             .or_insert_with(|| ColumnsBuild::start(entry, wake));
+        #[cfg(not(target_arch = "wasm32"))]
         build.poll();
         let draft = self
             .drafts
@@ -862,7 +863,11 @@ fn apply(app: &mut AppState, request: SweepRequest) {
         SweepRequest::AskAbort => app.sweep.confirm_abort = true,
         SweepRequest::Reveal(reveal) => app.sweep.form.reveal = Some(reveal),
         SweepRequest::DismissNotification => app.sweep.status = None,
-        SweepRequest::OpenFolderResults => open_folder_results(app),
+        // A browser has no output folder.
+        SweepRequest::OpenFolderResults => {
+            #[cfg(not(target_arch = "wasm32"))]
+            open_folder_results(app);
+        }
         SweepRequest::ShowFailedRuns => {
             app.results.show_failed_runs();
             app.focus_request = Some(Tab::Results);
@@ -994,17 +999,13 @@ fn save_results(app: &mut AppState) {
 }
 
 /// Opens the results the selected draft's output folder holds in the Results tab.
+#[cfg(not(target_arch = "wasm32"))]
 fn open_folder_results(app: &mut AppState) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let folder = selected_draft(app).and_then(|draft| draft.output_folder().map(PathBuf::from));
-        if let Some(folder) = folder {
-            crate::ui::results::open_folder(app, folder);
-            app.focus_request = Some(Tab::Results);
-        }
+    let folder = selected_draft(app).and_then(|draft| draft.output_folder().map(PathBuf::from));
+    if let Some(folder) = folder {
+        crate::ui::results::open_folder(app, folder);
+        app.focus_request = Some(Tab::Results);
     }
-    #[cfg(target_arch = "wasm32")]
-    let _ = app;
 }
 
 /// Takes the result of a file dialog the Sweep tab opened for `target`.

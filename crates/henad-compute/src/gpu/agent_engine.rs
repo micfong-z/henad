@@ -227,6 +227,13 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
     /// If the device cannot hold the model. The backstop, not the diagnostic, since a UI
     /// asks [`Self::demand`] first.
     #[expect(clippy::too_many_lines, reason = "one linear construction of every wgpu object")]
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "atomics"),
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the agent layers hold wgpu buffers, which atomics leave unsendable"
+        )
+    )]
     pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;
         let queue = &ctx.queue;

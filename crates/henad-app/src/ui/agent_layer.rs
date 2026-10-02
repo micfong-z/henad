@@ -122,6 +122,13 @@ pub struct AgentLayer {
 }
 
 impl AgentLayer {
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "atomics"),
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the layer holds wgpu handles, which atomics leave unsendable"
+        )
+    )]
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -256,6 +263,13 @@ impl AgentLayer {
     }
 
     /// Powers of two, so a model with a varying population stops reallocating quickly.
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "atomics"),
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the layer holds wgpu handles, which atomics leave unsendable"
+        )
+    )]
     fn grow_to(&mut self, n: usize) {
         if n <= self.capacity {
             return;

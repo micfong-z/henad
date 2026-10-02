@@ -86,10 +86,24 @@ pub type SharedSlot = Arc<Mutex<SnapshotSlot>>;
 impl SnapshotSlot {
     /// For a loop that publishes its own first snapshot from [`SimLoop::start`], where building
     /// one here would mean reporting stats nothing has read back yet.
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "atomics"),
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "a snapshot holds wgpu handles, which atomics leave unsendable"
+        )
+    )]
     pub fn empty() -> SharedSlot {
         Arc::new(Mutex::new(Self::default()))
     }
 
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "atomics"),
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "a snapshot holds wgpu handles, which atomics leave unsendable"
+        )
+    )]
     pub fn with_initial(snapshot: Snapshot) -> SharedSlot {
         Arc::new(Mutex::new(Self {
             fresh: Some(snapshot),

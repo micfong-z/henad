@@ -1521,7 +1521,7 @@ pub fn concurrency_feedback(concurrency: Concurrency, backend: Backend, threads:
         (Concurrency::Fixed(runs), Backend::Gpu) if runs.get() == 1 => "One run on the GPU at a time".to_owned(),
         (Concurrency::Fixed(runs), Backend::Gpu) => format!("{runs} runs share the GPU"),
         (Concurrency::Fixed(runs), Backend::Cpu) => {
-            let per_run = (threads / runs.get()).max(1) as u64;
+            let per_run = (threads / runs).max(1) as u64;
             format!("About {per_run} {} per run", plural(per_run, "thread"))
         }
     }

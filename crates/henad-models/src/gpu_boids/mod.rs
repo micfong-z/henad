@@ -134,7 +134,7 @@ impl GpuAgentModel for GpuBoids {
                 num_agents: ctx.geom.num_agents,
                 groups_x: ctx.groups_x,
                 seed: ctx.seed,
-                stationary: 0.5 * (hot.min_speed + hot.max_speed),
+                stationary: hot.min_speed.midpoint(hot.max_speed),
                 palette: packed_heading_palette(),
             })
             .to_vec();

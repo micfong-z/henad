@@ -244,7 +244,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
             &format!("{}_dims_buffer", M::ID),
             bytemuck::bytes_of(&Dims {
                 grid: [width, height],
-                tex: [tex.0, tex.1],
+                tex: tex.into(),
             }),
         );
 

@@ -422,10 +422,9 @@ impl Loop {
 
     /// One registration covers every submission above.
     #[cfg(target_arch = "wasm32")]
-    fn track(&mut self, submission: Option<wgpu::SubmissionIndex>, steps: u32, started_at: Instant) {
+    fn track(&mut self, _submission: Option<wgpu::SubmissionIndex>, steps: u32, started_at: Instant) {
         use std::sync::atomic::{AtomicU64, Ordering};
 
-        drop(submission);
         let elapsed_us = Arc::new(AtomicU64::new(0));
         let signal = Arc::clone(&elapsed_us);
         self.ctx.queue.on_submitted_work_done(move || {

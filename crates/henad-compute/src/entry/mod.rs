@@ -3,6 +3,13 @@
 //! A [`ModelEntry`] holds a model's declarations and the factory that builds it on any device. The `register_*`
 //! functions make one from an authoring trait. They are generic, so the engine a model steps on is monomorphised in
 //! the crate that calls them. A [`ModelSet`] holds the entries a host offers, each id once.
+#![cfg_attr(
+    all(target_arch = "wasm32", target_feature = "atomics"),
+    expect(
+        clippy::arc_with_non_send_sync,
+        reason = "a factory is not `Send` on wasm with atomics, see `send_sync`"
+    )
+)]
 
 mod set;
 

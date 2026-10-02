@@ -36,6 +36,13 @@ pub struct DisplayTarget {
 /// Creates the display texture and the pipeline that samples it into `target_format`.
 ///
 /// `width` and `height` are the *grid*; the texture is capped by [`display_dims`].
+#[cfg_attr(
+    all(target_arch = "wasm32", target_feature = "atomics"),
+    expect(
+        clippy::arc_with_non_send_sync,
+        reason = "a display holds wgpu handles, which atomics leave unsendable"
+    )
+)]
 pub fn build_display_target(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,

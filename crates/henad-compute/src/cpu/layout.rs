@@ -225,7 +225,7 @@ fn force_on(i: u32, pos_x: &[f32], pos_y: &[f32], graph: &Network, hash: &Spatia
             return;
         }
         // Divided by the mean degree of both ends, as in NetLogo.
-        let div = ((deg_i + graph.degree(j) as f32) * 0.5).max(1.0);
+        let div = deg_i.midpoint(graph.degree(j) as f32).max(1.0);
         let f = spring * saturation * ((d - rest) / saturation).tanh() / div;
         fx += f * ex / d;
         fy += f * ey / d;
@@ -249,7 +249,7 @@ fn force_on(i: u32, pos_x: &[f32], pos_y: &[f32], graph: &Network, hash: &Spatia
         if d2 > reach * reach {
             return;
         }
-        let div = ((deg_i + graph.degree(j) as f32) * 0.5).max(1.0);
+        let div = deg_i.midpoint(graph.degree(j) as f32).max(1.0);
         if d2 <= 0.0 {
             // The nodes are coincident, so push along an angle drawn from the node index.
             let angle = jitter_angle(seed, iteration, i);

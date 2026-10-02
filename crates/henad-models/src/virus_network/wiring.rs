@@ -113,12 +113,12 @@ pub(super) fn geometric(
 /// so sizing the disc by `π r²` alone would leave the mean degree short by that part.
 fn reach_for(share: f64, w: f64, h: f64) -> f64 {
     let within = |r: f64| (PI * w * h * r * r - 4.0 / 3.0 * (w + h) * r.powi(3) + 0.5 * r.powi(4)) / (w * w * h * h);
-    let (mut lo, mut hi) = (0.0, w.min(h));
+    let (mut lo, mut hi) = (0.0_f64, w.min(h));
     if within(hi) <= share {
         return hi;
     }
     for _ in 0..64 {
-        let mid = 0.5 * (lo + hi);
+        let mid = lo.midpoint(hi);
         if within(mid) < share {
             lo = mid;
         } else {
