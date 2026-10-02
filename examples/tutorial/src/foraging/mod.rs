@@ -5,18 +5,9 @@
 
 pub mod field;
 
-use henad_compute::agent_lanes;
-use henad_compute::cpu::field::scalar::{Deposits, ScalarField, ScalarRead};
-use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_compute::for_each_chunk_mut;
-use henad_core::authoring::model::agent_model::{AgentModel, NoIndex, StepCtx};
-use henad_core::authoring::model::field::Extent;
-use henad_core::authoring::primitives::rng::{choice3, next_bits, next_float, reservoir_accept};
-use henad_core::authoring::primitives::space::{Boundary, MOORE_COLUMN_MAJOR, cell_index, offset_cell};
-use henad_core::grid::Grid2D;
-use henad_core::helpers::{extract_f32, f32_param};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::view::{StatDescriptor, StatValue};
+use henad::agent_lanes;
+use henad::authoring::prelude::*;
+use henad::for_each_chunk_mut;
 
 use self::field::{FOOD, HOME, OBSTACLE, PheromoneField, TO_FOOD, TO_HOME, nest_cell};
 
@@ -49,7 +40,7 @@ pub const STAT_PALETTE: [[u8; 4]; 3] = [
     [0x2E, 0x8B, 0xE8, 0xFF], // total pheromone
 ];
 
-henad_core::params! {
+henad::params! {
     const UPDATE_CUTDOWN = f32_param("update_cutdown", "Trail Falloff", 0.9, 0.5, 1.0, Some(0.01));
     const REWARD = f32_param("reward", "Site Reward", 1.0, 0.1, 10.0, Some(0.1));
     const MOMENTUM = f32_param("momentum", "Momentum Probability", 0.8, 0.0, 1.0, Some(0.01));
@@ -351,8 +342,8 @@ fn field_sum(cells: &[f32]) -> f64 {
 
 #[test]
 fn results_do_not_depend_on_the_thread_count() {
-    use henad_compute::cpu::agent_engine::AgentModelState;
-    use henad_core::model::SimState as _;
+    use henad::engine::AgentModelState;
+    use henad::runner::SimState as _;
 
     fn run(threads: usize) -> Vec<u32> {
         let pool = rayon::ThreadPoolBuilder::new()

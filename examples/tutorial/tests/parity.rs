@@ -3,16 +3,18 @@
 //! Bit equality rather than a tolerance. Both sides run the same kernels through the same engine,
 //! so anything less than identical means the page has drifted.
 
-use henad_compute::cpu::agent_engine::AgentModelState;
-use henad_compute::cpu::field::scalar::{ScalarField, ScalarFieldSpec};
-use henad_compute::cpu::grid_engine::GridModelState;
-use henad_compute::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
-use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel};
-use henad_core::authoring::model::grid_model::GridModel;
-use henad_core::authoring::model::network_model::NetworkModel;
-use henad_core::model::SimState as _;
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::view::StatDescriptor;
+use henad::authoring::{
+    AgentLanes as _, AgentModel, BufferSpec, GpuAgentModel as _, GpuGridModel as _, GridModel, NUM_AGENTS,
+    NetworkModel, PassCtx, PassId, ScalarField, ScalarFieldSpec, network_model_param_descriptors,
+};
+use henad::engine::{AgentModelState, GpuAgentState, GpuGridState, GridModelState, NetworkModelState};
+use henad::gpu::{GpuContext, wgpu};
+use henad::models::{ants, game_of_life, gpu_ants, gpu_game_of_life, virus_network};
+use henad::params::{ParamDescriptor, ParamValue};
+use henad::runner::{GpuSimState, SimState as _};
+use henad::stats::StatDescriptor;
+use henad::testing::{TestDeviceRequest, headless_test_device};
+use henad_tutorial::{foraging, gpu_foraging, gpu_life, life, virus};
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 
 const SEED: u64 = 0x5EED_0DE5_0DE5_5EED;
@@ -43,8 +45,8 @@ fn the_game_of_life_tutorial_matches_the_shipped_model() {
     // Not square, so a transposed index shows up.
     let params = vec![ParamValue::U32(64), ParamValue::U32(48), ParamValue::F32(0.3)];
 
-    let (taught_cells, taught_stats) = run_grid::<super::life::LifeModel>(&params, 200);
-    let (shipped_cells, shipped_stats) = run_grid::<crate::game_of_life::GameOfLifeModel>(&params, 200);
+    let (taught_cells, taught_stats) = run_grid::<life::LifeModel>(&params, 200);
+    let (shipped_cells, shipped_stats) = run_grid::<game_of_life::GameOfLifeModel>(&params, 200);
 
     assert_eq!(
         taught_cells, shipped_cells,
@@ -60,12 +62,12 @@ fn the_game_of_life_tutorial_matches_the_shipped_model() {
 #[test]
 fn the_game_of_life_tutorial_declares_the_same_parameters() {
     assert_eq!(
-        descriptor_shape(&super::life::LifeModel::param_descriptors()),
-        descriptor_shape(&crate::game_of_life::GameOfLifeModel::param_descriptors()),
+        descriptor_shape(&life::LifeModel::param_descriptors()),
+        descriptor_shape(&game_of_life::GameOfLifeModel::param_descriptors()),
     );
     assert_eq!(
-        super::life::LifeModel::NEIGHBORHOOD,
-        crate::game_of_life::GameOfLifeModel::NEIGHBORHOOD,
+        life::LifeModel::NEIGHBORHOOD,
+        game_of_life::GameOfLifeModel::NEIGHBORHOOD,
     );
 }
 
@@ -122,8 +124,8 @@ fn the_ants_tutorial_matches_the_shipped_model() {
     ];
     const STEPS: usize = 400;
 
-    let taught = run_ants::<super::foraging::ForagingModel, super::foraging::field::PheromoneField>(&params, STEPS);
-    let shipped = run_ants::<crate::ants::AntsModel, crate::ants::field::PheromoneField>(&params, STEPS);
+    let taught = run_ants::<foraging::ForagingModel, foraging::field::PheromoneField>(&params, STEPS);
+    let shipped = run_ants::<ants::AntsModel, ants::field::PheromoneField>(&params, STEPS);
 
     assert_eq!(
         taught.positions, shipped.positions,
@@ -145,14 +147,14 @@ fn the_ants_tutorial_matches_the_shipped_model() {
 #[test]
 fn the_ants_tutorial_lays_out_the_same_world() {
     let (w, h) = (200u32, 200u32);
-    let mut taught = vec![super::foraging::field::EMPTY; (w * h) as usize];
-    let mut shipped = vec![crate::ants::field::EMPTY; (w * h) as usize];
-    super::foraging::field::PheromoneField::build_sites(w, h, &mut taught);
-    crate::ants::field::PheromoneField::build_sites(w, h, &mut shipped);
+    let mut taught = vec![foraging::field::EMPTY; (w * h) as usize];
+    let mut shipped = vec![ants::field::EMPTY; (w * h) as usize];
+    foraging::field::PheromoneField::build_sites(w, h, &mut taught);
+    ants::field::PheromoneField::build_sites(w, h, &mut shipped);
 
     assert_eq!(taught, shipped, "the taught site and obstacle layout has drifted");
     assert!(
-        taught.contains(&super::foraging::field::OBSTACLE),
+        taught.contains(&foraging::field::OBSTACLE),
         "the obstacle blobs cover no cells, so the comparison proves little"
     );
 }
@@ -160,16 +162,16 @@ fn the_ants_tutorial_lays_out_the_same_world() {
 #[test]
 fn the_ants_tutorial_declares_the_same_parameters() {
     assert_eq!(
-        descriptor_shape(&super::foraging::ForagingModel::param_descriptors()),
-        descriptor_shape(&crate::ants::AntsModel::param_descriptors()),
+        descriptor_shape(&foraging::ForagingModel::param_descriptors()),
+        descriptor_shape(&ants::AntsModel::param_descriptors()),
     );
     assert_eq!(
-        descriptor_shape(&super::foraging::field::PheromoneField::param_descriptors()),
-        descriptor_shape(&crate::ants::field::PheromoneField::param_descriptors()),
+        descriptor_shape(&foraging::field::PheromoneField::param_descriptors()),
+        descriptor_shape(&ants::field::PheromoneField::param_descriptors()),
     );
     assert_eq!(
-        super::foraging::ForagingModel::CHUNK,
-        crate::ants::AntsModel::CHUNK,
+        foraging::ForagingModel::CHUNK,
+        ants::AntsModel::CHUNK,
         "CHUNK sets the rng seeding granularity, so a mismatch changes results"
     );
 }
@@ -284,8 +286,8 @@ fn assert_virus_parity(
     steps: u64,
     nudges: &[(u64, Nudge)],
 ) -> (NetworkSnapshot, NetworkSnapshot) {
-    type Taught = super::virus::VirusModel;
-    type Shipped = crate::virus_network::VirusNetwork;
+    type Taught = virus::VirusModel;
+    type Shipped = virus_network::VirusNetwork;
 
     let taught = run_network::<Taught>(overrides, steps, nudges, |lanes| &lanes.timer);
     let shipped = run_network::<Shipped>(overrides, steps, nudges, |lanes| &lanes.timer);
@@ -347,7 +349,7 @@ fn the_virus_tutorial_matches_the_shipped_model_while_rewiring() {
     let (start, end) = assert_virus_parity(&overrides, 300, &nudges);
 
     assert!(
-        end.states.contains(&super::virus::RESISTANT) && end.edge_colors.contains(&super::virus::EDGE_BLOCKED),
+        end.states.contains(&virus::RESISTANT) && end.edge_colors.contains(&virus::EDGE_BLOCKED),
         "no edge was greyed, so the recolour went untested"
     );
     assert_ne!(
@@ -375,7 +377,7 @@ fn the_virus_tutorial_matches_the_shipped_model_when_directed_and_pressed() {
             .states
             .iter()
             .zip(&end.states)
-            .any(|(&s, &e)| s == super::virus::SUSCEPTIBLE && e != super::virus::SUSCEPTIBLE),
+            .any(|(&s, &e)| s == virus::SUSCEPTIBLE && e != virus::SUSCEPTIBLE),
         "the virus never spread, so the node pass went untested"
     );
     assert_ne!(
@@ -387,8 +389,8 @@ fn the_virus_tutorial_matches_the_shipped_model_when_directed_and_pressed() {
 
 #[test]
 fn the_virus_tutorial_declares_the_same_parameters_and_actions() {
-    type Taught = super::virus::VirusModel;
-    type Shipped = crate::virus_network::VirusNetwork;
+    type Taught = virus::VirusModel;
+    type Shipped = virus_network::VirusNetwork;
 
     // Kinds are compared through `Debug`. It carries the ranges and the slider step.
     let shape = |descs: Vec<ParamDescriptor>| -> Vec<_> {
@@ -453,9 +455,8 @@ fn gpu_life_params(width: u32, height: u32) -> Vec<ParamValue> {
 
 #[test]
 fn the_gpu_life_tutorial_seeds_the_same_grid() {
-    use henad_core::authoring::model::gpu_grid_model::GpuGridModel as _;
-    type Taught = super::gpu_life::GpuLifeModel;
-    type Shipped = crate::gpu_game_of_life::GpuGameOfLife;
+    type Taught = gpu_life::GpuLifeModel;
+    type Shipped = gpu_game_of_life::GpuGameOfLife;
 
     // A ragged width, so the padding bits are compared too.
     let (w, h) = (50u32, 30u32);
@@ -483,12 +484,7 @@ fn the_gpu_life_tutorial_seeds_the_same_grid() {
 
 #[test]
 fn the_gpu_life_tutorial_matches_the_shipped_model() {
-    use henad_compute::gpu::grid_engine::GpuGridState;
-    use henad_compute::gpu::{GpuContext, GpuSimState};
-
-    let Some(ctx) =
-        henad_explore::testing::headless_test_device(&henad_explore::testing::TestDeviceRequest::baseline())
-    else {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
         log::warn!("skipping the_gpu_life_tutorial_matches_the_shipped_model: no adapter");
         return;
     };
@@ -513,8 +509,8 @@ fn the_gpu_life_tutorial_matches_the_shipped_model() {
     }
 
     let params = gpu_life_params(50, 30);
-    let mut taught = GpuGridState::<super::gpu_life::GpuLifeModel>::new_seeded(&ctx, &params, Some(SEED));
-    let mut shipped = GpuGridState::<crate::gpu_game_of_life::GpuGameOfLife>::new_seeded(&ctx, &params, Some(SEED));
+    let mut taught = GpuGridState::<gpu_life::GpuLifeModel>::new_seeded(&ctx, &params, Some(SEED));
+    let mut shipped = GpuGridState::<gpu_game_of_life::GpuGameOfLife>::new_seeded(&ctx, &params, Some(SEED));
 
     for tick in 0..20 {
         assert_eq!(
@@ -534,21 +530,18 @@ fn the_gpu_life_tutorial_matches_the_shipped_model() {
 // --- GPU ants ---
 
 fn gpu_foraging_params(num_agents: u32) -> Vec<ParamValue> {
-    use henad_core::authoring::model::gpu_agent_model::GpuAgentModel as _;
-    let mut values: Vec<ParamValue> = crate::gpu_ants::GpuAnts::param_descriptors()
+    let mut values: Vec<ParamValue> = gpu_ants::GpuAnts::param_descriptors()
         .iter()
         .map(|d| d.kind.default_value())
         .collect();
-    values[henad_compute::cpu::agent_engine::NUM_AGENTS] = ParamValue::U32(num_agents);
+    values[NUM_AGENTS] = ParamValue::U32(num_agents);
     values
 }
 
 #[test]
 fn the_gpu_foraging_tutorial_seeds_the_same_buffers() {
-    use henad_compute::gpu::GpuAgentState;
-    use henad_core::authoring::model::gpu_agent_model::{GpuAgentModel as _, PassCtx, PassId};
-    type Taught = super::gpu_foraging::GpuForagingModel;
-    type Shipped = crate::gpu_ants::GpuAnts;
+    type Taught = gpu_foraging::GpuForagingModel;
+    type Shipped = gpu_ants::GpuAnts;
 
     let params = gpu_foraging_params(2_000);
     let geom = GpuAgentState::<Shipped>::geometry_for(&params, &wgpu::Limits::default());
@@ -578,10 +571,9 @@ fn the_gpu_foraging_tutorial_seeds_the_same_buffers() {
         descriptor_shape(&Taught::param_descriptors()),
         descriptor_shape(&Shipped::param_descriptors()),
     );
-    let flags =
-        |specs: &[henad_core::authoring::model::gpu_agent_model::BufferSpec]| -> Vec<(&'static str, bool, bool)> {
-            specs.iter().map(|b| (b.label, b.double_buffered, b.drawable)).collect()
-        };
+    let flags = |specs: &[BufferSpec]| -> Vec<(&'static str, bool, bool)> {
+        specs.iter().map(|b| (b.label, b.double_buffered, b.drawable)).collect()
+    };
     assert_eq!(flags(Taught::BUFFERS), flags(Shipped::BUFFERS));
     assert_eq!(Taught::COUNTERS, Shipped::COUNTERS);
     assert_eq!(Taught::REDUCE.lanes, Shipped::REDUCE.lanes);
@@ -590,11 +582,7 @@ fn the_gpu_foraging_tutorial_seeds_the_same_buffers() {
 
 #[test]
 fn the_gpu_foraging_tutorial_matches_the_shipped_model() {
-    use henad_compute::gpu::GpuAgentState;
-
-    let Some(ctx) =
-        henad_explore::testing::headless_test_device(&henad_explore::testing::TestDeviceRequest::baseline())
-    else {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
         log::warn!("skipping the_gpu_foraging_tutorial_matches_the_shipped_model: no adapter");
         return;
     };
@@ -602,8 +590,8 @@ fn the_gpu_foraging_tutorial_matches_the_shipped_model() {
     let params = gpu_foraging_params(4_000);
     const STEPS: u32 = 300;
 
-    let mut taught = GpuAgentState::<super::gpu_foraging::GpuForagingModel>::new_seeded(&ctx, &params, Some(SEED));
-    let mut shipped = GpuAgentState::<crate::gpu_ants::GpuAnts>::new_seeded(&ctx, &params, Some(SEED));
+    let mut taught = GpuAgentState::<gpu_foraging::GpuForagingModel>::new_seeded(&ctx, &params, Some(SEED));
+    let mut shipped = GpuAgentState::<gpu_ants::GpuAnts>::new_seeded(&ctx, &params, Some(SEED));
     taught.run_batched(STEPS);
     shipped.run_batched(STEPS);
 

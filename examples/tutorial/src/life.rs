@@ -3,14 +3,7 @@
 //! The id is `life` rather than `game_of_life`, since the shipped model already holds that one
 //! and the page tells a reader the same thing.
 
-use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_core::authoring::model::grid_model::GridModel;
-use henad_core::authoring::primitives::rng::{below, next_bits};
-use henad_core::grid::Grid2D;
-use henad_core::helpers::{extract_f32, f32_param};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::topology::NeighborhoodKind;
-use henad_core::view::{StatDescriptor, StatValue};
+use henad::authoring::prelude::*;
 
 const DEAD: u8 = 0;
 const ALIVE: u8 = 1;
@@ -20,7 +13,7 @@ pub const PALETTE: [[u8; 4]; 2] = [
     [0x00, 0xE6, 0x76, 0xFF], // Alive
 ];
 
-henad_core::params! {
+henad::params! {
     const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)).on_reload();
 }
 
@@ -75,8 +68,8 @@ fn count_alive(cells: &[u8]) -> u64 {
 
 #[test]
 fn a_blinker_rotates_and_comes_back() {
-    use henad_compute::cpu::grid_engine::GridModelState;
-    use henad_core::model::SimState as _;
+    use henad::engine::GridModelState;
+    use henad::runner::SimState as _;
 
     // A 5x5 grid, so the pattern stays clear of the wrap.
     let params = vec![ParamValue::U32(5), ParamValue::U32(5), ParamValue::F32(0.0)];

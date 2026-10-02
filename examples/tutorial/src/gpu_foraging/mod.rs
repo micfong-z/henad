@@ -3,32 +3,25 @@
 //! The id is `gpu_foraging` rather than `gpu_ants`, since the shipped model already holds that one
 //! and the page tells a reader the same thing.
 //!
-//! The shaders are the shipped model's own. A shader carries no id, so what the page writes is
-//! `gpu_ants/*.wgsl` line for line, and this module binds those rather than carrying a second
-//! copy. The page spells the generated paths `gpu_foraging`, after the directory a reader makes.
+//! The five shaders beside this file are copies of the shipped model's own. A shader carries no id,
+//! so what the page writes is `gpu_ants/*.wgsl` line for line, apart from the import path of
+//! `state.wgsl`, which follows the directory name.
 
-use henad_compute::cpu::agent_engine::{
+use henad::authoring::AgentLanes as _;
+use henad::authoring::prelude::*;
+use henad::authoring::{
     AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
 };
-use henad_compute::cpu::field::scalar::ScalarFieldSpec as _;
-use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel as _};
-use henad_core::authoring::model::field::Extent;
-use henad_core::authoring::model::gpu_agent_model::{
-    BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
-};
-use henad_core::authoring::primitives::rng::mix_seed;
-use henad_core::helpers::{extract_f32, extract_u32};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::view::{StatDescriptor, StatValue};
+use henad::authoring::{BufferSpec, DisplaySpec, Domain, Geometry, PassCtx, PassId, PassSpec, ReduceSpec};
 
-use super::foraging::field::{CELL_PALETTE, EMPTY, LOW_PHEROMONE, PheromoneField};
-use super::foraging::{ANT_PALETTE, AntLanes, ForagingModel};
-use crate::shader_bindings::gpu_ants::display::Params as DisplayParams;
-use crate::shader_bindings::gpu_ants::merge::Params as MergeParams;
-use crate::shader_bindings::gpu_ants::reduce::Params as ReduceParams;
-use crate::shader_bindings::gpu_ants::step::Params as StepParams;
+use crate::foraging::field::{CELL_PALETTE, EMPTY, LOW_PHEROMONE, PheromoneField};
+use crate::foraging::{ANT_PALETTE, AntLanes, ForagingModel};
+use crate::shader_bindings::gpu_foraging::display::Params as DisplayParams;
+use crate::shader_bindings::gpu_foraging::merge::Params as MergeParams;
+use crate::shader_bindings::gpu_foraging::reduce::Params as ReduceParams;
+use crate::shader_bindings::gpu_foraging::step::Params as StepParams;
 
-henad_core::buffers! {
+henad::buffers! {
     const POS = "pos" drawable;
     const STATE = "state";
     const COLOR = "color" drawable;
@@ -63,27 +56,27 @@ impl GpuAgentModel for GpuForagingModel {
     const STEP_PASSES: &'static [PassSpec] = &[
         PassSpec {
             label: "step",
-            shader: crate::shader_bindings::gpu_ants::step::SHADER_STRING,
-            bindings: crate::binding_decls::bindings::GPU_ANTS_STEP,
+            shader: crate::shader_bindings::gpu_foraging::step::SHADER_STRING,
+            bindings: crate::binding_decls::bindings::GPU_FORAGING_STEP,
             domain: Domain::Agents,
         },
         PassSpec {
             label: "merge",
-            shader: crate::shader_bindings::gpu_ants::merge::SHADER_STRING,
-            bindings: crate::binding_decls::bindings::GPU_ANTS_MERGE,
+            shader: crate::shader_bindings::gpu_foraging::merge::SHADER_STRING,
+            bindings: crate::binding_decls::bindings::GPU_FORAGING_MERGE,
             domain: Domain::Cells(2),
         },
     ];
 
     const DISPLAY: Option<DisplaySpec> = Some(DisplaySpec {
-        shader: crate::shader_bindings::gpu_ants::display::SHADER_STRING,
-        bindings: crate::binding_decls::bindings::GPU_ANTS_DISPLAY,
+        shader: crate::shader_bindings::gpu_foraging::display::SHADER_STRING,
+        bindings: crate::binding_decls::bindings::GPU_FORAGING_DISPLAY,
         workgroup: 16,
     });
 
     const REDUCE: ReduceSpec = ReduceSpec {
-        shader: crate::shader_bindings::gpu_ants::reduce::SHADER_STRING,
-        bindings: crate::binding_decls::bindings::GPU_ANTS_REDUCE,
+        shader: crate::shader_bindings::gpu_foraging::reduce::SHADER_STRING,
+        bindings: crate::binding_decls::bindings::GPU_FORAGING_REDUCE,
         lanes: 2,
         domain: Domain::AgentsOrCells,
     };
@@ -251,13 +244,12 @@ fn packed_cell_palette() -> [[u32; 4]; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::gpu::GpuAgentState;
+    use henad::engine::GpuAgentState;
+    use henad::testing::{TestDeviceRequest, headless_test_device};
 
     #[test]
     fn a_run_replays_bit_identically() {
-        let Some(ctx) =
-            henad_explore::testing::headless_test_device(&henad_explore::testing::TestDeviceRequest::baseline())
-        else {
+        let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
             log::warn!("skipping a_run_replays_bit_identically: no wgpu adapter available");
             return;
         };

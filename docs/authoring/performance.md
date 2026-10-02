@@ -43,7 +43,7 @@ Measure with the population you care about: a value that suits a million agents 
 
 ## Never scan every agent
 
-`SpatialHash` is a flat counting-sort grid, rebuilt every tick from the agent positions.
+`henad::authoring::SpatialHash` is a flat counting-sort grid, rebuilt every tick from the agent positions.
 Declaring `type Index = SpatialHash` and querying through `query_radius` is the single biggest lever for getting an agent model to scale, and boids only scaled in the first place once its naive neighbour search was replaced with this hash.
 
 A kernel that needs the offsets to its neighbours, and not just their indices, should take `for_each_within` instead.

@@ -110,8 +110,8 @@ Team Assembly keeps them in, since its own tick places newcomers and neither tes
 
 ## The testing kit
 
-`henad_explore::testing`, behind henad-explore's `testing` feature, checks a model's entry against what its state does.
-A model's tests take `henad-explore` as a dev-dependency with that feature on, and call `assert_set_conforms` over their model set.
+`henad::testing`, behind the facade's `testing` feature, checks a model's entry against what its state does.
+A model's tests take `henad` as a dev-dependency with that feature on, and call `assert_set_conforms` over their model set.
 It panics with every failure, and a set that passes prints which checks each model skipped.
 `check_model_set` returns the same report without asserting anything.
 The example models' test takes the report, to check each model's skipped checks as well.
@@ -162,7 +162,7 @@ A GPU model skips `ThreadCount`, since a pool width never reaches its kernels.
 A model that declares `REPLAYS_EXACTLY = false` skips `SameSeed`, `SeedSensitivity` and `SamplingCadence`.
 An exemption of a check that does not apply to the model fails that check, and the report of a set names every model the settings name and the set lacks.
 `CheckSettings::set_text` sets a parameter in every check that builds the model, as `--set` reads it.
-`check_model` returns the report instead of panicking, and its caller installs the panic hook first, through `henad_compute::fault::install_panic_hook`, or a kernel panic's failure names no `file:line`.
+`check_model` returns the report instead of panicking, and its caller installs the panic hook first, through `henad::install_panic_hook`, or a kernel panic's failure names no `file:line`.
 
 See [registering a model](registering.md).
 

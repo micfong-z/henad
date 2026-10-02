@@ -4,4 +4,3 @@
 pub mod broken;
 mod registry;
 mod simulation;
-pub mod tutorial;

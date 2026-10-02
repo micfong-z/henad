@@ -98,7 +98,7 @@ Team Assembly keys its cached components by the graph's version and node count, 
 --8<-- "crates/henad-models/src/team_assembly/mod.rs:components"
 ```
 
-`label_components`, from `henad_compute::cpu::primitives::components`, labels the components in parallel and returns their count and the size of the largest.
+`label_components`, at `henad::authoring::label_components`, labels the components in parallel and returns their count and the size of the largest.
 It reads a directed graph as undirected.
 
 `stats` can be called before any `prepare_view` has run, and it still has to return a value for every series.

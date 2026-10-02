@@ -71,7 +71,7 @@ The shared modules ship with henad-core, in `henad-core/src/authoring/primitives
 | `henad::dims` | The `Dims` struct a grid model's display and reduce shaders read |
 | `henad::reduce_tree` | `block_sum`, the workgroup fold a reduce leaf repeats |
 
-Most primitives here pair with a Rust function under `henad_core::authoring::primitives`, and a parity test pins each pair of pure functions together.
+Most primitives here pair with a Rust function under `henad::authoring::primitives`, and a parity test pins each pair of pure functions together.
 [Authoring primitives](../reference/primitives.md) is the index.
 It names the WGSL-only primitives and records what is deliberately absent.
 

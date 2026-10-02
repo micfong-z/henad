@@ -166,13 +166,13 @@ pub mod authoring {
     /// Names a model's source file imports whole.
     pub mod prelude {
         pub use henad_core::action::ActionDescriptor;
-        pub use henad_core::authoring::model::agent_model::AgentModel;
+        pub use henad_core::authoring::model::agent_model::{AgentModel, NoIndex, StepCtx};
         pub use henad_core::authoring::model::binding::BindingDecl;
-        pub use henad_core::authoring::model::field::{FieldLayer, NoField};
+        pub use henad_core::authoring::model::field::{Extent, FieldLayer, NoField};
         pub use henad_core::authoring::model::gpu_agent_model::GpuAgentModel;
         pub use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
         pub use henad_core::authoring::model::grid_model::GridModel;
-        pub use henad_core::authoring::model::network_model::NetworkModel;
+        pub use henad_core::authoring::model::network_model::{NetworkModel, NodeCtx, Nodes};
         pub use henad_core::authoring::primitives::rng::{
             below, choice3, mix_seed, next_bits, next_float, next_index, random_float, reservoir_accept, xorshift64,
         };
@@ -181,6 +181,7 @@ pub mod authoring {
         };
         pub use henad_core::grid::Grid2D;
         pub use henad_core::helpers::*;
+        pub use henad_core::network::Network;
         pub use henad_core::params::{ParamDescriptor, ParamValue};
         pub use henad_core::spatial_hash::SpatialHash;
         pub use henad_core::topology::NeighborhoodKind;
@@ -188,9 +189,10 @@ pub mod authoring {
 
         pub use henad_compute::cpu::agent_engine::{AGENT_PARAM_BASE, agent_init_rng};
         pub use henad_compute::cpu::field::ca::CaField;
-        pub use henad_compute::cpu::field::scalar::ScalarField;
+        pub use henad_compute::cpu::field::scalar::{Deposits, ScalarField, ScalarFieldSpec, ScalarRead};
         pub use henad_compute::cpu::grid_engine::{GRID_PARAM_BASE, grid_init_rng};
         pub use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+        pub use henad_compute::cpu::primitives::scatter::Combine;
 
         pub use bytemuck;
     }

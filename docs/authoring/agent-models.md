@@ -70,6 +70,7 @@ These four types wire your model into the engine.
 
 :   Use `SpatialHash` when agents read each other.
     `NoIndex` covers a population that ignores its neighbours.
+    Both are at `henad::authoring`, and the authoring prelude holds them.
     The hash is a flat counting-sort grid rebuilt every tick from agent positions, and all neighbour queries, toroidal wraparound included, go through `query_radius`.
     `index_cell_size` is read every tick, so a live parameter edit reaches the index.
 

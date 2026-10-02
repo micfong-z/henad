@@ -3,21 +3,15 @@
 //! The id is `gpu_life` rather than `gpu_game_of_life`, since the shipped model already holds
 //! that one and the page tells a reader the same thing.
 //!
-//! The shaders are the shipped model's own. A shader carries no id, so what the page writes is
-//! `gpu_game_of_life/*.wgsl` line for line, and this module binds those rather than carrying a
-//! second copy. The page spells the generated paths `gpu_life`, after the directory a reader makes.
+//! The three shaders beside this file are copies of the shipped model's own. A shader carries no
+//! id, so what the page writes is `gpu_game_of_life/*.wgsl` line for line.
 
-use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
-use henad_core::authoring::model::binding::BindingDecl;
-use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
-use henad_core::authoring::primitives::rng::{below, mix_seed, next_bits};
-use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::view::{StatDescriptor, StatValue};
+use henad::authoring::GRID_INIT_SEED;
+use henad::authoring::prelude::*;
 
-use super::life::PALETTE;
+use crate::life::PALETTE;
 
-henad_core::params! {
+henad::params! {
     const GRID_WIDTH = u32_param("grid_width", "Grid Width", 1024, 1, 16_384);
     const GRID_HEIGHT = u32_param("grid_height", "Grid Height", 1024, 1, 16_384);
     const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01));
@@ -34,13 +28,13 @@ impl GpuGridModel for GpuLifeModel {
 
     const BUFFERS: &'static [&'static str] = &["state"];
 
-    const STEP_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::step::SHADER_STRING;
-    const DISPLAY_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::display::SHADER_STRING;
-    const REDUCE_SHADER: &'static str = crate::shader_bindings::gpu_game_of_life::reduce::SHADER_STRING;
+    const STEP_SHADER: &'static str = crate::shader_bindings::gpu_life::step::SHADER_STRING;
+    const DISPLAY_SHADER: &'static str = crate::shader_bindings::gpu_life::display::SHADER_STRING;
+    const REDUCE_SHADER: &'static str = crate::shader_bindings::gpu_life::reduce::SHADER_STRING;
 
-    const STEP_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_GAME_OF_LIFE_STEP;
-    const DISPLAY_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_GAME_OF_LIFE_DISPLAY;
-    const REDUCE_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_GAME_OF_LIFE_REDUCE;
+    const STEP_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_LIFE_STEP;
+    const DISPLAY_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_LIFE_DISPLAY;
+    const REDUCE_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_LIFE_REDUCE;
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
         descriptors()
@@ -98,14 +92,15 @@ fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u32> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::cpu::grid_engine::GridModelState;
-    use henad_compute::gpu::grid_engine::GpuGridState;
-    use henad_compute::gpu::{GpuContext, GpuSimState as _};
-    use henad_core::model::SimState as _;
+    use henad::engine::{GpuGridState, GridModelState};
+    use henad::gpu::{GpuContext, wgpu};
+    use henad::runner::{GpuSimState as _, SimState as _};
+    use henad::stats::StatEntry;
+    use henad::testing::{TestDeviceRequest, headless_test_device};
 
-    use crate::tests::tutorial::life::LifeModel;
+    use crate::life::LifeModel;
 
-    fn alive(stats: &[henad_core::view::StatEntry]) -> u64 {
+    fn alive(stats: &[StatEntry]) -> u64 {
         match stats.first().map(|s| s.value.clone()) {
             Some(StatValue::Scalar(v)) => v as u64,
             other => panic!("expected a scalar Alive stat, got {other:?}"),
@@ -125,9 +120,7 @@ mod tests {
 
     #[test]
     fn the_alive_count_matches_the_cpu_model() {
-        let Some(ctx) =
-            henad_explore::testing::headless_test_device(&henad_explore::testing::TestDeviceRequest::baseline())
-        else {
+        let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
             log::warn!("skipping the_alive_count_matches_the_cpu_model: no wgpu adapter available");
             return;
         };

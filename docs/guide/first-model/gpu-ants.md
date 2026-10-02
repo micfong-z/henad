@@ -43,7 +43,7 @@ Let's start by declaring the state again, this time as buffers.
 Where the CPU model kept one `Vec` per attribute, the GPU model keeps one storage buffer per attribute, and the `buffers!` macro declares them the way `agent_lanes!` declared lanes.
 
 ``` { .rust .annotate title="crates/henad-models/src/gpu_foraging/mod.rs" }
-henad_core::buffers! {
+henad::buffers! {
     const POS = "pos" drawable; // (1)!
     const STATE = "state"; // (2)!
     const COLOR = "color" drawable; // (3)!
@@ -283,7 +283,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 This follows the same shape as [Implementing `GpuGridModel`](gpu-game-of-life.md#implementing-gpugridmodel).
 
 ``` rust title="crates/henad-models/src/gpu_foraging/mod.rs"
-use henad_core::authoring::model::gpu_agent_model::GpuAgentModel;
+use henad::authoring::prelude::*;
 
 pub struct GpuForagingModel;
 
@@ -330,13 +330,11 @@ impl GpuAgentModel for GpuForagingModel {
 `INDEX` keeps its default of `false`.
 Our ants read the field and never each other, so the engine builds no neighbour index, just as `NoIndex` told it on the CPU.
 
-Here are the other imports that `impl` relies on, the whole of the trait's vocabulary included, since we meet the rest of it further down:
+Here are the other imports that `impl` relies on, the whole of the trait's vocabulary included, since we meet the rest of it further down.
+The prelude holds the trait and the stat types, and the rest of the vocabulary sits at `henad::authoring`:
 
 ``` rust title="crates/henad-models/src/gpu_foraging/mod.rs"
-use henad_core::authoring::model::gpu_agent_model::{
-    BufferSpec, DisplaySpec, Domain, Geometry, PassCtx, PassId, PassSpec, ReduceSpec,
-};
-use henad_core::view::{StatDescriptor, StatValue};
+use henad::authoring::{BufferSpec, DisplaySpec, Domain, Geometry, PassCtx, PassId, PassSpec, ReduceSpec};
 
 use crate::foraging::{ANT_PALETTE, AntLanes, ForagingModel};
 ```
@@ -391,18 +389,15 @@ A GPU state rejects a live edit, and the engine marks the whole list accordingly
     }
 ```
 
-1. The engine's own three parameters, read back by the indices `cpu::agent_engine` gives them, with the defaults coming from the CPU model too.
+1. The engine's own three parameters, read back at the indices `NUM_AGENTS`, `WORLD_WIDTH` and `WORLD_HEIGHT`, with the defaults coming from the CPU model too.
 2. One length per buffer, in `u32`-sized elements and in declaration order. Reading it against the `buffers!` block gives the full layout: two floats per ant for `pos`, one word each for `state`, `color` and `rng`, two layers of cells for `field` and `accum`, and one word per cell for `sites`.
 
 From `dims` the engine resolves a `Geometry` once at construction, carrying the population, the extent, the cell grid, the number of cells and the display texture size, and hands it to everything below.
 
 ``` rust title="crates/henad-models/src/gpu_foraging/mod.rs"
-use henad_compute::cpu::agent_engine::{
+use henad::authoring::{
     AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
 };
-use henad_core::authoring::model::field::Extent;
-use henad_core::helpers::{extract_f32, extract_u32};
-use henad_core::params::{ParamDescriptor, ParamValue};
 ```
 
 ### Initialisation
@@ -501,14 +496,13 @@ fn packed_cell_palette() -> [[u32; 4]; 4] {
 2. Both palettes are packed from the CPU model's constants rather than retyped, one for the step uniform and one for the display uniform.
 
 ``` rust title="crates/henad-models/src/gpu_foraging/mod.rs"
-use henad_compute::cpu::field::scalar::ScalarFieldSpec as _;
-use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel as _};
-use henad_core::authoring::primitives::rng::mix_seed;
+use henad::authoring::AgentLanes as _;
 
 use crate::foraging::field::{CELL_PALETTE, EMPTY, LOW_PHEROMONE, PheromoneField};
 ```
 
-The two `as _` imports bring `alloc`, `init` and `build_sites` into scope without naming the traits, since nothing here calls them by name.
+The prelude's `AgentModel` and `ScalarFieldSpec` bring `init` and `build_sites` into scope.
+The `as _` import brings `alloc` into scope without naming `AgentLanes`, since nothing here calls it by name.
 
 ### Tick lifecycle
 
@@ -1050,12 +1044,12 @@ That last property is the one to test, and the test is a plain replay:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::gpu::GpuAgentState;
+    use henad::engine::GpuAgentState;
+    use henad::testing::{TestDeviceRequest, headless_test_device};
 
     #[test]
     fn a_run_replays_bit_identically() {
-        let Some(ctx) = crate::tests::support::headless_context("gpu_foraging_test_device", wgpu::Features::empty())
-        else {
+        let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
             log::warn!("skipping a_run_replays_bit_identically: no wgpu adapter available");
             return;
         };
@@ -1100,41 +1094,41 @@ For reference, here is everything we wrote on this page.
 ??? example "`gpu_foraging/mod.rs` completed"
 
     ``` rust
-    --8<-- "crates/henad-models/src/tests/tutorial/gpu_foraging.rs"
+    --8<-- "examples/tutorial/src/gpu_foraging/mod.rs"
     ```
 
 ??? example "`gpu_foraging/state.wgsl` completed"
 
     ``` wgsl
-    --8<-- "crates/henad-models/src/gpu_ants/state.wgsl"
+    --8<-- "examples/tutorial/src/gpu_foraging/state.wgsl"
     ```
 
 ??? example "`gpu_foraging/step.wgsl` completed"
 
     ``` wgsl
-    --8<-- "crates/henad-models/src/gpu_ants/step.wgsl"
+    --8<-- "examples/tutorial/src/gpu_foraging/step.wgsl"
     ```
 
 ??? example "`gpu_foraging/merge.wgsl` completed"
 
     ``` wgsl
-    --8<-- "crates/henad-models/src/gpu_ants/merge.wgsl"
+    --8<-- "examples/tutorial/src/gpu_foraging/merge.wgsl"
     ```
 
 ??? example "`gpu_foraging/display.wgsl` completed"
 
     ``` wgsl
-    --8<-- "crates/henad-models/src/gpu_ants/display.wgsl"
+    --8<-- "examples/tutorial/src/gpu_foraging/display.wgsl"
     ```
 
 ??? example "`gpu_foraging/reduce.wgsl` completed"
 
     ``` wgsl
-    --8<-- "crates/henad-models/src/gpu_ants/reduce.wgsl"
+    --8<-- "examples/tutorial/src/gpu_foraging/reduce.wgsl"
     ```
 
-The Rust listing is stored in the repository at [`crates/henad-models/src/tests/tutorial/gpu_foraging.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/tests/tutorial/gpu_foraging.rs), where it binds the shipped shaders under the paths its own directory gives them.
-The five shaders are the shipped port's own, at [`crates/henad-models/src/gpu_ants/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_ants), and differ from what we wrote only in the import path of `state.wgsl`, which follows the directory name.
+The listings above are stored in the repository at [`examples/tutorial/src/gpu_foraging/`](https://github.com/micfong-z/henad/tree/master/examples/tutorial/src/gpu_foraging/).
+The five shaders there are copies of the shipped port's own, at [`crates/henad-models/src/gpu_ants/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_ants), and differ from them only in the import path of `state.wgsl`, which follows the directory name.
 
 The actual default model is at [`crates/henad-models/src/gpu_ants/mod.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/gpu_ants/mod.rs).
 

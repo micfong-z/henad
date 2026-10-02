@@ -74,7 +74,7 @@ A node needs to remember its state and how long ago it last ran a virus check.
 We can declare this in lane form as follows:
 
 ``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
-use henad_compute::agent_lanes;
+use henad::agent_lanes;
 
 agent_lanes! {
     pub struct VirusLanes {
@@ -148,7 +148,7 @@ Edges are drawn under the nodes.
 This is very similar to [Implementing `AgentModel`](ants.md#implementing-agentmodel).
 
 ``` rust title="crates/henad-models/src/virus.rs"
-use henad_core::authoring::model::network_model::NetworkModel;
+use henad::authoring::prelude::*;
 
 pub struct VirusModel;
 
@@ -193,24 +193,14 @@ impl NetworkModel for VirusModel {
 
 `CHUNK` keeps its default of 512 nodes per chunk, for the reasons given in [Deciding on `CHUNK`](ants.md#deciding-on-chunk).
 
-Here are the other imports that `impl` relies on, along with a few that the functions below will need:
-
-``` rust title="crates/henad-models/src/virus.rs"
-use henad_core::authoring::model::field::Extent;
-use henad_core::authoring::model::network_model::{NodeCtx, Nodes};
-use henad_core::network::Network;
-use henad_core::view::{StatDescriptor, StatValue};
-```
+The prelude holds every other name that `impl` relies on, `Extent`, `Nodes`, `NodeCtx` and `Network` among them, so it needs no further import.
 
 ### Parameters
 
 The model declares eight parameters of its own:
 
 ``` rust title="crates/henad-models/src/virus.rs"
-use henad_core::helpers::{bool_param, extract_bool, extract_f32, extract_u32, f32_param, u32_param};
-use henad_core::params::{ParamDescriptor, ParamValue};
-
-henad_core::params! {
+henad::params! {
     const AVERAGE_NODE_DEGREE = u32_param("average_node_degree", "Average Node Degree", 6, 1, 20).on_reload();
     const INITIAL_OUTBREAK_SIZE =
         u32_param("initial_outbreak_size", "Initial Outbreak Size", 3, 1, 10_000).on_reload();
@@ -363,11 +353,7 @@ The order of the draws matters.
 Positions and timers come first, then the edges, then the outbreak.
 Moving one of them around would give a different run from the same seed.
 
-Both draws come from one import:
-
-``` rust title="crates/henad-models/src/virus.rs"
-use henad_core::authoring::primitives::rng::{next_float, next_index};
-```
+Both draws come from the prelude.
 
 ### A random graph
 
@@ -629,11 +615,10 @@ fn recolor(src: &[u32], dst: &[u32], color: &mut [u8], state: &[u8]) -> bool {
 ```
 
 ``` rust title="crates/henad-models/src/virus.rs"
-use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_compute::for_each_chunk_mut;
+use henad::for_each_chunk_mut;
 ```
 
-`STATS_CHUNK` is for the next section.
+`reduce_chunks` and `STATS_CHUNK` come from the prelude, and `STATS_CHUNK` is for the next section.
 
 ## Statistics
 
@@ -718,9 +703,7 @@ An action is a one-off change to the state that the user triggers between two ti
 Declaring one works much like declaring parameters:
 
 ``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
-use henad_core::action::ActionDescriptor;
-
-henad_core::actions! {
+henad::actions! {
     const REWIRE = ActionDescriptor::new("rewire", "Rewire a link"); // (1)!
 }
 ```
@@ -835,8 +818,8 @@ A path of five nodes, with the outbreak at one end and a resistant node in the m
 ``` { .rust .annotate title="crates/henad-models/src/virus.rs" }
 #[test]
 fn the_virus_walks_a_path_and_stops_at_a_resistant_node() {
-    use henad_compute::cpu::network_engine::NetworkModelState;
-    use henad_core::model::SimState as _;
+    use henad::engine::NetworkModelState;
+    use henad::runner::SimState as _;
 
     let params = vec![ // (1)!
         ParamValue::U32(5),      // num_agents
@@ -908,10 +891,10 @@ Here is everything we wrote on this page, gathered into one file.
 ??? example "`virus.rs` completed"
 
     ``` rust
-    --8<-- "crates/henad-models/src/tests/tutorial/virus.rs"
+    --8<-- "examples/tutorial/src/virus.rs"
     ```
 
-The listing above is stored in the repository at [`crates/henad-models/src/tests/tutorial/virus.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/tests/tutorial/virus.rs).
+The listing above is stored in the repository at [`examples/tutorial/src/virus.rs`](https://github.com/micfong-z/henad/blob/master/examples/tutorial/src/virus.rs).
 
 The actual default model is at [`crates/henad-models/src/virus_network/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/virus_network).
 It splits the same code across four files, and adds the geometric generator.

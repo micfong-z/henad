@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "examples/tutorial"]
 # Reference implementations for the cross-engine comparison. They pull in another engine's
 # dependency tree and lint settings, and nothing here builds or tests them.
 exclude = ["benchmarks/krabmaga"]

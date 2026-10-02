@@ -63,7 +63,7 @@ It needs its position, the direction it last moved in, whether it is carrying fo
 We can declare this in lane form as follows:
 
 ``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
-use henad_compute::agent_lanes;
+use henad::agent_lanes;
 
 /// No step taken yet, so momentum has nothing to continue.
 pub const NO_STEP: u8 = u8::MAX;
@@ -132,15 +132,15 @@ pub const TO_HOME: usize = 1;
 
 !!! warning "Separate module must be used"
 
-    `henad_core::params!` generates a function named `descriptors()` into the module it expands in, which means a module can hold only one parameter list.
+    `henad::params!` generates a function named `descriptors()` into the module it expands in, which means a module can hold only one parameter list.
     A field layer declares parameters of its own, separately from the model above it, so it needs to be in a separate module.
 
 The field itself carries a single parameter, which controls how fast a trail fades:
 
 ``` rust title="crates/henad-models/src/foraging/field.rs"
-use henad_core::helpers::{extract_f32, f32_param};
+use henad::authoring::prelude::*;
 
-henad_core::params! {
+henad::params! {
     const EVAPORATION = f32_param("evaporation", "Evaporation", 0.999, 0.9, 1.0, Some(0.001));
 }
 ```
@@ -150,10 +150,6 @@ henad_core::params! {
 The `ScalarFieldSpec` trait specifies information about the field to the engine.
 
 ``` { .rust .annotate title="crates/henad-models/src/foraging/field.rs" }
-use henad_compute::cpu::field::scalar::ScalarFieldSpec;
-use henad_compute::cpu::primitives::scatter::Combine;
-use henad_core::params::{ParamDescriptor, ParamValue};
-
 pub struct PheromoneField;
 
 pub struct FieldParams {
@@ -329,7 +325,7 @@ That completes `field.rs`, and we can head back to `mod.rs`.
 This is very similar to [Implementing `GridModel`](game-of-life.md#implementing-gridmodel).
 
 ``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_core::authoring::model::agent_model::AgentModel;
+use henad::authoring::prelude::*;
 
 pub struct ForagingModel;
 
@@ -374,14 +370,9 @@ impl AgentModel for ForagingModel {
 6. The hot parameters, extracted once per tick.
 7. A per-chunk reduction, merged in chunk order and accumulated across ticks. Use `()` for a model with nothing to count.
 
-Here are the other imports that `impl` relies on:
+The prelude holds every other name that `impl` relies on, and the field's own items take one more import:
 
 ``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_compute::cpu::field::scalar::ScalarField;
-use henad_core::authoring::model::agent_model::{NoIndex, StepCtx};
-use henad_core::authoring::model::field::Extent;
-use henad_core::view::{StatDescriptor, StatValue};
-
 use self::field::{FOOD, HOME, OBSTACLE, PheromoneField, TO_FOOD, TO_HOME, nest_cell};
 ```
 
@@ -410,10 +401,7 @@ Ants gets away with 4096 because each ant does far more work per step than a boi
 The model declares 4 parameters, and all 4 apply live to a running simulation.
 
 ``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_core::helpers::{extract_f32, f32_param};
-use henad_core::params::{ParamDescriptor, ParamValue};
-
-henad_core::params! {
+henad::params! {
     const UPDATE_CUTDOWN = f32_param("update_cutdown", "Trail Falloff", 0.9, 0.5, 1.0, Some(0.01));
     const REWARD = f32_param("reward", "Site Reward", 1.0, 0.1, 10.0, Some(0.1));
     const MOMENTUM = f32_param("momentum", "Momentum Probability", 0.8, 0.0, 1.0, Some(0.01));
@@ -788,13 +776,10 @@ Lastly, wire both passes into the trait:
 
 A single-pass model can omit `run_deposit_pass` entirely.
 
-These imports should now all be in place:
+The prelude holds the random draws, the grid helpers and the deposit types these passes use, and `for_each_chunk_mut!` needs one more import:
 
 ``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_compute::cpu::field::scalar::{Deposits, ScalarRead};
-use henad_compute::for_each_chunk_mut;
-use henad_core::authoring::primitives::rng::{choice3, next_bits, next_float, reservoir_accept};
-use henad_core::authoring::primitives::space::{Boundary, MOORE_COLUMN_MAJOR, cell_index, offset_cell};
+use henad::for_each_chunk_mut;
 ```
 
 ### Statistics
@@ -835,10 +820,7 @@ fn field_sum(cells: &[f32]) -> f64 {
 
 1. Values widen to `f64` before summing, and the chunks fold in index order. Float addition is not associative, so a sum folded in whatever order chunks happened to finish would differ from machine to machine.
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_core::grid::Grid2D;
-```
+`reduce_chunks`, `STATS_CHUNK` and `Grid2D` come from the prelude.
 
 ## Running it
 
@@ -892,16 +874,16 @@ For reference, here is everything we wrote on this page.
 ??? example "`foraging/mod.rs` completed"
 
     ``` rust
-    --8<-- "crates/henad-models/src/tests/tutorial/foraging/mod.rs"
+    --8<-- "examples/tutorial/src/foraging/mod.rs"
     ```
 
 ??? example "`foraging/field.rs` completed"
 
     ``` rust
-    --8<-- "crates/henad-models/src/tests/tutorial/foraging/field.rs"
+    --8<-- "examples/tutorial/src/foraging/field.rs"
     ```
 
-The listing above is stored in the repository at [`crates/henad-models/src/tests/tutorial/foraging/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/tests/tutorial/foraging/).
+The listing above is stored in the repository at [`examples/tutorial/src/foraging/`](https://github.com/micfong-z/henad/tree/master/examples/tutorial/src/foraging/).
 
 The actual default model is at [`crates/henad-models/src/ants/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/ants).
 

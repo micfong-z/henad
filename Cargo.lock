@@ -2047,6 +2047,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "henad-tutorial"
+version = "0.2.0"
+dependencies = [
+ "henad",
+ "henad-build",
+ "log",
+ "rayon",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

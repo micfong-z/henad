@@ -6,7 +6,7 @@ icon: material/cube-outline
 
 # Example models
 
-Ten example models ship with Henad, in the set `henad_models::example_models()` returns.
+Ten example models ship with Henad, in the set `henad::models::example_models()` returns.
 Six of them run on the CPU, and four of those six have a GPU port running the same simulation entirely in compute shaders.
 The two network models run on the CPU only.
 

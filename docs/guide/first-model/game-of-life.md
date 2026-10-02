@@ -71,13 +71,14 @@ We just need a few more pieces to register this model for actual use.
 Now that the rule exists, let's actually start to implement the trait.
 
 ``` rust title="crates/henad-models/src/life.rs"
-use henad_core::authoring::model::grid_model::GridModel;
+use henad::authoring::prelude::*;
 
 pub struct LifeModel;
 
 impl GridModel for LifeModel {}
 ```
 
+The prelude brings in the trait, and every other name a model's file needs, in one line.
 Notice that the struct is empty, which is the intended shape for a grid model.
 A model in Henad is just const metadata plus pure functions, and the grid data is handled by the engine.
 
@@ -170,11 +171,7 @@ Life doesn't need to know which neighbour is which, only how many are alive, but
     · 3 ·
     ```
 
-While we're here, let's add the import this needs:
-
-``` rust title="crates/henad-models/src/life.rs"
-use henad_core::topology::NeighborhoodKind;
-```
+`NeighborhoodKind` is one of the names the prelude brought in.
 
 ### Update rule
 
@@ -263,14 +260,7 @@ The [statistics](#statistics) can also wait until later in the tutorial, so for 
     }
 ```
 
-Once we add the imports these functions need, the file compiles:
-
-``` rust title="crates/henad-models/src/life.rs"
-use henad_core::authoring::primitives::rng::{below, next_bits};
-use henad_core::grid::Grid2D;
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::view::{StatDescriptor, StatValue};
-```
+The prelude already holds every name these functions use, so the file compiles.
 
 ## Running it
 
@@ -336,7 +326,7 @@ Let's deal with the density first.
 To make it adjustable, we hoist the hard-coded `0.3` out of `init` and declare it as a parameter:
 
 ``` rust title="crates/henad-models/src/life.rs"
-henad_core::params! {
+henad::params! {
     const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01)).on_reload();
 }
 ```
@@ -365,7 +355,7 @@ Next we forward the descriptors and read the value in `init`:
     }
 ```
 
-`f32_param` and `extract_f32` both come from `henad_core::helpers`.
+`f32_param` and `extract_f32` both come from the prelude, which holds every helper at `henad::authoring`.
 
 Grid width and height belong to every grid model, so the engine prepends them rather than making each model declare its own.
 An operator sees the composed list.
@@ -415,9 +405,7 @@ fn count_alive(cells: &[u8]) -> u64 {
 2. This closure maps one chunk, in parallel with every other chunk. It takes a range rather than a slice so that a caller can read several lanes per chunk.
 3. This is the fold, applied **in chunk order** rather than completion order. Counting integers would survive any order, but a float sum would not, and numbers that shift with rayon's scheduling are not reproducible.
 
-``` rust title="crates/henad-models/src/life.rs"
-use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-```
+`reduce_chunks` and `STATS_CHUNK` come from the prelude as well.
 
 Before we move on, be aware that `stats` runs when a snapshot is published rather than on every tick, so this likely runs at a much lower frequency than `step_cell`.
 
@@ -430,8 +418,8 @@ That small pattern can catch a wrong neighbour order, a missing wrap and a swapp
 ``` { .rust .annotate title="crates/henad-models/src/life.rs" }
 #[test]
 fn a_blinker_rotates_and_comes_back() {
-    use henad_compute::cpu::grid_engine::GridModelState;
-    use henad_core::model::SimState as _;
+    use henad::engine::GridModelState;
+    use henad::runner::SimState as _;
 
     // A 5x5 grid, so the pattern stays clear of the wrap.
     let params = vec![ParamValue::U32(5), ParamValue::U32(5), ParamValue::F32(0.0)]; // (1)!
@@ -483,10 +471,10 @@ Here is everything we wrote on this page, gathered into one file.
 ??? example "`life.rs` completed"
 
     ``` rust
-    --8<-- "crates/henad-models/src/tests/tutorial/life.rs"
+    --8<-- "examples/tutorial/src/life.rs"
     ```
 
-The listing above is stored in the repository at [`crates/henad-models/src/tests/tutorial/life.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/tests/tutorial/life.rs).
+The listing above is stored in the repository at [`examples/tutorial/src/life.rs`](https://github.com/micfong-z/henad/blob/master/examples/tutorial/src/life.rs).
 
 The actual default model is at [`crates/henad-models/src/game_of_life.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/game_of_life.rs).
 It runs under its own ID, with a `pub` palette that its GPU port reuses.

@@ -1,9 +1,6 @@
 //! The pheromone field as `docs/guide/first-model/ants.md` builds it.
 
-use henad_compute::cpu::field::scalar::ScalarFieldSpec;
-use henad_compute::cpu::primitives::scatter::Combine;
-use henad_core::helpers::{extract_f32, f32_param};
-use henad_core::params::{ParamDescriptor, ParamValue};
+use henad::authoring::prelude::*;
 
 pub const LOW_PHEROMONE: f32 = 1e-14;
 
@@ -18,7 +15,7 @@ pub const HOME: u8 = 3;
 pub const TO_FOOD: usize = 0;
 pub const TO_HOME: usize = 1;
 
-henad_core::params! {
+henad::params! {
     const EVAPORATION = f32_param("evaporation", "Evaporation", 0.999, 0.9, 1.0, Some(0.001));
 }
 

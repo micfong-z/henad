@@ -12,8 +12,8 @@ Most of them exist twice, once in Rust for CPU models and once in WGSL for GPU m
 The two generators, `xorshift64` and `pcg_hash`, fill the same role under different names.
 
 ```rust
-use henad_core::authoring::primitives::space::{Boundary, dist_sq, offset_cell};
-use henad_core::authoring::primitives::rng::{next_bits, random_float};
+use henad::authoring::primitives::space::{Boundary, dist_sq, offset_cell};
+use henad::authoring::primitives::rng::{next_bits, random_float};
 ```
 
 ```wgsl
@@ -22,6 +22,8 @@ use henad_core::authoring::primitives::rng::{next_bits, random_float};
 ```
 
 Where a primitive exists in both languages, the names match.
+`henad::authoring::prelude` holds every Rust draw, and `Boundary`, `cell_index`, `offset_cell`, `dist_sq` and the three offset tables of the space helpers.
+A model imports the other space helpers from `henad::authoring::primitives::space`.
 Each entry below gives the Rust signature, and calls out the WGSL one wherever it differs.
 
 ## Index
@@ -34,7 +36,7 @@ Each entry below gives the Rust signature, and calls out the WGSL one wherever i
 
 ## Space
 
-`henad_core::authoring::primitives::space` and `henad::space`.
+`henad::authoring::primitives::space` in Rust, and `henad::space` in WGSL.
 
 Positions are `f32` in world units, cells are `u32` indices into a grid `w` by `h`.
 The y axis points down, matching the display, and `dy` therefore runs south.
@@ -278,7 +280,7 @@ fn offsets(kind: NeighborhoodKind) -> &'static [(i32, i32)]
 The table for a `NeighborhoodKind`, in `step_cell` order.
 `Moore` gives [`MOORE_ROW_MAJOR`](#moore_row_major) and `VonNeumann` gives [`VON_NEUMANN`](#von_neumann).
 
-`NeighborhoodKind` comes from `henad_core::topology`.
+`NeighborhoodKind` is at `henad::authoring::NeighborhoodKind`, and the authoring prelude holds it.
 
 Rust only.
 A shader names a table by its id instead, as in [`neighbor_count`](#neighbor_count).
@@ -351,7 +353,7 @@ See also: [`neighbor_count`](#neighbor_count), [`offset_cell`](#offset_cell).
 
 ## Random
 
-`henad_core::authoring::primitives::rng` and `henad::rng`.
+`henad::authoring::primitives::rng` in Rust, and `henad::rng` in WGSL.
 
 A draw takes a raw `u32` word and is pure.
 A `next_*` form advances a generator and then calls the pure form.
@@ -548,13 +550,13 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 
 | Need | Where |
 |---|---|
-| Agents within a radius | `SpatialHash::query_radius`, in `henad_core::spatial_hash`. Takes a caller-provided result buffer, so a query does not allocate |
-| World size | `henad_core::Extent`. The engine prepends world size to every agent model's params |
+| Agents within a radius | `SpatialHash::query_radius`, on `henad::authoring::SpatialHash`. Takes a caller-provided result buffer, so a query does not allocate |
+| World size | `henad::authoring::Extent`. The engine prepends world size to every agent model's params |
 | A per-chunk RNG seed | `chunk_seed(base, tick, chunk_index)`, in `henad-compute`'s `cpu/primitives/chunked.rs` |
-| Counting cells | `reduce_chunks`, in the same file |
-| A node's neighbours | `Network::in_neighbors` and `Network::out_neighbors`, in `henad_core::network`. Each returns a slice of node indices without allocating. On an undirected graph the two return the same list |
-| Whether two nodes are joined | `Network::has_edge`, or `Network::edge_between` for the edge's index, in the same file. A lookup walks one node's neighbours, the shorter list on an undirected graph. On a directed graph it looks only for an edge from the first node to the second |
-| Connected components | `label_components`, in `henad-compute`'s `cpu/primitives/components.rs`. Labels every node with the lowest node index in its component, into a caller-provided buffer, and returns the number of components and the size of the largest. On a directed graph it finds weakly connected components |
+| Counting cells | `henad::authoring::reduce_chunks` |
+| A node's neighbours | `Network::in_neighbors` and `Network::out_neighbors`, on `henad::authoring::Network`. Each returns a slice of node indices without allocating. On an undirected graph the two return the same list |
+| Whether two nodes are joined | `Network::has_edge`, or `Network::edge_between` for the edge's index. A lookup walks one node's neighbours, the shorter list on an undirected graph. On a directed graph it looks only for an edge from the first node to the second |
+| Connected components | `henad::authoring::label_components`. Labels every node with the lowest node index in its component, into a caller-provided buffer, and returns the number of components and the size of the largest. On a directed graph it finds weakly connected components |
 | Arithmetic, trigonometry, `min`, `max`, `clamp` | Rust and WGSL both provide these already |
 
 ## Not provided

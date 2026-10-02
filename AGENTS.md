@@ -439,7 +439,7 @@ crate that has shadowed them.
 
 ## Architecture
 
-The workspace has 8 crates:
+The workspace has 8 crates, and the tutorial crate beside them:
 
 ```
 henad-core ─┬─ henad-build      (build dependency of every crate with WGSL or a stamp)
@@ -455,6 +455,7 @@ henad-explore  sweeps, searches and the testing kit
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models
 henad          the facade, one module tree over the others, the crate a program depends on
+henad-tutorial the first-model guide's finished code, in examples/tutorial, on the facade alone
 ```
 
 The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
@@ -474,7 +475,9 @@ henad-explore to henad-models, for its tests, the one from henad-models to henad
 to henad-models, for their unit tests without the feature. The pair between henad-models and
 henad-explore is the one dev-only edge against the dependency direction. Neither normal graph
 reaches the other, each crate compiles once, and packaging strips both edges. henad-explore reaching
-an example model outside its tests needs the maintainer's approval as a new edge.
+an example model outside its tests needs the maintainer's approval as a new edge. henad-tutorial
+depends on the facade and, to build, on henad-build. Its tests take the facade again with
+`example-models` and `testing`, and it names no other Henad crate.
 
 - **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
   GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
@@ -1226,6 +1229,23 @@ an example model outside its tests needs the maintainer's approval as a new edge
   `tests/facade_paths.rs` compiles against facade paths alone, for the items the tutorial never
   names. It defines no model, needs no build script and never builds on a device, and its parts
   that need an entry compile in a module no test calls. Keep both.
+- **henad-tutorial** (`examples/tutorial`, `publish = false`): the finished code of the five pages
+  under `docs/guide/first-model/`, which include each file whole. `life.rs`, `foraging/`,
+  `virus.rs`, `gpu_life/` and `gpu_foraging/` hold the models `life`, `foraging`, `virus`,
+  `gpu_life` and `gpu_foraging`, and `models()` (`lib.rs`) registers the five under the crate's
+  own `build_info!()`. The library and its tests name every item by a facade path, as a reader's
+  crate does: `henad::authoring::prelude::*` and `henad::authoring::...` in a model, the states
+  through `henad::engine`, the example models through `henad::models`. An item the tutorial needs
+  and the facade lacks goes into `crates/henad/src/lib.rs`, never into a direct dependency on an
+  inner crate. `build.rs` calls `stamp_commit` and `ShaderBuild::discover("src")`, and
+  `henad::include_shaders!()` brings the bindings in, as in a downstream crate. The two GPU
+  directories carry their own shader copies. `tests/shaders.rs` holds each equal to the shipped
+  one byte for byte, `gpu_foraging`'s apart from the import path `gpu_foraging::state`.
+  `tests/parity.rs` steps each tutorial model beside the example model it teaches and demands the
+  same bits (`the_game_of_life_tutorial_matches_the_shipped_model` and its siblings), and
+  `tests/kit.rs` runs `assert_set_conforms` over `models()`. The `package` job excludes it,
+  `scripts/check_packaging.sh` reads `crates/` alone, and `about.toml`'s `[private] ignore` keeps
+  it off the licence page. Keep the three test files.
 
 ### Adding a new model
 
@@ -1326,8 +1346,8 @@ device is available, that a GPU entry builds on a baseline device and runs a ful
   per tick on the sequential path by `advance_tick_seed` — folding the tick in only through
   `chunk_seed` measured 14% slower on SIR with identical content, and that was never explained.
   Boids, ants, Virus on a Network and Team Assembly each have a
-  `results_do_not_depend_on_the_thread_count` test, as do `cpu/grid_engine.rs`, `cpu/layout.rs`
-  and `cpu/primitives/components.rs`. Keep them. The kit's `ThreadCount` compares every CPU model of
+  `results_do_not_depend_on_the_thread_count` test, as do the foraging tutorial,
+  `cpu/grid_engine.rs`, `cpu/layout.rs` and `cpu/primitives/components.rs`. Keep them. The kit's `ThreadCount` compares every CPU model of
   a set the same way, at 14 jobs, and `a_shared_accumulator_fails_the_thread_count_check` and
   `a_build_that_reads_the_pool_width_fails_the_thread_count_check` pin it.
 - `AgentModel::CHUNK` is per-model on purpose. It sets both the RNG seeding granularity and the

@@ -4,17 +4,9 @@
 //! and the page tells a reader the same thing. The page leaves out the shipped model's geometric
 //! generator, so this declares one parameter fewer.
 
-use henad_compute::agent_lanes;
-use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_compute::for_each_chunk_mut;
-use henad_core::action::ActionDescriptor;
-use henad_core::authoring::model::field::Extent;
-use henad_core::authoring::model::network_model::{NetworkModel, NodeCtx, Nodes};
-use henad_core::authoring::primitives::rng::{next_float, next_index};
-use henad_core::helpers::{bool_param, extract_bool, extract_f32, extract_u32, f32_param, u32_param};
-use henad_core::network::Network;
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::view::{StatDescriptor, StatValue};
+use henad::agent_lanes;
+use henad::authoring::prelude::*;
+use henad::for_each_chunk_mut;
 
 agent_lanes! {
     pub struct VirusLanes {
@@ -55,7 +47,7 @@ const EDGE_CHUNK: usize = 8192;
 /// Number of draws a rewire makes before giving up.
 const REWIRE_TRIES: u32 = 64;
 
-henad_core::params! {
+henad::params! {
     const AVERAGE_NODE_DEGREE = u32_param("average_node_degree", "Average Node Degree", 6, 1, 20).on_reload();
     const INITIAL_OUTBREAK_SIZE =
         u32_param("initial_outbreak_size", "Initial Outbreak Size", 3, 1, 10_000).on_reload();
@@ -69,7 +61,7 @@ henad_core::params! {
     const KEEP_REWIRING = bool_param("keep_rewiring", "Keep Rewiring", false);
 }
 
-henad_core::actions! {
+henad::actions! {
     const REWIRE = ActionDescriptor::new("rewire", "Rewire a link");
 }
 
@@ -323,8 +315,8 @@ fn count_states(state: &[u8]) -> [u64; 3] {
 
 #[test]
 fn the_virus_walks_a_path_and_stops_at_a_resistant_node() {
-    use henad_compute::cpu::network_engine::NetworkModelState;
-    use henad_core::model::SimState as _;
+    use henad::engine::NetworkModelState;
+    use henad::runner::SimState as _;
 
     let params = vec![
         ParamValue::U32(5),      // num_agents

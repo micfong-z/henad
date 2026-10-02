@@ -350,7 +350,7 @@ fn main(
 With the three shaders written, let's start on `mod.rs`.
 
 ``` rust title="crates/henad-models/src/gpu_life/mod.rs"
-use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
+use henad::authoring::prelude::*;
 
 pub struct GpuLifeModel;
 
@@ -449,9 +449,7 @@ Our three shaders are already part of it, with nothing to list.
 Each one's path decides its names, so `gpu_life/step.wgsl` becomes `shader_bindings::gpu_life::step` and `GPU_LIFE_STEP`.
 The [shaders page](../../authoring/shaders.md#generated-from-the-wgsl) has the rules a path follows.
 
-``` rust title="crates/henad-models/src/gpu_life/mod.rs"
-use henad_core::authoring::model::binding::BindingDecl;
-```
+`BindingDecl` comes from the prelude.
 
 ??? tip "A model with a second buffer"
 
@@ -470,7 +468,7 @@ use henad_core::authoring::model::binding::BindingDecl;
 Unlike a CPU grid model, nothing is prepended to a GPU model's parameter list, so width and height are ours to declare:
 
 ``` rust title="crates/henad-models/src/gpu_life/mod.rs"
-henad_core::params! {
+henad::params! {
     const GRID_WIDTH = u32_param("grid_width", "Grid Width", 1024, 1, 16_384);
     const GRID_HEIGHT = u32_param("grid_height", "Grid Height", 1024, 1, 16_384);
 }
@@ -576,14 +574,10 @@ Three items are left: the stat series, the step's uniform and `stats` itself.
 2. The step's uniform block as raw bytes. `params` in `step.wgsl` is a `vec2<u32>`, and two `u32`s laid end to end are exactly that.
 3. `counts` holds one entry per series, read back from the reduce pass. It arrives through an asynchronous readback rather than a stall, so a reported stat is a few milliseconds stale, and reads zero until the first readback lands.
 
-Once we add the imports these need, the file compiles:
+The prelude holds every other name these use, and the CPU engine's default seed takes one more import, after which the file compiles:
 
 ``` rust title="crates/henad-models/src/gpu_life/mod.rs"
-use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
-use henad_core::authoring::primitives::rng::{below, mix_seed, next_bits};
-use henad_core::helpers::{extract_u32, u32_param};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::view::{StatDescriptor, StatValue};
+use henad::authoring::GRID_INIT_SEED;
 ```
 
 ## Running it
@@ -652,7 +646,7 @@ Let's deal with the density first.
 As on the CPU page, we hoist the hard-coded `0.3` out of the seeding and declare it as a parameter:
 
 ``` rust title="crates/henad-models/src/gpu_life/mod.rs" hl_lines="4"
-henad_core::params! {
+henad::params! {
     const GRID_WIDTH = u32_param("grid_width", "Grid Width", 1024, 1, 16_384);
     const GRID_HEIGHT = u32_param("grid_height", "Grid Height", 1024, 1, 16_384);
     const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01));
@@ -672,7 +666,7 @@ Then we read the value where the grid is seeded:
     }
 ```
 
-`f32_param` and `extract_f32` both come from `henad_core::helpers`, next to the two we already use.
+`f32_param` and `extract_f32` both come from the prelude, next to the two we already use.
 
 An operator sees exactly the three we declared, in the order we declared them.
 Here it is for the shipped port, which declares the same list:
@@ -700,14 +694,15 @@ That makes the CPU model a correctness oracle for this one, and the test is just
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::cpu::grid_engine::GridModelState;
-    use henad_compute::gpu::grid_engine::GpuGridState;
-    use henad_compute::gpu::{GpuContext, GpuSimState as _};
-    use henad_core::model::SimState as _;
+    use henad::engine::{GpuGridState, GridModelState};
+    use henad::gpu::{GpuContext, wgpu};
+    use henad::runner::{GpuSimState as _, SimState as _};
+    use henad::stats::StatEntry;
+    use henad::testing::{TestDeviceRequest, headless_test_device};
 
     use crate::life::LifeModel;
 
-    fn alive(stats: &[henad_core::view::StatEntry]) -> u64 {
+    fn alive(stats: &[StatEntry]) -> u64 {
         match stats.first().map(|s| s.value.clone()) {
             Some(StatValue::Scalar(v)) => v as u64,
             other => panic!("expected a scalar Alive stat, got {other:?}"),
@@ -727,7 +722,7 @@ mod tests {
 
     #[test]
     fn the_alive_count_matches_the_cpu_model() {
-        let Some(ctx) = crate::tests::support::headless_context("gpu_life_test_device", wgpu::Features::empty()) else { // (2)!
+        let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else { // (2)!
             log::warn!("skipping the_alive_count_matches_the_cpu_model: no wgpu adapter available");
             return;
         };
@@ -762,7 +757,7 @@ mod tests {
 ```
 
 1. A GPU state reports whatever its last readback delivered, so a test has to drive the snapshot passes itself and wait, exactly as a one-shot snapshot in the app does.
-2. `headless_context` opens a device with no window behind it, and returns `None` on a machine with no adapter, where the test skips. Set `HENAD_REQUIRE_GPU=1` to turn that skip into a failure, so a green run actually means the GPU tests ran.
+2. `headless_test_device` opens a device with no window behind it, at the WebGPU baseline, and returns `None` on a machine with no adapter, where the test skips. It comes from `henad::testing`, behind the facade's `testing` feature. Set `HENAD_REQUIRE_GPU=1` to turn that skip into a failure, so a green run actually means the GPU tests ran.
 3. Both models take the same parameter vector, thanks to the list we spelled out.
 4. One step per submission here, for simplicity. The real runner encodes many steps per submission, capped at 64, because one oversized submission can trip the OS GPU watchdog and silently zero every later readback.
 
@@ -775,29 +770,29 @@ Here is everything we wrote on this page, gathered into four files.
 ??? example "`gpu_life/mod.rs` completed"
 
     ``` rust
-    --8<-- "crates/henad-models/src/tests/tutorial/gpu_life.rs"
+    --8<-- "examples/tutorial/src/gpu_life/mod.rs"
     ```
 
 ??? example "`gpu_life/step.wgsl` completed"
 
     ``` wgsl
-    --8<-- "crates/henad-models/src/gpu_game_of_life/step.wgsl"
+    --8<-- "examples/tutorial/src/gpu_life/step.wgsl"
     ```
 
 ??? example "`gpu_life/display.wgsl` completed"
 
     ``` wgsl
-    --8<-- "crates/henad-models/src/gpu_game_of_life/display.wgsl"
+    --8<-- "examples/tutorial/src/gpu_life/display.wgsl"
     ```
 
 ??? example "`gpu_life/reduce.wgsl` completed"
 
     ``` wgsl
-    --8<-- "crates/henad-models/src/gpu_game_of_life/reduce.wgsl"
+    --8<-- "examples/tutorial/src/gpu_life/reduce.wgsl"
     ```
 
-The Rust listing is stored in the repository at [`crates/henad-models/src/tests/tutorial/gpu_life.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/tests/tutorial/gpu_life.rs), where it binds the shipped shaders under the paths its own directory gives them.
-The three shaders are the shipped port's own, at [`crates/henad-models/src/gpu_game_of_life/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_game_of_life), since a shader carries no model ID and what we wrote is the same file line for line.
+The listings above are stored in the repository at [`examples/tutorial/src/gpu_life/`](https://github.com/micfong-z/henad/tree/master/examples/tutorial/src/gpu_life/).
+The three shaders there are copies of the shipped port's own, at [`crates/henad-models/src/gpu_game_of_life/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_game_of_life), since a shader carries no model ID and what we wrote is the same file line for line.
 
 The actual default model is at [`crates/henad-models/src/gpu_game_of_life/mod.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/gpu_game_of_life/mod.rs).
 It runs under its own ID, and its tests pin the adder tree and the ragged wrap.

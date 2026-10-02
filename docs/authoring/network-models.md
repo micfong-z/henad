@@ -94,7 +94,7 @@ No lane needs a second buffer.
 
 ## The graph
 
-The graph is a `Network`, from `henad_core::network`.
+The graph is a `Network`, at `henad::authoring::Network`.
 It keeps an edge list for drawing, and a row of neighbours per node for the kernels to walk.
 
 ### Slots

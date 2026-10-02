@@ -23,6 +23,7 @@ for name, spec in root["workspace"]["dependencies"].items():
     if not isinstance(spec, dict) or spec.get("version") != version:
         errors.append(f"Cargo.toml: `{name}` needs `version = \"{version}\"` beside its path")
 
+# The crates that publish. examples/tutorial never packages, and its tests read the example models' shaders.
 crates = sorted(path.parent for path in Path("crates").glob("*/Cargo.toml"))
 
 # henad-build folds the wgsl_bindgen release into its stamp, and names the release the workspace pins.
