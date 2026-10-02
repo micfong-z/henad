@@ -2,7 +2,7 @@
 //!
 //! The cross-engine harness reads these lines from every engine it drives, so the shape is a
 //! contract rather than a convenience. `benchmarks/protocol.md` states it. The human report in
-//! `main` writes to the same stream, so exactly one of the two runs.
+//! the crate root writes to the same stream, so exactly one of the two runs.
 
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ pub fn info(model: &str, variant: &str, threads: usize, parallel_jobs: Option<us
     let line = json!({
         "kind": "info",
         "engine": "henad",
-        "engine_version": env!("CARGO_PKG_VERSION"),
+        "engine_version": henad_explore::ENGINE_BUILD.version(),
         "model": model,
         "variant": variant,
         "threads": threads,

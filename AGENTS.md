@@ -442,7 +442,7 @@ henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!
 henad-models   the ten example models, and a path dev-dependency of henad-explore
 henad-explore  sweeps and searches
-henad-cli      headless bench and sweeps, also on henad-models for example_models()
+henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI, also on henad-models for example_models()
 ```
 
@@ -450,10 +450,13 @@ The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build 
 alone. Every other normal or build dependency runs from a crate to one drawn above it:
 henad-explore and henad-models onto henad-compute, the hosts onto henad-explore,
 henad-compute and, for `example_models()`, henad-models, and any crate with WGSL or a build
-stamp onto henad-build. henad-models and henad-explore take no normal dependency on each other, and
+stamp onto henad-build. henad-cli takes henad-models only behind its default `example-models`
+feature, and `cargo tree -p henad-cli --no-default-features -e normal -i henad-models` prints
+nothing. henad-models and henad-explore take no normal dependency on each other, and
 `cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency
 between Henad crates that the normal graph does not hold is named here: today the one from
-henad-explore to henad-models, for its tests. henad-explore reaching an example model outside
+henad-explore to henad-models, for its tests, and the one from henad-cli to henad-models, for its
+unit tests without the feature. henad-explore reaching an example model outside
 its tests needs the maintainer's approval as a new edge.
 
 - **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
@@ -1055,7 +1058,17 @@ its tests needs the maintainer's approval as a new edge.
   held. Runs that land before their candidate is told wait in `unassigned_runs`. A new level on a
   numeric axis moves every level above it, and an `f32` search costs time linear in its levels per
   frame.
-- **henad-cli**: headless benchmark runner. Steps a state in a bare loop with no rendering, no
+- **henad-cli**: headless benchmark runner, as a library with the official binary over it.
+  `lib.rs` holds the crate doc, `CliOptions` (a `ModelSet`, the host's `BuildInfo` and the command
+  name, the host's package name unless `command_name` sets another), `SOME_RUNS_NOT_OK` and
+  `run(options, arguments) -> u8`. `run` installs the panic hook, parses with clap's `Command::name`
+  and `Command::version` from the options, prints an error as `Error: {error:?}` and returns 1, and
+  returns clap's own code for `--help`, `--version` and a usage error. Argument parsing, the modes,
+  `Reporter`, `json_report` and the text formats are private. `main.rs` is three lines over `run`
+  with `example_models()` and its `build_info!()`. henad-models is optional behind the default
+  `example-models` feature, which the `[[bin]]` and the two integration tests that run it name in
+  `required-features`, and `cargo build -p henad-cli --no-default-features` builds the library
+  alone. Steps a state in a bare loop with no rendering, no
   `SimThread` and no pacing, so a measurement times nothing but `step()`. `--act ID@TICK`
   (`henad_core::action::Schedule`) runs a declared action before the step at that tick. An action
   due from the end of warm-up up to, but not including, the tick the run stops on is timed with the
@@ -1068,9 +1081,9 @@ its tests needs the maintainer's approval as a new edge.
   `Simulation` (`run_to` and `write_state`, `run_sampled`). The shared `params_by_id_json` and
   `scheduled_actions_json` sit in henad-explore's `output/details.rs`, for the CLI's summary and the
   app's run details. A GPU run steps through `gpu/stepping.rs` on a device from henad-explore's
-  `acquire_headless`, sized to `example_models().gpu_needs()`. The CLI resolves its positional id
-  through `ModelSet::lookup`, and refuses an id outside the set ("this build does not include
-  model 'x' (try --list)") apart from a GPU model on a machine without a device. `--list` prints
+  `acquire_headless`, sized to the options' set's `gpu_needs()`. The CLI resolves its positional id
+  through that set's `ModelSet::lookup`, and refuses an id outside the set ("this build does not
+  include model 'x' (try --list)") apart from a GPU model on a machine without a device. `--list` prints
   only the models this machine can run. The CLI never publishes and never lays out a network.
   `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
   publish would.
@@ -1096,9 +1109,12 @@ its tests needs the maintainer's approval as a new edge.
   `scripts/bench_matrix.py` parses the text `--params` prints, and that text is unchanged.
   `tests/golden.rs` compares `--list`, `--params` and `--params --json` byte for byte with what
   0.2.0 printed, recorded in `tests/golden/` by the procedure in its `README.md`. Keep them.
-  `build.rs` calls `henad_build::stamp_commit`, as henad-app's does, and `build_info!()` is the
-  host build the manifest and the About window record. Under `--json` each `SweepWarning` also
-  prints as an `explore_warning` line (`warning_json`).
+  `build.rs` calls `henad_build::stamp_commit`, as henad-app's does, and the `CliOptions` host
+  build is the one the manifest records, the binary's `build_info!()` for `henad-cli`. The `info`
+  line's `engine_version` reads `ENGINE_BUILD.version()`. Under `--json` each `SweepWarning` also
+  prints as an `explore_warning` line (`warning_json`). `existing_invocations_keep_their_mode`
+  reads the command lines of `lib.rs`, which holds the crate doc, and of `docs/reference/cli.md`,
+  and its floor is the 13 documented lines that are not sweeps. Keep it.
 
 ### Adding a new model
 

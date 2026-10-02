@@ -8,7 +8,6 @@
 use std::fs;
 use std::io::{self, IsTerminal as _};
 use std::path::PathBuf;
-use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
@@ -43,11 +42,8 @@ use henad_explore::sweep::{
     Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, SweepWarning, plan_spec, run_spec,
 };
 
-use crate::Args;
 use crate::json_report;
-
-/// Exit status of a sweep that ran to its end with some run not `ok`, or of a merge that lacks some run.
-pub const SOME_RUNS_NOT_OK: u8 = 3;
+use crate::{Args, SOME_RUNS_NOT_OK};
 
 /// Rows of `series.csv` above which the plan carries a warning.
 pub const SERIES_ROWS_WARNING: u64 = 10_000_000;
@@ -202,8 +198,14 @@ impl ExploreArgs {
 ///
 /// Returns an error when the flags or the spec cannot make a sweep, the sweep cannot be planned, or its results
 /// cannot be written.
-pub fn run(args: &Args, entry: &ModelEntry, gpu: Option<&GpuContext>, spec: Option<LoadedSpec>) -> Result<ExitCode> {
-    let (sweep, options) = sweep_and_options(args, entry, spec)?;
+pub fn run(
+    args: &Args,
+    entry: &ModelEntry,
+    gpu: Option<&GpuContext>,
+    spec: Option<LoadedSpec>,
+    provenance: Provenance,
+) -> Result<u8> {
+    let (sweep, options) = sweep_and_options(args, entry, spec, provenance)?;
     if cfg!(debug_assertions) && !args.explore.dry_run {
         eprintln!("!!! warning: debug build. Runs will step slowly and timings will be unreliable. Use --release !!!");
     }
@@ -229,8 +231,13 @@ pub fn run(args: &Args, entry: &ModelEntry, gpu: Option<&GpuContext>, spec: Opti
 /// # Errors
 ///
 /// Returns an error when the flags cannot make a sweep.
-fn sweep_and_options(args: &Args, entry: &ModelEntry, spec: Option<LoadedSpec>) -> Result<(SweepSpec, SweepOptions)> {
-    let mut options = SweepOptions::new(provenance());
+fn sweep_and_options(
+    args: &Args,
+    entry: &ModelEntry,
+    spec: Option<LoadedSpec>,
+    provenance: Provenance,
+) -> Result<(SweepSpec, SweepOptions)> {
+    let mut options = SweepOptions::new(provenance);
     let sweep = if let Some(loaded) = spec {
         options.apply_execution(&loaded.execution);
         options.spec_source = loaded.spec_source;
@@ -263,7 +270,7 @@ fn sweep_and_options(args: &Args, entry: &ModelEntry, spec: Option<LoadedSpec>) 
 /// # Errors
 ///
 /// Returns an error when the directories cannot be merged.
-pub fn merge_shards(args: &Args) -> Result<ExitCode> {
+pub fn merge_shards(args: &Args) -> Result<u8> {
     let output_dir = args.explore.out.as_deref().context("--merge requires --out")?;
     let report = merge(&args.explore.merge, output_dir, &mut WarningPrinter { json: args.json })?;
     if args.json {
@@ -273,9 +280,9 @@ pub fn merge_shards(args: &Args) -> Result<ExitCode> {
     }
     let counts = &report.counts;
     if report.missing == 0 && counts.ok == counts.rows {
-        Ok(ExitCode::SUCCESS)
+        Ok(0)
     } else {
-        Ok(ExitCode::from(SOME_RUNS_NOT_OK))
+        Ok(SOME_RUNS_NOT_OK)
     }
 }
 
@@ -284,11 +291,11 @@ pub fn merge_shards(args: &Args) -> Result<ExitCode> {
 /// # Errors
 ///
 /// Returns an error for a sweep that was aborted or lost its GPU device.
-fn exit_status(end: SweepEnd, counts: &ResultCounts) -> Result<ExitCode> {
+fn exit_status(end: SweepEnd, counts: &ResultCounts) -> Result<u8> {
     match end {
-        SweepEnd::Planned => Ok(ExitCode::SUCCESS),
-        SweepEnd::Complete if counts.ok == counts.rows => Ok(ExitCode::SUCCESS),
-        SweepEnd::Complete => Ok(ExitCode::from(SOME_RUNS_NOT_OK)),
+        SweepEnd::Planned => Ok(0),
+        SweepEnd::Complete if counts.ok == counts.rows => Ok(0),
+        SweepEnd::Complete => Ok(SOME_RUNS_NOT_OK),
         SweepEnd::Aborted => bail!("the sweep was aborted after {} runs", counts.rows),
         SweepEnd::DeviceLost => bail!(
             "the GPU device was lost after {} runs. Use --resume to run the rest",
@@ -470,14 +477,6 @@ fn parse_timeout(raw: &str) -> Result<Duration, String> {
         .ok()
         .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
         .ok_or_else(|| format!("expected a non-negative number of seconds, got '{raw}'"))
-}
-
-/// Returns the build of this binary and its command line.
-fn provenance() -> Provenance {
-    let arguments = std::env::args_os()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
-    Provenance::new(henad_core::build_info!(), arguments)
 }
 
 /// Progress of a sweep as JSON lines on stdout, or as text on stderr.
@@ -1131,7 +1130,6 @@ fn merge_json(report: &MergeReport, inputs: usize) -> Value {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::process::ExitCode;
     use std::time::Duration;
 
     use clap::Parser as _;
@@ -1149,9 +1147,9 @@ mod tests {
 
     use super::{
         LoadedSpec, PatternAxis, SOME_RUNS_NOT_OK, axis_text, exit_status, fixed_actions, format_bytes, format_seconds,
-        parse_vary, plan_text, provenance, spec_from_flags, sweep_and_options,
+        parse_vary, plan_text, spec_from_flags, sweep_and_options,
     };
-    use crate::{Args, Mode};
+    use crate::{Args, Mode, test_provenance};
 
     fn levels(raw: &str) -> LevelSpec {
         parse_vary(raw).expect("reads").levels
@@ -1673,9 +1671,9 @@ mod tests {
             failed,
         };
         let status = |end, counts: ResultCounts| exit_status(end, &counts).ok();
-        assert_eq!(status(SweepEnd::Complete, counts(4, 0, 0)), Some(ExitCode::SUCCESS));
-        assert_eq!(status(SweepEnd::Planned, counts(0, 0, 0)), Some(ExitCode::SUCCESS));
-        let some_not_ok = Some(ExitCode::from(SOME_RUNS_NOT_OK));
+        assert_eq!(status(SweepEnd::Complete, counts(4, 0, 0)), Some(0));
+        assert_eq!(status(SweepEnd::Planned, counts(0, 0, 0)), Some(0));
+        let some_not_ok = Some(SOME_RUNS_NOT_OK);
         assert_eq!(status(SweepEnd::Complete, counts(3, 0, 1)), some_not_ok);
         assert_eq!(status(SweepEnd::Complete, counts(3, 1, 0)), some_not_ok);
         assert_eq!(status(SweepEnd::Aborted, counts(2, 0, 0)), None, "an abort is an error");
@@ -1708,7 +1706,7 @@ mod tests {
         let loaded = LoadedSpec::read(&path).expect("the example spec reads");
         let models = example_models();
         let sir = models.get("sir").expect("sir is registered");
-        let options = SweepOptions::new(provenance());
+        let options = SweepOptions::new(test_provenance());
         let report = plan_spec(
             sir,
             None,
@@ -1782,7 +1780,9 @@ mod tests {
             line.extend(extra);
             let args = Args::try_parse_from(line).expect("the line parses");
             let loaded = LoadedSpec::read(&path).expect("the spec reads");
-            sweep_and_options(&args, &entry, Some(loaded)).expect("a sweep").1
+            sweep_and_options(&args, &entry, Some(loaded), test_provenance())
+                .expect("a sweep")
+                .1
         };
 
         let from_table = options(&[]);

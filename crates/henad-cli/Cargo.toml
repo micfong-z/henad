@@ -15,9 +15,28 @@ categories = ["simulation", "science", "command-line-utilities"]
 # The golden tests and their 0.2.0 reference output stay in the repository.
 exclude = ["/tests/"]
 
+[lib]
+path = "src/lib.rs"
+
+# The official binary runs the example models. A host with models of its own calls `henad_cli::run`.
 [[bin]]
 name = "henad-cli"
 path = "src/main.rs"
+required-features = ["example-models"]
+
+# Both run the official binary.
+[[test]]
+name = "golden"
+required-features = ["example-models"]
+
+[[test]]
+name = "manifest"
+required-features = ["example-models"]
+
+[features]
+default = ["example-models"]
+# The ten example models, for the official binary.
+example-models = ["dep:henad-models"]
 
 [dependencies]
 # We drive states directly (CPU via `SimState::step`, GPU via `GpuSimState::encode_steps`) rather
@@ -25,14 +44,18 @@ path = "src/main.rs"
 # the `GpuSimState` runner trait and its stepping helpers. henad-explore acquires the headless device.
 henad-core = { workspace = true }
 henad-compute = { workspace = true }
-henad-models = { workspace = true }
+henad-models = { workspace = true, optional = true }
 henad-explore = { workspace = true }
-clap = { workspace = true }
+# `string` sets the command name at run time, from `CliOptions`.
+clap = { workspace = true, features = ["string"] }
 anyhow = { workspace = true }
 numfmt = { workspace = true }
 # `--json` writes the harness protocol lines, `--threads` sizes rayon's global pool.
 serde_json = { workspace = true }
 rayon = { workspace = true }
+
+[dev-dependencies]
+henad-models = { workspace = true }
 
 [build-dependencies]
 henad-build = { workspace = true }

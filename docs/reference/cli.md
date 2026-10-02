@@ -11,6 +11,7 @@ A measurement therefore times `step()` and nothing else.
 It also runs [parameter sweeps](#sweeps) and [searches](#searches).
 A sweep builds a model many times over a set of parameter values, and writes every run's results to a directory.
 A search picks its parameter values a batch at a time, from the results of the batches before.
+A project with models of its own can [host the same command line](#hosting-the-command-line) over them.
 
 ```text
 henad-cli [OPTIONS] [MODEL]
@@ -1039,3 +1040,35 @@ Without `--json`, `--params` prints the text it always has.
 ```
 
 The line above is cut down to one parameter and one stat.
+
+## Hosting the command line
+
+The henad-cli crate is a library as well as a binary.
+A project with models of its own runs this whole command line over them, sweeps and searches included, through `henad_cli::run`.
+The official binary is three lines over it:
+
+```rust
+--8<-- "crates/henad-cli/src/main.rs"
+```
+
+`run` takes a `CliOptions` and the command line, program name first, and returns the [exit status](#exit-status) as a `u8`.
+`std::process::ExitCode::from` turns it into a binary's exit code, and a host without a `main` of its own, such as a Python console script, passes the number on.
+An error prints to stderr as `Error:` with its causes, and returns 1.
+
+`CliOptions::new(models, host)` takes the `ModelSet` the command line offers and the host's `build_info!()`.
+Every sweep records that build as its [`host`](#builds), and `--version` prints its version.
+The command name defaults to the host's package name, and `CliOptions::command_name` sets another.
+The `info` line of [`--json`](#machine-readable-output) keeps reporting Henad's own version as `engine_version`.
+
+The default `example-models` feature brings in the example models and builds the `henad-cli` binary.
+A host leaves it off, and then depends on neither:
+
+```toml
+[dependencies.henad-cli]
+version = "0.3"
+default-features = false
+```
+
+`run` owns its process.
+It installs Henad's panic hook, and `--threads` sizes rayon's global pool.
+A process can size that pool only once, so call `run` once per process.
