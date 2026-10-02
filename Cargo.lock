@@ -2027,8 +2027,8 @@ dependencies = [
  "henad-build",
  "henad-compute",
  "henad-core",
+ "henad-explore",
  "log",
- "pollster 0.4.0",
  "rayon",
  "wgpu",
 ]

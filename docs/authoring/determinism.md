@@ -23,8 +23,9 @@ Float addition is not associative, so if any of these folded in arrival order in
 
 ## The thread-count test
 
-Both agent models carry a `results_do_not_depend_on_the_thread_count` test.
-If your model draws random numbers during a step, write one for it too.
+The testing kit's `ThreadCount` check runs this comparison on every CPU model, at a size that splits a step into 14 jobs.
+Both agent models carry a `results_do_not_depend_on_the_thread_count` test of their own as well, for a busier configuration than the kit's.
+If your model draws random numbers during a step, consider one for it too.
 
 ```rust
 #[test]
@@ -107,22 +108,62 @@ The second run then calls `prepare_view` once, and the colours it paints have to
 Virus on a Network leaves positions out of both comparisons.
 Team Assembly keeps them in, since its own tick places newcomers and neither test runs the layout.
 
-## Tests the registry brings
+## The testing kit
 
-Registering a model brings a set of tests with it for free, and they cover GPU entries too when a device is available.
+`henad_explore::testing`, behind henad-explore's `testing` feature, checks a model's entry against what its state does.
+A model's tests take `henad-explore` as a dev-dependency with that feature on, and call `assert_set_conforms` over their model set.
+It panics with every failure, and a set that passes prints which checks each model skipped.
+`check_model_set` returns the same report without asserting anything.
+The example models' test takes the report, to check each model's skipped checks as well.
 
-| Test | Pins |
+```rust
+--8<-- "crates/henad-models/src/tests/registry.rs:kit"
+```
+
+`headless_test_device` returns a device for the request, or `None` on a machine without one, and the GPU checks are then skipped.
+With `HENAD_REQUIRE_GPU` set, a missing device fails the test instead, and so does every check a missing device would skip.
+`TestDeviceRequest::baseline()` asks for the limits a browser offers.
+A model that needs more takes `TestDeviceRequest::raised(models.gpu_needs())`, and a browser without those limits will refuse it.
+
+| Check | Pins |
 |---|---|
-| `declared_apply_mode_matches_what_the_state_accepts` | A live parameter is accepted and a reload one is rejected, exactly as declared |
-| `declared_topology_matches_the_views_the_state_returns` | A CPU state returns a grid, point or edge view exactly when the entry's topology hint says the model draws one |
-| `every_declared_action_is_accepted_by_the_state` | Every declared action is accepted and an index past the last is refused |
-| `action_ids_are_unique_within_a_model` | No two actions of one model share an id |
-| `every_declared_stat_series_gets_a_value` | `STATS.len()` matches what `stats` returns |
-| `every_gpu_model_builds_on_a_baseline_device` | Every GPU model builds on a stock WebGPU device |
-| `every_gpu_entry_reports_its_capacity` | The capacity check agrees with what actually builds |
-| `a_kernel_that_panics_mid_step_keeps_its_location` | A bug in a kernel reaches the UI with its `file:line` |
+| `ModelId`, `ParamIds`, `StatLabels`, `ActionIds` | The id meets the grammar, and no parameter, stat or action id is declared twice |
+| `Palette` | A declared palette has colours |
+| `Metadata` | The backend, the structure, the topology hint and the device demand agree |
+| `DefaultSetup` | The declared defaults pass `RunSetup::from_parts`, as the app's Build checks them |
+| `DefaultsFit` | A GPU model's defaults fit a stock WebGPU device, checked without building |
+| `ApplyModes` | A live parameter is accepted and a reload one is refused, exactly as declared |
+| `Views` | The factory returns the declared backend, and its grid, point or edge views match the topology hint |
+| `ParallelJobs` | Only a CPU model reports how many jobs a step splits into |
+| `Actions` | Every declared action is accepted and an index past the last is refused, on a GPU model at its declared defaults |
+| `StatCount` | `STATS.len()` matches what `stats` returns |
+| `ThreadCount` | A CPU model's stats and exported state are the same at 1 and 7 threads |
+| `SameSeed`, `SeedSensitivity` | Two runs on one seed agree, and two seeds differ in some stat or in the exported state |
+| `SamplingCadence` | A run sampled every tick ends where a run sampled every seventh tick ends |
+| `BaselineBuild` | A GPU model builds on the device exactly when the capacity check says it fits |
+| `FullSubmission` | One submission of 64 steps reads back what 64 submissions of one step do, the OS watchdog trap of the [GPU backend](../developing/gpu-backend.md) |
+| `SampledSlice` | A sampled slice of steps reads back what a snapshot does |
 
-A registered model whose declarations are accurate therefore starts with a baseline of coverage, before you write any tests of your own.
+A check that builds the model sets the grid, population and world sizes small, so a model whose defaults hold ten million agents needs no settings.
+`ThreadCount` sets the size itself, so that a step splits into 14 jobs.
+At one job a kernel that shares state between chunks agrees with itself at any thread count.
+The GPU checks build at the declared defaults, the size the app builds first.
+
+A check the model cannot meet for an honest reason takes an exemption, recorded in the model's report.
+
+```rust
+--8<-- "crates/henad-explore/src/tests/kit.rs:exempt"
+```
+
+A model whose defaults need a device raised past the baseline fails `DefaultsFit`, and exempts it with its reason.
+A browser refuses to build such a model at its defaults, and the exemption records that in the model's report.
+
+A GPU model skips `ThreadCount`, since a pool width never reaches its kernels.
+A model that declares `REPLAYS_EXACTLY = false` skips `SameSeed`, `SeedSensitivity` and `SamplingCadence`.
+An exemption of a check that does not apply to the model fails that check, and the report of a set names every model the settings name and the set lacks.
+`CheckSettings::set_text` sets a parameter in every check that builds the model, as `--set` reads it.
+`check_model` returns the report instead of panicking, and its caller installs the panic hook first, through `henad_compute::fault::install_panic_hook`, or a kernel panic's failure names no `file:line`.
+
 See [registering a model](registering.md).
 
 ## Checking the rule itself

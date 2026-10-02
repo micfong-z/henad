@@ -115,6 +115,7 @@ nav = [
             { "#36, 2026-10-02" = "developing/agent-record/20261002-36-library-provenance.md" },
             { "#37, 2026-10-02" = "developing/agent-record/20261002-37-library-cli.md" },
             { "#38, 2026-10-02" = "developing/agent-record/20261002-38-library-app.md" },
+            { "#39, 2026-10-02" = "developing/agent-record/20261002-39-library-testing-kit.md" },
         ] },
     ] },
 ]

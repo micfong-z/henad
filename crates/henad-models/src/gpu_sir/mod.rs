@@ -175,13 +175,14 @@ mod tests {
     use henad_compute::gpu::sim_thread::GpuSimState as _;
     use henad_core::model::SimState as _;
     use henad_core::view::StatEntry;
+    use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
     use crate::sir::SirGridModel;
 
     type State = GpuGridState<GpuSir>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        crate::tests::support::headless_context("gpu_sir_test_device", wgpu::Features::empty())
+        headless_test_device(&TestDeviceRequest::baseline())
     }
 
     pub(super) fn params(

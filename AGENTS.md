@@ -310,12 +310,15 @@ Varies one parameter at a time. Other parameters use values from the Parameters 
   is how a UI change is confirmed to render. Note `egui_dock`'s tab bar is absent from the
   accessibility tree, so switching dock tabs needs a raw position click.
 - **A test-only module goes under a `tests/` directory in `src/`, never beside production modules.**
-  `henad-compute/src/gpu/tests/` and `henad-models/src/tests/` hold their crate's `support.rs` (the
-  headless device) plus any test module too big to inline, so each `mod.rs` lists exactly one
-  `#[cfg(test)] mod tests;` rather than interleaving test modules with real ones. An inline
-  `#[cfg(test)] mod tests` at the bottom of the file it tests is still the default and is unaffected. The two `support.rs` files look like duplicates and are not: henad-compute raises
-  the device limits, henad-models deliberately does not, since
-  `every_gpu_model_builds_on_a_baseline_device` has to run on a `Limits::default()` device.
+  `henad-compute/src/gpu/tests/` and `henad-models/src/tests/` hold any test module too big to
+  inline, and henad-compute's holds its `support.rs` (the headless device) as well, so each `mod.rs`
+  lists exactly one `#[cfg(test)] mod tests;` rather than interleaving test modules with real ones.
+  An inline `#[cfg(test)] mod tests` at the bottom of the file it tests is still the default and is
+  unaffected. Every other crate's tests take their device from
+  `henad_explore::testing::headless_test_device`. henad-compute keeps its own helper on purpose. It
+  sits below the kit, and raises the device limits for its spatial-hash tests. henad-models' tests
+  ask the kit for `TestDeviceRequest::baseline()`, since the kit's `BaselineBuild` has to build
+  every example GPU model on a `Limits::default()` device.
 - **Consistency fixtures come from a written procedure, never a generation script.** The procedure
   goes in the fixture's doc (e.g. `crates/henad-models/tests/fixtures/docs/`) for the user to run.
   A driver script would presume the reference engine is installed, which no future collaborator
@@ -441,7 +444,7 @@ henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!
 henad-models   the ten example models, and a path dev-dependency of henad-explore
-henad-explore  sweeps and searches
+henad-explore  sweeps, searches and the testing kit
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models
 ```
@@ -455,9 +458,12 @@ henad-cli and henad-app take henad-models only behind their default `example-mod
 the same line for henad-app. henad-models and henad-explore take no normal dependency on each other,
 and `cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency
 between Henad crates that the normal graph does not hold is named here: today the one from
-henad-explore to henad-models, for its tests, and the ones from henad-cli and henad-app to
-henad-models, for their unit tests without the feature. henad-explore reaching an example model
-outside its tests needs the maintainer's approval as a new edge.
+henad-explore to henad-models, for its tests, the one from henad-models to henad-explore with its
+`testing` feature, for the kit over the example models, and the ones from henad-cli and henad-app
+to henad-models, for their unit tests without the feature. The pair between henad-models and
+henad-explore is the one dev-only edge against the dependency direction. Neither normal graph
+reaches the other, each crate compiles once, and packaging strips both edges. henad-explore reaching
+an example model outside its tests needs the maintainer's approval as a new edge.
 
 - **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
   GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
@@ -707,7 +713,10 @@ outside its tests needs the maintainer's approval as a new edge.
   `init`, which is what keeps tick 0 bit identical between the two backends and makes them fair to
   compare — that call is confined to `seed_buffers`. `example_models()` (`lib.rs`) registers all
   ten into one `ModelSet` with henad-models' own `build_info!()`. The registry tests sit in
-  `src/tests/registry.rs` and run over `example_models()`. `gpu_boids` declares
+  `src/tests/registry.rs`. They run the testing kit over `example_models()` on a baseline device,
+  check each model's skipped checks, and keep the guards for the example models alone: no GPU
+  entry builds without a device, `gpu_sir`'s refusal at 6000 by 6000, each GPU entry's `GpuNeeds`
+  against its widest pass, and the set's coverage. `gpu_boids` declares
   `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly` reads it.
 - **henad-explore**: sweeps and searches, a sibling of henad-models over henad-compute, below the
   two front ends. `sweep.rs` holds `run_spec`, which runs a sweep, or a search for a spec with a
@@ -845,10 +854,44 @@ outside its tests needs the maintainer's approval as a new edge.
   run's `Replay`, refusing a run whose config, replicate, seed or run key differ from its row. The
   run key hashes the model's declarations too, and is compared only while `schema_matches` holds.
   `read_directory_series` reads the series of chosen runs later, given the stat column names.
+  `testing/`, behind the `testing` feature and always built for henad-explore's own tests, is the
+  kit a model's tests run. `check_model` runs every `ModelCheck` that applies and returns a
+  `ModelReport` of `CheckFailure`s and `SkippedCheck`s. It never panics on a model's behalf: a
+  panic, a device error or a broken contract is a failure of its check, and a GPU check waits for
+  the device before it ends, so no fault outlives the check that raised it. `check_model_set`
+  returns a `SetReport`, which also names every model id an override or an exemption names and the
+  set lacks. `assert_set_conforms` installs the panic hook, panics with every failure of a set, and
+  prints the report of a set that passes, skipped checks included. An exemption of a check that
+  does not apply fails that check, and under `HENAD_REQUIRE_GPU` a check a missing device would
+  skip fails. `declared.rs` reads the
+  declarations and builds nothing, `DefaultSetup` among them, the `RunSetup::from_parts` check the
+  app's Build makes. `built.rs` builds once per check, `determinism.rs` compares two runs, and
+  `gpu.rs` (native only) steps a GPU model on the settings' device. A check that builds takes the
+  five size parameters at 128, or 256 agents, never above the default. `ThreadCount` sets the size
+  so a step splits into twice the high thread count in jobs: `num_agents` at that many chunks, or
+  the largest `grid_height` that splits into no more, found by building. One job at every size
+  within bounds skips it as `OneJob`, and wasm32 skips it as `NativeOnly`. The GPU checks and a GPU
+  model's `Actions` build at the declared defaults. A watchdog trips on time, and a small model
+  never trips it. `FullSubmission` runs `MAX_STEPS_PER_SUBMISSION` single steps first and reads
+  their stats, then one full submission, and compares the two. A device the full submission
+  poisons reads zeros in every later run, and the other order compares zeros with zeros. A lost
+  device fails it. A GPU model skips `ThreadCount` (`OtherBackend`), and one that does not replay
+  exactly skips `SameSeed`, `SeedSensitivity` and `SamplingCadence` (`InexactReplay`).
+  `SeedSensitivity` compares the stats and the exported state. `CheckSettings::ticks` refuses fewer
+  than `MIN_TICKS`. `CheckSettings::set_text` overrides a value in every check that builds, and
+  `exempt` skips a check with a reason. `headless_test_device` (native only) acquires a device for
+  a `TestDeviceRequest`, the baseline or `raised(needs)`, with optional features, and a missing
+  feature returns `None` even under `HENAD_REQUIRE_GPU`.
   `src/tests/` holds `support.rs` (the headless device, scratch directories, a sweep helper,
   `OutputTables`, `CommitLimit`, and `ticks_seen` with `HOLD_WINDOW` for pause checks), `broken.rs`
   (`GridModel`s that panic or report a value that is not finite, registered through the public
-  `register_grid_model`), and the determinism, failure, run control, resume, shard, GPU sweep, GPU
+  `register_grid_model`, the `grid_model!` models with one broken declaration or build each,
+  `SharedAccumulator`, whose kernel shares a counter across chunks, `DeclaresNumAgents`,
+  `CountsViews`, a network model whose `prepare_view` writes a lane, `BuggyState`, which adds one
+  `Bug` to a CPU state, and `ZeroesFullSubmissions`, a GPU wrapper that reads zeros on every state
+  of its entry after a full submission), `kit.rs` (each broken model fails exactly the checks its
+  bug breaks), and the
+  determinism, failure, run control, resume, shard, GPU sweep, GPU
   track (`tracks.rs`), handle, result set and replay tests. For a model that replays exactly (every
   model but `gpu_boids`), the three CSVs are byte-identical apart from `TIMING_COLUMNS` at any lane
   or track count, for merged shards against an unsharded sweep, and for a resumed sweep against a
@@ -1225,9 +1268,10 @@ rather than `SimState` directly.
 Either way, register the new model in `henad-models/src/lib.rs::example_models()` via the
 `register_*` generic for its trait, so it's type-erased into a `ModelEntry` and shows up in the UI.
 Nothing about an entry should be written by hand. Name, params, stats, actions and
-`topology_hint` are all derived from the trait. The registry tests are the safety net that a
-model's declared params, topology, actions and stat series match what its state actually does, and
-they cover GPU entries too when a device is available.
+`topology_hint` are all derived from the trait. The registry tests run the testing kit over the
+set. It is the safety net that a model's declared params, topology, actions and stat series match
+what its state actually does, that its results do not depend on the thread count, and, when a
+device is available, that a GPU entry builds on a baseline device and runs a full submission.
 
 ### Performance-critical paths — read before touching
 
@@ -1254,7 +1298,9 @@ they cover GPU entries too when a device is available.
   `chunk_seed` measured 14% slower on SIR with identical content, and that was never explained.
   Boids, ants, Virus on a Network and Team Assembly each have a
   `results_do_not_depend_on_the_thread_count` test, as do `cpu/grid_engine.rs`, `cpu/layout.rs`
-  and `cpu/primitives/components.rs`. Keep them.
+  and `cpu/primitives/components.rs`. Keep them. The kit's `ThreadCount` compares every CPU model of
+  a set the same way, at 14 jobs, and `a_shared_accumulator_fails_the_thread_count_check` and
+  `a_build_that_reads_the_pool_width_fails_the_thread_count_check` pin it.
 - `AgentModel::CHUNK` is per-model on purpose. It sets both the RNG seeding granularity and the
   parallel load balance, so it must be a fixed const (not derived from the thread count) but still
   small enough to split across every core — 4096 gave only 13 chunks for 50k boids and cost 20%.
@@ -1300,9 +1346,11 @@ is about not undoing them.
 - **One oversized submission silently returns zeros.** Enough passes in a single command buffer
   trips the OS GPU watchdog — no error, no panic, and every later readback reads zero. Batch at 64
   steps per submission, as `GpuAgentState::run_batched` and the real runner do. This first showed up
-  as a flaky test. The sweep's GPU tracks (`henad-explore/src/exec/gpu.rs`) keep the bound per run.
-  Each command buffer holds the steps of one run, and two runs' buffers are never merged. N runs of
-  64 steps in one buffer would trip the watchdog again.
+  as a flaky test. The kit's `FullSubmission` compares one full submission of every GPU model at its
+  defaults with single steps run before it. The sweep's GPU tracks
+  (`henad-explore/src/exec/gpu.rs`) keep the bound per run. Each command buffer holds the steps of
+  one run, and two runs' buffers are never merged. N runs of 64 steps in one buffer would trip the
+  watchdog again.
 - **`max_storage_buffers_per_shader_stage` is 8** in `wgpu::Limits::default()` and in the WebGPU
   baseline. `limits.rs::raise` asks for exactly what the models need, the `GpuNeeds` a host reads
   from its set through `ModelSet::gpu_needs()` before any device exists. Each GPU entry declares its
@@ -1310,9 +1358,9 @@ is about not undoing them.
   and a constant would be either short of a future model or dead headroom. For the example models
   it comes to 8, since `gpu_ants`'s step pass sits at exactly 8. `raise` takes the needs rather
   than knowing them: henad-compute cannot see which models a host offers.
-  `every_gpu_model_builds_on_a_baseline_device` holds the line on a `Limits::default()` device, and
-  asserts in the same breath that `capacity.rs` agrees — build and declared demand pin each other,
-  so an over-reported pass count fails there.
+  The kit's `BaselineBuild`, run by the registry tests on a `Limits::default()` device from
+  `headless_test_device`, holds the line, and asserts in the same breath that `capacity.rs` agrees.
+  Build and declared demand pin each other, and an over-reported pass count fails there.
   `every_gpu_entry_needs_the_bindings_its_widest_pass_binds` pins each entry's `GpuNeeds` to its
   demand. Note wgpu on Metal shares one argument table across storage + uniform + vertex, so a
   check counting only storage buffers can pass locally and fail there.

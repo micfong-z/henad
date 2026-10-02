@@ -16,9 +16,8 @@ use henad_core::explore::spec::SweepSpec;
 use henad_core::export::csv::parse_records;
 use henad_models::example_models;
 
-use henad_compute::fault::{FaultSink, install_panic_hook};
+use henad_compute::fault::install_panic_hook;
 
-use crate::device::acquire_headless;
 use crate::exec::{ActiveRun, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, RunSink, SweepControl};
 use crate::handle::SweepOutput;
 use crate::output::manifest::{Manifest, RecordedBuild};
@@ -27,27 +26,16 @@ use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::probe::ProbeReport;
 use crate::progress::{NoProgress, Progress, ProgressEvent};
 use crate::sweep::{ExploreError, Provenance, SweepOptions, SweepReport, SweepWarning, plan_spec, run_spec};
+use crate::testing::{TestDeviceRequest, headless_test_device};
 
-const REQUIRE_GPU: &str = "HENAD_REQUIRE_GPU";
-
-/// Returns whether `HENAD_REQUIRE_GPU` is set to something other than empty or 0.
-fn gpu_required() -> bool {
-    std::env::var_os(REQUIRE_GPU).is_some_and(|value| !value.is_empty() && value != "0")
-}
-
-/// Returns a headless device, or `None` to skip a GPU test on a machine without one.
+/// Returns a headless device raised to the example models' needs, or `None` to skip a GPU test on a machine without
+/// one.
 ///
 /// # Panics
 ///
 /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
 pub fn headless_device() -> Option<GpuContext> {
-    match acquire_headless(example_models().gpu_needs()) {
-        Ok(ctx) => Some(ctx),
-        Err(error) => {
-            assert!(!gpu_required(), "{REQUIRE_GPU} is set but {error}");
-            None
-        }
-    }
+    headless_test_device(&TestDeviceRequest::raised(example_models().gpu_needs()))
 }
 
 /// Returns a headless device with the limits of `wgpu::Limits::default()`, the WebGPU baseline, or `None` to skip a
@@ -57,28 +45,7 @@ pub fn headless_device() -> Option<GpuContext> {
 ///
 /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
 pub fn baseline_device() -> Option<GpuContext> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let device = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        .map_err(|error| error.to_string())
-        .and_then(|adapter| {
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("henad-explore-baseline"),
-                ..Default::default()
-            }))
-            .map_err(|error| error.to_string())
-        });
-    match device {
-        Ok((device, queue)) => Some(GpuContext::new(
-            device,
-            queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-            FaultSink::new(),
-        )),
-        Err(error) => {
-            assert!(!gpu_required(), "{REQUIRE_GPU} is set but {error}");
-            None
-        }
-    }
+    headless_test_device(&TestDeviceRequest::baseline())
 }
 
 /// Returns example model `id`, as a host with `gpu` as its device finds it.

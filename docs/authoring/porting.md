@@ -98,7 +98,8 @@ Two limits shape ports in practice.
 - Storage bindings per shader stage sit at 8 in the WebGPU baseline, and the engine asks for exactly what the widest model needs rather than for headroom.
   If a pass needs nine storage buffers, restructure the pass rather than asking for a higher limit.
 
-A registry test builds every GPU model on a stock baseline device and asserts at the same time that the capacity check agrees, so an over-reported pass count fails there.
+The testing kit's `BaselineBuild` check builds a GPU model on the test's device and asserts at the same time that the capacity check agrees, so an over-reported pass count fails there.
+The example models' test gives it a stock baseline device.
 
 ## Check it against the counterpart
 

@@ -31,6 +31,9 @@ pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 pub use sim_thread::{GpuSimState, GpuStats};
 pub use view::agents::GpuAgents;
 pub use view::display::{DisplayTarget, GpuDisplay};
+/// The wgpu release Henad builds on. Its types sit in [`GpuContext`]'s fields and in device requests, and a caller
+/// names them through this path in place of a `wgpu` dependency of its own.
+pub use wgpu;
 
 #[cfg(test)]
 use tests::support::headless_context;

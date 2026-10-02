@@ -798,7 +798,7 @@ mod tests {
     use henad_core::export::csv::parse_records;
     use henad_core::export::stats_csv::StatsWriter;
     use henad_core::params::ParamValue;
-    use henad_explore::device::acquire_headless;
+    use henad_explore::testing::{TestDeviceRequest, headless_test_device};
     use henad_models::example_models;
     use serde_json::json;
 
@@ -1257,11 +1257,6 @@ parameters for virus_network (Virus on a Network):
             .expect("the model builds")
     }
 
-    /// Returns whether `HENAD_REQUIRE_GPU` turns a missing device into a failure. Empty and `0` read as unset.
-    fn gpu_required() -> bool {
-        std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|v| !v.is_empty() && v != "0")
-    }
-
     /// A 64 by 64 GPU grid model and the device it runs on.
     struct SmallGpuGrid {
         ctx: GpuContext,
@@ -1276,16 +1271,7 @@ parameters for virus_network (Virus on a Network):
         ///
         /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
         fn new(id: &str) -> Option<Self> {
-            let ctx = match acquire_headless(henad_models::example_models().gpu_needs()) {
-                Ok(ctx) => ctx,
-                Err(err) => {
-                    assert!(
-                        !gpu_required(),
-                        "HENAD_REQUIRE_GPU is set but no device is available: {err:?}"
-                    );
-                    return None;
-                }
-            };
+            let ctx = headless_test_device(&TestDeviceRequest::raised(example_models().gpu_needs()))?;
             let entry = example_models().get(id).cloned().expect("the model is registered");
             let overrides = parse_overrides(&["grid_width=64".to_owned(), "grid_height=64".to_owned()]).expect("valid");
             let params = resolve_params(entry.param_descriptors(), &overrides).expect("in range");

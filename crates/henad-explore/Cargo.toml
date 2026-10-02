@@ -15,6 +15,10 @@ categories = ["simulation", "science"]
 # The tests' reference folders stay in the repository.
 exclude = ["/tests/"]
 
+[features]
+# `henad_explore::testing`, the checks a model's tests run against its entry.
+testing = []
+
 [dependencies]
 henad-core = { workspace = true }
 henad-compute = { workspace = true }

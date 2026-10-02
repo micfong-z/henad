@@ -1,35 +1,46 @@
-//! The registry tests: each example model's declarations checked against what its state does.
+//! The registry tests: each example model's declarations checked against what its state does, through the testing
+//! kit, and the guards that hold for the example models alone.
 
 use henad_compute::entry::{ModelState, register_grid_model};
-use henad_compute::fault::{BUILDING, catching};
-use henad_compute::gpu::{MAX_STEPS_PER_SUBMISSION, StatsPoll, stepping};
-use henad_compute::simulation::RunSetup;
-use henad_core::action::Schedule;
-use henad_core::metadata::Structure;
-use henad_core::model::SimState;
+use henad_compute::fault::{BUILDING, catching, install_panic_hook};
 use henad_core::params::ParamValue;
-use henad_core::topology::TopologyHint;
+use henad_explore::testing::{
+    CheckSettings, ModelCheck, ModelReport, SkipReason, TestDeviceRequest, check_model_set, headless_test_device,
+};
 
 use henad_compute::entry::ModelEntry;
-use henad_compute::gpu::GpuContext;
 use henad_core::metadata::Backend;
 
-/// A baseline device, or `None` when this machine cannot give one.
+// --8<-- [start:kit]
+/// Settings of the kit over the example models, on a baseline device when this machine gives one, and whether it gave
+/// one.
 ///
-/// The device asks for `Limits::default()`, so a GPU model that only fits a raised limit fails
-/// to build here. That is deliberate: every model is meant to run on a stock WebGPU device.
-fn device() -> Option<GpuContext> {
-    crate::tests::support::headless_context("registry_test_device", wgpu::Features::empty())
+/// The device asks for `Limits::default()`, so a GPU model that only fits a raised limit fails to build here. Every
+/// example model is meant to run on a stock WebGPU device.
+fn kit_settings() -> (CheckSettings, bool) {
+    let settings = CheckSettings::default();
+    if let Some(device) = headless_test_device(&TestDeviceRequest::baseline()) {
+        (settings.gpu(device), true)
+    } else {
+        log::warn!("checking the example models without their GPU checks: no adapter");
+        (settings, false)
+    }
 }
 
-/// Every example model, GPU ones included when `gpu` holds a device.
-fn all_entries(gpu: Option<&GpuContext>) -> Vec<ModelEntry> {
-    crate::example_models()
-        .iter()
-        .filter(|entry| gpu.is_some() || !is_gpu(entry))
-        .cloned()
-        .collect()
+/// Checks every example model once, asserting that each passes and skips only what its backend, its declared
+/// replay or a missing device rules out.
+#[test]
+fn the_example_models_conform() {
+    let (settings, has_device) = kit_settings();
+    install_panic_hook();
+    let models = crate::example_models();
+    let report = check_model_set(&models, &settings);
+    report.assert_passed();
+    for (entry, model_report) in models.iter().zip(report.reports()) {
+        assert_skips_only_what_it_declares(entry, model_report, has_device);
+    }
 }
+// --8<-- [end:kit]
 
 fn is_gpu(entry: &ModelEntry) -> bool {
     entry.metadata().backend == Backend::Gpu
@@ -45,254 +56,81 @@ fn defaults(entry: &ModelEntry) -> Vec<ParamValue> {
 
 /// A model that cannot build from its own defaults has already failed. The tests below treat
 /// a `Fault` as a failure rather than threading it through.
-fn build(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuContext>) -> ModelState {
+fn build(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&henad_compute::gpu::GpuContext>) -> ModelState {
     entry
         .build(values, None, gpu)
         .unwrap_or_else(|fault| panic!("{}: {fault}", entry.id()))
 }
 
-/// Both arms are a `SimState`, which is where the contracts below live.
-fn sim_state(state: &mut ModelState) -> &mut dyn SimState {
-    match state {
-        ModelState::Cpu(state) => state.as_mut(),
-        ModelState::Gpu(state) => state.as_mut(),
-    }
-}
-
-/// The UI labels parameters from the descriptor and the state decides what it accepts, so the
-/// two disagreeing means the panel lies about what an edit does.
-/// Checks that the checked setup path accepts every example model's declared defaults, as the app's Build reads them.
-///
-/// A default outside its own bounds, or of another kind than its descriptor, would leave Build disabled on a fresh
-/// selection.
-#[test]
-fn every_default_setup_passes_the_checks_of_from_parts() {
-    for entry in crate::example_models().iter() {
-        let setup = entry.setup();
-        assert_eq!(setup.values(), defaults(entry), "{}", entry.id());
-        let checked = RunSetup::from_parts(entry, setup.values(), None, Schedule::default())
-            .unwrap_or_else(|error| panic!("{}: {error:?}", entry.id()));
-        assert_eq!(checked.values(), setup.values(), "{}", entry.id());
-    }
-}
-
-#[test]
-fn declared_apply_mode_matches_what_the_state_accepts() {
-    let gpu = device();
-    for entry in all_entries(gpu.as_ref()) {
-        let values = defaults(&entry);
-        let mut created = build(&entry, &values, gpu.as_ref());
-        let state = sim_state(&mut created);
-
-        for (i, desc) in entry.param_descriptors().iter().enumerate() {
-            assert_eq!(
-                state.set_param(i, &values[i]),
-                desc.is_live(),
-                "{}: parameter '{}' is declared {:?} but set_param disagrees",
-                entry.id(),
-                desc.id,
-                desc.apply
-            );
-        }
-    }
-}
-
-/// Nothing else reads `topology_hint`, so without this it drifts from what the state returns.
-#[test]
-fn declared_topology_matches_the_views_the_state_returns() {
-    for entry in all_entries(None) {
-        let values = defaults(&entry);
-        let ModelState::Cpu(state) = build(&entry, &values, None) else {
-            continue;
-        };
-
-        assert_eq!(
-            state.grid_view().is_some(),
-            entry.topology_hint().grid,
-            "{}: declares grid={} but grid_view() disagrees",
-            entry.id(),
-            entry.topology_hint().grid
-        );
-        assert_eq!(
-            state.point_view().is_some(),
-            entry.topology_hint().agents,
-            "{}: declares agents={} but point_view() disagrees",
-            entry.id(),
-            entry.topology_hint().agents
-        );
-        assert_eq!(
-            state.edge_view().is_some(),
-            entry.topology_hint().edges,
-            "{}: declares edges={} but edge_view() disagrees",
-            entry.id(),
-            entry.topology_hint().edges
-        );
-    }
-}
-
-/// The benchmark CSV carries the job count beside the thread count, where a blank cell has to
-/// mean a GPU model rather than a CPU one that reports nothing.
-#[test]
-fn only_a_cpu_model_reports_how_far_a_step_splits() {
-    let gpu = device();
-    for entry in all_entries(gpu.as_ref()) {
-        let values = defaults(&entry);
-        let mut created = build(&entry, &values, gpu.as_ref());
-        let cpu = matches!(created, ModelState::Cpu(_));
-        let jobs = sim_state(&mut created).parallel_jobs();
-
-        assert_eq!(jobs.is_some(), cpu, "{}: reports {jobs:?}", entry.id());
-        assert!(jobs.is_none_or(|n| n > 0), "{}: a step splits into no jobs", entry.id());
-    }
-}
-
-/// Nothing but the Model panel reads the metadata, so a mis-registered entry would show the
-/// wrong backend for a whole release without anything else noticing.
-#[test]
-fn declared_metadata_matches_the_entry_it_describes() {
-    let device = device();
-    for entry in all_entries(device.as_ref()) {
-        let (backend, structure) = (entry.metadata().backend, &entry.metadata().structure);
-        let gpu = matches!(backend, Backend::Gpu);
-
-        assert_eq!(
-            gpu,
-            entry.demand(&defaults(&entry), &wgpu::Limits::default()).is_some(),
-            "{}: declares {backend:?} but only a GPU entry carries a capacity",
-            entry.id()
-        );
-        assert_eq!(
-            gpu,
-            entry.gpu_needs().is_some(),
-            "{}: declares {backend:?} but only a GPU entry declares device needs",
-            entry.id()
-        );
-        assert_eq!(
-            gpu,
-            matches!(build(&entry, &defaults(&entry), device.as_ref()), ModelState::Gpu(_)),
-            "{}: declares {backend:?} but its factory returns the other arm",
-            entry.id()
-        );
+/// Asserts that `report` skips only the checks the backend of `entry`, its declared replay or a missing device rule
+/// out, and that a CPU model's step split into more than one job.
+fn assert_skips_only_what_it_declares(entry: &ModelEntry, report: &ModelReport, has_device: bool) {
+    let skipped: Vec<(ModelCheck, SkipReason)> = report
+        .skipped()
+        .iter()
+        .map(|skipped| (skipped.check(), skipped.reason().clone()))
+        .collect();
+    let expected: Vec<(ModelCheck, SkipReason)> = if is_gpu(entry) {
+        ModelCheck::ALL
+            .iter()
+            .copied()
+            .filter_map(|check| match check {
+                ModelCheck::ThreadCount => Some((check, SkipReason::OtherBackend)),
+                ModelCheck::SameSeed | ModelCheck::SeedSensitivity | ModelCheck::SamplingCadence
+                    if entry.id() == "gpu_boids" =>
+                {
+                    Some((check, SkipReason::InexactReplay))
+                }
+                ModelCheck::ApplyModes
+                | ModelCheck::Views
+                | ModelCheck::ParallelJobs
+                | ModelCheck::Actions
+                | ModelCheck::StatCount
+                | ModelCheck::SameSeed
+                | ModelCheck::SeedSensitivity
+                | ModelCheck::SamplingCadence
+                | ModelCheck::BaselineBuild
+                | ModelCheck::FullSubmission
+                | ModelCheck::SampledSlice
+                    if !has_device =>
+                {
+                    Some((check, SkipReason::NoDevice))
+                }
+                _ => None,
+            })
+            .collect()
+    } else {
+        [
+            ModelCheck::DefaultsFit,
+            ModelCheck::BaselineBuild,
+            ModelCheck::FullSubmission,
+            ModelCheck::SampledSlice,
+        ]
+        .map(|check| (check, SkipReason::OtherBackend))
+        .to_vec()
+    };
+    assert_eq!(skipped, expected, "{report}");
+    if !is_gpu(entry) {
         assert!(
-            gpu || entry.metadata().replays_exactly,
-            "{}: a CPU model replays exactly",
-            entry.id()
-        );
-
-        let hint = entry.topology_hint();
-        let agrees = match structure {
-            Structure::Grid { .. } | Structure::GpuGrid { .. } => hint == TopologyHint::GRID,
-            Structure::Agents { .. } | Structure::GpuAgents { .. } => hint.agents,
-            Structure::Network { .. } => hint.agents && hint.edges,
-        };
-        assert!(agrees, "{}: declared structure and topology disagree", entry.id());
-
-        assert!(
-            gpu == matches!(structure, Structure::GpuGrid { .. } | Structure::GpuAgents { .. }),
-            "{}: declares {backend:?} but a structure for the other backend",
-            entry.id()
-        );
-    }
-}
-
-/// The panel draws a button per declared action and the state decides what it runs, so the
-/// two disagreeing means a button that quietly does nothing.
-#[test]
-fn every_declared_action_is_accepted_by_the_state() {
-    let gpu = device();
-    for entry in all_entries(gpu.as_ref()) {
-        let values = defaults(&entry);
-        let mut created = build(&entry, &values, gpu.as_ref());
-        let declared = entry.action_descriptors().len();
-        let state = sim_state(&mut created);
-
-        for (i, action) in entry.action_descriptors().iter().enumerate() {
-            assert!(
-                state.act(i),
-                "{}: declares action '{}' at index {i} but the state refuses it",
-                entry.id(),
-                action.id
-            );
-        }
-        assert!(
-            !state.act(declared),
-            "{}: accepts an action past the {declared} it declares",
-            entry.id()
-        );
-    }
-}
-
-/// Ids reach the CLI through `--act`, where two the same would be ambiguous.
-#[test]
-fn action_ids_are_unique_within_a_model() {
-    for entry in crate::example_models().iter() {
-        let mut ids: Vec<&str> = entry.action_descriptors().iter().map(|a| a.id).collect();
-        let declared = ids.len();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), declared, "{}: declares the same action id twice", entry.id());
-    }
-}
-
-/// Every palette is drawn from, so an empty one would colour a model's cells out of an empty
-/// slice.
-#[test]
-fn a_declared_palette_has_colours_in_it() {
-    for entry in crate::example_models().iter() {
-        let Some(palette) = entry.metadata().palette else {
-            continue;
-        };
-        assert!(!palette.is_empty(), "{}: declares an empty palette", entry.id());
-    }
-}
-
-/// Labels and colours are declared once and paired with values positionally, so a model that
-/// returns too few values loses its trailing series rather than mislabelling anything. Silent
-/// either way, hence this.
-#[test]
-fn every_declared_stat_series_gets_a_value() {
-    let gpu = device();
-    for entry in all_entries(gpu.as_ref()) {
-        let values = defaults(&entry);
-        let mut created = build(&entry, &values, gpu.as_ref());
-        let state = sim_state(&mut created);
-        assert_eq!(
-            state.stats().len(),
-            entry.stat_descriptors().len(),
-            "{}: declares {} stat series but produced {} values",
+            report.thread_count_jobs().is_some_and(|jobs| jobs > 1),
+            "{}: a step splits into {:?} jobs",
             entry.id(),
-            entry.stat_descriptors().len(),
-            state.stats().len()
+            report.thread_count_jobs()
         );
     }
 }
 
-/// The GPU counterpart of the test above. A GPU state publishes through its snapshot rather
-/// than through `grid_view`/`point_view`, so that is what the hint has to agree with.
+/// The GPU checks pick a model by its declared backend, never by its id.
 #[test]
-fn declared_topology_matches_the_layers_a_gpu_state_publishes() {
-    let gpu = device();
-    for entry in all_entries(gpu.as_ref()) {
-        let values = defaults(&entry);
-        let ModelState::Gpu(state) = build(&entry, &values, gpu.as_ref()) else {
-            continue;
-        };
-        let view = state.view();
-        assert_eq!(
-            view.display.is_some(),
-            entry.topology_hint().grid,
-            "{}: declares grid={} but its snapshot disagrees",
-            entry.id(),
-            entry.topology_hint().grid
-        );
-        assert_eq!(
-            view.agents.is_some(),
-            entry.topology_hint().agents,
-            "{}: declares agents={} but its snapshot disagrees",
-            entry.id(),
-            entry.topology_hint().agents
-        );
-    }
+fn the_example_gpu_models_are_the_gpu_backend_entries() {
+    let models = crate::example_models();
+    let gpu = ["gpu_game_of_life", "gpu_sir", "gpu_boids", "gpu_ants"];
+    let found: Vec<&str> = models
+        .iter()
+        .filter(|entry| is_gpu(entry))
+        .map(ModelEntry::id)
+        .collect();
+    assert_eq!(found, gpu, "the GPU models are picked by backend");
 }
 
 /// A model author can get a kernel wrong, and that must reach Build as a message rather than
@@ -335,130 +173,6 @@ fn a_kernel_that_panics_mid_step_keeps_its_location() {
 fn a_model_entry_can_be_shared_between_threads() {
     fn assert_send_and_sync<T: Send + Sync>() {}
     assert_send_and_sync::<ModelEntry>();
-}
-
-/// Building every GPU model on a baseline device is what makes "runs on a stock WebGPU
-/// device" a fact rather than an argument: the engine asserts each pass against the device's
-/// own `max_storage_buffers_per_shader_stage`, which is 8 here.
-#[test]
-fn every_gpu_model_builds_on_a_baseline_device() {
-    let Some(ctx) = device() else {
-        log::warn!("skipping every_gpu_model_builds_on_a_baseline_device: no adapter");
-        return;
-    };
-    let entries = all_entries(Some(&ctx));
-    for entry in entries.iter().filter(|entry| is_gpu(entry)) {
-        let params = defaults(entry);
-        // The two pin each other: under-report a pass and the build fails, over-report one
-        // and the assert does.
-        let _built = build(entry, &params, Some(&ctx));
-        assert!(
-            entry.shortfalls(&params, &wgpu::Limits::default()).is_empty(),
-            "{}: builds on a baseline device but its declared demand says it should not: {:?}",
-            entry.id(),
-            entry.shortfalls(&params, &wgpu::Limits::default())
-        );
-    }
-}
-
-/// An oversized submission stops running with no error and no panic, leaving the tick counter
-/// advanced and every readback zero. How many steps that takes depends on the passes a model
-/// records per step, hence every model rather than one.
-#[test]
-fn a_full_submission_executes_every_step() {
-    let Some(ctx) = crate::tests::support::headless_context("submission_ceiling_device", wgpu::Features::empty())
-    else {
-        log::warn!("skipping a_full_submission_executes_every_step: no adapter");
-        return;
-    };
-
-    for entry in all_entries(Some(&ctx)) {
-        let ModelState::Gpu(mut state) = build(&entry, &defaults(&entry), Some(&ctx)) else {
-            continue;
-        };
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("henad_submission_ceiling"),
-        });
-        state.encode_steps(&mut encoder, MAX_STEPS_PER_SUBMISSION, None);
-        state.encode_snapshot_passes(&mut encoder);
-        ctx.queue.submit(Some(encoder.finish()));
-        state.begin_stats_readback();
-        state.poll_stats_readback(&ctx.device, true);
-
-        assert_eq!(
-            state.tick(),
-            u64::from(MAX_STEPS_PER_SUBMISSION),
-            "{}: tick after one full submission",
-            entry.id()
-        );
-        assert!(
-            state.stats().iter().any(|stat| stat.value.scalar() != 0.0),
-            "{}: every stat read back zero after a submission of {MAX_STEPS_PER_SUBMISSION} steps, which is what a dropped submission looks like",
-            entry.id()
-        );
-    }
-}
-
-/// A slice sampled through the stats passes alone reads back what the snapshot passes do, display included.
-#[test]
-fn a_sampled_slice_reads_back_what_a_snapshot_does() {
-    let Some(ctx) = crate::tests::support::headless_context("sampled_slice_device", wgpu::Features::empty()) else {
-        log::warn!("skipping a_sampled_slice_reads_back_what_a_snapshot_does: no adapter");
-        return;
-    };
-
-    for entry in all_entries(Some(&ctx)) {
-        let ModelState::Gpu(mut state) = build(&entry, &defaults(&entry), Some(&ctx)) else {
-            continue;
-        };
-        for count in [0, 17, MAX_STEPS_PER_SUBMISSION] {
-            let tick = state.tick() + u64::from(count);
-            let submission = stepping::submit_slice(&mut *state, &ctx, count, true);
-            assert!(
-                state.stats_readback_pending(),
-                "{}: a sampled slice begins its readback",
-                entry.id()
-            );
-            stepping::await_submission(&ctx, submission).expect("the slice runs");
-            assert_eq!(
-                state.poll_stats_readback(&ctx.device, false),
-                StatsPoll::Landed,
-                "{}: the readback of a finished slice lands on the next poll",
-                entry.id()
-            );
-            assert_eq!(state.tick(), tick, "{}: tick after a slice of {count}", entry.id());
-            let sliced = state.stats();
-            let snapshot = stepping::sample_stats(&mut *state, &ctx);
-            assert_eq!(
-                format!("{sliced:?}"),
-                format!("{snapshot:?}"),
-                "{}: stats at tick {tick}",
-                entry.id()
-            );
-        }
-        assert!(ctx.faults.take().is_none(), "{}: the device raised a fault", entry.id());
-    }
-}
-
-/// The app asks every frame, before building, so a missing capacity is a panic on the UI
-/// thread.
-#[test]
-fn every_gpu_entry_reports_its_capacity() {
-    let baseline = wgpu::Limits::default();
-    let models = crate::example_models();
-    for entry in models.iter().filter(|entry| is_gpu(entry)) {
-        let demand = entry
-            .demand(&defaults(entry), &baseline)
-            .expect("a GPU entry declares its capacity");
-        assert!(demand.bytes() > 0, "{}: a GPU model allocates something", entry.id());
-    }
-    for entry in models.iter().filter(|entry| !is_gpu(entry)) {
-        assert!(
-            entry.demand(&defaults(entry), &baseline).is_none(),
-            "{}: a CPU model has no device demand",
-            entry.id()
-        );
-    }
 }
 
 /// The device a host requests reads the set's needs, so an entry that declares fewer storage

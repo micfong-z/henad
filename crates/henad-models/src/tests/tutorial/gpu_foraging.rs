@@ -255,7 +255,8 @@ mod tests {
 
     #[test]
     fn a_run_replays_bit_identically() {
-        let Some(ctx) = crate::tests::support::headless_context("gpu_foraging_test_device", wgpu::Features::empty())
+        let Some(ctx) =
+            henad_explore::testing::headless_test_device(&henad_explore::testing::TestDeviceRequest::baseline())
         else {
             log::warn!("skipping a_run_replays_bit_identically: no wgpu adapter available");
             return;

@@ -16,7 +16,7 @@ use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
 
 use crate::example_models;
-use crate::tests::support::headless_context;
+use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
 fn entry(id: &str) -> ModelEntry {
     example_models().get(id).cloned().expect("the model is registered")
@@ -363,7 +363,7 @@ fn faulty_life() -> ModelEntry {
 /// the edit would return without the error, and the healthy simulation's next wait would report it from the sink.
 #[test]
 fn a_gpu_simulation_reports_its_own_device_error() {
-    let Some(ctx) = headless_context("henad_simulation_fault_test", wgpu::Features::empty()) else {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
         return;
     };
     let small = |entry: ModelEntry| {

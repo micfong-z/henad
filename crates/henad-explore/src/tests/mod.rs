@@ -13,6 +13,8 @@ mod gpu;
 #[cfg(not(target_arch = "wasm32"))]
 mod handle;
 #[cfg(not(target_arch = "wasm32"))]
+mod kit;
+#[cfg(not(target_arch = "wasm32"))]
 mod provenance;
 #[cfg(not(target_arch = "wasm32"))]
 mod replay;

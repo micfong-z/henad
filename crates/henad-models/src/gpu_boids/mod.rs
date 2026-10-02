@@ -218,11 +218,12 @@ mod tests {
     use henad_compute::cpu::agent_engine::AgentModelState;
     use henad_compute::gpu::{GpuAgentState, GpuContext};
     use henad_core::model::SimState as _;
+    use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
     type State = GpuAgentState<GpuBoids>;
 
     fn headless_context() -> Option<GpuContext> {
-        crate::tests::support::headless_context("gpu_boids_test_device", wgpu::Features::empty())
+        headless_test_device(&TestDeviceRequest::baseline())
     }
 
     fn params(num_agents: u32, world: f32) -> Vec<ParamValue> {

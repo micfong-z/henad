@@ -25,8 +25,10 @@ bytemuck = { workspace = true }
 henad-build = { workspace = true }
 
 [dev-dependencies]
+# A path alone, so the published package carries no requirement on henad-explore. The kit's checks run over the
+# example models, and henad-explore's tests build them in turn.
+henad-explore = { path = "../henad-explore", features = ["testing"] }
 rayon = { workspace = true }
-pollster = { workspace = true }
 flume = { workspace = true }
 log = { workspace = true }
 

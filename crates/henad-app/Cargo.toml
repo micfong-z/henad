@@ -56,6 +56,8 @@ web-time = { workspace = true }
 
 [dev-dependencies]
 henad-models = { workspace = true }
+# The headless device of the tests.
+henad-explore = { workspace = true, features = ["testing"] }
 
 # native:
 [build-dependencies]

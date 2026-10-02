@@ -794,15 +794,9 @@ impl AppState {
     ///
     /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
     pub fn headless(models: ModelSet, compute: bool) -> Option<Self> {
-        let ctx = match henad_explore::device::acquire_headless(models.gpu_needs()) {
-            Ok(ctx) => ctx,
-            Err(error) => {
-                let required =
-                    std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|value| !value.is_empty() && value != "0");
-                assert!(!required, "HENAD_REQUIRE_GPU is set but {error}");
-                return None;
-            }
-        };
+        use henad_explore::testing::{TestDeviceRequest, headless_test_device};
+
+        let ctx = headless_test_device(&TestDeviceRequest::raised(models.gpu_needs()))?;
         let runtime = ctx
             .runtime_info()
             .expect("a headless device carries its runtime info")

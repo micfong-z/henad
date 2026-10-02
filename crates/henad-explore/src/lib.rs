@@ -18,6 +18,8 @@ pub mod schema;
 pub mod search_run;
 pub mod spec_file;
 pub mod sweep;
+#[cfg(any(feature = "testing", test))]
+pub mod testing;
 
 #[cfg(test)]
 mod tests;

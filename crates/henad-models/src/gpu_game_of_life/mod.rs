@@ -168,13 +168,14 @@ mod tests {
     use henad_compute::gpu::sim_thread::GpuSimState as _;
     use henad_compute::gpu::timing::TimestampQuery;
     use henad_core::model::SimState as _;
+    use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
     use crate::game_of_life::GameOfLifeModel;
 
     type State = GpuGridState<GpuGameOfLife>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        crate::tests::support::headless_context("gpu_gol_test_device", wgpu::Features::empty())
+        headless_test_device(&TestDeviceRequest::baseline())
     }
 
     pub(super) fn params(width: u32, height: u32, density: f32) -> Vec<ParamValue> {
@@ -294,7 +295,9 @@ mod tests {
     /// Like `headless_context`, but requests `TIMESTAMP_QUERY` explicitly (mirroring what the app
     /// does when the adapter supports it), since the default test device requests no features.
     fn headless_timing_context() -> Option<GpuContext> {
-        crate::tests::support::headless_context("gpu_gol_timing_test_device", wgpu::Features::TIMESTAMP_QUERY)
+        headless_test_device(
+            &TestDeviceRequest::baseline().features(henad_compute::gpu::wgpu::Features::TIMESTAMP_QUERY),
+        )
     }
 
     /// Regression test for "GPU time/step flickers to 0/None during a sustained run": runs many

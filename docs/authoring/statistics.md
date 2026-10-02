@@ -21,7 +21,7 @@ Take the colour from the model's own palette, and each chart line then keeps the
 ```
 
 When a snapshot is published, the engine zips the two lists together.
-If `values` comes back short, the trailing series are left out instead of mislabelled, and a registry test asserts that every declared series gets a value.
+If `values` comes back short, the trailing series are left out instead of mislabelled, and the testing kit's `StatCount` check asserts that every declared series gets a value.
 
 ## Values
 
@@ -102,7 +102,7 @@ Team Assembly keys its cached components by the graph's version and node count, 
 It reads a directed graph as undirected.
 
 `stats` can be called before any `prepare_view` has run, and it still has to return a value for every series.
-The registry test that counts the series calls it on a freshly built state.
+The testing kit's `StatCount` check calls it on a freshly built state.
 Team Assembly reports both component stats as zero until the first labelling.
 
 ## On the GPU

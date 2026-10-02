@@ -52,7 +52,7 @@ The entry's metadata carries the flag as `replays_exactly`, and the tests that c
 
 ## Tests that come with it
 
-The [registry tests](determinism.md#tests-the-registry-brings) confirm that a model's declared parameters, topology and stat series match what its state actually does, and they cover GPU entries too when a device is available.
+The [testing kit](determinism.md#the-testing-kit) checks that a model's declared parameters, topology and stat series match what its state actually does, and it covers GPU entries too when a device is available.
 
 Every CPU entry's state has to return a grid, point or edge view exactly when the entry's hint says the model draws one.
 A `Structure::Network` has to come with a hint that has both agents and edges.
@@ -68,5 +68,5 @@ cargo run -p henad-cli -- <your-id> --params
 
 ## Next
 
-- [Determinism and testing](determinism.md) covers the tests you add on top of the registry's own.
+- [Determinism and testing](determinism.md) covers the testing kit and the tests you add on top of it.
 - [The models](../reference/models.md) shows what a registered entry looks like from the outside.

@@ -11,6 +11,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use henad_explore::testing::{TestDeviceRequest, headless_test_device};
+
 /// Returns the folder of reference output, or `None` with a note when it is absent, as in a packaged crate.
 fn golden_dir() -> Option<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
@@ -28,14 +30,8 @@ fn golden_dir() -> Option<PathBuf> {
 ///
 /// Panics when `HENAD_REQUIRE_GPU` is set and no adapter is available.
 fn has_adapter() -> bool {
-    match henad_explore::device::acquire_headless(henad_models::example_models().gpu_needs()) {
-        Ok(_) => true,
-        Err(error) => {
-            let required = std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|value| !value.is_empty() && value != "0");
-            assert!(!required, "HENAD_REQUIRE_GPU is set but {error}");
-            false
-        }
-    }
+    let request = TestDeviceRequest::raised(henad_models::example_models().gpu_needs());
+    headless_test_device(&request).is_some()
 }
 
 /// Returns what `henad-cli` with `arguments` writes to standard output.

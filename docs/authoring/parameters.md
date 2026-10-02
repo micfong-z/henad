@@ -84,7 +84,7 @@ The app reads the same flag and can say so before anything is sent.
 Declare `.on_reload()` for any parameter that only `init` reads.
 Otherwise a live edit to it changes nothing, with no sign that it failed.
 
-A registry test builds every model, edits every parameter, and asserts that the state accepts exactly the edits the descriptor says it will.
+The testing kit's `ApplyModes` check builds the model, edits every parameter, and asserts that the state accepts exactly the edits the descriptor says it will.
 
 ## Hot parameters
 
@@ -222,8 +222,8 @@ The result shows even while the simulation is paused.
 The Parameters tab draws one button per action under the parameter widgets, disabled until the selected model is built.
 `henad-cli --act ID@TICK` runs one when the state reaches that tick, and [the command line](../reference/cli.md) covers the flag.
 
-A registry test presses every declared action on a freshly built state, and asserts that the state accepts each one and refuses an index past the last.
-A second one asserts that no two actions of a model share an id, since `--act` could not tell them apart.
+The testing kit's `Actions` check presses every declared action on a freshly built state, and asserts that the state accepts each one and refuses an index past the last.
+Its `ActionIds` check asserts that no two actions of a model share an id, since `--act` could not tell them apart.
 
 ## Actions on the GPU
 

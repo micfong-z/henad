@@ -486,7 +486,9 @@ fn the_gpu_life_tutorial_matches_the_shipped_model() {
     use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::{GpuContext, GpuSimState};
 
-    let Some(ctx) = crate::tests::support::headless_context("gpu_life_parity_device", wgpu::Features::empty()) else {
+    let Some(ctx) =
+        henad_explore::testing::headless_test_device(&henad_explore::testing::TestDeviceRequest::baseline())
+    else {
         log::warn!("skipping the_gpu_life_tutorial_matches_the_shipped_model: no adapter");
         return;
     };
@@ -590,7 +592,8 @@ fn the_gpu_foraging_tutorial_seeds_the_same_buffers() {
 fn the_gpu_foraging_tutorial_matches_the_shipped_model() {
     use henad_compute::gpu::GpuAgentState;
 
-    let Some(ctx) = crate::tests::support::headless_context("gpu_foraging_parity_device", wgpu::Features::empty())
+    let Some(ctx) =
+        henad_explore::testing::headless_test_device(&henad_explore::testing::TestDeviceRequest::baseline())
     else {
         log::warn!("skipping the_gpu_foraging_tutorial_matches_the_shipped_model: no adapter");
         return;

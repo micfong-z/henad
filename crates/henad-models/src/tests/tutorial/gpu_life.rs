@@ -125,7 +125,9 @@ mod tests {
 
     #[test]
     fn the_alive_count_matches_the_cpu_model() {
-        let Some(ctx) = crate::tests::support::headless_context("gpu_life_test_device", wgpu::Features::empty()) else {
+        let Some(ctx) =
+            henad_explore::testing::headless_test_device(&henad_explore::testing::TestDeviceRequest::baseline())
+        else {
             log::warn!("skipping the_alive_count_matches_the_cpu_model: no wgpu adapter available");
             return;
         };
