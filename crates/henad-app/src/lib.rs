@@ -1,24 +1,55 @@
-//! The Henad GUI application.
+//! The app of Henad, a parallel agent-based modelling engine, as a library.
+//!
+//! [`run_native`] opens a window over the models an [`AppOptions`] holds, and `start_web` starts the same app in a
+//! browser. The official `henad-app` binary calls them with the example models. A project with models of its own opens
+//! the same app over its own [`ModelSet`](henad_compute::entry::ModelSet).
+//!
+//! ```no_run
+//! use henad_app::AppOptions;
+//! use henad_compute::entry::ModelSet;
+//!
+//! fn main() -> Result<(), henad_app::AppError> {
+//!     let models = ModelSet::new(henad_core::build_info!());
+//!     let options = AppOptions::new(models, "My Models", henad_core::build_info!()).cli_command("my-models-cli");
+//!     henad_app::run_native(options)
+//! }
+//! ```
+//!
+//! An [`AppOpening`] opens the app on a results folder, a recorded run or a setup the host built, in place of the
+//! first model of the set.
 
 henad_compute::include_shaders!();
 
 mod icons;
 mod init;
+#[cfg(not(target_arch = "wasm32"))]
+mod native;
+mod options;
 mod sim_runner;
-pub mod state;
-pub mod ui;
+mod state;
+mod ui;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 use eframe::egui_wgpu;
 use egui_dock::{DockArea, DockState, Style};
 
 use crate::init::{setup_custom_fonts, setup_custom_styles};
 
-pub use crate::init::wgpu_configuration;
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::native::{results_folder, run_native};
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::options::AppError;
+#[cfg(target_arch = "wasm32")]
+pub use crate::options::WebStartError;
+pub use crate::options::{AppOpening, AppOptions};
+pub use crate::state::OpenAt;
+#[cfg(target_arch = "wasm32")]
+pub use crate::web::{init_web_logger, start_web};
 
 use crate::sim_runner::SimRunner;
 use crate::state::AppState;
 use crate::ui::dock::{Tab, default_dock_state, focus_tab};
-use henad_compute::entry::ModelSet;
 use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::runner::CAN_SPAWN_THREADS;
 use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
@@ -43,23 +74,21 @@ pub fn requested_threads(search: &str, available: usize) -> usize {
 
 use crate::state::FrameTimings;
 
-/// Build of this app. A sweep's manifest, the run details and the About window record it as the host's.
-pub(crate) const HOST_BUILD: henad_core::provenance::BuildInfo = henad_core::build_info!();
-
 /// Longest time between two repaints while a sweep runs on a thread of its own.
 const SWEEP_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
-pub struct HenadApp {
+struct HenadApp {
     dock: DockState<Tab>,
     state: AppState,
 }
 
 impl HenadApp {
-    /// Returns the app offering `models`, on the device eframe created from [`wgpu_configuration`].
+    /// Returns the app `options` describe, on the device eframe created from [`init::wgpu_configuration`], opened on
+    /// the options' opening.
     ///
-    /// Note that the device has to be requested for `models.gpu_needs()`. Otherwise a GPU model that binds more
+    /// Note that the device has to be requested for the models' `gpu_needs()`. Otherwise a GPU model that binds more
     /// storage buffers than the WebGPU baseline allows will fail to build.
-    pub fn new(cc: &eframe::CreationContext<'_>, models: ModelSet) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, options: AppOptions) -> Self {
         install_panic_hook();
 
         let render_state = &cc
@@ -85,23 +114,28 @@ impl HenadApp {
         setup_custom_fonts(&cc.egui_ctx);
         setup_custom_styles(&cc.egui_ctx);
 
+        let AppOptions {
+            models,
+            product,
+            opening,
+            thread_pool_note,
+        } = options;
+        let mut state = AppState::new(
+            cc.egui_ctx.clone(),
+            models,
+            product,
+            render_ctx,
+            gpu_ctx,
+            RuntimeInfo::collect(&render_state.adapter, &render_state.device),
+        );
+        state.thread_pool_note = thread_pool_note;
+        if let Some(opening) = opening {
+            state.open(opening);
+        }
         Self {
             dock: default_dock_state(),
-            state: AppState::new(
-                cc.egui_ctx.clone(),
-                models,
-                render_ctx,
-                gpu_ctx,
-                RuntimeInfo::collect(&render_state.adapter, &render_state.device),
-            ),
+            state,
         }
-    }
-
-    /// Reads the results a sweep wrote to `folder`, and shows them in the Results tab once read.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn open_results(&mut self, folder: std::path::PathBuf) {
-        ui::results::open_folder(&mut self.state, folder);
-        self.state.focus_request = Some(Tab::Results);
     }
 }
 

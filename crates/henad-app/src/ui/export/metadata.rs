@@ -14,9 +14,9 @@ pub fn run_details(app: &AppState) -> String {
 
     let details = json!({
         "engine": "henad",
-        "engine_version": env!("CARGO_PKG_VERSION"),
+        "engine_version": henad_explore::ENGINE_BUILD.version(),
         "debug_build": cfg!(debug_assertions),
-        "host": RecordedBuild::from(&crate::HOST_BUILD),
+        "host": RecordedBuild::from(&app.product.host),
         "model": entry.map(|e| e.id()),
         "model_name": entry.map(|e| e.name()),
         "backend": entry.map(|e| e.metadata().backend.label()),

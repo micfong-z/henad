@@ -4,7 +4,7 @@ use crate::icons::material_design_icons::{MDI_ARROW_TOP_RIGHT_THIN, MDI_CHART_HI
 use crate::state::AppState;
 use henad_core::view::StatValue;
 
-pub fn stats_ui(ui: &mut egui::Ui, app: &mut AppState) {
+pub fn stats_ui(ui: &mut egui::Ui, app: &AppState) {
     let Some(snap) = &app.snapshot else {
         ui.label("No simulation loaded.");
         return;

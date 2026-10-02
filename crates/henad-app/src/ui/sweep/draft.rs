@@ -35,6 +35,7 @@ use henad_explore::search_run::{SearchPlan, SearchPlanError};
 use henad_explore::spec_file::{ExecutionTable, LoadedSpec, SpecFile};
 use henad_explore::sweep::SpecSource;
 
+use crate::options::cli_phrase;
 use crate::ui::params::display_value;
 use crate::ui::plural;
 use crate::ui::results::store::{action_label, output_label};
@@ -395,6 +396,8 @@ impl DesignTableDraft {
 pub struct SweepDraft {
     /// Id of the model the draft sweeps.
     pub model_id: String,
+    /// Program the advice on a sweep over the app's limit names, `None` for none.
+    pub cli_command: Option<String>,
     pub mode: DraftMode,
     /// One entry per parameter, in descriptor order. A search varies the ticked ones over its space.
     pub factors: Vec<FactorDraft>,
@@ -644,6 +647,7 @@ impl SweepDraft {
         let seeds = SeedSettings::default();
         Self {
             model_id: schema.id.to_owned(),
+            cli_command: None,
             mode: DraftMode::default(),
             factors: schema
                 .params
@@ -1220,8 +1224,8 @@ impl SweepDraft {
             vec![DraftIssue::new(
                 DraftSite::Sweep,
                 format!(
-                    "{noun} of {runs} runs is over the app's limit of {MAX_DRAFT_RUNS}. Run larger ones with \
-                     henad-cli."
+                    "{noun} of {runs} runs is over the app's limit of {MAX_DRAFT_RUNS}. Run larger ones {}.",
+                    cli_phrase(self.cli_command.as_deref())
                 ),
             )]
         };

@@ -495,6 +495,7 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let mut request = None;
     toolbar(ui, app, &mut request);
     let sweep_running = app.sweep.is_running();
+    let cli_command = app.product.cli_command.clone();
     let ResultsPanel {
         store,
         view,
@@ -532,7 +533,9 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
     if let Some(run_id) = *selected_run {
         egui::Panel::bottom("henad_results_run_strip")
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 4)))
-            .show(ui, |ui| table::detail_strip(ui, store, run_id, &mut request));
+            .show(ui, |ui| {
+                table::detail_strip(ui, store, run_id, cli_command.as_deref(), &mut request);
+            });
     }
     match view {
         ResultsView::Search => search::search_ui(ui, store, search, sweep_running, &mut request),
@@ -688,7 +691,10 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: Option<Result
             }
         }
         ResultsRequest::CopyCommand(run_id) => {
-            let command = panel.store.as_ref().map(|store| store.cli_command(run_id));
+            let Some(program) = &app.product.cli_command else {
+                return;
+            };
+            let command = panel.store.as_ref().map(|store| store.cli_command(program, run_id));
             match command {
                 Some(Ok(command)) => {
                     ctx.copy_text(command);
@@ -1044,11 +1050,11 @@ mod tests {
                     opened.replay(run_id).as_ref(),
                     "{name}: run {run_id} replays the same from its folder"
                 );
-                assert!(live.cli_command(run_id).is_ok(), "{name}: run {run_id}");
+                assert!(live.cli_command("henad-cli", run_id).is_ok(), "{name}: run {run_id}");
             }
             for store in [live, &opened] {
                 assert_eq!(
-                    store.cli_command(0).as_ref(),
+                    store.cli_command("henad-cli", 0).as_ref(),
                     Ok(&command),
                     "{name}: the command sets the fixed values and candidate 0's rate"
                 );

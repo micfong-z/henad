@@ -22,6 +22,11 @@ You can resize each panel, collapse or expand them, move them around, and even d
 In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists all 12 tabs and highlights the open ones, and is the only way to reopen a tab you closed.
 Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bottom to put everything back to default layout, in case the workspace gets too messy.
 
+<span class="ui" markdown>:material-information-outline: About</span> links to the source code and this documentation.
+Select <span class="ui" markdown>:material-information-outline: About Henad</span> to open a window with the app's version, commit, source hash, build type and licence, and the version of the crate that provides the models with its commit or the hash of its sources.
+Press <span class="ui" markdown>:material-content-copy: Copy</span> to copy every row, ready to paste into a bug report.
+An app built on Henad shows its own name there, and adds a **Built on** row with the Henad version underneath it.
+
 | Tab                                                                      | Content                                 |
 | ------------------------------------------------------------------------ | --------------------------------------- |
 | <span class="ui" markdown>:material-cube-outline: Viewport</span>        | Simulation visualization                |
@@ -842,6 +847,7 @@ A strip at the bottom of the tab then names the run and its configuration, with 
 
 <span class="ui" markdown>:material-content-copy: Copy command</span>
 : Copies a `henad-cli` command that replays the run and writes its stats to a CSV file.
+  An app built on Henad copies a command of its own command line instead, and shows no button when it has none.
   The command samples from tick 0, every `--stats-every` ticks.
   The run's series samples from the end of its warm-up, and with a warm-up the two files can hold different ticks.
 

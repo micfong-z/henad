@@ -7,6 +7,7 @@ use egui::{Button, Color32, CornerRadius, Frame, Margin, RichText, WidgetInfo, W
 use crate::icons::material_design_icons::{
     MDI_ALERT, MDI_CHECK, MDI_CLOSE, MDI_DOCK_RIGHT, MDI_FILE_COG_OUTLINE, MDI_TRAY_ARROW_DOWN, MDI_TRAY_ARROW_UP,
 };
+use crate::options::cli_phrase;
 use crate::ui::mcs;
 use crate::ui::sweep::SweepRequest;
 use crate::ui::sweep::draft::DraftMode;
@@ -43,6 +44,8 @@ pub struct BuilderHeader<'a> {
     pub notification: Option<&'a str>,
     /// Whether the model is one a browser cannot sweep.
     pub gpu_refused: bool,
+    /// Program the advice names, `None` for none.
+    pub cli_command: Option<&'a str>,
     /// Whether the Plan panel fits beside the form, and its toggle shows.
     pub plan_fits: bool,
 }
@@ -89,8 +92,10 @@ pub fn builder_header(
     }
     let description = if header.gpu_refused {
         Line {
-            text: "GPU sweeps are unavailable in a browser. Save spec and run it in the desktop app or henad-cli."
-                .to_owned(),
+            text: format!(
+                "GPU sweeps are unavailable in a browser. Save spec and run it in the desktop app or {}.",
+                cli_phrase(header.cli_command)
+            ),
             color: Some(ui.visuals().error_fg_color),
         }
     } else {

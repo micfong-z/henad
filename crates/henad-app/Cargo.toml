@@ -14,7 +14,20 @@ readme = "README.md"
 keywords = ["agent-based-model", "simulation", "egui", "gui", "visualization"]
 categories = ["simulation", "science", "visualization", "gui"]
 
+[lib]
+path = "src/lib.rs"
+
+# The official binary opens the example models. A host with models of its own calls `henad_app::run_native` or
+# `henad_app::start_web`.
+[[bin]]
+name = "henad-app"
+path = "src/main.rs"
+required-features = ["example-models"]
+
 [features]
+default = ["example-models"]
+# The ten example models, for the official binary.
+example-models = ["dep:henad-models"]
 # Lets an external inspector (egui_mcp) drive the app. Off unless asked for, and inert at runtime
 # until EGUI_INSPECTION is set.
 inspection = ["eframe/inspection"]
@@ -22,7 +35,7 @@ inspection = ["eframe/inspection"]
 [dependencies]
 henad-core = { workspace = true }
 henad-compute = { workspace = true }
-henad-models = { workspace = true }
+henad-models = { workspace = true, optional = true }
 henad-explore = { workspace = true }
 egui = { workspace = true }
 egui_dock = { workspace = true }
@@ -40,6 +53,9 @@ flume = { workspace = true }
 rfd = { workspace = true }
 serde_json = { workspace = true }
 web-time = { workspace = true }
+
+[dev-dependencies]
+henad-models = { workspace = true }
 
 # native:
 [build-dependencies]

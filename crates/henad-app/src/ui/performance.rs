@@ -48,7 +48,16 @@ fn padded_row(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: &str
     rows.end_row(ui);
 }
 
-pub fn performance_ui(ui: &mut egui::Ui, app: &mut AppState) {
+pub fn performance_ui(ui: &mut egui::Ui, app: &AppState) {
+    if let Some(note) = &app.thread_pool_note {
+        crate::ui::banner(
+            ui,
+            crate::icons::material_design_icons::MDI_ALERT,
+            ui.visuals().warn_fg_color,
+            "Thread pool failed to start",
+            note,
+        );
+    }
     crate::ui::kv_grid(ui, "performance_grid").show(ui, |ui, rows| {
         match &app.snapshot {
             Some(snap) => {

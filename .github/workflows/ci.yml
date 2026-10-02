@@ -223,8 +223,17 @@ jobs:
           curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xzf - -C "$HOME/.cargo/bin"
 
+      # Release, the build users deploy. Trunk runs `data-wasm-opt` only under `--release`.
       - name: Build
-        run: ./scripts/build_web.sh build
+        run: ./scripts/build_web.sh build --release
+
+      # The worker glue reaches the page through henad-app's re-export of `init_thread_pool`. Without it the thread
+      # pool cannot start, and the build still succeeds.
+      - name: Check the worker glue
+        run: |
+          grep -q wbg_rayon_start_worker dist/henad-app.js
+          grep -q initThreadPool dist/henad-app.js
+          ls dist/snippets/wasm-bindgen-rayon-*/src/workerHelpers.no-bundler.js
 
   # Packages every crate without building it, which catches a manifest that cargo refuses.
   package:

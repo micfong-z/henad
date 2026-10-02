@@ -95,6 +95,8 @@ pub struct FormInput<'a> {
     pub plan: &'a PlanSummary,
     /// Results the Results tab holds of the draft's model, `None` when it holds none.
     pub results: Option<&'a ResultsStore>,
+    /// Program the tab's advice names, `None` for none.
+    pub cli_command: Option<&'a str>,
 }
 
 /// One-line summary of each section's settings, as its header shows it.
@@ -2289,6 +2291,7 @@ mod tests {
             sections: &sections,
             plan: &plan,
             results: None,
+            cli_command: Some("henad-cli"),
         };
         let mut draft = check.draft.clone();
         // The Outputs section starts collapsed, and a reveal opens it.

@@ -5,7 +5,6 @@ use crate::icons::material_design_icons::{
     MDI_VIEW_DASHBOARD_OUTLINE,
 };
 use crate::state::AppState;
-use crate::ui::about::{DOCS_URL, SOURCE_URL};
 use crate::ui::dock::{Tab, default_dock_state, toggle_tab};
 use egui_dock::DockState;
 
@@ -39,10 +38,20 @@ fn view_menu(ui: &mut egui::Ui, dock: &mut DockState<Tab>) {
 
 fn about_menu(ui: &mut egui::Ui, app: &mut AppState) {
     ui.menu_button(format!("{MDI_INFORMATION_OUTLINE}  About"), |ui| {
-        link_button(ui, MDI_GITHUB, "Source code", SOURCE_URL);
-        link_button(ui, MDI_BOOK_OPEN_VARIANT, "Documentation", DOCS_URL);
-        ui.separator();
-        if ui.button(format!("{MDI_INFORMATION_OUTLINE}  About Henad")).clicked() {
+        let product = &app.product;
+        if let Some(url) = &product.source_url {
+            link_button(ui, MDI_GITHUB, "Source code", url);
+        }
+        if let Some(url) = &product.documentation_url {
+            link_button(ui, MDI_BOOK_OPEN_VARIANT, "Documentation", url);
+        }
+        if product.source_url.is_some() || product.documentation_url.is_some() {
+            ui.separator();
+        }
+        if ui
+            .button(format!("{MDI_INFORMATION_OUTLINE}  About {}", product.name))
+            .clicked()
+        {
             app.about_open = true;
             ui.close();
         }

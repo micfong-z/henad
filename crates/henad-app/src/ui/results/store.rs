@@ -43,6 +43,7 @@ pub enum ResultsSource {
     /// The sweep or search started from the Sweep tab.
     Sweep,
     /// A folder a sweep wrote.
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser reads no folder"))]
     Folder(PathBuf),
     /// Files picked one by one, by name.
     Files(Vec<String>),
@@ -253,6 +254,7 @@ impl SeriesCache {
     }
 
     /// Drops held series of runs outside `kept_runs`, highest run id first, until `bytes` more fit the budget.
+    #[cfg(not(target_arch = "wasm32"))]
     fn make_room(&mut self, bytes: usize, kept_runs: &BTreeSet<u64>) {
         let evictable: Vec<u64> = self
             .runs
@@ -274,11 +276,8 @@ impl SeriesCache {
         self.runs.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.runs.is_empty()
-    }
-
     /// Bytes the held series take.
+    #[cfg(test)]
     pub fn used_bytes(&self) -> usize {
         self.used
     }
@@ -1460,21 +1459,22 @@ impl ResultsStore {
         Ok(search_plan.replay(&outcome.run, &config))
     }
 
-    /// Returns a `henad-cli` command that steps run `run_id` to the tick it ended on and writes its stats.
+    /// Returns a command line of `program`, a host's equivalent of `henad-cli`, that steps run `run_id` to the tick it
+    /// ended on and writes its stats.
     ///
     /// The command sets each parameter that differs from the model's default and fires each action due by the end.
     ///
     /// # Errors
     ///
     /// Returns the message of [`Self::replay`] for a run that does not replay.
-    pub fn cli_command(&self, run_id: u64) -> Result<String, String> {
+    pub fn cli_command(&self, program: &str, run_id: u64) -> Result<String, String> {
         let replay = self.replay(run_id)?;
         let (Ok(plan), Some(outcome)) = (&self.plan, self.run(run_id)) else {
             return Err(format!("No run {run_id} in these results"));
         };
         let plan = plan.base();
         let mut words = vec![
-            "henad-cli".to_owned(),
+            shell_word(program),
             shell_word(&replay.model),
             "--seed".to_owned(),
             replay.seed.to_string(),
@@ -1525,6 +1525,7 @@ impl ResultsStore {
     }
 
     /// Records that the runs `run_ids` have no series rows, so [`Self::runs_without_series`] leaves them out.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn record_empty_series(&mut self, run_ids: &BTreeSet<u64>) {
         let known = run_ids.iter().filter(|run_id| self.positions.contains_key(run_id));
         self.empty_series_runs.extend(known);
@@ -1532,6 +1533,7 @@ impl ResultsStore {
     }
 
     /// Returns the bytes of series a load can add while the series of `kept_runs` stay held.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn series_room(&self, kept_runs: &BTreeSet<u64>) -> usize {
         let kept_bytes: usize = kept_runs
             .iter()
@@ -1543,6 +1545,7 @@ impl ResultsStore {
 
     /// Holds `series`, series of runs by id, dropping held series of runs outside `kept_runs` to make room, and
     /// returns the number that fit.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn insert_series(&mut self, series: BTreeMap<u64, SeriesBuffer>, kept_runs: &BTreeSet<u64>) -> usize {
         let needed = series.values().map(series_bytes).sum();
         self.series.make_room(needed, kept_runs);
@@ -2914,14 +2917,17 @@ mod tests {
 
         let seed = plan.run(1).expect("a planned run").seed;
         assert_eq!(
-            store.cli_command(1).expect("the run replays"),
+            store.cli_command("henad-cli", 1).expect("the run replays"),
             format!(
                 "henad-cli sir --seed {seed} --set grid_width=32 --set infection_rate=0.45 --act seed_outbreak@10 \
                  --warmup 5 --steps 20 --stats-every 5 --export-stats run-1.csv"
             ),
             "the default infection rate is left out, and so is the action past the end"
         );
-        assert!(store.cli_command(0).is_err(), "run 0 is not in the results");
+        assert!(
+            store.cli_command("henad-cli", 0).is_err(),
+            "run 0 is not in the results"
+        );
         assert_eq!(shell_word("network=Small world"), "'network=Small world'");
         assert_eq!(shell_word("it's"), r"'it'\''s'");
     }

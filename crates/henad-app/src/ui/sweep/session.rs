@@ -6,6 +6,7 @@ use std::sync::Arc;
 use henad_core::explore::plan::Plan;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::params::ParamValue;
+use henad_core::provenance::BuildInfo;
 use henad_explore::exec::Concurrency;
 use henad_explore::handle::{SweepEvent, SweepOutput, SweepPhase, SweepProgress, SweepRun, SweepRunOptions};
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
@@ -114,7 +115,7 @@ impl SweepSession {
             #[cfg(target_arch = "wasm32")]
             Some(_) => return Err("Writing results to a folder is unavailable in a browser".to_owned()),
         };
-        let mut options = SweepRunOptions::new(provenance());
+        let mut options = SweepRunOptions::new(provenance(app.product.host));
         options.concurrency = execution.concurrency;
         options.memory_budget = execution.memory_budget;
         options.gpu_memory = execution.gpu_memory_budget;
@@ -146,7 +147,7 @@ impl SweepSession {
     pub fn resume_folder(app: &mut AppState, folder: PathBuf, model_id: &str) -> Result<Self, String> {
         let entry = app.lookup(model_id).map_err(|error| lookup_message(&error))?.clone();
         let model_name = entry.name().to_owned();
-        let mut options = SweepRunOptions::new(provenance());
+        let mut options = SweepRunOptions::new(provenance(app.product.host));
         options.wake = Some(app.repaint_waker());
         let run = SweepRun::resume_directory(entry, None, &folder, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
@@ -260,12 +261,12 @@ impl SweepSession {
     }
 }
 
-/// Returns the build of this app and its command line for a sweep's manifest.
-fn provenance() -> Provenance {
+/// Returns `host`, the build of this app, and its command line for a sweep's manifest.
+fn provenance(host: BuildInfo) -> Provenance {
     let arguments = std::env::args_os()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
-    Provenance::new(crate::HOST_BUILD, arguments)
+    Provenance::new(host, arguments)
 }
 
 #[cfg(test)]
@@ -281,33 +282,8 @@ mod tests {
     use crate::ui::results::ResultsPanel;
 
     /// Returns the app over a headless device, or `None` to skip a GPU test on a machine without one.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
     fn headless_app() -> Option<AppState> {
-        let models = henad_models::example_models();
-        match henad_explore::device::acquire_headless(models.gpu_needs()) {
-            Ok(ctx) => {
-                let runtime = ctx
-                    .runtime_info()
-                    .expect("a headless device carries its runtime info")
-                    .clone();
-                Some(AppState::new(
-                    egui::Context::default(),
-                    models,
-                    ctx.clone(),
-                    Some(ctx),
-                    runtime,
-                ))
-            }
-            Err(error) => {
-                let required =
-                    std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|value| !value.is_empty() && value != "0");
-                assert!(!required, "HENAD_REQUIRE_GPU is set but {error}");
-                None
-            }
-        }
+        AppState::headless(henad_models::example_models(), true)
     }
 
     #[test]

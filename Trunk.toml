@@ -1,7 +1,8 @@
 [build]
 filehash = false
 
-# `SharedArrayBuffer` is only handed to a cross-origin-isolated page, and without it the threaded
-# build cannot start at all. A host serving `dist/` has to send these two headers as well.
+# The worker pool shares memory with the page, which a browser allows only on a cross-origin-isolated
+# page. Without these two headers Chrome still starts the build, on one thread. A host serving
+# `dist/` has to send them as well.
 [serve]
 headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }

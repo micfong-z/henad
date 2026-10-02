@@ -8,11 +8,21 @@ use henad_core::params::ParamDescriptor;
 use henad_core::topology::{NeighborhoodKind, TopologyHint};
 
 use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE};
-use crate::state::AppState;
+use crate::state::{AppState, OpeningRefusal};
 use crate::ui::{KvGridRows, kv_grid};
 
 /// Text the Model panel shows when no model of the set runs on this machine.
 const NO_MODEL_RUNS: &str = "No model in this build runs on this device. GPU models need a GPU with compute support.";
+
+/// Text the Model panel shows for a set without models.
+const NO_MODELS: &str = "This build includes no models.";
+
+/// Draws what the app could not open and why, then `next_step`.
+fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str) {
+    ui.colored_label(ui.visuals().warn_fg_color, refusal.lead);
+    ui.label(format!("{}.", refusal.reason));
+    ui.label(next_step);
+}
 
 pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let offered: Vec<(String, String)> = app
@@ -20,7 +30,16 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
         .map(|entry| (entry.id().to_owned(), entry.name().to_owned()))
         .collect();
     if offered.is_empty() {
-        ui.label(NO_MODEL_RUNS);
+        // The refusal of a hidden GPU model already names the GPU, and an empty set has no GPU to blame.
+        match &app.opening_refusal {
+            Some(refusal) => opening_refusal(ui, refusal, "No model in this build runs on this device."),
+            None if app.models.is_empty() => {
+                ui.label(NO_MODELS);
+            }
+            None => {
+                ui.label(NO_MODEL_RUNS);
+            }
+        }
         return;
     }
     let selected_name = app.selected_entry().map_or("None", ModelEntry::name).to_owned();
@@ -45,6 +64,10 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     }
 
     let Some(entry) = app.selected_entry() else {
+        if let Some(refusal) = &app.opening_refusal {
+            ui.separator();
+            opening_refusal(ui, refusal, "Select a model to continue.");
+        }
         return;
     };
 

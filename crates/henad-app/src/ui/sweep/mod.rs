@@ -86,6 +86,8 @@ pub struct SweepPanel {
     confirm_replace: bool,
     /// Build of each model the tab has shown, for the stat columns it samples, by model id.
     column_builds: BTreeMap<String, ColumnsBuild>,
+    /// Program the tab's advice names, `None` for none.
+    pub cli_command: Option<String>,
 }
 
 /// Build of a model at its default values, for the stat columns its sample at tick 0 has.
@@ -230,6 +232,7 @@ impl SweepPanel {
             .drafts
             .entry(schema.id.to_owned())
             .or_insert_with(|| SweepDraft::new(schema));
+        draft.cli_command.clone_from(&self.cli_command);
         if self
             .last_check
             .as_ref()
@@ -636,6 +639,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
         start_failure,
         confirm_abort,
         confirm_replace,
+        cli_command,
         ..
     } = &mut app.sweep;
     let Some(draft) = drafts.get_mut(schema.id) else {
@@ -648,6 +652,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
             model_name: entry.name(),
             notification: status.as_deref(),
             gpu_refused: cfg!(target_arch = "wasm32") && entry.metadata().backend == Backend::Gpu,
+            cli_command: cli_command.as_deref(),
             plan_fits: form.plan_fits,
         };
         if header::builder_header(ui, &header, &mut draft.mode, &mut plan_open, request) {
@@ -687,6 +692,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
                     sections: &sections,
                     plan: &plan,
                     results,
+                    cli_command: cli_command.as_deref(),
                 };
                 builder::form_ui(ui, draft, form, &form_input, request);
             });

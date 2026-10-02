@@ -64,6 +64,7 @@ pub struct DialogFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenResult {
     Files(Vec<DialogFile>),
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser picks no folder"))]
     Folder(PathBuf),
     Failed(String),
     /// The dialog was dismissed.

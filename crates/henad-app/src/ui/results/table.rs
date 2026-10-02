@@ -305,10 +305,16 @@ impl TableView {
     }
 }
 
-/// Draws the strip for run `run_id`: its name, Open, Open at end and Copy command.
+/// Draws the strip for run `run_id`: its name, Open, Open at end and, with a `cli_command`, Copy command.
 ///
 /// The buttons are disabled with the store's [`ResultsStore::replay_refusal`] when the runs cannot replay.
-pub fn detail_strip(ui: &mut egui::Ui, store: &ResultsStore, run_id: u64, request: &mut Option<ResultsRequest>) {
+pub fn detail_strip(
+    ui: &mut egui::Ui,
+    store: &ResultsStore,
+    run_id: u64,
+    cli_command: Option<&str>,
+    request: &mut Option<ResultsRequest>,
+) {
     let Some(outcome) = store.run(run_id) else {
         return;
     };
@@ -342,14 +348,17 @@ pub fn detail_strip(ui: &mut egui::Ui, store: &ResultsStore, run_id: u64, reques
             };
             *request = Some(ResultsRequest::OpenRun { run_id, start });
         }
-        let copy = ui
-            .add_enabled(replays, egui::Button::new(format!("{MDI_CONTENT_COPY} Copy command")))
-            .on_hover_text(
-                "Copy henad-cli command to replay this run. Its stats might fall on other ticks than this run's series.",
-            )
-            .on_disabled_hover_text(refusal_text);
-        if copy.clicked() {
-            *request = Some(ResultsRequest::CopyCommand(run_id));
+        if let Some(program) = cli_command {
+            let copy = ui
+                .add_enabled(replays, egui::Button::new(format!("{MDI_CONTENT_COPY} Copy command")))
+                .on_hover_text(format!(
+                    "Copy {program} command to replay this run. Its stats might fall on other ticks than this run's \
+                     series."
+                ))
+                .on_disabled_hover_text(refusal_text);
+            if copy.clicked() {
+                *request = Some(ResultsRequest::CopyCommand(run_id));
+            }
         }
     });
     if let Some(refusal) = refusal {

@@ -418,12 +418,12 @@ flat `Vec`s, rayon), not from unsafe tricks. The workspace `Cargo.toml` also ena
 `clippy::` lint set (`unwrap_used`, `indexing_slicing = "allow"` is a deliberate exception,
 `missing_errors_doc`, etc.) — run `./check.sh` rather than guessing whether something will pass CI.
 
-Two rules no lint enforces. Every public type of henad-core, henad-compute, henad-models and
-henad-explore implements `Debug`. A type that holds a closure, a trait object, a model's associated
-types or a whole graph writes its own impl ending in `finish_non_exhaustive`, as `ModelEntry`,
-`Network` and the engine states do. `cargo clippy -- -W missing_debug_implementations` lists the
-types that lack one. henad-app is left out, since its public `state` and `ui` modules are app
-internals. And an exported macro names its support items through its crate's `#[doc(hidden)]`
+Two rules no lint enforces. Every public type of henad-core, henad-compute, henad-models,
+henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait object, a
+model's associated types or a whole graph writes its own impl ending in `finish_non_exhaustive`, as
+`ModelEntry`, `Network` and the engine states do. `cargo clippy -- -W missing_debug_implementations`
+lists the types that lack one. henad-app's `state` and `ui` modules are private, and their types
+are left out. And an exported macro names its support items through its crate's `#[doc(hidden)]`
 `__macro_support` module, never through an internal path such as `$crate::cpu::primitives`, and
 names prelude items by their `::core` or `::std` path, as `agent_lanes!` does, so it expands in a
 crate that has shadowed them.
@@ -443,21 +443,21 @@ henad-compute  engines, runners, model entries and sets, include_shaders!
 henad-models   the ten example models, and a path dev-dependency of henad-explore
 henad-explore  sweeps and searches
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
-henad-app      egui UI, also on henad-models for example_models()
+henad-app      egui UI as a library, its binary on henad-models
 ```
 
-The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core
-alone. Every other normal or build dependency runs from a crate to one drawn above it:
-henad-explore and henad-models onto henad-compute, the hosts onto henad-explore,
-henad-compute and, for `example_models()`, henad-models, and any crate with WGSL or a build
-stamp onto henad-build. henad-cli takes henad-models only behind its default `example-models`
-feature, and `cargo tree -p henad-cli --no-default-features -e normal -i henad-models` prints
-nothing. henad-models and henad-explore take no normal dependency on each other, and
-`cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency
+The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
+Every other normal or build dependency runs from a crate to one drawn above it: henad-explore and
+henad-models onto henad-compute, the hosts onto henad-explore, henad-compute and, for
+`example_models()`, henad-models, and any crate with WGSL or a build stamp onto henad-build.
+henad-cli and henad-app take henad-models only behind their default `example-models` feature, and
+`cargo tree -p henad-cli --no-default-features -e normal -i henad-models` prints nothing, as does
+the same line for henad-app. henad-models and henad-explore take no normal dependency on each other,
+and `cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency
 between Henad crates that the normal graph does not hold is named here: today the one from
-henad-explore to henad-models, for its tests, and the one from henad-cli to henad-models, for its
-unit tests without the feature. henad-explore reaching an example model outside
-its tests needs the maintainer's approval as a new edge.
+henad-explore to henad-models, for its tests, and the ones from henad-cli and henad-app to
+henad-models, for their unit tests without the feature. henad-explore reaching an example model
+outside its tests needs the maintainer's approval as a new edge.
 
 - **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
   GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
@@ -893,12 +893,35 @@ its tests needs the maintainer's approval as a new edge.
   `a_resumed_search_follows_the_same_trajectory`,
   `a_resume_that_meets_a_changed_run_leaves_the_directory_alone` and
   `a_gpu_search_writes_the_same_tables_on_any_track_count`. Keep them.
-- **henad-app**: eframe/egui desktop+web GUI. `HenadApp` (`lib.rs`) owns the `SimThread` and
-  polls snapshots each frame. `HenadApp::new` takes the `ModelSet` the host offers, and
-  `wgpu_configuration` takes the set's `GpuNeeds` for the device request. `main.rs` passes
-  `example_models()` to both; `ui/` has one file per panel or window (`menu_bar.rs`, `model.rs`,
-  `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`, `charts.rs`,
-  `performance.rs`, `system.rs`, `fault.rs`, `about.rs`). The Export tab lives in a directory,
+- **henad-app**: eframe/egui desktop+web GUI, as a library with the official binary over it. The
+  public API is `options.rs` and the two entry points. `AppOptions::new(models, product, host)`
+  takes the `ModelSet`, the product name (the window title and, on native, eframe's storage folder)
+  and the host's `BuildInfo`, with setters for the icon, the source and documentation links, the
+  licence, the `cli_command` and an `AppOpening` (`Results` on native, `Run` or `Setup`, each with
+  an `OpenAt`, which `lib.rs` re-exports from the private `state`). The product's fields sit in the
+  crate-private `Product`, held as `AppState::product`, whose `Debug` prints the icon's byte length.
+  `Product::official` marks Henad's own app, and only the official binary sets it, through the
+  hidden `AppOptions::__official`. `native.rs` holds `run_native`, which returns `AppError` (its
+  `Debug` writes its `Display` and source, as `ShaderBuildError`'s does), and `results_folder`,
+  which `--open DIR` and `--open=DIR` go through. `web.rs` holds `start_web`, which starts the
+  wasm-bindgen-rayon pool at `requested_threads` before it calls the options closure, then looks up
+  `the_canvas_id` and `loading_text`, and `init_web_logger`. A pool that fails to start leaves
+  `thread_pool_note`, which the Performance tab shows. A start failure, a missing window included,
+  is written into `loading_text` and returned, and the caller logs it once. Both entry points check
+  the opening against the set before any device exists (`AppOptions::check_opening`,
+  `OpeningError`): the set has to hold the id, a run its parameter count, and a setup's entry the
+  same `schema_hash`. `AppError` is native only and `WebStartError` wasm only. henad-app re-exports
+  no eframe item. `state`, `ui`, `HenadApp` and `wgpu_configuration` are private. `HenadApp`
+  (`lib.rs`) owns the `SimThread` and polls snapshots each frame. `HenadApp::new` takes the options
+  and hands the opening to `AppState::open`, and `wgpu_configuration` takes the set's `GpuNeeds` for
+  the device request. henad-models is optional behind the default `example-models` feature, which
+  the `[[bin]]` requires, and `main.rs` builds the official options over `example_models()`:
+  "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and `__official()`. The
+  eframe app name "Henad" names the native storage folder, which left 0.2.0's `Henad-Engine` behind,
+  and a browser keeps eframe's one key per origin. `ui/` has one file per panel or window
+  (`menu_bar.rs`, `model.rs`, `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
+  `charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `about.rs`). The Export tab lives in a
+  directory,
   `export/`. Its `mod.rs` draws the tab and writes the stat series and final state, `image.rs`
   captures the viewport and `metadata.rs` builds the run details. `files/` holds the file dialogs:
   `save.rs` hands bytes to a save dialog (several files go into one picked folder on native and
@@ -951,10 +974,25 @@ its tests needs the maintainer's approval as a new edge.
   Viewport. `HenadApp::ui` applies that request through `dock::focus_tab` after
   `DockArea::show_inside`. The panels draw while the dock is borrowed. `OpenedRun` names the run in
   Playback. A live param edit, an action press or a build from other values marks it modified
-  (`settle_opened_run`), and a build of another model or Offload drops it. `export/metadata.rs`
-  writes the loaded `seed` (null for the default), `scheduled_actions`, and the `host` and
-  `model_source` builds. `HOST_BUILD` (`lib.rs`) is the app's `build_info!()`, which the About
-  window, the run details and a sweep's manifest read.
+  (`settle_opened_run`), and a build of another model or Offload drops it.
+  `AppState::open_setup(&RunSetup, OpenAt)` builds the set's entry under the setup's id from its
+  values, seed and schedule through the same fields, keeps a default seed as `None`, and records no
+  `OpenedRun`. `AppState::open` takes an `AppOpening`. A run or setup it cannot open (a GPU model
+  the compute filter hid, say) leaves nothing selected, keeps an `OpeningRefusal` (a lead line such
+  as "Run not opened" and the reason) in `opening_refusal`, which the Model panel shows with "Select
+  a model to continue." until a model is picked, or above "No model in this build runs on this
+  device." when none runs here, and brings the Model tab to the front. `export/metadata.rs` writes
+  the loaded `seed` (null for the default), `scheduled_actions`, the `host` build from
+  `AppState::product` and the `model_source` build, and reads `engine_version` from `ENGINE_BUILD`.
+  A sweep's manifest records the product's host build as well. `about.rs` draws the product's name,
+  its links and its build rows, Henad's logo and tagline for the official app and the host's icon
+  otherwise (decoded once into the `OnceCell` `logo_texture`, a failed decode included), a Built on
+  row from `ENGINE_BUILD` (with henad-core's version when it differs) for any other product, and one
+  Models row per distinct `ModelSource` build, showing the hash of its sources when the build stamps
+  no commit. Copy copies the name and every row. The menu entry reads "About" and the product name.
+  The runs table's Copy command builds `ResultsStore::cli_command(program, run_id)` from the
+  product's `cli_command` and is hidden without one, and the Sweep tab's advice names it through
+  `options::cli_phrase`, or "on the command line" without one.
   `ui/sweep/` is the Sweep tab. `mod.rs` holds `SweepPanel` and `sweep_ui`, which splits the tab
   into four egui panels: a header and a footer of fixed height (`header.rs`, `footer.rs`), a Plan
   panel on the right while the tab is wide enough (`PLAN_PANEL_BREAKPOINT`), and a central scroll
@@ -1035,10 +1073,11 @@ its tests needs the maintainer's approval as a new edge.
   while the model's schema matches the sweep's. After a model change the replay opens under the
   table's warning, as it does when Henad's or the model's build differs from any a session recorded
   (`ResultsStore::changed_builds`). A model the entry or the manifest declares does not replay
-  exactly gets a note beside Open (`replays_exactly`). Copy command puts an equivalent `henad-cli
-  --export-stats` line on the clipboard, which samples from tick 0 on the CLI's own cadence. Open
-  results reads a folder on a thread of its own on native and the picked files in a browser, on the
-  frame after the one that first shows "Reading results" (`hold_picked_files`, `due_picked_files`).
+  exactly gets a note beside Open (`replays_exactly`). Copy command puts an equivalent
+  `--export-stats` line of the product's `cli_command` on the clipboard, which samples from tick 0
+  on the CLI's own cadence. Open results reads a folder on a thread of its own on native and the
+  picked files in a browser, on the frame after the one that first shows "Reading results"
+  (`hold_picked_files`, `due_picked_files`).
   `ui::results::poll` takes the `egui::Context` for it.
   Resume sweep resumes an incomplete folder through `SweepRun::resume_directory`, and the folder is
   read again once that sweep ends. `henad-app --open DIR` opens a folder at start.

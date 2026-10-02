@@ -15,6 +15,7 @@ use henad_core::params::ParamValue;
 use henad_core::view::StatsHistory;
 use henad_explore::output::memory::SweepFiles;
 
+use crate::options::{AppOpening, Product};
 use crate::sim_runner::SimRunner;
 use crate::ui::agent_layer::AgentLayer;
 use crate::ui::dock::Tab;
@@ -62,6 +63,10 @@ pub struct AppState {
     egui_ctx: egui::Context,
     /// Every model the host offers, GPU ones included where this machine cannot run them.
     pub models: ModelSet,
+    /// Name, build, links and command line of the app the host ships.
+    pub product: Product,
+    /// Opening the app could not open, shown in the Model panel until a model is selected.
+    pub opening_refusal: Option<OpeningRefusal>,
     /// Id of the model the panels show, `None` when no offered model runs on this machine.
     pub selected_model: Option<String>,
     pub param_values: Vec<ParamValue>,
@@ -125,7 +130,10 @@ pub struct AppState {
     /// The fault being shown, cleared when the user dismisses the modal.
     pub fault: Option<Fault>,
     pub about_open: bool,
-    pub logo_texture: Option<TextureHandle>,
+    /// Note the Performance tab shows when the browser's thread pool failed to start.
+    pub thread_pool_note: Option<String>,
+    /// About window's image, set when the window first opens. It holds `None` for an icon that is no PNG.
+    pub logo_texture: std::cell::OnceCell<Option<TextureHandle>>,
     pub timings: FrameTimings,
     /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
     /// switch. `None` where the adapter cannot run compute shaders, and the GPU models are then hidden.
@@ -147,8 +155,18 @@ pub struct AppState {
     pub gpu_batch_size: u32,
 }
 
-/// Tick an opened run is shown at.
+/// Opening the app could not open, as the Model panel shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpeningRefusal {
+    /// Line naming what was not opened, as in "Run not opened".
+    pub lead: &'static str,
+    /// Reason, as in "This build does not include model 'x'".
+    pub reason: String,
+}
+
+/// Tick an opened run or setup is stepped to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OpenAt {
     /// Tick 0, paused.
     Start,
@@ -189,6 +207,7 @@ impl AppState {
     pub fn new(
         egui_ctx: egui::Context,
         models: ModelSet,
+        product: Product,
         render_ctx: GpuContext,
         gpu_ctx: Option<GpuContext>,
         runtime: RuntimeInfo,
@@ -196,11 +215,15 @@ impl AppState {
         let first = models.runnable(gpu_ctx.as_ref()).next();
         let selected_model = first.map(|entry| entry.id().to_owned());
         let param_values: Vec<ParamValue> = first.map(default_values).unwrap_or_default();
+        let mut sweep = SweepPanel::default();
+        sweep.cli_command.clone_from(&product.cli_command);
 
         Self {
             egui_ctx,
             pending_reload: vec![false; param_values.len()],
             models,
+            product,
+            opening_refusal: None,
             selected_model,
             param_values,
             loaded_model: None,
@@ -240,7 +263,8 @@ impl AppState {
             render_ctx,
             fault: None,
             about_open: false,
-            logo_texture: None,
+            thread_pool_note: None,
+            logo_texture: std::cell::OnceCell::new(),
             timings: FrameTimings::default(),
             gpu_ctx,
             capture: None,
@@ -248,7 +272,7 @@ impl AppState {
             export_status: None,
             saves: flume::unbounded(),
             opens: flume::unbounded(),
-            sweep: SweepPanel::default(),
+            sweep,
             results: ResultsPanel::default(),
             gpu_adaptive: true,
             gpu_target_ms: DEFAULT_TARGET_MS,
@@ -332,6 +356,38 @@ impl AppState {
         run.modified = !run.is_built_by(&self.param_values, self.seed, &self.schedule);
     }
 
+    /// Opens what the host asked the app to open on.
+    ///
+    /// A run or a setup this machine cannot open leaves the app with nothing selected, and the Model panel shows the
+    /// reason.
+    pub fn open(&mut self, opening: AppOpening) {
+        let opened = match opening {
+            #[cfg(not(target_arch = "wasm32"))]
+            AppOpening::Results(folder) => {
+                crate::ui::results::open_folder(self, folder);
+                self.focus_request = Some(Tab::Results);
+                Ok(())
+            }
+            AppOpening::Run { replay, open_at } => self.open_run(replay, open_at).map_err(|reason| OpeningRefusal {
+                lead: "Run not opened",
+                reason,
+            }),
+            AppOpening::Setup { setup, open_at } => self.open_setup(&setup, open_at).map_err(|reason| OpeningRefusal {
+                lead: "Model not opened",
+                reason,
+            }),
+        };
+        if let Err(refusal) = opened {
+            log::warn!("{}: {}", refusal.lead, refusal.reason);
+            self.selected_model = None;
+            self.param_values.clear();
+            self.pending_reload.clear();
+            self.schedule = Schedule::default();
+            self.opening_refusal = Some(refusal);
+            self.focus_request = Some(Tab::Model);
+        }
+    }
+
     /// Builds the run `replay` holds, optionally steps it to a tick, and brings the viewport to the front.
     ///
     /// # Errors
@@ -346,8 +402,9 @@ impl AppState {
             .len();
         if replay.params.len() != declared {
             return Err(format!(
-                "This run sets {} parameters, but {} has {declared}",
+                "This run sets {} {}, but {} has {declared}",
                 replay.params.len(),
+                crate::ui::plural(replay.params.len() as u64, "parameter"),
                 replay.model
             ));
         }
@@ -355,28 +412,69 @@ impl AppState {
         let entry = self.lookup(&replay.model).map_err(|error| lookup_message(&error))?;
         RunSetup::from_replay(entry, &replay).map_err(|error| setup_message(&error))?;
 
+        let built = self.open_values(
+            &replay.model,
+            &replay.params,
+            Some(replay.seed),
+            &replay.schedule,
+            start,
+        );
+        if built {
+            self.opened_run = Some(OpenedRun {
+                replay,
+                modified: false,
+            });
+        }
+        Ok(())
+    }
+
+    /// Builds the model of the set under `setup`'s model id from the setup's values, seed and schedule, optionally
+    /// steps it to a tick, and brings the viewport to the front.
+    ///
+    /// The setup's fields go into the ones the next build reads, and a default seed stays the default.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when this build or this machine has no model under the setup's id, or that model refuses the
+    /// setup's values. A build that fails goes to the fault modal instead.
+    pub fn open_setup(&mut self, setup: &RunSetup, start: OpenAt) -> Result<(), String> {
+        let id = setup.entry().id();
+        let entry = self.lookup(id).map_err(|error| lookup_message(&error))?;
+        RunSetup::from_parts(entry, setup.values(), setup.seed(), setup.schedule().clone())
+            .map_err(|error| setup_message(&error))?;
+        self.open_values(id, setup.values(), setup.seed(), setup.schedule(), start);
+        Ok(())
+    }
+
+    /// Selects model `id`, builds it from `params`, `seed` and `schedule`, steps it to `start`, and brings the
+    /// viewport to the front. Returns whether the build succeeded.
+    fn open_values(
+        &mut self,
+        id: &str,
+        params: &[ParamValue],
+        seed: Option<u64>,
+        schedule: &Schedule,
+        start: OpenAt,
+    ) -> bool {
         self.opened_run = None;
-        self.selected_model = Some(replay.model.clone());
-        self.param_values.clone_from(&replay.params);
-        self.pending_reload = vec![false; declared];
-        self.seed = Some(replay.seed);
-        self.seed_text = replay.seed.to_string();
-        self.schedule = replay.schedule.clone();
+        self.opening_refusal = None;
+        self.selected_model = Some(id.to_owned());
+        self.param_values = params.to_vec();
+        self.pending_reload = vec![false; params.len()];
+        self.seed = seed;
+        self.seed_text = seed.map(|seed| seed.to_string()).unwrap_or_default();
+        self.schedule = schedule.clone();
         self.schedule_action_input = 0;
         self.reset_simulation();
         if self.sim_thread.is_none() {
-            return Ok(());
+            return false;
         }
         if let OpenAt::Tick(tick) = start {
             self.run_to_input = tick;
             self.run_to(tick);
         }
-        self.opened_run = Some(OpenedRun {
-            replay,
-            modified: false,
-        });
         self.focus_request = Some(Tab::Viewport);
-        Ok(())
+        true
     }
 
     /// Steps the loaded model uncapped to `tick` and pauses there.
@@ -564,6 +662,7 @@ impl AppState {
             return;
         }
         self.selected_model = Some(id.to_owned());
+        self.opening_refusal = None;
         self.param_values = self.models.get(id).map(default_values).unwrap_or_default();
         self.pending_reload = vec![false; self.param_values.len()];
         // Entries index the previous model's actions.
@@ -624,7 +723,7 @@ impl AppState {
     /// Opens a dialog that picks the files or the folder `target` asks for.
     ///
     /// Results can be polled via [`Self::poll_opens`].
-    pub fn open_file(&mut self, target: OpenTarget) {
+    pub fn open_file(&self, target: OpenTarget) {
         spawn_open(target, self.opens.0.clone());
     }
 
@@ -685,6 +784,49 @@ impl AppState {
     }
 }
 
+#[cfg(test)]
+impl AppState {
+    /// Returns an app over `models` on a headless device, or `None` to skip on a machine without a device.
+    ///
+    /// Without `compute` the app sees an adapter that cannot run compute shaders, and hides its GPU models.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
+    pub fn headless(models: ModelSet, compute: bool) -> Option<Self> {
+        let ctx = match henad_explore::device::acquire_headless(models.gpu_needs()) {
+            Ok(ctx) => ctx,
+            Err(error) => {
+                let required =
+                    std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|value| !value.is_empty() && value != "0");
+                assert!(!required, "HENAD_REQUIRE_GPU is set but {error}");
+                return None;
+            }
+        };
+        let runtime = ctx
+            .runtime_info()
+            .expect("a headless device carries its runtime info")
+            .clone();
+        let product = crate::options::AppOptions::new(
+            ModelSet::new(henad_core::build_info!()),
+            "Henad",
+            henad_core::build_info!(),
+        )
+        .cli_command("henad-cli")
+        .__official()
+        .product;
+        let gpu_ctx = compute.then(|| ctx.clone());
+        Some(Self::new(
+            egui::Context::default(),
+            models,
+            product,
+            ctx,
+            gpu_ctx,
+            runtime,
+        ))
+    }
+}
+
 /// Returns the default value of every parameter of `entry`.
 pub fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
     entry
@@ -714,31 +856,17 @@ mod tests {
     use henad_core::explore::replay::Replay;
     use henad_core::params::ParamValue;
 
-    use super::{AppState, OpenAt, OpenedRun};
+    use henad_compute::entry::ModelSet;
+    use henad_core::metadata::Backend;
 
-    /// Returns an app over a headless device whose adapter, as the app sees it, cannot run compute shaders, or `None`
+    use super::{AppState, OpenAt, OpenedRun};
+    use crate::options::AppOpening;
+    use crate::ui::dock::Tab;
+
+    /// Returns an app over the example models whose adapter, as the app sees it, cannot run compute shaders, or `None`
     /// to skip on a machine without a device.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
     fn app_without_compute() -> Option<AppState> {
-        let models = henad_models::example_models();
-        match henad_explore::device::acquire_headless(models.gpu_needs()) {
-            Ok(ctx) => {
-                let runtime = ctx
-                    .runtime_info()
-                    .expect("a headless device carries its runtime info")
-                    .clone();
-                Some(AppState::new(egui::Context::default(), models, ctx, None, runtime))
-            }
-            Err(error) => {
-                let required =
-                    std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|value| !value.is_empty() && value != "0");
-                assert!(!required, "HENAD_REQUIRE_GPU is set but {error}");
-                None
-            }
-        }
+        AppState::headless(henad_models::example_models(), false)
     }
 
     /// Returns a replay of model `model` with no parameters.
@@ -813,5 +941,104 @@ mod tests {
         assert!(!run.is_built_by(&params, Some(42), &Schedule::default()), "no schedule");
         let edited = [ParamValue::U32(64), ParamValue::F32(0.4)];
         assert!(!run.is_built_by(&edited, Some(42), &schedule), "an edited parameter");
+    }
+
+    #[test]
+    fn an_opened_setup_keeps_the_default_seed() {
+        let Some(mut app) = app_without_compute() else {
+            return;
+        };
+        let sir = app.models.get("sir").expect("the example models include sir").clone();
+        let setup = sir
+            .setup()
+            .set("infection_rate", 0.4_f32)
+            .and_then(|setup| setup.act_at("seed_outbreak", 20))
+            .expect("a valid setup");
+
+        assert_eq!(app.open_setup(&setup, OpenAt::Start), Ok(()));
+        assert_eq!(app.selected_model.as_deref(), Some("sir"));
+        assert_eq!(app.param_values, setup.values());
+        assert_eq!(app.schedule, *setup.schedule());
+        assert_eq!(app.seed, None, "the default seed became a number");
+        assert_eq!(app.seed_text, "", "the Seed field shows the Default hint");
+        assert!(app.sim_thread.is_some(), "the setup built");
+        assert_eq!(app.loaded_seed, None);
+        assert_eq!(app.loaded_schedule, *setup.schedule());
+        assert_eq!(app.opened_run, None, "a setup is no sweep run");
+        assert_eq!(app.focus_request, Some(Tab::Viewport));
+
+        assert_eq!(app.open_setup(&setup.with_seed(7), OpenAt::Start), Ok(()));
+        assert_eq!(app.seed, Some(7));
+        assert_eq!(app.seed_text, "7");
+        assert_eq!(app.loaded_seed, Some(7));
+    }
+
+    #[test]
+    fn a_gpu_only_set_without_compute_opens_with_nothing_selected() {
+        let mut models = ModelSet::new(henad_core::build_info!());
+        for entry in henad_models::example_models().iter() {
+            if entry.metadata().backend == Backend::Gpu {
+                models.insert(entry.clone()).expect("example ids are unique");
+            }
+        }
+        assert!(!models.is_empty());
+        let Some(app) = AppState::headless(models, false) else {
+            return;
+        };
+        assert_eq!(app.offered_models().count(), 0);
+        assert_eq!(app.selected_model, None);
+        assert!(app.selected_entry().is_none());
+        assert!(app.param_values.is_empty());
+        assert!(app.build_setup().is_none(), "Build has nothing to build");
+    }
+
+    #[test]
+    fn an_opening_of_a_hidden_gpu_model_opens_with_nothing_selected() {
+        let Some(mut app) = app_without_compute() else {
+            return;
+        };
+        let needs_gpu = "Model 'gpu_sir' needs a GPU with compute support, and this device has none";
+        let gpu_sir = app
+            .models
+            .get("gpu_sir")
+            .expect("the example models include gpu_sir")
+            .clone();
+
+        app.open(AppOpening::Setup {
+            setup: gpu_sir.setup(),
+            open_at: OpenAt::Start,
+        });
+        assert_eq!(app.selected_model, None);
+        assert!(app.param_values.is_empty());
+        assert!(app.sim_thread.is_none());
+        assert_eq!(
+            app.opening_refusal.as_ref().map(|refusal| refusal.reason.as_str()),
+            Some(needs_gpu)
+        );
+        assert_eq!(app.focus_request, Some(Tab::Model), "the Model panel shows the reason");
+        assert_eq!(
+            app.opening_refusal.as_ref().map(|refusal| refusal.lead),
+            Some("Model not opened")
+        );
+
+        let mut replay = replay_of("gpu_sir");
+        replay.params = gpu_sir.setup().values().to_vec();
+        app.open(AppOpening::Run {
+            replay,
+            open_at: OpenAt::Tick(5),
+        });
+        assert_eq!(app.selected_model, None);
+        assert_eq!(
+            app.opening_refusal.as_ref().map(|refusal| refusal.reason.as_str()),
+            Some(needs_gpu)
+        );
+        assert_eq!(app.run_to_target, None);
+        assert_eq!(
+            app.opening_refusal.as_ref().map(|refusal| refusal.lead),
+            Some("Run not opened")
+        );
+
+        app.select_model("sir");
+        assert_eq!(app.opening_refusal, None, "a selected model replaces the reason");
     }
 }
