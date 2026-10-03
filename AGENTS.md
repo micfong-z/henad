@@ -1286,7 +1286,7 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
 - **The template** (`templates/model-project`, package `my-model`, `publish = false`): the project
   a user fetches from a release tag and builds on the published crates, outside the workspace
   through the root `exclude`. It depends on `henad` and `henad-build` alone, at the workspace's
-  major and minor (`"0.2"` until M11 moves both), with the app and the CLI behind its own default
+  major and minor (`"0.3"`), with the app and the CLI behind its own default
   features `app` and `cli`. `src/vote.rs` (`Vote`, a `GridModel`) and `src/gpu_vote/` (`GpuVote`,
   its `GpuGridModel` port seeded through `Vote::init`) follow the tutorial's import shape, and
   `models()` (`src/lib.rs`) inserts each on a line of its own. The test at the foot of `lib.rs`
@@ -1416,8 +1416,9 @@ available, that a GPU entry builds on a baseline device and runs a full submissi
   Boids, ants, Virus on a Network and Team Assembly each have a
   `results_do_not_depend_on_the_thread_count` test, as do the foraging tutorial,
   `cpu/grid_engine.rs`, `cpu/layout.rs` and `cpu/primitives/components.rs`. Keep them. The kit's `ThreadCount` compares every CPU model of
-  a set the same way, at 14 jobs, and `a_shared_accumulator_fails_the_thread_count_check` and
-  `a_build_that_reads_the_pool_width_fails_the_thread_count_check` pin it.
+  a set the same way, at 14 jobs. `a_build_that_reads_the_pool_width_fails_the_thread_count_check`
+  pins it deterministically. `a_shared_accumulator_fails_the_thread_count_check` retries up to five
+  times, since a pool can take a shared lock in the single thread's order by chance.
 - `AgentModel::CHUNK` is per-model on purpose. It sets both the RNG seeding granularity and the
   parallel load balance, so it must be a fixed const (not derived from the thread count) but still
   small enough to split across every core — 4096 gave only 13 chunks for 50k boids and cost 20%.

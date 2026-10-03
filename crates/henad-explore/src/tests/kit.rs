@@ -200,17 +200,35 @@ fn a_build_that_reads_the_pool_width_fails_the_thread_count_check() {
     assert_fails(&register_grid_model::<ReadsPoolWidth>(), &[ModelCheck::ThreadCount]);
 }
 
+/// Checks the shared accumulator up to [`SHARED_ACCUMULATOR_ATTEMPTS`] times, until `ThreadCount` reports it.
+///
+/// Note that the model's result depends on the order its chunks take a lock, and a pool of seven workers can take
+/// them in the single thread's order by chance, under a loaded machine most of all. Any one check can then pass.
+/// [`a_build_that_reads_the_pool_width_fails_the_thread_count_check`] pins `ThreadCount` deterministically.
 #[test]
 fn a_shared_accumulator_fails_the_thread_count_check() {
     let model = register_agent_model::<SharedAccumulator>();
-    let report = check(&model, &CheckSettings::default());
-    let failure = report
-        .failures()
-        .iter()
-        .find(|failure| failure.check() == ModelCheck::ThreadCount)
-        .unwrap_or_else(|| panic!("{report}"));
-    assert!(failure.message().contains("split into 14 jobs"), "{failure}");
+    let mut reports = Vec::new();
+    for _ in 0..SHARED_ACCUMULATOR_ATTEMPTS {
+        let report = check(&model, &CheckSettings::default());
+        if let Some(failure) = report
+            .failures()
+            .iter()
+            .find(|failure| failure.check() == ModelCheck::ThreadCount)
+        {
+            assert!(failure.message().contains("split into 14 jobs"), "{failure}");
+            return;
+        }
+        reports.push(report.to_string());
+    }
+    panic!(
+        "ThreadCount passed the shared accumulator on {SHARED_ACCUMULATOR_ATTEMPTS} attempts:\n{}",
+        reports.join("\n")
+    );
 }
+
+/// Attempts [`a_shared_accumulator_fails_the_thread_count_check`] makes before it fails.
+const SHARED_ACCUMULATOR_ATTEMPTS: usize = 5;
 
 /// A device the watchdog stopped reads zeros from then on, from every state on it. The check runs the single steps
 /// first, and they read back what they computed.

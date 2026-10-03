@@ -800,7 +800,7 @@ Here is everything we wrote on this page, gathered into four files.
     ```
 
 The listings above are stored in the repository at [`examples/tutorial/src/gpu_life/`](https://github.com/micfong-z/henad/tree/master/examples/tutorial/src/gpu_life/).
-The three shaders there are copies of the shipped port's own, at [`crates/henad-models/src/gpu_game_of_life/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_game_of_life), since a shader carries no model ID and what we wrote is the same file line for line.
+The three shaders there are copies of the example port's own, at [`crates/henad-models/src/gpu_game_of_life/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_game_of_life), since a shader carries no model ID and what we wrote is the same file line for line.
 
 The example model is at [`crates/henad-models/src/gpu_game_of_life/mod.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/gpu_game_of_life/mod.rs).
 It runs under its own ID, and its tests pin the adder tree and the ragged wrap.

@@ -1924,7 +1924,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "henad"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "henad-app",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "henad-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "eframe",
@@ -1969,7 +1969,7 @@ dependencies = [
 
 [[package]]
 name = "henad-build"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "heck",
  "henad-core",
@@ -1978,7 +1978,7 @@ dependencies = [
 
 [[package]]
 name = "henad-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "henad-compute"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -2012,11 +2012,11 @@ dependencies = [
 
 [[package]]
 name = "henad-core"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "henad-explore"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "henad-build",
  "henad-compute",
@@ -2033,7 +2033,7 @@ dependencies = [
 
 [[package]]
 name = "henad-models"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "flume",
@@ -2048,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "henad-tutorial"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "henad",
  "henad-build",

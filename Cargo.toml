@@ -7,7 +7,7 @@ exclude = ["benchmarks/krabmaga", "templates/model-project"]
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Micfong <micfong2@outlook.com>"]
 edition = "2024"
 rust-version = "1.95"
@@ -17,14 +17,14 @@ homepage = "https://micfong-z.github.io/henad/"
 
 [workspace.dependencies]
 # Each version equals `[workspace.package] version`, which `scripts/check_packaging.sh` checks.
-henad-core = { path = "crates/henad-core", version = "0.2.0" }
-henad-build = { path = "crates/henad-build", version = "0.2.0" }
-henad-compute = { path = "crates/henad-compute", version = "0.2.0" }
-henad-models = { path = "crates/henad-models", version = "0.2.0" }
-henad-explore = { path = "crates/henad-explore", version = "0.2.0" }
+henad-core = { path = "crates/henad-core", version = "0.3.0" }
+henad-build = { path = "crates/henad-build", version = "0.3.0" }
+henad-compute = { path = "crates/henad-compute", version = "0.3.0" }
+henad-models = { path = "crates/henad-models", version = "0.3.0" }
+henad-explore = { path = "crates/henad-explore", version = "0.3.0" }
 # The facade alone takes the two hosts, without the example models their binaries need.
-henad-cli = { path = "crates/henad-cli", version = "0.2.0", default-features = false }
-henad-app = { path = "crates/henad-app", version = "0.2.0", default-features = false }
+henad-cli = { path = "crates/henad-cli", version = "0.3.0", default-features = false }
+henad-app = { path = "crates/henad-app", version = "0.3.0", default-features = false }
 egui = "0.36.1"
 eframe = { version = "0.36.1", default-features = false, features = [
     "wgpu",

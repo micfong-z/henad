@@ -22,7 +22,7 @@ path = "src/bin/my-model-cli.rs"
 required-features = ["cli"]
 
 [dependencies]
-henad = "0.2"
+henad = "0.3"
 log = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -32,10 +32,10 @@ env_logger = "0.11"
 wasm-bindgen-futures = "0.4"
 
 [build-dependencies]
-henad-build = "0.2"
+henad-build = "0.3"
 
 [dev-dependencies]
-henad = { version = "0.2", features = ["testing"] }
+henad = { version = "0.3", features = ["testing"] }
 
 [lints.rust]
 # The generated shader bindings lift this lint for their own module. `forbid` would refuse that.

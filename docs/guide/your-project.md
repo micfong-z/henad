@@ -25,8 +25,7 @@ The [first-model tutorials](first-model/game-of-life.md) add models beside them,
 
 ## Renaming it
 
-The package can be renamed alone, and every command keeps working.
-Renaming the package renames the library too, and the `my_model::` paths in the two binaries follow it.
+Renaming the package renames the library too, so the `my_model::` paths in `src/main.rs` and `src/bin/my-model-cli.rs` change with it, and every command keeps working.
 A full rebrand renames these:
 
 --8<-- "templates/model-project/README.md:rename"
