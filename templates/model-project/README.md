@@ -29,8 +29,8 @@ A full rebrand renames these:
 - the product name passed to `AppOptions::new`.
 <!-- --8<-- [end:rename] -->
 
-The product name is the app's window title, and names the folder where the native app keeps its settings, with each space turned into a dash.
-"My Model" keeps its settings in a folder named `My-Model`.
+The product name is the app's window title, and names the folder where the native app keeps its settings.
+"My Model" keeps them in `My-Model` under `~/Library/Application Support` on macOS, in `mymodel` under `$XDG_DATA_HOME` or `~/.local/share` on Linux, and in `My Model\data` under `%APPDATA%` on Windows.
 
 ## Running
 
@@ -80,7 +80,8 @@ Two apps served from one origin share the web app's saved settings.
 ## Checks
 
 `scripts/ci.sh` runs the stages CI runs: `lint`, `lint-web`, `test` and `web`, or all four without an argument.
-`.github/workflows/ci.yml` runs them on every push and pull request, and `.github/dependabot.yml` keeps the dependencies current.
+`.github/workflows/ci.yml` runs them on every push to `main`, on every pull request, and when started by hand.
+`.github/dependabot.yml` keeps the dependencies current.
 
 ## Updating Henad
 

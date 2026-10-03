@@ -33,7 +33,7 @@ use henad::prelude::*;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     henad::install_panic_hook();
     let models = henad::models::example_models();
-    let sir = models.get("sir").ok_or("the example set holds SIR")?;
+    let sir = models.get("sir").ok_or("the example set lacks SIR")?;
     let mut out = std::io::stdout();
 
     // SIR on a 256 by 256 grid with seed 7. One cell in a thousand starts infected, an outbreak at tick 50 adds more,
@@ -87,6 +87,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "#,
     )?;
     let folder = std::env::temp_dir().join("sir-rates");
+    // A sweep refuses a folder that already holds results. Each run of the program starts from an empty one.
+    if folder.exists() {
+        std::fs::remove_dir_all(&folder)?;
+    }
     let mut options = SweepOptions::new(Provenance::new(henad::build_info!(), std::env::args().collect()));
     options.spec_source = loaded.spec_source.clone();
     options.apply_execution(&loaded.execution);

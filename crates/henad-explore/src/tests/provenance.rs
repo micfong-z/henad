@@ -366,6 +366,21 @@ fn a_merge_of_shards_from_two_builds_records_both() {
 }
 
 #[test]
+fn a_merged_manifest_records_the_merging_build() {
+    let scratch = ScratchDir::new("merge-engine");
+    let dirs: Vec<PathBuf> = (0..2)
+        .map(|index| scratch.path().join(format!("shard-{index}")))
+        .collect();
+    shard_under(&dirs[0], 0, other_engine());
+    shard_under(&dirs[1], 1, other_engine());
+    let merged = scratch.path().join("merged");
+    merge(&dirs, &merged, &mut Recorder::default()).expect("the shards merge");
+    let recorded = manifest(&merged);
+    assert_eq!(recorded.engine, RecordedBuild::engine());
+    assert_eq!(recorded.recorded_builds(BuildRole::Engine), [other_engine()]);
+}
+
+#[test]
 fn a_merge_of_shards_under_another_engine_build_warns() {
     let scratch = ScratchDir::new("merge-warns");
     let dirs: Vec<PathBuf> = (0..2)

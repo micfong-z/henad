@@ -184,7 +184,7 @@ Let's move the function into the impl block and extend its signature:
 
 ``` { .rust .annotate title="src/life.rs" }
     fn step_cell(cell: u8, neighbors: &[u8], _params: &(), _rng: &mut u64) -> u8 { // (1)!
-        let alive_count: u8 = neighbors.iter().map(|&n| n & 1).sum();
+        let alive_count: u8 = neighbors.iter().sum();
         match (cell, alive_count) {
             (ALIVE, 2..=3) | (DEAD, 3) => ALIVE,
             _ => DEAD,

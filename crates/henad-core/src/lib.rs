@@ -32,4 +32,5 @@ pub mod __macro_support {
     pub use crate::action::ActionDescriptor;
     pub use crate::authoring::model::gpu_agent_model::BufferSpec;
     pub use crate::params::ParamDescriptor;
+    pub use crate::provenance::BuildInfo;
 }

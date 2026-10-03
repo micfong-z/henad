@@ -21,10 +21,11 @@ git worktree add --detach ../henad-0.2.0 v0.2.0
 cd ../henad-0.2.0
 git log --oneline -1          # 773a7a5 release: bump version to 0.2.0
 cargo build --release --locked -p henad-cli
+out=$(mktemp -d)
 for id in $(target/release/henad-cli --list | awk 'NR > 1 { print $1 }'); do
-    target/release/henad-cli "$id" --steps 1 --out "/tmp/schema-0.2.0/$id"
+    target/release/henad-cli "$id" --steps 1 --out "$out/$id"
     python3 -c "import json, sys; m = json.load(open(sys.argv[1])); print(sys.argv[2], m['model']['schema_hash'])" \
-        "/tmp/schema-0.2.0/$id/manifest.json" "$id"
+        "$out/$id/manifest.json" "$id"
 done
 target/release/henad-cli --info
 cd - && git worktree remove ../henad-0.2.0

@@ -26,6 +26,7 @@ Copy the checklist into an issue titled "Release 0.x.y" for each release, and ti
 
 ```markdown
 - [ ] `[workspace.package]` carries the release's version, and so does every `henad-*` entry of `[workspace.dependencies]`.
+- [ ] The root `pyproject.toml` and `uv.lock` carry the release's version.
 - [ ] `templates/model-project/Cargo.toml` requires the release's major and minor in all three places: `henad` and `henad-build`, and the `henad` line of `[dev-dependencies]`.
 - [ ] `docs/license.html` is regenerated, and the `lint` job passes on it.
 - [ ] The CHANGELOG section of the release is dated, and `python3 scripts/changelog_section.py 0.x.y` prints the notes.
@@ -60,7 +61,8 @@ The shared modules under `crates/henad-core/src/` are an interface of their own,
 1. **Bump the version.**
    Set `[workspace.package] version`, every `henad-*` entry of `[workspace.dependencies]`, and the template's three requirements in `templates/model-project/Cargo.toml`: `henad` and `henad-build`, and `henad` under `[dev-dependencies]`.
    Set the tag in the `fetch` region of `templates/model-project/README.md` as well.
-   `scripts/check_packaging.sh` holds the workspace requirements to the version.
+   `scripts/check_packaging.sh` holds the workspace requirements to the version, and the template's three to its major and minor.
+   Set `version` in the root `pyproject.toml`, the documentation site's project, and run `uv lock`.
 
 2. **Regenerate the licence page.**
    The page lists every crate with its version, and the `lint` job fails on a stale one.

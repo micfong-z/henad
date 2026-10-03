@@ -162,7 +162,7 @@ impl GpuAgentModel for GpuForagingModel {
             PassId::Step(_) => bytemuck::bytes_of(&MergeParams {
                 n: ctx.invocations,
                 groups_x: ctx.groups_x,
-                evaporation: PheromoneField::from_params(params).evaporation,
+                evaporation: PheromoneField::from_params(split_params::<ForagingModel>(params).1).evaporation,
                 low: LOW_PHEROMONE,
             })
             .to_vec(),

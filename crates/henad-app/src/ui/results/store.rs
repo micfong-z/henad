@@ -1084,6 +1084,15 @@ impl ResultsStore {
         if self.is_search() { "Candidate" } else { "Config" }
     }
 
+    /// Returns the plural the views give the configs, "candidates" for the results of a search.
+    pub fn configs_noun(&self) -> &'static str {
+        if self.is_search() {
+            "candidates"
+        } else {
+            "configurations"
+        }
+    }
+
     /// Returns a name for config `config_id` that gives its level on every axis.
     pub fn config_label(&self, config_id: u64) -> String {
         let noun = self.config_noun();

@@ -143,11 +143,15 @@ fn binding_decls(root: &Path, entries: &[PathBuf], sources: &[(PathBuf, String)]
 
         if !bindings.is_empty() {
             let module = names.join("::");
+            // Forward slashes on every platform. The literal is written through `Debug`, which escapes the rest.
+            let message = format!(
+                "henad-build read another number of @group(0) bindings from {} than naga composed",
+                entry.to_string_lossy().replace('\\', "/")
+            );
             assertions.push_str(&format!(
                 "const _: () = ::core::assert!(\n    bindings::{constant}.len() == \
                  super::shader_bindings::{module}::WgpuBindGroup0::LAYOUT_DESCRIPTOR.entries.len(),\n    \
-                 \"henad-build read another number of @group(0) bindings from {} than naga composed\",\n);\n",
-                entry.display()
+                 {message:?},\n);\n"
             ));
         }
     }

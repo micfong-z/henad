@@ -8,7 +8,7 @@ henad::include_shaders!();
 use henad::authoring::register_gpu_grid_model;
 use henad::authoring::register_grid_model;
 
-/// Every model this crate provides.
+/// Returns every model this crate provides.
 ///
 /// # Errors
 ///

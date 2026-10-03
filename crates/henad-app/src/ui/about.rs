@@ -34,6 +34,7 @@ pub fn about_modal(ctx: &Context, app: &mut AppState) {
 
     let screen = ctx.content_rect();
     let width = MODAL_WIDTH.min(screen.width() - 2.0 * MODAL_MARGIN);
+    let logo_width = if logo.is_some() { LOGO_SIZE + MODAL_MARGIN } else { 0.0 };
 
     let mut dismissed = false;
     let id = Id::new("henad_about_modal");
@@ -52,7 +53,7 @@ pub fn about_modal(ctx: &Context, app: &mut AppState) {
                             ui.add_space(8.0);
                         }
                         ui.vertical(|ui| {
-                            ui.set_max_width((width - LOGO_SIZE - MODAL_MARGIN).max(0.0));
+                            ui.set_max_width((width - logo_width).max(0.0));
                             ui.heading(&product.name);
                             if product.official {
                                 ui.add(Label::new(TAGLINE).wrap());

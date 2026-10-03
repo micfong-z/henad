@@ -81,7 +81,9 @@ impl BuildInfo {
         self.dirty
     }
 
-    /// Hash of the crate's sources, manifest and lockfile. `None` when the build did not compute one.
+    /// Hash of the crate's files under `src` and its manifest. A crate stamped with its commit, Henad's engine
+    /// included, adds the nearest `Cargo.lock` outside a package. In Henad's checkout the engine's hash covers its four
+    /// crates. `None` when the build did not compute one.
     pub fn source_hash(&self) -> Option<u64> {
         self.source_hash
     }
@@ -128,7 +130,7 @@ const fn parse_hash(text: &str) -> Option<u64> {
 #[macro_export]
 macro_rules! build_info {
     () => {
-        $crate::provenance::BuildInfo::__from_env(
+        $crate::__macro_support::BuildInfo::__from_env(
             ::core::env!("CARGO_PKG_NAME"),
             ::core::env!("CARGO_PKG_VERSION"),
             ::core::option_env!("HENAD_BUILD_COMMIT"),

@@ -17,6 +17,7 @@ use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::{PlannedRun, RunOutcome};
 use henad_core::explore::plan::{Config, ModelSchema, Plan, PlanError};
 use henad_core::explore::replay::Replay;
+use henad_core::explore::search::SearchSpecError;
 use henad_core::explore::spec::SweepSpec;
 
 use henad_core::explore::value::parse_value;
@@ -88,7 +89,8 @@ impl ResultSet {
     /// # Errors
     ///
     /// Returns [`ResultSetError`] when the manifest or `runs.csv` is missing or cannot be read, the manifest's spec
-    /// cannot be read back, or a complete record of a table is not one the sweep writes.
+    /// cannot be read back or the search it records has a setting out of range, or a complete record of a table is
+    /// not one the sweep writes.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_dir(dir: &Path, series_budget: usize) -> Result<Self, ResultSetError> {
         let manifest_path = dir.join(MANIFEST_FILE);
@@ -146,8 +148,8 @@ impl ResultSet {
     /// # Errors
     ///
     /// Returns [`ResultSetError`] when the manifest or `runs.csv` is missing or cannot be read, two files hold the
-    /// same table, the manifest's spec cannot be read back, or a complete record of a table is not one the sweep
-    /// writes.
+    /// same table, the manifest's spec cannot be read back or the search it records has a setting out of range, or a
+    /// complete record of a table is not one the sweep writes.
     pub fn from_files(files: Vec<(String, Vec<u8>)>, series_budget: usize) -> Result<Self, ResultSetError> {
         let mut tables: BTreeMap<&'static str, Vec<u8>> = BTreeMap::new();
         for (name, bytes) in files {
@@ -185,6 +187,9 @@ impl ResultSet {
         let spec = SpecFile::from_json(&manifest.spec)
             .and_then(SpecFile::into_spec)
             .map_err(ResultSetError::Spec)?;
+        if let Some(search) = &spec.search {
+            search.check().map_err(ResultSetError::Search)?;
+        }
         let stat_columns = manifest.columns.stats.clone();
         let (column_names, records) = read_runs(runs, runs_path, stat_columns.len())?;
         let positions = records
@@ -855,6 +860,10 @@ pub enum ResultSetError {
     Manifest(ManifestError),
     /// The manifest's spec cannot be read back, for the reason inside.
     Spec(SpecFileError),
+    /// The search the manifest records has a setting [`SearchSpec::check`] refuses, for the reason inside.
+    ///
+    /// [`SearchSpec::check`]: henad_core::explore::search::SearchSpec::check
+    Search(SearchSpecError),
     /// A table cannot be read, for the reason inside.
     Table(ReadError),
 }
@@ -866,6 +875,7 @@ impl fmt::Display for ResultSetError {
             Self::Duplicate { file } => write!(f, "two selected files hold {file}"),
             Self::Manifest(_) => f.write_str("cannot read the manifest"),
             Self::Spec(_) => f.write_str("cannot read the spec the manifest records"),
+            Self::Search(_) => f.write_str("the search the manifest records has an invalid setting"),
             Self::Table(_) => f.write_str("cannot read the results"),
         }
     }
@@ -877,6 +887,7 @@ impl std::error::Error for ResultSetError {
             Self::Missing { .. } | Self::Duplicate { .. } => None,
             Self::Manifest(error) => Some(error),
             Self::Spec(error) => Some(error),
+            Self::Search(error) => Some(error),
             Self::Table(error) => Some(error),
         }
     }

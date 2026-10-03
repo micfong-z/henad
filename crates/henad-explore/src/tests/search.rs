@@ -30,13 +30,13 @@ use crate::output::{
 };
 use crate::progress::{NoProgress, Progress, ProgressEvent};
 use crate::pumped::PumpedSweep;
-use crate::result_set::ResultSet;
+use crate::result_set::{ResultSet, ResultSetError};
 use crate::search_run::{EvaluationReading, SearchPlan, SearchPlanError};
 use crate::spec_file::SpecFile;
 use crate::sweep::{ExploreError, SweepEnd, SweepOptions, SweepReport, SweepWarning};
 use crate::tests::support::{
     CommitLimit, OutputTables, Recorder, ScratchDir, dry_run, entry, headless_device, other_engine, planned,
-    provenance, sweep, sweep_options, without_timing,
+    provenance, rewrite_manifest, sweep, sweep_options, without_timing,
 };
 
 /// Longest a test waits for a search to end.
@@ -617,6 +617,56 @@ fn a_resume_that_meets_a_changed_run_leaves_the_directory_alone() {
 }
 
 #[test]
+fn a_resume_refuses_runs_past_the_budget() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-resume-past-budget");
+    let spec = search_spec(genetic(), 12);
+    search(&sir, None, &spec, scratch.path(), lane_count(1));
+    let runs_path = scratch.path().join(RUNS_FILE);
+    let text = std::fs::read_to_string(&runs_path).expect("runs.csv reads");
+    let row_count = text.lines().count() - 1;
+    assert_eq!(row_count, 24, "the budget of 12 evaluations of 2 replicates is spent");
+    let last = text.lines().last().expect("runs.csv holds runs");
+    let (_, rest) = last.split_once(',').expect("a run id field");
+    append(&runs_path, &format!("{row_count},{rest}\n"));
+    let before = std::fs::read(&runs_path).expect("runs.csv reads");
+
+    let resume = sweep_options(true);
+    let error = search_with(&sir, None, &spec, scratch.path(), &resume, &mut NoProgress).expect_err("a run too many");
+    assert!(
+        matches!(error, ExploreError::Resume(ResumeError::UnknownRun { run_id }) if run_id == 24),
+        "{error:?}"
+    );
+    assert_eq!(
+        std::fs::read(&runs_path).expect("runs.csv reads"),
+        before,
+        "runs.csv is left as it was"
+    );
+}
+
+#[test]
+fn a_search_resume_names_a_changed_model() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-resume-model");
+    let spec = search_spec(genetic(), 12);
+    search(&sir, None, &spec, scratch.path(), lane_count(1));
+    // Another version of the model changes the schema hash, and with it the search hash.
+    rewrite_manifest(scratch.path(), |recorded| {
+        recorded.model.schema_hash = "0000000000000000".to_owned();
+        if let Some(search) = &mut recorded.search {
+            search.search_hash = "0000000000000000".to_owned();
+        }
+    });
+
+    let resume = sweep_options(true);
+    let error = search_with(&sir, None, &spec, scratch.path(), &resume, &mut NoProgress).expect_err("another model");
+    assert!(
+        matches!(error, ExploreError::Resume(ResumeError::SchemaChanged { .. })),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn a_resume_refuses_another_search_or_a_sweep() {
     let sir = entry("sir", None);
     let scratch = ScratchDir::new("search-resume-refused");
@@ -1059,4 +1109,17 @@ fn a_search_folder_reads_back_with_its_history_and_replays_its_runs() {
         files.search_history().expect("the tables read"),
         "a picked file is known by its header"
     );
+}
+
+#[test]
+fn a_search_folder_with_an_axis_of_no_cells_is_refused() {
+    let scratch = ScratchDir::new("search-no-cells");
+    let spec = search_spec(pattern(), 6);
+    search(&entry("sir", None), None, &spec, scratch.path(), lane_count(1));
+    let manifest_path = scratch.path().join(MANIFEST_FILE);
+    let manifest = std::fs::read_to_string(&manifest_path).expect("the manifest is written");
+    assert!(manifest.contains("\"cells\": 8"), "the manifest records the axis cells");
+    std::fs::write(&manifest_path, manifest.replacen("\"cells\": 8", "\"cells\": 0", 1)).expect("the manifest writes");
+    let opened = ResultSet::open_dir(scratch.path(), usize::MAX);
+    assert!(matches!(opened, Err(ResultSetError::Search(_))), "{opened:?}");
 }

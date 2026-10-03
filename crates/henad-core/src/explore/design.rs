@@ -10,7 +10,7 @@ use crate::explore::factor::{Factor, FactorDomain, FactorLevel, FactorSlot};
 use crate::explore::plan::Config;
 use crate::params::ParamValue;
 
-/// Most configs one block can have.
+/// Most configs one plan can have, over all its blocks.
 pub const MAX_CONFIGS: usize = 1 << 24;
 
 /// Rule that combines the factors of a block.
@@ -68,7 +68,7 @@ pub struct Block {
 pub enum DesignError {
     /// A zip over factors with different numbers of levels, given in factor order.
     UnequalLengths { lengths: Vec<usize> },
-    /// A design with more than [`MAX_CONFIGS`] configs.
+    /// A design whose configs would take the plan past [`MAX_CONFIGS`].
     TooManyConfigs,
     /// A random or Latin hypercube design of 0 samples.
     NoSamples,
@@ -91,7 +91,7 @@ impl fmt::Display for DesignError {
                     lengths.join(", ")
                 )
             }
-            Self::TooManyConfigs => write!(f, "design has more than {MAX_CONFIGS} configs"),
+            Self::TooManyConfigs => write!(f, "design takes the plan past {MAX_CONFIGS} configs"),
             Self::NoSamples => write!(f, "a random or Latin hypercube design needs at least 1 sample"),
             Self::NoFactors => write!(f, "a random or Latin hypercube design needs at least 1 factor"),
             Self::UnlistedLevels { factor_index } => {
@@ -118,6 +118,15 @@ impl std::error::Error for DesignError {}
 /// sampled design with no samples or no factors, a whole range in a design that lists levels, or more than
 /// [`MAX_CONFIGS`] configs.
 pub fn generate(block: &Block, base: &Config) -> Result<Vec<Config>, DesignError> {
+    generate_within(block, base, MAX_CONFIGS)
+}
+
+/// Returns the configs of `block` as [`generate`] does, refusing more than `limit` of them before any is built.
+///
+/// # Errors
+///
+/// Returns [`DesignError`] as [`generate`] does, with [`DesignError::TooManyConfigs`] past `limit`.
+pub(crate) fn generate_within(block: &Block, base: &Config, limit: usize) -> Result<Vec<Config>, DesignError> {
     if let Some(factor_index) = block
         .factors
         .iter()
@@ -126,10 +135,10 @@ pub fn generate(block: &Block, base: &Config) -> Result<Vec<Config>, DesignError
         return Err(DesignError::NoLevels { factor_index });
     }
     match block.design {
-        DesignKind::Factorial => factorial(&listed_levels(&block.factors)?, &block.factors, base),
-        DesignKind::Zip | DesignKind::Table { .. } => zip(&listed_levels(&block.factors)?, &block.factors, base),
+        DesignKind::Factorial => factorial(&listed_levels(&block.factors)?, &block.factors, base, limit),
+        DesignKind::Zip | DesignKind::Table { .. } => zip(&listed_levels(&block.factors)?, &block.factors, base, limit),
         DesignKind::Random { samples } => {
-            check_samples(samples, &block.factors)?;
+            check_samples(samples, &block.factors, limit)?;
             Ok(random(
                 &block.factors,
                 base,
@@ -138,7 +147,7 @@ pub fn generate(block: &Block, base: &Config) -> Result<Vec<Config>, DesignError
             ))
         }
         DesignKind::LatinHypercube { samples } => {
-            check_samples(samples, &block.factors)?;
+            check_samples(samples, &block.factors, limit)?;
             Ok(latin_hypercube(
                 &block.factors,
                 base,
@@ -158,11 +167,11 @@ fn listed_levels(factors: &[Factor]) -> Result<Vec<&[FactorLevel]>, DesignError>
         .collect()
 }
 
-fn check_samples(samples: usize, factors: &[Factor]) -> Result<(), DesignError> {
+fn check_samples(samples: usize, factors: &[Factor], limit: usize) -> Result<(), DesignError> {
     if samples == 0 {
         return Err(DesignError::NoSamples);
     }
-    if samples > MAX_CONFIGS {
+    if samples > limit {
         return Err(DesignError::TooManyConfigs);
     }
     if factors.is_empty() {
@@ -171,11 +180,16 @@ fn check_samples(samples: usize, factors: &[Factor]) -> Result<(), DesignError> 
     Ok(())
 }
 
-fn factorial(levels: &[&[FactorLevel]], factors: &[Factor], base: &Config) -> Result<Vec<Config>, DesignError> {
+fn factorial(
+    levels: &[&[FactorLevel]],
+    factors: &[Factor],
+    base: &Config,
+    limit: usize,
+) -> Result<Vec<Config>, DesignError> {
     let count = levels
         .iter()
         .try_fold(1_usize, |product, levels| product.checked_mul(levels.len()))
-        .filter(|&count| count <= MAX_CONFIGS)
+        .filter(|&count| count <= limit)
         .ok_or(DesignError::TooManyConfigs)?;
     let mut configs = Vec::with_capacity(count);
     let mut positions = vec![0; factors.len()];
@@ -196,15 +210,14 @@ fn factorial(levels: &[&[FactorLevel]], factors: &[Factor], base: &Config) -> Re
     Ok(configs)
 }
 
-fn zip(levels: &[&[FactorLevel]], factors: &[Factor], base: &Config) -> Result<Vec<Config>, DesignError> {
+fn zip(levels: &[&[FactorLevel]], factors: &[Factor], base: &Config, limit: usize) -> Result<Vec<Config>, DesignError> {
     let lengths: Vec<usize> = levels.iter().map(|levels| levels.len()).collect();
-    let Some(&count) = lengths.first() else {
-        return Ok(vec![base.clone()]);
-    };
+    // A zip of no factors gives `base` alone.
+    let count = lengths.first().copied().unwrap_or(1);
     if lengths.iter().any(|&length| length != count) {
         return Err(DesignError::UnequalLengths { lengths });
     }
-    if count > MAX_CONFIGS {
+    if count > limit {
         return Err(DesignError::TooManyConfigs);
     }
     Ok((0..count)

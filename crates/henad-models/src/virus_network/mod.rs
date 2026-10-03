@@ -335,6 +335,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_node_views_implement_debug() {
+        use henad_core::authoring::model::network_model::{NodeCtx, Nodes};
+
+        fn assert_debug<T: std::fmt::Debug>() {}
+        assert_debug::<Nodes<'static, VirusNetwork>>();
+        assert_debug::<NodeCtx<'static, VirusNetwork>>();
+    }
+
     /// Chunk seeds come from the chunk index,
     /// and the global pass and the recolour are either sequential or in chunk order,
     /// so the way rayon splits the work must not affect the result.

@@ -738,10 +738,12 @@ fn session_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
         resumed_plan = PlanSummary::for_resumed(session);
         &resumed_plan
     };
-    let caption = if state.is_running() {
-        format!("of the running {noun}")
-    } else {
-        format!("of this {noun}")
+    let caption = match state {
+        SessionState::Planning | SessionState::Running => format!("of the running {noun}"),
+        SessionState::Paused => format!("of the paused {noun}"),
+        SessionState::Finished | SessionState::Aborted | SessionState::Stopped | SessionState::Failed => {
+            format!("of this {noun}")
+        }
     };
 
     header_panel(ui, |ui| {

@@ -474,7 +474,7 @@ fn print_runtime_info(runtime: Option<&RuntimeInfo>) {
     }
 }
 
-/// Print the id and human name of each model in `entries`.
+/// Prints the id and human name of each model in `entries`.
 fn print_models<'a>(entries: impl Iterator<Item = &'a ModelEntry>) {
     println!("available models:");
     for entry in entries {

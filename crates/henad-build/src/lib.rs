@@ -37,9 +37,9 @@
 //! # Bindings
 //!
 //! `binding_decls::bindings` holds each entry point's `@group(0)` declarations, in `@binding` order, read from lines
-//! of one form: `@group(0) @binding(N) var<...> name: Type;`. A line holding `@binding(` in any other form fails the
-//! build. A compile-time assertion holds each list to the length of the layout `wgsl_bindgen` derives. A module
-//! declares no binding, and a line holding `@binding(` in one fails the build too.
+//! of one form: `@group(0) @binding(N) var<...> name: Type;`. A line holding `@binding` or `@group` in any other form
+//! fails the build. A compile-time assertion holds each list to the length of the layout `wgsl_bindgen` derives. A
+//! module declares no binding, and a line holding `@binding` in one fails the build too.
 //!
 //! # Versions
 //!
@@ -113,10 +113,11 @@ impl ShaderBuild {
     /// # Errors
     ///
     /// Returns [`ShaderBuildError`] for a `.wgsl` file whose path below the root holds a component that is not a Rust
-    /// identifier or is a keyword, for two `.wgsl` files whose module paths, `ShaderEntry` variants or binding
-    /// constants collide, for a file named `henad.wgsl` or a directory named `henad` holding a `.wgsl` file at any
-    /// depth under the root, and for a root whose last component is `henad`. Files that are not `.wgsl` are never
-    /// checked. Each error names the files.
+    /// identifier or is a keyword, for an entry point whose `ShaderEntry` variant is no Rust identifier (`self_.wgsl`
+    /// gives `Self`), for two `.wgsl` files whose module paths, `ShaderEntry` variants or binding constants collide,
+    /// for a file named `henad.wgsl` or a directory named `henad` holding a `.wgsl` file at any depth under the root,
+    /// and for a root whose last component is `henad`. Files that are not `.wgsl` are never checked. Each error names
+    /// the files.
     pub fn discover(shader_root: impl AsRef<Path>) -> Result<Self, ShaderBuildError> {
         let root = shader_root.as_ref().to_path_buf();
         paths::check_root(&root)?;
@@ -250,6 +251,9 @@ fn read(path: &Path) -> Result<String, ShaderBuildError> {
 /// `Debug` writes the same text as `Display`, so a build script that returns the error shows its guidance.
 pub enum ShaderBuildError {
     /// A component of a `.wgsl` file's path below the shader root is not a Rust identifier, or is a keyword.
+    ///
+    /// The same error names an entry point whose `ShaderEntry` variant is no Rust identifier, as `self_.wgsl` gives
+    /// `Self`.
     InvalidName { path: PathBuf, component: String },
     /// Two shaders give one Rust name, or one shader's module holds another's.
     NameCollision {
@@ -264,7 +268,7 @@ pub enum ShaderBuildError {
     ReservedName { path: PathBuf, name: String },
     /// An entry point given to [`ShaderBuild::entry_point`] lies outside the shader root.
     OutsideRoot { path: PathBuf },
-    /// A line holding `@binding(` in a form the binding parser does not read, for the reason given.
+    /// A line holding `@binding` or `@group` in a form the binding parser does not read, for the reason given.
     BindingLine {
         path: PathBuf,
         /// Line number, counted from 1.
@@ -292,12 +296,21 @@ pub enum ShaderBuildError {
 impl fmt::Display for ShaderBuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidName { path, component } => write!(
-                f,
-                "{}: `{component}` is not a Rust identifier, or is a keyword. Each component of a shader's path below \
-                 the shader root becomes part of a Rust name",
-                path.display()
-            ),
+            Self::InvalidName { path, component } => {
+                if component.is_empty() {
+                    write!(f, "{}: the path gives an empty Rust name. ", path.display())?;
+                } else {
+                    write!(
+                        f,
+                        "{}: `{component}` is not a Rust identifier, or is a keyword. ",
+                        path.display()
+                    )?;
+                }
+                f.write_str(
+                    "Each component of a shader's path below the shader root becomes part of a Rust name, and the \
+                     components joined in PascalCase name the shader's `ShaderEntry` variant",
+                )
+            }
             Self::NameCollision {
                 first,
                 second,

@@ -657,7 +657,7 @@ Taking every `N`th run spreads the configs, heavy and light alike, evenly over t
 Once every shard has finished, `--merge` joins them:
 
 ``` bash
-cargo run --release --locked -p henad-cli -- --merge shard-0 shard-1 shard-2 shard-3 --out sir-sweep
+cargo run --release --locked -p henad-cli -- --merge shard-0 shard-1 shard-2 shard-3 --out sir-merged
 ```
 
 `--merge` checks that the directories hold different shards of one plan, all at one replicate count.

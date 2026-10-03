@@ -250,6 +250,25 @@ fn the_thread_count_check_splits_a_grid_into_twice_the_high_thread_count() {
     assert_eq!(report.thread_count_jobs(), Some(14));
 }
 
+/// A grid of 1024 columns holds 8 rows a job, and 112 rows split into 14 jobs.
+#[test]
+fn the_thread_count_check_shrinks_a_grid_an_override_widens() {
+    let settings = CheckSettings::default().set_text("game_of_life", "grid_width", "1024");
+    let report = check(&entry("game_of_life", None), &settings);
+    assert!(report.passed(), "{report}");
+    assert_eq!(report.thread_count_jobs(), Some(14));
+}
+
+#[test]
+fn an_override_of_one_job_skips_the_thread_count_check_naming_it() {
+    let settings = CheckSettings::default().set_text("boids", "num_agents", "8");
+    let report = check(&entry("boids", None), &settings);
+    assert_eq!(
+        report.skip_reason(ModelCheck::ThreadCount),
+        Some(&SkipReason::OneJobAtOverride("num_agents".to_owned()))
+    );
+}
+
 #[test]
 fn a_cpu_model_skips_the_gpu_checks_as_another_backend() {
     let report = check(&entry("game_of_life", None), &CheckSettings::default());

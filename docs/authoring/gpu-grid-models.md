@@ -91,7 +91,9 @@ fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64
 ```
 
 Buffer contents are built on the CPU and uploaded once at construction.
-Both shipped ports call their CPU counterpart's `init` here and nowhere else, which starts both backends from the same data and makes tick 0 come out bit-identical between them.
+Both shipped ports repeat their CPU counterpart's `init` here, draw for draw from the same `grid_init_rng(seed)`, and a test compares each seeded buffer with the CPU grid cell by cell.
+Both backends therefore start from the same data, and tick 0 comes out bit-identical between them.
+A port can instead call the CPU `init` on a `Grid2D` and convert its cells, as the template's `gpu_vote` does, at the cost of a second copy of the grid while it seeds.
 See [porting a model to the GPU](porting.md) for the rest of that workflow.
 
 ## Contracts nothing checks

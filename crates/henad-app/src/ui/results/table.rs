@@ -51,15 +51,6 @@ impl RunsFilter {
     }
 }
 
-/// Returns the plural the Runs view gives the configs of `store`, "candidates" for the results of a search.
-fn configs_noun(store: &ResultsStore) -> &'static str {
-    if store.is_search() {
-        "candidates"
-    } else {
-        "configurations"
-    }
-}
-
 /// Returns the name the table gives `status`.
 pub fn status_label(status: RunStatus) -> &'static str {
     match status {
@@ -81,7 +72,7 @@ pub fn table_ui(
     selected_run: Option<u64>,
     request: &mut Option<ResultsRequest>,
 ) {
-    let configs = configs_noun(store);
+    let configs = store.configs_noun();
     ui.horizontal_wrapped(|ui| {
         let filter_text = view.filter.label(configs);
         labeled_combo(ui, "Show", "henad_results_runs_filter", &filter_text, |ui| {
@@ -376,12 +367,12 @@ pub fn detail_strip(
     }
 }
 
-/// Returns the warning that a replay of the store's runs might differ, `None` when the model's parameters and every
-/// recorded build match the current ones.
+/// Returns the warning that a replay of the store's runs might differ, `None` when the model's parameters, stats and
+/// actions and every recorded build match the current ones.
 fn replay_change(store: &ResultsStore) -> Option<String> {
     let noun = if store.is_search() { "search" } else { "sweep" };
     let changed = if !store.schema_matches {
-        "Model parameters changed"
+        "Model parameters, stats or actions changed"
     } else {
         match store.changed_builds.as_slice() {
             [] => return None,

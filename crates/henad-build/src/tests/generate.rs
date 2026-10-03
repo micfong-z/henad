@@ -117,6 +117,23 @@ fn a_crate_without_shaders_builds() {
 }
 
 #[test]
+fn a_nested_entry_names_its_path_with_forward_slashes() {
+    let scratch = Scratch::new("nested_entry");
+    scratch.write("gpu_vote/step.wgsl", STEP_SHADER);
+    ShaderBuild::discover(scratch.root())
+        .expect("the shaders are found")
+        .generate_in(&scratch.out_dir())
+        .expect("the build generates");
+    let decls = scratch.generated("binding_decls.rs");
+    assert!(
+        decls.contains(
+            "\"henad-build read another number of @group(0) bindings from gpu_vote/step.wgsl than naga composed\""
+        ),
+        "{decls}"
+    );
+}
+
+#[test]
 fn shaders_removed_and_restored_are_generated_again() {
     let scratch = Scratch::new("removed_and_restored");
     let generate = || {

@@ -1,6 +1,6 @@
 //! The app of Henad, a parallel agent-based modelling engine, as a library.
 //!
-//! [`run_native`] opens a window over the models an [`AppOptions`] holds, and `start_web` starts the same app in a
+//! `run_native` opens a window over the models an [`AppOptions`] holds, and `start_web` starts the same app in a
 //! browser. The official `henad-app` binary calls them with the example models. A project with models of its own opens
 //! the same app over its own [`ModelSet`](henad_compute::entry::ModelSet).
 //!

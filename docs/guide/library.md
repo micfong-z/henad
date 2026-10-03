@@ -101,7 +101,7 @@ A GPU model builds on the device it is handed:
 
 ```rust
 let gpu = henad::gpu::acquire_headless(models.gpu_needs())?;
-let mut simulation = models.get("gpu_sir").ok_or("the example set holds GPU SIR")?.setup().build(Some(&gpu))?;
+let mut simulation = models.get("gpu_sir").ok_or("the example set lacks GPU SIR")?.setup().build(Some(&gpu))?;
 ```
 
 `acquire_headless` asks for a device without a window, with the limits the set's GPU models need.
@@ -159,6 +159,9 @@ rayon::scope(|_| -> Result<(), henad::Fault> {
     Ok(())
 })?;
 ```
+
+`rayon::scope` takes `rayon = "1"` among the program's own dependencies.
+Cargo resolves it to the rayon Henad steps on, and the loop runs on the same pool.
 
 A GPU model takes no pool.
 Each call waits for the device once, and `run_for` submits its steps in batches of up to 64.

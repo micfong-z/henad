@@ -179,9 +179,10 @@ fn a_setup_refuses_a_value_of_the_wrong_kind() {
 fn a_setup_refuses_a_wrong_value_count() {
     let sir = entry("sir");
     let values = sir.setup().values().to_vec();
+    let count = values.len();
     let error = RunSetup::from_parts(&sir, &values[1..], None, Schedule::default()).expect_err("a value short");
     assert!(
-        matches!(error, SetupError::ParamCount { expected, found } if expected == values.len() && found == values.len() - 1),
+        matches!(error, SetupError::ParamCount { expected, found } if expected == count && found == count - 1),
         "{error:?}"
     );
 

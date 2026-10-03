@@ -3,25 +3,14 @@
 //! Scripts parse all three, `scripts/bench_matrix.py` among them. The reference output sits in `tests/golden/`, with
 //! the procedure that recorded it from the `v0.2.0` tag in `tests/golden/README.md`.
 
-#![expect(
-    clippy::print_stderr,
-    reason = "a skipped test says why on stderr, as the CLI's other tests do"
-)]
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
-/// Returns the folder of reference output, or `None` with a note when it is absent, as in a packaged crate.
-fn golden_dir() -> Option<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
-    if dir.is_dir() {
-        Some(dir)
-    } else {
-        eprintln!("note: skipped, {} is absent", dir.display());
-        None
-    }
+/// Returns the folder of reference output.
+fn golden_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
 }
 
 /// Returns whether this machine offers a compute adapter, as the CLI acquires one.
@@ -61,9 +50,7 @@ fn reference(dir: &Path, name: &str) -> String {
 
 #[test]
 fn list_prints_what_0_2_0_printed() {
-    let Some(dir) = golden_dir() else {
-        return;
-    };
+    let dir = golden_dir();
     let name = if has_adapter() {
         "list.txt"
     } else {
@@ -75,9 +62,7 @@ fn list_prints_what_0_2_0_printed() {
 /// Checks `--params` and `--params --json` for every example model, a GPU model only where an adapter exists.
 #[test]
 fn params_print_what_0_2_0_printed() {
-    let Some(dir) = golden_dir() else {
-        return;
-    };
+    let dir = golden_dir();
     let adapter = has_adapter();
     let models = henad_models::example_models();
     let mut compared = 0;

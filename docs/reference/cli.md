@@ -540,9 +540,9 @@ The 95% confidence interval for the mean is `mean ± t * sd / sqrt(n)`, where `t
 | `columns` | Names of the stat columns and the reducer columns |
 | `shard` | Share of the plan the directory holds, as `index` and `count`. Index 0 of 1 for a whole sweep or a merge |
 | `execution` | Backend, concurrency, lanes, threads per lane, GPU runs at once, projected bytes, and the memory and GPU memory budgets |
-| `runtime` | Operating system, architecture, logical cpus, worker threads, and the GPU adapter with its limits when there is one |
+| `runtime` | Operating system, architecture, logical cpus, worker threads, and the GPU adapter a GPU sweep steps on, with its limits. A CPU sweep records no adapter |
 | `timestamps` | Start and end, in milliseconds since the Unix epoch and as RFC 3339 text in UTC |
-| `sessions` | One entry per process that wrote runs to the directory, with its start, the engine's commit, the runs it kept as `skipped` and the runs it wrote as `ran`, and the [builds](#builds) it ran as `engine`, `host` and `model_source` |
+| `sessions` | One entry per process that wrote runs to the directory, with its start, the engine's commit, the runs it kept as `skipped` and the runs it wrote as `ran` (for a session that ended without replacing the manifest, the runs a later resume kept beyond those the session found), and the [builds](#builds) it ran as `engine`, `host` and `model_source` |
 | `results` | Row counts `rows`, `ok`, `non_finite` and `failed`, `null` while the sweep runs |
 | `merged_shards` | Directories a merge read, as `--merge` names them. `null` for a sweep that ran in the directory |
 | `search` | A search's budget and standing, described under [search tables](#search-tables). `null` for a sweep |
@@ -625,7 +625,7 @@ It also refuses a row whose `run_id` is not `config_id * reps + rep` at the repl
 A resume that raises a shard's replicate count and ends before renumbering the shard's rows leaves such rows, and resuming that shard again renumbers them.
 It merges `runs.csv` and `series.csv` in run order, leaving out a partial last record and the series rows of runs with no row in `runs.csv`, and rebuilds `summary.csv`.
 Both tables are staged and renamed into place together, as a resume that rewrites them does.
-The merged manifest is that of the lowest shard, with shard 0 of 1, the sessions of every shard, and the inputs under `merged_shards`.
+The merged manifest is that of the lowest shard, with shard 0 of 1, the sessions of every shard, the inputs under `merged_shards`, and the build that merged them as `engine`.
 
 A run of the plan that no input holds is reported as a warning, and the merged manifest reads `incomplete`.
 Shards whose sessions ran different engine or model builds get a warning for each build that differs from the lowest shard's.
@@ -674,7 +674,7 @@ The counts of `explore_end` and `explore_merge` cover every row of `runs.csv`, t
 None of these kinds is a benchmark kind, and one reader can take both streams.
 
 ```json
-{"backend":"cpu","blocks":[{"configs":2,"design":"factorial","design_seed":null}],"configs":2,"cpu_lanes":4,"dry_run":false,"gpu_tracks":0,"kind":"explore_plan","model":"sir","pending":4,"projected_bytes":32768,"replicates":2,"runs":4,"series_rows":204,"shard":{"count":1,"index":0},"skipped":0,"threads_per_lane":1}
+{"backend":"cpu","blocks":[{"configs":2,"design":"factorial","design_seed":null}],"configs":2,"cpu_lanes":4,"dry_run":false,"gpu_tracks":0,"kind":"explore_plan","model":"sir","pending":4,"projected_bytes":32768,"replicates":2,"runs":4,"search":null,"series_rows":204,"shard":{"count":1,"index":0},"skipped":0,"threads_per_lane":1}
 {"config_id":0,"kind":"explore_run","rep":0,"run_id":0,"seed":4320778953317010875,"status":"ok","stop_reason":"steps","ticks":50,"wall_ms":0.743085}
 {"elapsed_s":0.015759,"end":"complete","failed":0,"kind":"explore_end","non_finite":0,"ok":4,"output_dir":"sir-sweep","rows":4,"skipped":0}
 ```
@@ -1005,7 +1005,7 @@ rather than re-timing one. Without it every rep starts from the engine default a
 replay the same run.
 
 ```json
-{"kind":"info","engine":"henad","engine_version":"0.1.0","model":"boids","variant":"cpu","threads":1,"parallel_jobs":782,"adapter":null,"debug_build":false}
+{"kind":"info","engine":"henad","engine_version":"0.3.0","model":"boids","variant":"cpu","threads":1,"parallel_jobs":782,"adapter":null,"debug_build":false}
 {"kind":"rep","rep":0,"seed":42,"steps":100,"warmup":10,"elapsed_s":1.234,"population":50000,"heap_bytes":2050020}
 ```
 

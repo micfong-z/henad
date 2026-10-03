@@ -769,7 +769,10 @@ impl SweepDraft {
 
     /// Sets action row `position` to action `action_index` of `schema`, renamed after it.
     pub fn set_action(&mut self, schema: &ModelSchema<'_>, position: usize, action_index: usize) {
-        if position >= self.actions.len() || self.actions[position].action_index == action_index {
+        if position >= self.actions.len()
+            || self.actions[position].action_index == action_index
+            || schema.actions.get(action_index).is_none()
+        {
             return;
         }
         let row = self.actions.remove(position);
@@ -3990,5 +3993,17 @@ mod tests {
                 "{min}..={max} gave {example}"
             );
         }
+    }
+
+    #[test]
+    fn set_action_ignores_an_undeclared_action() {
+        let sir = sir();
+        let schema = sir.schema();
+        let mut draft = SweepDraft::new(&schema);
+        draft.add_action(&schema, 0, 10);
+        draft.add_action(&schema, 0, 20);
+        let rows = draft.actions.clone();
+        draft.set_action(&schema, 0, schema.actions.len());
+        assert_eq!(draft.actions, rows);
     }
 }

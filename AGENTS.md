@@ -355,7 +355,8 @@ cargo check -p henad --features example-models,testing --lib --target wasm32-unk
 cargo test -p henad --doc --features example-models,app      # compiles the README program
 ./scripts/build_web.sh build  # builds the WASM/web target
 ./scripts/check_packaging.sh  # workspace versions, licence copies, paths that climb out of a crate,
-                              # the template's [profile.release] held equal to the root's
+                              # the template's [profile.release] held equal to the root's and its
+                              # requirements to the workspace's major and minor
 cargo deny --locked check     # advisories, licences and sources
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
@@ -555,8 +556,8 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   list the view draws. A full row relocates to the end, the engine repacks after a tick once
   `should_repack()` finds too much stale space, and a full `rebuild()` runs only when the graph
   changes direction. `version()` goes up whenever the edges, their colours or their direction
-  change. Those three, `set_directed` and the raw `spawn` and `retire` are `#[doc(hidden)]`, since
-  the engine calls them and a model goes through `Nodes`.
+  change. `repack`, `should_repack`, `rebuild`, `set_directed` and the raw `spawn` and `retire` are
+  `#[doc(hidden)]`, since the engine calls them and a model goes through `Nodes`.
   `explore/` holds the parts of a sweep that need no engine, and builds on wasm like the rest of the
   crate. `value.rs` reads a param value written as text and checks it against its descriptor
   (`parse_value`, `resolve_params`, `parse_overrides`), and `format_value` writes one back. `--set`
@@ -648,11 +649,12 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `SearchHistory::read` takes the range again from the initial samples' rows of `evaluations.csv`
   and places the rows written before it. `search/tests/` holds the driver the searcher tests share
   (`support.rs`) and the protocol tests every searcher passes.
-- **henad-build**: a build dependency, on henad-core and `wgsl_bindgen` alone. `lib.rs` holds
-  `ShaderBuild` and `ShaderBuildError`, `paths.rs` the walk of a shader root and the Rust names a
-  path becomes (`check_components`, `check_reserved`, `check_collisions`), `binding_lines.rs` the
-  private reader of `@group(0)` lines, and `output.rs` the shared-module copies, the stamp and the
-  two generated files. `stamp/` holds the build stamps: `stamp_commit` for a host or model crate,
+- **henad-build**: a build dependency, on henad-core, `wgsl_bindgen` and `heck` alone, the last
+  naming a `ShaderEntry` variant as `wgsl_bindgen` does. `lib.rs` holds `ShaderBuild` and
+  `ShaderBuildError`, `paths.rs` the walk of a shader root and the Rust names a path becomes
+  (`check_components`, `check_reserved`, `check_collisions`), `binding_lines.rs` the private reader
+  of `@group(0)` lines, and `output.rs` the shared-module copies, the stamp and the two generated
+  files. `stamp/` holds the build stamps: `stamp_commit` for a host or model crate,
   and the hidden `stamp_engine_commit` (henad-explore) and `stamp_source_hash` (henad-compute,
   henad-models). `stamp/mod.rs` picks the source of a stamp by `StampScope`: a package's
   `.cargo_vcs_info.json` first, then git when `git ls-files --error-unmatch Cargo.toml` succeeds,
@@ -758,15 +760,17 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `assembly.rs` (the global pass and the setup teams), `ring.rs` (`RetirementRing`, a bucket queue
   that finds the nodes due to retire without a scan) and `live.rs` (`LiveSet`, a dense list of the
   live nodes for uniform draws). A GPU model is one `mod.rs` of
-  declarations next to its `.wgsl` files. Each GPU port seeds itself through its CPU counterpart's
-  `init`, which is what keeps tick 0 bit identical between the two backends and makes them fair to
-  compare — that call is confined to `seed_buffers`. `example_models()` (`lib.rs`) registers all
-  ten into one `ModelSet` with henad-models' own `build_info!()`. The registry tests sit in
-  `src/tests/registry.rs`. They run the testing kit over `example_models()` on a baseline device,
-  check each model's skipped checks, and keep the guards for the example models alone: no GPU
-  entry builds without a device, `gpu_sir`'s refusal at 6000 by 6000, each GPU entry's `GpuNeeds`
-  against its widest pass, and the set's coverage. `gpu_boids` declares
-  `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly` reads it.
+  declarations next to its `.wgsl` files. Each GPU port starts from its CPU counterpart's tick 0
+  bit for bit, which keeps the two backends fair to compare, and seeds only in `seed_buffers`. The
+  agent ports call the CPU `init`. The grid ports repeat its draws (`gpu_game_of_life` bit-packed),
+  and a device-free test per port compares the seeded buffer with the CPU grid.
+  `example_models()` (`lib.rs`) registers all ten into one `ModelSet` with henad-models' own
+  `build_info!()`. The registry tests sit in `src/tests/registry.rs`. They run the testing kit
+  over `example_models()` on a baseline device, check each model's skipped checks, and keep the
+  guards for the example models alone: no GPU entry builds without a device, `gpu_sir`'s refusal
+  at 6000 by 6000, each GPU entry's `GpuNeeds` against its widest pass, and the set's coverage.
+  `gpu_boids` declares `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly`
+  reads it.
 - **henad-explore**: sweeps and searches, a sibling of henad-models over henad-compute, below the
   two front ends. `sweep.rs` holds `run_spec`, which runs a sweep, or a search for a spec with a
   `[search]` table, into a `SweepOutput`, and `plan_spec`, the dry run, which reads a folder as a
@@ -919,7 +923,8 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   five size parameters at 128, or 256 agents, never above the default. `ThreadCount` sets the size
   so a step splits into twice the high thread count in jobs: `num_agents` at that many chunks, or
   the largest `grid_height` that splits into no more, found by building. One job at every size
-  within bounds skips it as `OneJob`, and wasm32 skips it as `NativeOnly`. The GPU checks and a GPU
+  within bounds skips it as `OneJob`, one job at a size an override sets as `OneJobAtOverride`,
+  and wasm32 skips it as `NativeOnly`. The GPU checks and a GPU
   model's `Actions` build at the declared defaults. A watchdog trips on time, and a small model
   never trips it. `FullSubmission` runs `MAX_STEPS_PER_SUBMISSION` single steps first and reads
   their stats, then one full submission, and compares the two. A device the full submission
@@ -998,9 +1003,10 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   which `--open DIR` and `--open=DIR` go through. `web.rs` holds `start_web`, which starts the
   wasm-bindgen-rayon pool at `requested_threads` before it calls the options closure, then looks up
   `the_canvas_id` and `loading_text`, and `init_web_logger`. A pool that fails to start leaves
-  `thread_pool_note`, which the Performance tab shows. A start failure, a missing window included,
-  is written into `loading_text` and returned, and the caller logs it once. Both entry points check
-  the opening against the set before any device exists (`AppOptions::check_opening`,
+  `thread_pool_note`, which the Performance tab shows. A start failure is returned, a missing window
+  included, and the caller logs it once. In a window, it is also written into `loading_text` where
+  the page has one. Both entry points check the opening against the set before any device exists
+  (`AppOptions::check_opening`,
   `OpeningError`): the set has to hold the id, a run its parameter count, and a setup's entry the
   same `schema_hash`. `AppError` is native only and `WebStartError` wasm only. henad-app re-exports
   no eframe item. `state`, `ui`, `HenadApp` and `wgpu_configuration` are private. `HenadApp`
@@ -1541,7 +1547,7 @@ is about not undoing them.
   collide, a `henad.wgsl` file or a `henad` directory holding a `.wgsl` file in any case, which
   would shadow a shared module, and a first component the generated code uses at its root (`wgpu`,
   `bytemuck`, `std`, `core`, `alloc`, `_root`, `ShaderEntry`, `layout_asserts`, `bytemuck_impls`). A
-  module with a `@binding(` line fails the build. The binding constant is the path's components
+  module with a `@binding` line fails the build. The binding constant is the path's components
   upper-cased and joined by `_`. `generate` copies the shared modules from henad-core into
   `OUT_DIR/henad_wgsl/henad/`, runs `wgsl_bindgen` (pinned to `=0.23.3`, and
   `scripts/check_packaging.sh` holds `WGSL_BINDGEN_VERSION` to the pin) with its own rerun lines
@@ -1554,13 +1560,13 @@ is about not undoing them.
   layouts therefore come from the WGSL, and each model asserts its own struct against the generated
   one. Shared WGSL is reached with `#import henad::<module>`, resolved at build time, so no shader
   is assembled at runtime any more. henad-build also reads each entry's `@group(0)` lines into
-  `binding_decls`, in `@binding` order, and fails the build on any line holding `@binding(` in
-  another form than `@group(G) @binding(N) var<...> name: Type;` or a gap in the indices. A
-  compile-time assertion in `binding_decls.rs` holds each list to the length of the generated
-  `WgpuBindGroup0` layout, and `include_shaders!` asserts that the shaders were composed against the
-  `SHARED_WGSL_FNV1A64` of the henad-core it links. henad-build's tests run `generate` against a
-  scratch `OUT_DIR`, never Cargo. The engine resolves each name itself. `params`, `dims`, `output`,
-  `cell_start`, `sorted`, `counters` and `partials` are reserved, and any other name is a
+  `binding_decls`, in `@binding` order, and fails the build on any line holding `@binding` or
+  `@group` in another form than `@group(G) @binding(N) var<...> name: Type;` or a gap in the
+  indices. A compile-time assertion in `binding_decls.rs` holds each list to the length of the
+  generated `WgpuBindGroup0` layout, and `include_shaders!` asserts that the shaders were composed
+  against the `SHARED_WGSL_FNV1A64` of the henad-core it links. henad-build's tests run `generate`
+  against a scratch `OUT_DIR`, never Cargo. The engine resolves each name itself. `params`, `dims`,
+  `output`, `cell_start`, `sorted`, `counters` and `partials` are reserved, and any other name is a
   `BufferSpec` label with an optional `_in` or `_out` suffix. The access mode picks the side.
   `henad-core/src/authoring/model/binding.rs` is the reference. An imported constant or type reaches
   the generated bindings exactly when an entry point references it, since naga keeps only what an

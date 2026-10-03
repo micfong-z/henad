@@ -9,7 +9,7 @@
 //! one round, and uses the result for its transition. This makes the GPU stream different from
 //! the CPU stream. See `tests` for further details.
 //!
-//! That RNG buffer is why this model sets `BUFFER_COUNT = 2`: the engine ping-pongs the state and
+//! That RNG buffer is why this model declares two `BUFFERS`: the engine ping-pongs the state and
 //! RNG buffers together, in lockstep. Only the state buffer (index 0) is visible to the display
 //! and reduce shaders.
 
@@ -37,7 +37,8 @@ henad_core::params! {
     const PARAM_HEIGHT = u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384);
     const PARAM_INFECTION_RATE =
         f32_param("infection_rate", "Infection Rate", DEFAULT_INFECTION_RATE, 0.0, 1.0, Some(0.01));
-    const PARAM_RECOVERY_RATE = f32_param("recovery_rate", "Recovery Rate", DEFAULT_RECOVERY_RATE, 0.0, 1.0, Some(0.01));
+    const PARAM_RECOVERY_RATE =
+        f32_param("recovery_rate", "Recovery Rate", DEFAULT_RECOVERY_RATE, 0.0, 1.0, Some(0.01));
     const PARAM_INITIAL_INFECTED_PCT = f32_param(
         "initial_infected_pct",
         "Initial Infected",
@@ -169,10 +170,12 @@ impl GpuGridModel for GpuSir {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::cpu::grid_engine::GridModelState;
+    use henad_compute::cpu::grid_engine::{GRID_PARAM_BASE, GridModelState};
     use henad_compute::gpu::GpuContext;
     use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::GpuSimState as _;
+    use henad_core::authoring::model::grid_model::GridModel as _;
+    use henad_core::grid::Grid2D;
     use henad_core::model::SimState as _;
     use henad_core::view::StatEntry;
     use henad_explore::testing::{TestDeviceRequest, headless_test_device};
@@ -299,6 +302,23 @@ mod tests {
             );
             assert_eq!(r, 0, "no cell can reach R when recovery_rate is 0 (tick {tick})");
             prev_i = i;
+        }
+    }
+
+    /// The port repeats `SirGridModel::init` rather than calling it, so every cell is compared.
+    #[test]
+    fn the_seeded_grid_matches_the_cpu_init() {
+        let (width, height) = (37u32, 23u32);
+        let p = params(width, height, 0.3, 0.05, 0.2);
+        for seed in [None, Some(7)] {
+            let mut grid = Grid2D::new(width, height);
+            SirGridModel::init(&mut grid, &p[GRID_PARAM_BASE..], &mut grid_init_rng(seed));
+            let cpu: Vec<u32> = grid.current().iter().copied().map(u32::from).collect();
+            assert_eq!(
+                GpuSir::seed_buffers(width, height, &p, seed)[0],
+                cpu,
+                "the seeded state differs from the CPU grid for seed {seed:?}"
+            );
         }
     }
 

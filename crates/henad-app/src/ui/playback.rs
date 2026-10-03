@@ -5,6 +5,9 @@ use crate::state::{AppState, setup_message};
 use crate::ui::params::{INVALID_SEED, parse_seed};
 use crate::ui::{add_progress_bar, mcs};
 
+/// Reason Build gives with no model selected.
+const NO_SELECTED_MODEL: &str = "Select a model in the Model tab";
+
 pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let has_thread = app.sim_thread.is_some();
 
@@ -73,6 +76,9 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
 /// Returns the reason the selection cannot be built, or `None` when it can.
 fn build_refusal(app: &AppState, shortfalls: &[String]) -> Option<String> {
+    if app.selected_entry().is_none() {
+        return Some(NO_SELECTED_MODEL.to_owned());
+    }
     if !shortfalls.is_empty() {
         return Some(format!("Too large for this device: {}", shortfalls.join("; ")));
     }
@@ -162,4 +168,27 @@ fn opened_run_line(ui: &mut egui::Ui, app: &AppState) {
             "Seed {}. Scheduled actions run on the recorded ticks.",
             run.replay.seed
         ));
+}
+
+#[cfg(test)]
+mod tests {
+    use henad_compute::entry::ModelSet;
+    use henad_core::metadata::Backend;
+
+    use super::{NO_SELECTED_MODEL, build_refusal};
+    use crate::state::AppState;
+
+    #[test]
+    fn build_is_refused_with_no_model_selected() {
+        let mut models = ModelSet::new(henad_core::build_info!());
+        for entry in henad_models::example_models().iter() {
+            if entry.metadata().backend == Backend::Gpu {
+                models.insert(entry.clone()).expect("example ids are unique");
+            }
+        }
+        let Some(app) = AppState::headless(models, false) else {
+            return;
+        };
+        assert_eq!(build_refusal(&app, &[]).as_deref(), Some(NO_SELECTED_MODEL));
+    }
 }

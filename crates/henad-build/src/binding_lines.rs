@@ -24,14 +24,14 @@ pub(crate) struct Binding {
 ///
 /// # Errors
 ///
-/// Returns [`ShaderBuildError::BindingLine`] for a line that holds `@binding(` or opens with `@group(` in another form
-/// than `@group(G) @binding(N) var<...> name: Type;`, and for a binding kind the engine does not bind.
+/// Returns [`ShaderBuildError::BindingLine`] for a line that holds `@binding` or `@group` in another form than
+/// `@group(G) @binding(N) var<...> name: Type;`, and for a binding kind the engine does not bind.
 /// Returns [`ShaderBuildError::BindingGap`] when the indices do not run from 0 with no gap or repeat.
 pub(crate) fn read_bindings(path: &Path, source: &str) -> Result<Vec<Binding>, ShaderBuildError> {
     let mut bindings = Vec::new();
     for (number, line) in strip_block_comments(source).lines().enumerate() {
         let code = line.split("//").next().unwrap_or_default().trim();
-        if !code.contains("@binding(") && !code.starts_with("@group(") {
+        if !code.contains("@binding") && !code.contains("@group") {
             continue;
         }
         let refuse = |reason| ShaderBuildError::BindingLine {
@@ -55,7 +55,7 @@ pub(crate) fn read_bindings(path: &Path, source: &str) -> Result<Vec<Binding>, S
     Ok(bindings)
 }
 
-/// Returns an error for the first line of `source`, the text of the module at `path`, that holds `@binding(`.
+/// Returns an error for the first line of `source`, the text of the module at `path`, that holds `@binding`.
 ///
 /// # Errors
 ///
@@ -63,7 +63,7 @@ pub(crate) fn read_bindings(path: &Path, source: &str) -> Result<Vec<Binding>, S
 pub(crate) fn refuse_bindings(path: &Path, source: &str) -> Result<(), ShaderBuildError> {
     for (number, line) in strip_block_comments(source).lines().enumerate() {
         let code = line.split("//").next().unwrap_or_default().trim();
-        if code.contains("@binding(") {
+        if code.contains("@binding") {
             return Err(ShaderBuildError::ModuleBinding {
                 path: path.to_path_buf(),
                 line: number + 1,
@@ -138,7 +138,7 @@ fn kind(space: Option<&str>, binding_type: &str) -> Result<BindingKind, &'static
 }
 
 /// Returns `source` with each block comment, nested ones included, replaced by spaces and the newlines it held.
-fn strip_block_comments(source: &str) -> String {
+pub(crate) fn strip_block_comments(source: &str) -> String {
     let mut stripped = String::with_capacity(source.len());
     let mut depth = 0usize;
     let mut characters = source.chars().peekable();

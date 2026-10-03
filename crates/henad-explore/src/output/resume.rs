@@ -230,18 +230,18 @@ fn check_recorded(recorded: &Manifest, plan: &Plan, shard: Shard) -> Result<(), 
             current: ManifestMode::Sweep,
         });
     }
-    let current_plan = hex(plan.plan_hash());
-    if recorded.plan.plan_hash != current_plan {
-        return Err(ResumeError::PlanChanged {
-            recorded: recorded.plan.plan_hash.clone(),
-            current: current_plan,
-        });
-    }
     let current_schema = hex(plan.schema_hash());
     if recorded.model.schema_hash != current_schema {
         return Err(ResumeError::SchemaChanged {
             recorded: recorded.model.schema_hash.clone(),
             current: current_schema,
+        });
+    }
+    let current_plan = hex(plan.plan_hash());
+    if recorded.plan.plan_hash != current_plan {
+        return Err(ResumeError::PlanChanged {
+            recorded: recorded.plan.plan_hash.clone(),
+            current: current_plan,
         });
     }
     if recorded.shard != ManifestShard::from(shard) {

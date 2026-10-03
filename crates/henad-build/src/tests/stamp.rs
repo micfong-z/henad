@@ -65,10 +65,12 @@ fn init(directory: &Path) {
         .args(["-c", "init.defaultBranch=main", "init", "--quiet", "--ref-format=files"])
         .current_dir(directory)
         .env_remove("GIT_DIR")
-        .status()
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
         .expect("git runs");
-    if !with_format.success() {
-        init(directory);
+    if !with_format.status.success() {
+        git(directory, &["init", "--quiet"]);
     }
 }
 
@@ -95,7 +97,7 @@ fn committed_crate(test: &str) -> Scratch {
     let directory = scratch.path();
     write_crate(directory, "model");
     write(directory, "Cargo.lock", "version = 4\n");
-    git(directory, &["init", "--quiet"]);
+    init(directory);
     git(directory, &["add", "."]);
     git(directory, &["commit", "--quiet", "--no-verify", "-m", "first"]);
     scratch

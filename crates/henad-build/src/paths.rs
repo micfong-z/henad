@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use heck::ToPascalCase as _;
 
 use crate::ShaderBuildError;
+use crate::binding_lines::strip_block_comments;
 
 /// Name reserved for the shared modules' import root, in any case.
 const RESERVED: &str = "henad";
@@ -60,16 +61,17 @@ pub(crate) fn wgsl_files(root: &Path) -> Result<Vec<PathBuf>, ShaderBuildError> 
     Ok(files)
 }
 
-/// Returns whether `source` declares an import path, which makes its file a module and not an entry point.
+/// Returns whether `source` declares an import path outside a block comment, which makes its file a module and not an
+/// entry point.
 pub(crate) fn is_module(source: &str) -> bool {
-    source
+    strip_block_comments(source)
         .lines()
         .any(|line| line.trim_start().starts_with("#define_import_path"))
 }
 
-/// Returns whether `source` declares an import path under the reserved root.
+/// Returns whether `source` declares an import path under the reserved root, outside a block comment.
 pub(crate) fn defines_reserved_path(source: &str) -> bool {
-    source.lines().any(|line| {
+    strip_block_comments(source).lines().any(|line| {
         line.trim_start()
             .strip_prefix("#define_import_path")
             .and_then(|path| path.trim().split("::").next())
@@ -138,8 +140,8 @@ pub(crate) fn check_components(root: &Path, file: &Path) -> Result<(), ShaderBui
     }
 }
 
-/// Returns an error when two of `entries` give one module path, `ShaderEntry` variant or binding constant, or one
-/// entry's module path holds another's.
+/// Returns an error when two of `entries` give one module path, `ShaderEntry` variant or binding constant, when one
+/// entry's module path holds another's, or when the `ShaderEntry` variant of an entry is no Rust identifier.
 pub(crate) fn check_collisions(root: &Path, entries: &[PathBuf]) -> Result<(), ShaderBuildError> {
     let mut names: BTreeMap<(&'static str, String), &PathBuf> = BTreeMap::new();
     // Modules that hold another entry's module, each with the first entry inside it.
@@ -155,9 +157,16 @@ pub(crate) fn check_collisions(root: &Path, entries: &[PathBuf]) -> Result<(), S
             name,
         };
         let module = components.join("::");
+        let variant = variant_name(&components);
+        if !is_identifier(&variant) {
+            return Err(ShaderBuildError::InvalidName {
+                path: root.join(entry),
+                component: variant,
+            });
+        }
         for (kind, name) in [
             ("module", module.clone()),
-            ("variant", variant_name(&components)),
+            ("variant", variant),
             ("constant", constant_name(&components)),
         ] {
             if let Some(first) = names.insert((kind, name.clone()), entry) {

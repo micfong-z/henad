@@ -97,6 +97,8 @@ fn a_binding_line_in_another_form_is_refused() {
     let path = Path::new("pass.wgsl");
     for (line, reason) in [
         ("@binding(2) @group(0) var<uniform> params: Params;", "`@group(G)`"),
+        ("@binding (0) @group(0) var<uniform> params: Params;", "`@group(G)`"),
+        ("@group (0) @binding (0) var<uniform> params: Params;", "`@group(G)`"),
         ("@group(0)\n@binding(0) var<uniform> params: Params;", "`@binding(N)`"),
         ("@group(0) @binding(0)\nvar<uniform> params: Params;", "`var`"),
         ("@group(0) @binding(0) var<uniform> params:\n    Params;", "`;`"),

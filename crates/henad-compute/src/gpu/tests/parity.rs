@@ -410,7 +410,8 @@ fn every_space_primitive_agrees_with_its_wgsl_twin() {
         }
         let tolerance = tolerance_for(check.case.op);
         for (k, (expected, got)) in check.expected.f.iter().zip(&got.f).enumerate() {
-            if (expected - got).abs() > tolerance {
+            // A NaN on either side compares false against any tolerance, and no Rust twin returns one.
+            if expected.is_nan() || got.is_nan() || (expected - got).abs() > tolerance {
                 failures.push(format!("{}: float {k} expected {expected}, got {got}", check.call));
             }
         }

@@ -50,7 +50,7 @@ Record #40 flagged `wrap_index`, `wrap_coord`, `axis_delta`, `offsets`, `for_eac
   The macros come from the root (`henad::params!`, `henad::actions!`, `henad::buffers!`, `henad::agent_lanes`, `henad::for_each_chunk_mut`), and the GPU agent vocabulary from `henad::authoring` (`BufferSpec`, `Domain`, `PassCtx`, `NUM_AGENTS`, `split_params` and the rest), as [8] asks of a GPU page.
   `GRID_INIT_SEED`, `AGENT_INIT_SEED` and `AgentLanes` come from `henad::authoring` as well.
   The unit tests reach the states through `henad::engine`, `SimState` and `GpuSimState` through `henad::runner`, `wgpu` through `henad::gpu`, `StatEntry` through `henad::stats`, and the test device through `henad::testing`.
-  `grep -rn henad_ examples/tutorial` finds only the crate's own name, `henad_tutorial`, in its tests.
+  `grep -rn henad_ examples/tutorial` finds the crate's own name, `henad_tutorial`, in its tests, `henad_build` in `build.rs`, and `henad_models` in a comment of the copied `gpu_life/display.wgsl`.
 - **Shaders.** `gpu_life/` holds copies of `gpu_game_of_life/{step,display,reduce}.wgsl`, byte for byte.
   `gpu_foraging/` holds `gpu_ants/{state,step,merge,display,reduce}.wgsl` with `gpu_ants::state` read as `gpu_foraging::state`, in the `#define_import_path` of `state.wgsl` and the imports of `step.wgsl` and `reduce.wgsl`.
   The action shaders `clear.wgsl`, `randomise.wgsl` and `reset_colony.wgsl` stay behind, since no page declares an action on a GPU model.

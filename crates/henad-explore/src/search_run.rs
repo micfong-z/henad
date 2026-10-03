@@ -823,7 +823,8 @@ impl RecordedSearch {
     /// # Errors
     ///
     /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds a sweep, another
-    /// search, another model schema or another column layout, or `runs.csv` lists its runs out of order.
+    /// search, another model schema or another column layout, or `runs.csv` lists its runs out of order or more runs
+    /// than the search's budget.
     pub(crate) fn read(
         path: &Path,
         plan: &SearchPlan,
@@ -839,6 +840,13 @@ impl RecordedSearch {
                 current: ManifestMode::Search,
             });
         }
+        let current_schema = hex(plan.base.schema_hash());
+        if recorded.model.schema_hash != current_schema {
+            return Err(ResumeError::SchemaChanged {
+                recorded: recorded.model.schema_hash.clone(),
+                current: current_schema,
+            });
+        }
         let current_search = hex(plan.search_hash);
         let recorded_search = recorded
             .search
@@ -848,13 +856,6 @@ impl RecordedSearch {
             return Err(ResumeError::SearchChanged {
                 recorded: recorded_search,
                 current: current_search,
-            });
-        }
-        let current_schema = hex(plan.base.schema_hash());
-        if recorded.model.schema_hash != current_schema {
-            return Err(ResumeError::SchemaChanged {
-                recorded: recorded.model.schema_hash,
-                current: current_schema,
             });
         }
         let (runs_path, series_path) = table_paths(path);
@@ -868,6 +869,9 @@ impl RecordedSearch {
         let mut runs = Vec::with_capacity(table.records.len());
         let mut counts = ResultCounts::default();
         for (position, record) in table.records.iter().enumerate() {
+            if position as u64 >= plan.run_count() {
+                return Err(ResumeError::UnknownRun { run_id: record.run_id });
+            }
             if record.run_id != position as u64 {
                 return Err(ResumeError::SearchRunChanged { run_id: record.run_id });
             }

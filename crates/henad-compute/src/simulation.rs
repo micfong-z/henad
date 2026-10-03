@@ -7,11 +7,12 @@
 //! Actions fire under [`Fire::AfterStep`]. Tick 0's fire inside the build, and each later tick's after the step that
 //! reaches it. Every call returns a model's panic or a device error as a [`Fault`].
 //!
-//! On native targets a CPU model's [`RunSetup::build`], [`Simulation::step`], [`Simulation::run_for`],
-//! [`Simulation::run_to`], [`Simulation::run_sampled`], [`Simulation::stats`], [`Simulation::act`],
-//! [`Simulation::views`] and [`Simulation::relax_layout`] enter the current rayon pool once each, and
-//! [`Simulation::write_state`] enters it for its view preparation alone. [`Simulation::set_param`] runs no parallel
-//! pass and enters no pool.
+//! On native targets a CPU model's [`Simulation::step`], [`Simulation::run_for`], [`Simulation::run_to`],
+//! [`Simulation::run_sampled`], [`Simulation::stats`], [`Simulation::act`], [`Simulation::views`] and
+//! [`Simulation::relax_layout`] enter the current rayon pool at most once each. `run_for(0)` and a `run_to` at or
+//! behind the current tick step nothing and enter no pool. [`RunSetup::build`] runs the model's `init`
+//! outside the pool and enters it only to fire tick 0's actions. [`Simulation::write_state`] enters it for its view
+//! preparation alone, and [`Simulation::set_param`] runs no parallel pass and enters no pool.
 
 use std::fmt;
 use std::io::{self, Write};

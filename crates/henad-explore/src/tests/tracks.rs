@@ -329,6 +329,13 @@ fn interleaved_gpu_runs_match_sequential_ones() {
             ("clear", &["9", "20"]),
             "Alive <= 0",
         ),
+        interleaved_spec(
+            "gpu_ants",
+            &[("num_agents", "1000"), ("world_width", "64"), ("world_height", "64")],
+            ("momentum", &["0.5", "0.8"]),
+            ("reset_colony", &["4", "12"]),
+            "Total Pheromone >= 200",
+        ),
     ];
     let scratch = ScratchDir::new("gpu-interleaved");
     for spec in cases {

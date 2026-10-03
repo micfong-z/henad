@@ -5,7 +5,7 @@ use std::ops::Range;
 use std::str::FromStr;
 
 use crate::action::{ActionDescriptor, Schedule, Scheduled};
-use crate::explore::design::{Block, DesignError, DesignKind, generate};
+use crate::explore::design::{Block, DesignError, DesignKind, MAX_CONFIGS, generate_within};
 use crate::explore::design_csv::{DesignTableError, read_table};
 use crate::explore::factor::{FactorError, FactorSlot, FactorTarget};
 use crate::explore::fingerprint::{plan_hash, results_fingerprint, run_key, schema_hash};
@@ -400,7 +400,10 @@ impl SweepSpec {
                 action_ticks: fixed_ticks.clone(),
             };
             let start = configs.len() as u64;
-            configs.extend(generate(&block, &base).map_err(|source| PlanError::Design { block: index, source })?);
+            let limit = MAX_CONFIGS - configs.len();
+            configs.extend(
+                generate_within(&block, &base, limit).map_err(|source| PlanError::Design { block: index, source })?,
+            );
             blocks.push(PlannedBlock {
                 design: block.design.clone(),
                 configs: start..configs.len() as u64,
@@ -738,6 +741,47 @@ mod tests {
             ],
             "a block leaves the parameters it does not vary at their fixed values"
         );
+    }
+
+    #[test]
+    fn blocks_past_the_limit_together_are_refused() {
+        // Block 1 alone holds exactly `MAX_CONFIGS`, 4096 widths by 4096 ticks.
+        let mut spec = SweepSpec::new("sir");
+        spec.actions = vec![ActionSpec::new("seed_outbreak", 0)];
+        spec.blocks = vec![
+            block(
+                DesignKind::Factorial,
+                vec![FactorSpec::param("neighborhood", LevelSpec::All)],
+            ),
+            block(
+                DesignKind::Factorial,
+                vec![
+                    FactorSpec::param(
+                        "grid_width",
+                        LevelSpec::Range {
+                            min: 1.0,
+                            max: 4096.0,
+                            step: None,
+                        },
+                    ),
+                    FactorSpec::action(
+                        "seed_outbreak",
+                        LevelSpec::Range {
+                            min: 0.0,
+                            max: 4095.0,
+                            step: None,
+                        },
+                    ),
+                ],
+            ),
+        ];
+        assert!(matches!(
+            plan(&spec),
+            Err(PlanError::Design {
+                block: 1,
+                source: DesignError::TooManyConfigs
+            })
+        ));
     }
 
     #[test]

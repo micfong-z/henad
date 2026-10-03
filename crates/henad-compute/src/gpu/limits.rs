@@ -59,9 +59,21 @@ pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits, needs: GpuNeeds) -> w
 mod tests {
     use super::{GpuNeeds, raise};
 
+    /// The default adapter, or `None` when this machine has none.
+    ///
+    /// # Panics
+    ///
+    /// If `HENAD_REQUIRE_GPU` is set and no adapter is available.
     fn adapter() -> Option<wgpu::Adapter> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
+        if let Err(err) = &adapter {
+            assert!(
+                !crate::gpu::tests::support::gpu_required(),
+                "HENAD_REQUIRE_GPU is set but no wgpu adapter is available: {err}"
+            );
+        }
+        adapter.ok()
     }
 
     /// Over-asking fails `request_device` outright, so this is the safety property.

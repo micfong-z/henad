@@ -3,6 +3,8 @@
 //! The file defines no model, needs no build script and never builds on a device. The parts that need no model run,
 //! and the parts that need a model's entry compile in [`with_an_entry`], which no test calls.
 
+use std::any::type_name;
+
 use henad::SetupError;
 use henad::action::ActionDescriptor;
 use henad::authoring::{
@@ -149,6 +151,27 @@ fn the_spatial_index_and_the_components_are_reached() {
     assert_eq!(near, 3, "the three nodes of the path lie within reach of the origin");
     assert_eq!(components.count, 2, "the path and the lone node");
     assert_eq!(components.largest, 3, "the path holds three nodes");
+}
+
+/// Names the types a public field, variant or return value of a listed item holds, each through its facade path.
+#[test]
+fn payload_types_have_facade_paths() {
+    let names = [
+        type_name::<henad::gpu::Alloc>(),
+        type_name::<henad::gpu::PassBindings>(),
+        type_name::<henad::explore::BatchStanding>(),
+        type_name::<henad::explore::EvaluatedCandidate>(),
+        type_name::<henad::explore::EvaluationReading>(),
+        type_name::<henad::explore::ConfigFault>(),
+        type_name::<henad::explore::RefusedConfig>(),
+        type_name::<henad::explore::ProgressUpdate>(),
+        type_name::<henad::explore::SummaryError>(),
+        type_name::<henad::explore::SearchPlan>(),
+        type_name::<henad::explore::CsvError>(),
+        type_name::<henad::explore::design_csv::DesignTableError>(),
+        type_name::<henad::explore::design_csv::DesignTableValueError>(),
+    ];
+    assert!(names.iter().all(|name| !name.is_empty()), "every type is named");
 }
 
 /// Hosts that need a model's entry. They compile against the facade and never run.

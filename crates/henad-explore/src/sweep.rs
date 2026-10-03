@@ -1086,7 +1086,14 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
         Some(recorded) => {
             let mut recorded = recorded.clone();
             recorded.record_session_engines();
+            let status = recorded.status;
             let mut sessions = recorded.sessions;
+            // A session whose process ended before `Manifest::finish` never had its runs counted.
+            if matches!(status, ManifestStatus::Running | ManifestStatus::Failed)
+                && let Some(last) = sessions.last_mut()
+            {
+                last.ran = outline.skipped.saturating_sub(last.skipped);
+            }
             sessions.push(session);
             (recorded.timestamps.started_unix_ms, sessions, recorded.merged_shards)
         }

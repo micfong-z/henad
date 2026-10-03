@@ -20,7 +20,8 @@ const THREAD_POOL_NOTE: &str = "Models run on one thread. The page might lack th
 /// `the_canvas_id` canvas, removing the `loading_text` element.
 ///
 /// A pool that fails to start is logged, and the models then run on one thread, with a note in the Performance tab.
-/// A failure to start the app is written into the `loading_text` element and returned, for the caller to log.
+/// A failure to start the app is returned, for the caller to log, and written into the `loading_text` element where
+/// the page has one.
 ///
 /// Note that nothing before this call may touch rayon. A rayon call there builds a one-thread pool, and the worker pool
 /// then cannot start.

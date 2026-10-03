@@ -162,11 +162,13 @@ impl GpuGridModel for GpuGameOfLife {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::cpu::grid_engine::GridModelState;
+    use henad_compute::cpu::grid_engine::{GRID_PARAM_BASE, GridModelState};
     use henad_compute::gpu::GpuContext;
     use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::GpuSimState as _;
     use henad_compute::gpu::timing::TimestampQuery;
+    use henad_core::authoring::model::grid_model::GridModel as _;
+    use henad_core::grid::Grid2D;
     use henad_core::model::SimState as _;
     use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
@@ -202,6 +204,30 @@ mod tests {
         ctx.queue.submit(Some(encoder.finish()));
         state.begin_stats_readback();
         state.poll_stats_readback(&ctx.device, true);
+    }
+
+    /// The port repeats `GameOfLifeModel::init` rather than calling it, so every cell is compared.
+    /// The CPU grid is packed into the shaders' layout. A width of 37 leaves padding bits, and
+    /// the seed leaves them zero.
+    #[test]
+    fn the_seeded_grid_matches_the_cpu_init() {
+        let (width, height) = (37u32, 23u32);
+        let p = params(width, height, 0.3);
+        let stride = words_per_row(width);
+        for seed in [None, Some(7)] {
+            let mut grid = Grid2D::new(width, height);
+            GameOfLifeModel::init(&mut grid, &p[GRID_PARAM_BASE..], &mut grid_init_rng(seed));
+            let mut cpu = vec![0u32; stride * height as usize];
+            for (index, &cell) in grid.current().iter().enumerate() {
+                let (x, y) = (index % width as usize, index / width as usize);
+                cpu[y * stride + x / 32] |= u32::from(cell) << (x % 32);
+            }
+            assert_eq!(
+                GpuGameOfLife::seed_buffers(width, height, &p, seed)[0],
+                cpu,
+                "the seeded words differ from the CPU grid for seed {seed:?}"
+            );
+        }
     }
 
     /// End-to-end agreement with the CPU model, which is the real correctness oracle: identical

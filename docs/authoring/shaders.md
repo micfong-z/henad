@@ -95,7 +95,7 @@ A module declares no binding, since bindings belong in the entry shader.
 
 henad-build reads the `@group(0)` lines of every entry point into `binding_decls`, in `@binding` order.
 Every pass of either GPU trait points at one of its constants, as `crate::binding_decls::bindings::GPU_SIR_STEP` is for `gpu_sir/step.wgsl`.
-Each binding sits on one line, as `@group(0) @binding(N) var<...> name: Type;`, and a line holding `@binding(` in any other form fails the build.
+Each binding sits on one line, as `@group(0) @binding(N) var<...> name: Type;`, and a line holding `@binding` or `@group` in any other form fails the build.
 A compile-time assertion holds each list to the length of the layout naga derives from the composed shader.
 The engine resolves each name itself.
 Otherwise a slot index could disagree with the shader that owns it.

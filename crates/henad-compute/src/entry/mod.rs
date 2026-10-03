@@ -69,7 +69,8 @@ impl fmt::Debug for ModelState {
 
 /// Closure behind a model's factory.
 ///
-/// A CPU model ignores the device. Public for [`ModelEntry::wrap_factory`] alone. The `Option<u64>` is the seed, which falls back to the model's default when `None`.
+/// A CPU model ignores the device. Public for [`ModelEntry::wrap_factory`] alone.
+/// The `Option<u64>` is the seed. `None` falls back to the model's default.
 #[doc(hidden)]
 pub trait Factory:
     Fn(&[ParamValue], Option<u64>, Option<&GpuContext>) -> Result<ModelState, Fault> + WasmNotSend + WasmNotSync

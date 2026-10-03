@@ -535,6 +535,14 @@ fn gpu_foraging_params(num_agents: u32) -> Vec<ParamValue> {
         .map(|d| d.kind.default_value())
         .collect();
     values[NUM_AGENTS] = ParamValue::U32(num_agents);
+    // Off its default, so the merge uniforms differ if either copy reads it from the wrong place.
+    let Some(evaporation) = gpu_ants::GpuAnts::param_descriptors()
+        .iter()
+        .position(|d| d.id == "evaporation")
+    else {
+        panic!("gpu_ants declares no evaporation parameter");
+    };
+    values[evaporation] = ParamValue::F32(0.95);
     values
 }
 

@@ -17,8 +17,8 @@ use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::sweep::{ExploreError, SweepOptions, SweepWarning};
 use crate::tests::broken::DividesByParam;
 use crate::tests::support::{
-    OutputTables, Recorder, ScratchDir, dry_run, entry, manifest, other_engine, provenance, sweep, sweep_options,
-    sweep_with,
+    OutputTables, Recorder, ScratchDir, dry_run, entry, manifest, other_engine, provenance, rewrite_manifest, sweep,
+    sweep_options, sweep_with,
 };
 
 fn values(raw: &[&str]) -> LevelSpec {
@@ -115,6 +115,57 @@ fn a_resumed_sweep_skips_finished_runs_and_matches_a_fresh_one() {
         "a complete directory has nothing left to run"
     );
     assert_eq!(OutputTables::read(&resumed_dir), OutputTables::read(&fresh_dir));
+}
+
+#[test]
+fn a_resume_credits_a_session_its_process_left_unfinished() {
+    let spec = sir_spec(2);
+    let scratch = ScratchDir::new("resume-unfinished");
+    sweep(&entry("sir", None), None, &spec, scratch.path(), Concurrency::Auto);
+
+    // A process killed after its second run leaves two rows and the manifest it wrote at the start.
+    let runs = fs::read_to_string(scratch.path().join(RUNS_FILE)).expect("runs.csv is written");
+    fs::write(scratch.path().join(RUNS_FILE), first_lines(&runs, 3)).expect("runs.csv is cut");
+    rewrite_manifest(scratch.path(), |recorded| {
+        recorded.status = ManifestStatus::Running;
+        recorded.results = None;
+        recorded.sessions[0].ran = 0;
+    });
+
+    assert_eq!(resume("sir", &spec, scratch.path(), sweep_options(false)), [2, 3, 4, 5]);
+    let sessions: Vec<(u64, u64)> = manifest(scratch.path())
+        .sessions
+        .iter()
+        .map(|session| (session.skipped, session.ran))
+        .collect();
+    assert_eq!(sessions, [(0, 2), (2, 4)]);
+}
+
+#[test]
+fn a_resume_names_a_changed_model() {
+    let sir = entry("sir", None);
+    let spec = sir_spec(2);
+    let scratch = ScratchDir::new("resume-model");
+    sweep(&sir, None, &spec, scratch.path(), Concurrency::Auto);
+
+    // Another version of the model changes the schema hash, and with it the plan hash.
+    rewrite_manifest(scratch.path(), |recorded| {
+        recorded.model.schema_hash = "0000000000000000".to_owned();
+        recorded.plan.plan_hash = "0000000000000000".to_owned();
+    });
+    let error = sweep_with(
+        &sir,
+        None,
+        &spec,
+        scratch.path(),
+        &sweep_options(true),
+        &mut Recorder::default(),
+    )
+    .expect_err("another model");
+    assert!(
+        matches!(error, ExploreError::Resume(ResumeError::SchemaChanged { .. })),
+        "{error:?}"
+    );
 }
 
 #[test]

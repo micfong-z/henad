@@ -768,6 +768,9 @@ pub struct ManifestSession {
     /// Runs the session found written and kept.
     pub skipped: u64,
     /// Runs the session wrote.
+    ///
+    /// The next session credits a session that ended before replacing the manifest with the runs the next session
+    /// kept, less those the ended session found and kept.
     pub ran: u64,
     /// Build of Henad that ran the session, `None` in a 0.2 manifest.
     #[serde(default)]

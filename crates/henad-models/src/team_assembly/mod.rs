@@ -329,6 +329,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_node_views_implement_debug() {
+        use henad_core::authoring::model::network_model::{NodeCtx, Nodes};
+
+        fn assert_debug<T: std::fmt::Debug>() {}
+        assert_debug::<Nodes<'static, TeamAssembly>>();
+        assert_debug::<NodeCtx<'static, TeamAssembly>>();
+    }
+
     /// Every pass that runs in parallel either reads the graph or writes in chunk order,
     /// so the way rayon splits the work must not affect the result.
     #[test]

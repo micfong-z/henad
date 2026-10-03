@@ -47,6 +47,7 @@ pub mod action {
 
 /// The GPU device a model builds on, its sizing, and the headless device a program acquires.
 pub mod gpu {
+    pub use henad_compute::gpu::capacity::{Alloc, PassBindings};
     pub use henad_compute::gpu::{Demand, GpuContext, GpuNeeds, wgpu};
     pub use henad_compute::runtime_info::{HostInfo, RuntimeInfo};
     #[cfg(not(target_arch = "wasm32"))]
@@ -79,7 +80,10 @@ pub mod engine {
 /// [`spec::BlockSpec`](explore::spec::BlockSpec).
 pub mod explore {
     pub use henad_core::explore::replay::Replay;
-    pub use henad_core::explore::{design, factor, measure, outcome, plan, reducer, search, seed, spec, stop};
+    pub use henad_core::explore::{
+        design, design_csv, factor, measure, outcome, plan, reducer, search, seed, spec, stop,
+    };
+    pub use henad_core::export::csv::CsvError;
     pub use henad_explore::exec::{ActiveRun, Concurrency, ExecutionError, ExecutionLayout, SweepControl};
     pub use henad_explore::handle::{
         SweepEvent, SweepOutput, SweepPhase, SweepProgress, SweepRun, SweepRunOptions, SweepStartError,
@@ -95,12 +99,15 @@ pub mod explore {
     pub use henad_explore::output::memory::SweepFiles;
     pub use henad_explore::output::read::ReadError;
     pub use henad_explore::output::resume::ResumeError;
-    pub use henad_explore::output::search_tables::SearchHistory;
-    pub use henad_explore::probe::{CapacityError, ProbeError, ProbeReport};
-    pub use henad_explore::progress::{NoProgress, Progress, ProgressEvent};
+    pub use henad_explore::output::search_tables::{BatchStanding, SearchHistory};
+    pub use henad_explore::output::summary_csv::SummaryError;
+    pub use henad_explore::probe::{CapacityError, ConfigFault, ProbeError, ProbeReport, RefusedConfig};
+    pub use henad_explore::progress::{NoProgress, Progress, ProgressEvent, ProgressUpdate};
     pub use henad_explore::result_set::{ResultReplayError, ResultSet, ResultSetError, RunRow};
     pub use henad_explore::schema::schema_json;
-    pub use henad_explore::search_run::{SearchOutline, SearchPlanError, SearchUpdate};
+    pub use henad_explore::search_run::{
+        EvaluatedCandidate, EvaluationReading, SearchOutline, SearchPlan, SearchPlanError, SearchUpdate,
+    };
     pub use henad_explore::spec_file::{DesignTableFile, ExecutionTable, LoadedSpec, SpecFileError};
     pub use henad_explore::sweep::{
         ExploreError, Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepRecord, SweepReport,

@@ -277,6 +277,11 @@ impl SweepControl {
     /// Returns whether a run can take its next slice, blocking while the sweep is paused.
     ///
     /// Returns `false` once the sweep is aborted.
+    ///
+    /// # Panics
+    ///
+    /// On wasm32, panics or traps while the sweep is paused on a thread that cannot wait, as a browser's main thread
+    /// cannot. A host there reads [`Self::is_paused`] between slices instead.
     pub fn proceed(&self) -> bool {
         match self.shared.mode.load(Ordering::Acquire) {
             RUNNING => true,
@@ -629,7 +634,8 @@ impl<'a> Executor<'a> {
 
     /// Runs every request and commits each outcome to `sink` in request order.
     ///
-    /// Runs that finish early wait in memory until every earlier request is committed.
+    /// Runs that finish early wait in memory until every earlier request is committed. Note that on wasm32 a pause
+    /// panics on a thread that cannot wait, as [`SweepControl::proceed`] describes.
     ///
     /// # Errors
     ///

@@ -31,7 +31,8 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
 ```
 
 `./check.sh` also runs `cargo deny` when [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) is installed.
-CI runs it on every pull request, together with the jobs `./check.sh` leaves out: a `cargo package` pass, a check at the minimum supported Rust version, and the wasm32 documentation of henad-app.
+CI runs it on every pull request, together with checks `./check.sh` leaves out, among them a `cargo package` pass, a check at the minimum supported Rust version, a check of each feature of the `henad` crate alone, the build of the reference ports, and the wasm32 documentation of henad-app.
+`.github/workflows/ci.yml` lists them all.
 
 ## AI usage
 

@@ -384,12 +384,17 @@ fn the_pumped_sweep_refuses_a_gpu_model() {
 
 #[test]
 fn a_paused_sweep_holds_every_run_until_resumed() {
+    // Two lanes step both runs at once, on a machine of one worker too.
+    let options = SweepRunOptions {
+        concurrency: Concurrency::Fixed(std::num::NonZeroUsize::new(2).expect("2 is above 0")),
+        ..options()
+    };
     let mut run = SweepRun::start(
         entry("game_of_life", None),
         None,
         endless_spec(),
         SweepOutput::Memory,
-        options(),
+        options,
     )
     .expect("the sweep starts");
     wait_for(&run, "both runs stepping", |progress| {
@@ -612,7 +617,7 @@ fn a_gpu_sweep_runs_on_the_handle_thread() {
     assert_eq!((record.report.end, record.report.counts.ok), (SweepEnd::Complete, 2));
     let memory = UntimedFiles::new(record.files.as_ref().expect("files in memory"));
     let directory = UntimedFiles::new(&directory_files(scratch.path()));
-    assert_eq!((memory.runs, memory.series), (directory.runs, directory.series));
+    assert_eq!(memory, directory);
 }
 
 #[test]

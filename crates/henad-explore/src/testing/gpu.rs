@@ -127,7 +127,16 @@ pub(super) fn sampled_slice(entry: &ModelEntry, settings: &CheckSettings, ctx: &
             ));
         }
         let sliced = state.stats();
-        let snapshot = stepping::sample_stats(&mut *state, ctx);
+        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("henad_sampled_slice_snapshot"),
+        });
+        state.encode_snapshot_passes(&mut encoder);
+        ctx.queue.submit(Some(encoder.finish()));
+        state.begin_stats_readback();
+        if state.poll_stats_readback(&ctx.device, true) != StatsPoll::Landed {
+            return Err(format!("The readback of a snapshot at tick {tick} did not land."));
+        }
+        let snapshot = state.stats();
         if let Some(difference) = first_stat_difference(&sliced, &snapshot) {
             return Err(format!(
                 "A sampled slice and a snapshot differ in {difference} at tick {tick}."

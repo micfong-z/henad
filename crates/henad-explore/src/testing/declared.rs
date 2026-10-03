@@ -65,7 +65,7 @@ pub(super) fn action_ids(entry: &ModelEntry) -> Result<(), String> {
 /// Checks [`super::ModelCheck::Palette`]. A view colours its cells or agents from the palette by index.
 pub(super) fn palette(entry: &ModelEntry) -> Result<(), String> {
     match entry.metadata().palette {
-        Some([]) => Err("The declared palette holds no colours.".to_owned()),
+        Some([]) => Err("The declared palette holds no colors.".to_owned()),
         _ => Ok(()),
     }
 }

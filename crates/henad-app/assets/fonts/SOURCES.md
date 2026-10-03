@@ -8,7 +8,10 @@ Each is listed here with its source, its licence and, for the two built here, th
 | `Henad Sans Regular.ttf` | IBM Plex Sans 3.201, modified as described below | SIL Open Font License 1.1, in `OFL.txt` |
 | `Henad Mono Regular.ttf` | IBM Plex Mono 2.3, modified as described below | SIL Open Font License 1.1, in `OFL.txt` |
 | `Material Design Icons.ttf` | `fonts/materialdesignicons-webfont.ttf` of [Templarian/MaterialDesign-Webfont](https://github.com/Templarian/MaterialDesign-Webfont) at tag `v7.2.96`, unmodified | Apache License 2.0, in `LICENSE-APACHE` |
-| `Material Symbols Outlined.ttf` | Google's [Material Symbols](https://github.com/google/material-design-icons) Outlined variable font, version 2.667, unmodified | Apache License 2.0, in `LICENSE-APACHE`. Copyright 2020-2023 Google LLC |
+| `Material Symbols Outlined.ttf` | `variablefont/MaterialSymbolsOutlined[FILL,GRAD,opsz,wght].ttf` of [google/material-design-icons](https://github.com/google/material-design-icons) at commit `9365c0b8c619f5888bbf6f9497ca0f1d5e27c5b1`, version 2.667, unmodified | Apache License 2.0, in `LICENSE-APACHE`. Copyright 2020-2023 Google LLC |
+
+The Material Design Icons file has SHA-256 `a58ecb54f45eec1afadbc21314d1f0932cf009e5cbc7f3225d7e4a4e1b71ef6b`, the same bytes as the upstream file at its tag.
+The Material Symbols file has SHA-256 `3527004d40bc8706368af0c247876c272a25fd3f17d70e1ba24c84d1c0b5e499`, the same bytes as the upstream file at its commit.
 
 ## Henad Sans and Henad Mono
 

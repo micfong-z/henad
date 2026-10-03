@@ -1737,8 +1737,7 @@ mod tests {
         assert_eq!(Mode::of(&args), Mode::Explore);
     }
 
-    /// Checks that a flag given on the command line replaces the spec table's setting, `--concurrent auto` included,
-    /// and that a setting no flag gives keeps the table's value.
+    /// Checks that a `SweepWarning::BuildChanged` prints as an `explore_warning` line with both builds and its message.
     #[test]
     fn a_build_change_prints_as_an_explore_warning_line() {
         use henad_explore::output::manifest::{BuildRole, RecordedBuild};
@@ -1763,6 +1762,8 @@ mod tests {
         assert_eq!(line["message"], warning.to_string());
     }
 
+    /// Checks that a flag given on the command line replaces the spec table's setting, `--concurrent auto` included,
+    /// and that a setting no flag gives keeps the table's value.
     #[test]
     fn an_explicit_concurrent_auto_overrides_the_spec_table() {
         let dir = std::env::temp_dir().join(format!("henad-cli-execution-table-{}", std::process::id()));

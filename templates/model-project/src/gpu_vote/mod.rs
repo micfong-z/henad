@@ -44,7 +44,11 @@ impl GpuGridModel for GpuVote {
         // Runs the CPU twin's `init` from the engine's starting state, and tick 0 matches it bit for bit.
         // The port declares `grid_width` and `grid_height` first, where the CPU engine prepends them.
         let mut grid = Grid2D::new(width, height);
-        <Vote as GridModel>::init(&mut grid, &params[GRID_PARAM_BASE..], &mut grid_init_rng(seed));
+        <Vote as GridModel>::init(
+            &mut grid,
+            &params[GRID_PARAM_BASE.min(params.len())..],
+            &mut grid_init_rng(seed),
+        );
         vec![grid.current().iter().map(|&cell| u32::from(cell)).collect()]
     }
 

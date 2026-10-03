@@ -67,7 +67,7 @@ pub struct AppState {
     pub product: Product,
     /// Opening the app could not open, shown in the Model panel until a model is selected.
     pub opening_refusal: Option<OpeningRefusal>,
-    /// Id of the model the panels show, `None` when no offered model runs on this machine.
+    /// Id of the model the panels show, `None` when no offered model runs on this machine or the opening was refused.
     pub selected_model: Option<String>,
     pub param_values: Vec<ParamValue>,
     /// Id of the model the live simulation was built from.
@@ -909,7 +909,7 @@ mod tests {
         assert_eq!(
             app.selected_model.as_deref(),
             Some("sir"),
-            "a refused run selects nothing"
+            "a refused run leaves the selection alone"
         );
     }
 

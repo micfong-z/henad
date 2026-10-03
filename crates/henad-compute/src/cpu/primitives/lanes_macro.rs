@@ -20,6 +20,9 @@
 ///
 /// Lanes named `pos_x` and `pos_y` are required, since the engine builds the neighbour index and
 /// the point view from them.
+///
+/// The three types implement `Debug`. The lanes and the chunk print their agent count alone, and
+/// the read view prints no field. A `#[derive(Debug)]` on the declaration conflicts with that impl.
 #[macro_export]
 macro_rules! agent_lanes {
     (
@@ -53,6 +56,28 @@ macro_rules! agent_lanes {
             $(pub $pname: &'a mut [$pty],)*
         }
 
+        impl ::core::fmt::Debug for $name {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                f.debug_struct(::core::stringify!($name))
+                    .field("len", &self.pos_x.len())
+                    .finish_non_exhaustive()
+            }
+        }
+
+        impl ::core::fmt::Debug for $read<'_> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                f.debug_struct(::core::stringify!($read)).finish_non_exhaustive()
+            }
+        }
+
+        impl ::core::fmt::Debug for $chunk<'_> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                f.debug_struct(::core::stringify!($chunk))
+                    .field("len", &self.pos_x.len())
+                    .finish_non_exhaustive()
+            }
+        }
+
         impl $name {
             /// Runs `kernel(global_index, local_index, read, chunk, rng)` over every agent,
             /// merging the returned tally in chunk order.
@@ -61,7 +86,9 @@ macro_rules! agent_lanes {
             /// the chunk index, so which agent sees which stream does not depend on scheduling.
             pub fn run_pass<K, T>(&mut self, chunk_size: usize, seed: u64, tick: u64, kernel: K) -> T
             where
-                K: ::core::ops::Fn(usize, usize, $read<'_>, &mut $chunk<'_>, &mut u64) -> T + ::core::marker::Send + ::core::marker::Sync,
+                K: ::core::ops::Fn(usize, usize, $read<'_>, &mut $chunk<'_>, &mut u64) -> T
+                    + ::core::marker::Send
+                    + ::core::marker::Sync,
                 T: $crate::__macro_support::ChunkTally,
             {
                 let chunk_size = chunk_size.max(1);

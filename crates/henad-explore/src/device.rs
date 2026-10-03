@@ -64,13 +64,13 @@ pub fn acquire_headless(needs: GpuNeeds) -> Result<GpuContext, DeviceError> {
         ..Default::default()
     }))
     .map_err(DeviceError::NoAdapter)?;
-    let required_limits = henad_compute::gpu::limits::raise(&adapter, &wgpu::Limits::default(), needs);
-    if let Some(limit) = short_limit(&required_limits, &adapter.limits()) {
-        return Err(DeviceError::BelowBaseline {
-            adapter: adapter.get_info().name,
-            limit,
-        });
-    }
+    let required_limits = device_limits(&adapter.limits(), |baseline| {
+        henad_compute::gpu::limits::raise(&adapter, baseline, needs)
+    })
+    .map_err(|limit| DeviceError::BelowBaseline {
+        adapter: adapter.get_info().name,
+        limit,
+    })?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("henad-explore"),
         required_features: wgpu::Features::empty(),
@@ -86,6 +86,25 @@ pub fn acquire_headless(needs: GpuNeeds) -> Result<GpuContext, DeviceError> {
     Ok(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, FaultSink::new()).with_runtime_info(runtime))
 }
 
+/// Returns the limits to request from an adapter offering `available`, `raise` applied to the WebGPU baseline.
+///
+/// The adapter is checked against the baseline before the raise. The raise clamps the storage buffer count to the
+/// adapter's.
+///
+/// # Errors
+///
+/// Returns the name of the first limit of the baseline that `available` falls short of.
+fn device_limits(
+    available: &wgpu::Limits,
+    raise: impl FnOnce(&wgpu::Limits) -> wgpu::Limits,
+) -> Result<wgpu::Limits, &'static str> {
+    let baseline = wgpu::Limits::default();
+    match short_limit(&baseline, available) {
+        Some(limit) => Err(limit),
+        None => Ok(raise(&baseline)),
+    }
+}
+
 /// Returns the name of the first limit of `required` that `available` falls short of, or `None` when it offers them
 /// all.
 fn short_limit(required: &wgpu::Limits, available: &wgpu::Limits) -> Option<&'static str> {
@@ -96,12 +115,33 @@ fn short_limit(required: &wgpu::Limits, available: &wgpu::Limits) -> Option<&'st
 
 #[cfg(test)]
 mod tests {
-    use super::short_limit;
+    use super::{device_limits, short_limit};
 
     #[test]
     fn a_webgl2_adapter_falls_short_of_the_baseline() {
         let baseline = wgpu::Limits::default();
         assert_eq!(short_limit(&baseline, &baseline), None);
         assert!(short_limit(&baseline, &wgpu::Limits::downlevel_webgl2_defaults()).is_some());
+    }
+
+    /// An adapter one storage buffer short of the baseline is refused. The raise clamps the count to the adapter's 7,
+    /// and a check of the raised limits would pass it.
+    #[test]
+    fn an_adapter_short_of_storage_buffers_falls_short_of_the_baseline() {
+        let available = wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 7,
+            ..wgpu::Limits::default()
+        };
+        let clamp = |base: &wgpu::Limits| wgpu::Limits {
+            max_storage_buffers_per_shader_stage: base
+                .max_storage_buffers_per_shader_stage
+                .min(available.max_storage_buffers_per_shader_stage),
+            ..base.clone()
+        };
+        assert_eq!(
+            device_limits(&available, clamp).err(),
+            Some("max_storage_buffers_per_shader_stage")
+        );
+        assert!(device_limits(&wgpu::Limits::default(), clamp).is_ok());
     }
 }

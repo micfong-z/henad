@@ -81,17 +81,21 @@ pub(super) fn thread_count(entry: &ModelEntry, settings: &CheckSettings) -> Resu
     let (low, high) = settings.low_and_high_threads();
     let ticks = settings.run_ticks();
     let mut values = settings.check_values(entry)?;
-    size_for_jobs(entry, settings, &mut values, high.saturating_mul(2))?;
+    let pinned = size_for_jobs(entry, settings, &mut values, high.saturating_mul(2))?;
     let jobs = jobs_at(entry, &values)?;
     if jobs <= 1 {
-        return Ok(Ran::Skipped(SkipReason::OneJob));
+        return Ok(Ran::Skipped(match pinned {
+            Some(param_id) => SkipReason::OneJobAtOverride(param_id.to_owned()),
+            None => SkipReason::OneJob,
+        }));
     }
     let at_low = in_pool(low, || run(entry, &values, SEED, ticks, None))?;
     let at_high = in_pool(high, || run(entry, &values, SEED, ticks, None))?;
     match at_low.difference(&at_high) {
         None => Ok(Ran::PassedAtJobs(jobs)),
         Some(difference) => Err(format!(
-            "Runs at {low} and {high} threads differ in {difference} after {ticks} ticks, with a step split into {jobs} jobs."
+            "Runs at {low} and {high} threads differ in {difference} after {ticks} ticks, with a step split into \
+             {jobs} jobs."
         )),
     }
 }
@@ -215,43 +219,49 @@ fn jobs_at(entry: &ModelEntry, values: &[ParamValue]) -> Result<usize, String> {
 /// An agent or network model takes `num_agents` at `target` chunks. A grid model takes the largest `grid_height`
 /// that splits into no more than `target` jobs, found by building it, since the rows a job holds depend on the width.
 /// A parameter an override sets keeps its value.
+///
+/// Returns the id of that parameter when an override sets it, `None` otherwise.
 fn size_for_jobs(
     entry: &ModelEntry,
     settings: &CheckSettings,
     values: &mut [ParamValue],
     target: usize,
-) -> Result<(), String> {
+) -> Result<Option<&'static str>, String> {
     let (param_id, chunk) = match &entry.metadata().structure {
         Structure::Agents { chunk, .. } | Structure::Network { chunk, .. } => ("num_agents", Some(*chunk)),
         Structure::Grid { .. } => ("grid_height", None),
-        Structure::GpuGrid { .. } | Structure::GpuAgents { .. } => return Ok(()),
+        Structure::GpuGrid { .. } | Structure::GpuAgents { .. } => return Ok(None),
     };
     if settings.overrides(entry, param_id) {
-        return Ok(());
+        return Ok(Some(param_id));
     }
     let Some(index) = entry.param_index(param_id) else {
-        return Ok(());
+        return Ok(None);
     };
     let ParamKind::U32 { min, max, .. } = entry.param_descriptors()[index].kind else {
-        return Ok(());
+        return Ok(None);
     };
     let within = |size: usize| u32::try_from(size).unwrap_or(u32::MAX).clamp(min, max);
     if let Some(chunk) = chunk {
         values[index] = ParamValue::U32(within(target.saturating_mul(chunk)));
-        return Ok(());
+        return Ok(None);
     }
 
     let ParamValue::U32(start) = values[index] else {
-        return Ok(());
+        return Ok(None);
     };
     let mut jobs_with = |size: u32| {
         values[index] = ParamValue::U32(size);
         jobs_at(entry, values)
     };
-    // Doubles until a size splits into too many jobs, then bisects for the largest size that does not.
-    let mut fits = start;
-    let mut too_many = None;
-    if jobs_with(fits)? <= target {
+    // Doubles until a size splits into too many jobs, then bisects for the largest size that does not. A start that
+    // already splits into too many, as a grid an override widens can, bisects up from the lower bound instead.
+    let (mut fits, mut too_many) = if jobs_with(start)? > target {
+        (min, Some(start))
+    } else {
+        (start, None)
+    };
+    if too_many.is_none() {
         while fits < max {
             let next = fits.saturating_mul(2).min(max);
             if jobs_with(next)? > target {
@@ -272,5 +282,5 @@ fn size_for_jobs(
         }
     }
     values[index] = ParamValue::U32(fits);
-    Ok(())
+    Ok(None)
 }

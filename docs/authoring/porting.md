@@ -54,7 +54,9 @@ Boids interleaves `pos_x`/`pos_y` into the `vec2<f32>` layout its shaders read, 
 
 ## Tick 0 and after
 
-**Tick 0 is bit-identical** across all four ports, because it comes straight from the CPU `init`.
+**Tick 0 is bit-identical** across all four ports.
+The two agent ports call the CPU `init`.
+The two grid ports repeat it draw for draw, and a test compares their seeded buffers with the CPU grid.
 
 **After tick 0 it depends on the model.**
 

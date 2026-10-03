@@ -9,7 +9,7 @@ use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 /// Form a choice parameter's value takes in [`params_by_id_json`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChoiceForm {
-    /// The option's index, as `benchmarks/protocol.md` fixes it for a benchmark summary.
+    /// The option's index, as the CLI's benchmark summary writes it.
     Index,
     /// The option's name, or its index when the descriptor names no option there.
     Name,

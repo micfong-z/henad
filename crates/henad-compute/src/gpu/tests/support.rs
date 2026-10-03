@@ -7,7 +7,7 @@ use crate::gpu::GpuContext;
 const REQUIRE_GPU: &str = "HENAD_REQUIRE_GPU";
 
 /// Empty counts as unset, so a workflow matrix can blank it out on runners without a GPU.
-fn gpu_required() -> bool {
+pub fn gpu_required() -> bool {
     std::env::var_os(REQUIRE_GPU).is_some_and(|v| !v.is_empty() && v != "0")
 }
 

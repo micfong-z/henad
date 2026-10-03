@@ -50,8 +50,18 @@ async fn save_files(files: &[(&str, &[u8])]) -> SaveResult {
     let Some(folder) = folder_handle else {
         return SaveResult::Canceled;
     };
-    let folder = folder.path();
-    if let Some((name, _)) = files.iter().find(|(name, _)| folder.join(name).exists()) {
+    write_into(folder.path(), files)
+}
+
+/// Writes every file of `files` into `folder`, refusing a folder that holds an entry of the same name.
+///
+/// A link counts as an entry, a link to nothing included. Otherwise the write would follow the link out of `folder`.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_into(folder: &std::path::Path, files: &[(&str, &[u8])]) -> SaveResult {
+    if let Some((name, _)) = files
+        .iter()
+        .find(|(name, _)| folder.join(name).symlink_metadata().is_ok())
+    {
         return SaveResult::Failed(format!("{} already contains a file named {name}", folder.display()));
     }
     for (name, bytes) in files {
@@ -71,4 +81,32 @@ async fn save_files(files: &[(&str, &[u8])]) -> SaveResult {
         }
     }
     SaveResult::Saved(format!("{} files", files.len()))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{SaveResult, write_into};
+
+    /// Folder removed with its contents when dropped.
+    struct ScratchFolder(PathBuf);
+
+    impl Drop for ScratchFolder {
+        fn drop(&mut self) {
+            drop(std::fs::remove_dir_all(&self.0));
+        }
+    }
+
+    #[test]
+    fn a_link_to_nothing_with_a_file_name_refuses_the_folder() {
+        let scratch = ScratchFolder(std::env::temp_dir().join(format!("henad-app-save-link-{}", std::process::id())));
+        let folder = scratch.0.join("picked");
+        std::fs::create_dir_all(&folder).expect("the scratch folder is created");
+        let target = scratch.0.join("outside.csv");
+        std::os::unix::fs::symlink(&target, folder.join("runs.csv")).expect("the link is created");
+        let result = write_into(&folder, &[("runs.csv", b"run_id\n")]);
+        assert!(matches!(result, SaveResult::Failed(_)));
+        assert!(!target.exists(), "nothing is written through the link");
+    }
 }

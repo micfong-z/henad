@@ -318,11 +318,12 @@ fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
 ///
 /// The merge holds the whole plan, lists every session of every shard with the builds it ran, and keeps the
 /// execution and runtime of the lowest shard. A shard's session that records no engine build takes the one its
-/// shard's manifest reads for it.
+/// shard's manifest reads for it. The engine block is the build that merges.
 fn merged_manifest(shards: &[ShardInput], shard_dirs: &[PathBuf]) -> Manifest {
     let mut manifest = shards[0].manifest.clone();
     manifest.status = ManifestStatus::Running;
     manifest.shard = Shard::WHOLE.into();
+    manifest.engine = RecordedBuild::engine();
     manifest.sessions = shards
         .iter()
         .flat_map(|input| {

@@ -29,7 +29,7 @@ cargo run -p henad-cli -- --list
 | `gpu_ants` | Ant Foraging (GPU) | Agents over a field | GPU |
 
 The four GPU entries appear only when wgpu finds an adapter with compute support.
-Each GPU port seeds itself through its CPU counterpart's `init`, which makes tick 0 bit-identical between the two backends and a comparison between them fair.
+Each GPU port starts from its CPU counterpart's tick 0 bit for bit, which makes a comparison between the two backends fair.
 
 ## Parameters
 

@@ -30,8 +30,8 @@ A full rebrand renames these:
 
 --8<-- "templates/model-project/README.md:rename"
 
-The product name is the app's window title, and names the folder where the native app keeps its settings, with each space turned into a dash.
-"My Model" keeps its settings in a folder named `My-Model`.
+The product name is the app's window title, and names the folder where the native app keeps its settings.
+"My Model" keeps them in `My-Model` under `~/Library/Application Support` on macOS, in `mymodel` under `$XDG_DATA_HOME` or `~/.local/share` on Linux, and in `My Model\data` under `%APPDATA%` on Windows.
 
 ## What is in it
 

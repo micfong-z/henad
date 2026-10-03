@@ -494,7 +494,7 @@ For the first tick, `init` is called to fill the lanes.
 1. The whole model shares one extent. `cells()` expresses that extent at one cell per unit.
 2. The ants need some initial reward to start depositing pheromone.
 
-Ants do not need random numbers during setup, which is why `_rng` remain unused here.
+Ants draw no random numbers during setup, and `_rng` stays unused here.
 
 ### Tick lifecycle
 

@@ -55,7 +55,7 @@ hash.query_radius(pos_x[i], pos_y[i], radius, pos_x, pos_y, buf);
 ```
 
 The result buffer is caller-provided, and a query therefore does not allocate.
-Boids keeps one buffer in a `thread_local!` and reuses it across the whole pass.
+Boids takes `for_each_within`, which needs no buffer at all.
 
 Toroidal wraparound is handled inside the query.
 Do not reintroduce an O(n²) neighbour loop, and do not filter the whole population by distance.

@@ -215,6 +215,37 @@ fn a_model_too_large_for_the_device_is_reported() {
     );
 }
 
+/// The index tables in a GPU entry's demand match the hash grid the engine builds, on both sides of a cell size of 1.
+#[test]
+fn gpu_boids_sizes_its_index_tables_to_the_hash_grid() {
+    use henad_core::Extent;
+    use henad_core::spatial_hash::HashGrid;
+
+    let models = crate::example_models();
+    let entry = models.get("gpu_boids").expect("gpu_boids is an example model");
+    let range = entry
+        .param_index("visual_range")
+        .expect("gpu_boids declares visual_range");
+    for visual_range in [50.0, 1.0] {
+        let mut params = defaults(entry);
+        params[range] = ParamValue::F32(visual_range);
+        let demand = entry
+            .demand(&params, &wgpu::Limits::default())
+            .expect("a GPU entry declares its capacity");
+        let grid = HashGrid::new(Extent { w: 1000.0, h: 1000.0 }, visual_range / 3.0);
+        let counts = demand
+            .buffers
+            .iter()
+            .find(|alloc| alloc.label == "gpu_boids_hash_counts")
+            .expect("gpu_boids declares an index");
+        assert_eq!(
+            counts.bytes,
+            (u64::from(grid.num_cells()) + 1) * 4,
+            "visual_range {visual_range}"
+        );
+    }
+}
+
 #[test]
 fn every_example_model_joins_the_set() {
     let models = crate::example_models();

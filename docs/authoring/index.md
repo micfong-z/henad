@@ -26,7 +26,7 @@ If your state is a population whose members interact along edges that last from 
 Then pick the backend, and start on the CPU.
 A CPU model is ordinary Rust, so `dbg!` and a test work on it.
 The GPU version is WGSL plus a declared list of passes, and every GPU model in the repository was written after its CPU counterpart already worked.
-Each one seeds itself through that counterpart's `init`, which keeps the pair comparable.
+Each one starts from that counterpart's tick 0 bit for bit, which keeps the pair comparable.
 [Porting a model to the GPU](porting.md) picks up from there.
 
 !!! note "`SimState` is not a sixth path"

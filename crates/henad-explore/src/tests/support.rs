@@ -198,6 +198,18 @@ pub fn manifest(dir: &Path) -> Manifest {
     Manifest::read(&dir.join(MANIFEST_FILE)).expect("the manifest reads back")
 }
 
+/// Rewrites the manifest of the output directory `dir` after `change` edits it.
+///
+/// # Panics
+///
+/// Panics when the manifest is missing, unreadable or cannot be written.
+pub fn rewrite_manifest(dir: &Path, change: impl FnOnce(&mut Manifest)) {
+    let mut recorded = manifest(dir);
+    change(&mut recorded);
+    let bytes = serde_json::to_vec_pretty(&recorded).expect("the manifest writes as JSON");
+    std::fs::write(dir.join(MANIFEST_FILE), bytes).expect("the manifest is written");
+}
+
 /// Three CSV files of an output directory, as their text and as records of fields.
 ///
 /// Two readings are equal when `series.csv` and `summary.csv` match byte for byte, and `runs.csv` matches apart from

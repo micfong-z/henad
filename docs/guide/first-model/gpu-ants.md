@@ -305,8 +305,8 @@ error[E0046]: not all trait items implemented, missing: `NAME`, `ID`, `DESCRIPTI
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing 15 items in implementation
 ```
 
-Three more items have defaults and so are missing from the list: `INDEX`, `COUNTERS` and `DISPLAY`.
-Ants needs two of the three.
+Six more items have defaults and so are missing from the list: `INDEX`, `COUNTERS`, `DISPLAY`, `ACTIONS`, `REPLAYS_EXACTLY` and `index_cell_size`.
+Ants needs two of them, `COUNTERS` and `DISPLAY`.
 
 ### Identity and Metadata
 
@@ -858,7 +858,7 @@ Each pass declared a `struct Params` in WGSL, and `build.rs` generated a `#[repr
             PassId::Step(_) => bytemuck::bytes_of(&MergeParams {
                 n: ctx.invocations,
                 groups_x: ctx.groups_x,
-                evaporation: PheromoneField::from_params(params).evaporation, // (4)!
+                evaporation: PheromoneField::from_params(split_params::<ForagingModel>(params).1).evaporation, // (4)!
                 low: LOW_PHEROMONE,
             })
             .to_vec(),
@@ -890,7 +890,7 @@ Each pass declared a `struct Params` in WGSL, and `build.rs` generated a `#[repr
 1. `PassId` says which block is being asked for, step passes by their index in `STEP_PASSES`, and `PassCtx` carries the geometry plus the two numbers only the engine knows, the invocation count and the fold width.
 2. The step's arm runs the _CPU model's_ `from_params`, so the hot-parameter derivations we wrote on the ants page, `diagonal` being `cutdown` raised to √2 for instance, are computed in exactly one place.
 3. `linear_index` in the shader needs the fold width the engine picked.
-4. The field's one parameter, through the CPU field spec's `from_params`.
+4. The field's one parameter, through the CPU field spec's `from_params`. That function counts from the start of the field's own parameters, and the second half of `split_params` is that part of the list, as the CPU engine hands it over.
 5. The reduce block has padding fields to fill, and zeroing the rest is simpler than naming them.
 
 The generated structs come from the same place as the shader strings:

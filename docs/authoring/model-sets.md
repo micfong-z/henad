@@ -95,7 +95,7 @@ A project that wants a few takes clones of their entries:
 ```rust
 let examples = henad::models::example_models();
 for id in ["sir", "boids"] {
-    models.insert(examples.get(id).ok_or("the example set holds the model")?.clone())?;
+    models.insert(examples.get(id).ok_or("the example set lacks this model")?.clone())?;
 }
 ```
 

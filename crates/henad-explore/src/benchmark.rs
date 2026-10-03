@@ -5,8 +5,9 @@
 //! steps inside another. A GPU repetition submits its steps in batches and times them up to the wait that drains the
 //! device.
 //!
-//! Actions fire under [`BENCH_FIRE`], before the step that leaves their tick. An action due from the end of warm-up up to, but not including, the tick a repetition stops on is timed with the
-//! steps, and one due on that tick fires after the timer stops.
+//! Actions fire under [`BENCH_FIRE`], before the step that leaves their tick. An action due from the end of warm-up
+//! up to, but not including, the tick a repetition stops on is timed with the steps, and one due on that tick fires
+//! after the timer stops.
 
 use std::time::{Duration, Instant};
 
@@ -104,14 +105,14 @@ pub struct BenchmarkReport {
 /// default seed runs every repetition on the default seed. `on_event` runs between repetitions, outside the pool and
 /// outside the timed steps.
 ///
-/// A tick-0 action fires once in each repetition, before its first step. Without the template's profile block, a debug
-/// build runs the kernels at opt-level 0 in the crate that registers the model, or in henad-models for an example entry,
-/// and only a `--release` build gives timings worth comparing.
+/// A tick-0 action fires once in each repetition, before its first step. Without the template's profile block, a
+/// debug build runs the kernels at opt-level 0 in the crate that registers the model, or in henad-models for an
+/// example entry, and only a `--release` build gives timings worth comparing.
 ///
 /// # Errors
 ///
-/// Returns a [`Fault`] when a build fails, the model panics or the device reports an error. A GPU model handed no
-/// device fails its first build.
+/// Returns a [`Fault`] when a build fails, the model panics, the device reports an error or the model refuses a
+/// scheduled action. A GPU model handed no device fails its first build.
 pub fn run_benchmark(
     settings: &BenchmarkSettings,
     gpu: Option<&GpuContext>,

@@ -31,7 +31,9 @@ jobs:
 
       # Refuses an undated or missing section rather than drafting empty notes.
       - name: Release notes from the changelog
-        run: python3 scripts/changelog_section.py "$GITHUB_REF_NAME" | tee "$RUNNER_TEMP/notes.md"
+        run: |
+          set -o pipefail
+          python3 scripts/changelog_section.py "$GITHUB_REF_NAME" | tee "$RUNNER_TEMP/notes.md"
 
       # A draft, so the notes are read before anyone outside sees them. Nothing here publishes.
       # A semver pre-release tag (v0.2.0-rc.1) is marked as one.

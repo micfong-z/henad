@@ -56,7 +56,9 @@ fn results_do_not_depend_on_the_thread_count() {
 
 Three details of the test matter.
 
-- Compare **bits** rather than floats, because `to_bits` catches a last-bit difference that `assert_eq!` on `f32` would report but an `approx` comparison would hide.
+- Compare **bits** rather than floats.
+  Two NaNs with the same bits compare equal, where `==` fails, and `-0.0` and `0.0` differ, where `==` calls them equal.
+  An approximate comparison would hide a last-bit difference altogether.
 - Use a **population that spans several chunks**, preferably one that is not a multiple of `CHUNK`, so that the ragged final chunk is covered too.
 - Use **thread counts that are not multiples of each other**, since running 1 against 7 splits the work completely differently.
 

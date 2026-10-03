@@ -196,7 +196,7 @@ impl GpuAgentModel for GpuAnts {
             PassId::Step(_) => bytemuck::bytes_of(&MergeParams {
                 n: ctx.invocations,
                 groups_x: ctx.groups_x,
-                evaporation: PheromoneField::from_params(params).evaporation,
+                evaporation: PheromoneField::from_params(split_params::<AntsModel>(params).1).evaporation,
                 low: LOW_PHEROMONE,
             })
             .to_vec(),
@@ -505,6 +505,34 @@ mod tests {
                 "ant {i} left the field at ({x}, {y}); the dispatch fold probably missed it"
             );
         }
+    }
+
+    /// The field's parameters sit after the model's own in the composed list, and the merge reads
+    /// them from there.
+    #[test]
+    fn the_merge_pass_reads_the_evaporation_param() {
+        let mut values = params(1_000, 200.0);
+        let Some(index) = GpuAnts::param_descriptors()
+            .iter()
+            .position(|desc| desc.id == "evaporation")
+        else {
+            panic!("gpu_ants declares no evaporation parameter");
+        };
+        values[index] = ParamValue::F32(0.95);
+
+        let geom = State::geometry_for(&values, &wgpu::Limits::default());
+        let ctx = PassCtx {
+            geom: &geom,
+            invocations: geom.n_cells * 2,
+            groups_x: 1,
+            seed: 0,
+        };
+        let bytes = GpuAnts::pass_params_bytes(PassId::Step(1), ctx, &values);
+        let merge = bytemuck::pod_read_unaligned::<MergeParams>(&bytes);
+        assert_eq!(
+            merge.evaporation, 0.95,
+            "the merge uniform ignores the evaporation parameter"
+        );
     }
 
     /// The site markers are what the ants navigate between, so a layout mismatch would make the

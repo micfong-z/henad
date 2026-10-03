@@ -177,8 +177,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         for (spec, len) in M::BUFFERS.iter().zip(M::buffer_lens(&geom)) {
             demand.push_sides(&format!("{}_{}", M::ID, spec.label), len, spec.double_buffered);
         }
-        if M::INDEX {
-            demand.push_index(M::ID, geom.n_cells, geom.num_agents);
+        if let Some(grid) = geom.index {
+            demand.push_index(M::ID, grid.num_cells(), geom.num_agents);
         }
         if M::DISPLAY.is_some() {
             demand.set_display(geom.width, geom.height, limits);

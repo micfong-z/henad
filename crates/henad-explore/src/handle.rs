@@ -89,7 +89,7 @@ impl std::fmt::Debug for SweepRunOptions {
             .field("spec_source", &self.spec_source)
             .field("provenance", &self.provenance)
             .field("wake", &self.wake.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -248,9 +248,11 @@ impl SweepRun {
     /// Plans `spec` against `entry` and starts the sweep, or the search a `spec` with a search runs, writing its
     /// files to `output`.
     ///
-    /// `gpu` is a device the host shares with the sweep. Note that a fault the device reports outside every error
-    /// scope then ends every live run, whichever side raised it. Handed no device, the sweep acquires one on its own
-    /// thread for a GPU model, sized to the entry's [`gpu_needs`](ModelEntry::gpu_needs), and builds `entry` on it.
+    /// `gpu` is a device the host shares with the sweep, its [`FaultSink`](henad_compute::fault::FaultSink) included.
+    /// Note that the sink holds one fault, and whichever side reads it first takes it. A fault the sweep takes ends
+    /// every live run, whichever side raised it, and one the host takes first leaves the runs going. Handed no device,
+    /// the sweep acquires one on its own thread for a GPU model, sized to the entry's
+    /// [`gpu_needs`](ModelEntry::gpu_needs), and builds `entry` on it.
     ///
     /// Planning happens before this returns. The probe build and the runs happen after it, on native on a thread of
     /// the sweep's own and in a browser in [`Self::update`].
@@ -298,7 +300,9 @@ impl SweepRun {
     /// Resumes the sweep whose results the directory `dir` holds, running only the runs it lacks.
     ///
     /// The spec, source and shard come from the directory's manifest, and the sweep runs as
-    /// [`crate::sweep::run_spec`] resumes one. `gpu` is the device a GPU model steps on, as in [`Self::start`].
+    /// [`crate::sweep::run_spec`] resumes one. Note that the execution settings come from `options` alone. The
+    /// `[execution]` table the manifest records is not applied. `gpu` is the device a GPU model steps on, as in
+    /// [`Self::start`].
     ///
     /// # Errors
     ///

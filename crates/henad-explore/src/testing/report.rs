@@ -167,10 +167,13 @@ pub enum SkipReason {
     Exempt(String),
     /// The check needs a GPU device, and the settings give none.
     NoDevice,
-    /// The check steps a GPU model, which only a native target does.
+    /// The check runs on native targets only. These are the checks that build a GPU model, and
+    /// [`super::ModelCheck::ThreadCount`].
     NativeOnly,
     /// A step of the model is one job at every size within its parameters' bounds.
     OneJob,
+    /// A step of the model is one job at the size an override sets for the named parameter.
+    OneJobAtOverride(String),
 }
 
 impl fmt::Display for SkipReason {
@@ -182,6 +185,7 @@ impl fmt::Display for SkipReason {
             Self::NoDevice => f.write_str("no GPU device"),
             Self::NativeOnly => f.write_str("runs on native targets only"),
             Self::OneJob => f.write_str("one job at every size within bounds"),
+            Self::OneJobAtOverride(param_id) => write!(f, "one job at the {param_id} an override sets"),
         }
     }
 }

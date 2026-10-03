@@ -826,7 +826,7 @@ A cell pools only the blocks that vary either axis, and a configuration that two
 The **Runs** view lists every run in a table: **Run**, **Config**, **Rep**, **Seed**, **Status**, **Ticks** and **Time**, then a column for each axis and one for each output.
 Click a header to sort by it, and click it again to reverse the order.
 **Show** lists **All runs**, the **Failed runs**, or the runs of the **Selected configurations**, **Selected candidates** for a search.
-The Series view's **Configurations** menu and a clicked heatmap cell set that same selection.
+The Series view's **Configurations** menu (**Candidates** for a search) and a clicked heatmap cell set that same selection.
 Under **Selected configurations**, <span class="ui" markdown>Clear selection</span> empties it, in the Series view too.
 Hover over a status to read the run's note, such as a panic message, or the tick a stop condition ended it at.
 Every status but **OK** and **Not finite** counts as failed.
@@ -867,7 +867,7 @@ A model that declares it does not replay exactly shows a note beside <span class
 
 The three buttons are disabled when this device lacks the run's model, such as a GPU model on a machine without a suitable GPU.
 They are also disabled when the model refuses the sweep's spec, for example after a parameter was removed, and the reason shows below them.
-A warning shows when the model's parameters changed after the sweep ran, or when the build of Henad or of the model differs from every build the sweep recorded, and the replay might then differ.
+A warning shows when the model's parameters, stats or actions changed after the sweep ran, or when the build of Henad or of the model differs from any build a session of the sweep recorded, and the replay might then differ.
 
 ### Opening results
 

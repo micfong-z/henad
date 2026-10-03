@@ -156,25 +156,25 @@ pub(crate) fn hash_sources(mut sources: Vec<(String, PathBuf)>) -> Option<u64> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => return None,
         };
-        let normalised = crlf_to_lf(&bytes);
+        let normalized = crlf_to_lf(&bytes);
         hasher.write_str(label);
-        hasher.write_u64(normalised.len() as u64);
-        hasher.write(&normalised);
+        hasher.write_u64(normalized.len() as u64);
+        hasher.write(&normalized);
     }
     Some(hasher.finish())
 }
 
 /// Returns `bytes` with every CRLF pair replaced by LF.
 fn crlf_to_lf(bytes: &[u8]) -> Vec<u8> {
-    let mut normalised = Vec::with_capacity(bytes.len());
+    let mut normalized = Vec::with_capacity(bytes.len());
     let mut iterator = bytes.iter().peekable();
     while let Some(&byte) = iterator.next() {
         if byte == b'\r' && iterator.peek() == Some(&&b'\n') {
             continue;
         }
-        normalised.push(byte);
+        normalized.push(byte);
     }
-    normalised
+    normalized
 }
 
 /// Returns the nearest `Cargo.lock` in `directory` or a directory above it.

@@ -319,6 +319,7 @@ jobs:
       - name: A second build does nothing
         working-directory: ${{ runner.temp }}/my-model
         run: |
+          set -o pipefail
           cargo build -v --locked
           cargo build -v --locked 2>&1 | tee "$RUNNER_TEMP/second-build.log"
           if grep -E 'Dirty|Compiling|Running' "$RUNNER_TEMP/second-build.log"; then
@@ -356,6 +357,7 @@ jobs:
       - name: A model edit recompiles the template alone
         working-directory: ${{ runner.temp }}/my-model
         run: |
+          set -o pipefail
           echo '// An edit that changes no item.' >> src/vote.rs
           cargo build -v --locked 2>&1 | tee "$RUNNER_TEMP/edit-build.log"
           if grep -E '(Dirty|Compiling) henad' "$RUNNER_TEMP/edit-build.log"; then
@@ -389,6 +391,7 @@ jobs:
       - name: A CPU-only crate sweeps and resumes with no BuildChanged
         working-directory: ${{ runner.temp }}/my-model
         run: |
+          set -o pipefail
           rm -r src/gpu_vote src/probe
           sed -i.orig -e '/^mod gpu_vote;$/d' -e '/^henad::include_shaders!();$/d' -e '/register_gpu_grid_model/d' src/lib.rs
           sed -i.orig -e '/ShaderBuild::discover/d' build.rs
@@ -411,6 +414,10 @@ jobs:
     name: cargo package
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    # The paths filter lists a pull request's files through the REST API, which needs `pull-requests: read`.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v5
 

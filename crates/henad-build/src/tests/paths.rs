@@ -180,3 +180,47 @@ fn an_import_path_under_henad_elsewhere_draws_a_warning() {
     assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
     assert!(report.warnings[0].contains("state.wgsl"), "{:?}", report.warnings);
 }
+
+#[test]
+fn a_path_whose_variant_is_no_identifier_is_refused() {
+    for (file, variant) in [("self_.wgsl", "Self"), ("__.wgsl", ""), ("_1.wgsl", "1")] {
+        let scratch = Scratch::new("variant");
+        scratch.write(file, STEP_SHADER);
+        match ShaderBuild::discover(scratch.root()) {
+            Err(error @ ShaderBuildError::InvalidName { .. }) => {
+                let message = error.to_string();
+                let ShaderBuildError::InvalidName { path, component } = error else {
+                    unreachable!()
+                };
+                assert_eq!(component, variant, "{file}");
+                assert_eq!(path, scratch.root().join(file));
+                assert!(message.contains("`ShaderEntry` variant"), "{message}");
+                assert!(!message.contains("``"), "{message}");
+            }
+            other => panic!("{file}: expected an invalid name, got {other:?}"),
+        }
+    }
+
+    // A module gets no variant, and keeps the name.
+    let scratch = Scratch::new("variant_module");
+    scratch.write("gpu_vote/step.wgsl", STEP_SHADER);
+    scratch.write("self_.wgsl", "#define_import_path self_\n\nconst VOTED: u32 = 1u;\n");
+    ShaderBuild::discover(scratch.root()).expect("a module is never a variant");
+}
+
+#[test]
+fn a_directive_in_a_block_comment_makes_no_module() {
+    let scratch = Scratch::new("commented_directive");
+    scratch.write(
+        "gpu_vote/step.wgsl",
+        &format!("/*\n#define_import_path gpu_vote::step\n*/\n{STEP_SHADER}"),
+    );
+    scratch.write(
+        "gpu_vote/state.wgsl",
+        "#define_import_path gpu_vote::state\n/*\n#define_import_path henad::state\n*/\nconst VOTED: u32 = 1u;\n",
+    );
+    let build = ShaderBuild::discover(scratch.root()).expect("the shaders are found");
+    assert_eq!(build.entries, [PathBuf::from("gpu_vote/step.wgsl")]);
+    let report = build.generate_in(&scratch.out_dir()).expect("the build generates");
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
