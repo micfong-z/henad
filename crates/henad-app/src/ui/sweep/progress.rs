@@ -282,6 +282,8 @@ pub fn running_results_text(noun: &str, output_dir: Option<&Path>) -> String {
 
 /// Returns the Results row of an ended session whose results went to `output_dir`, or stayed in memory for `None`,
 /// where `saved` says whether they were saved since.
+///
+/// Note that a browser's downloads never count as saved. A browser can hold back every download after the first.
 pub fn ended_results_text(output_dir: Option<&Path>, saved: bool) -> String {
     match output_dir {
         Some(dir) => format!("Written to {}", dir.display()),

@@ -9,7 +9,9 @@ use std::process::Command;
 
 use super::files::{is_excluded, is_link_to_no_file};
 
-/// Repository that tracks a crate's `Cargo.toml`, seen from the crate's directory.
+/// Git repository whose work tree holds a crate, seen from the crate's directory.
+///
+/// [`Repository::find`] returns one only when git tracks the crate's `Cargo.toml`.
 #[derive(Debug, Clone)]
 pub(crate) struct Repository {
     /// Crate's directory, where each query runs.
@@ -26,6 +28,11 @@ impl Repository {
     /// outside git. Otherwise it would record that repository's commit.
     pub(crate) fn find(directory: &Path) -> Option<Self> {
         run(directory, &["ls-files", "--error-unmatch", "Cargo.toml"])?;
+        Self::enclosing(directory)
+    }
+
+    /// Returns the repository whose work tree holds `directory`, whether or not git tracks anything in it.
+    pub(crate) fn enclosing(directory: &Path) -> Option<Self> {
         let toplevel = PathBuf::from(text(directory, &["rev-parse", "--show-toplevel"])?);
         let prefix = text(directory, &["rev-parse", "--show-prefix"])?;
         Some(Self {
@@ -55,29 +62,54 @@ impl Repository {
         full.chars().take(8).collect()
     }
 
-    /// Returns the date of `HEAD`'s commit as `YYYY-MM-DD`.
+    /// Returns the date of `HEAD`'s commit as `YYYY-MM-DD`, or empty text when git prints no such date.
+    ///
+    /// `log.showSignature` is turned off for the query. Left on, git prints the signature check ahead of the date.
     pub(crate) fn commit_date(&self) -> String {
-        text(&self.directory, &["log", "-1", "--format=%cd", "--date=short"]).unwrap_or_default()
+        let arguments = [
+            "-c",
+            "log.showSignature=false",
+            "log",
+            "-1",
+            "--format=%cd",
+            "--date=short",
+        ];
+        text(&self.directory, &arguments)
+            .filter(|date| is_date(date))
+            .unwrap_or_default()
     }
 
-    /// Returns `path` relative to the repository root with `/` separators, `None` for a path outside it.
-    pub(crate) fn pathspec(&self, path: &Path) -> Option<String> {
-        let path = absolute_real(path);
-        let relative = path.strip_prefix(absolute_real(&self.toplevel)).ok()?;
-        let components: Vec<String> = relative
-            .components()
-            .map(|component| component.as_os_str().to_string_lossy().into_owned())
-            .collect();
-        Some(components.join("/"))
+    /// Returns the pathspec of `path`, a file in the crate's directory or a directory above it, relative to the
+    /// repository root with `/` separators. `None` when git does not track the file, or it lies above the root.
+    ///
+    /// The pathspec is built from the crate's prefix below the root, and no absolute path is compared.
+    pub(crate) fn tracked(&self, path: &Path) -> Option<String> {
+        let parent = path.parent()?;
+        let levels = self.directory.ancestors().position(|ancestor| ancestor == parent)?;
+        let name = path.file_name()?.to_str()?;
+        let below_root: Vec<&str> = self.prefix.split('/').filter(|part| !part.is_empty()).collect();
+        let kept = below_root.len().checked_sub(levels)?;
+        let mut pathspec: String = below_root[..kept].iter().map(|part| format!("{part}/")).collect();
+        pathspec.push_str(name);
+        let from_root = format!(":(top,literal){pathspec}");
+        run(
+            &self.directory,
+            &["ls-files", "--error-unmatch", "--", from_root.as_str()],
+        )?;
+        Some(pathspec)
     }
 
     /// Returns whether any path below `pathspecs` differs from `HEAD`, untracked files that git does not ignore
-    /// included. `None` when git cannot tell.
+    /// included. `None` when git cannot tell, or `pathspecs` is empty.
     ///
     /// Each path is checked against the exclusions below the pathspec it falls under, and a symlink to a directory
     /// or to nothing is left out, as the hash leaves it out. An untracked `src/.DS_Store` or `src/step.rs.swp` leaves
     /// the tree clean.
     pub(crate) fn dirty(&self, pathspecs: &[String]) -> Option<bool> {
+        // An empty list would ask about the whole repository, and match no path below.
+        if pathspecs.is_empty() {
+            return None;
+        }
         let mut arguments = vec![
             "status",
             "--porcelain=v1",
@@ -199,11 +231,14 @@ pub(crate) fn list_sources(directory: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Returns `path` with every symlink resolved, or `path` itself when it cannot be resolved.
-///
-/// Git prints real paths, and Cargo's `CARGO_MANIFEST_DIR` can name the same directory through a symlink.
-fn absolute_real(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+/// Returns whether `text` reads as a date in the form `YYYY-MM-DD`.
+pub(crate) fn is_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() == 10
+        && bytes.iter().enumerate().all(|(index, byte)| match index {
+            4 | 7 => *byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
 }
 
 /// Returns the standard output of git run with `arguments` in `directory`, `None` when it fails or git is absent.

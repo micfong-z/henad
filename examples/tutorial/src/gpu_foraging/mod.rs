@@ -47,7 +47,7 @@ impl GpuAgentModel for GpuForagingModel {
         "Ants lay and follow pheromone trails between a nest and a food source, stepped entirely on the GPU";
     const STATS: &'static [StatDescriptor] = ForagingModel::STATS;
 
-    const BUFFERS: &'static [BufferSpec] = SPECS;
+    const BUFFERS: &'static [BufferSpec] = BUFFER_SPECS;
     const POS_BUFFER: usize = POS;
     const COLOR_BUFFER: usize = COLOR;
 
@@ -209,13 +209,6 @@ fn pack_state(lanes: &AntLanes, i: usize) -> u32 {
         packed |= HAS_REWARD_BIT;
     }
     packed
-}
-
-/// Matches `pcg_hash` in `henad::rng` bit for bit, since `u32` arithmetic wraps the same on both sides.
-fn pcg_hash(input: u32) -> u32 {
-    let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
-    let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
-    (word >> 22) ^ word
 }
 
 fn seed_rng_states(n: usize, seed: u64) -> Vec<u32> {

@@ -3,17 +3,23 @@
 use std::collections::BTreeSet;
 use std::panic::AssertUnwindSafe;
 
-use henad_compute::entry::{ModelEntry, ModelSet, register_agent_model, register_grid_model, register_network_model};
+use henad_compute::entry::{
+    ModelEntry, ModelSet, register_agent_model, register_gpu_agent_model, register_gpu_grid_model, register_grid_model,
+    register_network_model,
+};
 use henad_compute::fault::install_panic_hook;
+use henad_models::example_models;
 
 use crate::testing::{
-    CheckSettings, ModelCheck, ModelReport, SkipReason, assert_set_conforms, check_model, check_model_set,
+    CheckSettings, ModelCheck, ModelReport, SkipReason, assert_set_conforms, check_model, check_model_requiring,
+    check_model_set,
 };
 use crate::tests::broken::{
-    BadId, Bug, BuggyState, CountsBuilds, CountsViews, DeclaresNumAgents, DividesByParam, EmptyPalette,
-    InverseOfCountdown, ReadsPoolWidth, RepeatsActionId, RepeatsStatLabel, SharedAccumulator, ZeroesFullSubmissions,
+    BadId, Bug, BuggyGpuState, BuggyState, CountsBuilds, CountsViews, DeclaresNumAgents, DefaultOutOfBounds,
+    DividesByParam, EmptyPalette, GpuBug, InverseOfCountdown, OversizedGpuSir, PlacesCellByPoolWidth, PlacesCellBySeed,
+    ReadsPoolWidth, RepeatsActionId, RepeatsStatLabel, SharedAccumulator, StatlessGpuBoids, UnnameableIds,
 };
-use crate::tests::support::{entry, headless_device};
+use crate::tests::support::{baseline_device, entry, headless_device};
 
 /// Returns the checks `report` lists as failed, by name.
 fn failed(report: &ModelReport) -> BTreeSet<String> {
@@ -46,6 +52,29 @@ fn assert_fails_under(entry: &ModelEntry, settings: &CheckSettings, expected: &[
     assert_eq!(failed(&report), names(expected), "{report}");
 }
 
+/// Returns example model `id`, a GPU model included on a machine without a device.
+fn example(id: &str) -> ModelEntry {
+    example_models()
+        .get(id)
+        .cloned()
+        .unwrap_or_else(|| panic!("the example models include {id}"))
+}
+
+/// Checks that build a GPU model. Every check that builds a model is one, apart from the CPU check `ThreadCount`.
+const GPU_BUILDING_CHECKS: [ModelCheck; 11] = [
+    ModelCheck::ApplyModes,
+    ModelCheck::Views,
+    ModelCheck::ParallelJobs,
+    ModelCheck::Actions,
+    ModelCheck::StatCount,
+    ModelCheck::SameSeed,
+    ModelCheck::SeedSensitivity,
+    ModelCheck::SamplingCadence,
+    ModelCheck::BaselineBuild,
+    ModelCheck::FullSubmission,
+    ModelCheck::SampledSlice,
+];
+
 #[test]
 fn a_bad_id_fails_the_model_id_check() {
     assert_fails(&register_grid_model::<BadId>(), &[ModelCheck::ModelId]);
@@ -61,20 +90,73 @@ fn a_repeated_action_id_fails_the_action_ids_check() {
     assert_fails(&register_grid_model::<RepeatsActionId>(), &[ModelCheck::ActionIds]);
 }
 
+/// The regression. An id holding `=` or whitespace passed the kit, and the command line could not name it.
+#[test]
+fn an_id_the_command_line_cannot_name_fails_its_check() {
+    let model = register_grid_model::<UnnameableIds>();
+    let report = check(&model, &CheckSettings::default());
+    assert_eq!(
+        failed(&report),
+        names(&[ModelCheck::ParamIds, ModelCheck::ActionIds]),
+        "{report}"
+    );
+    let messages: Vec<&str> = report.failures().iter().map(|failure| failure.message()).collect();
+    for refused in [
+        "'rate=high' holds '='",
+        "'spread rate' holds whitespace",
+        "'action.delay' starts with",
+    ] {
+        assert!(messages[0].contains(refused), "{report}");
+    }
+    assert!(messages[1].contains("'clear=all' holds '='"), "{report}");
+    assert!(
+        !report.to_string().contains("'count'") && !report.to_string().contains("'spawn@centre'"),
+        "{report}"
+    );
+}
+
 #[test]
 fn an_empty_palette_fails_the_palette_check() {
     assert_fails(&register_grid_model::<EmptyPalette>(), &[ModelCheck::Palette]);
 }
 
+/// The agent engine prepends `num_agents` and no `grid_width`, and the hint names the one id it prepends.
 #[test]
 fn a_parameter_repeating_an_engine_id_fails_the_param_ids_check() {
     let model = register_agent_model::<DeclaresNumAgents>();
     let report = check(&model, &CheckSettings::default());
     assert_eq!(failed(&report), names(&[ModelCheck::ParamIds]), "{report}");
-    assert!(
-        report.failures()[0].message().contains("engine prepends 'num_agents'"),
+    assert_eq!(
+        report.failures()[0].message(),
+        "Parameter ids 'num_agents', 'grid_width' are declared more than once. The engine prepends 'num_agents', and \
+         a model does not declare it itself."
+    );
+}
+
+/// `DefaultSetup` and every check that builds through `RunSetup::from_parts` refuse the default, and each failure
+/// names the parameter and its bounds.
+#[test]
+fn a_default_outside_its_bounds_fails_every_check_through_a_run_setup() {
+    let report = check(&register_grid_model::<DefaultOutOfBounds>(), &CheckSettings::default());
+    assert_eq!(
+        failed(&report),
+        names(&[
+            ModelCheck::DefaultSetup,
+            ModelCheck::ThreadCount,
+            ModelCheck::SameSeed,
+            ModelCheck::SeedSensitivity,
+            ModelCheck::SamplingCadence,
+        ]),
         "{report}"
     );
+    for failure in report.failures() {
+        assert!(
+            failure
+                .message()
+                .contains("parameter 'initial_infected': 500 is outside 1..=100"),
+            "{failure}"
+        );
+    }
 }
 
 #[test]
@@ -171,6 +253,14 @@ fn a_state_that_accepts_every_edit_fails_the_apply_modes_check() {
 }
 
 #[test]
+fn a_state_that_reports_no_jobs_fails_the_parallel_jobs_check() {
+    assert_fails(
+        &BuggyState::wrap(entry("sir", None), Bug::ReportsNoJobs),
+        &[ModelCheck::ParallelJobs],
+    );
+}
+
+#[test]
 fn a_state_that_hides_its_grid_fails_the_views_check() {
     assert_fails(
         &BuggyState::wrap(entry("sir", None), Bug::HidesGrid),
@@ -198,6 +288,26 @@ fn a_view_preparation_that_writes_a_lane_fails_the_sampling_cadence_check() {
 #[test]
 fn a_build_that_reads_the_pool_width_fails_the_thread_count_check() {
     assert_fails(&register_grid_model::<ReadsPoolWidth>(), &[ModelCheck::ThreadCount]);
+}
+
+/// The model's stats are the same at any pool width, and its exported state is not.
+#[test]
+fn a_state_that_reads_the_pool_width_fails_the_thread_count_check() {
+    let report = check(
+        &register_grid_model::<PlacesCellByPoolWidth>(),
+        &CheckSettings::default(),
+    );
+    assert_eq!(failed(&report), names(&[ModelCheck::ThreadCount]), "{report}");
+    assert!(
+        report.failures()[0].message().contains("differ in the exported state"),
+        "{report}"
+    );
+}
+
+/// Two seeds give the same stats and different exported states.
+#[test]
+fn a_seed_that_moves_the_state_alone_passes_the_seed_sensitivity_check() {
+    assert_fails(&register_grid_model::<PlacesCellBySeed>(), &[]);
 }
 
 /// Checks the shared accumulator up to [`SHARED_ACCUMULATOR_ATTEMPTS`] times, until `ThreadCount` reports it.
@@ -237,9 +347,108 @@ fn a_full_submission_that_reads_zeros_fails_the_full_submission_check() {
     let Some(ctx) = headless_device() else {
         return;
     };
-    let model = ZeroesFullSubmissions::wrap(entry("gpu_game_of_life", Some(&ctx)));
+    let model = BuggyGpuState::wrap(entry("gpu_game_of_life", Some(&ctx)), GpuBug::ZeroesFullSubmissions);
     let report = check(&model, &CheckSettings::default().gpu(ctx));
     assert_eq!(failed(&report), names(&[ModelCheck::FullSubmission]), "{report}");
+}
+
+/// A model that does not replay exactly runs one full submission alone, and fails on every stat reading zero.
+#[test]
+fn an_inexact_full_submission_that_reads_zeros_fails_the_full_submission_check() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
+    let model = BuggyGpuState::wrap(entry("gpu_boids", Some(&ctx)), GpuBug::ZeroesFullSubmissions);
+    assert_fails_under(
+        &model,
+        &CheckSettings::default().gpu(ctx),
+        &[ModelCheck::FullSubmission],
+    );
+}
+
+/// A model with no stats has no value to read zero, and its landed readback and its tick show the steps ran.
+#[test]
+fn a_model_with_no_stats_passes_the_full_submission_check() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
+    let model = register_gpu_agent_model::<StatlessGpuBoids>();
+    assert_fails_under(&model, &CheckSettings::default().gpu(ctx), &[]);
+}
+
+#[test]
+fn a_state_that_records_no_stats_passes_fails_the_sampled_slice_check() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
+    let model = BuggyGpuState::wrap(entry("gpu_boids", Some(&ctx)), GpuBug::SkipsStatsPasses);
+    assert_fails_under(&model, &CheckSettings::default().gpu(ctx), &[ModelCheck::SampledSlice]);
+}
+
+/// The checks at the small check values pass, and every check that builds at the defaults fails on a baseline
+/// device.
+#[test]
+fn defaults_past_the_baseline_fail_every_check_at_the_defaults() {
+    let model = register_gpu_grid_model::<OversizedGpuSir>();
+    let report = check_model_requiring(&model, &CheckSettings::default(), false);
+    assert_eq!(failed(&report), names(&[ModelCheck::DefaultsFit]), "{report}");
+
+    let Some(ctx) = baseline_device() else {
+        return;
+    };
+    assert_fails_under(
+        &model,
+        &CheckSettings::default().gpu(ctx),
+        &[
+            ModelCheck::DefaultsFit,
+            ModelCheck::Actions,
+            ModelCheck::BaselineBuild,
+            ModelCheck::FullSubmission,
+            ModelCheck::SampledSlice,
+        ],
+    );
+}
+
+#[test]
+fn a_required_gpu_fails_every_check_a_missing_device_skips() {
+    let model = example("gpu_sir");
+    let skipped = check_model_requiring(&model, &CheckSettings::default(), false);
+    assert!(skipped.passed(), "{skipped}");
+    let no_device: Vec<ModelCheck> = skipped
+        .skipped()
+        .iter()
+        .filter(|skipped_check| *skipped_check.reason() == SkipReason::NoDevice)
+        .map(|skipped_check| skipped_check.check())
+        .collect();
+    assert_eq!(no_device, GPU_BUILDING_CHECKS);
+
+    let required = check_model_requiring(&model, &CheckSettings::default(), true);
+    assert_eq!(failed(&required), names(&GPU_BUILDING_CHECKS), "{required}");
+    assert!(
+        required
+            .failures()
+            .iter()
+            .all(|failure| failure.message().starts_with("HENAD_REQUIRE_GPU is set")),
+        "{required}"
+    );
+}
+
+/// The override fails where no device runs the checks, as it fails on a device.
+#[test]
+fn an_override_of_an_undeclared_parameter_fails_without_a_device() {
+    let model = example("gpu_sir");
+    let settings = CheckSettings::default().set_text("gpu_sir", "num_boids", "4096");
+    for gpu_required in [false, true] {
+        let report = check_model_requiring(&model, &settings, gpu_required);
+        assert_eq!(failed(&report), names(&GPU_BUILDING_CHECKS), "{report}");
+        assert!(
+            report
+                .failures()
+                .iter()
+                .all(|failure| failure.message().contains("parameter 'num_boids'")),
+            "{report}"
+        );
+    }
 }
 
 /// A grid of 128 columns holds 64 rows a job, and 896 rows split into 14 jobs.
@@ -309,6 +518,12 @@ fn a_set_report_names_the_models_the_settings_name_and_the_set_lacks() {
     assert_eq!(report.unknown_models(), ["game_of_lfe", "missing"]);
     assert!(!report.passed(), "{report}");
     assert!(report.reports()[0].passed(), "{report}");
+    assert!(
+        report
+            .to_string()
+            .starts_with("1 model checked, and none failed. The settings name 2 models the set lacks.\n"),
+        "{report}"
+    );
 }
 
 #[test]
@@ -323,7 +538,7 @@ fn assert_set_conforms_panics_with_every_failure() {
     .expect_err("a model fails a check");
     let message = panic.downcast_ref::<String>().expect("the assert formats its message");
     assert!(
-        message.starts_with("1 of 1 models failed their checks")
+        message.starts_with("1 model checked, and 1 failed.\n")
             && message.contains("Model 'divides_by_param' failed 1 of its checks: SeedSensitivity."),
         "{message}"
     );

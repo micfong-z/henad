@@ -66,6 +66,8 @@ impl ModelReport {
             .map(|skipped| &skipped.reason)
     }
 
+    /// Asserts that no check failed.
+    ///
     /// # Panics
     ///
     /// Panics with a summary line naming the failed checks, then every failure.
@@ -220,6 +222,8 @@ impl SetReport {
         self.unknown_models.is_empty() && self.reports.iter().all(ModelReport::passed)
     }
 
+    /// Asserts that every model passed and the settings name no model the set lacks.
+    ///
     /// # Panics
     ///
     /// Panics with a summary line, then every model's report and every model id the set lacks.
@@ -232,16 +236,20 @@ impl SetReport {
 impl fmt::Display for SetReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let failed = self.reports.iter().filter(|report| !report.passed()).count();
-        if self.passed() {
-            writeln!(f, "Every one of {} models passed its checks.", self.reports.len())?;
+        let checked = models(self.reports.len());
+        if failed == 0 {
+            write!(f, "{checked} checked, and none failed.")?;
         } else {
-            writeln!(
+            write!(f, "{checked} checked, and {failed} failed.")?;
+        }
+        if !self.unknown_models.is_empty() {
+            write!(
                 f,
-                "{failed} of {} models failed their checks, and the settings name {} models the set lacks.",
-                self.reports.len(),
-                self.unknown_models.len()
+                " The settings name {} the set lacks.",
+                models(self.unknown_models.len())
             )?;
         }
+        writeln!(f)?;
         for id in &self.unknown_models {
             writeln!(f, "The settings name model '{id}', which the set lacks.")?;
         }
@@ -249,5 +257,14 @@ impl fmt::Display for SetReport {
             write!(f, "{report}")?;
         }
         Ok(())
+    }
+}
+
+/// Returns `count` with the noun "model" in agreement, as in "1 model" or "3 models".
+fn models(count: usize) -> String {
+    if count == 1 {
+        "1 model".to_owned()
+    } else {
+        format!("{count} models")
     }
 }

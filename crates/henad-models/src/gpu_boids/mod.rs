@@ -46,7 +46,7 @@ impl GpuAgentModel for GpuBoids {
 
     /// All double buffered, since a boid reads its neighbours' current values while writing its
     /// own next ones.
-    const BUFFERS: &'static [BufferSpec] = SPECS;
+    const BUFFERS: &'static [BufferSpec] = BUFFER_SPECS;
     const POS_BUFFER: usize = POS;
     const COLOR_BUFFER: usize = COLOR;
 
@@ -301,7 +301,8 @@ mod tests {
         }
     }
 
-    /// Both backends seed through `BoidsModel::init`, so any later divergence is the step's.
+    /// Both backends seed through `BoidsModel::init`, by default and from a seed, so any later divergence is the
+    /// step's.
     #[test]
     fn initial_flock_matches_the_cpu_model() {
         let Some(ctx) = headless_context() else {
@@ -310,15 +311,17 @@ mod tests {
         };
 
         let values = params(2_000, 800.0);
-        let gpu = State::new(&ctx, &values);
-        let cpu = AgentModelState::<BoidsModel>::from_params(&values);
+        for seed in [None, Some(7)] {
+            let gpu = State::new_seeded(&ctx, &values, seed);
+            let cpu = AgentModelState::<BoidsModel>::from_params_seeded(&values, seed);
 
-        let (pos_x, pos_y, vel_x, vel_y) = lanes(&gpu);
-        let cpu_lanes = cpu.lanes();
-        assert_eq!(pos_x, cpu_lanes.pos_x, "initial x positions must match the CPU model");
-        assert_eq!(pos_y, cpu_lanes.pos_y, "initial y positions must match the CPU model");
-        assert_eq!(vel_x, cpu_lanes.vel_x, "initial x velocities must match the CPU model");
-        assert_eq!(vel_y, cpu_lanes.vel_y, "initial y velocities must match the CPU model");
+            let (pos_x, pos_y, vel_x, vel_y) = lanes(&gpu);
+            let cpu_lanes = cpu.lanes();
+            assert_eq!(pos_x, cpu_lanes.pos_x, "initial x positions differ for seed {seed:?}");
+            assert_eq!(pos_y, cpu_lanes.pos_y, "initial y positions differ for seed {seed:?}");
+            assert_eq!(vel_x, cpu_lanes.vel_x, "initial x velocities differ for seed {seed:?}");
+            assert_eq!(vel_y, cpu_lanes.vel_y, "initial y velocities differ for seed {seed:?}");
+        }
     }
 
     /// Catches a reduction that lost or double counted a workgroup.

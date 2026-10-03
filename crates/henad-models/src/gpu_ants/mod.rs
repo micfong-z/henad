@@ -15,7 +15,7 @@ use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{
     BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentAction, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
-use henad_core::authoring::primitives::rng::mix_seed;
+use henad_core::authoring::primitives::rng::{mix_seed, pcg_hash};
 use henad_core::helpers::{extract_f32, extract_u32};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -62,7 +62,7 @@ impl GpuAgentModel for GpuAnts {
 
     /// Nothing is double buffered. Ants never read one another, and deposits land in `accum`
     /// rather than in the field the step is reading.
-    const BUFFERS: &'static [BufferSpec] = SPECS;
+    const BUFFERS: &'static [BufferSpec] = BUFFER_SPECS;
     const POS_BUFFER: usize = POS;
     const COLOR_BUFFER: usize = COLOR;
 
@@ -253,25 +253,18 @@ fn pack_state(lanes: &AntLanes, i: usize) -> u32 {
     packed
 }
 
-/// Matches `pcg_hash` in `step.wgsl` bit-for-bit (u32 arithmetic wraps identically on both sides).
-fn pcg_hash(input: u32) -> u32 {
-    let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
-    let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
-    (word >> 22) ^ word
-}
-
 fn seed_rng_states(n: usize, seed: u64) -> Vec<u32> {
     let seed32 = (seed ^ (seed >> 32)) as u32;
     (0..n).map(|i| pcg_hash(seed32 ^ i as u32)).collect()
 }
 
-/// Packed for the step uniform, from the one palette in `ants` so colours cannot drift.
 /// Where `AntsModel::init` puts every ant, in world coordinates.
 fn nest_position(width: u32, height: u32) -> (f32, f32) {
     let nest = nest_cell(width, height) as u32;
     ((nest % width) as f32, (nest / width) as f32)
 }
 
+/// Packed for the step uniform, from the one palette in `ants` so colours cannot drift.
 fn packed_ant_palette() -> [u32; 2] {
     [u32::from_le_bytes(ANT_PALETTE[0]), u32::from_le_bytes(ANT_PALETTE[1])]
 }
@@ -343,7 +336,8 @@ mod tests {
         }
     }
 
-    /// Both backends seed through `AntsModel::init`, so any later divergence is the step's.
+    /// Both backends seed through `AntsModel::init`, by default and from a seed, so any later divergence is the
+    /// step's.
     #[test]
     fn the_initial_colony_matches_the_cpu_model() {
         let Some(ctx) = headless_context() else {
@@ -352,13 +346,15 @@ mod tests {
         };
 
         let values = params(2_000, 200.0);
-        let gpu = State::new(&ctx, &values);
-        let cpu = AgentModelState::<AntsModel>::from_params(&values);
+        for seed in [None, Some(7)] {
+            let gpu = State::new_seeded(&ctx, &values, seed);
+            let cpu = AgentModelState::<AntsModel>::from_params_seeded(&values, seed);
 
-        let (pos_x, pos_y) = positions(&gpu);
-        let cpu_lanes = cpu.lanes();
-        assert_eq!(pos_x, cpu_lanes.pos_x, "initial x positions must match the CPU model");
-        assert_eq!(pos_y, cpu_lanes.pos_y, "initial y positions must match the CPU model");
+            let (pos_x, pos_y) = positions(&gpu);
+            let cpu_lanes = cpu.lanes();
+            assert_eq!(pos_x, cpu_lanes.pos_x, "initial x positions differ for seed {seed:?}");
+            assert_eq!(pos_y, cpu_lanes.pos_y, "initial y positions differ for seed {seed:?}");
+        }
     }
 
     /// The reference is bounded, not toroidal like the other models.

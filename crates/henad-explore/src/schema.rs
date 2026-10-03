@@ -113,7 +113,7 @@ fn param_json(index: usize, descriptor: &ParamDescriptor) -> Value {
 /// Returns `value` as the JSON number with the shortest decimal form that reads back as `value`.
 ///
 /// A plain conversion widens to `f64` first and writes `0.025` as `0.02500000037252903`.
-fn f32_json(value: f32) -> Value {
+pub(crate) fn f32_json(value: f32) -> Value {
     value
         .to_string()
         .parse::<f64>()

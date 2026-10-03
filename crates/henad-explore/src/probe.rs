@@ -217,7 +217,9 @@ fn probe_gpu(
     seed: Option<u64>,
 ) -> Result<ProbeReport, ProbeError> {
     let ctx = gpu.ok_or(ProbeError::NoDevice)?;
-    let stats = catching_on(ctx, STEPPING, || stepping::sample_stats(&mut *state, ctx)).map_err(ProbeError::Fault)?;
+    let stats = catching_on(ctx, STEPPING, || stepping::sample_stats(&mut *state, ctx))
+        .flatten()
+        .map_err(ProbeError::Fault)?;
     stepping::wait(ctx).map_err(ProbeError::Fault)?;
     Ok(ProbeReport {
         params: params.to_vec(),

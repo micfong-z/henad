@@ -13,7 +13,8 @@ Each one's API documentation is on docs.rs.
 
 A program or a model crate depends on **`henad`**, and on **`henad-build`** as a build dependency when it registers models of its own.
 Every item a model, a host or a test needs has a path in `henad`, and the guides name items by those paths alone.
-The [template](../guide/your-project.md) depends on these two crates and no other.
+The code they include from the example models is the exception, since henad-models sits below the facade and names `henad_core` and `henad_compute`.
+The [template](../guide/your-project.md) depends on these two Henad crates and no other.
 
 The other six are the crates `henad` re-exports.
 A program never needs to name them, and their paths can move between releases where the facade's stay.
@@ -53,7 +54,7 @@ No feature is on by default, and none changes a result.
 | `henad::stats` | Statistic descriptors and values, and the CSV writer of a stat series |
 | `henad::views` | The grid, point and edge views a CPU model hands a host |
 | `henad::action` | Action descriptors and the schedule of actions a run fires |
-| `henad::gpu` | `GpuContext`, `GpuNeeds`, `acquire_headless`, and `wgpu` itself |
+| `henad::gpu` | `GpuContext`, `GpuNeeds`, `acquire_headless`, `raise_limits` for a host that requests its own device, and `wgpu` itself |
 | `henad::runner` | The paced runners `SimThread` and `GpuSimThread`, and the snapshots they publish |
 | `henad::engine` | The engine states a test builds directly, without an entry |
 | `henad::explore` | Sweeps, searches, results folders and replay: `run_spec`, `plan_spec`, `SweepRun`, `ResultSet`, `Replay`, the manifest, and the planning modules `spec`, `plan`, `design`, `search` and the rest |

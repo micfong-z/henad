@@ -36,7 +36,8 @@ pollster = { workspace = true }
 henad-build = { workspace = true }
 
 [dev-dependencies]
-# A path alone, so the published package carries no requirement on the example models.
+# A path alone, so the published package carries no requirement on the example models. The package's own tests
+# name them, and do not build from the package.
 henad-models = { path = "../henad-models" }
 
 [lints]

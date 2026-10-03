@@ -35,7 +35,8 @@ pub fn wrap_index(v: i32, m: i32) -> i32 {
 
 /// Wraps `v` into `0.0..world`.
 ///
-/// This is the position wrap an agent leaving one edge needs to re-enter at the other.
+/// This is the position wrap an agent leaving one edge needs to re-enter at the other. A `v` a little below 0.0
+/// whose wrap rounds up to `world` wraps to 0.0, so a position truncated to its cell stays inside the grid.
 ///
 /// # Examples
 ///
@@ -44,12 +45,14 @@ pub fn wrap_index(v: i32, m: i32) -> i32 {
 ///
 /// assert_eq!(wrap_coord(10.5, 10.0), 0.5);
 /// assert_eq!(wrap_coord(-0.5, 10.0), 9.5);
+/// assert_eq!(wrap_coord(-1e-8, 200.0), 0.0);
 /// ```
 ///
 /// See also: [`wrap_index`], [`axis_delta`].
 #[inline]
 pub fn wrap_coord(v: f32, world: f32) -> f32 {
-    v.rem_euclid(world)
+    let wrapped = v.rem_euclid(world);
+    if wrapped == world { 0.0 } else { wrapped }
 }
 
 /// Flat index of cell `(x, y)` in a grid `w` wide.
@@ -306,6 +309,18 @@ pub fn heading_octant(vx: f32, vy: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The regression. A tiny negative position rounded up to `world`, and its cell fell off the grid.
+    #[test]
+    fn a_wrapped_coordinate_never_reaches_the_world_size() {
+        for world in [1.0f32, 7.5, 200.0, 4096.0] {
+            for v in [-1e-8f32, -1e-12, -f32::MIN_POSITIVE, -0.0, world, 2.0 * world] {
+                let wrapped = wrap_coord(v, world);
+                assert!((0.0..world).contains(&wrapped), "wrap_coord({v}, {world}) = {wrapped}");
+            }
+        }
+        assert!(wrap_coord(f32::NAN, 10.0).is_nan(), "a NaN stays NaN");
+    }
 
     /// Both tables must cover the same 8 cells, or one of them has a typo.
     #[test]

@@ -25,8 +25,9 @@ pub(crate) struct Binding {
 /// # Errors
 ///
 /// Returns [`ShaderBuildError::BindingLine`] for a line that holds `@binding` or `@group` in another form than
-/// `@group(G) @binding(N) var<...> name: Type;`, and for a binding kind the engine does not bind.
-/// Returns [`ShaderBuildError::BindingGap`] when the indices do not run from 0 with no gap or repeat.
+/// `@group(G) @binding(N) var<...> name: Type;`, [`ShaderBuildError::UnsupportedBinding`] for a binding kind the
+/// engine does not bind, and [`ShaderBuildError::BindingGap`] when the indices do not run from 0 with no gap or
+/// repeat.
 pub(crate) fn read_bindings(path: &Path, source: &str) -> Result<Vec<Binding>, ShaderBuildError> {
     let mut bindings = Vec::new();
     for (number, line) in strip_block_comments(source).lines().enumerate() {
@@ -34,11 +35,20 @@ pub(crate) fn read_bindings(path: &Path, source: &str) -> Result<Vec<Binding>, S
         if !code.contains("@binding") && !code.contains("@group") {
             continue;
         }
-        let refuse = |reason| ShaderBuildError::BindingLine {
-            path: path.to_path_buf(),
-            line: number + 1,
-            text: code.to_owned(),
-            reason,
+        let (path, line, text) = (path.to_path_buf(), number + 1, code.to_owned());
+        let refuse = |refusal| match refusal {
+            Refusal::Form(reason) => ShaderBuildError::BindingLine {
+                path,
+                line,
+                text,
+                reason,
+            },
+            Refusal::Kind(reason) => ShaderBuildError::UnsupportedBinding {
+                path,
+                line,
+                text,
+                reason,
+            },
         };
         if let Some(binding) = read_line(code).map_err(refuse)? {
             bindings.push(binding);
@@ -74,40 +84,49 @@ pub(crate) fn refuse_bindings(path: &Path, source: &str) -> Result<(), ShaderBui
     Ok(())
 }
 
+/// Reason a line holding `@binding` or `@group` is refused.
+enum Refusal {
+    /// The line is not in the one form the reader reads.
+    Form(&'static str),
+    /// The line declares a binding of a kind no Henad pass binds.
+    Kind(&'static str),
+}
+
 /// Returns the declaration on `code`, one line with its comment removed, or `None` for one of another group.
-fn read_line(code: &str) -> Result<Option<Binding>, &'static str> {
-    let (group, rest) = attribute(code, "@group(").ok_or("the line does not open with `@group(G)`")?;
-    let (index, rest) = attribute(rest, "@binding(").ok_or("`@group(G)` is not followed by `@binding(N)`")?;
+fn read_line(code: &str) -> Result<Option<Binding>, Refusal> {
+    let form = Refusal::Form;
+    let (group, rest) = attribute(code, "@group(").ok_or(form("the line does not open with `@group(G)`"))?;
+    let (index, rest) = attribute(rest, "@binding(").ok_or(form("`@group(G)` is not followed by `@binding(N)`"))?;
     let rest = rest
         .strip_prefix("var")
-        .ok_or("`@binding(N)` is not followed by `var`")?;
+        .ok_or(form("`@binding(N)` is not followed by `var`"))?;
     let (space, rest) = match rest.strip_prefix('<') {
         Some(rest) => {
-            let (space, rest) = rest.split_once('>').ok_or("`var<` has no closing `>`")?;
+            let (space, rest) = rest.split_once('>').ok_or(form("`var<` has no closing `>`"))?;
             (Some(space), rest)
         }
         None => (None, rest),
     };
-    let (name, kind_text) = rest.split_once(':').ok_or("the name is not followed by `:`")?;
+    let (name, kind_text) = rest.split_once(':').ok_or(form("the name is not followed by `:`"))?;
     let name = name.trim();
     if name.is_empty()
         || !name
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '_')
     {
-        return Err("the binding has no plain name");
+        return Err(form("the binding has no plain name"));
     }
     let binding_type = kind_text
         .trim()
         .strip_suffix(';')
-        .ok_or("the declaration does not end with `;` on the same line")?;
+        .ok_or(form("the declaration does not end with `;` on the same line"))?;
     if group != 0 {
         return Ok(None);
     }
     Ok(Some(Binding {
         index,
         name: name.to_owned(),
-        kind: kind(space, binding_type.trim())?,
+        kind: kind(space, binding_type.trim()).map_err(Refusal::Kind)?,
     }))
 }
 
@@ -125,7 +144,7 @@ fn kind(space: Option<&str>, binding_type: &str) -> Result<BindingKind, &'static
         return if binding_type.starts_with("texture_storage_") {
             Ok(BindingKind::StorageTexture)
         } else {
-            Err("a sampled texture or a sampler, which no Henad pass binds")
+            Err("a sampled texture or a sampler")
         };
     };
     let parts: Vec<&str> = space.split(',').map(str::trim).collect();
@@ -133,7 +152,7 @@ fn kind(space: Option<&str>, binding_type: &str) -> Result<BindingKind, &'static
         ["uniform"] => Ok(BindingKind::Uniform),
         ["storage"] | ["storage", "read"] => Ok(BindingKind::Storage { read_only: true }),
         ["storage", "read_write"] => Ok(BindingKind::Storage { read_only: false }),
-        _ => Err("an address space other than `uniform`, `storage, read` or `storage, read_write`"),
+        _ => Err("a variable in an address space other than `uniform`, `storage, read` or `storage, read_write`"),
     }
 }
 

@@ -8,7 +8,7 @@ model: claude-opus-5-5 (Claude Code)
 issue: "#48"
 state: every audit finding fixed or refuted, HENAD_REQUIRE_GPU=1 ./check.sh passing, uncommitted on top of the 0.3.0 bump
 baseline_commit: 7faf864
-delta_state: uncommitted on `48-library`, mixed with record #44's uncommitted release bump
+delta_state: "uncommitted on `48-library`, mixed with record #44's uncommitted release bump"
 ---
 
 # Library audit: fixes and refutations

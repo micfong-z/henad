@@ -12,7 +12,7 @@ use henad_core::params::{ParamKind, ParamValue};
 use henad_core::view::StatEntry;
 
 use super::settings::CheckSettings;
-use super::{Ran, SEED, SkipReason, fault_text, first_stat_difference};
+use super::{Ran, SEED, SkipReason, error_text, fault_text, first_stat_difference};
 
 /// Coarser of the two cadences [`super::ModelCheck::SamplingCadence`] compares. The finer samples every tick.
 pub(super) const COARSE_CADENCE: u64 = 7;
@@ -39,7 +39,7 @@ fn simulation(
     gpu: Option<&GpuContext>,
 ) -> Result<Simulation, String> {
     RunSetup::from_parts(entry, values, Some(seed), Schedule::default())
-        .map_err(|error| format!("The check values were refused: {error}."))?
+        .map_err(|error| format!("The check values were refused: {}.", error_text(&error)))?
         .build(gpu)
         .map_err(|fault| format!("The model did not build. {}", fault_text(&fault)))
 }
@@ -50,7 +50,7 @@ fn exported(simulation: &mut Simulation) -> Result<Option<Vec<u8>>, String> {
     match simulation.write_state(&mut bytes) {
         Ok(()) => Ok(Some(bytes)),
         Err(ExportError::GpuState) => Ok(None),
-        Err(error) => Err(format!("The state was not exported: {error}.")),
+        Err(error) => Err(format!("The state was not exported: {}.", error_text(&error))),
     }
 }
 

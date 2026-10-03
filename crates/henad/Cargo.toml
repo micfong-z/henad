@@ -35,14 +35,24 @@ bytemuck = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 henad-cli = { workspace = true, optional = true }
 
+[dev-dependencies]
+# For the scoped step loop `docs/guide/library.md` includes from `tests/facade_paths.rs`.
+rayon = { workspace = true }
+
 [[example]]
+name = "complete"
+required-features = ["example-models", "app"]
+
+# Runs the example's program up to the app.
+[[test]]
 name = "complete"
 required-features = ["example-models", "app"]
 
 [lints]
 workspace = true
 
+# The wasm32 docs show the app's web entry point. They build without atomics, as henad-app's do.
 [package.metadata.docs.rs]
 features = ["example-models", "cli", "app", "testing"]
-targets = ["x86_64-unknown-linux-gnu"]
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 rustdoc-args = ["--cfg", "docsrs"]

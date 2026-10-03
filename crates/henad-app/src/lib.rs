@@ -18,6 +18,11 @@
 //! An [`AppOpening`] opens the app on a results folder, a recorded run or a setup the host built, in place of the
 //! first model of the set.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+// Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
+// limit of 128.
+#![recursion_limit = "256"]
+
 henad_compute::include_shaders!();
 
 mod icons;
@@ -54,14 +59,15 @@ use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::runner::CAN_SPAWN_THREADS;
 use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
 /// Re-exported so wasm-bindgen emits the worker glue `wasm_bindgen_rayon` builds its pool from.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
 /// Pool width asked for by a `?threads=N` query string, clamped to what the host offers.
 ///
 /// `?threads=1` is how the threaded build gets compared against no pool at all, without keeping a
 /// second build around to compare against.
-pub fn requested_threads(search: &str, available: usize) -> usize {
+#[cfg(any(all(target_arch = "wasm32", target_feature = "atomics"), test))]
+pub(crate) fn requested_threads(search: &str, available: usize) -> usize {
     let available = available.max(1);
     search
         .trim_start_matches('?')

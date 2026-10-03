@@ -10,7 +10,7 @@ use henad_compute::simulation::{RunSetup, SetupError};
 use henad_compute::snapshot::GpuSnapshot;
 use henad_core::action::{Schedule, Scheduled};
 use henad_core::explore::replay::Replay;
-use henad_core::explore::value::ValueError;
+use henad_core::explore::value::{ValueError, ValueKind};
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
@@ -112,7 +112,11 @@ fn a_setup_refuses_a_value_of_the_wrong_kind() {
     assert!(
         matches!(
             param_reason(error, "grid_width"),
-            ValueError::NotAnInteger { source: None, .. }
+            ValueError::WrongKind {
+                expected: ValueKind::U32,
+                found: ValueKind::F32,
+                ..
+            }
         ),
         "an integer parameter refuses a float"
     );
@@ -138,7 +142,10 @@ fn a_setup_refuses_a_value_of_the_wrong_kind() {
     let error = network.setup().set("network", 1u32).expect_err("a u32 for a choice");
     assert!(matches!(
         param_reason(error, "network"),
-        ValueError::UnknownOption { .. }
+        ValueError::WrongKind {
+            expected: ValueKind::Choice,
+            ..
+        }
     ));
     let by_index = network
         .setup()
@@ -191,7 +198,10 @@ fn a_setup_refuses_a_wrong_value_count() {
     let error = RunSetup::from_parts(&sir, &wrong_kind, None, Schedule::default()).expect_err("a float width");
     assert!(matches!(
         param_reason(error, "grid_width"),
-        ValueError::NotAnInteger { .. }
+        ValueError::WrongKind {
+            expected: ValueKind::U32,
+            ..
+        }
     ));
 
     let misnamed = Schedule::from_entries(vec![Scheduled {
@@ -226,8 +236,11 @@ fn a_setup_refuses_a_wrong_value_count() {
     assert_eq!((setup.values(), setup.seed()), (values.as_slice(), Some(1)));
 }
 
-/// Fails to compile once `ParamValue` gains a fourth `From` impl, such as `From<usize>`. An unsuffixed literal then
-/// no longer infers one type.
+/// Fails to compile once `ParamValue` gains a fourth `From` impl for an integer type other than `i32`, such as
+/// `From<usize>`. An unsuffixed literal then no longer infers one type.
+///
+/// An impl for `i32` or `f64`, the types an unsuffixed literal falls back to, would still compile here. A static check
+/// beside the test refuses those two.
 #[test]
 fn an_unsuffixed_literal_sets_a_parameter() {
     let sir = entry("sir");
@@ -240,6 +253,20 @@ fn an_unsuffixed_literal_sets_a_parameter() {
     assert_eq!(setup.values()[0], ParamValue::U32(256));
     assert_eq!(setup.values()[infection_rate], ParamValue::F32(0.4));
 }
+
+// Fails to compile once `ParamValue` implements `From<f64>` or `From<i32>`. The path below then matches two impls of
+// `AmbiguousIfFrom`, and its marker cannot be inferred.
+const _: fn() = || {
+    trait AmbiguousIfFrom<Marker> {
+        fn some_item() {}
+    }
+    impl<T> AmbiguousIfFrom<()> for T {}
+    struct FromF64;
+    impl<T: From<f64>> AmbiguousIfFrom<FromF64> for T {}
+    struct FromI32;
+    impl<T: From<i32>> AmbiguousIfFrom<FromI32> for T {}
+    let _ = <ParamValue as AmbiguousIfFrom<_>>::some_item;
+};
 
 /// Checks that the ants field read through `views` is the field of the tick it is read at, not the one last
 /// quantised.
@@ -279,10 +306,12 @@ fn views_are_prepared_at_the_read() {
     assert!(!exported.is_empty());
 }
 
-/// A GPU model that steps `inner`, and asks the device for a buffer over its limit on every live parameter edit.
+/// A GPU model that steps `inner`, and asks the device for a buffer over its limit on every live parameter edit and,
+/// from another thread, on every action.
 ///
 /// A live edit submits nothing and waits for nothing. Only the error scopes around the call can then report the error
-/// to it. Without them the error lands in the context's sink, for whichever holder waits next.
+/// to it. Without them the error lands in the context's sink, for whichever holder waits next. Error scopes are
+/// thread-local, and an action's error lands in the sink whatever scopes its call pushes.
 struct FaultyGpu {
     inner: Box<dyn GpuSimState>,
     device: wgpu::Device,
@@ -299,12 +328,7 @@ impl SimState for FaultyGpu {
         self.inner.stats()
     }
     fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
-        drop(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("henad_simulation_test_oversized"),
-            size: self.device.limits().max_buffer_size + 4096,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        }));
+        request_oversized_buffer(&self.device);
         self.inner.set_param(index, value)
     }
     fn population(&self) -> u64 {
@@ -320,6 +344,8 @@ impl GpuSimState for FaultyGpu {
         self.inner.encode_steps(encoder, count, timestamps);
     }
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
+        std::thread::scope(|scope| scope.spawn(|| request_oversized_buffer(&self.device)).join())
+            .expect("the request returns");
         self.inner.encode_action(encoder, index)
     }
     fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
@@ -342,7 +368,17 @@ impl GpuSimState for FaultyGpu {
     }
 }
 
-/// Returns `gpu_game_of_life` wrapped so that a live parameter edit raises a validation error.
+/// Asks `device` for a buffer over its limit, which raises a validation error.
+fn request_oversized_buffer(device: &wgpu::Device) {
+    drop(device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("henad_simulation_test_oversized"),
+        size: device.limits().max_buffer_size + 4096,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    }));
+}
+
+/// Returns `gpu_game_of_life` wrapped so that a live parameter edit and an action raise a validation error.
 fn faulty_life() -> ModelEntry {
     entry("gpu_game_of_life").wrap_factory(|factory| {
         Arc::new(
@@ -390,4 +426,232 @@ fn a_gpu_simulation_reports_its_own_device_error() {
     healthy.run_for(20).expect("the healthy simulation steps on");
     assert_eq!(healthy.tick(), 25);
     assert!(ctx.faults.take().is_none(), "no error reached the device's sink");
+}
+
+/// Returns a 64 by 64 `gpu_game_of_life` setup with seed 1.
+fn small_gpu_life() -> RunSetup {
+    entry("gpu_game_of_life")
+        .setup()
+        .set("grid_width", 64u32)
+        .and_then(|setup| setup.set("grid_height", 64u32))
+        .expect("the grid fits")
+        .with_seed(1)
+}
+
+/// Checks that a lost device fails the stepping and the sampling of every simulation on it.
+///
+/// wgpu reports a loss to no error scope, and polls go on succeeding. The regression returned `Ok` from both, advanced
+/// the tick and repeated the last stats it had read.
+#[test]
+fn a_lost_device_fails_the_next_step_and_sample() {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+        return;
+    };
+    let mut stepped = small_gpu_life().build(Some(&ctx)).expect("builds");
+    let mut sampled = small_gpu_life().build(Some(&ctx)).expect("builds");
+    stepped.run_for(5).expect("the simulation steps");
+    sampled.run_for(5).expect("the simulation steps");
+    ctx.device.destroy();
+
+    let fault = stepped.run_for(5).expect_err("the loss fails the step");
+    assert!(matches!(fault.kind, FaultKind::DeviceLost), "{fault:?}");
+    let fault = stepped.stats().expect_err("the loss fails every later call");
+    assert!(matches!(fault.kind, FaultKind::DeviceLost), "{fault:?}");
+    let fault = sampled.stats().expect_err("the loss fails the sample");
+    assert!(matches!(fault.kind, FaultKind::DeviceLost), "{fault:?}");
+    let fault = sampled
+        .run_sampled(20, 5, |_| ControlFlow::<()>::Continue(()))
+        .expect_err("the loss fails a sampled run");
+    assert!(matches!(fault.kind, FaultKind::DeviceLost), "{fault:?}");
+}
+
+/// SIR's CPU state, panicking at the start of the step from tick 2, in place of a kernel that panics part way.
+struct PanicsOnce {
+    inner: Box<dyn SimState>,
+    panicked: bool,
+}
+
+impl SimState for PanicsOnce {
+    fn step(&mut self) {
+        if self.inner.tick() == 2 && !self.panicked {
+            self.panicked = true;
+            panic!("the model breaks at tick 2");
+        }
+        self.inner.step();
+    }
+    fn tick(&self) -> u64 {
+        self.inner.tick()
+    }
+    fn stats(&self) -> Vec<StatEntry> {
+        self.inner.stats()
+    }
+    fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
+        self.inner.set_param(index, value)
+    }
+    fn act(&mut self, index: usize) -> bool {
+        self.inner.act(index)
+    }
+    fn population(&self) -> u64 {
+        self.inner.population()
+    }
+    fn heap_bytes(&self) -> usize {
+        self.inner.heap_bytes()
+    }
+}
+
+/// Checks that a simulation refuses every call that runs model code once a call has faulted.
+///
+/// The regression stepped on from the half-done step and returned `Ok`, reaching a state no rebuild reproduces.
+#[test]
+fn a_simulation_refuses_every_call_after_a_fault() {
+    let broken = entry("sir").wrap_factory(|factory| {
+        Arc::new(
+            move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| {
+                let ModelState::Cpu(inner) = factory(params, seed, gpu)? else {
+                    panic!("sir builds a CPU state");
+                };
+                Ok(ModelState::Cpu(Box::new(PanicsOnce { inner, panicked: false })))
+            },
+        )
+    });
+    let mut simulation = broken
+        .setup()
+        .set("grid_width", 64u32)
+        .and_then(|setup| setup.set("grid_height", 64u32))
+        .expect("the grid fits")
+        .build(None)
+        .expect("SIR builds");
+    let fault = simulation.run_for(10).expect_err("the step panics");
+    assert!(matches!(fault.kind, FaultKind::Panic { .. }), "{fault:?}");
+    assert_eq!(simulation.tick(), 2);
+
+    let refused = |fault: henad_compute::fault::Fault| {
+        assert!(
+            matches!(&fault.kind, FaultKind::Refused(message) if message.contains("tick 2")),
+            "{fault:?}"
+        );
+    };
+    refused(simulation.run_for(1).expect_err("a step after the fault"));
+    refused(simulation.run_to(5).expect_err("a run after the fault"));
+    refused(simulation.stats().expect_err("a sample after the fault"));
+    refused(
+        simulation
+            .run_sampled(5, 1, |_| ControlFlow::<()>::Continue(()))
+            .expect_err("a sampled run after the fault"),
+    );
+    refused(simulation.views().expect_err("the views after the fault"));
+    refused(simulation.relax_layout(1.0).expect_err("a layout after the fault"));
+    for error in [
+        simulation
+            .set_param("infection_rate", 0.5f32)
+            .expect_err("a live edit after the fault"),
+        simulation.act("seed_outbreak").expect_err("an action after the fault"),
+    ] {
+        let SetupError::Fault(fault) = error else {
+            panic!("expected the earlier fault, got {error:?}");
+        };
+        refused(fault);
+    }
+    assert_eq!(simulation.tick(), 2, "nothing stepped after the fault");
+}
+
+/// Returns the scalar of every stat `simulation` reports at its current tick.
+fn scalars(simulation: &mut henad_compute::simulation::Simulation) -> Vec<f64> {
+    let sample = simulation.stats().expect("a sample");
+    sample.entries().iter().map(|entry| entry.value.scalar()).collect()
+}
+
+/// Checks that a live edit reaches the parameter it names, as the same value set before the build does.
+#[test]
+fn a_live_edit_steps_as_the_same_value_set_at_the_build() {
+    let mut live = small_sir().build(None).expect("SIR builds");
+    live.set_param("infection_rate", 0.6f32).expect("a live parameter");
+    live.run_for(30).expect("SIR steps");
+
+    let built = small_sir().set("infection_rate", 0.6f32).expect("in bounds");
+    let mut built = built.build(None).expect("SIR builds");
+    built.run_for(30).expect("SIR steps");
+
+    let mut unedited = small_sir().build(None).expect("SIR builds");
+    unedited.run_for(30).expect("SIR steps");
+
+    let live = scalars(&mut live);
+    assert_eq!(live, scalars(&mut built), "the live edit set another parameter");
+    assert_ne!(live, scalars(&mut unedited), "the live edit changed nothing");
+}
+
+/// Checks that relaxing a network's layout moves its nodes, and that a model without a layout accepts the call.
+#[test]
+fn relax_layout_moves_a_network_and_leaves_other_models_alone() {
+    let mut network = entry("virus_network")
+        .setup()
+        .set("num_agents", 300u32)
+        .expect("in bounds")
+        .with_seed(5)
+        .build(None)
+        .expect("Virus on a Network builds");
+    let positions = |simulation: &mut henad_compute::simulation::Simulation| {
+        let views = simulation.views().expect("the views prepare");
+        let points = views.points.expect("a network has points");
+        (points.pos_x.to_vec(), points.pos_y.to_vec())
+    };
+    let before = positions(&mut network);
+    network.relax_layout(20.0).expect("the layout relaxes");
+    assert_ne!(positions(&mut network), before, "the layout moved no node");
+
+    let mut sir = small_sir().build(None).expect("SIR builds");
+    sir.relax_layout(20.0)
+        .expect("a model without a layout accepts the call");
+}
+
+/// Checks that an action on a GPU simulation reaches its state.
+#[test]
+fn an_action_on_a_gpu_simulation_reaches_its_state() {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+        return;
+    };
+    let mut simulation = small_gpu_life().build(Some(&ctx)).expect("builds");
+    simulation.run_for(3).expect("the simulation steps");
+    let alive = |simulation: &mut henad_compute::simulation::Simulation| {
+        simulation
+            .stats()
+            .expect("a sample")
+            .scalar("Alive")
+            .expect("Game of Life counts the living")
+    };
+    assert!(alive(&mut simulation) > 0.0, "a seeded grid has living cells");
+    simulation.act("clear").expect("gpu_game_of_life declares clear");
+    assert_eq!(alive(&mut simulation), 0.0, "the clear pass ran");
+    assert!(ctx.faults.take().is_none());
+}
+
+/// Checks that an action on a GPU simulation waits for the device before it returns, and reports an error that
+/// reached the device's sink in the meantime.
+///
+/// Without the wait the action returns once it is submitted. The error stays in the sink, and the healthy
+/// simulation's next wait reports it.
+#[test]
+fn a_gpu_action_reports_an_error_from_the_sink_before_it_returns() {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+        return;
+    };
+    let mut healthy = small_gpu_life().build(Some(&ctx)).expect("builds");
+    let mut faulty = faulty_life()
+        .setup()
+        .set("grid_width", 64u32)
+        .and_then(|setup| setup.set("grid_height", 64u32))
+        .expect("the grid fits")
+        .with_seed(1)
+        .build(Some(&ctx))
+        .expect("builds");
+    healthy.run_for(5).expect("the healthy simulation steps");
+    faulty.run_for(5).expect("the faulty simulation steps");
+
+    let error = faulty.act("clear").expect_err("the action's error is reported");
+    let SetupError::Fault(fault) = error else {
+        panic!("expected the device error as a fault, got {error:?}");
+    };
+    assert!(matches!(fault.kind, FaultKind::Device(_)), "{fault:?}");
+    healthy.run_for(20).expect("the healthy simulation steps on");
+    assert!(ctx.faults.take().is_none(), "no error was left in the device's sink");
 }

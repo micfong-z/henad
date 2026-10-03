@@ -12,8 +12,8 @@ use henad_compute::entry::ModelEntry;
 use henad_core::metadata::Backend;
 
 // --8<-- [start:kit]
-/// Settings of the kit over the example models, on a baseline device when this machine gives one, and whether it gave
-/// one.
+/// Returns the kit's settings over the example models, on a baseline device when this machine gives one, and whether
+/// it gave one.
 ///
 /// The device asks for `Limits::default()`, so a GPU model that only fits a raised limit fails to build here. Every
 /// example model is meant to run on a stock WebGPU device.

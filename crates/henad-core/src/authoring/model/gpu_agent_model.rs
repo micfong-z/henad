@@ -27,18 +27,22 @@
 //! The reduce leaf is an ordinary shader like any other pass. The workgroup fold it repeats is
 //! `henad::reduce_tree::block_sum`, so a model writes only the per lane value.
 //!
-//! # Unchecked contracts
+//! # Contracts
 //!
-//! Shaders are opaque strings to Rust, so most of this surfaces as a wgpu validation error at
-//! model construction rather than at compile time.
+//! Shaders are opaque strings to Rust, so nothing below is checked at compile time.
 //! - a binding's declared WGSL type must match what the buffer actually holds, since resolution
-//!   goes by name and every storage slot looks alike,
+//!   goes by name and every storage slot looks alike. A mismatch mostly surfaces as a wgpu
+//!   validation error at model construction,
 //! - a pass shader must declare `@workgroup_size(256)` and fold with `linear_index`, and a display
-//!   shader must declare `@workgroup_size(N, N)` for its [`DisplaySpec::workgroup`],
+//!   shader must declare `@workgroup_size(N, N)` for its [`DisplaySpec::workgroup`]. The engine
+//!   reads each shader's literal size at construction and panics on a mismatch,
+//! - a buffer label must not be reserved or end in `_in` or `_out`. The engine checks this at
+//!   construction,
 //! - [`GpuAgentModel::buffer_lens`] and [`GpuAgentModel::seed_buffers`] must each return one entry
 //!   per [`GpuAgentModel::BUFFERS`] entry, and a non-empty seed must be exactly `len * 4` bytes,
-//! - [`GpuAgentModel::STATS`] length must equal the number of values
-//!   [`GpuAgentModel::stats`] returns.
+//! - [`GpuAgentModel::STATS`] length must equal the number of values [`GpuAgentModel::stats`]
+//!   returns. The engine pairs the two by position and drops the values past the shorter. The
+//!   testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values.
 
 use crate::action::ActionDescriptor;
 use crate::authoring::model::binding::BindingDecl;
@@ -61,7 +65,7 @@ pub struct BufferSpec {
 ///
 /// The index is the declaration's position, so it is derived rather than written down. Flags are
 /// named rather than positional, as in `agent_lanes!`, and default off. Expands at module scope,
-/// next to the impl that forwards `BUFFERS` to `SPECS`.
+/// next to the impl that forwards `BUFFERS` to `BUFFER_SPECS`.
 ///
 /// ```ignore
 /// buffers! {
@@ -76,7 +80,7 @@ macro_rules! buffers {
         $crate::__indices!(0usize, $([$(#[$meta])* $vis $name],)+);
 
         /// This model's storage buffers, in index order.
-        const SPECS: &[$crate::__macro_support::BufferSpec] = &[
+        const BUFFER_SPECS: &[$crate::__macro_support::BufferSpec] = &[
             $($crate::__buffer_flags!(
                 $crate::__macro_support::BufferSpec {
                     label: $label,
@@ -127,7 +131,6 @@ impl Domain {
 }
 
 /// One compute pass of a step, run in declaration order.
-#[derive(Debug)]
 pub struct PassSpec {
     pub label: &'static str,
     pub shader: &'static str,
@@ -135,10 +138,21 @@ pub struct PassSpec {
     pub domain: Domain,
 }
 
+/// Prints the shader's length, not its source.
+impl std::fmt::Debug for PassSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PassSpec")
+            .field("label", &self.label)
+            .field("shader_len", &self.shader.len())
+            .field("bindings", &self.bindings)
+            .field("domain", &self.domain)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The pass that turns state into the display texture, for a model that draws a grid layer.
 ///
 /// Dispatched over [`Geometry::display`], one invocation per texel, not per cell.
-#[derive(Debug)]
 pub struct DisplaySpec {
     pub shader: &'static str,
     pub bindings: &'static [BindingDecl],
@@ -146,17 +160,39 @@ pub struct DisplaySpec {
     pub workgroup: u32,
 }
 
+/// Prints the shader's length, not its source.
+impl std::fmt::Debug for DisplaySpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DisplaySpec")
+            .field("shader_len", &self.shader.len())
+            .field("bindings", &self.bindings)
+            .field("workgroup", &self.workgroup)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The leaf of the stat reduction, which folds the population down to one value per lane.
 ///
 /// The engine owns every level above it, so the leaf only has to write `partials`. Its shader
 /// imports `henad::reduce_tree::block_sum` for the workgroup fold.
-#[derive(Debug)]
 pub struct ReduceSpec {
     pub shader: &'static str,
     pub bindings: &'static [BindingDecl],
     /// Values the leaf sums, one per lane.
     pub lanes: usize,
     pub domain: Domain,
+}
+
+/// Prints the shader's length, not its source.
+impl std::fmt::Debug for ReduceSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReduceSpec")
+            .field("shader_len", &self.shader.len())
+            .field("bindings", &self.bindings)
+            .field("lanes", &self.lanes)
+            .field("domain", &self.domain)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A one-off pass the user can trigger.
@@ -194,8 +230,8 @@ pub struct Geometry {
     pub index: Option<HashGrid>,
 }
 
-/// Extra a uniform block needs beyond the geometry. `groups_x` is the fold width the prelude's
-/// `linear_index` expects, so a shader that folds has to carry it.
+/// Extra a uniform block needs beyond the geometry. `groups_x` is the fold width
+/// `henad::dispatch::linear_index` expects, so a shader that folds has to carry it.
 #[derive(Clone, Copy, Debug)]
 pub struct PassCtx<'a> {
     pub geom: &'a Geometry,
@@ -207,7 +243,7 @@ pub struct PassCtx<'a> {
 
 /// A population of agents stepped by compute shaders, with its state resident in GPU buffers.
 ///
-/// See the module docs for the binding conventions and the contracts nothing checks.
+/// See the module docs for the bindings and the contracts the shaders must follow.
 pub trait GpuAgentModel: Send + Sync + 'static {
     const NAME: &'static str;
     const ID: &'static str;
@@ -239,8 +275,9 @@ pub trait GpuAgentModel: Send + Sync + 'static {
 
     /// Whether two builds on one seed step through identical states.
     ///
-    /// A model whose passes leave the order of their writes to the GPU declares `false`. The sweep tests then skip
-    /// the checks that compare two runs on one seed. A rebuilt run of such a model might differ from its recorded row.
+    /// A model whose passes leave the order of their writes to the GPU declares `false`. The testing kit then skips
+    /// the checks that compare two runs on one seed, and the app notes that a replayed run might differ from its
+    /// recorded row.
     const REPLAYS_EXACTLY: bool = true;
 
     /// The full descriptor list. Unlike [`crate::authoring::model::agent_model::AgentModel`], nothing is
@@ -262,7 +299,7 @@ pub trait GpuAgentModel: Send + Sync + 'static {
     /// fully written by the first step.
     fn seed_buffers(geom: &Geometry, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u8>>;
 
-    /// Neighbour index cell size, read only when [`Self::INDEX`].
+    /// Neighbour index cell size, read only when [`Self::INDEX`], and once at construction.
     fn index_cell_size(_params: &[ParamValue]) -> f32 {
         1.0
     }
@@ -289,8 +326,8 @@ mod tests {
             const SITES = "sites";
         }
         assert_eq!((POS, SITES), (0, 1), "indices follow declaration order");
-        assert_eq!(SPECS.len(), 2);
-        assert!(SPECS[POS].double_buffered && SPECS[POS].drawable);
-        assert!(!SPECS[SITES].double_buffered && !SPECS[SITES].drawable);
+        assert_eq!(BUFFER_SPECS.len(), 2);
+        assert!(BUFFER_SPECS[POS].double_buffered && BUFFER_SPECS[POS].drawable);
+        assert!(!BUFFER_SPECS[SITES].double_buffered && !BUFFER_SPECS[SITES].drawable);
     }
 }

@@ -43,7 +43,6 @@ pub enum Strategy {
 /// Reusable scratch for combining per-agent deposits into a grid.
 ///
 /// Only the chosen arm's buffers get allocated, the other arm's stay empty.
-#[derive(Debug)]
 pub struct ScatterGrid {
     n_cells: usize,
     combine: Combine,
@@ -68,6 +67,18 @@ pub struct ScatterGrid {
     /// Pinned by a test that needs an arm the rule would not pick for its workload.
     #[cfg(test)]
     forced: Option<Strategy>,
+}
+
+/// Prints the arm and its sizes, not the scratch buffers.
+impl std::fmt::Debug for ScatterGrid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScatterGrid")
+            .field("n_cells", &self.n_cells)
+            .field("combine", &self.combine)
+            .field("strategy", &self.strategy)
+            .field("heap_bytes", &self.heap_bytes())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ScatterGrid {

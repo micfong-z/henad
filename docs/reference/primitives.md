@@ -9,7 +9,7 @@ icon: material/function-variant
 Primitives are the small vocabulary a model kernel calls for world geometry, neighbourhoods and random draws.
 Most of them exist twice, once in Rust for CPU models and once in WGSL for GPU models.
 `offsets`, `for_each_neighbor`, `mix_seed` and `next_index` are Rust only, and `neighbor_count` and `neighbor_offset` are WGSL only.
-The two generators, `xorshift64` and `pcg_hash`, fill the same role under different names.
+The two generators, `xorshift64` and `pcg_hash`, fill the same role under different names, and `pcg_hash` has a Rust twin for seeding a GPU buffer.
 
 ```rust
 use henad::authoring::primitives::space::{Boundary, dist_sq, offset_cell};
@@ -386,7 +386,13 @@ fn pcg_hash(input: u32) -> u32
 ```
 
 The GPU generator, and the WGSL counterpart of [`xorshift64`](#xorshift64).
-A model that seeds a GPU buffer from Rust mirrors this function bit for bit.
+
+```rust
+fn pcg_hash(input: u32) -> u32
+```
+
+The Rust twin, bit-equal to the WGSL one, which a GPU port calls to seed a state buffer the shader then draws from.
+The authoring prelude brings it in.
 
 See also: [`next_bits`](#next_bits).
 
@@ -552,7 +558,7 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 |---|---|
 | Agents within a radius | `SpatialHash::query_radius`, on `henad::authoring::SpatialHash`. Takes a caller-provided result buffer, so a query does not allocate |
 | World size | `henad::authoring::Extent`. The engine prepends world size to every agent model's params |
-| A per-chunk RNG seed | `chunk_seed(base, tick, chunk_index)`, in `henad-compute`'s `cpu/primitives/chunked.rs` |
+| A per-chunk RNG | The `run_pass` that `agent_lanes!` generates hands the kernel its chunk's generator, seeded from the tick and the chunk's index |
 | Counting cells | `henad::authoring::reduce_chunks` |
 | A node's neighbours | `Network::in_neighbors` and `Network::out_neighbors`, on `henad::authoring::Network`. Each returns a slice of node indices without allocating. On an undirected graph the two return the same list |
 | Whether two nodes are joined | `Network::has_edge`, or `Network::edge_between` for the edge's index. A lookup walks one node's neighbours, the shorter list on an undirected graph. On a directed graph it looks only for an edge from the first node to the second |
@@ -564,7 +570,7 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 - **Agentsets.** There is no first-class filtered collection of agents, and no ask-style iteration over one. A model filters inside its own kernel, over flat lanes.
 - **Global ordering.** Nothing sorts agents or picks a global maximum across them.
 - **A per-cell list of agents.** Nothing keeps a second copy of where each agent stands. `SpatialHash` is rebuilt from positions each tick and answers the same queries.
-- **A global RNG seed.** A chunk's RNG comes from `chunk_seed(base, tick, chunk_index)`. A run is then independent of the thread count.
+- **A global RNG seed.** A chunk's RNG is seeded from the tick and the chunk's index. A run is then independent of the thread count.
   A network model's global pass is sequential and draws from one stream of its own.
 - **Dynamic populations of agents.** An agent model's agents are neither created nor removed mid-run.
   A network model can add and remove nodes through `Nodes::spawn` and `Nodes::retire`.

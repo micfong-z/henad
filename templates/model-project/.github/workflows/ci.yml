@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -26,31 +29,37 @@ jobs:
           rustup toolchain install "$(cat scripts/web-toolchain)" --profile minimal \
             --component rust-src,clippy --target wasm32-unknown-unknown
 
+      # A release asset can be replaced after the release. The tarball has to match `scripts/trunk-sha256`, the SHA-256
+      # of this asset of the release that `scripts/trunk-version` names.
       - name: Install Trunk
         run: |
           version="$(cat scripts/trunk-version)"
-          curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xzf - -C "$HOME/.cargo/bin"
+          curl -sSfL --retry 5 -o "$RUNNER_TEMP/trunk.tar.gz" \
+            "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$(cat scripts/trunk-sha256)  $RUNNER_TEMP/trunk.tar.gz" | sha256sum --check --quiet -
+          tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$HOME/.cargo/bin"
 
       # The runner has no GPU. Without a driver, the GPU checks of the test stage would be skipped.
       - name: Install lavapipe
-        run: scripts/install-lavapipe.sh
+        run: bash scripts/install-lavapipe.sh
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Lint
-        run: scripts/ci.sh lint
+        run: bash scripts/ci.sh lint
 
       - name: Lint the web build
-        run: scripts/ci.sh lint-web
+        run: bash scripts/ci.sh lint-web
 
       # A missing adapter fails the GPU checks in place of skipping them.
       - name: Test
         env:
           HENAD_REQUIRE_GPU: "1"
-        run: scripts/ci.sh test
+        run: bash scripts/ci.sh test
 
       # The release build, which applies `data-wasm-opt`. GitHub Pages cannot send the two cross-origin headers the
-      # thread pool needs, and a site deployed there needs a service worker such as coi-serviceworker to add them.
+      # thread pool needs, and a site deployed there needs a service worker such as coi-serviceworker to add them. A
+      # project site there sits under `/<repo>/`, and builds with `scripts/build_web.sh build --release --public-url
+      # /<repo>/`.
       - name: Web build
-        run: scripts/ci.sh web
+        run: bash scripts/ci.sh web

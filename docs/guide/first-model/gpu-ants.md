@@ -27,7 +27,7 @@ Assuming that you just built both, here's a quick comparison of what changes whe
 | Step                | `run_deposit_pass`, then `run_step_pass` | a _list_ of passes, run in declaration order               |
 | Field               | a `ScalarField` the engine owns          | three buffers of ours, and a pass that merges them         |
 | Many ants, one cell | `ScatterGrid` with `Combine::Max`        | `atomicMax` into an accumulator buffer                     |
-| Random numbers      | `chunk_seed` and `xorshift64`            | a per-ant `pcg_hash` state buffer                          |
+| Random numbers      | a `xorshift64` stream per chunk          | a per-ant `pcg_hash` state buffer                          |
 | Counting            | a per-chunk tally, merged as you go      | a persistent counter the kernel adds into                  |
 
 ``` mermaid
@@ -67,7 +67,7 @@ henad::buffers! {
 
 `buffers!` works like the `params!` macro we have used twice already.
 Each entry gets a `const` holding its index, derived from declaration order, and the string is the label a shader's binding names refer to.
-The macro also emits `SPECS`, the list the trait reads.
+The macro also emits `BUFFER_SPECS`, the list the trait reads.
 
 ### Buffer flags
 
@@ -127,7 +127,7 @@ const HAS_REWARD_BIT: u32 = 0x200u;
 
 Apart from the ants, we still need the pheromone trails and the terrain.
 On the CPU we handed those to a `ScalarField` and wrote a `ScalarFieldSpec` describing them.
-On the GPU the field is the three buffers we just declared, and the spec's four jobs land in three places:
+On the GPU the field is the three buffers we just declared, and each of the spec's four jobs lands in a place of its own:
 
 | `ScalarFieldSpec` on the CPU | On the GPU                                                   |
 | ---------------------------- | ------------------------------------------------------------ |
@@ -206,7 +206,7 @@ struct Params {
     // Under the cell grid on a large world.
     tex: vec2<u32>,
     _pad2: vec2<u32>,
-    // `ants::field::CELL_PALETTE`, packed so the colours cannot drift from the CPU model's.
+    // The CPU field's `CELL_PALETTE`, packed so the colours cannot drift from the CPU model's.
     palette: array<vec4<u32>, 4>, // (2)!
 }
 
@@ -279,7 +279,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 1. Uniform layout rules align a `vec2` to 8 bytes and a `vec4` to 16, and the padding fields make that alignment explicit rather than leaving it to the compiler. The generated Rust struct carries the same fields, so the two sides cannot be laid out differently.
 2. Sixteen colours, packed four to a `vec4<u32>`. Unlike the grid model's display shader, the palette is not baked into the WGSL. It arrives through the uniform, packed on the Rust side from the CPU model's `CELL_PALETTE`, so the sixteen colours cannot drift between the backends. With sixteen entries that is worth the plumbing, where two baked constants were fine.
-3. `output` is one of the engine's reserved binding names, along with `params`, `dims`, `counters` and `partials`. Anything else names one of our buffers by its label.
+3. `output` is one of the engine's reserved binding names, along with `params`, `dims`, `counters`, `partials`, and `cell_start` and `sorted`, the neighbour index's bindings. Anything else names one of our buffers by its label.
 4. WGSL has `log2` and no `log10`, hence the constant.
 5. The two layers sit end to end in one buffer, to-food first, so the second layer starts `n_cells` in.
 
@@ -294,6 +294,15 @@ pub struct GpuForagingModel;
 
 impl GpuAgentModel for GpuForagingModel {}
 ```
+
+This won't compile yet.
+Cargo compiles only the files `src/lib.rs` reaches, so first declare the module there, next to the others:
+
+``` rust title="src/lib.rs"
+mod gpu_foraging;
+```
+
+`cargo check` then reports `AntLanes`, which `pack_state` names and we import [in a moment](#identity-and-metadata), and lists what the trait still needs:
 
 ``` text title="cargo check"
 error[E0046]: not all trait items implemented, missing: `NAME`, `ID`, `DESCRIPTION`, `STATS`, `BUFFERS`,
@@ -318,7 +327,7 @@ impl GpuAgentModel for GpuForagingModel {
         "Ants lay and follow pheromone trails between a nest and a food source, stepped entirely on the GPU";
     const STATS: &'static [StatDescriptor] = ForagingModel::STATS; // (2)!
 
-    const BUFFERS: &'static [BufferSpec] = SPECS; // (3)!
+    const BUFFERS: &'static [BufferSpec] = BUFFER_SPECS; // (3)!
     const POS_BUFFER: usize = POS; // (4)!
     const COLOR_BUFFER: usize = COLOR;
 
@@ -326,7 +335,7 @@ impl GpuAgentModel for GpuForagingModel {
 }
 ```
 
-1. The example port already uses the id `gpu_ants`. A model set holds each id once, and our id differs so that the guide's models can sit in one set beside the example models, as the guide's parity tests in Henad's repository run them.
+1. The example port already uses the id `gpu_ants`. A model set holds each id once, and our id differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
 2. Reused wholesale from the CPU model, so both backends chart the same three series in the same colours.
 3. The list `buffers!` emitted.
 4. Which two of the drawable buffers the renderer reads.
@@ -466,14 +475,7 @@ The helpers this leans on are small:
 /// Domain separated from the ant seeding stream, so the two do not start correlated.
 const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 
-/// Matches `pcg_hash` in `henad::rng` bit for bit, since `u32` arithmetic wraps the same on both sides.
-fn pcg_hash(input: u32) -> u32 { // (1)!
-    let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
-    let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
-    (word >> 22) ^ word
-}
-
-fn seed_rng_states(n: usize, seed: u64) -> Vec<u32> {
+fn seed_rng_states(n: usize, seed: u64) -> Vec<u32> { // (1)!
     let seed32 = (seed ^ (seed >> 32)) as u32;
     (0..n).map(|i| pcg_hash(seed32 ^ i as u32)).collect()
 }
@@ -497,7 +499,7 @@ fn packed_cell_palette() -> [[u32; 4]; 4] {
 }
 ```
 
-1. WGSL has no 64-bit integers, so the GPU cannot run `xorshift64`. Its generator is `pcg_hash` over `u32`, from `henad::rng`, and this is the same hash in Rust so the buffer can be seeded to a known first state.
+1. WGSL has no 64-bit integers, so the GPU cannot run `xorshift64`. Its generator is `pcg_hash` over `u32`, from `henad::rng`, and the prelude's `pcg_hash` is the same hash in Rust, so the buffer can be seeded to a known first state.
 2. Both palettes are packed from the CPU model's constants rather than retyped, one for the step uniform and one for the display uniform.
 
 ``` rust title="src/gpu_foraging/mod.rs"
@@ -614,14 +616,14 @@ struct Params {
 A few constants and helpers follow, mirroring their CPU namesakes:
 
 ``` { .wgsl .annotate title="src/gpu_foraging/step.wgsl" }
-// Matches `ants::field`.
+// Matches the CPU field's site and layer constants.
 const OBSTACLE: u32 = 1u;
 const FOOD: u32 = 2u;
 const HOME: u32 = 3u;
 const TO_FOOD: u32 = 0u;
 const TO_HOME: u32 = 1u;
 
-// Matches `ants::lanes::NO_STEP`.
+// Matches the CPU model's `NO_STEP`.
 const NO_STEP: u32 = 255u;
 
 const DELIVERIES: u32 = 0u; // (1)!
@@ -646,7 +648,7 @@ fn passable(x: i32, y: i32) -> bool { // (2)!
 Rule 2, how much pheromone to lay, is `deposit_value` ported line for line:
 
 ``` { .wgsl .annotate title="src/gpu_foraging/step.wgsl" }
-// Mirrors `ants::step::deposit_value`. Floored at what the cell already holds, which is why
+// Mirrors the CPU model's `deposit_value`. Floored at what the cell already holds, which is why
 // `atomicMax` downstream reproduces the reference's plain overwrite.
 fn deposit_value(x: i32, y: i32, reward: f32, base: u32) -> f32 {
     var best = field[base + cell_of(x, y)]; // (1)!
@@ -779,7 +781,7 @@ Choosing where to move is the same three-way logic as the CPU kernel, trail firs
     }
 ```
 
-1. The ant's own generator state, loaded into a local and written back at the end. On the CPU a chunk's generator came from `chunk_seed`, and here every ant carries its own, since a shader has no chunk.
+1. The ant's own generator state, loaded into a local and written back at the end. On the CPU `run_pass` handed each chunk a generator, and here every ant carries its own, since a shader has no chunk.
 2. The same deliberate quirk as the CPU page, giving the first neighbour visited twice the odds of every other.
 3. `dx` on the outside and `dy` on the inside, spelled out as two loops where the CPU walked `MOORE_COLUMN_MAJOR`. The order is the same, and it has to be, because ties are broken by a draw.
 4. The reservoir draw, from `henad::rng`. The same call as on the CPU, over a 32-bit word.
@@ -988,12 +990,7 @@ fn main(
 ## Running it
 
 That finishes the model.
-Declare the module and register it in `models()`, and then we can run it.
-
-``` rust title="src/lib.rs"
-mod gpu_foraging;
-```
-
+The module is declared already, so we register it in `models()`, and then we can run it.
 No earlier page registered a GPU agent model, so `src/lib.rs` needs the import too:
 
 ``` rust title="src/lib.rs"

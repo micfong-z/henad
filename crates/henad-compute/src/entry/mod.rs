@@ -13,7 +13,7 @@
 
 mod set;
 
-pub use set::{ModelLookupError, ModelSet, ModelSetError};
+pub use set::{ModelLookupError, ModelSet, ModelSetError, ModelSetIter};
 
 use std::any::type_name;
 use std::fmt;

@@ -3,48 +3,87 @@
 /// Declares a model's agent lanes.
 ///
 /// A `dual` lane is double buffered, for a model whose agents read one another. Both names are
-/// spelled out because a macro cannot build an identifier. A `plain` lane is written in place.
+/// spelled out because a macro cannot build an identifier. A `plain` lane is written in place, and
+/// every agent starts at its initial value. Every `dual` lane comes before the first `plain` lane.
 ///
-/// ```ignore
-/// agent_lanes! {
+/// ```
+/// # #![deny(missing_docs)]
+/// # //! A crate that documents every public item.
+/// henad_compute::agent_lanes! {
+///     /// Lanes of a flock.
 ///     pub struct BoidLanes {
 ///         read BoidRead;
 ///         chunk BoidChunk;
+///         /// Position along x.
 ///         dual pos_x / next_pos_x: f32,
+///         /// Position along y.
+///         dual pos_y / next_pos_y: f32,
+///         /// Velocity along x.
 ///         dual vel_x / next_vel_x: f32,
-///         plain color: u8,
+///         /// Palette index of each boid.
+///         plain color: u8 = 0,
 ///     }
 ///     color = color;
 /// }
+/// # fn main() {}
 /// ```
 ///
 /// Lanes named `pos_x` and `pos_y` are required, since the engine builds the neighbour index and
 /// the point view from them.
 ///
+/// A lane's doc comment and attributes go on its field of the lanes struct, and on both fields of
+/// a `dual` lane. The fields of the read view and the chunk carry generated docs.
+///
 /// The three types implement `Debug`. The lanes and the chunk print their agent count alone, and
 /// the read view prints no field. A `#[derive(Debug)]` on the declaration conflicts with that impl.
 #[macro_export]
 macro_rules! agent_lanes {
+    // Each lane is read as its attributes, then its keyword. A single pattern listing every lane cannot tell
+    // which repetition an attribute starts.
     (
-        $(#[$meta:meta])*
-        $vis:vis struct $name:ident {
+        @dual $head:tt [$($dual:tt)*]
+        $(#[$attribute:meta])* dual $current:ident / $next:ident : $ty:ty, $($rest:tt)*
+    ) => {
+        $crate::agent_lanes! {
+            @dual $head [$($dual)* { $(#[$attribute])* $current / $next : $ty }] $($rest)*
+        }
+    };
+    (@dual $head:tt $duals:tt $($rest:tt)*) => {
+        $crate::agent_lanes! { @plain $head $duals [] $($rest)* }
+    };
+    (
+        @plain $head:tt $duals:tt [$($plain:tt)*]
+        $(#[$attribute:meta])* plain $name:ident : $ty:ty = $init:expr, $($rest:tt)*
+    ) => {
+        $crate::agent_lanes! {
+            @plain $head $duals [$($plain)* { $(#[$attribute])* $name : $ty = $init }] $($rest)*
+        }
+    };
+    (
+        @plain
+        [
+            $(#[$meta:meta])*
+            $vis:vis struct $name:ident;
             read $read:ident;
             chunk $chunk:ident;
-            $($(#[$dmeta:meta])* dual $dcur:ident / $dnext:ident : $dty:ty,)*
-            $($(#[$pmeta:meta])* plain $pname:ident : $pty:ty = $pinit:expr,)*
-        }
-        $(color = $color:ident;)?
+            $(color = $color:ident;)?
+        ]
+        [$({ $(#[$dmeta:meta])* $dcur:ident / $dnext:ident : $dty:ty })*]
+        [$({ $(#[$pmeta:meta])* $pname:ident : $pty:ty = $pinit:expr })*]
     ) => {
         $(#[$meta])*
         $vis struct $name {
-            $($(#[$dmeta])* pub $dcur: ::std::vec::Vec<$dty>, pub $dnext: ::std::vec::Vec<$dty>,)*
+            $($(#[$dmeta])* pub $dcur: ::std::vec::Vec<$dty>, $(#[$dmeta])* pub $dnext: ::std::vec::Vec<$dty>,)*
             $($(#[$pmeta])* pub $pname: ::std::vec::Vec<$pty>,)*
         }
 
         /// The current side of every double buffered lane, readable by every agent.
         #[derive(::core::clone::Clone, ::core::marker::Copy)]
         $vis struct $read<'a> {
-            $(pub $dcur: &'a [$dty],)*
+            $(
+                #[doc = ::core::concat!("Current side of the `", ::core::stringify!($dcur), "` lane.")]
+                pub $dcur: &'a [$dty],
+            )*
             /// Keeps `'a` used when a model has no double buffered lane.
             #[doc(hidden)]
             pub _lifetime: ::std::marker::PhantomData<&'a ()>,
@@ -52,8 +91,16 @@ macro_rules! agent_lanes {
 
         /// The slice of each writable lane that one chunk owns.
         $vis struct $chunk<'a> {
-            $(pub $dcur: &'a mut [$dty],)*
-            $(pub $pname: &'a mut [$pty],)*
+            $(
+                #[doc = ::core::concat!(
+                    "Slice of the `", ::core::stringify!($dcur), "` lane's next side that the chunk writes."
+                )]
+                pub $dcur: &'a mut [$dty],
+            )*
+            $(
+                #[doc = ::core::concat!("Slice of the `", ::core::stringify!($pname), "` lane that the chunk owns.")]
+                pub $pname: &'a mut [$pty],
+            )*
         }
 
         impl ::core::fmt::Debug for $name {
@@ -191,6 +238,28 @@ macro_rules! agent_lanes {
             $(fn colors(&self) -> ::core::option::Option<&[u8]> {
                 ::core::option::Option::Some(&self.$color)
             })?
+        }
+    };
+    (
+        $(#[$meta:meta])*
+        $vis:vis struct $name:ident {
+            read $read:ident;
+            chunk $chunk:ident;
+            $($lanes:tt)*
+        }
+        $(color = $color:ident;)?
+    ) => {
+        $crate::agent_lanes! {
+            @dual
+            [
+                $(#[$meta])*
+                $vis struct $name;
+                read $read;
+                chunk $chunk;
+                $(color = $color;)?
+            ]
+            []
+            $($lanes)*
         }
     };
 }

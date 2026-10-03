@@ -224,3 +224,120 @@ fn a_directive_in_a_block_comment_makes_no_module() {
     let report = build.generate_in(&scratch.out_dir()).expect("the build generates");
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
+
+#[test]
+fn a_module_imported_under_a_generated_name_is_refused() {
+    let scratch = Scratch::new("generated_import");
+    scratch.write(
+        "gpu_vote/step.wgsl",
+        &STEP_SHADER
+            .replace("@group(0)", "#import std::VOTED\n\n@group(0)")
+            .replace("= 1u;", "= VOTED;"),
+    );
+    scratch.write(
+        "gpu_vote/std.wgsl",
+        "#define_import_path gpu_vote::std\n\nconst VOTED: u32 = 1u;\n",
+    );
+    let build = ShaderBuild::discover(scratch.root()).expect("the file paths are free");
+    match build.generate_in(&scratch.out_dir()) {
+        Err(error @ ShaderBuildError::ReservedImport { .. }) => {
+            let message = error.to_string();
+            let ShaderBuildError::ReservedImport {
+                path,
+                import_path,
+                name,
+            } = error
+            else {
+                unreachable!()
+            };
+            assert_eq!((import_path.as_str(), name.as_str()), ("std", "std"));
+            assert!(path.ends_with("gpu_vote/std.wgsl"), "{}", path.display());
+            assert!(message.contains("the import path `std`"), "{message}");
+        }
+        other => panic!("expected a reserved import, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_quoted_import_is_checked_under_the_name_the_bindings_give_it() {
+    for (import_path, file, name) in [
+        ("\"std.inc\"", "gpu_vote/std.inc", "std"),
+        ("\"./std.inc\"", "gpu_vote/std.inc", "std"),
+        ("\"std\"", "gpu_vote/std.wgsl", "std"),
+        ("\"../shared/core.inc\"", "shared/core.inc", "core"),
+        ("\"Henad.inc\"", "gpu_vote/Henad.inc", "Henad"),
+    ] {
+        let scratch = Scratch::new("quoted_import");
+        scratch.write(
+            "gpu_vote/step.wgsl",
+            &STEP_SHADER
+                .replace("@group(0)", &format!("#import {import_path} as noise\n\n@group(0)"))
+                .replace("= 1u;", "= noise::value();"),
+        );
+        let module = "#define_import_path noise\n\nfn value() -> u32 {\n    return 1u;\n}\n";
+        scratch.write(file, module);
+        let build = ShaderBuild::discover(scratch.root()).expect("the file paths are free");
+        match build.generate_in(&scratch.out_dir()) {
+            Err(error @ ShaderBuildError::ReservedImport { .. }) => {
+                let message = error.to_string();
+                let ShaderBuildError::ReservedImport {
+                    path,
+                    import_path: found_import_path,
+                    name: found_name,
+                } = error
+                else {
+                    unreachable!()
+                };
+                assert_eq!((found_import_path.as_str(), found_name.as_str()), (import_path, name));
+                assert!(path.ends_with(file), "{import_path}: {}", path.display());
+                let reason = if name == "Henad" {
+                    "shared modules"
+                } else {
+                    "at their root"
+                };
+                assert!(message.contains(reason), "{import_path}: {message}");
+            }
+            other => panic!("{import_path}: expected a reserved import, got {other:?}"),
+        }
+    }
+
+    // A quoted import whose file stem is free generates.
+    let scratch = Scratch::new("quoted_import_free");
+    scratch.write(
+        "gpu_vote/step.wgsl",
+        &STEP_SHADER
+            .replace("@group(0)", "#import \"std_noise.inc\" as noise\n\n@group(0)")
+            .replace("= 1u;", "= noise::value();"),
+    );
+    scratch.write("gpu_vote/std_noise.inc", "fn value() -> u32 {\n    return 1u;\n}\n");
+    ShaderBuild::discover(scratch.root())
+        .expect("the file paths are free")
+        .generate_in(&scratch.out_dir())
+        .expect("a free stem generates");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_directory_is_walked_once() {
+    use std::os::unix::fs::symlink;
+
+    let scratch = Scratch::new("linked");
+    scratch.write("gpu_vote/step.wgsl", STEP_SHADER);
+    // Two links back to ancestors would make a walk that follows them unbounded.
+    symlink(".", scratch.root().join("again")).expect("a symlink can be made");
+    symlink("..", scratch.root().join("gpu_vote/up")).expect("a symlink can be made");
+    let shared = scratch.path().join("shared");
+    std::fs::create_dir_all(&shared).expect("the directory can be created");
+    std::fs::write(shared.join("tally.wgsl"), STEP_SHADER).expect("the file can be written");
+    symlink("../shared", scratch.root().join("linked")).expect("a symlink can be made");
+    symlink("../shared", scratch.root().join("same")).expect("a symlink can be made");
+
+    let build = ShaderBuild::discover(scratch.root()).expect("the walk ends");
+    assert_eq!(
+        build.entries,
+        [PathBuf::from("gpu_vote/step.wgsl"), PathBuf::from("linked/tally.wgsl")],
+        "each directory is walked once, under its first path"
+    );
+    build.generate_in(&scratch.out_dir()).expect("the build generates");
+    assert!(scratch.generated("binding_decls.rs").contains("pub const LINKED_TALLY"));
+}

@@ -100,7 +100,7 @@ Simulation stepping never blocks rendering, on any platform.
 === "Web"
 
     The web has no separate thread.
-    `SimThread::update()` runs synchronously from `eframe::App::update()` once per frame instead.
+    `SimThread::update(dt)` runs synchronously from `HenadApp::logic`, eframe's per-frame hook, once per frame instead.
 
 The public API is identical on both paths, and nothing in `henad-app` needs to know which backend is active.
 rayon still parallelises the kernels either way.

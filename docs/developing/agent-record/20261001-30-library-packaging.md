@@ -1,7 +1,7 @@
 ---
 date: 2026-10-01
 title: "Library M1: packaging hygiene"
-description: The first milestone of #48, which makes every crate package on its own. It adds caret requirements between the crates, per-crate READMEs, metadata and licence copies, moves the app's assets into its crate, rebuilds the IBM Plex fonts under new names, pins the web build's nightly, and adds packaging, MSRV, docs and cargo-deny checks. The performance protocol's baseline phase ran first.
+description: "The first milestone of #48, which makes every crate package on its own. It adds caret requirements between the crates, per-crate READMEs, metadata and licence copies, moves the app's assets into its crate, rebuilds the IBM Plex fonts under new names, pins the web build's nightly, and adds packaging, MSRV, docs and cargo-deny checks. The performance protocol's baseline phase ran first."
 icon: material/package-variant-closed
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

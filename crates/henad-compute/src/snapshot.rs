@@ -67,7 +67,6 @@ impl GpuSnapshot {
 }
 
 /// Owned grid data, cloned from the sim state.
-#[derive(Debug)]
 pub struct GridSnapshot {
     pub width: u32,
     pub height: u32,
@@ -75,8 +74,19 @@ pub struct GridSnapshot {
     pub palette: &'static [[u8; 4]],
 }
 
+/// Prints the grid's size, not its cells.
+impl std::fmt::Debug for GridSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GridSnapshot")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("palette_len", &self.palette.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Owned edge list, cloned from the sim state.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct EdgeSnapshot {
     /// Graph version at the time the list was copied.
     pub version: u64,
@@ -88,8 +98,20 @@ pub struct EdgeSnapshot {
     pub directed: bool,
 }
 
+/// Prints the edge count and the version, not the edges.
+impl std::fmt::Debug for EdgeSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EdgeSnapshot")
+            .field("version", &self.version)
+            .field("len", &self.src.len())
+            .field("colored", &!self.color.is_empty())
+            .field("palette_len", &self.palette.len())
+            .field("directed", &self.directed)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Owned point cloud data, cloned from the sim state.
-#[derive(Debug)]
 pub struct PointSnapshot {
     pub pos_x: Vec<f32>,
     pub pos_y: Vec<f32>,
@@ -98,4 +120,17 @@ pub struct PointSnapshot {
     /// One palette index per agent. Empty means uniform, so `refill` can recycle it like the rest.
     pub color: Vec<u8>,
     pub palette: &'static [[u8; 4]],
+}
+
+/// Prints the point count and the world, not the positions.
+impl std::fmt::Debug for PointSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PointSnapshot")
+            .field("len", &self.pos_x.len())
+            .field("world_w", &self.world_w)
+            .field("world_h", &self.world_h)
+            .field("colored", &!self.color.is_empty())
+            .field("palette_len", &self.palette.len())
+            .finish_non_exhaustive()
+    }
 }

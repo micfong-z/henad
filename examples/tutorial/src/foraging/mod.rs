@@ -339,35 +339,3 @@ fn field_sum(cells: &[f32]) -> f64 {
         0.0,
     )
 }
-
-#[test]
-fn results_do_not_depend_on_the_thread_count() {
-    use henad::engine::AgentModelState;
-    use henad::runner::SimState as _;
-
-    fn run(threads: usize) -> Vec<u32> {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .expect("rayon pool");
-        pool.install(|| {
-            let mut state = AgentModelState::<ForagingModel>::from_params(&[
-                ParamValue::U32(500),
-                ParamValue::F32(200.0),
-                ParamValue::F32(200.0),
-            ]);
-            for _ in 0..200 {
-                state.step();
-            }
-            let lanes = state.lanes();
-            lanes
-                .pos_x
-                .iter()
-                .zip(&lanes.pos_y)
-                .map(|(&x, &y)| y as u32 * 200 + x as u32)
-                .collect()
-        })
-    }
-
-    assert_eq!(run(1), run(7), "ant positions depend on the thread count");
-}

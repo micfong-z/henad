@@ -133,7 +133,7 @@ pub struct ResultsPanel {
     pub status: Option<String>,
     /// Results a thread reads from a folder, with the folder.
     #[cfg(not(target_arch = "wasm32"))]
-    folder_load: Option<(PathBuf, flume::Receiver<Result<ResultSet, String>>)>,
+    folder_load: Option<(PathBuf, flume::Receiver<Result<ReadResults, String>>)>,
     /// Series a thread reads from the folder.
     #[cfg(not(target_arch = "wasm32"))]
     series_load: Option<SeriesLoad>,
@@ -290,13 +290,10 @@ impl ResultsPanel {
         }
     }
 
-    /// Shows the results `set`, read from `source`, replaying through `model`, the sweep's model as this app finds
-    /// it.
-    fn show_result_set(&mut self, set: ResultSet, source: ResultsSource, model: Result<&ModelEntry, ModelLookupError>) {
-        let search = SearchView::for_result_set(&set);
-        let store = ResultsStore::from_result_set(set, source, model, DEFAULT_SERIES_BUDGET);
-        self.set_store(store);
-        self.search = search;
+    /// Shows the results `read` holds.
+    fn show_read_results(&mut self, read: ReadResults) {
+        self.set_store(read.store);
+        self.search = read.search;
     }
 
     /// Holds the picked `files` to read on a later frame, and reports the wait on the status line.
@@ -341,16 +338,42 @@ pub fn receive_open(app: &mut AppState, result: OpenResult) {
     }
 }
 
-/// Reads the results in `folder` on a thread of its own, and shows them once read.
+/// Results read and built into a store, with the Search view they open in.
+pub struct ReadResults {
+    store: ResultsStore,
+    search: SearchView,
+}
+
+impl ReadResults {
+    /// Returns the results `set` holds, read from `source`, replaying through `model`, the sweep's model as this app
+    /// finds it.
+    ///
+    /// Note that the build plans the sweep's spec, unless its manifest records more configs than the store plans. Its
+    /// time and memory grow with the configs.
+    fn new(set: ResultSet, source: ResultsSource, model: Result<&ModelEntry, ModelLookupError>) -> Self {
+        let search = SearchView::for_result_set(&set);
+        let store = ResultsStore::from_result_set(set, source, model, DEFAULT_SERIES_BUDGET);
+        Self { store, search }
+    }
+}
+
+/// Reads the results in `folder` and builds their store on a thread of its own, and shows them once built.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_folder(app: &mut AppState, folder: PathBuf) {
     let (sender, receiver) = flume::bounded(1);
     let wake = app.repaint_waker();
     let path = folder.clone();
+    let models = app.models.clone();
+    let gpu_ctx = app.gpu_ctx.clone();
     let spawned = std::thread::Builder::new()
         .name("henad-results".to_owned())
         .spawn(move || {
-            let read = ResultSet::open_dir(&path, DEFAULT_SERIES_BUDGET).map_err(|error| describe_error(&error));
+            let read = ResultSet::open_dir(&path, DEFAULT_SERIES_BUDGET)
+                .map_err(|error| describe_error(&error))
+                .map(|set| {
+                    let model = models.lookup(&set.manifest().model.id, gpu_ctx.as_ref());
+                    ReadResults::new(set, ResultsSource::Folder(path), model)
+                });
             // The receiver is gone once the app is closing, and nothing is left to report to.
             drop(sender.send(read));
             wake();
@@ -369,15 +392,18 @@ fn read_files(app: &mut AppState, files: Vec<DialogFile>) {
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
     let file_bytes = files.into_iter().map(|file| (file.name, file.bytes)).collect();
     match ResultSet::from_files(file_bytes, DEFAULT_SERIES_BUDGET) {
-        Ok(set) => show_results(app, set, ResultsSource::Files(names)),
+        Ok(set) => {
+            let model = app.lookup(&set.manifest().model.id);
+            let read = ReadResults::new(set, ResultsSource::Files(names), model);
+            show_results(app, read);
+        }
         Err(error) => app.results.status = Some(format!("Open failed: {}", describe_error(&error))),
     }
 }
 
-/// Shows `set`, read from `source`, and brings the Results tab to the front.
-fn show_results(app: &mut AppState, set: ResultSet, source: ResultsSource) {
-    let model = app.models.lookup(&set.manifest().model.id, app.gpu_ctx.as_ref());
-    app.results.show_result_set(set, source, model);
+/// Shows the results `read` holds, and brings the Results tab to the front.
+fn show_results(app: &mut AppState, read: ReadResults) {
+    app.results.show_read_results(read);
     app.focus_request = Some(Tab::Results);
 }
 
@@ -427,16 +453,16 @@ fn poll_folder_load(app: &mut AppState) {
         Err(flume::TryRecvError::Empty) => return,
         Err(flume::TryRecvError::Disconnected) => Err("Reading ended unexpectedly".to_owned()),
     };
-    let Some((folder, _)) = app.results.folder_load.take() else {
+    if app.results.folder_load.take().is_none() {
         return;
-    };
+    }
     // The sweep's events go to the store it started with.
     if app.sweep.is_running() {
         app.results.status = None;
         return;
     }
     match read {
-        Ok(set) => show_results(app, set, ResultsSource::Folder(folder)),
+        Ok(read) => show_results(app, read),
         Err(message) => app.results.status = Some(format!("Open failed: {message}")),
     }
 }
@@ -572,13 +598,7 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
         if open.clicked() {
             *request = Some(ResultsRequest::OpenResults);
         }
-        let resumable = panel.store.as_ref().is_some_and(|store| {
-            cfg!(not(target_arch = "wasm32"))
-                && matches!(store.source, ResultsSource::Folder(_))
-                && !store.complete
-                && app.lookup(&store.model_id).is_ok()
-        });
-        if resumable {
+        if resumable(app) {
             let noun = if panel.store.as_ref().is_some_and(ResultsStore::is_search) {
                 "search"
             } else {
@@ -593,12 +613,33 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
             }
         }
     });
+    let resume_text = panel
+        .store
+        .as_ref()
+        .filter(|_| !sweep_running && resumable(app))
+        .and_then(|store| {
+            let noun = if store.is_search() { "search" } else { "sweep" };
+            store.recorded_execution?.resume_text(noun)
+        });
+    if let Some(text) = resume_text {
+        ui.weak(text);
+    }
     if let Some(status) = &panel.status {
         ui.label(status);
     }
     if app.results.confirm_open {
         open_modal(ui.ctx(), &mut app.results.confirm_open, request);
     }
+}
+
+/// Returns whether the results come from an incomplete folder whose sweep this app can resume.
+fn resumable(app: &AppState) -> bool {
+    app.results.store.as_ref().is_some_and(|store| {
+        cfg!(not(target_arch = "wasm32"))
+            && matches!(store.source, ResultsSource::Folder(_))
+            && !store.complete
+            && app.lookup(&store.model_id).is_ok()
+    })
 }
 
 /// Draws the source of the results, the search or sweep in memory or the files read.
@@ -717,7 +758,8 @@ fn resume_sweep(app: &mut AppState) {
     let (Some(folder), model_id) = (store.folder().map(std::path::Path::to_path_buf), store.model_id.clone()) else {
         return;
     };
-    match SweepSession::resume_folder(app, folder, &model_id) {
+    let execution = store.recorded_execution.unwrap_or_default();
+    match SweepSession::resume_folder(app, folder, &model_id, execution) {
         Ok(session) => {
             app.results.drop_pending_loads();
             app.sweep.session = Some(session);
@@ -816,7 +858,7 @@ mod tests {
     use henad_explore::sweep::Provenance;
     use henad_models::example_models;
 
-    use super::{READING_RESULTS, ResultsPanel, ResultsView, SeriesLoad, poll_series_load};
+    use super::{READING_RESULTS, ReadResults, ResultsPanel, ResultsView, SeriesLoad, poll_series_load};
     use crate::ui::files::DialogFile;
     use crate::ui::results::store::{ResultsSource, ResultsStore};
 
@@ -1219,7 +1261,11 @@ mod tests {
             let entries = files.into_iter().map(|file| (file.name, file.bytes)).collect();
             let set = ResultSet::from_files(entries, usize::MAX).expect("the files read");
             let mut panel = ResultsPanel::default();
-            panel.show_result_set(set, ResultsSource::Files(names), models.lookup("sir", None));
+            panel.show_read_results(ReadResults::new(
+                set,
+                ResultsSource::Files(names),
+                models.lookup("sir", None),
+            ));
             panel
         };
         let whole = open(picked_files(&live, ""));

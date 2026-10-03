@@ -189,6 +189,43 @@ impl Progress for Recorder {
     }
 }
 
+/// Progress that resumes `spec` over `entry` in `dir` a second time once the first resume reports its outline, after
+/// its scan, and keeps the result of the second.
+#[derive(Debug)]
+pub struct SecondResume<'a> {
+    entry: &'a ModelEntry,
+    spec: &'a SweepSpec,
+    dir: &'a Path,
+    pub result: Option<Result<SweepReport, ExploreError>>,
+}
+
+impl<'a> SecondResume<'a> {
+    pub fn new(entry: &'a ModelEntry, spec: &'a SweepSpec, dir: &'a Path) -> Self {
+        Self {
+            entry,
+            spec,
+            dir,
+            result: None,
+        }
+    }
+}
+
+impl Progress for SecondResume<'_> {
+    fn report(&mut self, event: &ProgressEvent<'_>) {
+        if matches!(event, ProgressEvent::Planned(_)) && self.result.is_none() {
+            let options = sweep_options(true);
+            self.result = Some(sweep_with(
+                self.entry,
+                None,
+                self.spec,
+                self.dir,
+                &options,
+                &mut NoProgress,
+            ));
+        }
+    }
+}
+
 /// Reads the manifest of the output directory `dir`.
 ///
 /// # Panics
@@ -307,6 +344,19 @@ pub fn without_timing(mut runs: Vec<Vec<String>>) -> Vec<Vec<String>> {
         }
     }
     runs
+}
+
+/// Returns `manifest` with its clock readings cleared: when the sweep started and finished, and when each session
+/// started.
+pub fn without_clocks(mut manifest: Manifest) -> Manifest {
+    manifest.timestamps.started_unix_ms = 0;
+    manifest.timestamps.started.clear();
+    manifest.timestamps.finished_unix_ms = None;
+    manifest.timestamps.finished = None;
+    for session in &mut manifest.sessions {
+        session.started.clear();
+    }
+    manifest
 }
 
 /// Returns the positions of the timing columns in `header`, the header of a `runs.csv`.

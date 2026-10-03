@@ -94,7 +94,8 @@ A whole-file include strips the markers, so a page can show a file whole and in 
 The template's regions take each file's comment form, `# --8<-- [start:profile]` in TOML and
 shell and `<!-- --8<-- [start:fetch] -->` in HTML and Markdown, so a user's copy stays readable.
 Its Rust files carry no markers and are included whole. `crates/henad/examples/complete.rs` carries
-regions for `guide/library.md`, and its README copy leaves the marker lines out. Every page that
+regions for `guide/library.md`, and its README copy leaves the marker lines out.
+`crates/henad/tests/facade_paths.rs` carries the page's two other regions. Every page that
 includes template or tutorial code opens with an `!!! info "Henad 0.3"` admonition naming the
 release it describes, since the site deploys from `master` and can run ahead of crates.io. An
 unused region is deleted with its include.
@@ -344,36 +345,40 @@ Varies one parameter at a time. Other parameters use values from the Parameters 
 ```bash
 ./check.sh                    # all CI checks except the slow ones — run this before considering work done
 cargo check --workspace --all-targets
-cargo check -p henad-core -p henad-compute -p henad-models -p henad-explore --all-features --lib \
-  --target wasm32-unknown-unknown          # typechecks without atomics; henad-app cannot
+cargo check -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features \
+  --lib --target wasm32-unknown-unknown    # without atomics, henad-app without its thread pool
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
-cargo test --workspace --all-targets
+cargo test --workspace --all-targets --all-features
 cargo test --workspace --doc
-cargo check -p henad --lib --target wasm32-unknown-unknown   # the facade, never with --all-features
-cargo check -p henad --features example-models,testing --lib --target wasm32-unknown-unknown
+cargo check -p henad --lib --target wasm32-unknown-unknown   # the facade, without atomics
+cargo check -p henad --all-features --lib --target wasm32-unknown-unknown
 cargo test -p henad --doc --features example-models,app      # compiles the README program
 ./scripts/build_web.sh build  # builds the WASM/web target
 ./scripts/check_packaging.sh  # workspace versions, licence copies, paths that climb out of a crate,
-                              # the template's [profile.release] held equal to the root's and its
-                              # requirements to the workspace's major and minor
-cargo deny --locked check     # advisories, licences and sources
+                              # the template's [profile.release] held equal to the root's, and its
+                              # requirements and the facade README's to the workspace's major and minor
+cargo deny --locked check     # advisories, licences, bans and sources, every feature on (deny.toml)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+python3 -m unittest discover -s scripts -p 'test_*.py'   # the scripts' own tests
 rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
   --component rust-src,clippy --target wasm32-unknown-unknown   # the pinned nightly the web build needs
 ```
 
 `./check.sh` runs every line above but the install, and skips `cargo deny` where cargo-deny is not
 installed. CI alone runs `cargo package --workspace --exclude henad-tutorial --no-verify --locked`
-(the `package` job, on manifest changes), `cargo +1.95 check --workspace --locked` (`msrv`),
-`cargo check -p henad` with no features and then with each feature alone (`features`), clippy on
-the pinned nightly for wasm32 with `RUSTFLAGS="-C target-feature=+atomics,+bulk-memory"` and a
-`CARGO_TARGET_DIR` of its own, over `-p henad-app` and over `-p henad --features app,example-models`
-(`lint`), `actionlint` over `templates/model-project/.github/workflows/*.yml` (`lint`), and
-henad-app's wasm32 docs on the pinned nightly with the atomics flags in `RUSTFLAGS` and
-`RUSTDOCFLAGS` (`docs`). The `downstream` job runs on `workflow_dispatch` alone, and the release
-checklist starts it. It runs the verified packaging in two fresh target directories, copies the
-template outside the checkout, pins `henad` and `henad-build` to `=<version>`, patches every crate
+(the `package` job, on manifest changes), `cargo +1.95 check --workspace --locked` and the facade
+with all four features on 1.95 (`msrv`), `cargo check -p henad` with no features and then with
+each feature alone (`features`), clippy on the pinned nightly for wasm32 with
+`RUSTFLAGS="-C target-feature=+atomics,+bulk-memory"` and a `CARGO_TARGET_DIR` of its own, over
+`-p henad-app` and over `-p henad --features app,example-models` (`lint`), `actionlint` over
+`templates/model-project/.github/workflows/*.yml` (`lint`), and every published crate's docs as
+docs.rs builds them, through `scripts/docs_rs.py` from each crate's `[package.metadata.docs.rs]`
+table on the pinned nightly (`docs`). `msrv`, `features` and `docs` run on a pull request and on a
+dispatch, and `package` on a pull request alone. The `downstream` job runs on `workflow_dispatch`
+alone, with `CARGO_TERM_COLOR=never`, and the release checklist starts it. It runs the verified
+packaging in two fresh target directories and deletes both builds, copies the template outside the
+checkout, pins `henad` and `henad-build` to `=<version>`, patches every crate
 it uses to the unpacked tarballs under the verify directory's `package/`, and generates a lock.
 Then, in order: both `henad` and `henad-build` resolve with a null `source`, henad-models is
 absent, strict clippy (`-D unreachable_pub -D unused_qualifications`), `scripts/ci.sh test` under
@@ -384,8 +389,8 @@ recompiling no henad crate, an unreferenced shader added under `src/probe/` comp
 `-D warnings`, the CLI's dry run of `specs/vote.toml`, and the CPU-only crate (`gpu_vote`, its
 lines and the `ShaderBuild` line removed) sweeping and resuming with no `build_changed` warning.
 The wasm32 steps run before any step changes the copy. To run it by hand, run each step's script
-from `ci.yml` with `RUNNER_TEMP` set to a directory outside any git work tree, and pass
-`--allow-dirty` to `cargo package` on an uncommitted tree.
+from `ci.yml` with `RUNNER_TEMP` set to a directory outside any git work tree and
+`CARGO_TERM_COLOR=never`, and pass `--allow-dirty` to `cargo package` on an uncommitted tree.
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
@@ -413,14 +418,19 @@ Sweep every installed engine across the cross-engine ladder: `uv run --project s
 scripts/compare_bench.py` (`--dry-run` for the matrix, `--smoke` for one small point each); gate the
 ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py`
 Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` builds without serving)
+Build the docs as docs.rs does: `python3 scripts/docs_rs.py` (crate names to narrow it, `--host` on
+a machine that is no x86_64 Linux)
 Preview a release's notes: `python3 scripts/changelog_section.py 0.1.0` (what the tag build puts in
 the release body; it refuses a section with no date)
 Cut a release: `docs/developing/releasing.md` holds the order (bump the version, every requirement
-and the template's three, regenerate `docs/license.html`, `cargo update --workspace`, date the
-CHANGELOG, commit and push, run the checklist on that commit, then tag), the checklist the
-maintainer copies into an issue per release (both verified packaging passes in a fresh
-`CARGO_TARGET_DIR`, `gh workflow run ci.yml --ref <branch>` for the `downstream` job, `cargo
-semver-checks` and a WGSL diff on a patch release, `cargo publish --workspace --dry-run --locked`),
+and the template's three, and on a breaking release the facade README's line, the guide's
+admonitions and its typed dependency snippets, regenerate `docs/license.html`, `cargo update
+--workspace`, date the CHANGELOG, commit and push, run the checklist on that commit, then tag), the
+checklist the maintainer copies into an issue per release (both verified packaging passes in a fresh
+`CARGO_TARGET_DIR`, `gh workflow run ci.yml --ref <branch>` for the `downstream`, `msrv`, `features`
+and `docs` jobs, a native check on the pinned nightly, `cargo semver-checks`, a WGSL diff and a
+review of the hidden items another crate calls on a patch release, `cargo publish --workspace
+--dry-run --locked` in a fresh `CARGO_TARGET_DIR`),
 the paced publish and the stability policy. The maintainer runs every publish by hand. Never tag,
 publish or bump the version unasked.
 Regenerate the third-party licence page: `cargo about generate about.hbs -o docs/license.html`
@@ -438,7 +448,9 @@ The web build is the exception and runs on one dated nightly, named in
 `templates/model-project/scripts/web-toolchain` and selected by `scripts/build_web.sh`, which prints
 the install line above when the toolchain or its `rust-src` is missing. The Trunk release sits beside
 it in `templates/model-project/scripts/trunk-version`. CI, vercel.json and the docs read both files,
-and the repository holds one pin. Threads on wasm need
+and the repository holds one pin. `trunk-sha256` beside them holds the SHA-256 of that release's Linux
+x86_64 tarball, which Henad's CI and the template's both check before extracting it, so a Trunk bump
+changes both files. Threads on wasm need
 `-C target-feature=+atomics,+bulk-memory,+mutable-globals` and a std rebuilt to match, so the nightly
 needs `rust-src`. That script is the only supported way to build for the web; a bare `trunk build`
 produces a binary whose thread pool cannot start. It also unsets `CARGO_ENCODED_RUSTFLAGS`, which
@@ -463,10 +475,20 @@ flat `Vec`s, rayon), not from unsafe tricks. The workspace `Cargo.toml` also ena
 `clippy::` lint set (`unwrap_used`, `indexing_slicing = "allow"` is a deliberate exception,
 `missing_errors_doc`, etc.) — run `./check.sh` rather than guessing whether something will pass CI.
 
+henad-compute, henad-explore, henad-app, henad-models, the tutorial (its `lib.rs` and
+`tests/parity.rs`), the template's `src/lib.rs` and the facade's `tests/facade_paths.rs` set
+`#![recursion_limit = "256"]`. Proving a type that holds wgpu handles `Send` there overflows the
+default 128, which the pinned nightly reports as the future-incompatible
+`recursion_depth_exceeding_limit`. A new crate root or test that proves a GPU state `Send` takes
+the same line. The release checklist's native check on that nightly finds one that lacks it, and
+the tutorial's `tests/snippets.rs` holds the template's line to the tutorial's.
+
 Two rules no lint enforces. Every public type of henad-core, henad-compute, henad-models,
 henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait object, a
 model's associated types or a whole graph writes its own impl ending in `finish_non_exhaustive`, as
-`ModelEntry`, `Network` and the engine states do. `cargo clippy -- -W missing_debug_implementations`
+`ModelEntry`, `Network` and the engine states do. So does a type holding a payload, such as cells,
+lanes, positions or a shader's source, and it prints sizes and labels in their place, as `Grid2D`,
+`PassSpec` and `PointSnapshot` do. `cargo clippy -- -W missing_debug_implementations`
 lists the types that lack one. henad-app's `state` and `ui` modules are private, and their types
 are left out. And an exported macro names its support items through its crate's `#[doc(hidden)]`
 `__macro_support` module, never through an internal path such as `$crate::cpu::primitives`, and
@@ -502,7 +524,8 @@ henad-cli and henad-app take henad-models only behind their default `example-mod
 `cargo tree -p henad-cli --no-default-features -e normal -i henad-models` prints nothing, as does
 the same line for henad-app. The facade takes henad-models, henad-app and henad-cli only behind its
 features, and the two hosts with `default-features = false`, so
-`cargo tree -p henad --features app,cli -e normal -i henad-models` prints nothing. henad-models and
+`cargo tree -p henad --features app,cli -e normal -i henad-models` reports that no package matches
+`henad-models` and exits 101, since that resolve holds no henad-models. henad-models and
 henad-explore take no normal dependency on each other,
 and `cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency
 between Henad crates that the normal graph does not hold is named here: today the one from
@@ -510,7 +533,8 @@ henad-explore to henad-models, for its tests, the one from henad-models to henad
 `testing` feature, for the kit over the example models, and the ones from henad-cli and henad-app
 to henad-models, for their unit tests without the feature. The pair between henad-models and
 henad-explore is the one dev-only edge against the dependency direction. Neither normal graph
-reaches the other, each crate compiles once, and packaging strips both edges. henad-explore reaching
+reaches the other, each crate compiles once, and packaging strips both edges. Neither package's
+own tests then build from its tarball. henad-explore reaching
 an example model outside its tests needs the maintainer's approval as a new edge. henad-tutorial
 depends on the facade and, to build, on henad-build. Its tests take the facade again with
 `example-models` and `testing`, and it names no other Henad crate.
@@ -570,9 +594,10 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `run_id / replicates`. It refuses an unknown id, a value out of bounds, a param both fixed and
   varied or varied twice in a block, a zip of unequal lengths, an `F32` range with no step outside
   a sampled design, a factor with no levels (`DesignError::NoLevels`), an undeclared action, a
-  name two actions share, and a stop or `first` threshold that is not finite (`MeasurePlan::check`,
-  through `StopSpec::check_threshold` and `Comparison::check`), all before any run. An
-  action due past the last tick is only a `PlanWarning`. `Plan::schedule` orders a config's actions
+  name two actions share, a stop or `first` threshold that is not finite (`MeasurePlan::check`,
+  through `StopSpec::check_threshold` and `Comparison::check`), and more than `MAX_RUNS` runs
+  (2^24, equal to `MAX_CONFIGS`, `PlanError::TooManyRuns`), all before any run. An action due
+  past the last tick is only a `PlanWarning`. `Plan::schedule` orders a config's actions
   by tick, then by spec order, and a `Shard` (`I/N`) takes the runs with `run_id % N == I`.
   `factor.rs` resolves a factor over a param or an action's tick (`FactorTarget`) from a list, an
   inclusive range or `all`, and `LevelSpec::parse` reads the level text of `--vary`. It and a plan
@@ -596,7 +621,8 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   (`MeasurePlan`), and folds each sample into the reducers and a `SeriesBuffer` (`Sampler`),
   skipping and flagging a value that is not finite. `Sampler::push` reports whether the
   `StopCondition` holds at that sample. `stop.rs` reads a condition such as `Infected <= 0`, split
-  at the first comparator so a label can hold spaces, and NaN never meets one. `reducer.rs` binds
+  at the last run of comparator characters so a label can hold spaces and comparators, and NaN
+  never meets one. `reducer.rs` binds
   the `ReducerKind`s to `StatColumns` indices: final, min, max and mean by default, and argmax,
   argmin, `first<=10` (`FirstCrossing`) and `mean@200..600` (`WindowMean`) on request. `outcome.rs`
   holds `PlannedRun`, `RunStatus` (`timed_out` among the failures), `StopReason` and `RunOutcome`,
@@ -652,31 +678,39 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
 - **henad-build**: a build dependency, on henad-core, `wgsl_bindgen` and `heck` alone, the last
   naming a `ShaderEntry` variant as `wgsl_bindgen` does. `lib.rs` holds `ShaderBuild` and
   `ShaderBuildError`, `paths.rs` the walk of a shader root and the Rust names a path becomes
-  (`check_components`, `check_reserved`, `check_collisions`), `binding_lines.rs` the private reader
-  of `@group(0)` lines, and `output.rs` the shared-module copies, the stamp and the two generated
-  files. `stamp/` holds the build stamps: `stamp_commit` for a host or model crate,
-  and the hidden `stamp_engine_commit` (henad-explore) and `stamp_source_hash` (henad-compute,
-  henad-models). `stamp/mod.rs` picks the source of a stamp by `StampScope`: a package's
-  `.cargo_vcs_info.json` first, then git when `git ls-files --error-unmatch Cargo.toml` succeeds,
-  and for the engine only when `--show-prefix` is `crates/henad-explore/`. `stamp/files.rs` lists
-  and hashes the files under `src` and the manifest (`Cargo.toml.orig` in a package), with the
-  nearest `Cargo.lock` outside a package, CRLF read as LF, and a file that vanishes mid-read
-  skipped. Dotfiles, `~` and `.swp` backups (`is_excluded`) and symlinks to a directory or to
-  nothing (`is_link_to_no_file`) are left out of the hash and the dirty flag alike. `stamp/git.rs`
-  asks git, with `GIT_OPTIONAL_LOCKS=0`, for the commit (the full hash cut to eight characters),
-  the dirty flag (`status --porcelain -z --untracked-files=all`) and the paths a commit changes,
+  (`check_components`, `check_reserved`, `check_collisions`, `check_module_name`),
+  `binding_lines.rs` the private reader of `@group(0)` lines, and `output.rs` the shared-module
+  copies, the files the entry points import (`imported_files`, through `wgsl_bindgen`'s
+  `DependencyTree`), the stamp and the two generated files. `stamp/` holds the build stamps:
+  `stamp_commit` for a host or model crate, and the hidden `stamp_engine_commit` (henad-explore)
+  and `stamp_source_hash` (henad-compute, henad-models). `stamp/mod.rs` picks the source of a
+  stamp by `StampScope`: a package's `.cargo_vcs_info.json` first, then git when
+  `git ls-files --error-unmatch Cargo.toml` succeeds, and for the engine only when `--show-prefix`
+  is `crates/henad-explore/`. `stamp/files.rs` lists and hashes the files under `src` and the
+  manifest (`Cargo.toml.orig` in a package, which holds a `.cargo_vcs_info.json` or a `Cargo.toml`
+  Cargo generated), with the nearest `Cargo.lock` outside a package, CRLF read as LF, and a file
+  that vanishes mid-read skipped. Dotfiles, `~`, `.swp`, `.orig` and `.rej` files, `#name#`
+  autosaves (`is_excluded`) and symlinks to a directory or to nothing (`is_link_to_no_file`) are
+  left out of the hash and the dirty flag alike. `stamp/git.rs` asks git, with
+  `GIT_OPTIONAL_LOCKS=0`, for the commit (the full hash cut to eight characters), its date
+  (`log.showSignature` off, and empty unless it reads `YYYY-MM-DD`), the dirty flag
+  (`status --porcelain -z --untracked-files=all`, over pathspecs built from `--show-prefix`, and
+  unknown in place of clean when git does not track the lockfile) and the paths a commit changes,
   resolved through `--git-path` and `--git-common-dir`, so packed refs and a linked worktree stay
-  watched. A git before 2.31 echoes `--path-format=absolute` back, and the paths are then joined
-  onto the crate's directory (`echoes_path_format`). In Henad's checkout the
-  engine's hash covers henad-core, henad-build, henad-compute and henad-explore with the lockfile,
-  and `HENAD_BUILD_CRATE_HASH` covers henad-explore alone. `scripts/check_packaging.sh` refuses a
-  `"../` path in `stamp/`. Its tests sit in `src/tests/`: the path checks, the reader against the
-  layout `wgsl_bindgen` generates, whole generations (`a_second_build_reruns_nothing`,
-  `a_shader_added_between_builds_is_generated`, `a_crate_without_shaders_builds`), and the stamps
-  in scratch repositories (`stamp.rs`), with
+  watched. A crate in a repository that does not track its manifest yet watches those paths too,
+  and its first commit reruns the stamp. A git before 2.31 echoes `--path-format=absolute` back,
+  and the paths are then joined onto the crate's directory (`echoes_path_format`). In Henad's
+  checkout the engine's hash covers henad-core, henad-build, henad-compute and henad-explore with
+  the lockfile, and `HENAD_BUILD_CRATE_HASH` covers henad-explore alone.
+  `scripts/check_packaging.sh` refuses a `"../` path in `stamp/`. Its tests sit in `src/tests/`:
+  the path checks, the reader against the layout `wgsl_bindgen` generates, whole generations
+  (`a_second_build_reruns_nothing`,
+  `an_edited_shader_or_module_is_generated_again`, `a_shader_added_between_builds_is_generated`,
+  `a_crate_without_shaders_builds`), and the stamps in scratch repositories (`stamp.rs`), with
   `a_commit_changes_a_watched_path_under_packed_refs_and_in_a_worktree` and
   `the_engine_stamp_reads_cargo_vcs_info`, which runs `cargo package --no-verify` on the engine's
-  crates and compares the tarball's crate hash with the checkout's. Keep them.
+  crates and henad-models, and compares henad-explore's crate hash and the source hashes of
+  henad-compute and henad-models with the checkout's. Keep them.
 - **henad-compute**: the engine machinery that turns an authoring impl into something runnable.
   `cpu/` and `gpu/` are **siblings**, not a base and a specialisation, and mirror each other:
   each has its own `sim_thread.rs` (runner), its `*_engine.rs` (authoring trait → runnable state)
@@ -701,9 +735,14 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   the schedule once per stretch. On native a CPU `Simulation` runs each call's model code inside
   one `rayon::scope` (`run_sampled` once for the whole call, its callback inside it, hence the
   `WasmNotSend` bounds), and a GPU one runs on the calling thread inside `catching_on`. A refused
-  scheduled action is a `Fault`. `StatSample` reads stats by label, `views` prepares at the read,
+  scheduled action is a `Fault`. A `Simulation` keeps the message of the first fault a call
+  returned, and every later call that runs model code returns it as `FaultKind::Refused`, or
+  `FaultKind::DeviceLost` once the device is lost. A fault can leave a step half done, and a later
+  call would step on from it. `StatSample` reads stats by label, `views` prepares at the read,
   and `write_state` is `--export`'s writer. `ParamValue` has exactly three `From` impls (`f32`,
-  `u32`, `bool`), and `an_unsuffixed_literal_sets_a_parameter` fails to compile on a fourth.
+  `u32`, `bool`). `an_unsuffixed_literal_sets_a_parameter` fails to compile on a fourth for an
+  integer type other than `i32`, and a static check beside it on `From<i32>` or `From<f64>`, the
+  types an unsuffixed literal falls back to.
   - `cpu/grid_engine.rs` (`GridModelState`), `cpu/agent_engine.rs` (`AgentModelState`) and
     `cpu/network_engine.rs` (`NetworkModelState`) each implement the whole `SimState` for their
     trait. `cpu/field/ca.rs` (`CaField`, a `GridModel` as
@@ -732,6 +771,10 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
     each boundary and table code the test reads.
     `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`
     is what asks whether a model fits the device before anything is allocated.
+    `gpu/contracts.rs` holds the asserts both engines make first: each shader's `main` declares the
+    `@workgroup_size` its pass dispatches (read from the literal naga writes, skipped for anything
+    else), and no buffer label is reserved or ends in `_in` or `_out`. Either mismatch validates
+    and runs wrong.
     `gpu/stepping.rs` steps a `GpuSimState` from a host with no sim thread, native only. It submits
     at most `MAX_STEPS_PER_SUBMISSION` steps per command buffer, fires a `Schedule` under either
     `Fire` rule, waits once at the end of a run, and blocks on a stats readback. `submit_slice`
@@ -787,8 +830,9 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   summary and replaces the manifest. A sweep that fails after the manifest exists marks it `failed`
   when it can. A dry run stops after the probes. `spec_file.rs` is the TOML form of a spec
   (`SpecFile`), and `LoadedSpec` a spec file read whole, with its `SpecSource` and
-  `ExecutionTable`. No library call installs the panic hook. A host's `main` does, and the
-  test helpers `support::sweep` and `sweep_with` install it before each sweep. Every table is
+  `ExecutionTable`. A sweep, a search and a pumped sweep install no panic hook. A host's `main`
+  does, as do `henad_cli::run`, the app's entry points and `assert_set_conforms`, and the test
+  helpers `support::sweep` and `sweep_with` install it before each sweep. Every table is
   `deny_unknown_fields`. A param value stays the text `--set` takes, and a spec file and a command
   line hand `parse_value` the same text. A `table` block's `file` is
   read relative to the spec file, and only a table design's. A path that is absolute or holds `.` or
@@ -814,7 +858,10 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   starts its slices at one step. A slice carried over from a lighter run once held off a pause for
   minutes. `exec/cpu.rs` runs one `thread::scope` lane per rayon pool, each pool built once in
   `Executor::new` with `threads_per_lane` workers, and each run built and stepped inside
-  `pool.install`. A single lane runs inside `rayon::scope` on the global pool.
+  `pool.install`. A single lane gets a pool of its own as well, even at the global width, so a
+  paused run waits on a worker of its lane's pool and never on one of the global pool. Other hosts'
+  passes share the global pool. A target that cannot spawn threads builds no pool and drives each
+  run on the calling thread.
   A panic on a lane's thread or in the sink aborts the `SweepControl` (`AbortOnPanic`). The other
   lanes then stop within a slice instead of stepping runs nobody commits. `exec/gpu.rs`
   (`run_on_tracks`) is the counterpart of `exec/cpu.rs` for a GPU model. Error scopes are
@@ -842,19 +889,29 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   streams `runs.csv` one record at a time and holds one cell string per config) and
   `manifest.json` (written `running`, then replaced by a rename). `OutputDir` refuses a directory
   that holds any of the four, a search table or any `*.staged` file unless the sweep resumes, and
-  `OutputWriter` writes and flushes a run's series before its row. `output/read.rs` reads the tables
+  `OutputWriter` writes and flushes a run's series before its row. An `OutputDir` holds the
+  operating system's advisory lock on `.lock` (`DirLock`, `File::try_lock`) while it lives, and a
+  second writer gets `OutputError::Locked`. The file stays when the writer ends, and the next writer
+  locks it again. The lock goes with a killed process. A resume, of a sweep or a search, opens the
+  directory in `SweepPreparation::new` or `SearchPreparation::new`, before its scan reads the
+  tables, and holds the lock through its last write. A writer creates afresh each file it replaces
+  (`create_fresh`), appends to and cuts `runs.csv` and `series.csv` only after `open` refuses a
+  symbolic link in place of either, and `check_free` counts a dangling link as a result file.
+  `output/read.rs` reads the tables
   back, keeping complete records only (`RunsCsv`, `SeriesScan`), and `merge_series` interleaves
   series segments by run id. `record_ends` follows the CSV grammar (`RecordScan`), and a quote
   inside an unquoted field fails its record instead of hiding the records after it.
-  `output/resume.rs` (`ResumeScan`) accepts a directory only with the same plan hash, schema hash
-  and shard, and no more replicates than the sweep runs. It keeps `ok`, `non_finite` and, without
-  `--retry-failed`, failed runs, always reruns a `timed_out` one, renumbers kept runs when the
+  `output/resume.rs` (`ResumeScan`) accepts a directory only with the same model id, plan hash,
+  schema hash and shard, and no more replicates than the sweep runs. It keeps `ok`, `non_finite`
+  and, without `--retry-failed`, failed runs, always reruns a `timed_out` one, renumbers kept runs when the
   replicate count rises, and repairs the tables by truncation or by a rewrite. A rewrite stages both
   tables as `*.staged`, marks them complete with `tables.staged`, then renames both, and
   `OutputDir::open` finishes a rename a process left part done. `merge.rs` joins shard directories
   of one plan, replicate count and shard count, merges both tables by run id, rebuilds the summary
-  and records the inputs in `merged_shards`. Missing runs are a warning and an `incomplete`
-  manifest. A resume of the merged directory fills them in. Provenance: `ENGINE_BUILD` (`lib.rs`) is
+  and records the inputs in `merged_shards`. It credits the last session of a `running` or `failed`
+  shard as a resume would, and `replays_exactly` reads `true` only when every shard's does. Missing
+  runs are a warning and an `incomplete` manifest. A resume of the merged directory fills them in.
+  Provenance: `ENGINE_BUILD` (`lib.rs`) is
   Henad's build, stamped by henad-explore's `build.rs`, and `RecordedBuild::engine()` records it
   under the name `henad` with `crate_versions` and `crate_hashes` (henad-compute's from the hidden
   `__COMPUTE_BUILD`). `Provenance::new(host, arguments)` holds it beside the host's build. Every
@@ -864,11 +921,17 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   source hashes, and two unidentified builds are never the same. A commit with `dirty: null` counts
   as clean only without a source hash, as in a 0.2 session. A resume, a search resume and a
   merge warn `SweepWarning::BuildChanged` for each differing build of `BuildRole::Engine` or `Model`
-  (`build_warnings`, `Manifest::recorded_builds`), a merge's with `between_shards` set. The host is never compared. A 0.2 session reads
+  (`build_warnings`, `Manifest::recorded_builds`), a merge's with `between_shards` set. A merge
+  compares each other shard's builds with those of the lowest shard that records any.
+  `recorded_builds` leaves out a 0.3 session that ran nothing (`ran` 0, unless it is the last
+  session of a `running` or `failed` manifest) and lists unidentified builds alike once
+  (`RecordedBuild::reads_as`). The host is never compared. A 0.2 session reads
   as the engine build of its commit and the folder's version, and a resume or a merge writes that
   build into it (`record_session_engines`). `ResultSet::recorded_builds` reads them.
   `a_0_2_0_manifest_still_resumes` resumes the 0.2.0 folder in `tests/fixtures/`, recorded by the
-  procedure in its `README.md`, and `tests/provenance.rs` holds the comparisons. Keep them.
+  procedure in its `README.md`, and `a_0_2_0_manifest_still_replays_and_merges` replays and merges
+  it. Both fail when the folder is missing. `src/tests/provenance.rs` holds the comparisons. Keep
+  them.
   `progress.rs` is the `Progress` trait the host renders. The library never prints. `device.rs`
   (`acquire_headless`) acquires a GPU device with no window or surface, at the WebGPU baseline
   raised by `gpu::limits::raise`. An adapter below the baseline, as a GL adapter can be, gets
@@ -888,8 +951,8 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   through `runtime_info()`.
   `SweepOutput::Memory` writes the four files through the same writers over `Vec<u8>`
   (`output/memory.rs`, `SweepFiles`) and hands them over in the `SweepRecord`.
-  `SweepOutput::Directory` is native only. `SweepRunOptions::memory_budget` and `gpu_memory` are
-  the budgets of `--memory` and `--gpu-memory`. `SweepRunOptions::series_budget` caps the bytes of
+  `SweepOutput::Directory` is native only. `SweepRunOptions::memory_budget` and `gpu_memory_budget`
+  are the budgets of `--memory` and `--gpu-memory`. `SweepRunOptions::series_budget` caps the bytes of
   series the `RunFinished` events carry. From the first run past it, every run arrives without its
   series, and the files keep them all. `SweepRun::resume_directory` resumes a folder with the spec
   its manifest records, along the path `--resume` takes. `pumped.rs` (`PumpedSweep`) is the
@@ -916,7 +979,8 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   set lacks. `assert_set_conforms` installs the panic hook, panics with every failure of a set, and
   prints the report of a set that passes, skipped checks included. An exemption of a check that
   does not apply fails that check, and under `HENAD_REQUIRE_GPU` a check a missing device would
-  skip fails. `declared.rs` reads the
+  skip fails. An override the model refuses fails every check that builds it, one a missing device
+  skips included. `declared.rs` reads the
   declarations and builds nothing, `DefaultSetup` among them, the `RunSetup::from_parts` check the
   app's Build makes. `built.rs` builds once per check, `determinism.rs` compares two runs, and
   `gpu.rs` (native only) steps a GPU model on the settings' device. A check that builds takes the
@@ -928,23 +992,28 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   model's `Actions` build at the declared defaults. A watchdog trips on time, and a small model
   never trips it. `FullSubmission` runs `MAX_STEPS_PER_SUBMISSION` single steps first and reads
   their stats, then one full submission, and compares the two. A device the full submission
-  poisons reads zeros in every later run, and the other order compares zeros with zeros. A lost
-  device fails it. A GPU model skips `ThreadCount` (`OtherBackend`), and one that does not replay
-  exactly skips `SameSeed`, `SeedSensitivity` and `SamplingCadence` (`InexactReplay`).
+  poisons reads zeros in every later run, and the other order compares zeros with zeros. A model
+  that does not replay exactly runs the full submission alone, and fails when it declares stats and
+  every one reads zero. A lost device fails it. A GPU model skips `ThreadCount` (`OtherBackend`),
+  and one that does not replay exactly skips `SameSeed`, `SeedSensitivity` and `SamplingCadence`
+  (`InexactReplay`).
   `SeedSensitivity` compares the stats and the exported state. `CheckSettings::ticks` refuses fewer
   than `MIN_TICKS`. `CheckSettings::set_text` overrides a value in every check that builds, and
   `exempt` skips a check with a reason. `headless_test_device` (native only) acquires a device for
   a `TestDeviceRequest`, the baseline or `raised(needs)`, with optional features, and a missing
-  feature returns `None` even under `HENAD_REQUIRE_GPU`.
+  feature returns `None` even under `HENAD_REQUIRE_GPU`. An adapter below the baseline gives no
+  device for either request, as `acquire_headless` refuses it.
   `src/tests/` holds `support.rs` (the headless device, scratch directories, a sweep helper,
   `OutputTables`, `CommitLimit`, and `ticks_seen` with `HOLD_WINDOW` for pause checks), `broken.rs`
   (`GridModel`s that panic or report a value that is not finite, registered through the public
   `register_grid_model`, the `grid_model!` models with one broken declaration or build each,
   `SharedAccumulator`, whose kernel shares a counter across chunks, `DeclaresNumAgents`,
-  `CountsViews`, a network model whose `prepare_view` writes a lane, `BuggyState`, which adds one
-  `Bug` to a CPU state, and `ZeroesFullSubmissions`, a GPU wrapper that reads zeros on every state
-  of its entry after a full submission), `kit.rs` (each broken model fails exactly the checks its
-  bug breaks), and the
+  `CountsViews`, a network model whose `prepare_view` writes a lane, `DefaultOutOfBounds`, whose
+  default lies outside its bounds, `OversizedGpuSir`, whose defaults pass the WebGPU baseline,
+  `BuggyState`, which adds one `Bug` to a CPU state, `BuggyGpuState`, which adds one `GpuBug` to a
+  GPU state, such as reading zeros on every state of its entry after a full submission, and the
+  sound `PlacesCellBySeed` and `StatlessGpuBoids`, which the kit passes), `kit.rs` (each broken
+  model fails exactly the checks its bug breaks), and the
   determinism, failure, run control, resume, shard, GPU sweep, GPU
   track (`tracks.rs`), handle, result set and replay tests. For a model that replays exactly (every
   model but `gpu_boids`), the three CSVs are byte-identical apart from `TIMING_COLUMNS` at any lane
@@ -960,9 +1029,12 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `a_pipelined_gpu_sample_matches_a_blocking_one` pins a track's pipelined sample to
   `stepping::sample_stats`. `gpu_boids` matches only in the parts the engine owns, every `runs.csv`
   field up to `population` and the run and tick of each series row, and
-  `interleaved_gpu_boids_runs_commit_in_plan_order` pins them. Keep them.
+  `interleaved_gpu_boids_runs_commit_in_plan_order` pins them.
+  `every_gpu_model_that_replays_has_a_track_case` holds the cases of the two GPU tests above to
+  every GPU model that replays exactly. Keep them.
   `search_run.rs` runs a spec with a `[search]` table, behind `run_spec`. `SearchPlan` plans the fixed
-  values and actions as a one-config `Plan`, and a search spec with blocks is refused. It resolves
+  values and actions as a one-config `Plan`, and a search spec with blocks is refused, as is a batch
+  of more than `MAX_RUNS` runs (`SearchPlanError::BatchTooLarge`). It resolves
   the space, checks that every watched column is a reducer column, and hashes the settings that fix
   the trajectory with `search_hash`. Unlike `plan_hash`, that hash covers the replicate count, and
   it covers the budget. The loop asks the searcher for a batch, runs it through the sweep's
@@ -985,14 +1057,18 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   the search hash. A search that fails records its standing at the failure there. `SweepRun` and
   `PumpedSweep` run searches as well, and `ResultSet` reads
   a search folder back with its tables. `specs/sir_search_genetic.toml` and
-  `specs/sir_search_pse.toml` are the example searches the docs include. `tests/search.rs` holds
+  `specs/sir_search_pse.toml` are the example searches the docs include. `src/tests/search.rs` holds
   `every_example_search_spec_parses`, `a_search_writes_the_same_tables_at_any_concurrency`,
   `a_resumed_search_follows_the_same_trajectory`,
   `a_resume_that_meets_a_changed_run_leaves_the_directory_alone` and
-  `a_gpu_search_writes_the_same_tables_on_any_track_count`. Keep them.
+  `a_gpu_search_writes_the_same_tables_on_any_track_count`. Keep them. A resume plans the spec its
+  manifest records, and the workspace turns on serde_json's `float_roundtrip` so that a bound or a
+  rate reads back bit for bit. `a_search_resumes_from_a_manifest_holding_a_seventeen_digit_axis_bound`
+  (`src/tests/manifest_floats.rs`) holds it. Keep it.
 - **henad-app**: eframe/egui desktop+web GUI, as a library with the official binary over it. The
   public API is `options.rs` and the two entry points. `AppOptions::new(models, product, host)`
-  takes the `ModelSet`, the product name (the window title and, on native, eframe's storage folder)
+  takes the `ModelSet`, the product name (the window title and, on native, eframe's storage folder,
+  through `storage_id` where the name is no folder name)
   and the host's `BuildInfo`, with setters for the icon, the source and documentation links, the
   licence, the `cli_command` and an `AppOpening` (`Results` on native, `Run` or `Setup`, each with
   an `OpenAt`, which `lib.rs` re-exports from the private `state`). The product's fields sit in the
@@ -1001,20 +1077,21 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   hidden `AppOptions::__official`. `native.rs` holds `run_native`, which returns `AppError` (its
   `Debug` writes its `Display` and source, as `ShaderBuildError`'s does), and `results_folder`,
   which `--open DIR` and `--open=DIR` go through. `web.rs` holds `start_web`, which starts the
-  wasm-bindgen-rayon pool at `requested_threads` before it calls the options closure, then looks up
-  `the_canvas_id` and `loading_text`, and `init_web_logger`. A pool that fails to start leaves
-  `thread_pool_note`, which the Performance tab shows. A start failure is returned, a missing window
+  wasm-bindgen-rayon pool at the crate-private `requested_threads` before it calls the options
+  closure, then looks up `the_canvas_id` and `loading_text`, and `init_web_logger`. A pool that
+  fails to start leaves `thread_pool_note`, which the Performance tab shows. wasm-bindgen-rayon and
+  the `init_thread_pool` re-export exist only with `target_feature = "atomics"`. A wasm32 build
+  without it, as docs.rs makes, has no pool and leaves a note of its own. A start failure is returned, a missing window
   included, and the caller logs it once. In a window, it is also written into `loading_text` where
   the page has one. Both entry points check the opening against the set before any device exists
-  (`AppOptions::check_opening`,
-  `OpeningError`): the set has to hold the id, a run its parameter count, and a setup's entry the
-  same `schema_hash`. `AppError` is native only and `WebStartError` wasm only. henad-app re-exports
-  no eframe item. `state`, `ui`, `HenadApp` and `wgpu_configuration` are private. `HenadApp`
-  (`lib.rs`) owns the `SimThread` and polls snapshots each frame. `HenadApp::new` takes the options
-  and hands the opening to `AppState::open`, and `wgpu_configuration` takes the set's `GpuNeeds` for
-  the device request. henad-models is optional behind the default `example-models` feature, which
-  the `[[bin]]` requires, and `main.rs` builds the official options over `example_models()`:
-  "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and `__official()`. The
+  (`AppOptions::check_opening`, `OpeningError`): the set has to hold the id, a run has to pass
+  `RunSetup::from_replay`, and a setup's entry has to declare the same `schema_hash`. `AppError` is
+  native only and `WebStartError` wasm only. henad-app re-exports no eframe item. `state`, `ui`, `HenadApp` and
+  `wgpu_configuration` are private. `HenadApp` (`lib.rs`) owns the `SimThread` and polls snapshots each frame.
+  `HenadApp::new` takes the options and hands the opening to `AppState::open`, and `wgpu_configuration` takes the set's
+  `GpuNeeds` for the device request. henad-models and the binary's env_logger are optional behind the default
+  `example-models` feature, which the `[[bin]]` requires, and `main.rs` builds the official options over
+  `example_models()`: "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and `__official()`. The
   eframe app name "Henad" names the native storage folder, which left 0.2.0's `Henad-Engine` behind,
   and a browser keeps eframe's one key per origin. `ui/` has one file per panel or window
   (`menu_bar.rs`, `model.rs`, `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
@@ -1042,9 +1119,11 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   model, or with none selected and `NO_MODEL_RUNS` in the Model panel. A missing id reads as
   `lookup_message` words it, "This build does not include model 'x'" or "Model 'x' needs a GPU with
   compute support, and this device has none", with no full stop. `select_model` loads the defaults
-  and clears the schedule, for the Model panel and the Sweep tab alike, and an id the set lacks
-  leaves no values. `AppState` also holds the values the next build reads: `param_values`, the Seed
-  field's `seed` with its raw `seed_text`, and the scheduled actions in `schedule`.
+  and clears the schedule, or, for the loaded model, restores `loaded_values` (its built values with
+  every live edit, kept by `send_live_param`), its seed and its schedule, for the Model panel and
+  the Sweep tab alike, and an id the set lacks leaves no values. `AppState` also holds the values
+  the next build reads: `param_values`, the Seed field's `seed` with its raw `seed_text`, and the
+  scheduled actions in `schedule`.
   `AppState::build_setup` checks all three through `RunSetup::from_parts`. Playback's
   `build_refusal` shows a `SetupError` as Build's disabled reason (`setup_message`), as it shows
   `INVALID_SEED`, `reset_simulation` builds nothing while the check fails, and `open_run` refuses
@@ -1080,9 +1159,9 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   as "Run not opened" and the reason) in `opening_refusal`, which the Model panel shows with "Select
   a model to continue." until a model is picked, or above "No model in this build runs on this
   device." when none runs here, and brings the Model tab to the front. `export/metadata.rs` writes
-  the loaded `seed` (null for the default), `scheduled_actions`, the `host` build from
-  `AppState::product` and the `model_source` build, and reads `engine_version` from `ENGINE_BUILD`.
-  A sweep's manifest records the product's host build as well. `about.rs` draws the product's name,
+  `loaded_values` as `params`, the loaded `seed` (null for the default), `scheduled_actions`, the
+  `host` build from `AppState::product` and the `model_source` build, and reads `engine_version`
+  from `ENGINE_BUILD`. A sweep's manifest records the product's host build as well. `about.rs` draws the product's name,
   its links and its build rows, Henad's logo and tagline for the official app and the host's icon
   otherwise (decoded once into the `OnceCell` `logo_texture`, a failed decode included), a Built on
   row from `ENGINE_BUILD` (with henad-core's version when it differs) for any other product, and one
@@ -1168,7 +1247,9 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `egui_extras::TableBuilder`, and the detail strip whose Open and Open at end go through
   `AppState::open_run`. Open at end steps to the run's recorded ticks, which a stop condition can
   bring early. The store refuses to replay a run whose plan gives another run key than its row,
-  while the model's schema matches the sweep's. After a model change the replay opens under the
+  while the model's schema matches the sweep's. A folder whose manifest records more than
+  `MAX_PLANNED_CONFIGS` configs is never planned, lists its configs from `runs.csv` alone and
+  refuses every replay, on native and in a browser. After a model change the replay opens under the
   table's warning, as it does when Henad's or the model's build differs from any a session recorded
   (`ResultsStore::changed_builds`). A model the entry or the manifest declares does not replay
   exactly gets a note beside Open (`replays_exactly`). Copy command puts an equivalent
@@ -1177,8 +1258,9 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   picked files in a browser, on the frame after the one that first shows "Reading results"
   (`hold_picked_files`, `due_picked_files`).
   `ui::results::poll` takes the `egui::Context` for it.
-  Resume sweep resumes an incomplete folder through `SweepRun::resume_directory`, and the folder is
-  read again once that sweep ends. `henad-app --open DIR` opens a folder at start.
+  Resume sweep resumes an incomplete folder through `SweepRun::resume_directory`, with the memory
+  budgets its manifest records and automatic concurrency (`SessionExecution::recorded`), and the
+  folder is read again once that sweep ends. `henad-app --open DIR` opens a folder at start.
   `ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
   PSE axes, the budget, and each method's other settings in a nested Method settings section. An
   output picked there that the runs do not record joins the Outputs section, and Use range from
@@ -1196,14 +1278,15 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   numeric axis moves every level above it, and an `f32` search costs time linear in its levels per
   frame.
 - **henad-cli**: headless benchmark runner, as a library with the official binary over it.
-  `lib.rs` holds the crate doc, `CliOptions` (a `ModelSet`, the host's `BuildInfo` and the command
-  name, the host's package name unless `command_name` sets another), `SOME_RUNS_NOT_OK` and
-  `run(options, arguments) -> u8`. `run` installs the panic hook, parses with clap's `Command::name`
-  and `Command::version` from the options, prints an error as `Error: {error:?}` and returns 1, and
+  `lib.rs` holds the crate doc, `CliOptions` (a `ModelSet`, the host's `BuildInfo`, the command
+  name, the host's package name unless `command_name` sets another, and the `about` line help opens
+  with, henad-cli's description unless set), `SOME_RUNS_NOT_OK` and `run(options, arguments) -> u8`.
+  `run` installs the panic hook, parses with clap's `Command::name`, `bin_name` and `version` from
+  the options, and `about` when set, prints an error as `Error: {error:?}` and returns 1, and
   returns clap's own code for `--help`, `--version` and a usage error. Argument parsing, the modes,
   `Reporter`, `json_report` and the text formats are private. `main.rs` is three lines over `run`
   with `example_models()` and its `build_info!()`. henad-models is optional behind the default
-  `example-models` feature, which the `[[bin]]` and the two integration tests that run it name in
+  `example-models` feature, which the `[[bin]]` and the three integration tests that run it name in
   `required-features`, and `cargo build -p henad-cli --no-default-features` builds the library
   alone. Steps a state in a bare loop with no rendering, no
   `SimThread` and no pacing, so a measurement times nothing but `step()`. `--act ID@TICK`
@@ -1213,15 +1296,17 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   The GPU benchmark fires before the step and the GPU stats export after it, one `action::Fire`
   rule per run, as the two CPU loops do. Otherwise two runs back to back both fire the tick they
   share. The benchmark is `henad_explore::benchmark::run_benchmark` (`benchmark.rs`), which holds
-  the rule, `BENCH_FIRE`, and reports each repetition through a callback as it finishes, so a run
-  killed part way has printed every repetition it finished. `--export` and `--export-stats` step a
-  `Simulation` (`run_to` and `write_state`, `run_sampled`). The shared `params_by_id_json` and
-  `scheduled_actions_json` sit in henad-explore's `output/details.rs`, for the CLI's summary and the
-  app's run details. A GPU run steps through `gpu/stepping.rs` on a device from henad-explore's
-  `acquire_headless`, sized to the options' set's `gpu_needs()`. The CLI resolves its positional id
-  through that set's `ModelSet::lookup`, and refuses an id outside the set ("this build does not
-  include model 'x' (try --list)") apart from a GPU model on a machine without a device. `--list` prints
-  only the models this machine can run. The CLI never publishes and never lays out a network.
+  the rule, `BENCH_FIRE`, and reports each repetition through a callback as it starts and as it
+  finishes, so a run killed part way has printed every repetition it finished. `--export` and
+  `--export-stats` step a `Simulation` (`run_to` and `write_state`, `run_sampled`). The shared
+  `params_by_id_json` and `scheduled_actions_json` sit in henad-explore's `output/details.rs`, for
+  the CLI's summary and the app's run details. A GPU run steps through `gpu/stepping.rs` on a device
+  from henad-explore's `acquire_headless`, sized to the options' set's `gpu_needs()`. A set without
+  a GPU model asks for no device, apart from `--info`, and prints no GPU note. The CLI resolves its
+  positional id through that set's `ModelSet::lookup`, and refuses an id outside the set ("this
+  build does not include model 'x' (try --list)") apart from a GPU model on a machine without a
+  device. `--list` prints only the models this machine can run. The CLI never publishes and never
+  lays out a network.
   `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
   publish would.
   `explore.rs` is the sweep mode. `--out`, `--spec` or `--dry-run` selects it (`Mode::Explore`), and
@@ -1231,7 +1316,10 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `random:N` draw, or a `--design` table, or loads `--spec`. In a sweep, `--act` adds an action
   named by its id, or by the first of `ID_2`, `ID_3` and so on that no earlier action took, and
   `--vary action.NAME=LEVELS` varies its tick. `--spec` conflicts with every flag that changes a
-  result. `--concurrent` (the lanes of a
+  result, and needs `--out`, `--dry-run` or `--params` (the `spec_use` group). A value parser
+  (`check_set`, `check_act`, `check_vary`, `check_stop`, `check_reduce`) refuses a malformed
+  `--set`, `--act`, `--vary`, `--stop` or `--reduce` before anything runs, with exit code 2, and
+  the model checks the ids later. `--concurrent` (the lanes of a
   CPU model or the tracks of a GPU model), `--memory`, `--gpu-memory`, `--shard`, `--resume` and
   `--retry-failed` pass through to `SweepOptions`, and `--merge DIR... --out DIR` (`Mode::Merge`)
   calls `merge` with no model and no device. It renders `ProgressEvent`s as a text line on stderr
@@ -1249,29 +1337,45 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `build.rs` calls `henad_build::stamp_commit`, as henad-app's does, and the `CliOptions` host
   build is the one the manifest records, the binary's `build_info!()` for `henad-cli`. The `info`
   line's `engine_version` reads `ENGINE_BUILD.version()`. Under `--json` each `SweepWarning` also
-  prints as an `explore_warning` line (`warning_json`). `existing_invocations_keep_their_mode`
-  reads the command lines of `lib.rs`, which holds the crate doc, and of `docs/reference/cli.md`,
-  and its floor is the 13 documented lines that are not sweeps. Keep it.
-- **henad**: the facade, the crate a program depends on. Its one `lib.rs` re-exports and defines
-  nothing else: the root items and macros, `params`, `stats`, `views`, `action`, `gpu`, `runner`,
-  `engine`, `explore`, `benchmark` (native), `authoring` with its `primitives` and `prelude`, the
+  prints as an `explore_warning` line (`warning_json`), and so does the series rows warning, as
+  `series_rows`. `existing_invocations_keep_their_mode` reads the command lines of `lib.rs`, which
+  holds the crate doc, and of `docs/reference/cli.md`, and its floor is the 13 documented lines
+  that are not sweeps. `tests/json_lines.rs` runs the binary and holds each `--json` line kind to
+  the fields `benchmarks/protocol.md` and `docs/reference/cli.md` list, `explore_progress` aside,
+  which a quick sweep never sends and a unit test checks. Keep them.
+- **henad**: the facade, the crate a program depends on. Its one `lib.rs` re-exports, and defines
+  nothing but the `params!` forward and its hidden `__macro_support`: the root items and macros,
+  `params`, `stats`, `views`, `action`, `gpu`, `runner`, `engine`, `explore`, `benchmark`
+  (native), `authoring` with its `primitives` and `prelude`, the
   gated `models` (`example-models`), `app` (`app`), `cli` (`cli`) and `testing` (`testing`), and
   `henad::prelude`. Each re-export fixes its item's one documented path, and the guides name items
   by these paths alone. `henad::explore` keeps henad-core's planning modules as modules (`spec`,
   `plan`, `search` and the rest), and `henad::authoring` globs henad-core's `authoring::model`
-  modules and `helpers` flat, under `#![deny(ambiguous_glob_reexports)]`, so a name two of them
-  share fails the build. The root macros reach the root through a glob of the private
-  `root_macros`, since henad-core's `params` names a module as well as the macro, and the facade's
-  own `params` module shadows the module. henad-cli sits under a native target table, and `cli`
-  adds nothing on wasm32. No feature changes a bound, a layout or a result. `examples/complete.rs`
-  is the program a newcomer reads first, and `README.md`, which the crate doc includes with `app`
-  and `example-models` both on, holds a copy in a `rust,no_run` fence.
+  modules flat, under `#![deny(ambiguous_glob_reexports)]`, so a name two of them share fails the
+  build. `binding` is the exception. The facade names its `BindingDecl` and `BindingKind`, as it
+  names each item of `helpers`, and leaves the engine's `buffer_target`, `RESERVED` and
+  `fmt_bytes` out. `params!` is a macro of the facade's own that forwards to henad-core's through
+  the hidden `__macro_support`. A `use` of henad-core's would bring its `params` module along, and
+  docs.rs would show that module at `henad::params`. The other root macros are plain re-exports.
+  henad-cli sits under a native target table, and `cli` adds nothing on wasm32. docs.rs builds the
+  facade for wasm32 too, without atomics, for the app's web entry point. No feature changes a bound,
+  a layout or a result. `examples/complete.rs` is the program a newcomer reads first, and
+  `README.md`, which the crate doc includes with `app` and `example-models` both on, holds a copy in
+  a `rust,no_run` fence.
   `the_readme_program_matches_the_example` (`lib.rs`) holds the two equal byte for byte, apart
   from the example's `// --8<--` lines, which the README copy leaves out. The program prints with
-  `writeln!` to standard output and carries no lint attribute, so it copies into any crate.
+  `writeln!` to standard output and carries no lint attribute, so it copies into any crate. Its
+  `main` empties `sir-rates` in the temporary directory, hands `study` the example set, that folder
+  and standard output, then opens the app. `tests/complete.rs` includes the example whole, runs
+  `study` into a buffer on a folder named after the process id, removes that folder, and compares
+  the lines with the "It prints" block of `docs/guide/library.md`, where a `...` line stands for
+  any lines.
   `tests/facade_paths.rs` compiles against facade paths alone, for the items the tutorial never
   names. It defines no model, needs no build script and never builds on a device, and its parts
-  that need an entry compile in a module no test calls. Keep both.
+  that need an entry compile in a module no test calls. That module also holds the `gpu_build`
+  and `scoped_steps` regions `guide/library.md` includes, the second through a `rayon`
+  dev-dependency. Its `named_only` module names items whose path is the whole check. Keep all
+  three.
 - **henad-tutorial** (`examples/tutorial`, `publish = false`): the finished code of the five pages
   under `docs/guide/first-model/`, which include each file whole. `life.rs`, `foraging/`,
   `virus.rs`, `gpu_life/` and `gpu_foraging/` hold the models `life`, `foraging`, `virus`,
@@ -1286,9 +1390,17 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   one byte for byte, `gpu_foraging`'s apart from the import path `gpu_foraging::state`.
   `tests/parity.rs` steps each tutorial model beside the example model it teaches and demands the
   same bits (`the_game_of_life_tutorial_matches_the_shipped_model` and its siblings), and
-  `tests/kit.rs` runs `assert_set_conforms` over `models()`. The `package` job excludes it,
+  `tests/kit.rs` runs `assert_set_conforms` over `models()` and joins the five to
+  `example_models()`. `tests/snippets.rs` holds every page block titled with a file under `src/` to
+  that file, line by line, apart from the first versions it lists, and the template's crate
+  attributes, with their comments, to those of `lib.rs`. `tests/thread_count.rs` holds
+  the foraging tutorial's thread-count test, outside `foraging/mod.rs`, which the ants page shows
+  whole and a reader's crate, without `rayon`, has to build. The modules in `lib.rs` are `pub`, and
+  a reader's crate declares them private, so a dead item shows only there. A change to a page is
+  checked by following it in a copy of the template, patched to the workspace by path. The
+  `package` job excludes it,
   `scripts/check_packaging.sh` reads `crates/` alone, and `about.toml`'s `[private] ignore` keeps
-  it off the licence page. Keep the three test files.
+  it off the licence page. Keep the five test files.
 - **The template** (`templates/model-project`, package `my-model`, `publish = false`): the project
   a user fetches from a release tag and builds on the published crates, outside the workspace
   through the root `exclude`. It depends on `henad` and `henad-build` alone, at the workspace's
@@ -1300,14 +1412,18 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `src/bin/my-model-cli.rs` are the app and the CLI over `henad::app` and `henad::cli`, under the
   product name "My Model". `build.rs` calls `stamp_commit` and `ShaderBuild::discover("src")`,
   and ends in `Ok(())`, so a crate without shaders deletes one line. `.cargo/config.toml` holds the
-  wasm32 rustflags, and `scripts/build_web.sh` refuses an inherited `RUSTFLAGS` or
-  `CARGO_ENCODED_RUSTFLAGS` rather than drop them. `scripts/ci.sh` runs the stages `lint`,
+  wasm32 rustflags. `scripts/web-checks.sh`, which `scripts/build_web.sh` and the `lint-web` stage
+  source, refuses an inherited `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` rather than drop them, and
+  prints the install line of a missing nightly. `scripts/ci.sh` runs the stages `lint`,
   `lint-web`, `test` and `web` (all four without an argument), with `--locked` once a lock exists,
-  and `.github/workflows/ci.yml` runs them under `HENAD_REQUIRE_GPU=1` on lavapipe.
+  and `.github/workflows/ci.yml` runs them through `bash`, since a checkout from Windows keeps no
+  executable bit, under `HENAD_REQUIRE_GPU=1` on lavapipe. `.gitattributes` keeps the scripts and
+  the pins at LF line ends.
   `scripts/install-lavapipe.sh` holds the Mesa and gfx-rs/ci-build pins, and Henad's own `test`
   job calls it. `.github/dependabot.yml` groups `henad` and `henad-build`. `README.md` holds the
-  `fetch`, `rename`, `run` and `update` regions, `Cargo.toml` the `profile` region, and the guide
-  will include them. The template ships no `Cargo.lock`, and its `.gitignore` never lists one.
+  `fetch`, `rename`, `run` and `update` regions, `Cargo.toml` the `profile` region, and
+  `guide/your-project.md` and `guide/library.md` include them. The template ships no `Cargo.lock`,
+  and its `.gitignore` never lists one.
   `rustfmt.toml` sets the 120 columns Henad formats at. Its `[profile.release]` equals the root's,
   which `scripts/check_packaging.sh` checks, and `./check.sh` never builds it.
 
@@ -1385,7 +1501,9 @@ rather than `SimState` directly.
 
 A GPU port that leaves the order of its writes to the device declares `REPLAYS_EXACTLY = false`,
 as `gpu_boids` does, and the kit then skips the checks that compare two runs of one seed. A port
-seeds itself through its CPU model's `init` from `grid_init_rng(seed)` or `agent_init_rng(seed)`.
+starts from its CPU model's tick 0, seeded from `grid_init_rng(seed)` or `agent_init_rng(seed)`.
+The agent ports and the template's `gpu_vote` call the CPU `init`, and the example grid ports
+repeat its draws.
 
 Either way, register an example model in `henad-models/src/lib.rs::example_models()` via the
 `register_*` generic for its trait, so it's type-erased into a `ModelEntry` and shows up in the UI.
@@ -1420,9 +1538,9 @@ available, that a GPU entry builds on a baseline device and runs a full submissi
   per tick on the sequential path by `advance_tick_seed` — folding the tick in only through
   `chunk_seed` measured 14% slower on SIR with identical content, and that was never explained.
   Boids, ants, Virus on a Network and Team Assembly each have a
-  `results_do_not_depend_on_the_thread_count` test, as do the foraging tutorial,
-  `cpu/grid_engine.rs`, `cpu/layout.rs` and `cpu/primitives/components.rs`. Keep them. The kit's `ThreadCount` compares every CPU model of
-  a set the same way, at 14 jobs. `a_build_that_reads_the_pool_width_fails_the_thread_count_check`
+  `results_do_not_depend_on_the_thread_count` test, as do the foraging tutorial (in its `tests/`),
+  `cpu/grid_engine.rs`, `cpu/layout.rs` and `cpu/primitives/components.rs`. Keep them. The kit's `ThreadCount` compares
+  every CPU model of a set the same way, at 14 jobs. `a_build_that_reads_the_pool_width_fails_the_thread_count_check`
   pins it deterministically. `a_shared_accumulator_fails_the_thread_count_check` retries up to five
   times, since a pool can take a shared lock in the single thread's order by chance.
 - `AgentModel::CHUNK` is per-model on purpose. It sets both the RNG seeding granularity and the
@@ -1507,8 +1625,9 @@ is about not undoing them.
   error no scope claims. `gpu::fault::catching_on` wraps model construction in error scopes for all
   three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the floor under
   every path no scope covers, egui's own rendering included. Contracts `capacity.rs` cannot see
-  (workgroup size, uniform layout, an allocation the device has no memory for) now reach the UI as
-  a modal. Do not undo either half — remove the handler and the next validation error ends the
+  (uniform layout, an allocation the device has no memory for) now reach the UI as a modal, and
+  `contracts.rs` turns a workgroup size or a buffer label the device would accept into a panic
+  at construction. Do not undo either half — remove the handler and the next validation error ends the
   process. Note error scopes are **thread-local**, so a scope pushed on the UI thread never sees
   what a sim thread does. The sink exists to cover that asymmetry.
 - **A panicking kernel is caught too, and its location needs help.** Both sim threads wrap
@@ -1533,7 +1652,10 @@ is about not undoing them.
   only through the device-lost callback, and for a destroyed device only once a poll finds its
   queue empty. `GpuContext::new` installs that callback and `GpuContext::is_lost` reads it. The GPU
   tracks drain the device and check it before writing any run that failed on the GPU. Otherwise
-  every run left is written as `gpu_error` instead of being left for `--resume`.
+  every run left is written as `gpu_error` instead of being left for `--resume`. `stepping::wait`
+  and `stepping::sample_stats` return `FaultKind::DeviceLost` once it is set, and a `Simulation`
+  returns it in place of the errors the loss caused. Otherwise `--export-stats` and the benchmark
+  step on a lost device and report the last stats it read.
 - **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
   henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
   `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as
@@ -1543,25 +1665,34 @@ is about not undoing them.
   `build.rs` calls `stamp_engine_commit` alone.
   henad-compute names its entry points with `ShaderBuild::new("src/gpu")`, and the other two use
   `discover` over `src` and `src/ui`: every `.wgsl` file without a `#define_import_path` line.
-  `discover` refuses a path component that is no Rust identifier or is a keyword, names that
+  `discover` follows a symlink to a directory, and walks a directory reached twice once. It
+  refuses a path component that is no Rust identifier or is a keyword, names that
   collide, a `henad.wgsl` file or a `henad` directory holding a `.wgsl` file in any case, which
   would shadow a shared module, and a first component the generated code uses at its root (`wgpu`,
-  `bytemuck`, `std`, `core`, `alloc`, `_root`, `ShaderEntry`, `layout_asserts`, `bytemuck_impls`). A
-  module with a `@binding` line fails the build. The binding constant is the path's components
-  upper-cased and joined by `_`. `generate` copies the shared modules from henad-core into
-  `OUT_DIR/henad_wgsl/henad/`, runs `wgsl_bindgen` (pinned to `=0.23.3`, and
-  `scripts/check_packaging.sh` holds `WGSL_BINDGEN_VERSION` to the pin) with its own rerun lines
-  off, prints one `cargo:rerun-if-changed` for the shader root (and one per explicit entry), in the
-  single-colon form that keeps a downstream MSRV below 1.77, skips the pass when the FNV-1a stamp of
-  its inputs and of `output.rs` itself matches `shader_bindings.stamp`, and writes each file only
-  when its bytes change. A crate with no shaders gets an empty `shader_bindings.rs` and loses its
+  `bytemuck`, `std`, `core`, `alloc`, `_root`, `ShaderEntry`, `layout_asserts`, `bytemuck_impls`).
+  `generate` refuses an import path that starts with one of them too, since the bindings name an
+  imported module by its import path, and a quoted one by its file stem (`bindings_module`,
+  `ShaderBuildError::ReservedImport`). A module or an imported file with a `@binding` line fails
+  the build, as does an import cycle. `wgsl_bindgen` would follow a cycle until the stack
+  overflows, and a panic of its own becomes `ShaderBuildError::Compose`. The binding constant is
+  the path's components upper-cased and joined by `_`. `generate` copies the shared modules from
+  henad-core into `OUT_DIR/henad_wgsl/henad/` and removes a copy henad-core no longer holds, runs
+  `wgsl_bindgen` (pinned to `=0.23.3`, and `scripts/check_packaging.sh` holds
+  `WGSL_BINDGEN_VERSION` to the pin) with its own rerun lines off, prints one
+  `cargo:rerun-if-changed` for the shader root (and one per explicit entry and per file outside the
+  root an entry imports), in the single-colon form that keeps a downstream MSRV below 1.77, skips
+  the pass when the FNV-1a stamp of its inputs and of `output.rs` itself matches
+  `shader_bindings.stamp`, and writes each file only when its bytes change. The inputs are every
+  file `wgsl_bindgen`'s dependency tree reads, a quoted path import outside the root or a file
+  without the `.wgsl` extension included. A crate with no shaders gets an empty `shader_bindings.rs` and loses its
   stamp. Otherwise the shaders' return would match the old stamp and keep the empty file.
   `ShaderBuildError`'s `Debug` writes its `Display`. Uniform structs, workgroup sizes and bind group
   layouts therefore come from the WGSL, and each model asserts its own struct against the generated
   one. Shared WGSL is reached with `#import henad::<module>`, resolved at build time, so no shader
   is assembled at runtime any more. henad-build also reads each entry's `@group(0)` lines into
   `binding_decls`, in `@binding` order, and fails the build on any line holding `@binding` or
-  `@group` in another form than `@group(G) @binding(N) var<...> name: Type;` or a gap in the
+  `@group` in another form than `@group(G) @binding(N) var<...> name: Type;` (`BindingLine`), on a
+  sampler, a sampled texture or another address space (`UnsupportedBinding`), or on a gap in the
   indices. A compile-time assertion in `binding_decls.rs` holds each list to the length of the
   generated `WgpuBindGroup0` layout, and `include_shaders!` asserts that the shaders were composed
   against the `SHARED_WGSL_FNV1A64` of the henad-core it links. henad-build's tests run `generate`
@@ -1604,8 +1735,10 @@ at or behind the current one pauses at once. Going back is the host's job, and t
 first. The GPU loop cuts a batch at the target and a submission at each tick an action is due at,
 gives each action a submission of its own (`encode_action` needs one per press), and at the target
 takes the blocking `snapshot_now`. On native the stats then equal the state at the target. In a
-browser the readback cannot block, and the stats land on a later pump. Either driver runs a run-to
-through the same `pump`, and the frame driver cuts it at `PUMP_BUDGET_MS` like any other.
+browser the readback cannot block, and the stats land on a later pump. A loop told to step while a
+one-shot snapshot's readback is still out (`late_stats`) waits for it and publishes that tick
+again first. Otherwise the build's zeros stay in the history as tick 0's row. Either driver runs a
+run-to through the same `pump`, and the frame driver cuts it at `PUMP_BUDGET_MS` like any other.
 `a_replay_of_a_planned_run_matches_its_sweep_row` and `a_gpu_schedule_matches_export_stats`
 (henad-explore) pin the live loop's rule to a sweep's and to `--export-stats`. Keep them.
 

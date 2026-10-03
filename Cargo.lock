@@ -1933,6 +1933,7 @@ dependencies = [
  "henad-core",
  "henad-explore",
  "henad-models",
+ "rayon",
 ]
 
 [[package]]
@@ -1953,8 +1954,9 @@ dependencies = [
  "henad-explore",
  "henad-models",
  "image",
+ "js-sys",
  "log",
- "pollster 0.4.0",
+ "pollster 1.0.1",
  "rayon",
  "rfd",
  "send_wrapper",
@@ -2002,7 +2004,7 @@ dependencies = [
  "henad-build",
  "henad-core",
  "log",
- "pollster 0.4.0",
+ "pollster 1.0.1",
  "rayon",
  "send_wrapper",
  "web-sys",
@@ -2022,7 +2024,7 @@ dependencies = [
  "henad-compute",
  "henad-core",
  "henad-models",
- "pollster 0.4.0",
+ "pollster 1.0.1",
  "rayon",
  "serde",
  "serde_json",

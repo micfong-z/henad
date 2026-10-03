@@ -5,7 +5,8 @@
 //! hash alone identifies the build.
 //!
 //! The source hash is a Fowler-Noll-Vo (FNV-1a) hash over the files under `src`, the manifest and, outside a package,
-//! the nearest `Cargo.lock`. Dotfiles, editor backups and dangling symlinks stay out of it, and out of the dirty flag.
+//! the nearest `Cargo.lock`. Dotfiles, editor backups, the `.orig` and `.rej` files a merge or a patch leaves, and
+//! symlinks to a directory or to nothing stay out of it, and out of the dirty flag.
 
 mod files;
 mod git;
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 pub(crate) use files::{CrateFiles, VcsInfo, hash_sources};
 pub(crate) use git::Repository;
 #[cfg(test)]
-pub(crate) use git::echoes_path_format;
+pub(crate) use git::{echoes_path_format, is_date};
 
 use files::nearest_lockfile;
 
@@ -58,10 +59,20 @@ impl Stamp {
         }
         let repository = Repository::find(crate_dir);
         match scope {
-            StampScope::Commit => match &repository {
-                Some(repository) => Self::from_git(repository, &[own]),
-                None => Self::untracked(&own, None, true),
-            },
+            StampScope::Commit => {
+                if let Some(repository) = &repository {
+                    return Self::from_git(repository, &[own]);
+                }
+                let mut stamp = Self::untracked(&own, None, true);
+                // A repository that holds the crate and does not track its manifest yet. A commit reruns the
+                // script, the first one included.
+                if !own.is_package()
+                    && let Some(enclosing) = Repository::enclosing(crate_dir)
+                {
+                    stamp.watched.extend(enclosing.watched());
+                }
+                stamp
+            }
             StampScope::Engine => {
                 let mut stamp = match repository.as_ref().filter(|found| found.prefix() == ENGINE_PREFIX) {
                     Some(henad) => {
@@ -94,6 +105,9 @@ impl Stamp {
     }
 
     /// Returns the stamp of `packages` under git.
+    ///
+    /// The dirty flag reads unknown in place of clean when git does not track the nearest `Cargo.lock`, since no commit
+    /// then records the lockfile. The source hash covers it, and tells two such builds apart.
     fn from_git(repository: &Repository, packages: &[CrateFiles]) -> Self {
         let mut sources = Vec::new();
         let mut watched = repository.watched();
@@ -103,8 +117,12 @@ impl Stamp {
             watched.extend(package.watched());
             pathspecs.extend(package.pathspecs(repository));
         }
+        let mut lockfile_tracked = true;
         if let Some(lockfile) = nearest_lockfile(repository.directory()) {
-            pathspecs.extend(repository.pathspec(&lockfile));
+            match repository.tracked(&lockfile) {
+                Some(pathspec) => pathspecs.push(pathspec),
+                None => lockfile_tracked = false,
+            }
             sources.push(("Cargo.lock".to_owned(), lockfile.clone()));
             watched.push(lockfile);
         }
@@ -112,7 +130,10 @@ impl Stamp {
         let dirty = if commit.is_empty() {
             None
         } else {
-            repository.dirty(&pathspecs)
+            match repository.dirty(&pathspecs) {
+                Some(false) if !lockfile_tracked => None,
+                dirty => dirty,
+            }
         };
         Self {
             commit_date: repository.commit_date(),

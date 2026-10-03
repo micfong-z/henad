@@ -25,7 +25,7 @@ use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::fingerprint::{run_key, search_hash};
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::outcome::{PlannedRun, RunOutcome};
-use henad_core::explore::plan::{Config, ModelSchema, Plan, PlanError, Shard};
+use henad_core::explore::plan::{Config, MAX_RUNS, ModelSchema, Plan, PlanError, Shard};
 use henad_core::explore::replay::Replay;
 use henad_core::explore::search::genome::{Genome, SearchSpace, SearchSpaceError};
 use henad_core::explore::search::pse::{
@@ -46,7 +46,7 @@ use crate::output::manifest::{
 };
 use crate::output::memory::{SweepFiles, memory_writer};
 use crate::output::read::{ReadError, RunsCsv, SeriesScan, parse_one};
-use crate::output::resume::ResumeError;
+use crate::output::resume::{ResumeError, check_model};
 use crate::output::runs_csv::{ID_COLUMNS, OUTCOME_COLUMNS, column_names};
 use crate::output::search_tables::{ConfigColumns, SearchTablesWriter, write_archive, write_ranking};
 use crate::output::{
@@ -79,7 +79,8 @@ impl SearchPlan {
     /// # Errors
     ///
     /// Returns [`SearchPlanError`] for a spec with no search or with blocks, search settings or a space the search
-    /// refuses, fixed values or actions the model refuses, or a budget whose runs overflow a 64-bit count.
+    /// refuses, fixed values or actions the model refuses, a batch of more than [`MAX_RUNS`] runs, or a budget whose
+    /// runs overflow a 64-bit count.
     pub fn new(spec: &SweepSpec, schema: &ModelSchema<'_>) -> Result<Self, SearchPlanError> {
         let search = spec.search.as_ref().ok_or(SearchPlanError::NotASearch)?;
         if !spec.blocks.is_empty() {
@@ -89,6 +90,12 @@ impl SearchPlan {
         let base = spec.plan(schema).map_err(SearchPlanError::Plan)?;
         let space = SearchSpace::resolve(&search.space, schema.params, &spec.actions, &spec.fixed)
             .map_err(SearchPlanError::Space)?;
+        if (search.batch_size as u64).saturating_mul(base.replicates()) > MAX_RUNS {
+            return Err(SearchPlanError::BatchTooLarge {
+                batch_size: search.batch_size,
+                replicates: base.replicates(),
+            });
+        }
         let run_count = search
             .max_evaluations
             .checked_mul(base.replicates())
@@ -238,6 +245,8 @@ pub enum SearchPlanError {
     Space(SearchSpaceError),
     /// A watched column no reducer writes. `known` lists the reducer columns.
     UnknownColumn { column: String, known: Vec<String> },
+    /// A batch of `batch_size` candidates at `replicates` runs each, more than [`MAX_RUNS`] runs in all.
+    BatchTooLarge { batch_size: usize, replicates: u64 },
     /// More runs than a 64-bit count holds.
     TooManyRuns,
     /// A search run as one shard of several.
@@ -262,6 +271,10 @@ impl fmt::Display for SearchPlanError {
                 "no reducer writes '{column}', the column the search watches. The reducer columns are {}",
                 known.join(", ")
             ),
+            Self::BatchTooLarge { batch_size, replicates } => write!(
+                f,
+                "a batch of {batch_size} candidates at {replicates} replicates each has more than {MAX_RUNS} runs"
+            ),
             Self::TooManyRuns => f.write_str("search budget has more runs than a 64-bit integer can hold"),
             Self::Sharded => f.write_str("a search cannot run as a shard"),
             Self::RetryFailed => {
@@ -280,6 +293,7 @@ impl std::error::Error for SearchPlanError {
             Self::NotASearch
             | Self::Blocks
             | Self::UnknownColumn { .. }
+            | Self::BatchTooLarge { .. }
             | Self::TooManyRuns
             | Self::Sharded
             | Self::RetryFailed => None,
@@ -823,8 +837,8 @@ impl RecordedSearch {
     /// # Errors
     ///
     /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds a sweep, another
-    /// search, another model schema or another column layout, or `runs.csv` lists its runs out of order or more runs
-    /// than the search's budget.
+    /// search, another model, another model schema or another column layout, or `runs.csv` lists its runs out of
+    /// order or more runs than the search's budget.
     pub(crate) fn read(
         path: &Path,
         plan: &SearchPlan,
@@ -840,6 +854,7 @@ impl RecordedSearch {
                 current: ManifestMode::Search,
             });
         }
+        check_model(&recorded, plan.base.model())?;
         let current_schema = hex(plan.base.schema_hash());
         if recorded.model.schema_hash != current_schema {
             return Err(ResumeError::SchemaChanged {
@@ -1014,6 +1029,13 @@ pub(crate) struct SearchPreparation {
     watched_reducers: Vec<usize>,
     /// Directory the search resumes, `None` for a search that starts afresh.
     resumed: Option<RecordedSearch>,
+    /// Directory a resume holds locked from before its scan until its last write, `None` for a dry run or a search
+    /// that starts afresh.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "a search in a browser writes no directory")
+    )]
+    locked: Option<OutputDir>,
     outline: SweepOutline,
     /// Clock reading when planning started.
     started: Instant,
@@ -1056,9 +1078,16 @@ impl SearchPreparation {
         let resume_dir = inputs
             .folder
             .filter(|output_dir| options.resume && OutputDir::holds_results(output_dir));
-        if let (None, Some(output_dir)) = (resume_dir, inputs.folder) {
-            OutputDir::check_free(output_dir)?;
-        }
+        let locked = match (resume_dir, inputs.folder) {
+            (None, Some(output_dir)) => {
+                OutputDir::check_free(output_dir)?;
+                None
+            }
+            // Locked before the scan and held until the last write. Otherwise another writer could change the
+            // tables between the two.
+            (Some(output_dir), _) if !inputs.dry_run => Some(OutputDir::open(output_dir)?),
+            _ => None,
+        };
         let base = plan.base();
         if let Some(ctx) = gpu {
             check_capacity(entry, base, &ctx.device.limits())?;
@@ -1119,6 +1148,7 @@ impl SearchPreparation {
             measure: Arc::new(measure),
             watched_reducers,
             resumed,
+            locked,
             outline,
             started,
             started_unix_ms,
@@ -1232,15 +1262,17 @@ impl SearchPreparation {
         output_dir: &Path,
         progress: &mut dyn Progress,
     ) -> Result<SweepRecord, ExploreError> {
-        let dir = if self.resumed.is_some() {
-            OutputDir::open(output_dir)?
+        let created;
+        let dir = if let Some(dir) = &self.locked {
+            dir
         } else {
-            OutputDir::create(output_dir)?
+            created = OutputDir::create(output_dir)?;
+            &created
         };
         let mut manifest = self.manifest(inputs)?;
         dir.write_manifest(&manifest)?;
         let mut standing = None;
-        let (end, counts, session, search_report) = match self.run_into(&dir, inputs, progress, &mut standing) {
+        let (end, counts, session, search_report) = match self.run_into(dir, inputs, progress, &mut standing) {
             Ok(finished) => finished,
             Err(error) => {
                 manifest.fail(now_unix_ms());
@@ -1354,7 +1386,7 @@ impl SearchPreparation {
         Ok(executor
             .with_timeout(self.plan.base.run_settings().timeout)
             .with_active_runs(options.active_runs.clone())
-            .with_gpu_memory(options.gpu_memory))
+            .with_gpu_memory_budget(options.gpu_memory_budget))
     }
 
     /// Runs batches on `executor` until the budget is spent or its control aborts, writing each run and each batch to

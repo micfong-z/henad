@@ -1,0 +1,6 @@
+# Bash fails on a script with CRLF line ends, and `$(cat scripts/web-toolchain)` would keep the CR. A Windows checkout
+# writes CRLF unless told otherwise.
+*.sh text eol=lf
+scripts/web-toolchain text eol=lf
+scripts/trunk-version text eol=lf
+scripts/trunk-sha256 text eol=lf

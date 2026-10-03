@@ -1,9 +1,10 @@
 //! The set of models a host offers.
 //!
 //! A model id is a lowercase ASCII letter, followed by lowercase ASCII letters, digits and underscores. Ids in that
-//! form stay safe as TOML values, CLI arguments, CSV cells and Python attribute names.
+//! form stay safe as TOML values, CLI arguments and CSV cells.
 
 use std::fmt;
+use std::iter::FusedIterator;
 
 use henad_core::provenance::{BuildInfo, ModelSource};
 
@@ -94,8 +95,8 @@ impl ModelSet {
             .filter(move |entry| device || entry.gpu_needs().is_none())
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &ModelEntry> + '_ {
-        self.entries.iter()
+    pub fn iter(&self) -> ModelSetIter<'_> {
+        ModelSetIter(self.entries.iter())
     }
 
     pub fn len(&self) -> usize {
@@ -129,12 +130,32 @@ impl ModelSet {
 
 impl<'a> IntoIterator for &'a ModelSet {
     type Item = &'a ModelEntry;
-    type IntoIter = std::slice::Iter<'a, ModelEntry>;
+    type IntoIter = ModelSetIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.entries.iter()
+        self.iter()
     }
 }
+
+/// Iterator over the entries of a [`ModelSet`], in the set's order.
+#[derive(Debug, Clone)]
+pub struct ModelSetIter<'a>(std::slice::Iter<'a, ModelEntry>);
+
+impl<'a> Iterator for ModelSetIter<'a> {
+    type Item = &'a ModelEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl ExactSizeIterator for ModelSetIter<'_> {}
+
+impl FusedIterator for ModelSetIter<'_> {}
 
 /// Returns an error when `id` is outside the grammar of model ids.
 fn check_id(id: &str) -> Result<(), ModelSetError> {
@@ -298,6 +319,19 @@ mod tests {
         other.insert(register_grid_model::<StillAgain>()).expect("a fresh id");
         assert!(matches!(models.extend(other), Err(ModelSetError::DuplicateId { .. })));
         assert_eq!(ids(&models), ["still"], "a refused extend adds nothing");
+    }
+
+    #[test]
+    fn a_set_iterates_in_insertion_order_either_way() {
+        let mut models = ModelSet::new(build("host"));
+        models.insert(register_grid_model::<Still>()).expect("a fresh id");
+        models.insert(register_grid_model::<Calm>()).expect("a fresh id");
+        let mut through_iter = models.iter();
+        assert_eq!(through_iter.len(), 2);
+        assert_eq!(through_iter.next().map(ModelEntry::id), Some("still"));
+        assert_eq!(through_iter.len(), 1);
+        let through_loop: Vec<&str> = (&models).into_iter().map(ModelEntry::id).collect();
+        assert_eq!(through_loop, ["still", "calm_2"]);
     }
 
     #[test]

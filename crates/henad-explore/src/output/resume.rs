@@ -1,6 +1,6 @@
 //! Resumes of a sweep into a directory that holds some of its runs.
 //!
-//! A resume takes a directory only when its manifest names the same plan, model schema and shard, and no more
+//! A resume takes a directory only when its manifest names the same model, plan, model schema and shard, and no more
 //! replicates than the sweep runs. It keeps every run that ended `ok` or `non_finite`, and every failed run unless
 //! asked to retry failures. A run that timed out is always run again. Kept runs take their ids in the current plan.
 //! A changed replicate count gives them new ids.
@@ -58,8 +58,8 @@ impl ResumeScan {
     ///
     /// # Errors
     ///
-    /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds another plan, model
-    /// schema, shard or column layout or more replicates, or a row names a run the plan does not have.
+    /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds another model, plan,
+    /// model schema, shard or column layout or more replicates, or a row names a run the plan does not have.
     pub fn read(
         path: &Path,
         plan: &Plan,
@@ -230,6 +230,7 @@ fn check_recorded(recorded: &Manifest, plan: &Plan, shard: Shard) -> Result<(), 
             current: ManifestMode::Sweep,
         });
     }
+    check_model(recorded, plan.model())?;
     let current_schema = hex(plan.schema_hash());
     if recorded.model.schema_hash != current_schema {
         return Err(ResumeError::SchemaChanged {
@@ -257,6 +258,21 @@ fn check_recorded(recorded: &Manifest, plan: &Plan, shard: Shard) -> Result<(), 
         });
     }
     Ok(())
+}
+
+/// Checks that `recorded`, the manifest of a directory to resume, names the model `model`.
+///
+/// Called before the schema hash is compared. The hash covers the model's id, and another model would read as a
+/// changed version of the same one.
+pub(crate) fn check_model(recorded: &Manifest, model: &str) -> Result<(), ResumeError> {
+    if recorded.model.id == model {
+        Ok(())
+    } else {
+        Err(ResumeError::ModelChanged {
+            recorded: recorded.model.id.clone(),
+            current: model.to_owned(),
+        })
+    }
 }
 
 /// Returns the id in `plan` of the run written with id `written_id` as replicate `rep` of config `config_id`, after
@@ -295,6 +311,8 @@ pub enum ResumeError {
     Table(ReadError),
     /// A directory holding another plan, each hash as 16 hexadecimal digits.
     PlanChanged { recorded: String, current: String },
+    /// A directory holding runs of the model `recorded`, resumed for the model `current`.
+    ModelChanged { recorded: String, current: String },
     /// A directory holding runs of another model schema, each hash as 16 hexadecimal digits.
     SchemaChanged { recorded: String, current: String },
     /// A directory holding another shard of the plan.
@@ -332,6 +350,12 @@ impl fmt::Display for ResumeError {
                 "the directory holds a different plan (plan hash {recorded}, expected {current}). Only the \
                  replicate count and the timeout can change on a resume"
             ),
+            Self::ModelChanged { recorded, current } => {
+                write!(
+                    f,
+                    "the directory holds runs of model '{recorded}', expected '{current}'"
+                )
+            }
             Self::SchemaChanged { recorded, current } => write!(
                 f,
                 "the directory holds runs of a different model version (schema hash {recorded}, expected \
@@ -351,8 +375,8 @@ impl fmt::Display for ResumeError {
             ),
             Self::OutsideShard { run_id, shard } => write!(
                 f,
-                "run {run_id} of runs.csv falls outside shard {shard} at this replicate count. A resume of a \
-                 sharded sweep cannot change the replicate count"
+                "run {run_id} of runs.csv falls outside shard {shard} at this replicate count. Merge the shards \
+                 first, then resume the merged directory"
             ),
             Self::DuplicateRun { run_id } => write!(f, "run {run_id} is written twice in runs.csv"),
             Self::ModeChanged { recorded, current } => write!(
@@ -380,6 +404,7 @@ impl std::error::Error for ResumeError {
             Self::Manifest(error) => Some(error),
             Self::Table(error) => Some(error),
             Self::PlanChanged { .. }
+            | Self::ModelChanged { .. }
             | Self::SchemaChanged { .. }
             | Self::ShardChanged { .. }
             | Self::ColumnsChanged { .. }
@@ -441,6 +466,34 @@ mod tests {
         assert!(
             matches!(result, Err(ResumeError::UnknownRun { run_id: 9 })),
             "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_resume_of_another_model_names_both() {
+        let scratch = ScratchDir::new("resume-other-model");
+        sweep(
+            &entry("game_of_life", None),
+            None,
+            &life_spec(1),
+            scratch.path(),
+            Concurrency::Auto,
+        );
+        let mut sir_spec = life_spec(1);
+        sir_spec.model = "sir".to_owned();
+        let error = sweep_with(
+            &entry("sir", None),
+            None,
+            &sir_spec,
+            scratch.path(),
+            &sweep_options(true),
+            &mut NoProgress,
+        )
+        .expect_err("a folder of another model");
+        assert!(
+            matches!(&error, ExploreError::Resume(ResumeError::ModelChanged { recorded, current })
+                if recorded == "game_of_life" && current == "sir"),
+            "{error:?}"
         );
     }
 

@@ -1,7 +1,7 @@
 ---
 date: 2026-10-02
 title: "Library M10d: the template"
-description: The tenth milestone of #48, fourth part. templates/model-project is the project a user fetches from a release and builds on the published crates, with a CPU and a GPU model of the voting rule, its own app, command line, web build, test and CI. Henad gains the downstream CI job that builds it against the packaged crates, actionlint over its workflow, and a check that its release profile equals the root's.
+description: "The tenth milestone of #48, fourth part. templates/model-project is the project a user fetches from a release and builds on the published crates, with a CPU and a GPU model of the voting rule, its own app, command line, web build, test and CI. Henad gains the downstream CI job that builds it against the packaged crates, actionlint over its workflow, and a check that its release profile equals the root's."
 icon: material/content-copy
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

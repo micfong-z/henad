@@ -1399,9 +1399,12 @@ mod tests {
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::fingerprint::fnv1a64;
-    use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
+    use henad_core::explore::measure::MeasureError;
+    use henad_core::explore::plan::PlanError;
+    use henad_core::explore::reducer::{ReducerError, ReducerKind, ReducerSpec};
     use henad_core::explore::seed::SeedScheme;
     use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
+    use henad_core::explore::stop::StopSpec;
 
     use super::{DesignTableFile, ExecutionTable, SpecFile, SpecFileError, SpecValue};
     use crate::exec::Concurrency;
@@ -1680,6 +1683,58 @@ e = 1e-3
         assert_eq!(json["block"][0]["factors"][1]["values"][0], serde_json::json!(0.02));
         let back: SpecFile = serde_json::from_value(json).expect("the JSON reads back");
         assert_eq!(back, file);
+    }
+
+    /// Checks that every spec the plan accepts reads back from the file its manifest records, and that the plan
+    /// refuses the two that cannot.
+    #[test]
+    fn a_spec_that_plans_reads_back_from_its_file() {
+        let models = henad_models::example_models();
+        let schema = models.get("sir").expect("the example set holds SIR").schema();
+
+        let mut stop = sweep();
+        stop.run.stop = Some(StopSpec::parse("Agents (k=3) <= 0.5", 4).expect("a well-formed condition"));
+        let text = SpecFile::from(&stop).to_toml().expect("a spec file serializes");
+        let back = parse(&text).and_then(SpecFile::into_spec).expect("the stop reads back");
+        assert_eq!(back, stop, "{text}");
+
+        let mut window = SweepSpec::new("sir");
+        window.measure.reducers.push(ReducerSpec {
+            column: "Infected".to_owned(),
+            kind: ReducerKind::WindowMean { start: 600, end: 200 },
+        });
+        assert!(
+            SpecFile::from(&window).into_spec().is_err(),
+            "a reversed window does not read back"
+        );
+        assert!(
+            matches!(
+                window.plan(&schema),
+                Err(PlanError::Measure(MeasureError::Reducer(
+                    ReducerError::BadWindow { .. }
+                )))
+            ),
+            "the plan refuses a reversed window"
+        );
+
+        let mut timeout = SweepSpec::new("sir");
+        timeout.run.timeout = Some(Duration::MAX);
+        assert!(
+            SpecFile::from(&timeout).into_spec().is_err(),
+            "the longest timeout does not read back"
+        );
+        assert!(
+            matches!(
+                timeout.plan(&schema),
+                Err(PlanError::Measure(MeasureError::TimeoutTooLong { .. }))
+            ),
+            "the plan refuses the longest timeout"
+        );
+        timeout.run.timeout = Some(Duration::from_secs(1 << 62));
+        let back = SpecFile::from(&timeout).into_spec().expect("a long timeout reads back");
+        assert_eq!(back.run.timeout, timeout.run.timeout);
+        let planned = timeout.plan(&schema);
+        assert!(planned.is_ok(), "the plan takes a timeout that reads back: {planned:?}");
     }
 
     #[test]

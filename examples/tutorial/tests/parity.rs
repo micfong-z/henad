@@ -3,28 +3,39 @@
 //! Bit equality rather than a tolerance. Both sides run the same kernels through the same engine,
 //! so anything less than identical means the page has drifted.
 
+// Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
+// limit of 128.
+#![recursion_limit = "256"]
+
 use henad::authoring::{
-    AgentLanes as _, AgentModel, BufferSpec, GpuAgentModel as _, GpuGridModel as _, GridModel, NUM_AGENTS,
-    NetworkModel, PassCtx, PassId, ScalarField, ScalarFieldSpec, network_model_param_descriptors,
+    AgentLanes as _, AgentModel, BufferSpec, GpuAgentModel, GpuGridModel as _, GridModel, NUM_AGENTS, NetworkModel,
+    PassCtx, PassId, ScalarField, ScalarFieldSpec, network_model_param_descriptors,
 };
 use henad::engine::{AgentModelState, GpuAgentState, GpuGridState, GridModelState, NetworkModelState};
 use henad::gpu::{GpuContext, wgpu};
 use henad::models::{ants, game_of_life, gpu_ants, gpu_game_of_life, virus_network};
-use henad::params::{ParamDescriptor, ParamValue};
+use henad::params::{ParamApply, ParamDescriptor, ParamFormat, ParamValue};
 use henad::runner::{GpuSimState, SimState as _};
-use henad::stats::StatDescriptor;
+use henad::stats::{StatDescriptor, StatEntry};
 use henad::testing::{TestDeviceRequest, headless_test_device};
 use henad_tutorial::{foraging, gpu_foraging, gpu_life, life, virus};
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 
 const SEED: u64 = 0x5EED_0DE5_0DE5_5EED;
 
-/// Ids, labels, defaults and the live/reload flag, in declaration order.
-fn descriptor_shape(descs: &[ParamDescriptor]) -> Vec<(&str, &str, ParamValue, bool)> {
+/// Ids, labels, kinds, the live/reload flag and the display format, in declaration order.
+///
+/// Kinds are compared through `Debug`, which carries the default, the range and the slider step.
+fn descriptor_shape(descs: &[ParamDescriptor]) -> Vec<(&str, &str, String, ParamApply, ParamFormat)> {
     descs
         .iter()
-        .map(|d| (d.id, d.label, d.kind.default_value(), d.is_live()))
+        .map(|d| (d.id, d.label, format!("{:?}", d.kind), d.apply, d.format))
         .collect()
+}
+
+/// Labels and colours of the stat series, in declaration order.
+fn stat_shape(descs: &[StatDescriptor]) -> Vec<(&str, [u8; 4])> {
+    descs.iter().map(|d| (d.label, d.color)).collect()
 }
 
 // --- Game of Life ---
@@ -68,6 +79,11 @@ fn the_game_of_life_tutorial_declares_the_same_parameters() {
     assert_eq!(
         life::LifeModel::NEIGHBORHOOD,
         game_of_life::GameOfLifeModel::NEIGHBORHOOD,
+    );
+    assert_eq!(life::LifeModel::PALETTE, game_of_life::GameOfLifeModel::PALETTE);
+    assert_eq!(
+        stat_shape(life::LifeModel::STATS),
+        stat_shape(game_of_life::GameOfLifeModel::STATS)
     );
 }
 
@@ -173,6 +189,15 @@ fn the_ants_tutorial_declares_the_same_parameters() {
         foraging::ForagingModel::CHUNK,
         ants::AntsModel::CHUNK,
         "CHUNK sets the rng seeding granularity, so a mismatch changes results"
+    );
+    assert_eq!(foraging::ForagingModel::PALETTE, ants::AntsModel::PALETTE);
+    assert_eq!(
+        foraging::field::PheromoneField::PALETTE,
+        ants::field::PheromoneField::PALETTE
+    );
+    assert_eq!(
+        stat_shape(foraging::ForagingModel::STATS),
+        stat_shape(ants::AntsModel::STATS)
     );
 }
 
@@ -419,9 +444,7 @@ fn the_virus_tutorial_declares_the_same_parameters_and_actions() {
     assert_eq!(Taught::ACTIONS, Shipped::ACTIONS);
     assert_eq!(Taught::PALETTE, Shipped::PALETTE);
     assert_eq!(Taught::EDGE_PALETTE, Shipped::EDGE_PALETTE);
-    let stats =
-        |descs: &[StatDescriptor]| -> Vec<(&str, [u8; 4])> { descs.iter().map(|d| (d.label, d.color)).collect() };
-    assert_eq!(stats(Taught::STATS), stats(Shipped::STATS));
+    assert_eq!(stat_shape(Taught::STATS), stat_shape(Shipped::STATS));
     assert_eq!(
         Taught::CHUNK,
         Shipped::CHUNK,
@@ -479,7 +502,8 @@ fn the_gpu_life_tutorial_seeds_the_same_grid() {
         descriptor_shape(&Shipped::param_descriptors()),
     );
     assert_eq!(Taught::BUFFERS, Shipped::BUFFERS);
-    assert_eq!(Taught::STATS.len(), Shipped::STATS.len());
+    assert_eq!(Taught::PALETTE, Shipped::PALETTE);
+    assert_eq!(stat_shape(Taught::STATS), stat_shape(Shipped::STATS));
 }
 
 #[test]
@@ -583,9 +607,44 @@ fn the_gpu_foraging_tutorial_seeds_the_same_buffers() {
         specs.iter().map(|b| (b.label, b.double_buffered, b.drawable)).collect()
     };
     assert_eq!(flags(Taught::BUFFERS), flags(Shipped::BUFFERS));
-    assert_eq!(Taught::COUNTERS, Shipped::COUNTERS);
-    assert_eq!(Taught::REDUCE.lanes, Shipped::REDUCE.lanes);
-    assert_eq!(Taught::STATS.len(), Shipped::STATS.len());
+    assert_eq!(
+        (
+            Taught::POS_BUFFER,
+            Taught::COLOR_BUFFER,
+            Taught::INDEX,
+            Taught::COUNTERS
+        ),
+        (
+            Shipped::POS_BUFFER,
+            Shipped::COLOR_BUFFER,
+            Shipped::INDEX,
+            Shipped::COUNTERS
+        )
+    );
+    assert_eq!(pass_shape::<Taught>(), pass_shape::<Shipped>());
+    assert_eq!(stat_shape(Taught::STATS), stat_shape(Shipped::STATS));
+}
+
+/// Each step pass's label, domain and bindings, then the display pass's and the reduce leaf's, as `Debug` text.
+///
+/// The shaders themselves are left out. Their composed text names the module they import from, and
+/// `tests/shaders.rs` compares the files.
+fn pass_shape<M: GpuAgentModel>() -> Vec<String> {
+    let mut shape: Vec<String> = M::STEP_PASSES
+        .iter()
+        .map(|pass| format!("{} {:?} {:?}", pass.label, pass.domain, pass.bindings))
+        .collect();
+    shape.push(format!(
+        "{:?}",
+        M::DISPLAY.as_ref().map(|display| (display.workgroup, display.bindings))
+    ));
+    shape.push(format!(
+        "{} {:?} {:?}",
+        M::REDUCE.lanes,
+        M::REDUCE.domain,
+        M::REDUCE.bindings
+    ));
+    shape
 }
 
 #[test]
@@ -602,6 +661,14 @@ fn the_gpu_foraging_tutorial_matches_the_shipped_model() {
     let mut shipped = GpuAgentState::<gpu_ants::GpuAnts>::new_seeded(&ctx, &params, Some(SEED));
     taught.run_batched(STEPS);
     shipped.run_batched(STEPS);
+    taught.refresh_stats();
+    shipped.refresh_stats();
+    let stat_bits = |stats: Vec<StatEntry>| -> Vec<u64> { stats.iter().map(|e| e.value.scalar().to_bits()).collect() };
+    assert_eq!(
+        stat_bits(taught.stats()),
+        stat_bits(shipped.stats()),
+        "the taught reduce leaf or stats decoding has drifted"
+    );
 
     // Buffer indices are declaration order, and both declare pos, state, colour, rng, field.
     for (index, what) in [

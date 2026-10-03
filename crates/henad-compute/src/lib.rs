@@ -6,6 +6,11 @@
 //! one gets driven. [`entry`] type-erases a model behind one entry a host can list and build, and
 //! [`simulation`] builds one with checked values and steps it from a program.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+// Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
+// limit of 128.
+#![recursion_limit = "256"]
+
 /// Brings in the Rust that henad-build generated from the crate's WGSL, as the modules `shader_bindings` and
 /// `binding_decls`.
 ///

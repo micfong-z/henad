@@ -2,6 +2,8 @@
 
 Produces the sweep folder beside this file: `manifest.json`, `runs.csv`, `series.csv` and `summary.csv`.
 `a_0_2_0_manifest_still_resumes` (`crates/henad-explore/src/tests/provenance.rs`) copies the folder, resumes it twice with more replicates, and checks the warning each resume gives, the builds the folder records, and that the resumed runs equal a fresh sweep's.
+`a_0_2_0_manifest_still_replays_and_merges` replays each run the folder holds, and merges the folder as its one shard.
+Both fail when the folder is missing.
 
 ## Why the reference is Henad itself
 

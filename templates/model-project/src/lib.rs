@@ -1,5 +1,9 @@
 //! Models of the my-model project.
 
+// Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
+// limit of 128.
+#![recursion_limit = "256"]
+
 mod gpu_vote;
 mod vote;
 

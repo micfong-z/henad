@@ -36,14 +36,14 @@ struct Params {
 @group(0) @binding(8) var<uniform>             params: Params;
 
 
-// Matches `ants::field`.
+// Matches the CPU field's site and layer constants.
 const OBSTACLE: u32 = 1u;
 const FOOD: u32 = 2u;
 const HOME: u32 = 3u;
 const TO_FOOD: u32 = 0u;
 const TO_HOME: u32 = 1u;
 
-// Matches `ants::lanes::NO_STEP`.
+// Matches the CPU model's `NO_STEP`.
 const NO_STEP: u32 = 255u;
 
 const DELIVERIES: u32 = 0u;
@@ -61,7 +61,7 @@ fn passable(x: i32, y: i32) -> bool {
     return in_field(x, y) && sites[cell_of(x, y)] != OBSTACLE;
 }
 
-// Mirrors `ants::step::deposit_value`. Floored at what the cell already holds, which is why
+// Mirrors the CPU model's `deposit_value`. Floored at what the cell already holds, which is why
 // `atomicMax` downstream reproduces the reference's plain overwrite.
 fn deposit_value(x: i32, y: i32, reward: f32, base: u32) -> f32 {
     var best = field[base + cell_of(x, y)];

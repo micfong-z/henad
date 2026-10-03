@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Checks that every crate packages on its own. The workspace versions agree, each crate carries the
-# licence texts, no source or build script reads a file outside its crate, and the template's release
-# profile equals the root's. The template requires the workspace's major and minor. Only a verified
-# `cargo package` builds a crate from its tarball, and the release checklist runs it by hand.
+# Checks the packaging rules that cargo itself never checks. The workspace versions agree, each crate carries the
+# licence texts, no source or build script reads a file outside its crate, and henad-build names the wgsl_bindgen
+# release the workspace pins. The template and the facade's README program require the workspace's major and minor,
+# and the template's release profile equals the root's.
+#
+# The script builds nothing. Only a verified `cargo package` builds a crate from its tarball, and the release
+# checklist and the `downstream` job run it.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -74,6 +77,12 @@ for table, name in (("dependencies", "henad"), ("build-dependencies", "henad-bui
     required = spec.get("version") if isinstance(spec, dict) else spec
     if required != major_minor:
         errors.append(f'templates/model-project/Cargo.toml: `{name}` in `[{table}]` needs to require "{major_minor}"')
+
+# The facade's README program opens with the dependency line a reader copies, as does the example it equals.
+requirement = re.compile(r'^// Cargo\.toml: henad = \{ version = "([^"]*)"', re.MULTILINE)
+for program in (Path("crates/henad/README.md"), Path("crates/henad/examples/complete.rs")):
+    if requirement.findall(program.read_text()) != [major_minor]:
+        errors.append(f'{program}: the `// Cargo.toml: henad = ...` line needs to require "{major_minor}"')
 
 # The template builds its models at the root's release opt-level, so a downstream model runs as fast as an example one.
 root_release = root.get("profile", {}).get("release")

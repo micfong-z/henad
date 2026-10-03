@@ -3,6 +3,8 @@
 //! [`authoring`] is what a model implements, [`model`] is what the runner drives. The rest are the
 //! shared data structures and the descriptors the UI reads.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 pub mod action;
 pub mod authoring;
 pub mod explore;

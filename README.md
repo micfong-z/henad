@@ -47,7 +47,7 @@ Use any device with a CPU and optionally a GPU, and any OS that can build [wgpu]
 Install the app and the command line from crates.io, at the opt-level every Henad number is measured at:
 
 ```bash
-cargo install --locked --config 'profile.release.opt-level=2' henad-app henad-cli
+cargo install --locked --config profile.release.opt-level=2 henad-app henad-cli
 ```
 
 Then run the app, or a model headlessly with an id from `--list`:

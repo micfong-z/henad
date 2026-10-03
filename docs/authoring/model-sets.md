@@ -61,7 +61,7 @@ let mut models = henad::ModelSet::new(henad::build_info!());
 
 A crate that holds models builds its own set this way, and calls `henad_build::stamp_commit()` from its `build.rs`.
 The build then carries the commit, whether the sources differed from it, and a hash of the sources.
-A results folder records each model's source, and a resume, a merge or a replay warns when it differs.
+A results folder records each model's source, and a resume or a merge warns when it differs, as the app does before it opens a run.
 [Your own project](../guide/your-project.md#the-build-script) covers the stamp.
 
 A model library exports a `models()` built from its own `build_info!()`, and its entries keep the library's name and version in any set they join.
@@ -77,11 +77,10 @@ models.extend(my_model::models()?)?;
 ## The example models
 
 With the `example-models` feature on, `henad::models::example_models()` returns the ten [example models](../reference/models.md), with henad-models as their source.
-It registers them in two groups:
+It registers the six CPU models, then the four GPU models, and inserts each into one set:
 
 ``` rust title="crates/henad-models/src/lib.rs"
---8<-- "crates/henad-models/src/lib.rs:cpu_entries"
---8<-- "crates/henad-models/src/lib.rs:gpu_entries"
+--8<-- "crates/henad-models/src/lib.rs:example_models"
 ```
 
 A project that wants every example model beside its own extends its set with them:

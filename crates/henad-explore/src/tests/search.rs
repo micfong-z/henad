@@ -10,6 +10,7 @@ use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runner::{Pace, SimLoop as _};
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::plan::MAX_RUNS;
 use henad_core::explore::search::genetic::GeneticSettings;
 use henad_core::explore::search::hill_climb::HillClimbSettings;
 use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
@@ -35,8 +36,8 @@ use crate::search_run::{EvaluationReading, SearchPlan, SearchPlanError};
 use crate::spec_file::SpecFile;
 use crate::sweep::{ExploreError, SweepEnd, SweepOptions, SweepReport, SweepWarning};
 use crate::tests::support::{
-    CommitLimit, OutputTables, Recorder, ScratchDir, dry_run, entry, headless_device, other_engine, planned,
-    provenance, rewrite_manifest, sweep, sweep_options, without_timing,
+    CommitLimit, OutputTables, Recorder, ScratchDir, SecondResume, dry_run, entry, headless_device, other_engine,
+    planned, provenance, rewrite_manifest, sweep, sweep_options, without_clocks, without_timing,
 };
 
 /// Longest a test waits for a search to end.
@@ -235,6 +236,8 @@ impl SearchTables {
     }
 }
 
+/// Plans every example spec with a search table, whatever its file is named. A search spec under a new name has to
+/// join the list of counts too.
 #[test]
 fn every_example_search_spec_parses() {
     let specs = Path::new(env!("CARGO_MANIFEST_DIR")).join("specs");
@@ -242,15 +245,18 @@ fn every_example_search_spec_parses() {
     let mut planned = Vec::new();
     for file in std::fs::read_dir(&specs).expect("the specs directory exists") {
         let path = file.expect("the directory lists").path();
+        if path.extension().is_none_or(|extension| extension != "toml") {
+            continue;
+        }
         let name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if !name.starts_with("sir_search_") {
+        let (file, _) = SpecFile::load(&path).expect("an example spec parses");
+        let spec = file.into_spec().expect("an example spec reads");
+        if spec.search.is_none() {
             continue;
         }
-        let (file, _) = SpecFile::load(&path).expect("an example spec parses");
-        let spec = file.into_spec().expect("an example spec is a search spec");
         let written = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
         let back = SpecFile::parse(&written)
             .and_then(SpecFile::into_spec)
@@ -617,6 +623,26 @@ fn a_resume_that_meets_a_changed_run_leaves_the_directory_alone() {
 }
 
 #[test]
+fn a_second_search_resume_is_refused_while_the_first_holds_its_scan() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-resume-locked");
+    let spec = search_spec(genetic(), 12);
+    search(&sir, None, &spec, scratch.path(), lane_count(1));
+    let before = SearchTables::read(scratch.path(), &spec);
+
+    let mut second = SecondResume::new(&sir, &spec, scratch.path());
+    let report = search_with(&sir, None, &spec, scratch.path(), &sweep_options(true), &mut second)
+        .expect("the first resume runs");
+    let refused = second.result.expect("the first resume reports its outline");
+    assert!(
+        matches!(refused, Err(ExploreError::Output(OutputError::Locked { .. }))),
+        "{refused:?}"
+    );
+    assert_eq!(report.end, SweepEnd::Complete);
+    assert_eq!(SearchTables::read(scratch.path(), &spec), before);
+}
+
+#[test]
 fn a_resume_refuses_runs_past_the_budget() {
     let sir = entry("sir", None);
     let scratch = ScratchDir::new("search-resume-past-budget");
@@ -752,6 +778,30 @@ fn a_watched_column_must_name_a_reducer() {
     assert_eq!(known, ["Infected:max", "Infected:argmax"]);
 }
 
+/// The regression. A batch of 4096 candidates at 2^20 replicates each planned, and its first ask allocated more runs
+/// than a machine holds.
+#[test]
+fn a_batch_past_the_run_limit_is_refused() {
+    let sir = entry("sir", None);
+    let mut spec = search_spec(SearchAlgorithm::Random, 12);
+    let batch_size = 16;
+    if let Some(search) = &mut spec.search {
+        search.batch_size = batch_size;
+    }
+    let widest = MAX_RUNS / batch_size as u64;
+    spec.run.replicates = widest;
+    SearchPlan::new(&spec, &sir.schema()).expect("a batch at the limit plans");
+    spec.run.replicates = widest + 1;
+    let error = SearchPlan::new(&spec, &sir.schema()).expect_err("a batch past the limit");
+    assert_eq!(
+        error,
+        SearchPlanError::BatchTooLarge {
+            batch_size,
+            replicates: widest + 1
+        }
+    );
+}
+
 /// Progress that puts a directory where `best.csv` goes once a batch is told. The search then fails as it ends.
 struct ClosingTableBlocker {
     output_dir: PathBuf,
@@ -827,6 +877,15 @@ fn untimed(files: &[(String, Vec<u8>)]) -> Vec<(String, String)> {
             }
         })
         .collect()
+}
+
+/// Returns the manifest among `files`, with its clock readings cleared.
+fn untimed_manifest(files: &[(String, Vec<u8>)]) -> Manifest {
+    let (_, bytes) = files
+        .iter()
+        .find(|(name, _)| name == MANIFEST_FILE)
+        .expect("the files hold a manifest");
+    without_clocks(serde_json::from_slice(bytes).expect("the manifest reads back"))
 }
 
 /// Returns the files of the output directory `dir`, in the order a search held in memory lists them.
@@ -909,6 +968,12 @@ fn a_search_through_a_handle_sends_each_batch_after_its_runs() {
     search(&entry("sir", None), None, &spec, scratch.path(), lane_count(1));
     let directory = directory_files(scratch.path(), &[EVALUATIONS_FILE, BATCHES_FILE, ARCHIVE_FILE]);
     assert_eq!(untimed(&files), untimed(&directory));
+    // The manifests record two lanes against one. The standing of the search matches.
+    let (memory, directory) = (untimed_manifest(&files), untimed_manifest(&directory));
+    assert_eq!(
+        (memory.mode, memory.status, memory.search, memory.results),
+        (directory.mode, directory.status, directory.search, directory.results)
+    );
 }
 
 #[test]
@@ -953,6 +1018,7 @@ fn the_pumped_search_writes_what_a_directory_search_writes() {
         &[EVALUATIONS_FILE, BATCHES_FILE, GENERATIONS_FILE, BEST_FILE],
     );
     assert_eq!(untimed(&files), untimed(&directory));
+    assert_eq!(untimed_manifest(&files), untimed_manifest(&directory));
 }
 
 #[test]

@@ -151,14 +151,19 @@ pub struct StopSpec {
 impl StopSpec {
     /// Reads `condition`, such as `Infected <= 0`, to be checked from `min_tick` on.
     ///
-    /// The column is the text before the first `<`, `>`, `=` or `!`, trimmed, so a column name can hold spaces.
+    /// The comparator is the last run of `<`, `>`, `=` and `!` characters, and the column is the text before it,
+    /// trimmed. A column name can then hold spaces and comparator characters, as in `Agents (k=3) <= 0.5`. A
+    /// threshold holds no comparator character, so a condition [`StopSpec`] writes reads back as the same spec.
     ///
     /// # Errors
     ///
     /// Returns [`StopError::MissingColumn`] for a condition that starts with its comparator, and
     /// [`StopError::Comparison`] for one with no comparator or a threshold that is not a finite number.
     pub fn parse(condition: &str, min_tick: u64) -> Result<Self, StopError> {
-        let split = condition.find(['<', '>', '=', '!']).unwrap_or(condition.len());
+        let is_comparator = |character: char| matches!(character, '<' | '>' | '=' | '!');
+        let split = condition.rfind(is_comparator).map_or(condition.len(), |last| {
+            condition[..last].trim_end_matches(is_comparator).len()
+        });
         let (column, comparison) = condition.split_at(split);
         let column = column.trim();
         if column.is_empty() {
@@ -336,6 +341,26 @@ mod tests {
         let tight = stop("  Infected<=0 ");
         assert_eq!((tight.column.as_str(), tight.comparison.threshold), ("Infected", 0.0));
         assert_eq!(tight.to_string(), "Infected <= 0");
+    }
+
+    /// The regression. A label holding a comparator character split inside the label, so a spec recorded with a
+    /// stop condition on it never read back.
+    #[test]
+    fn a_label_holding_comparator_characters_reads_back() {
+        for label in ["Agents (k=3)", "R>1 cells", "a<b", "Not!", "x >= y"] {
+            for comparator in Comparator::PARSE_ORDER {
+                let spec = StopSpec {
+                    column: label.to_owned(),
+                    comparison: Comparison {
+                        comparator,
+                        threshold: -0.5,
+                    },
+                    min_tick: 3,
+                };
+                assert_eq!(StopSpec::parse(&spec.to_string(), 3), Ok(spec.clone()), "{spec}");
+            }
+        }
+        assert_eq!(stop("R>1 cells<=0.5").column, "R>1 cells");
     }
 
     #[test]

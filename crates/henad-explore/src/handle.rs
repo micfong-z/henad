@@ -39,7 +39,10 @@ pub const DEFAULT_SERIES_BUDGET: usize = 256 << 20;
 pub const DEFAULT_SERIES_BUDGET: usize = 64 << 20;
 
 /// Place a sweep writes its four files.
+///
+/// The variants differ between targets, and a match outside this crate ends in a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SweepOutput {
     /// Memory, handed over in the [`SweepRecord`] once the sweep ends.
     Memory,
@@ -61,7 +64,7 @@ pub struct SweepRunOptions {
     /// Bytes of host memory the live runs can hold together, `None` for no limit.
     pub memory_budget: Option<u64>,
     /// Bytes of GPU memory the live runs of a GPU model can hold together, `None` for the device's largest buffer.
-    pub gpu_memory: Option<u64>,
+    pub gpu_memory_budget: Option<u64>,
     /// Whether a resume runs again the runs that ended on a fault.
     pub retry_failed: bool,
     /// Bytes of series the [`SweepEvent::RunFinished`] events carry in all.
@@ -83,7 +86,7 @@ impl std::fmt::Debug for SweepRunOptions {
         f.debug_struct("SweepRunOptions")
             .field("concurrency", &self.concurrency)
             .field("memory_budget", &self.memory_budget)
-            .field("gpu_memory", &self.gpu_memory)
+            .field("gpu_memory_budget", &self.gpu_memory_budget)
             .field("retry_failed", &self.retry_failed)
             .field("series_budget", &self.series_budget)
             .field("spec_source", &self.spec_source)
@@ -99,7 +102,7 @@ impl SweepRunOptions {
         Self {
             concurrency: Concurrency::Auto,
             memory_budget: None,
-            gpu_memory: None,
+            gpu_memory_budget: None,
             retry_failed: false,
             series_budget: DEFAULT_SERIES_BUDGET,
             spec_source: SpecSource::default(),
@@ -162,6 +165,9 @@ pub struct SweepProgress {
     /// Time since the sweep started, pauses left out.
     pub elapsed: Duration,
     /// Time left at the pace so far, `None` before the first run is written and once the sweep ends.
+    ///
+    /// The pace counts the runs that finished and the share of its ticks each run in progress has stepped. A time too
+    /// long for a [`Duration`], as a search with a budget of `u64::MAX` evaluations projects, reads as `None`.
     pub remaining: Option<Duration>,
     /// Runs in progress, in order of their ids.
     pub active_runs: Vec<ActiveRun>,
@@ -178,7 +184,8 @@ pub enum SweepStartError {
     Search(SearchPlanError),
     /// A GPU model on a target that cannot step one in a sweep.
     GpuNeedsNative,
-    /// An output directory that holds the results of a sweep.
+    /// An output directory that holds the results of a sweep, or that another sweep, search or merge is writing to,
+    /// for the reason inside.
     Output(OutputError),
     /// A manifest that cannot be read, for the reason inside.
     Manifest(ManifestError),
@@ -252,7 +259,9 @@ impl SweepRun {
     /// Note that the sink holds one fault, and whichever side reads it first takes it. A fault the sweep takes ends
     /// every live run, whichever side raised it, and one the host takes first leaves the runs going. Handed no device,
     /// the sweep acquires one on its own thread for a GPU model, sized to the entry's
-    /// [`gpu_needs`](ModelEntry::gpu_needs), and builds `entry` on it.
+    /// [`gpu_needs`](ModelEntry::gpu_needs), and builds `entry` on it. The manifest records the adapter of a shared
+    /// device only when its context carries [`RuntimeInfo`](henad_compute::runtime_info::RuntimeInfo), as
+    /// [`GpuContext::with_runtime_info`] attaches it.
     ///
     /// Planning happens before this returns. The probe build and the runs happen after it, on native on a thread of
     /// the sweep's own and in a browser in [`Self::update`].
@@ -306,9 +315,10 @@ impl SweepRun {
     ///
     /// # Errors
     ///
-    /// Returns [`SweepStartError`] when the manifest or its spec cannot be read, the spec names another model or
-    /// cannot be planned, or the sweep's thread cannot start. A directory whose runs do not fit the plan, or a device
-    /// the sweep cannot acquire, fails the sweep with a [`SweepEvent::Failed`].
+    /// Returns [`SweepStartError`] when another sweep, search or merge is writing to `dir`, the manifest or its spec
+    /// cannot be read, the spec names another model or cannot be planned, or the sweep's thread cannot start. A
+    /// directory whose runs do not fit the plan, or a device the sweep cannot acquire, fails the sweep with a
+    /// [`SweepEvent::Failed`].
     #[cfg(not(target_arch = "wasm32"))]
     pub fn resume_directory(
         entry: ModelEntry,
@@ -316,10 +326,11 @@ impl SweepRun {
         dir: &std::path::Path,
         options: SweepRunOptions,
     ) -> Result<Self, SweepStartError> {
-        use crate::output::MANIFEST_FILE;
         use crate::output::manifest::Manifest;
+        use crate::output::{MANIFEST_FILE, OutputDir};
         use crate::spec_file::SpecFile;
 
+        OutputDir::check_unlocked(dir).map_err(SweepStartError::Output)?;
         let manifest = Manifest::read(&dir.join(MANIFEST_FILE)).map_err(SweepStartError::Manifest)?;
         let spec = SpecFile::from_json(&manifest.spec)
             .and_then(SpecFile::into_spec)
@@ -432,12 +443,16 @@ impl SweepRun {
         });
         let runs_done = progress_state.runs_done;
         let elapsed = self.clock.elapsed(progress_state.ended_at.unwrap_or_else(Instant::now));
-        let runs_left = runs_total.saturating_sub(runs_done);
-        let remaining = (!ended && runs_done > 0).then(|| elapsed.mul_f64(runs_left as f64 / runs_done as f64));
         let runs_waiting = if ended {
             0
         } else {
             self.active_runs.waiting_count() as u64
+        };
+        let active_runs = self.active_runs.list();
+        let remaining = if ended || runs_done == 0 {
+            None
+        } else {
+            remaining_time(elapsed, runs_total, runs_done + runs_waiting, &active_runs)
         };
         SweepProgress {
             phase,
@@ -448,7 +463,7 @@ impl SweepRun {
             runs_failed: progress_state.runs_failed,
             elapsed,
             remaining,
-            active_runs: self.active_runs.list(),
+            active_runs,
         }
     }
 
@@ -467,7 +482,7 @@ impl SweepRun {
         let mut sweep_options = SweepOptions::new(launch.options.provenance.clone());
         sweep_options.concurrency = launch.options.concurrency;
         sweep_options.memory_budget = launch.options.memory_budget;
-        sweep_options.gpu_memory = launch.options.gpu_memory;
+        sweep_options.gpu_memory_budget = launch.options.gpu_memory_budget;
         sweep_options.control = control.clone();
         sweep_options.shard = launch.shard;
         sweep_options.resume = launch.resume;
@@ -668,6 +683,29 @@ impl PauseClock {
     }
 }
 
+/// Returns the time left for `runs_total` runs after `elapsed`, at the pace of the `runs_finished` runs that finished
+/// and the share of its ticks each run of `active_runs` has stepped.
+///
+/// Returns `None` before any run has made progress, and for a time too long for a [`Duration`].
+fn remaining_time(
+    elapsed: Duration,
+    runs_total: u64,
+    runs_finished: u64,
+    active_runs: &[ActiveRun],
+) -> Option<Duration> {
+    let stepped: f64 = active_runs
+        .iter()
+        .filter(|active| active.end_tick > 0)
+        .map(|active| (active.tick as f64 / active.end_tick as f64).min(1.0))
+        .sum();
+    let done = runs_finished as f64 + stepped;
+    if done <= 0.0 {
+        return None;
+    }
+    let left = (runs_total as f64 - done).max(0.0);
+    Duration::try_from_secs_f64(elapsed.as_secs_f64() * left / done).ok()
+}
+
 /// Counts and stage of a sweep, written by its channel and read by its handle.
 #[derive(Debug, Default)]
 struct ProgressState {
@@ -819,4 +857,54 @@ fn describe(error: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use henad_core::explore::outcome::PlannedRun;
+
+    use super::remaining_time;
+    use crate::exec::ActiveRun;
+
+    /// Returns run `run_id` in progress at `tick` of `end_tick`.
+    fn active(run_id: u64, tick: u64, end_tick: u64) -> ActiveRun {
+        ActiveRun {
+            run: PlannedRun {
+                run_id,
+                config_id: run_id,
+                rep: 0,
+                seed: 1,
+            },
+            tick,
+            end_tick,
+        }
+    }
+
+    #[test]
+    fn the_remaining_time_counts_the_runs_in_progress() {
+        let seconds = |remaining: Option<Duration>| remaining.expect("an estimate").as_secs_f64();
+        assert!((seconds(remaining_time(Duration::from_secs(8), 10, 4, &[])) - 12.0).abs() < 1e-9);
+        // Four runs started together, and one finished as the other three neared their end.
+        let nearly_done = [active(1, 90, 100), active(2, 90, 100), active(3, 90, 100)];
+        let estimate = seconds(remaining_time(Duration::from_secs(37), 8, 1, &nearly_done));
+        assert!(
+            (estimate - 43.0).abs() < 1e-6,
+            "1 run and 2.7 of the next three took 37 s, and 4.3 runs are left, not {estimate}"
+        );
+        assert_eq!(
+            remaining_time(Duration::from_secs(3), 10, 0, &[active(0, 0, 100)]),
+            None
+        );
+        assert_eq!(
+            remaining_time(Duration::from_secs(3), 10, 10, &[]),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn a_remaining_time_past_the_largest_duration_reads_as_none() {
+        assert_eq!(remaining_time(Duration::from_secs(2), u64::MAX, 1, &[]), None);
+    }
 }

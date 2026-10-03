@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
+use crate::explore::design::MAX_CONFIGS;
 use crate::explore::factor::FactorSpec;
 use crate::explore::search::evaluation_log::CandidateRecord;
 use crate::explore::search::genetic::{GeneticAlgorithm, GeneticSettings};
@@ -402,16 +403,23 @@ pub struct SearchSpec {
 impl SearchSpec {
     /// Checks the budget, the batch size, the objective and the settings of the algorithm.
     ///
+    /// A batch holds at most [`MAX_CONFIGS`] candidates, the configs a sweep's plan holds at most.
+    ///
     /// # Errors
     ///
-    /// Returns [`SearchSpecError`] for no evaluations, a batch size of 0, an objective missing or given where none
-    /// is taken, or a setting outside its range.
+    /// Returns [`SearchSpecError`] for no evaluations, a batch size of 0 or past [`MAX_CONFIGS`], an objective
+    /// missing or given where none is taken, or a setting outside its range.
     pub fn check(&self) -> Result<(), SearchSpecError> {
         if self.max_evaluations == 0 {
             return Err(SearchSpecError::NoEvaluations);
         }
         if self.batch_size == 0 {
             return Err(SearchSpecError::NoBatch);
+        }
+        if self.batch_size > MAX_CONFIGS {
+            return Err(SearchSpecError::BatchTooLarge {
+                batch_size: self.batch_size,
+            });
         }
         match (&self.algorithm, &self.objective) {
             (SearchAlgorithm::PatternSpaceExploration(settings), None) => settings.check(),
@@ -498,6 +506,8 @@ pub enum SearchSpecError {
     NoEvaluations,
     /// A batch size of 0.
     NoBatch,
+    /// A batch size past [`MAX_CONFIGS`].
+    BatchTooLarge { batch_size: usize },
     /// A random search, hill climb or genetic algorithm with no objective.
     MissingObjective { algorithm: &'static str },
     /// An objective given to a Pattern Space Exploration. Pattern Space Exploration scores none.
@@ -515,6 +525,9 @@ impl fmt::Display for SearchSpecError {
         match self {
             Self::NoEvaluations => write!(f, "max_evaluations must be at least 1"),
             Self::NoBatch => write!(f, "batch_size must be at least 1"),
+            Self::BatchTooLarge { batch_size } => {
+                write!(f, "batch_size must be at most {MAX_CONFIGS}, got {batch_size}")
+            }
             Self::MissingObjective { algorithm } => write!(f, "a {algorithm} search needs an objective"),
             Self::UnusedObjective => write!(f, "a pse search takes x_axis and y_axis, and no objective"),
             Self::Setting { key, value, expected } => write!(f, "{key} must be {expected}, got {value}"),

@@ -6,7 +6,7 @@ use henad_core::explore::value::parse_value;
 use henad_core::params::{ParamKind, ParamValue};
 
 use super::determinism::COARSE_CADENCE;
-use super::{ModelCheck, declared_defaults};
+use super::{ModelCheck, declared_defaults, error_text};
 
 /// Ticks a run of a determinism check steps by default. Off the seven-tick cadence, so the last sample is one of its
 /// own.
@@ -51,6 +51,10 @@ impl Default for CheckSettings {
 
 impl CheckSettings {
     /// Runs the GPU models' checks on `device`. Without one they are skipped.
+    ///
+    /// Note that a check takes a fault it finds in the device's sink as its own, and clones of a context share the
+    /// sink. A test that shares `device` with another test can have its faults dropped, or reported by a check. Each
+    /// test takes a device of its own from `headless_test_device`.
     pub fn gpu(mut self, device: GpuContext) -> Self {
         self.gpu = Some(device);
         self
@@ -88,8 +92,9 @@ impl CheckSettings {
 
     /// Sets parameter `param_id` of model `model_id` from `text`, as `--set` reads it.
     ///
-    /// The value holds in every check that builds the model, and no check changes it. A value the parameter refuses
-    /// fails every such check.
+    /// The value holds in every check that builds the model, and no check changes it. A parameter the model does not
+    /// declare, or a value the parameter refuses, fails every such check, one that cannot run for want of a device
+    /// included.
     pub fn set_text(mut self, model_id: &str, param_id: &str, text: &str) -> Self {
         self.texts
             .push((model_id.to_owned(), param_id.to_owned(), text.to_owned()));
@@ -172,8 +177,12 @@ impl CheckSettings {
             let index = entry
                 .param_index(param_id)
                 .ok_or_else(|| format!("The settings set parameter '{param_id}', which the model does not declare."))?;
-            values[index] = parse_value(&entry.param_descriptors()[index].kind, text)
-                .map_err(|error| format!("The settings set parameter '{param_id}' to '{text}': {error}."))?;
+            values[index] = parse_value(&entry.param_descriptors()[index].kind, text).map_err(|error| {
+                format!(
+                    "The settings set parameter '{param_id}' to '{text}': {}.",
+                    error_text(&error)
+                )
+            })?;
         }
         Ok(values)
     }

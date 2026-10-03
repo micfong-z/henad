@@ -3,6 +3,7 @@
 /// Host facts, available with or without an adapter.
 #[derive(Debug, Clone)]
 pub struct HostInfo {
+    /// Operating system as Rust names it, and `browser` on wasm32, where Rust names none.
     pub os: &'static str,
     pub arch: &'static str,
     /// `None` where the platform cannot report it.
@@ -16,12 +17,17 @@ impl HostInfo {
     /// defaults, which in a browser means asking for threads the pool has no way to spawn.
     pub fn collect() -> Self {
         Self {
-            os: std::env::consts::OS,
+            os: os_name(std::env::consts::OS),
             arch: std::env::consts::ARCH,
             logical_cpus: logical_cpus(),
             worker_threads: Some(rayon::current_num_threads()),
         }
     }
+}
+
+/// Returns `os`, or `browser` for the empty name wasm32-unknown-unknown gives. Only a browser runs that target here.
+fn os_name(os: &'static str) -> &'static str {
+    if os.is_empty() { "browser" } else { os }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -98,5 +104,18 @@ pub fn classify_adapter(info: &wgpu::AdapterInfo) -> GpuVerdict {
         GpuVerdict::Capable
     } else {
         GpuVerdict::Uncertain
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HostInfo, os_name};
+
+    /// wasm32-unknown-unknown gives an empty name, and the System tab read " (wasm32)".
+    #[test]
+    fn an_unnamed_os_reads_as_browser() {
+        assert_eq!(os_name(""), "browser");
+        assert_eq!(os_name("macos"), "macos");
+        assert!(!HostInfo::collect().os.is_empty());
     }
 }

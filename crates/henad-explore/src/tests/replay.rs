@@ -7,10 +7,9 @@ use henad_compute::cpu::sim_thread::SimThread;
 use henad_compute::entry::ModelState;
 use henad_compute::fault::FaultSink;
 use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
-use henad_compute::gpu::stepping;
 use henad_compute::simulation::RunSetup;
 use henad_compute::snapshot::Snapshot;
-use henad_core::action::{Fire, Schedule};
+use henad_core::action::Schedule;
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
 use henad_core::explore::measure::Sampler;
@@ -180,16 +179,23 @@ fn a_gpu_schedule_matches_export_stats() {
         Ok(ModelState::Cpu(_)) | Err(_) => panic!("gpu_sir builds on the GPU"),
     };
 
-    // This mirrors `--export-stats --stats-every 40`. It fires tick 0's actions, takes a sample, steps under the
-    // after-step rule and takes a final sample.
-    let mut exported = build();
-    assert!(stepping::run_due(&mut *exported, &ctx, &schedule).is_empty());
-    drop(stepping::sample_stats(&mut *exported, &ctx));
-    let refused =
-        stepping::run_steps_acting(&mut *exported, &ctx, total, &schedule, Fire::AfterStep).expect("the steps run");
-    assert!(refused.is_empty());
-    let expected = stepping::sample_stats(&mut *exported, &ctx);
-    stepping::wait(&ctx).expect("the sample runs");
+    // The path `--export-stats --stats-every 40` takes: the build fires tick 0's actions, and the run samples ticks 0
+    // and 40.
+    let mut exported = RunSetup::from_parts(&gpu_sir, &params, Some(seed), schedule.clone())
+        .expect("a valid setup")
+        .build(Some(&ctx))
+        .expect("gpu_sir builds");
+    let mut samples = Vec::new();
+    let end = exported
+        .run_sampled::<()>(total, total, |sample| {
+            samples.push((sample.tick(), sample.entries().to_vec()));
+            ControlFlow::Continue(())
+        })
+        .expect("the steps run");
+    assert!(end.is_continue());
+    let ticks: Vec<u64> = samples.iter().map(|(tick, _)| *tick).collect();
+    assert_eq!(ticks, [0, total]);
+    let expected = samples.pop().map(|(_, entries)| entries).expect("a final sample");
 
     // In batches of 16, submissions end at ticks 6, 16, 21, 32 and 40, and each action goes in a submission of its own.
     let settings = GpuBatchSettings {

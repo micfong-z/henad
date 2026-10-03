@@ -1,6 +1,6 @@
 //! The `.wgsl` files under a shader root, and the Rust names their paths become.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 use heck::ToPascalCase as _;
@@ -35,27 +35,42 @@ const KEYWORDS: &[&str] = &[
 
 /// Returns every `.wgsl` file under `root`, relative to it, in sorted order.
 ///
+/// A symlink to a directory is followed. A directory reached a second time, through a link or a cycle, is walked
+/// once, under the first of its paths in sorted order.
+///
 /// # Errors
 ///
 /// Returns [`ShaderBuildError::Io`] for a directory that cannot be read.
 pub(crate) fn wgsl_files(root: &Path) -> Result<Vec<PathBuf>, ShaderBuildError> {
     let mut files = Vec::new();
+    let mut visited = BTreeSet::new();
     let mut pending = vec![PathBuf::new()];
     while let Some(relative) = pending.pop() {
         let directory = root.join(&relative);
+        // A directory reached again, through a second link or a link back to an ancestor, is walked once.
+        if !visited.insert(std::fs::canonicalize(&directory).unwrap_or_else(|_| directory.clone())) {
+            continue;
+        }
         let io_error = |source| ShaderBuildError::Io {
             path: directory.clone(),
             source,
         };
+        let mut names = Vec::new();
         for item in std::fs::read_dir(&directory).map_err(io_error)? {
-            let item = item.map_err(io_error)?;
-            let path = relative.join(item.file_name());
+            names.push(item.map_err(io_error)?.file_name());
+        }
+        names.sort();
+        let mut directories = Vec::new();
+        for name in names {
+            let path = relative.join(name);
             if root.join(&path).is_dir() {
-                pending.push(path);
+                directories.push(path);
             } else if path.extension().is_some_and(|extension| extension == "wgsl") {
                 files.push(path);
             }
         }
+        // Pushed in reverse, so the walk takes each directory's subdirectories in name order.
+        pending.extend(directories.into_iter().rev());
     }
     files.sort();
     Ok(files)
@@ -119,6 +134,38 @@ pub(crate) fn check_reserved(root: &Path, files: &[PathBuf]) -> Result<(), Shade
         }
     }
     Ok(())
+}
+
+/// Returns an error when the bindings would put the file at `path`, imported as `module`, at their root under the
+/// name `henad` or a name they use there.
+///
+/// The bindings name an imported module by its import path, and a quoted one by the stem of its file name. An import
+/// resolved from the importing file's directory can start with any name, and a check of the file's path alone would
+/// miss it.
+pub(crate) fn check_module_name(path: &Path, module: &str) -> Result<(), ShaderBuildError> {
+    let module_path = bindings_module(module);
+    let first = module_path.split("::").next().unwrap_or_default();
+    if first.eq_ignore_ascii_case(RESERVED) || GENERATED_NAMES.contains(&first) {
+        return Err(ShaderBuildError::ReservedImport {
+            path: path.to_path_buf(),
+            import_path: module.to_owned(),
+            name: first.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Returns the module path the generated bindings give a module imported as `module`.
+///
+/// `wgsl_bindgen` keeps an unquoted import path as it stands. A quoted one loses its quotes and keeps only the stem of
+/// its last component, so `"./std.inc"`, `"std.inc"` and `"../shared/std"` all give `std`. The steps follow
+/// `make_valid_rust_import` in `wgsl_bindgen` 0.23.3.
+fn bindings_module(module: &str) -> String {
+    let unquoted = module.replace("\"../", "").replace('"', "");
+    Path::new(&unquoted)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map_or_else(|| unquoted.clone(), str::to_owned)
 }
 
 /// Returns whether `name` is the reserved name, in any case.

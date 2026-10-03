@@ -16,4 +16,5 @@ The app embeds four fonts, listed with their sources and licences in [`assets/fo
 
 ## License
 
-Licensed under [MIT](https://github.com/micfong-z/henad/blob/master/LICENSE-MIT) or [Apache-2.0](https://github.com/micfong-z/henad/blob/master/LICENSE-APACHE), at your option.
+Henad's code is licensed under [MIT](https://github.com/micfong-z/henad/blob/master/LICENSE-MIT) or [Apache-2.0](https://github.com/micfong-z/henad/blob/master/LICENSE-APACHE), at your option.
+The embedded fonts keep their own licences, SIL OFL 1.1 for Henad Sans and Henad Mono and Apache 2.0 for the two icon fonts, as [`assets/fonts/SOURCES.md`](https://github.com/micfong-z/henad/blob/master/crates/henad-app/assets/fonts/SOURCES.md) lists.

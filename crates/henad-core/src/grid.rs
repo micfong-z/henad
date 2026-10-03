@@ -1,12 +1,21 @@
 use std::mem;
 
 /// A double-buffered 2D grid with toroidal wrapping.
-#[derive(Debug)]
 pub struct Grid2D<T: Copy + Default> {
     width: u32,
     height: u32,
     current: Vec<T>,
     next: Vec<T>,
+}
+
+/// Prints the grid's size, not its cells.
+impl<T: Copy + Default> std::fmt::Debug for Grid2D<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Grid2D")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: Copy + Default> Grid2D<T> {

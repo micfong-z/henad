@@ -1,5 +1,5 @@
-# The stable toolchain of native builds, as Henad pins it. `scripts/build_web.sh` alone selects the nightly in
-# `scripts/web-toolchain`.
+# The stable toolchain of native builds, as Henad pins it. The web build and its lint, through `scripts/build_web.sh`
+# and `scripts/ci.sh lint-web`, select the nightly in `scripts/web-toolchain`.
 [toolchain]
 channel = "1.97"
 components = ["rustfmt", "clippy"]

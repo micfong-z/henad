@@ -62,6 +62,7 @@ impl ScalarFieldSpec for PheromoneField {
     }
 
     fn build_sites(width: u32, height: u32, sites: &mut [u8]) {
+        sites.fill(EMPTY);
         let (w, h) = (f64::from(width), f64::from(height));
         let size = 0.407 * (200.0 / w);
         // f64 and this grouping are what the declaration states, and every port follows it. In f32
@@ -88,7 +89,7 @@ impl ScalarFieldSpec for PheromoneField {
 
     fn decay(v: f32, p: &FieldParams) -> f32 {
         let d = v * p.evaporation;
-        // Without the floor a trail never disappears, it just asymptotes.
+        // Without the floor a trail never disappears.
         if d < LOW_PHEROMONE { 0.0 } else { d }
     }
 

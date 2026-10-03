@@ -161,6 +161,21 @@ impl PlanSummary {
         let mut results = results_row(session.output_dir.as_deref());
         results.section = None;
         rows.push(results);
+        let execution = &session.execution;
+        rows.push(PlanRow::new(
+            "Concurrent runs",
+            concurrency_text(execution.concurrency),
+            None,
+        ));
+        let budgets = [
+            ("Memory budget", execution.memory_budget),
+            ("GPU memory budget", execution.gpu_memory_budget),
+        ];
+        rows.extend(budgets.into_iter().filter_map(|(label, bytes)| {
+            let mut row = PlanRow::new(label, fmt_bytes(bytes?), None);
+            row.tooltip = Some(format!("Recorded by the {}", session.noun()));
+            Some(row)
+        }));
         Self {
             rows,
             runs: Some(runs),

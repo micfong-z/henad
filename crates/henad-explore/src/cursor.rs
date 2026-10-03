@@ -103,7 +103,8 @@ impl From<Fault> for RunFailure {
         let status = match fault.kind {
             FaultKind::Panic { .. } => RunStatus::Panicked,
             FaultKind::Refused(_) => RunStatus::Refused,
-            FaultKind::Device(_) | FaultKind::Poll(_) => RunStatus::GpuError,
+            // A device error, a failed wait or a lost device.
+            _ => RunStatus::GpuError,
         };
         Self {
             status,

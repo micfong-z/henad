@@ -13,12 +13,12 @@ use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 use crate::exec::Concurrency;
 use crate::output::manifest::{BuildRole, ManifestStatus, RecordedBuild};
 use crate::output::resume::ResumeError;
-use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
+use crate::output::{MANIFEST_FILE, OutputError, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::sweep::{ExploreError, SweepOptions, SweepWarning};
 use crate::tests::broken::DividesByParam;
 use crate::tests::support::{
-    OutputTables, Recorder, ScratchDir, dry_run, entry, manifest, other_engine, provenance, rewrite_manifest, sweep,
-    sweep_options, sweep_with,
+    OutputTables, Recorder, ScratchDir, SecondResume, dry_run, entry, manifest, other_engine, provenance,
+    rewrite_manifest, sweep, sweep_options, sweep_with,
 };
 
 fn values(raw: &[&str]) -> LevelSpec {
@@ -115,6 +115,34 @@ fn a_resumed_sweep_skips_finished_runs_and_matches_a_fresh_one() {
         "a complete directory has nothing left to run"
     );
     assert_eq!(OutputTables::read(&resumed_dir), OutputTables::read(&fresh_dir));
+}
+
+#[test]
+fn a_second_resume_is_refused_while_the_first_holds_its_scan() {
+    let sir = entry("sir", None);
+    let spec = sir_spec(2);
+    let scratch = ScratchDir::new("resume-locked");
+    let fresh_dir = scratch.path().join("fresh");
+    let resumed_dir = scratch.path().join("resumed");
+    sweep(&sir, None, &spec, &fresh_dir, Concurrency::Auto);
+    sweep(&sir, None, &spec, &resumed_dir, Concurrency::Auto);
+    let runs = fs::read_to_string(resumed_dir.join(RUNS_FILE)).expect("runs.csv is written");
+    fs::write(resumed_dir.join(RUNS_FILE), first_lines(&runs, 3)).expect("runs.csv is cut");
+
+    let mut second = SecondResume::new(&sir, &spec, &resumed_dir);
+    let report =
+        sweep_with(&sir, None, &spec, &resumed_dir, &sweep_options(true), &mut second).expect("the first resume runs");
+    let refused = second.result.expect("the first resume reports its outline");
+    assert!(
+        matches!(refused, Err(ExploreError::Output(OutputError::Locked { .. }))),
+        "{refused:?}"
+    );
+    assert_eq!(report.outline.skipped, 2);
+    assert_eq!(
+        OutputTables::read(&resumed_dir),
+        OutputTables::read(&fresh_dir),
+        "no run is written twice"
+    );
 }
 
 #[test]

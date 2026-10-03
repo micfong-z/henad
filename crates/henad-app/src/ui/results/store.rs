@@ -33,9 +33,14 @@ use henad_explore::search_run::{SearchPlan, SearchUpdate};
 
 use crate::state::lookup_message;
 use crate::ui::sweep::draft::describe_error;
+use crate::ui::sweep::session::SessionExecution;
 
 /// Level id of a config on an axis whose column the config lacks.
 const NO_LEVEL_ID: usize = usize::MAX;
+
+/// Most configs a folder's manifest can record for the app to plan its sweep. The configs of a larger sweep are
+/// listed from `runs.csv` alone.
+const MAX_PLANNED_CONFIGS: u64 = 1 << 20;
 
 /// Place results come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -483,21 +488,42 @@ impl SortValue {
     }
 }
 
-/// Returns the roles whose current build, Henad's or the one that registered `entry`, differs from any build a
-/// session of `set` recorded for that role.
-fn changed_builds(set: &ResultSet, entry: &ModelEntry) -> Vec<BuildRole> {
-    [
+/// Returns the roles whose current build, Henad's or the one that registered `entry`, differs from a build a session
+/// of `set` recorded for that role, and then the roles whose builds cannot be compared.
+///
+/// A build that records neither a commit nor a source hash is never the same as another, itself included. A role
+/// lands in the second list when each of its differences is between two builds of one package and version, and one
+/// of the two is such a build.
+fn compare_builds(set: &ResultSet, entry: &ModelEntry) -> (Vec<BuildRole>, Vec<BuildRole>) {
+    let mut changed = Vec::new();
+    let mut unidentified = Vec::new();
+    for (role, current) in [
         (BuildRole::Engine, RecordedBuild::engine()),
         (BuildRole::Model, RecordedBuild::from(entry.source())),
-    ]
-    .into_iter()
-    .filter(|(role, current)| {
-        set.recorded_builds(*role)
+    ] {
+        let recorded = set.recorded_builds(role);
+        let mut differing = recorded
             .iter()
-            .any(|recorded| !recorded.same_build(current))
-    })
-    .map(|(role, _)| role)
-    .collect()
+            .filter(|recorded| !recorded.same_build(&current))
+            .peekable();
+        if differing.peek().is_none() {
+            continue;
+        }
+        if differing.any(|recorded| known_change(recorded, &current)) {
+            changed.push(role);
+        } else {
+            unidentified.push(role);
+        }
+    }
+    (changed, unidentified)
+}
+
+/// Returns whether `recorded` and `current`, two builds that are not the same, are known to differ: in package or
+/// version, or with both identified by a commit or a source hash.
+fn known_change(recorded: &RecordedBuild, current: &RecordedBuild) -> bool {
+    recorded.package != current.package
+        || recorded.version != current.version
+        || (recorded.is_identified() && current.is_identified())
 }
 
 /// Runs, configs and series of one sweep.
@@ -512,11 +538,17 @@ pub struct ResultsStore {
     /// Roles whose current build differs from a build some session of the sweep recorded, the engine's before the
     /// model's.
     pub changed_builds: Vec<BuildRole>,
+    /// Roles outside `changed_builds` whose current or recorded build records neither a commit nor a source hash, and
+    /// so cannot be compared, the engine's before the model's.
+    pub unidentified_builds: Vec<BuildRole>,
     /// Whether two builds of the model on one seed step through identical states, as the model and the sweep both
     /// declare.
     pub replays_exactly: bool,
     /// Whether every run of the sweep is held.
     pub complete: bool,
+    /// Settings a resume runs with: the memory budgets the folder's manifest records, and automatic concurrency.
+    /// `None` for a sweep the app runs.
+    pub recorded_execution: Option<SessionExecution>,
     /// Folder that holds the sweep's files, `None` for a sweep held in memory or picked files.
     folder: Option<PathBuf>,
     /// Plan the runs replay through, or the reason they cannot: this device lacks the model, or the model refuses the
@@ -564,8 +596,10 @@ impl ResultsStore {
             model_name: entry.name().to_owned(),
             schema_matches: true,
             changed_builds: Vec::new(),
+            unidentified_builds: Vec::new(),
             replays_exactly: entry.metadata().replays_exactly,
             complete: false,
+            recorded_execution: None,
             folder,
             action_labels: action_labels(plan.actions(), entry),
             plan: Ok(ReplayPlan::Sweep(plan)),
@@ -612,18 +646,33 @@ impl ResultsStore {
 
     /// Returns a store of the runs `set` read from `source`, holding at most `series_budget` bytes of series.
     ///
-    /// The runs replay through `model`, the sweep's model as the app finds it.
+    /// The runs replay through `model`, the sweep's model as the app finds it. A sweep whose manifest records more than
+    /// [`MAX_PLANNED_CONFIGS`] configs is never planned. Its configs come from `runs.csv` alone, and its runs do not
+    /// replay.
     pub fn from_result_set(
         set: ResultSet,
         source: ResultsSource,
         model: Result<&ModelEntry, ModelLookupError>,
         series_budget: usize,
     ) -> Self {
+        Self::listing_planned_configs(set, source, model, series_budget, MAX_PLANNED_CONFIGS)
+    }
+
+    /// Returns the store [`Self::from_result_set`] does, planning a sweep only while its manifest records at most
+    /// `max_planned` configs, and listing the configs `runs.csv` lacks only from a plan of at most that many.
+    fn listing_planned_configs(
+        set: ResultSet,
+        source: ResultsSource,
+        model: Result<&ModelEntry, ModelLookupError>,
+        series_budget: usize,
+        max_planned: u64,
+    ) -> Self {
         let recorded = &set.manifest().model;
         let (model_id, model_name) = (recorded.id.clone(), recorded.name.clone());
         let entry = model.as_ref().ok().copied();
         let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry.schema()));
-        let changed_builds = entry.map_or_else(Vec::new, |entry| changed_builds(&set, entry));
+        let (changed_builds, unidentified_builds) =
+            entry.map_or_else(Default::default, |entry| compare_builds(&set, entry));
         let replays_exactly = recorded.replays_exactly && entry.is_none_or(|entry| entry.metadata().replays_exactly);
         let search = set
             .spec()
@@ -642,6 +691,7 @@ impl ResultsStore {
                     table_error: Some(describe_error(&error)),
                 },
             });
+        let recorded_configs = set.manifest().plan.configs.unwrap_or(0);
         let plan = match model {
             Err(error) => Err(lookup_message(&error)),
             Ok(entry) if search.is_some() => SearchPlan::new(set.spec(), &entry.schema())
@@ -653,13 +703,21 @@ impl ResultsStore {
                         describe_error(&error)
                     )
                 }),
+            Ok(_) if recorded_configs > max_planned => Err(format!(
+                "Sweep has {recorded_configs} configurations, too many to replay in the app"
+            )),
             Ok(entry) => set
                 .plan(entry.schema())
                 .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
                 .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error))),
         };
+        // Configs `runs.csv` lacks are listed from the plan, unless the plan holds too many to list.
         let mut texts = match (&plan, entry) {
-            (Ok(ReplayPlan::Sweep(plan)), Some(entry)) if schema_matches => plan_texts(plan, entry.param_descriptors()),
+            (Ok(ReplayPlan::Sweep(plan)), Some(entry))
+                if schema_matches && plan.configs().len() as u64 <= max_planned =>
+            {
+                plan_texts(plan, entry.param_descriptors())
+            }
             _ => BTreeMap::new(),
         };
         let mut store = Self {
@@ -668,8 +726,10 @@ impl ResultsStore {
             model_name,
             schema_matches,
             changed_builds,
+            unidentified_builds,
             replays_exactly,
             complete: set.is_complete(),
+            recorded_execution: Some(SessionExecution::recorded(&set.manifest().execution)),
             folder: set.dir().map(Path::to_path_buf),
             plan,
             search,
@@ -1394,6 +1454,19 @@ impl ResultsStore {
         self.plan.as_ref().err().map(String::as_str)
     }
 
+    /// Returns the reason run `run_id` of a running search cannot replay yet, `None` for any other run.
+    ///
+    /// A search reports a run before the batch that tells its candidate, and the candidate's values arrive with the
+    /// batch.
+    pub fn untold_candidate(&self, run_id: u64) -> Option<String> {
+        if !self.is_search() {
+            return None;
+        }
+        let config_id = self.run(run_id)?.run.config_id;
+        (!self.configs.contains_key(&config_id) && self.unassigned_runs.contains_key(&config_id))
+            .then(|| format!("Candidate {config_id} will be known once its batch ends"))
+    }
+
     /// Returns the replay of run `run_id`.
     ///
     /// # Errors
@@ -1432,6 +1505,9 @@ impl ResultsStore {
     /// Returns the replay of `outcome`, a run of the search of `search_plan`, from the values of its candidate.
     fn search_replay(&self, search_plan: &SearchPlan, outcome: &RunOutcome) -> Result<Replay, String> {
         let run_id = outcome.run.run_id;
+        if let Some(reason) = self.untold_candidate(run_id) {
+            return Err(reason);
+        }
         let mismatch = || format!("Run {run_id} does not match the search it comes from");
         let config = self.configs.get(&outcome.run.config_id).ok_or_else(mismatch)?;
         let param_count = self.descriptors.len();
@@ -2042,12 +2118,23 @@ mod tests {
             params,
             action_ticks: Vec::new(),
         };
+        // The run of a batch arrives before the batch is told.
+        store.push_run(search_outcome(0, 0, 1, RunStatus::Ok), false);
+        let untold = "Candidate 0 will be known once its batch ends";
+        assert_eq!(store.untold_candidate(0).as_deref(), Some(untold));
+        assert_eq!(
+            store.replay(0),
+            Err(untold.to_owned()),
+            "a run of a candidate not told yet"
+        );
         store.push_search_updates([&search_update(0, vec![evaluated_candidate(0, 0, config)])]);
         assert_eq!(
             store.config_values_text(0).as_deref(),
             Some("Infection Rate 0.25"),
             "one candidate varies no axis, and still names what the search picks"
         );
+        assert_eq!(store.untold_candidate(0), None);
+        assert_ne!(store.replay(0), Err(untold.to_owned()));
     }
 
     /// Advances `state` by one xorshift step and returns a draw below `count`.
@@ -3023,6 +3110,136 @@ mod tests {
             !store.replays_exactly,
             "the manifest declares the model does not replay exactly"
         );
+        assert_eq!(store.unidentified_builds, []);
+
+        // A model crate whose build script stamps nothing records an unidentified build. The model's build changed
+        // no more than before, and the store cannot tell.
+        for session in manifest["sessions"].as_array_mut().expect("a list of sessions") {
+            let model_source = &mut session["model_source"];
+            model_source["commit"] = Value::from("");
+            model_source["dirty"] = Value::Null;
+            model_source["source_hash"] = Value::Null;
+        }
+        std::fs::write(&path, manifest.to_string()).expect("the manifest can be written");
+        let store = open();
+        assert_eq!(store.changed_builds, [BuildRole::Engine]);
+        assert_eq!(store.unidentified_builds, [BuildRole::Model]);
+    }
+
+    /// A sweep whose manifest records more configs than the bound is never planned. It lists the configs `runs.csv`
+    /// holds, and its runs do not replay. A manifest naming a huge design once took gigabytes to open.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_folder_plans_its_sweep_only_within_a_bounded_size() {
+        use henad_core::explore::factor::{FactorSpec, LevelSpec};
+        use henad_core::explore::spec::BlockSpec;
+        use henad_explore::handle::SweepOutput;
+        use henad_explore::progress::NoProgress;
+        use henad_explore::result_set::ResultSet;
+        use henad_explore::sweep::{Provenance, SweepOptions, run_spec};
+        use serde_json::Value;
+
+        use super::MAX_PLANNED_CONFIGS;
+        use crate::ui::results::store::ResultsSource;
+
+        let models = example_models();
+        let sir = models.get("sir").expect("SIR is registered");
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = [("grid_width", "8"), ("grid_height", "8")]
+            .map(|(id, value)| (id.to_owned(), value.to_owned()))
+            .to_vec();
+        spec.blocks = vec![BlockSpec {
+            factors: vec![FactorSpec::param(
+                "infection_rate",
+                LevelSpec::Values(["0.1", "0.2", "0.3", "0.4"].map(str::to_owned).to_vec()),
+            )],
+            ..BlockSpec::default()
+        }];
+        spec.run.steps = 3;
+        let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-planned-{}", std::process::id())));
+        drop(std::fs::remove_dir_all(&folder.0));
+        let options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
+        run_spec(
+            sir,
+            None,
+            &spec,
+            SweepOutput::Directory(folder.0.clone()),
+            &options,
+            &mut NoProgress,
+        )
+        .expect("the sweep runs");
+        // A sweep stopped after its first run.
+        let runs_path = folder.0.join("runs.csv");
+        let runs = std::fs::read_to_string(&runs_path).expect("runs.csv is written");
+        let first_run: String = runs.lines().take(2).map(|line| format!("{line}\n")).collect();
+        std::fs::write(&runs_path, first_run).expect("runs.csv can be written");
+
+        let open = |max_planned| {
+            let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
+            let source = ResultsSource::Folder(folder.0.clone());
+            ResultsStore::listing_planned_configs(set, source, models.lookup("sir", None), usize::MAX, max_planned)
+        };
+        let within = open(4);
+        assert_eq!(
+            within.config_ids().count(),
+            4,
+            "a plan within the bound lists every config"
+        );
+        assert!(within.replay(0).is_ok(), "the run replays");
+        let past = open(3);
+        assert_eq!(
+            past.replay_refusal(),
+            Some("Sweep has 4 configurations, too many to replay in the app")
+        );
+        assert_eq!(past.config_ids().collect::<Vec<_>>(), [0], "the config runs.csv holds");
+        assert_eq!(past.runs().len(), 1);
+
+        // A spec the model refuses. Planned, it gives another reason.
+        let path = folder.0.join("manifest.json");
+        let mut manifest: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("the manifest is written")).expect("JSON");
+        manifest["spec"]["block"][0]["factors"][0]["param"] = Value::from("no_such_parameter");
+        manifest["plan"]["configs"] = Value::from(MAX_PLANNED_CONFIGS + 1);
+        std::fs::write(&path, manifest.to_string()).expect("the manifest can be written");
+        assert!(
+            open(MAX_PLANNED_CONFIGS + 1)
+                .replay_refusal()
+                .is_some_and(|refusal| refusal.contains("refuses this sweep's spec")),
+            "a count within the bound plans the spec"
+        );
+        let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
+        let source = ResultsSource::Folder(folder.0.clone());
+        let mut huge = ResultsStore::from_result_set(set, source, models.lookup("sir", None), usize::MAX);
+        let refusal = format!(
+            "Sweep has {} configurations, too many to replay in the app",
+            MAX_PLANNED_CONFIGS + 1
+        );
+        assert_eq!(huge.replay_refusal(), Some(refusal.as_str()), "the plan is never built");
+        assert_eq!(huge.config_ids().collect::<Vec<_>>(), [0]);
+
+        // A browser reads the picked files through the same store.
+        let names = ["manifest.json", "runs.csv"];
+        let files = names
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    std::fs::read(folder.0.join(name)).expect("the file reads"),
+                )
+            })
+            .to_vec();
+        let set = ResultSet::from_files(files, usize::MAX).expect("the files read");
+        let source = ResultsSource::Files(names.map(str::to_owned).to_vec());
+        let picked = ResultsStore::from_result_set(set, source, models.lookup("sir", None), usize::MAX);
+        assert_eq!(picked.replay_refusal(), Some(refusal.as_str()));
+        assert_eq!(picked.config_ids().collect::<Vec<_>>(), [0]);
+
+        // A resume's run of a config the store does not list. A sweep has no candidates to wait for.
+        let mut resumed = huge.runs()[0].clone();
+        resumed.run.run_id = 2;
+        resumed.run.config_id = 2;
+        huge.push_run(resumed, true);
+        assert_eq!(huge.untold_candidate(2), None);
+        assert_eq!(huge.replay(2), Err(refusal));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -1,6 +1,7 @@
-//! Saves that hand bytes to a save dialog.
+//! Saves that hand bytes to a save dialog, or to the browser's downloads.
 //!
-//! On the web the dialog returns without prompting, and the browser asks where to put the file when `write` runs.
+//! A browser offers no save dialog that reports what the user chose. The app hands each file straight to the
+//! browser's downloads, which saves it or asks where to, as the browser is set up.
 
 use std::sync::Arc;
 
@@ -8,28 +9,47 @@ use henad_explore::output::memory::SweepFiles;
 
 use super::{SaveOutcome, SaveResult, SaveTarget, spawn};
 
-/// Opens a save dialog for `name` and writes `bytes` into the file the user picks.
+/// Opens a save dialog for `name` and writes `bytes` into the file the user picks, or downloads them in a browser.
 ///
-/// Returns immediately. The outcome arrives on `sender`.
-pub fn spawn_save(target: SaveTarget, name: String, bytes: Vec<u8>, sender: flume::Sender<SaveOutcome>) {
+/// Returns immediately. The outcome arrives on `sender`, and `ctx` repaints to show it.
+pub fn spawn_save(
+    target: SaveTarget,
+    name: String,
+    bytes: Vec<u8>,
+    sender: flume::Sender<SaveOutcome>,
+    ctx: egui::Context,
+) {
     spawn(async move {
         let result = save_file(&name, &bytes).await;
-        // The receiver is gone once the app is closing, and nothing is left to report to.
-        drop(sender.send(SaveOutcome { target, result }));
+        report(&sender, &ctx, SaveOutcome { target, result });
     });
 }
 
 /// Saves the four files of a sweep, `files`, together, sharing their bytes with the caller.
 ///
 /// Native asks for a folder and writes every file into it, refusing a folder that holds a file of the same name. A
-/// browser downloads the files one after another. Returns immediately. The outcome arrives on `sender`.
-pub fn spawn_save_files(target: SaveTarget, files: Arc<SweepFiles>, sender: flume::Sender<SaveOutcome>) {
+/// browser downloads the files one after another. Returns immediately. The outcome arrives on `sender`, and `ctx`
+/// repaints to show it.
+pub fn spawn_save_files(
+    target: SaveTarget,
+    files: Arc<SweepFiles>,
+    sender: flume::Sender<SaveOutcome>,
+    ctx: egui::Context,
+) {
     spawn(async move {
         let result = save_files(&files.entries()).await;
-        drop(sender.send(SaveOutcome { target, result }));
+        report(&sender, &ctx, SaveOutcome { target, result });
     });
 }
 
+/// Sends `outcome` and repaints, so an idle app shows it without waiting for input.
+fn report(sender: &flume::Sender<SaveOutcome>, ctx: &egui::Context, outcome: SaveOutcome) {
+    // The receiver is gone once the app is closing, and nothing is left to report to.
+    drop(sender.send(outcome));
+    ctx.request_repaint();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 async fn save_file(name: &str, bytes: &[u8]) -> SaveResult {
     match rfd::AsyncFileDialog::new().set_file_name(name).save_file().await {
         Some(handle) => match handle.write(bytes).await {
@@ -73,14 +93,66 @@ fn write_into(folder: &std::path::Path, files: &[(&str, &[u8])]) -> SaveResult {
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn save_files(files: &[(&str, &[u8])]) -> SaveResult {
-    for (name, bytes) in files {
-        let result = save_file(name, bytes).await;
-        if !matches!(result, SaveResult::Saved(_)) {
-            return result;
-        }
+async fn save_file(name: &str, bytes: &[u8]) -> SaveResult {
+    match download(name, bytes) {
+        Ok(()) => SaveResult::Downloaded(name.to_owned()),
+        Err(message) => SaveResult::Failed(message),
     }
-    SaveResult::Saved(format!("{} files", files.len()))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn save_files(files: &[(&str, &[u8])]) -> SaveResult {
+    match files.iter().try_for_each(|(name, bytes)| download(name, bytes)) {
+        Ok(()) => SaveResult::DownloadsStarted,
+        Err(message) => SaveResult::Failed(message),
+    }
+}
+
+/// Time in milliseconds a download's object URL stays valid. A browser that asks where to save reads the bytes
+/// before it asks.
+#[cfg(target_arch = "wasm32")]
+const DOWNLOAD_URL_LIFETIME_MS: i32 = 60_000;
+
+/// Hands `bytes` to the browser's downloads under the file name `name`.
+///
+/// # Errors
+///
+/// Returns the browser's error, written out, when the page has no document or refuses the download.
+#[cfg(target_arch = "wasm32")]
+fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+    use eframe::wasm_bindgen::JsCast as _;
+    use eframe::wasm_bindgen::JsValue;
+    use eframe::wasm_bindgen::closure::Closure;
+
+    let describe = |error: JsValue| format!("the browser refused the download of {name}: {error:?}");
+    let window = web_sys::window().ok_or_else(|| "the app runs outside a browser window".to_owned())?;
+    let document = window.document().ok_or_else(|| "the page has no document".to_owned())?;
+    let body = document.body().ok_or_else(|| "the page has no body".to_owned())?;
+
+    // A copy out of the wasm memory. A threaded build shares that memory between workers, and a blob refuses a view
+    // of shared memory.
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("application/octet-stream");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options).map_err(describe)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(describe)?;
+
+    let anchor = document
+        .create_element("a")
+        .map_err(describe)?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|element| describe(element.into()))?;
+    anchor.set_href(&url);
+    anchor.set_download(name);
+    body.append_child(&anchor).map_err(describe)?;
+    anchor.click();
+    anchor.remove();
+
+    let revoke = Closure::once_into_js(move || drop(web_sys::Url::revoke_object_url(&url)));
+    window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), DOWNLOAD_URL_LIFETIME_MS)
+        .map_err(describe)?;
+    Ok(())
 }
 
 #[cfg(all(test, unix))]

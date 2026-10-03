@@ -20,12 +20,15 @@ Its `Cargo.toml` then requires that release's crates.
 
 --8<-- "templates/model-project/README.md:fetch"
 
+On Windows, the commands on this page run in Git Bash or WSL.
+
 The project starts with two models of the voting rule, `vote` on the CPU and `gpu_vote`, its port to the GPU.
-The [first-model tutorials](first-model/game-of-life.md) add models beside them, and you can delete either once you have your own.
+The [first-model tutorials](first-model/game-of-life.md) add models beside them, and you can delete both once you have your own.
+`gpu_vote` can go on its own, while `vote` can only go together with `gpu_vote`, since the port seeds itself through `Vote::init`.
 
 ## Renaming it
 
-Renaming the package renames the library too, so the `my_model::` paths in `src/main.rs` and `src/bin/my-model-cli.rs` change with it, and every command keeps working.
+Renaming the package renames the library too, and the `my_model::` paths in `src/main.rs` and `src/bin/my-model-cli.rs` have to be edited to the new name.
 A full rebrand renames these:
 
 --8<-- "templates/model-project/README.md:rename"
@@ -43,6 +46,7 @@ my-model/
 ├── rust-toolchain.toml        # the stable toolchain Henad pins, with the wasm32 target
 ├── rustfmt.toml               # the 120 columns Henad formats at
 ├── .gitignore
+├── .gitattributes             # LF line ends for the scripts and the pins
 ├── .cargo/config.toml         # the wasm32 flags of the threaded web build
 ├── index.html                 # the web page, for Trunk
 ├── Trunk.toml                 # file names, the two headers and the port of the web build
@@ -52,7 +56,9 @@ my-model/
 │   ├── build_web.sh           # the web build, on the dated nightly
 │   ├── ci.sh                  # the stages CI runs
 │   ├── install-lavapipe.sh    # a GPU driver that runs on the CPU, for CI
+│   ├── trunk-sha256           # the SHA-256 of the Trunk tarball CI installs, one line
 │   ├── trunk-version          # the Trunk release, one line
+│   ├── web-checks.sh          # the checks both web stages run first
 │   └── web-toolchain          # the dated nightly, one line
 ├── src/
 │   ├── lib.rs                 # models(), and the test of every model in it
@@ -72,7 +78,7 @@ The app, the command line and the test all read their models from it.
 --8<-- "templates/model-project/src/lib.rs"
 ```
 
-The `.gitignore` lists `/target` and `/dist`, the two folders a build writes, and the files Finder and editors leave beside sources.
+The `.gitignore` lists `/target` and `/dist`, the two folders a build writes, and the files Finder, editors, merges and patches leave beside sources.
 It never lists `Cargo.lock`.
 A project that keeps sweep folders inside its tree adds `/runs` to it.
 
@@ -125,26 +131,28 @@ A GPU model added later joins them on the next build, and no build file changes.
 [Shaders and bindings](../authoring/shaders.md) covers the bindings.
 
 `stamp_commit` records the commit the crate was built from, whether its sources differed from it, and a hash of the sources.
-Every results folder records that build beside each model, and a resume, a merge or a replay compares it with the build that runs it.
+Every results folder records that build beside each model.
+A resume or a merge compares it with the build that runs it and warns when they differ, and the app warns before it opens a run of another build.
 Without the stamp the build reads as unknown, and an uncommitted edit to a model goes unrecorded.
 Two unknown builds never count as the same, and every resume warns whether or not the model changed.
 A crate without shaders drops the `ShaderBuild` line and `henad::include_shaders!()`, and keeps `build.rs` for the stamp.
 
 The stamp sees what sits under `src` and the manifest.
 A file a model reads at compile time, through `include_bytes!` or `include_str!`, belongs under `src`, or a change to it goes unrecorded.
+The stamp follows no symlink to a folder, and sees no file outside `src` that a shader imports.
+A change to a shader there reaches the bindings and goes unrecorded.
 The app's icon sits in `assets/`, since it changes no result.
 
-A commit reruns the build script, even one that changes no source.
+A commit reruns the build script, even one that changes no source, once the project sits in a git repository.
 The crate holding your kernels then recompiles, and both binaries relink.
 Henad's own crates stay built.
+A project built before `git init` records no commit until a file under `src` or the manifest changes, or `cargo clean -p my-model` runs.
 
 ## Updating Henad
 
 --8<-- "templates/model-project/README.md:update"
 
 Henad's crates require each other at the same version, and `cargo update -p henad` moves them all.
-`henad-build` alone would move henad-core and leave the engine behind it.
-The template's `.github/dependabot.yml` groups `henad` and `henad-build`, and a pull request never moves one without the other.
 
 A new minor release can change the API, and the [CHANGELOG](https://github.com/micfong-z/henad/blob/master/CHANGELOG.md) gives each change with what to do about it.
 [Releasing](../developing/releasing.md#stability) describes what a release may change.
@@ -164,7 +172,7 @@ rustup toolchain install "$(cat scripts/web-toolchain)" --profile minimal \
   --component rust-src,clippy --target wasm32-unknown-unknown
 ```
 
-Trunk is the other tool it needs, at the release `scripts/trunk-version` names:
+Trunk is the other tool it needs, at the release `scripts/trunk-version` names, and the script prints this command as well when Trunk is missing:
 
 ```bash
 cargo install --locked trunk --version "$(cat scripts/trunk-version)"
@@ -172,16 +180,18 @@ cargo install --locked trunk --version "$(cat scripts/trunk-version)"
 
 The wasm32 flags live in `.cargo/config.toml`, and a flag of your own for the web goes into its array.
 An exported `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` would replace that array without notice, and the build would fail on an error that names neither.
-The script refuses to run while either is set, even to an empty value.
+The script refuses to run while either is set, even to an empty value, and so does the `lint-web` stage of `scripts/ci.sh`.
 
-A host serving `dist/` sends two headers, or the app runs on one thread:
+A host serving `dist/` has to send two headers:
 
 ```text
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
+Without them the app runs on one thread in Chrome, and does not start in a browser that refuses shared memory.
 GitHub Pages cannot send them, and a site there needs a service worker such as [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) to add them.
+A project site on GitHub Pages sits under `/<repo>/`, and builds with `scripts/build_web.sh build --release --public-url /<repo>/`.
 A browser keeps one web app's saved settings per origin.
 Serve each app from an origin of its own.
 
@@ -198,6 +208,8 @@ Serve each app from an origin of its own.
 
 Each stage passes `--locked` once a `Cargo.lock` exists.
 `.github/workflows/ci.yml` runs them on every push to `main`, on every pull request, and when started by hand.
+It runs each script through `bash`, since a project committed from Windows records no executable bits.
+On Windows, `git add --chmod=+x scripts/*.sh` records them for collaborators on Linux and macOS.
 
 The test at the foot of `src/lib.rs` runs Henad's [testing kit](../authoring/testing.md) over every model in `models()`, and a model added there is checked by the next `cargo test`.
 A runner on GitHub has no GPU, and the workflow installs lavapipe, a Vulkan driver that runs on the CPU, through `scripts/install-lavapipe.sh`.
@@ -205,9 +217,10 @@ It sets `HENAD_REQUIRE_GPU=1`, and a GPU check that would be skipped fails inste
 Lavapipe has no watchdog.
 Run `cargo test` on your own machine's GPU as well.
 
-`cargo deny` reports `fxhash` as unmaintained, under RUSTSEC-2025-0057.
-It reaches your project as a build dependency of henad-build's shader generator, and never runs in a binary.
-Henad's own `deny.toml` ignores it with that reason.
+`cargo deny` reports two crates as unmaintained.
+`fxhash`, under RUSTSEC-2025-0057, reaches your project as a build dependency of henad-build's shader generator, and never runs in a binary.
+`paste`, under RUSTSEC-2024-0436, is a procedural macro that henad-app's `egui_dock` uses, and goes with the `app` feature.
+Henad's own `deny.toml` ignores both with these reasons.
 
 ## Publishing a model library
 

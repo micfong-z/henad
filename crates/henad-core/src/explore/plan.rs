@@ -19,6 +19,12 @@ use crate::explore::value::{ValueError, resolve_params};
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::view::StatDescriptor;
 
+/// Most runs one plan can have, every config times its replicates, equal to [`MAX_CONFIGS`].
+///
+/// Note that the limit bounds a count of runs, not memory. A sweep lists every run it has left before the first one
+/// starts. At the limit those lists take about 2 GB, and more when the configs schedule actions.
+pub const MAX_RUNS: u64 = 1 << 24;
+
 /// Declarations of a model, as a plan checks a spec against them.
 #[derive(Debug, Clone, Copy)]
 pub struct ModelSchema<'a> {
@@ -357,7 +363,8 @@ impl SweepSpec {
     /// Returns [`PlanError`] for a spec naming another model, no replicates, settings [`MeasurePlan::check`]
     /// refuses, a reducer or stop condition over no stat label, an action the model does not declare or a name two
     /// actions share, a value or factor the model's parameters or the spec's actions refuse, a parameter both fixed
-    /// and varied, a target varied twice in one block, or a block its design cannot combine.
+    /// and varied, a target varied twice in one block, a block its design cannot combine, or more than [`MAX_RUNS`]
+    /// runs.
     pub fn plan(&self, schema: &ModelSchema<'_>) -> Result<Plan, PlanError> {
         if self.model != schema.id {
             return Err(PlanError::WrongModel {
@@ -413,6 +420,7 @@ impl SweepSpec {
 
         let run_count = (configs.len() as u64)
             .checked_mul(self.run.replicates)
+            .filter(|&count| count <= MAX_RUNS)
             .ok_or(PlanError::TooManyRuns)?;
         let schema_hash = schema_hash(schema);
         let results_fingerprint = results_fingerprint(schema_hash, &self.run, &self.measure, &self.actions);
@@ -566,7 +574,7 @@ pub enum PlanError {
     Table { block: usize, source: DesignTableError },
     /// Block `block`, whose design cannot combine its factors for the reason in `source`.
     Design { block: usize, source: DesignError },
-    /// More runs than a 64-bit count holds.
+    /// More runs than [`MAX_RUNS`].
     TooManyRuns,
 }
 
@@ -605,7 +613,7 @@ impl fmt::Display for PlanError {
             Self::Factor { block, .. } | Self::Table { block, .. } | Self::Design { block, .. } => {
                 write!(f, "block {block}")
             }
-            Self::TooManyRuns => write!(f, "plan has more runs than a 64-bit integer can hold"),
+            Self::TooManyRuns => write!(f, "plan has more than {MAX_RUNS} runs"),
         }
     }
 }
@@ -636,7 +644,7 @@ impl std::error::Error for PlanError {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{ModelSchema, PlanError, PlanWarning, Shard, ShardError};
+    use super::{MAX_RUNS, ModelSchema, PlanError, PlanWarning, Shard, ShardError};
     use crate::action::{ActionDescriptor, Scheduled};
     use crate::explore::design::{DesignError, DesignKind};
     use crate::explore::design_csv::DesignTableError;
@@ -782,6 +790,15 @@ mod tests {
                 source: DesignError::TooManyConfigs
             })
         ));
+    }
+
+    #[test]
+    fn a_plan_past_the_run_limit_is_refused() {
+        let mut spec = SweepSpec::new("sir");
+        spec.run.replicates = MAX_RUNS;
+        assert_eq!(plan(&spec).expect("a plan at the limit").run_count(), MAX_RUNS);
+        spec.run.replicates = MAX_RUNS + 1;
+        assert!(matches!(plan(&spec), Err(PlanError::TooManyRuns)));
     }
 
     #[test]

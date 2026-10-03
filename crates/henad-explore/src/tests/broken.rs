@@ -1,12 +1,18 @@
 //! Models with bugs in them, for the tests that check a failed run is recorded and the rest of a sweep carries on, and
-//! that the testing kit reports each bug under its check.
+//! that the testing kit reports each bug under its check. A few sound models at the edge of a contract sit beside
+//! them, for the kit to pass.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::agent_model::{AgentModel, NoIndex, StepCtx};
+use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::field::{Extent, NoField};
+use henad_core::authoring::model::gpu_agent_model::{
+    BufferSpec, DisplaySpec, Geometry, GpuAgentAction, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
+};
+use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
 use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::authoring::model::network_model::{NetworkModel, Nodes};
 use henad_core::authoring::primitives::rng::{next_float, xorshift64};
@@ -14,7 +20,7 @@ use henad_core::grid::Grid2D;
 use henad_core::helpers::u32_param;
 use henad_core::model::SimState;
 use henad_core::network::Network;
-use henad_core::params::{ParamDescriptor, ParamValue};
+use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{EdgeView, GridView, PointView, StatDescriptor, StatEntry, StatValue};
 use std::sync::Arc;
@@ -22,6 +28,8 @@ use std::sync::Arc;
 use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION, StatsPoll};
 use henad_compute::snapshot::GpuSnapshot;
+use henad_models::gpu_boids::GpuBoids;
+use henad_models::gpu_sir::GpuSir;
 
 /// Divides by `init_divisor` while it builds and by `divisor` in every step, so a sweep reaching 0 panics there.
 pub struct DividesByParam;
@@ -113,6 +121,8 @@ pub enum Bug {
     AcceptsEveryEdit,
     /// Returns no grid view.
     HidesGrid,
+    /// Reports a step split into no jobs.
+    ReportsNoJobs,
 }
 
 /// CPU state that steps as the state it wraps, with one [`Bug`].
@@ -194,7 +204,10 @@ impl SimState for BuggyState {
     }
 
     fn parallel_jobs(&self) -> Option<usize> {
-        self.state.parallel_jobs()
+        match self.bug {
+            Bug::ReportsNoJobs => Some(0),
+            _ => self.state.parallel_jobs(),
+        }
     }
 }
 
@@ -378,7 +391,115 @@ grid_model! {
     }
 }
 
-/// Declares a parameter `num_agents` of its own beside the engine's.
+grid_model! {
+    /// Writes the pool's width into its first row as the position of the row's one live cell, so a build's state
+    /// depends on the thread count and its stats do not.
+    PlacesCellByPoolWidth,
+    id: "places_cell_by_pool_width",
+    palette: TWO_COLORS,
+    stats: LIVE,
+    actions: &[],
+    init: |grid, _rng| {
+        let width = grid.width() as usize;
+        let row = &mut grid.current_mut()[..width];
+        row.fill(0);
+        row[rayon::current_num_threads() % width] = 1;
+    }
+}
+
+grid_model! {
+    /// Keeps one live cell, placed by the seed, so two seeds differ in the state alone. A sound model.
+    PlacesCellBySeed, id: "places_cell_by_seed", palette: TWO_COLORS, stats: LIVE, actions: &[], init: |grid, rng| {
+        let cells = grid.current_mut();
+        cells.fill(0);
+        *rng = xorshift64(*rng);
+        let index = (*rng % cells.len() as u64) as usize;
+        cells[index] = 1;
+    }
+}
+
+/// Declares parameter and action ids the command line cannot name, and an action id holding `@`. The command line
+/// can name that one.
+pub struct UnnameableIds;
+
+impl GridModel for UnnameableIds {
+    const NAME: &'static str = "Unnameable Ids";
+    const ID: &'static str = "unnameable_ids";
+    const DESCRIPTION: &'static str = "A deliberately broken model, registered only by tests";
+    const PALETTE: &'static [[u8; 4]] = TWO_COLORS;
+    const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
+    const STATS: &'static [StatDescriptor] = LIVE;
+    const ACTIONS: &'static [ActionDescriptor] = &[
+        ActionDescriptor::new("spawn@centre", "Spawn at centre"),
+        ActionDescriptor::new("clear=all", "Clear all"),
+    ];
+    type Params = ();
+
+    fn param_descriptors() -> Vec<ParamDescriptor> {
+        vec![
+            u32_param("rate=high", "Rate", 1, 0, 4),
+            u32_param("spread rate", "Spread rate", 1, 0, 4),
+            u32_param("action.delay", "Delay", 1, 0, 4),
+            u32_param("count", "Count", 1, 0, 4),
+        ]
+    }
+
+    fn from_params(_params: &[ParamValue]) {}
+
+    fn init(grid: &mut Grid2D<u8>, _params: &[ParamValue], rng: &mut u64) {
+        for cell in grid.current_mut() {
+            *rng = xorshift64(*rng);
+            *cell = u8::from(*rng & 1 == 1);
+        }
+    }
+
+    fn step_cell(cell: u8, _neighbors: &[u8], (): &(), _rng: &mut u64) -> u8 {
+        cell
+    }
+
+    fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
+        vec![StatValue::Scalar(
+            grid.current().iter().filter(|&&cell| cell == 1).count() as f64,
+        )]
+    }
+}
+
+/// Declares a parameter default outside its own bounds. Nothing checks it before the kit.
+pub struct DefaultOutOfBounds;
+
+impl GridModel for DefaultOutOfBounds {
+    const NAME: &'static str = "Default Out Of Bounds";
+    const ID: &'static str = "default_out_of_bounds";
+    const DESCRIPTION: &'static str = "A deliberately broken model, registered only by tests";
+    const PALETTE: &'static [[u8; 4]] = TWO_COLORS;
+    const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
+    const STATS: &'static [StatDescriptor] = LIVE;
+    type Params = ();
+
+    fn param_descriptors() -> Vec<ParamDescriptor> {
+        vec![u32_param("initial_infected", "Initial infected", 500, 1, 100)]
+    }
+
+    fn from_params(_params: &[ParamValue]) {}
+
+    fn init(grid: &mut Grid2D<u8>, _params: &[ParamValue], rng: &mut u64) {
+        for cell in grid.current_mut() {
+            *rng = xorshift64(*rng);
+            *cell = u8::from(*rng & 1 == 1);
+        }
+    }
+
+    fn step_cell(cell: u8, _neighbors: &[u8], (): &(), _rng: &mut u64) -> u8 {
+        cell
+    }
+
+    fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
+        let live = grid.current().iter().filter(|&&cell| cell == 1).count();
+        vec![StatValue::Scalar(live as f64)]
+    }
+}
+
+/// Declares a parameter `num_agents` of its own beside the engine's, and a `grid_width` of its own twice.
 pub struct DeclaresNumAgents;
 
 impl AgentModel for DeclaresNumAgents {
@@ -397,7 +518,11 @@ impl AgentModel for DeclaresNumAgents {
     type Tally = ();
 
     fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![u32_param("num_agents", "Number of Agents", 8, 1, 64)]
+        vec![
+            u32_param("num_agents", "Number of Agents", 8, 1, 64),
+            u32_param("grid_width", "Grid Width", 8, 1, 64),
+            u32_param("grid_width", "Grid Width again", 8, 1, 64),
+        ]
     }
 
     fn from_params(_params: &[ParamValue], _extent: Extent) {}
@@ -472,18 +597,29 @@ impl NetworkModel for CountsViews {
     }
 }
 
-/// GPU state that steps as the state it wraps. Once any state of its entry has encoded
-/// [`MAX_STEPS_PER_SUBMISSION`] steps in one submission, every state of the entry reads every stat back as zero, as
-/// every buffer of a device the watchdog stopped does.
-pub struct ZeroesFullSubmissions {
+/// One bug a [`BuggyGpuState`] adds to the state it wraps.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GpuBug {
+    /// Once any state of the entry has encoded [`MAX_STEPS_PER_SUBMISSION`] steps in one submission, every state of
+    /// the entry reads every stat back as zero, as every buffer of a device the watchdog stopped does.
+    ZeroesFullSubmissions,
+    /// Records no stats passes, so a sampled slice begins no readback.
+    SkipsStatsPasses,
+}
+
+/// GPU state that steps as the state it wraps, with one [`GpuBug`].
+pub struct BuggyGpuState {
     state: Box<dyn GpuSimState>,
-    /// Shared by every state the entry builds, as one device is.
+    bug: GpuBug,
+    /// Whether a state of the entry has encoded a full submission, shared by every state the entry builds, as one
+    /// device is.
     stopped: Arc<AtomicBool>,
 }
 
-impl ZeroesFullSubmissions {
-    /// Returns `entry` with every GPU state it builds wrapped, all of them sharing one stopped flag.
-    pub fn wrap(entry: ModelEntry) -> ModelEntry {
+impl BuggyGpuState {
+    /// Returns `entry` with every GPU state it builds wrapped, so each has `bug`, all of them sharing one stopped
+    /// flag.
+    pub fn wrap(entry: ModelEntry, bug: GpuBug) -> ModelEntry {
         let stopped = Arc::new(AtomicBool::new(false));
         entry.wrap_factory(|create| {
             Arc::new(
@@ -492,6 +628,7 @@ impl ZeroesFullSubmissions {
                 )? {
                     ModelState::Gpu(state) => Ok(ModelState::Gpu(Box::new(Self {
                         state,
+                        bug,
                         stopped: Arc::clone(&stopped),
                     }))),
                     ModelState::Cpu(state) => Ok(ModelState::Cpu(state)),
@@ -501,7 +638,7 @@ impl ZeroesFullSubmissions {
     }
 }
 
-impl SimState for ZeroesFullSubmissions {
+impl SimState for BuggyGpuState {
     fn step(&mut self) {
         self.state.step();
     }
@@ -552,9 +689,9 @@ impl SimState for ZeroesFullSubmissions {
     }
 }
 
-impl GpuSimState for ZeroesFullSubmissions {
+impl GpuSimState for BuggyGpuState {
     fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>) {
-        if count >= MAX_STEPS_PER_SUBMISSION {
+        if self.bug == GpuBug::ZeroesFullSubmissions && count >= MAX_STEPS_PER_SUBMISSION {
             self.stopped.store(true, Ordering::Relaxed);
         }
         self.state.encode_steps(encoder, count, timestamps);
@@ -569,7 +706,9 @@ impl GpuSimState for ZeroesFullSubmissions {
     }
 
     fn encode_stats_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        self.state.encode_stats_passes(encoder);
+        if self.bug != GpuBug::SkipsStatsPasses {
+            self.state.encode_stats_passes(encoder);
+        }
     }
 
     fn begin_stats_readback(&mut self) {
@@ -586,5 +725,118 @@ impl GpuSimState for ZeroesFullSubmissions {
 
     fn view(&self) -> GpuSnapshot {
         self.state.view()
+    }
+}
+
+/// Side of [`OversizedGpuSir`]'s default grid. A buffer of that many cells squared is 256 MiB, past the WebGPU
+/// baseline's 128 MiB storage binding.
+const OVERSIZED_SIDE: u32 = 8192;
+
+/// [`GpuSir`] with a default grid past the WebGPU baseline.
+pub struct OversizedGpuSir;
+
+impl GpuGridModel for OversizedGpuSir {
+    const NAME: &'static str = "Oversized GPU SIR";
+    const ID: &'static str = "oversized_gpu_sir";
+    const DESCRIPTION: &'static str = "A deliberately broken model, registered only by tests";
+    const PALETTE: &'static [[u8; 4]] = GpuSir::PALETTE;
+    const WORKGROUP_SIZE: u32 = GpuSir::WORKGROUP_SIZE;
+    const STATS: &'static [StatDescriptor] = GpuSir::STATS;
+    const ACTIONS: &'static [GpuGridAction] = GpuSir::ACTIONS;
+    const BUFFERS: &'static [&'static str] = GpuSir::BUFFERS;
+    const STEP_BINDINGS: &'static [BindingDecl] = GpuSir::STEP_BINDINGS;
+    const DISPLAY_BINDINGS: &'static [BindingDecl] = GpuSir::DISPLAY_BINDINGS;
+    const REDUCE_BINDINGS: &'static [BindingDecl] = GpuSir::REDUCE_BINDINGS;
+    const STEP_SHADER: &'static str = GpuSir::STEP_SHADER;
+    const DISPLAY_SHADER: &'static str = GpuSir::DISPLAY_SHADER;
+    const REDUCE_SHADER: &'static str = GpuSir::REDUCE_SHADER;
+    const REPLAYS_EXACTLY: bool = GpuSir::REPLAYS_EXACTLY;
+
+    fn param_descriptors() -> Vec<ParamDescriptor> {
+        let mut descriptors = GpuSir::param_descriptors();
+        for descriptor in &mut descriptors {
+            if let ParamKind::U32 { default, .. } = &mut descriptor.kind
+                && matches!(descriptor.id, "grid_width" | "grid_height")
+            {
+                *default = OVERSIZED_SIDE;
+            }
+        }
+        descriptors
+    }
+
+    fn dims(params: &[ParamValue]) -> (u32, u32) {
+        GpuSir::dims(params)
+    }
+
+    fn buffer_lens(width: u32, height: u32) -> Vec<usize> {
+        GpuSir::buffer_lens(width, height)
+    }
+
+    fn step_dims(width: u32, height: u32) -> (u32, u32) {
+        GpuSir::step_dims(width, height)
+    }
+
+    fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
+        GpuSir::seed_buffers(width, height, params, seed)
+    }
+
+    fn step_params_bytes(width: u32, height: u32, params: &[ParamValue]) -> Vec<u8> {
+        GpuSir::step_params_bytes(width, height, params)
+    }
+
+    fn action_params_bytes(action: usize, width: u32, height: u32, params: &[ParamValue], seed: u32) -> Vec<u8> {
+        GpuSir::action_params_bytes(action, width, height, params, seed)
+    }
+
+    fn stats(counts: &[u32]) -> Vec<StatValue> {
+        GpuSir::stats(counts)
+    }
+}
+
+/// [`GpuBoids`] with no stats, as a model that only draws declares it. A sound model.
+pub struct StatlessGpuBoids;
+
+impl GpuAgentModel for StatlessGpuBoids {
+    const NAME: &'static str = "Statless GPU Boids";
+    const ID: &'static str = "statless_gpu_boids";
+    const DESCRIPTION: &'static str = "A model with no stats, registered only by tests";
+    const STATS: &'static [StatDescriptor] = &[];
+    const BUFFERS: &'static [BufferSpec] = GpuBoids::BUFFERS;
+    const POS_BUFFER: usize = GpuBoids::POS_BUFFER;
+    const COLOR_BUFFER: usize = GpuBoids::COLOR_BUFFER;
+    const INDEX: bool = GpuBoids::INDEX;
+    const COUNTERS: usize = GpuBoids::COUNTERS;
+    const STEP_PASSES: &'static [PassSpec] = GpuBoids::STEP_PASSES;
+    const DISPLAY: Option<DisplaySpec> = GpuBoids::DISPLAY;
+    const ACTIONS: &'static [GpuAgentAction] = GpuBoids::ACTIONS;
+    const REDUCE: ReduceSpec = GpuBoids::REDUCE;
+    const REPLAYS_EXACTLY: bool = GpuBoids::REPLAYS_EXACTLY;
+
+    fn param_descriptors() -> Vec<ParamDescriptor> {
+        GpuBoids::param_descriptors()
+    }
+
+    fn dims(params: &[ParamValue]) -> (u32, Extent) {
+        GpuBoids::dims(params)
+    }
+
+    fn buffer_lens(geom: &Geometry) -> Vec<usize> {
+        GpuBoids::buffer_lens(geom)
+    }
+
+    fn seed_buffers(geom: &Geometry, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u8>> {
+        GpuBoids::seed_buffers(geom, params, seed)
+    }
+
+    fn index_cell_size(params: &[ParamValue]) -> f32 {
+        GpuBoids::index_cell_size(params)
+    }
+
+    fn pass_params_bytes(pass: PassId, ctx: PassCtx<'_>, params: &[ParamValue]) -> Vec<u8> {
+        GpuBoids::pass_params_bytes(pass, ctx, params)
+    }
+
+    fn stats(_sums: &[f32], _counters: &[u32], _geom: &Geometry) -> Vec<StatValue> {
+        Vec::new()
     }
 }

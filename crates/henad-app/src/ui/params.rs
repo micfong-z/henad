@@ -18,14 +18,19 @@ use web_time::{SystemTime, UNIX_EPOCH};
 /// Line shown under the Seed field while its text is not a seed.
 pub const INVALID_SEED: &str = "Seed must be an integer from 0 to 18446744073709551615.";
 
+/// Line the panel shows in place of its rows while no model is selected.
+const NO_MODEL_SELECTED: &str = "No model selected.";
+
 /// Space between the Seed field's frame and its text, egui's default for a text field.
 const SEED_FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(4, 2);
 
 pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    let descriptors: Vec<_> = app
-        .selected_entry()
-        .map(|m| m.param_descriptors().to_vec())
-        .unwrap_or_default();
+    // With nothing selected, a seed or a schedule would apply to no build.
+    let Some(entry) = app.selected_entry() else {
+        ui.label(NO_MODEL_SELECTED);
+        return;
+    };
+    let descriptors = entry.param_descriptors().to_vec();
 
     // Before the sliders draw: a long slider label widens the region behind it, and the footer
     // would then wrap against that width and be clipped.
@@ -120,11 +125,7 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
             }
             continue;
         }
-        if sim_matches && let Some(thread) = &mut app.sim_thread {
-            thread.send(SimCommand::SetParam {
-                index: *idx,
-                value: val.clone(),
-            });
+        if sim_matches && app.send_live_param(*idx, val.clone()) {
             sent_live = true;
         }
     }
@@ -506,16 +507,19 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
 
 #[cfg(test)]
 mod tests {
+    use henad_compute::entry::ModelSet;
     use henad_core::action::{Schedule, Scheduled};
     use henad_core::explore::value::parse_value;
+    use henad_core::metadata::Backend;
     use henad_core::params::{ParamKind, ParamValue};
     use henad_models::example_models;
 
     use super::{
-        INVALID_SEED, decimal_value, dice_button, display_value, f32_slider, parse_seed, percent_decimals,
-        remove_button, with_entry, without_entry,
+        INVALID_SEED, NO_MODEL_SELECTED, decimal_value, dice_button, display_value, f32_slider, params_ui, parse_seed,
+        percent_decimals, remove_button, with_entry, without_entry,
     };
     use crate::icons::material_design_icons::{MDI_DELETE_OUTLINE, MDI_DICE_5};
+    use crate::state::AppState;
 
     /// Draws the slider of an F32 parameter of `kind` over `value` for one frame of `context`, focused and pressed
     /// with `keys`, and returns whether it reports a change.
@@ -695,10 +699,18 @@ mod tests {
 
     /// Returns the accessible names of the widgets `add` draws in one frame.
     fn accessible_names(add: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        accessible_texts(add, |node| node.label())
+    }
+
+    /// Returns the text `read` takes from each accessible node `add` draws in one frame.
+    fn accessible_texts(
+        add: impl FnMut(&mut egui::Ui),
+        read: impl Fn(&egui::accesskit::Node) -> Option<&str>,
+    ) -> Vec<String> {
         let context = egui::Context::default();
         context.enable_accesskit();
         let output = context.run_ui(egui::RawInput::default(), add);
-        let names = output
+        let texts = output
             .platform_output
             .accesskit_update
             .as_ref()
@@ -706,12 +718,38 @@ mod tests {
                 update
                     .nodes
                     .iter()
-                    .filter_map(|(_, node)| node.label().map(str::to_owned))
+                    .filter_map(|(_, node)| read(node).map(str::to_owned))
                     .collect()
             })
             .unwrap_or_default();
         output.drop_without_applying_deltas();
-        names
+        texts
+    }
+
+    /// The regression. With no model selected, the panel offered a Seed field and said the model had no parameters.
+    #[test]
+    fn with_no_model_selected_the_panel_offers_nothing_to_edit() {
+        let mut models = ModelSet::new(henad_core::build_info!());
+        for entry in &example_models() {
+            if entry.metadata().backend == Backend::Gpu {
+                models.insert(entry.clone()).expect("example ids are unique");
+            }
+        }
+        let Some(mut app) = AppState::headless(models, false) else {
+            return;
+        };
+        assert!(app.selected_entry().is_none());
+        let texts = accessible_texts(
+            |ui| params_ui(ui, &mut app),
+            |node| node.value().or_else(|| node.label()),
+        );
+        assert!(texts.iter().any(|text| text == NO_MODEL_SELECTED), "{texts:?}");
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text == "Generate random seed" || text.contains("no parameters")),
+            "{texts:?}"
+        );
     }
 
     /// The regression. The dice and remove buttons were named by their icon glyphs, which a screen reader cannot read.

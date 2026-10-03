@@ -1,7 +1,7 @@
 ---
 date: 2026-10-02
 title: "Library M11: the documentation"
-description: The documentation half of the last milestone of #48. Six new guide and reference pages, the first-model guide moved into a project made from the template, the install line of Q4, the release checklist and stability policy, and the facade's README program retuned so its live edit shows.
+description: "The documentation half of the last milestone of #48. Six new guide and reference pages, the first-model guide moved into a project made from the template, the install line of Q4, the release checklist and stability policy, and the facade's README program retuned so its live edit shows."
 icon: material/book-open-page-variant-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

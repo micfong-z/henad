@@ -87,7 +87,13 @@ Notice that the struct is empty, which is the intended shape for a grid model.
 A model in Henad is just const metadata plus pure functions, and the grid data is handled by the engine.
 
 This won't compile yet, because the `impl` block is still empty.
-Let's run `cargo check` and see what the compiler says is missing:
+Cargo compiles only the files `src/lib.rs` reaches, so first declare the module there, next to the template's own:
+
+``` rust title="src/lib.rs"
+mod life;
+```
+
+Now let's run `cargo check` and see what the compiler says is missing:
 
 ``` text title="cargo check"
 error[E0046]: not all trait items implemented, missing: `NAME`, `ID`, `DESCRIPTION`, `PALETTE`,
@@ -119,7 +125,7 @@ impl GridModel for LifeModel {
 ```
 
 1. The ID is the model's handle, and you can run this model with `cargo run --release --bin my-model-cli -- [ID]`.
-   The example Game of Life already has `game_of_life`. A model set holds each ID once, and our ID differs so that the guide's models can sit in one set beside the example models, as the guide's parity tests in Henad's repository run them.
+   The example Game of Life already has `game_of_life`. A model set holds each ID once, and our ID differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
 2. The description shows up next to the model in the picker, so keep it to one line saying what the model actually is.
 
 ### Colours
@@ -192,7 +198,7 @@ Let's move the function into the impl block and extend its signature:
     }
 ```
 
-1. Life reads neither of the new arguments, hence the underscores. We'll cover `params` [below](#parameters), and `rng` is a random number generator private to this row and this tick, which SIR draws from twice per cell.
+1. Life reads neither of the new arguments, hence the underscores. We'll cover `params` [below](#parameters), and `rng` is a random number generator private to this row and this tick, which SIR draws from at most once per cell.
 
 Two associated items are required, but we won't implement this in this tutorial.
 
@@ -270,13 +276,7 @@ The prelude already holds every name these functions use, so the file compiles.
 
 The model compiles, but the app can only pick models from the set it was handed, so we have to register it.
 The template's `src/lib.rs` builds that set in `models()`, and the app, the command line and the tests all read it.
-First we declare the module next to the template's own,
-
-``` rust title="src/lib.rs"
-mod life;
-```
-
-then we import the function that registers a grid model, if `src/lib.rs` does not import it already,
+The `mod life;` line is already there, so first we import the function that registers a grid model, if `src/lib.rs` does not import it already,
 
 ``` rust title="src/lib.rs"
 use henad::authoring::register_grid_model;
@@ -309,6 +309,7 @@ Make sure that `--release` is present to reach full performance.
     ```
 
     Our model shows up as Game of Life in the picker, beside the template's Vote models.
+    Pick Game of Life, press Build, and set it playing.
     See [App tour](../app.md) for a quick overview of the UI.
 
 === "Headless"

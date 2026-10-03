@@ -4,8 +4,9 @@
 //! model's descriptors when set. [`RunSetup::build`] returns a [`Simulation`], one built model that its caller steps,
 //! and a [`StatSample`] is one sample of the model's stats, read by label.
 //!
-//! Actions fire under [`Fire::AfterStep`]. Tick 0's fire inside the build, and each later tick's after the step that
-//! reaches it. Every call returns a model's panic or a device error as a [`Fault`].
+//! Actions fire under [`henad_core::action::Fire::AfterStep`]. Tick 0's fire inside the build, and each later
+//! tick's after the step that reaches it. Every call returns a model's panic, a device error or a lost
+//! device as a [`Fault`], and a simulation that returned one refuses every later call that runs model code.
 //!
 //! On native targets a CPU model's [`Simulation::step`], [`Simulation::run_for`], [`Simulation::run_to`],
 //! [`Simulation::run_sampled`], [`Simulation::stats`], [`Simulation::act`], [`Simulation::views`] and
@@ -223,10 +224,10 @@ impl RunSetup {
                     .ok_or_else(|| Fault::refused(BUILDING, "a GPU model was built with no device"))?
                     .clone();
                 if !schedule.is_empty() {
-                    catching_on(&ctx, BUILDING, || {
+                    gpu_call(&ctx, BUILDING, || {
                         refusal(&stepping::run_due(&mut *state, &ctx, schedule), BUILDING)?;
                         stepping::wait(&ctx)
-                    })??;
+                    })?;
                 }
                 Engine::Gpu { state, ctx }
             }
@@ -236,6 +237,7 @@ impl RunSetup {
         Ok(Simulation {
             setup: self.clone(),
             engine,
+            earlier_fault: None,
         })
     }
 }
@@ -307,6 +309,9 @@ fn cpu_call<T: WasmNotSend>(
 ///
 /// Called from outside the pool, the body runs on a worker. Each parallel pass then starts from a worker instead of
 /// being injected from outside and parking the caller.
+///
+/// Note that the body is one job on the pool. A worker waiting in another host's join can run it nested, and that
+/// join returns only once the body ends.
 #[cfg(not(target_arch = "wasm32"))]
 fn in_pool<T: Send>(task: impl FnOnce() -> T + Send) -> T {
     rayon::scope(|_| task())
@@ -399,12 +404,28 @@ impl Engine {
 /// [`Self::set_param`] stays on the calling thread. A GPU simulation runs each call on the calling thread, inside wgpu
 /// error scopes that keep a device error on the call that raised it.
 ///
-/// Note that an error no scope catches, such as a lost device, lands in the context's
-/// [`FaultSink`](crate::fault::FaultSink), and whichever holder of the context waits next reports it. Give each thread
-/// its own [`GpuContext`] when several simulations step at once.
+/// Note that a call made from outside the pool runs as one job on it, and a worker waiting in another host's join
+/// can run that job nested. The other host's join then waits for the whole call. Hosts that step independently each
+/// step inside `install` on a pool of their own.
+///
+/// An error no scope catches lands in the context's [`FaultSink`](crate::fault::FaultSink), and whichever holder of
+/// the context waits next reports it. A lost device fails the next call that waits for the device with
+/// [`FaultKind::DeviceLost`]. Simulations that step at once on several threads each take a device of their own, for
+/// example from one `henad::gpu::acquire_headless` call per thread. A second [`GpuContext::new`] on one device takes
+/// its error handling over from the first.
+///
+/// A call that returns a [`Fault`] can stop part way through a step or an action, with some of its edits applied.
+/// Every later stepping, sampling, live edit, action, view and layout call then returns a [`FaultKind::Refused`]
+/// fault naming the first one, or [`FaultKind::DeviceLost`] once the device is lost. Rebuild from [`Self::setup`] to
+/// go on.
+///
+/// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+/// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
 pub struct Simulation {
     setup: RunSetup,
     engine: Engine,
+    /// First fault a call returned, as its message.
+    earlier_fault: Option<String>,
 }
 
 // A host steps a simulation on a thread of its own.
@@ -439,7 +460,7 @@ impl Simulation {
         self.engine.state().population()
     }
 
-    /// Approximate heap use of the state, and only what it owns. A GPU state's buffers live on the device.
+    /// Approximate memory the state owns: host heap for a CPU state, device buffers and textures for a GPU state.
     pub fn heap_bytes(&self) -> usize {
         self.engine.state().heap_bytes()
     }
@@ -457,7 +478,11 @@ impl Simulation {
     ///
     /// # Errors
     ///
-    /// Returns a [`Fault`] when the model panics or the device reports an error.
+    /// Returns a [`Fault`] when the model panics or the device reports an error. Once an earlier call returned a
+    /// fault, the fault is [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     pub fn step(&mut self) -> Result<(), Fault> {
         self.run_for(1)
     }
@@ -470,7 +495,11 @@ impl Simulation {
     ///
     /// # Errors
     ///
-    /// Returns a [`Fault`] when the model panics or the device reports an error.
+    /// Returns a [`Fault`] when the model panics or the device reports an error. Once an earlier call returned a
+    /// fault, the fault is [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     pub fn run_for(&mut self, ticks: u64) -> Result<(), Fault> {
         let end = self.tick().saturating_add(ticks);
         self.advance(end)
@@ -480,7 +509,11 @@ impl Simulation {
     ///
     /// # Errors
     ///
-    /// Returns a [`Fault`] when the model panics or the device reports an error.
+    /// Returns a [`Fault`] when the model panics or the device reports an error. Once an earlier call returned a
+    /// fault, the fault is [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     pub fn run_to(&mut self, tick: u64) -> Result<(), Fault> {
         self.advance(tick)
     }
@@ -489,15 +522,25 @@ impl Simulation {
     /// `end_tick`.
     ///
     /// Returns the `Break` of the first sample that asks to stop, or `Continue` once `end_tick` is reached. Each
-    /// sample is taken as [`Self::stats`] takes it.
+    /// sample is taken as [`Self::stats`] takes it. An `end_tick` at or behind the current tick steps nothing and
+    /// takes the one sample at the current tick. Each call samples the tick it starts on, and two calls back to back
+    /// both sample the tick they share.
     ///
     /// On native targets a CPU model enters the pool once for the whole call, and `on_sample` runs inside it on a
     /// pool worker. It needs `Send`, and it holds that worker while it runs. A GPU model calls it on the calling
     /// thread. Either way `on_sample` runs outside the fault scopes, and a panic in it unwinds as the caller's own.
     ///
+    /// Note that a CPU model's whole call can run nested under another host's join on the same pool, as the type's
+    /// docs describe. An `on_sample` that waits on another user of the pool, through a bounded channel for one, can
+    /// then deadlock.
+    ///
     /// # Errors
     ///
-    /// Returns a [`Fault`] when the model panics or the device reports an error.
+    /// Returns a [`Fault`] when the model panics or the device reports an error. Once an earlier call returned a
+    /// fault, the fault is [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     ///
     /// # Panics
     ///
@@ -509,9 +552,10 @@ impl Simulation {
         mut on_sample: impl FnMut(&StatSample) -> ControlFlow<B> + WasmNotSend,
     ) -> Result<ControlFlow<B>, Fault> {
         assert!(interval > 0, "a sampling interval is at least one tick");
-        let Self { setup, engine } = self;
+        self.check_earlier_fault()?;
+        let Self { setup, engine, .. } = self;
         let schedule = &setup.schedule;
-        match engine {
+        let sampled = match engine {
             // One pool entry for the whole call. A pool entry per sample costs more than a small model's tick.
             Engine::Cpu(state) => in_pool(|| {
                 let first = catching(STEPPING, || sample_cpu(&mut **state))?;
@@ -531,35 +575,28 @@ impl Simulation {
                 Ok(ControlFlow::Continue(()))
             }),
             #[cfg(not(target_arch = "wasm32"))]
-            Engine::Gpu { state, ctx } => {
-                let first = sample_gpu(&mut **state, ctx)?;
-                if let ControlFlow::Break(stop) = on_sample(&first) {
-                    return Ok(ControlFlow::Break(stop));
-                }
-                while state.tick() < end_tick {
-                    let next = next_sample_tick(state.tick(), interval, end_tick);
-                    advance_gpu(&mut **state, ctx, schedule, next)?;
-                    let sample = sample_gpu(&mut **state, ctx)?;
-                    if let ControlFlow::Break(stop) = on_sample(&sample) {
-                        return Ok(ControlFlow::Break(stop));
-                    }
-                }
-                Ok(ControlFlow::Continue(()))
-            }
-        }
+            Engine::Gpu { state, ctx } => run_sampled_gpu(&mut **state, ctx, schedule, end_tick, interval, on_sample),
+        };
+        self.record(sampled)
     }
 
     /// Samples as a sweep track does: `prepare_view` first on the CPU, a blocking stats-only readback on the GPU.
     ///
     /// # Errors
     ///
-    /// Returns a [`Fault`] when the model panics or the device reports an error.
+    /// Returns a [`Fault`] when the model panics or the device reports an error. Once an earlier call returned a
+    /// fault, the fault is [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     pub fn stats(&mut self) -> Result<StatSample, Fault> {
-        match &mut self.engine {
+        self.check_earlier_fault()?;
+        let sample = match &mut self.engine {
             Engine::Cpu(state) => cpu_call(STEPPING, || Ok(sample_cpu(&mut **state))),
             #[cfg(not(target_arch = "wasm32"))]
             Engine::Gpu { state, ctx } => sample_gpu(&mut **state, ctx),
-        }
+        };
+        self.record(sample)
     }
 
     /// Sets parameter `id` on the running model.
@@ -568,20 +605,28 @@ impl Simulation {
     ///
     /// Returns [`SetupError::Param`] for an unknown id or a value the descriptor refuses, [`SetupError::ReloadOnly`]
     /// for a parameter the running model takes only when it is built, and [`SetupError::Fault`] when the model panics
-    /// or the device reports an error.
+    /// or the device reports an error. Once an earlier call returned a fault, a value the descriptor accepts gets
+    /// [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     pub fn set_param(&mut self, id: &str, value: impl Into<ParamValue>) -> Result<(), SetupError> {
         let value = value.into();
         let index = param_index(&self.setup.entry, id)?;
         let descriptor = &self.setup.entry.param_descriptors()[index];
         check_value(&descriptor.kind, &value).map_err(|error| param_error(id, error))?;
-        let reload_only = || SetupError::ReloadOnly { id: id.to_owned() };
+        self.check_earlier_fault()?;
         // The state refuses a reload-only index itself, from the descriptors it was built with.
         let accepted = match &mut self.engine {
-            Engine::Cpu(state) => catching(STEPPING, || state.set_param(index, &value))?,
+            Engine::Cpu(state) => catching(STEPPING, || state.set_param(index, &value)),
             #[cfg(not(target_arch = "wasm32"))]
-            Engine::Gpu { state, ctx } => catching_on(ctx, STEPPING, || state.set_param(index, &value))?,
+            Engine::Gpu { state, ctx } => gpu_call(ctx, STEPPING, || Ok(state.set_param(index, &value))),
         };
-        if accepted { Ok(()) } else { Err(reload_only()) }
+        if self.record(accepted)? {
+            Ok(())
+        } else {
+            Err(SetupError::ReloadOnly { id: id.to_owned() })
+        }
     }
 
     /// Runs action `action_id` now, between ticks.
@@ -589,64 +634,81 @@ impl Simulation {
     /// # Errors
     ///
     /// Returns [`SetupError::UnknownAction`] for an id the model does not declare, and [`SetupError::Fault`] when the
-    /// model panics or the device refuses the action's pass.
+    /// model panics or the device refuses the action's pass. Once an earlier call returned a fault, a declared action
+    /// gets [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     pub fn act(&mut self, action_id: &str) -> Result<(), SetupError> {
         let index = action_index(&self.setup.entry, action_id)?;
+        self.check_earlier_fault()?;
         let refused = || Fault::refused(STEPPING, format!("the model refused its own action '{action_id}'"));
-        match &mut self.engine {
-            Engine::Cpu(state) => cpu_call(STEPPING, || if state.act(index) { Ok(()) } else { Err(refused()) })?,
+        let acted = match &mut self.engine {
+            Engine::Cpu(state) => cpu_call(STEPPING, || if state.act(index) { Ok(()) } else { Err(refused()) }),
             #[cfg(not(target_arch = "wasm32"))]
-            Engine::Gpu { state, ctx } => {
-                catching_on(ctx, STEPPING, || {
-                    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("henad_simulation_action"),
-                    });
-                    if !state.encode_action(&mut encoder, index) {
-                        return Err(refused());
-                    }
-                    ctx.queue.submit(Some(encoder.finish()));
-                    stepping::wait(ctx)
-                })??;
-            }
-        }
-        Ok(())
+            Engine::Gpu { state, ctx } => gpu_call(ctx, STEPPING, || {
+                let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("henad_simulation_action"),
+                });
+                if !state.encode_action(&mut encoder, index) {
+                    return Err(refused());
+                }
+                ctx.queue.submit(Some(encoder.finish()));
+                stepping::wait(ctx)
+            }),
+        };
+        Ok(self.record(acted)?)
     }
 
-    /// Prepares the views as a publish would, then borrows all three together. Every view is `None` for a GPU model.
+    /// Prepares the views as a publish would, then borrows all three together. A GPU model's views stay on the
+    /// device, and each reads `None`.
     ///
     /// # Errors
     ///
-    /// Returns a [`Fault`] when the model panics while preparing its views.
+    /// Returns a [`Fault`] when the model panics while preparing its views. Once an earlier call returned a fault, the
+    /// fault is [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     pub fn views(&mut self) -> Result<SimulationViews<'_>, Fault> {
-        match &mut self.engine {
-            Engine::Cpu(state) => {
-                cpu_call(STEPPING, || {
-                    state.prepare_view();
-                    Ok(())
-                })?;
-                let state = &**state;
-                Ok(SimulationViews {
-                    grid: state.grid_view(),
-                    points: state.point_view(),
-                    edges: state.edge_view(),
-                })
-            }
+        self.check_earlier_fault()?;
+        let prepared = match &mut self.engine {
+            Engine::Cpu(state) => cpu_call(STEPPING, || {
+                state.prepare_view();
+                Ok(())
+            }),
             #[cfg(not(target_arch = "wasm32"))]
-            Engine::Gpu { .. } => Ok(SimulationViews {
+            Engine::Gpu { .. } => Ok(()),
+        };
+        self.record(prepared)?;
+        Ok(match &self.engine {
+            Engine::Cpu(state) => SimulationViews {
+                grid: state.grid_view(),
+                points: state.point_view(),
+                edges: state.edge_view(),
+            },
+            #[cfg(not(target_arch = "wasm32"))]
+            Engine::Gpu { .. } => SimulationViews {
                 grid: None,
                 points: None,
                 edges: None,
-            }),
-        }
+            },
+        })
     }
 
-    /// Relaxes a network model's layout for `budget_ms` milliseconds. Does nothing for a model without a layout.
+    /// Relaxes a network model's layout for `budget_ms` milliseconds. A model without a layout keeps its points where
+    /// they are.
     ///
     /// # Errors
     ///
-    /// Returns a [`Fault`] when the model panics.
+    /// Returns a [`Fault`] when the model panics. Once an earlier call returned a fault, the fault is
+    /// [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     pub fn relax_layout(&mut self, budget_ms: f32) -> Result<(), Fault> {
-        match &mut self.engine {
+        self.check_earlier_fault()?;
+        let relaxed = match &mut self.engine {
             Engine::Cpu(state) => cpu_call(STEPPING, || {
                 if state.set_layout(true, budget_ms) {
                     state.relax_layout();
@@ -656,7 +718,8 @@ impl Simulation {
             }),
             #[cfg(not(target_arch = "wasm32"))]
             Engine::Gpu { .. } => Ok(()),
-        }
+        };
+        self.record(relaxed)
     }
 
     /// Writes the grid, points or edges as `--export` does.
@@ -666,17 +729,24 @@ impl Simulation {
     ///
     /// # Errors
     ///
-    /// Returns [`ExportError::GpuState`] for a GPU model, whose views stay on the device, [`ExportError::Io`] when
-    /// `writer` fails, and [`ExportError::Fault`] when the model panics while preparing its views.
+    /// Returns [`ExportError::Fault`] when the model panics while preparing its views. Once an earlier call returned a
+    /// fault, it returns [`ExportError::Fault`] for every model, holding [`FaultKind::Refused`], or
+    /// [`FaultKind::DeviceLost`] once the device is lost. Otherwise it returns [`ExportError::GpuState`] for a GPU
+    /// model, whose views stay on the device, and [`ExportError::Io`] when `writer` fails.
+    ///
+    /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
+    /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
     pub fn write_state(&mut self, writer: &mut dyn Write) -> Result<(), ExportError> {
+        self.check_earlier_fault()?;
         match &mut self.engine {
             Engine::Cpu(state) => {
                 // Only the prepare is scoped. The writer is not `Send`.
-                cpu_call(STEPPING, || {
+                let prepared = cpu_call(STEPPING, || {
                     state.prepare_view();
                     Ok(())
-                })?;
-                write_views(&**state, writer)?;
+                });
+                self.record(prepared)?;
+                write_views(self.engine.state(), writer)?;
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -686,9 +756,10 @@ impl Simulation {
 
     /// Steps to `end` under [`Fire::AfterStep`], firing each tick's actions after the step that reaches it.
     fn advance(&mut self, end: u64) -> Result<(), Fault> {
-        let Self { setup, engine } = self;
+        self.check_earlier_fault()?;
+        let Self { setup, engine, .. } = self;
         let schedule = &setup.schedule;
-        match engine {
+        let advanced = match engine {
             Engine::Cpu(state) => {
                 if state.tick() >= end {
                     return Ok(());
@@ -697,7 +768,73 @@ impl Simulation {
             }
             #[cfg(not(target_arch = "wasm32"))]
             Engine::Gpu { state, ctx } => advance_gpu(&mut **state, ctx, schedule, end),
+        };
+        self.record(advanced)
+    }
+
+    /// Returns the fault every call returns once an earlier call faulted.
+    fn check_earlier_fault(&self) -> Result<(), Fault> {
+        let Some(earlier) = &self.earlier_fault else {
+            return Ok(());
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Engine::Gpu { ctx, .. } = &self.engine
+            && ctx.is_lost()
+        {
+            return Err(Fault::device_lost(STEPPING));
         }
+        Err(Fault::refused(
+            STEPPING,
+            format!("an earlier call faulted and the simulation has to be rebuilt ({earlier})"),
+        ))
+    }
+
+    /// Returns `result`, and records its fault for every later call to refuse on.
+    fn record<T>(&mut self, result: Result<T, Fault>) -> Result<T, Fault> {
+        if let Err(fault) = &result
+            && self.earlier_fault.is_none()
+        {
+            self.earlier_fault = Some(fault.to_string());
+        }
+        result
+    }
+}
+
+/// Runs a GPU state to `end_tick` as [`Simulation::run_sampled`] does.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_sampled_gpu<B>(
+    state: &mut dyn GpuSimState,
+    ctx: &GpuContext,
+    schedule: &Schedule,
+    end_tick: u64,
+    interval: u64,
+    mut on_sample: impl FnMut(&StatSample) -> ControlFlow<B>,
+) -> Result<ControlFlow<B>, Fault> {
+    let first = sample_gpu(state, ctx)?;
+    if let ControlFlow::Break(stop) = on_sample(&first) {
+        return Ok(ControlFlow::Break(stop));
+    }
+    while state.tick() < end_tick {
+        let next = next_sample_tick(state.tick(), interval, end_tick);
+        advance_gpu(state, ctx, schedule, next)?;
+        let sample = sample_gpu(state, ctx)?;
+        if let ControlFlow::Break(stop) = on_sample(&sample) {
+            return Ok(ControlFlow::Break(stop));
+        }
+    }
+    Ok(ControlFlow::Continue(()))
+}
+
+/// Runs `f` inside the fault scopes. Once the device is lost, the loss is returned in place of the errors it caused.
+#[cfg(not(target_arch = "wasm32"))]
+fn gpu_call<T>(ctx: &GpuContext, during: &'static str, f: impl FnOnce() -> Result<T, Fault>) -> Result<T, Fault> {
+    match catching_on(ctx, during, f) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(fault)) | Err(fault) => Err(if ctx.is_lost() {
+            Fault::device_lost(during)
+        } else {
+            fault
+        }),
     }
 }
 
@@ -709,10 +846,10 @@ fn advance_gpu(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &Schedul
     if count == 0 {
         return Ok(());
     }
-    catching_on(ctx, STEPPING, || {
+    gpu_call(ctx, STEPPING, || {
         let refused = stepping::run_steps_acting(state, ctx, count, schedule, Fire::AfterStep)?;
         refusal(&refused, STEPPING)
-    })?
+    })
 }
 
 /// Returns the tick of the sample after `tick`: the next multiple of `interval`, or `end_tick` when that comes first.
@@ -753,7 +890,7 @@ fn sample_cpu(state: &mut dyn SimState) -> StatSample {
 /// Returns the stats of a GPU state's current tick, blocking on a stats-only readback.
 #[cfg(not(target_arch = "wasm32"))]
 fn sample_gpu(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Result<StatSample, Fault> {
-    let entries = catching_on(ctx, STEPPING, || stepping::sample_stats(state, ctx))?;
+    let entries = gpu_call(ctx, STEPPING, || stepping::sample_stats(state, ctx))?;
     // Reports a fault the sample raised outside the scopes. No later call might wait.
     stepping::wait(ctx)?;
     Ok(StatSample {

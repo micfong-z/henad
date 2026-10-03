@@ -2,9 +2,9 @@
 
 use eframe::wasm_bindgen::JsCast as _;
 
+use crate::HenadApp;
 use crate::init::wgpu_configuration;
 use crate::options::{AppOptions, WebStartError};
-use crate::{HenadApp, init_thread_pool, requested_threads};
 
 /// Id of the canvas the app draws on.
 const CANVAS_ID: &str = "the_canvas_id";
@@ -13,13 +13,19 @@ const CANVAS_ID: &str = "the_canvas_id";
 const LOADING_TEXT_ID: &str = "loading_text";
 
 /// Note the Performance tab shows when the thread pool failed to start.
+#[cfg(target_feature = "atomics")]
 const THREAD_POOL_NOTE: &str = "Models run on one thread. The page might lack the Cross-Origin-Opener-Policy and \
                                 Cross-Origin-Embedder-Policy headers, and the browser console has the error.";
+
+/// Note the Performance tab shows in a build without atomics. Such a build has no thread pool.
+#[cfg(not(target_feature = "atomics"))]
+const THREAD_POOL_NOTE: &str = "Models run on one thread. This build has no thread support.";
 
 /// Starts the worker pool at the width `?threads=` asks for, then builds the options and starts the app on the
 /// `the_canvas_id` canvas, removing the `loading_text` element.
 ///
 /// A pool that fails to start is logged, and the models then run on one thread, with a note in the Performance tab.
+/// A build without atomics has no pool, and runs the models on one thread with a note of its own.
 /// A failure to start the app is returned, for the caller to log, and written into the `loading_text` element where
 /// the page has one.
 ///
@@ -38,16 +44,7 @@ pub async fn start_web(options: impl FnOnce() -> AppOptions) -> Result<(), WebSt
         return Err(WebStartError::no_window());
     };
 
-    let available = window.navigator().hardware_concurrency() as usize;
-    let search = window.location().search().unwrap_or_default();
-    let workers = requested_threads(&search, available);
-    log::info!("thread pool: {workers} workers, {available} reported by the browser");
-    let pool_failed = wasm_bindgen_futures::JsFuture::from(init_thread_pool(workers))
-        .await
-        .is_err_and(|error| {
-            log::error!("thread pool init failed, models will run on one core: {error:?}");
-            true
-        });
+    let pool_failed = !start_thread_pool(&window).await;
 
     let mut options = options();
     if pool_failed {
@@ -91,6 +88,26 @@ pub async fn start_web(options: impl FnOnce() -> AppOptions) -> Result<(), WebSt
         }
         Err(error) => refuse(WebStartError::eframe(&error)),
     }
+}
+
+/// Starts the worker pool at the width `?threads=` asks for, and returns whether it started.
+#[cfg(target_feature = "atomics")]
+async fn start_thread_pool(window: &web_sys::Window) -> bool {
+    let available = window.navigator().hardware_concurrency() as usize;
+    let search = window.location().search().unwrap_or_default();
+    let workers = crate::requested_threads(&search, available);
+    log::info!("thread pool: {workers} workers, {available} reported by the browser");
+    wasm_bindgen_futures::JsFuture::from(crate::init_thread_pool(workers))
+        .await
+        .inspect_err(|error| log::error!("thread pool init failed, models will run on one core: {error:?}"))
+        .is_ok()
+}
+
+/// Returns `false`. A build without atomics has no thread pool, and rayon runs every task on the calling thread.
+#[cfg(not(target_feature = "atomics"))]
+async fn start_thread_pool(_window: &web_sys::Window) -> bool {
+    log::warn!("this build has no atomics, models will run on one core");
+    false
 }
 
 /// Installs a logger that writes to the browser console, for messages at `level` and above.

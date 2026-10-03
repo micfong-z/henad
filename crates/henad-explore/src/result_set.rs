@@ -116,6 +116,9 @@ impl ResultSet {
         for file in SEARCH_FILES {
             let path = dir.join(file);
             match std::fs::read(&path) {
+                // A table without a complete header line is one a stopped search had only begun, and reads as none,
+                // as `from_files` reads it.
+                Ok(bytes) if !bytes.contains(&b'\n') => {}
                 Ok(bytes) => {
                     set.search_tables
                         .insert(file, String::from_utf8_lossy(&bytes).into_owned());
@@ -284,7 +287,8 @@ impl ResultSet {
         &self.manifest
     }
 
-    /// Returns every distinct build the manifest's sessions record for `role`, in session order.
+    /// Returns every distinct build the manifest's sessions that wrote runs record for `role`, in session order, as
+    /// [`Manifest::recorded_builds`] lists them.
     ///
     /// A session of a 0.2 manifest records no builds, and reads as the engine build of its own commit and the
     /// manifest's engine version, with no model build.
@@ -387,26 +391,34 @@ impl ResultSet {
     }
 
     /// Returns the [`Replay`] of `recorded`, a run of a search, from the config its row records.
+    ///
+    /// Each value is found by its column's name, a parameter's id or an action's `action.<name>`, so a model that
+    /// reorders its parameters still reads each value under its own id.
     fn search_replay(&self, schema: ModelSchema<'_>, recorded: &RunRow) -> Result<Replay, ResultReplayError> {
         let run = recorded.outcome.run;
         let mismatch = || ResultReplayError::Mismatch { run_id: run.run_id };
         let plan = SearchPlan::new(&self.spec, &schema).map_err(ResultReplayError::Search)?;
-        let params = schema.params.len();
-        if recorded.values.len() != params + plan.base().actions().len() {
+        let actions = plan.base().actions();
+        if recorded.values.len() != schema.params.len() + actions.len()
+            || self.value_columns.len() != recorded.values.len()
+        {
             return Err(mismatch());
         }
+        let value_of = |column: &str| {
+            let position = self.value_columns.iter().position(|name| name == column)?;
+            recorded.values.get(position)
+        };
         let config = Config {
             block: recorded.block,
             params: schema
                 .params
                 .iter()
-                .zip(&recorded.values)
-                .map(|(descriptor, text)| parse_value(&descriptor.kind, text).ok())
+                .map(|descriptor| parse_value(&descriptor.kind, value_of(descriptor.id)?).ok())
                 .collect::<Option<_>>()
                 .ok_or_else(mismatch)?,
-            action_ticks: recorded.values[params..]
+            action_ticks: actions
                 .iter()
-                .map(|text| text.parse().ok())
+                .map(|action| value_of(&action.column_name())?.parse().ok())
                 .collect::<Option<_>>()
                 .ok_or_else(mismatch)?,
         };
@@ -922,6 +934,88 @@ impl std::error::Error for ResultReplayError {
             Self::Plan(error) => Some(error),
             Self::Search(error) => Some(error),
             Self::UnknownRun { .. } | Self::Mismatch { .. } => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use henad_core::explore::factor::{FactorSpec, LevelSpec};
+    use henad_core::explore::plan::ModelSchema;
+    use henad_core::explore::replay::Replay;
+    use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, SearchSpec};
+    use henad_core::explore::spec::SweepSpec;
+    use henad_core::params::{ParamDescriptor, ParamValue};
+
+    use super::ResultSet;
+    use crate::progress::NoProgress;
+    use crate::tests::support::{ScratchDir, entry, sweep_options, sweep_with};
+
+    /// Returns the value `replay` gives the parameter `id`, whose schema lists `params`.
+    fn value_of(replay: &Replay, params: &[ParamDescriptor], id: &str) -> ParamValue {
+        let position = params
+            .iter()
+            .position(|param| param.id == id)
+            .expect("the schema has the parameter");
+        replay.params[position].clone()
+    }
+
+    #[test]
+    fn a_search_run_replays_each_value_under_its_parameter_id() {
+        let sir = entry("sir", None);
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = vec![
+            ("grid_width".to_owned(), "8".to_owned()),
+            ("grid_height".to_owned(), "8".to_owned()),
+        ];
+        spec.run.steps = 4;
+        spec.measure.default_reducers = false;
+        spec.measure.reducers = vec!["Infected:max".parse().expect("a valid reducer")];
+        let rate = |min, max| LevelSpec::Range { min, max, step: None };
+        spec.search = Some(SearchSpec {
+            algorithm: SearchAlgorithm::Random,
+            max_evaluations: 2,
+            batch_size: 2,
+            objective: Some(Objective {
+                column: "Infected:max".to_owned(),
+                goal: Goal::Minimize,
+                aggregate: Aggregate::Median,
+            }),
+            space: vec![
+                FactorSpec::param("infection_rate", rate(0.5, 0.9)),
+                FactorSpec::param("recovery_rate", rate(0.02, 0.3)),
+            ],
+        });
+        let scratch = ScratchDir::new("search-replay-by-id");
+        sweep_with(
+            &sir,
+            None,
+            &spec,
+            scratch.path(),
+            &sweep_options(false),
+            &mut NoProgress,
+        )
+        .expect("the search runs");
+        let set = ResultSet::open_dir(scratch.path(), usize::MAX).expect("the folder reads back");
+        let schema = sir.schema();
+        let replay = set.replay(schema, 0).expect("the run replays");
+
+        // A later version of the model lists its two rates the other way round.
+        let mut params = schema.params.to_vec();
+        let position = |id: &str| params.iter().position(|param| param.id == id).expect("a SIR parameter");
+        let (infection, recovery) = (position("infection_rate"), position("recovery_rate"));
+        params.swap(infection, recovery);
+        let reordered = ModelSchema {
+            params: &params,
+            ..schema
+        };
+        let swapped = set.replay(reordered, 0).expect("the run replays");
+        for id in ["infection_rate", "recovery_rate", "grid_width"] {
+            assert_eq!(
+                value_of(&swapped, &params, id),
+                value_of(&replay, schema.params, id),
+                "{id}"
+            );
         }
     }
 }

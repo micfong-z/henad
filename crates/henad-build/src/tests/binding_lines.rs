@@ -103,6 +103,24 @@ fn a_binding_line_in_another_form_is_refused() {
         ("@group(0) @binding(0)\nvar<uniform> params: Params;", "`var`"),
         ("@group(0) @binding(0) var<uniform> params:\n    Params;", "`;`"),
         ("@group(0) @binding(x) var<uniform> params: Params;", "`@binding(N)`"),
+    ] {
+        match read_bindings(path, line) {
+            Err(
+                error @ ShaderBuildError::BindingLine {
+                    reason: found,
+                    line: number,
+                    ..
+                },
+            ) => {
+                assert!(found.contains(reason), "{line:?}: {found}");
+                assert_eq!(number, 1, "{line:?}");
+                assert!(error.to_string().contains("Write each binding on one line"), "{error}");
+            }
+            other => panic!("{line:?}: expected a refused line, got {other:?}"),
+        }
+    }
+
+    for (line, reason) in [
         (
             "@group(0) @binding(0) var input_tex: texture_2d<f32>;",
             "sampled texture",
@@ -115,15 +133,20 @@ fn a_binding_line_in_another_form_is_refused() {
         ("@group(0) @binding(0) var<private> data: u32;", "address space"),
     ] {
         match read_bindings(path, line) {
-            Err(ShaderBuildError::BindingLine {
-                reason: found,
-                line: number,
-                ..
-            }) => {
+            Err(
+                error @ ShaderBuildError::UnsupportedBinding {
+                    reason: found,
+                    line: number,
+                    ..
+                },
+            ) => {
                 assert!(found.contains(reason), "{line:?}: {found}");
                 assert_eq!(number, 1, "{line:?}");
+                let message = error.to_string();
+                assert!(!message.contains("on one line"), "{message}");
+                assert!(message.contains("`ShaderBuild::new`"), "{message}");
             }
-            other => panic!("{line:?}: expected a refused line, got {other:?}"),
+            other => panic!("{line:?}: expected an unsupported binding, got {other:?}"),
         }
     }
 

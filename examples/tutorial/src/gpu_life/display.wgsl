@@ -4,7 +4,7 @@
 @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> dims: Dims;
 
-// Palette matches `henad_models::game_of_life::PALETTE`: dead = 0x15/0x15/0x15, alive = 0x00/0xE6/0x76.
+// Palette matches the CPU model's `PALETTE`: dead = 0x15/0x15/0x15, alive = 0x00/0xE6/0x76.
 const DEAD_COLOR: vec4<f32> = vec4<f32>(21.0 / 255.0, 21.0 / 255.0, 21.0 / 255.0, 1.0);
 const ALIVE_COLOR: vec4<f32> = vec4<f32>(0.0 / 255.0, 230.0 / 255.0, 118.0 / 255.0, 1.0);
 

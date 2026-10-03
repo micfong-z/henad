@@ -5,7 +5,7 @@ use henad_compute::gpu::view::display::GpuDisplay;
 use henad_compute::snapshot::{CpuLayers, GpuSnapshot, GridSnapshot, SnapshotView};
 
 use crate::state::AppState;
-use crate::ui::agent_layer::AgentDraw;
+use crate::ui::agent_layer::{AgentDraw, padded_palette};
 
 /// A capture waiting on the GPU. Polled every frame, never blocking, the way a stats readback is.
 pub struct PendingCapture {
@@ -295,18 +295,18 @@ fn agent_draw(app: &AppState, width: u32, height: u32) -> Option<AgentDraw> {
 
 /// The grid as target-format bytes, one pixel per cell, sampled the way the panel's texture is
 /// once the grid is past the cap.
+///
+/// A cell value past the end of the palette takes its first colour, as in the viewport.
 fn grid_pixels(grid: &GridSnapshot, width: u32, height: u32, format: wgpu::TextureFormat) -> Vec<u8> {
     use rayon::prelude::*;
 
     let src_width = grid.width as usize;
+    let colors = padded_palette(grid.palette);
     let row = |y: u32| {
         let sy = henad_compute::display_scale::source_row(y, grid.height, height) as usize;
         let cells = &grid.cells[sy * src_width..(sy + 1) * src_width];
         (0..width as usize)
-            .flat_map(|x| {
-                let cell = cells[x * src_width / width as usize];
-                grid.palette[cell as usize]
-            })
+            .flat_map(|x| colors[usize::from(cells[x * src_width / width as usize])])
             .collect::<Vec<u8>>()
     };
     let mut pixels: Vec<u8> = (0..height).into_par_iter().flat_map_iter(row).collect();
@@ -336,8 +336,22 @@ fn match_channel_order(pixels: &mut [u8], format: wgpu::TextureFormat) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_AGENT_DIM, agent_scale, padded_row};
+    use super::{MIN_AGENT_DIM, agent_scale, grid_pixels, padded_row};
     use henad_compute::display_scale::MAX_DISPLAY_DIM;
+    use henad_compute::snapshot::GridSnapshot;
+
+    /// A model's cell value can run past its palette. The capture used to panic on it and end the app.
+    #[test]
+    fn a_cell_past_the_palette_takes_the_first_colour() {
+        let grid = GridSnapshot {
+            width: 4,
+            height: 1,
+            cells: vec![0, 1, 2, 255],
+            palette: &[[1, 2, 3, 4], [5, 6, 7, 8]],
+        };
+        let pixels = grid_pixels(&grid, 4, 1, wgpu::TextureFormat::Rgba8Unorm);
+        assert_eq!(pixels, [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 1, 2, 3, 4]);
+    }
 
     #[test]
     fn a_row_is_padded_to_the_copy_alignment() {

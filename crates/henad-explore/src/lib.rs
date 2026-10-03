@@ -1,5 +1,10 @@
 //! Parameter sweeps and searches over Henad models.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+// Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
+// limit of 128.
+#![recursion_limit = "256"]
+
 #[cfg(not(target_arch = "wasm32"))]
 pub mod benchmark;
 pub mod cursor;
@@ -12,7 +17,7 @@ pub mod output;
 pub mod probe;
 pub mod progress;
 #[cfg(any(target_arch = "wasm32", test))]
-pub mod pumped;
+pub(crate) mod pumped;
 pub mod result_set;
 pub mod schema;
 pub mod search_run;

@@ -9,6 +9,7 @@
 
 pub mod agent_engine;
 pub mod capacity;
+mod contracts;
 pub mod fault;
 pub mod grid_engine;
 pub mod limits;
@@ -78,6 +79,15 @@ impl GpuContext {
     /// panics there. A model provokes those two, and the handler reports them normally.
     ///
     /// The context also records the loss of the device. [`Self::is_lost`] reports it.
+    ///
+    /// Note that a second `new` on the same device takes the error handler over from the first, and on native targets
+    /// the lost callback too. From then on only the newest context receives the device's unscoped errors, and on
+    /// native targets its loss. In a browser every context on the device records the loss. A clone shares both with
+    /// the context it came from.
+    ///
+    /// The context carries no [`RuntimeInfo`]. A host that hands its context to a sweep attaches one with
+    /// `.with_runtime_info(RuntimeInfo::collect(&adapter, &device))`. Without it the sweep's manifest records no
+    /// adapter.
     pub fn new(
         device: wgpu::Device,
         queue: wgpu::Queue,

@@ -82,6 +82,9 @@ run 5 ends with Some(0.0) infected
 ```
 
 and then opens the app on run 5 of the sweep.
+`main` installs the [panic hook](#faults-and-the-panic-hook), empties a folder for the sweep, and hands the example set, the folder and standard output to `study`.
+`study` does everything up to the app.
+Henad's tests run `study` and check that it prints the lines above.
 The program is in Henad's repository as [`crates/henad/examples/complete.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad/examples/complete.rs), and the rest of this page goes through it a part at a time.
 
 ## Building and stepping a model
@@ -100,8 +103,7 @@ The program is in Henad's repository as [`crates/henad/examples/complete.rs`](ht
 A GPU model builds on the device it is handed:
 
 ```rust
-let gpu = henad::gpu::acquire_headless(models.gpu_needs())?;
-let mut simulation = models.get("gpu_sir").ok_or("the example set lacks GPU SIR")?.setup().build(Some(&gpu))?;
+--8<-- "crates/henad/tests/facade_paths.rs:gpu_build"
 ```
 
 `acquire_headless` asks for a device without a window, with the limits the set's GPU models need.
@@ -151,17 +153,16 @@ Step with `run_for` or `run_to` where you can.
 A loop that has to do something between two ticks goes inside `rayon::scope`, or `install` on a pool of your own, and then costs what `run_for` costs:
 
 ```rust
-rayon::scope(|_| -> Result<(), henad::Fault> {
-    for _ in 0..1000 {
-        simulation.step()?;
-        // Per-tick work of your own.
-    }
-    Ok(())
-})?;
+--8<-- "crates/henad/tests/facade_paths.rs:scoped_steps"
 ```
 
 `rayon::scope` takes `rayon = "1"` among the program's own dependencies.
 Cargo resolves it to the rayon Henad steps on, and the loop runs on the same pool.
+
+A call made from outside the pool runs on it as one job.
+A worker that waits inside another host's parallel work can pick that job up and run it nested, and the other host then waits for the whole call.
+A `run_sampled` closure that waits on another user of the pool, through a bounded channel for one, can deadlock there.
+Hosts that step independently, such as a window's frame loop and a background run, each step inside `install` on a pool of their own.
 
 A GPU model takes no pool.
 Each call waits for the device once, and `run_for` submits its steps in batches of up to 64.
@@ -169,24 +170,32 @@ Each call waits for the device once, and `run_for` submits its steps in batches 
 ## Faults and the panic hook
 
 A model that panics, or a device that reports an error, ends the call with a `Fault`, and leaves the process running.
+A lost device ends the next call that waits for the device with `FaultKind::DeviceLost`.
+A fault can leave a step half done, and the simulation then refuses every later call that runs model code, naming the first fault.
+Build it again from its `setup()` to go on.
 The fault names where the model panicked, as `file:line`, once the panic hook is installed:
 
 ```rust
 henad::install_panic_hook();
 ```
 
-No library call installs it, and a program calls it once in `main`.
-The app and the command line install it for themselves.
+Building, stepping and sweeping install no hook, and a program calls it once in `main`.
+The app's entry points, `henad::cli::run` and the testing kit's `assert_set_conforms` install it for themselves.
 The hook chains to the hook installed before it.
 A program that installs a hook of its own afterwards keeps the previous one from `std::panic::take_hook` and calls it from the new one, or faults lose their location.
 
 The hook keeps one list of recent panics for the whole process.
 Two models that panic with the same message on two threads at once can swap their locations.
 
-`GpuContext::new` takes over the device's error and loss handlers.
-A host that shares its own wgpu device with Henad gets its errors reported as faults from then on.
+`GpuContext::new` takes over the device's error handler and records the device's loss.
+A host that shares its own wgpu device with Henad requests it with the limits `henad::gpu::raise_limits` gives for the set's `gpu_needs()`, and gets its errors reported as faults from then on.
+It also attaches `RuntimeInfo::collect(&adapter, &device)` to the context with `with_runtime_info`, or a sweep on that context records no adapter in its manifest.
+A second `GpuContext::new` on the same device takes the error handler over from the first, and only the newest context hears of unscoped errors.
+On native targets it takes the lost callback over as well, and only the newest context hears of the loss.
+In a browser every context on the device hears of it.
+Simulations that step at once on several threads each take a device of their own, from one `acquire_headless` call each.
 
-No library call installs a logger either, and each `main` installs its own, as the template's does.
+Building, stepping and sweeping install no logger either, and each `main` installs its own, as the template's does.
 
 ## Sweeps from code
 
@@ -200,7 +209,8 @@ A `SweepSpec` can also be built in code, from the types in `henad::explore::spec
 `SweepOptions::new` takes the `Provenance` the manifest records: the program's own build and its command line.
 `apply_execution` copies the spec's `[execution]` table into the options.
 Set the program's own settings after it, as `--concurrent` overrides the table on the command line.
-`concurrency`, `memory_budget` and `gpu_memory` decide how the runs spread over the machine, `shard` and `resume` act as `--shard` and `--resume` do, and none of them changes a result.
+`concurrency`, `memory_budget` and `gpu_memory_budget` decide how the runs spread over the machine, `shard` and `resume` act as `--shard` and `--resume` do, and none of them changes a result.
+A sweep held in memory resumes nothing, whatever `resume` says.
 
 `run_spec` runs the sweep, or the search for a spec with a `[search]` table, and blocks until it ends.
 `SweepOutput::Directory` writes the four files of the [output directory](sweeps.md#the-output-directory), and `SweepOutput::Memory` hands them back in the `SweepRecord` in place of a folder.
@@ -209,6 +219,9 @@ The `Progress` argument hears of each planned sweep, finished run and warning, a
 For a sweep that runs while the program does something else, `SweepRun::start` runs it on a thread of its own, and reports through a channel of `SweepEvent`s.
 
 A GPU model sweeps on the device it is handed, or on a headless device of its own when it is handed `None`.
+A device handed to a sweep shares its fault sink with the sweep, and the sink holds one fault for whichever side reads it first.
+A fault the sweep takes ends every live run, whichever side raised it, and a fault the program takes first never reaches the sweep.
+A program that renders on its device hands the sweep `None`.
 
 ## Reading results back
 
@@ -220,11 +233,11 @@ A GPU model sweeps on the device it is handed, or on a headless device of its ow
 `ResultSet::replay` checks a run's row against the plan the folder records and returns its `Replay`, the model, values, seed and schedule that rebuild it.
 `RunSetup::from_replay` turns it back into a setup.
 
-A run's trajectory depends on its model, its values, its seed and its schedule, and on nothing else.
-A rebuild on the same build of Henad and of the model steps through the same states, and its stats at the run's last tick equal the run's last row in `series.csv`.
+A run's trajectory depends on its model, its values, its seed and its schedule.
+A rebuild on the same build of Henad and of the model, on the same platform, steps through the same states, and its stats at the run's last tick equal the run's last row in `series.csv`.
 A pause, the thread count or the number of runs stepping beside it never changes a run.
 
-Three things stand between a run and its rebuild:
+Four things stand between a run and its rebuild:
 
 - **A model that does not replay exactly.**
   A GPU model whose passes leave the order of their writes to the device declares `REPLAYS_EXACTLY = false`.
@@ -233,6 +246,10 @@ Three things stand between a run and its rebuild:
 - **A changed build.**
   The manifest records the build of Henad and of the model's crate for every session that wrote runs.
   A rebuild from a changed build steps the changed code, and the app warns before it opens such a run.
+- **Another platform.**
+  A model that calls `sin`, `cos`, `hypot` or `powf` gets them from the platform's maths library, which can round the last bit differently on another operating system or in a browser.
+  Boids, Ants and Virus on a Network call them, and a rebuild on another platform can diverge from the run.
+  A resume, a merge and a replay compare no platforms, and none of them warns.
 - **A sample taken on another schedule.**
   A rebuild sampled from tick 0, as `run_sampled` and `--export-stats` sample, holds other ticks than a series that started after a warm-up.
   The ticks both hold agree.
@@ -265,7 +282,10 @@ The template's `src/main.rs` shows both entry points.
 
 Every results folder records three builds: Henad's, the host's, and that of the crate that registered each model.
 A build is a crate's name and version, the commit it was built from, whether its sources differed from that commit, and a hash of its sources.
-A resume, a merge or a replay compares the recorded builds with its own, and warns when Henad's build or the model's differs.
+A resume or a merge compares the recorded builds with its own, and warns when Henad's build or the model's differs.
+The app warns before it opens a run when Henad's build or the model's differs from a build the folder records.
+`ResultSet::replay` compares no builds.
+To check a rebuild, a program compares `results.recorded_builds(BuildRole::Engine)` with `RecordedBuild::engine()`, and `recorded_builds(BuildRole::Model)` with `RecordedBuild::from(entry.source())`, through `RecordedBuild::same_build`.
 
 `henad::build_info!()` returns the build of the crate it expands in.
 A crate that holds models builds its set with `ModelSet::new(henad::build_info!())`, and the set records that build on each model inserted into it.
@@ -279,13 +299,14 @@ fn main() {
 
 Without the stamp the build reads as unknown, and an uncommitted edit to a model goes unrecorded.
 Two unknown builds never count as the same, and every resume warns whether or not the model changed.
+The app says the model's build is unidentified before it opens such a run.
 A program that registers no models of its own, as the one above, needs no `build.rs`.
 
 The stamp hashes the files under the crate's `src` and its manifest.
 A file a model reads at compile time, through `include_bytes!` or `include_str!`, belongs under `src`, where the hash sees it.
 
-henad-core has no hash of its own sources.
-An edited copy of henad-core, pulled in through `[patch]`, reads as the release it patches, and a resume does not warn about it.
+henad-core and henad-build have no hash of their own sources.
+An edited copy of either, pulled in through `[patch]`, reads as the release it patches, and a resume does not warn about it.
 
 ## Next
 

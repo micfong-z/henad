@@ -30,7 +30,7 @@ const PUMP_SLICE_MS: f64 = PUMP_BUDGET_MS / 2.0;
 
 /// Command to a sweep pumped from a host's frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SweepCommand {
+pub(crate) enum SweepCommand {
     Pause,
     Resume,
     /// Ends the sweep at its next pump, writing the runs finished so far.
@@ -38,7 +38,7 @@ pub enum SweepCommand {
 }
 
 /// A sweep or search of a CPU model, advanced by [`SimLoop::pump`].
-pub struct PumpedSweep {
+pub(crate) struct PumpedSweep {
     setup: SweepSetup,
     channel: SweepChannel,
     stage: PumpStage,
@@ -173,7 +173,7 @@ impl PumpedSweep {
         let mut sweep_options = SweepOptions::new(options.provenance);
         sweep_options.concurrency = Concurrency::Fixed(std::num::NonZeroUsize::MIN);
         sweep_options.memory_budget = options.memory_budget;
-        sweep_options.gpu_memory = options.gpu_memory;
+        sweep_options.gpu_memory_budget = options.gpu_memory_budget;
         sweep_options.active_runs = Some(active_runs.clone());
         sweep_options.spec_source = options.spec_source;
         Ok(Self {
@@ -192,12 +192,12 @@ impl PumpedSweep {
     }
 
     /// Switch that pauses and aborts the sweep.
-    pub fn control(&self) -> &SweepControl {
+    pub(crate) fn control(&self) -> &SweepControl {
         &self.setup.options.control
     }
 
     /// Table of the run in progress.
-    pub fn active_runs(&self) -> &ActiveRuns {
+    pub(crate) fn active_runs(&self) -> &ActiveRuns {
         &self.setup.active_runs
     }
 
@@ -358,6 +358,11 @@ impl SearchQueue {
             .is_some_and(|pumped| pumped.current.is_some() || pumped.batch.request(pumped.next_position).is_some())
     }
 
+    /// Returns whether every run of the batch in progress is written, and the next pump tells the searcher the batch.
+    fn awaits_tell(&self) -> bool {
+        self.batch.is_some() && !self.runs_next()
+    }
+
     /// Asks for the next batch, builds the next run, steps the run in progress by one slice, writes it once it
     /// finishes, or tells the searcher a finished batch.
     fn pump(&mut self, setup: &SweepSetup, channel: &mut SweepChannel) -> Result<PumpWork, ExploreError> {
@@ -459,7 +464,14 @@ impl SimLoop for PumpedSweep {
             // A pause holds the runs alone. A sweep paused after its last run still ends.
             PumpStage::Running(runs) if control.is_paused() && !runs.is_drained() => return Pace::Idle,
             PumpStage::Running(runs) => runs.pump(&self.setup, &mut self.channel),
-            PumpStage::Searching(_) if control.is_aborted() => Ok(PumpWork::Aborted),
+            // A batch whose runs are all written is told before the search ends, as a native search tells it.
+            PumpStage::Searching(search) if control.is_aborted() => {
+                if search.awaits_tell() {
+                    search.pump(&self.setup, &mut self.channel).map(|_| PumpWork::Aborted)
+                } else {
+                    Ok(PumpWork::Aborted)
+                }
+            }
             PumpStage::Searching(search) if control.is_paused() && search.runs_next() => return Pace::Idle,
             PumpStage::Searching(search) => search.pump(&self.setup, &mut self.channel),
         };
@@ -646,8 +658,8 @@ mod tests {
         assert_eq!(finished_end(&ended), Some(SweepEnd::Complete));
     }
 
-    #[test]
-    fn a_search_paused_after_its_last_run_ends() {
+    /// Returns a random search of SIR on an 8 by 8 grid, 2 candidates a batch and `max_evaluations` in all.
+    fn small_search(max_evaluations: u64) -> SweepSpec {
         let mut spec = SweepSpec::new("sir");
         spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
         spec.run.steps = 4;
@@ -655,7 +667,7 @@ mod tests {
         spec.measure.reducers = vec!["Infected:max".parse().expect("a valid reducer")];
         spec.search = Some(SearchSpec {
             algorithm: SearchAlgorithm::Random,
-            max_evaluations: 2,
+            max_evaluations,
             batch_size: 2,
             objective: Some(Objective {
                 column: "Infected:max".to_owned(),
@@ -671,7 +683,39 @@ mod tests {
                 },
             )],
         });
-        let (mut sweep, events) = pumped(entry("sir", None), spec);
+        spec
+    }
+
+    #[test]
+    fn a_search_aborted_after_a_batch_is_written_tells_the_batch() {
+        let (mut sweep, events) = pumped(entry("sir", None), small_search(4));
+        let received = pump_until_runs(&mut sweep, &events, 2);
+        assert!(
+            !received
+                .iter()
+                .any(|event| matches!(event, SweepEvent::SearchBatchTold(_))),
+            "the first batch is written and not told"
+        );
+
+        sweep.handle_command(SweepCommand::Abort);
+        let ended = pump_until_idle(&mut sweep, &events);
+        assert!(
+            matches!(ended.first(), Some(SweepEvent::SearchBatchTold(_))),
+            "an abort leaves a written batch to be told"
+        );
+        let Some(SweepEvent::Finished(record)) = ended.last() else {
+            panic!("the search did not finish: {:?}", ended.last());
+        };
+        assert_eq!(record.report.end, SweepEnd::Aborted);
+        assert_eq!(
+            record.manifest.search.as_ref().map(|search| search.evaluations),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_search_paused_after_its_last_run_ends() {
+        let (mut sweep, events) = pumped(entry("sir", None), small_search(2));
         let received = pump_until_runs(&mut sweep, &events, 2);
         assert_eq!(
             finished_end(&received),

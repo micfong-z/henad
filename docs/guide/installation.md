@@ -36,7 +36,7 @@ Henad runs on any device with a CPU, optionally a GPU, and any operating system 
 With a Rust toolchain from [rustup](https://rustup.rs), install both from crates.io:
 
 ``` bash
-cargo install --locked --config 'profile.release.opt-level=2' henad-app henad-cli
+cargo install --locked --config profile.release.opt-level=2 henad-app henad-cli
 ```
 
 This puts `henad-app` and `henad-cli` on your path, with the ten example models.
@@ -87,5 +87,14 @@ From a clone, run `cargo run -p henad-cli -- --info` instead.
 This prints the host details and the GPU adapter wgpu selected.
 If an adapter line is printed, the four GPU models are available.
 Otherwise, only the CPU models are available.
+
+### Packages on Linux
+
+A desktop distribution ships everything Henad needs.
+A server or container image might lack a Vulkan loader and driver, and `henad-cli --info` then prints no adapter.
+On Debian and Ubuntu, install `libvulkan1` with `mesa-vulkan-drivers` or your GPU vendor's driver.
+On Fedora, install `vulkan-loader` with `mesa-vulkan-drivers`.
+On X11 the app needs `libxkbcommon-x11`, packaged as `libxkbcommon-x11-0` on Debian and Ubuntu.
+Its file dialogs need `xdg-desktop-portal` with a backend for your desktop, such as `xdg-desktop-portal-gtk`.
 
 *[wasm]: WebAssembly

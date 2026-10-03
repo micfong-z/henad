@@ -131,6 +131,8 @@ impl Schedule {
     /// Resolves each `ID@TICK` against `actions`, the actions of model `model_id`. Order is preserved, so two at
     /// one tick run as given.
     ///
+    /// An entry splits at its last `@`, and an id can hold one.
+    ///
     /// # Errors
     ///
     /// Returns [`ScheduleError`] for an entry that does not read as `ID@TICK`, or names no action in `actions`.
@@ -138,7 +140,7 @@ impl Schedule {
         let mut entries = Vec::with_capacity(raw.len());
         for spec in raw {
             let (id, tick) = spec
-                .split_once('@')
+                .rsplit_once('@')
                 .ok_or_else(|| ScheduleError::BadEntry { raw: spec.clone() })?;
             let tick = tick.parse::<u64>().map_err(|source| ScheduleError::BadTick {
                 raw: spec.clone(),
@@ -354,6 +356,21 @@ mod tests {
         assert_eq!(
             refuse("reset@5", &actions),
             "unknown action 'reset' for 'life' (has randomise, clear)"
+        );
+    }
+
+    /// The regression. An entry split at its first `@`, so an id holding one read the rest of the id as its tick.
+    #[test]
+    fn an_id_holding_an_at_sign_resolves() {
+        let actions = [ActionDescriptor::new("spawn@centre", "Spawn at centre")];
+        let schedule = Schedule::parse(&["spawn@centre@100".to_owned()], "life", &actions).expect("a declared action");
+        assert_eq!(
+            schedule.entries(),
+            [Scheduled {
+                index: 0,
+                id: "spawn@centre".to_owned(),
+                tick: 100,
+            }]
         );
     }
 }

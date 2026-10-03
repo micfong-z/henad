@@ -1,7 +1,7 @@
 ---
 date: 2026-10-01
 title: "Library M3: the entry layer"
-description: The third milestone of #48. ModelEntry moves into henad-compute and holds no device, a ModelSet holds the models a host offers with each id once, henad-explore stops depending on the example models, and a sweep handed no device builds the entry it was handed.
+description: "The third milestone of #48. ModelEntry moves into henad-compute and holds no device, a ModelSet holds the models a host offers with each id once, henad-explore stops depending on the example models, and a sweep handed no device builds the entry it was handed."
 icon: material/package-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

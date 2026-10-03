@@ -43,17 +43,20 @@ impl Csr {
     }
 
     /// Returns the range of indices in `neighbors` and `edges` that correspond to row `i`.
+    #[inline]
     fn span(&self, i: u32) -> Range<usize> {
         let start = self.offset[i as usize] as usize;
         start..start + self.len[i as usize] as usize
     }
 
     /// Returns the slice of neighbour nodes for row `i`.
+    #[inline]
     fn row(&self, i: u32) -> &[u32] {
         &self.neighbors[self.span(i)]
     }
 
     /// Returns the slice of edge indices for row `i`.
+    #[inline]
     fn row_edges(&self, i: u32) -> &[u32] {
         &self.edges[self.span(i)]
     }
@@ -422,11 +425,13 @@ impl Network {
     }
 
     /// Returns the nodes that have an edge to `i`.
+    #[inline]
     pub fn in_neighbors(&self, i: u32) -> &[u32] {
         self.in_csr.row(i)
     }
 
     /// Returns the nodes that `i` has an edge to.
+    #[inline]
     pub fn out_neighbors(&self, i: u32) -> &[u32] {
         if self.directed {
             self.out_csr.row(i)
@@ -436,6 +441,7 @@ impl Network {
     }
 
     /// Returns the degree of the node. On directed graphs, this is the sum of in-degree and out-degree.
+    #[inline]
     pub fn degree(&self, i: u32) -> usize {
         if self.directed {
             self.in_csr.row(i).len() + self.out_csr.row(i).len()
@@ -448,6 +454,7 @@ impl Network {
     ///
     /// On undirected graphs, an edge in either direction counts, and the shorter of the two rows is searched.
     /// On directed graphs, the out-row of `a` is searched.
+    #[inline]
     pub fn edge_between(&self, a: u32, b: u32) -> Option<u32> {
         let (csr, a, b) = if self.directed {
             (&self.out_csr, a, b)
@@ -461,6 +468,7 @@ impl Network {
     }
 
     /// Returns whether there is an edge from `a` to `b`.
+    #[inline]
     pub fn has_edge(&self, a: u32, b: u32) -> bool {
         self.edge_between(a, b).is_some()
     }

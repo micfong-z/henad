@@ -21,6 +21,10 @@
 //! `_in` or `_out` suffix. Which side it resolves to comes from the access mode, not the suffix, so
 //! a buffer read by one pass and written by another needs no naming trick.
 //!
+//! A label can neither be a reserved name nor end in `_in` or `_out`. A binding named after it
+//! would resolve to the engine's own resource, or to the label without its suffix. Both engines
+//! panic at construction on one that does.
+//!
 //! [`BufferSpec`]: crate::authoring::model::gpu_agent_model::BufferSpec
 
 /// How a binding is declared, which is what the engine needs to build a layout entry.
@@ -62,7 +66,8 @@ pub fn buffer_target(decl: &BindingDecl) -> Option<(&'static str, bool)> {
     Some((label, writes))
 }
 
-/// Names the engine answers itself. A model cannot label a buffer with one of these.
+/// Names the engine answers itself. A model cannot label a buffer with one of these, and the engines panic at
+/// construction on a label that is one.
 pub const RESERVED: &[&str] = &[
     "params",
     "dims",

@@ -1,7 +1,7 @@
 ---
 date: 2026-10-01
 title: "Library M5: the shared WGSL and henad-build"
-description: The fifth milestone of #48. The shared WGSL moves into henad-core under the import root henad::, a new henad-build crate generates every crate's shader bindings, include_shaders! brings them in, and the grid engine's Dims comes from the generated code. The M4 review is folded in first.
+description: "The fifth milestone of #48. The shared WGSL moves into henad-core under the import root henad::, a new henad-build crate generates every crate's shader bindings, include_shaders! brings them in, and the grid engine's Dims comes from the generated code. The M4 review is folded in first."
 icon: material/package-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

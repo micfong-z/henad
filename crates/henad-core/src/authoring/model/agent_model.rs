@@ -94,9 +94,10 @@ impl ChunkTally for () {
     fn merge(self, (): Self) {}
 }
 
+/// Saturates at `u32::MAX`. A count over a whole run can pass it, and a wrapped total would read as a small one.
 impl ChunkTally for u32 {
     fn merge(self, other: Self) -> Self {
-        self + other
+        self.saturating_add(other)
     }
 }
 
@@ -153,6 +154,10 @@ pub trait AgentModel: Send + Sync + 'static {
     /// Pre-extracted hot parameters, rebuilt once per tick.
     type Params: Send + Sync;
     /// Per chunk reduction, accumulated across ticks. `()` when there is nothing to count.
+    ///
+    /// The engine merges each tick's tally into one total for the whole run, and never resets it. A count of events
+    /// per tick therefore grows with the run. A `u32` total stops at `u32::MAX`, and a `u64` holds any count a run
+    /// can reach.
     type Tally: ChunkTally;
 
     /// Model parameters. `num_agents`, `world_width` and `world_height` are prepended by the
@@ -196,4 +201,16 @@ pub trait AgentModel: Send + Sync + 'static {
 
     /// Current statistics, in [`Self::STATS`] order.
     fn stats(lanes: &Self::Lanes, field: &Self::Field, tally: &Self::Tally) -> Vec<StatValue>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChunkTally;
+
+    /// A run-long `u32` count that wrapped read as a small number in a release build.
+    #[test]
+    fn a_u32_tally_saturates() {
+        assert_eq!(ChunkTally::merge(u32::MAX - 1, 5), u32::MAX);
+        assert_eq!(ChunkTally::merge(2_u32, 3), 5);
+    }
 }

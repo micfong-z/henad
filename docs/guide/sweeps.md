@@ -16,7 +16,9 @@ Before we start, make sure you can [run the CLI](running.md#cli).
 Every example here uses SIR, but any model that `--list` prints works the same way.
 
 The commands below run the CLI from a clone of Henad's repository, as `cargo run --release -p henad-cli --`.
-With the CLI installed, write `henad-cli` in place of that, and in a [project of your own](your-project.md), `cargo run --release --bin my-model-cli --`.
+With the CLI installed, write `henad-cli` in place of that.
+A [project of your own](your-project.md) runs its own models through `cargo run --release --bin my-model-cli --`, and SIR is not among them.
+The template's `vote` sweeps the same way, as in `--vary density=0.45:0.55:0.05`, and its `specs/vote.toml` is a spec file to start from.
 
 ## A first sweep
 
@@ -323,7 +325,8 @@ cargo run --release -p henad-cli -- sir \
 
 A condition is a stat column, a comparator and a number.
 The column is written as a reducer names it, and can hold spaces, as in `'Giant Component Share >= 0.5'` for Team Assembly.
-The comparator is one of `<`, `<=`, `>`, `>=`, `==` and `!=`.
+The comparator is one of `<`, `<=`, `>`, `>=`, `==` and `!=`, read from the last run of those characters in the condition.
+A label holding `<`, `>`, `=` or `!` therefore works too.
 A NaN never meets a condition.
 
 The condition is checked at each sample, and `--stats-every` sets how soon after the event a run stops.
@@ -625,6 +628,8 @@ A run that timed out runs again.
 
 When the resume ends, the three CSV files are the same as those of a sweep that ran without a break, byte for byte apart from the timing columns.
 `--resume` on a directory with no results starts a fresh sweep, and a script can pass it every time.
+A resume of a directory that another sweep is still writing to is refused.
+A sweep leaves a file named `.lock` in its directory, killed or not, and the next resume locks it again, so it needs no clearing.
 With `--dry-run`, a resume prints its counts and changes nothing.
 In the desktop app, open the directory in the [Results tab](app.md#opening-results) and press <span class="ui" markdown>:material-play: Resume sweep</span>.
 

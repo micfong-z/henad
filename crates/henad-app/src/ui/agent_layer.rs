@@ -449,12 +449,15 @@ impl AgentBuffers {
 /// It has 256 entries, so an inner loop can index unconditionally.
 /// A model can use an index past the end of its own palette, and such indices take the first colour.
 pub fn palette_lut(palette: &[[u8; 4]]) -> [u32; 256] {
+    padded_palette(palette).map(u32::from_le_bytes)
+}
+
+/// Returns `palette` with an entry for every `u8` index.
+///
+/// An index past the end of `palette` takes its first colour, and every index of an empty palette takes white.
+pub fn padded_palette(palette: &[[u8; 4]]) -> [[u8; 4]; 256] {
     let fallback = palette.first().copied().unwrap_or([0xFF; 4]);
-    let mut lut = [0u32; 256];
-    for (i, slot) in lut.iter_mut().enumerate() {
-        *slot = u32::from_le_bytes(palette.get(i).copied().unwrap_or(fallback));
-    }
-    lut
+    std::array::from_fn(|index| palette.get(index).copied().unwrap_or(fallback))
 }
 
 /// `(split, interleaved)`. They differ only in how the position attributes are fetched.

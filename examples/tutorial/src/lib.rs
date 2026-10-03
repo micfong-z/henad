@@ -4,7 +4,8 @@
 //! The tutorials are written out by hand rather than included from the shipped models, so that a
 //! page can show a half-finished function and grow it. That leaves the pages free to drift, which
 //! is what these modules are here to stop. Each one is the state a reader reaches at the end of a
-//! page, and `tests/parity.rs` steps it beside the model it mirrors and demands the same bits.
+//! page. `tests/parity.rs` steps it beside the model it mirrors and demands the same bits, and
+//! `tests/snippets.rs` holds the code each page shows to it.
 //!
 //! Change a shipped model and one of two things happens. The parity test fails, and the page needs
 //! the same edit. Or the authoring API moved and this stops compiling, which says the same thing
@@ -13,6 +14,10 @@
 //! The crate depends on the `henad` facade alone and names every item through it, as a reader's
 //! crate does. The two GPU pages carry their own copies of the shipped shaders, and
 //! `tests/shaders.rs` holds each copy to its original.
+
+// Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
+// limit of 128.
+#![recursion_limit = "256"]
 
 henad::include_shaders!();
 

@@ -1,7 +1,7 @@
 ---
 date: 2026-10-01
 title: "Library M2: surface hygiene"
-description: The second milestone of #48. CPU agent models stop building their parameter list every tick, Network hides its engine-only methods, the exported macros reach their support items through a hidden module, every public type of the four library crates implements Debug, and a test pins each example model's schema hash to the value 0.2.0 recorded. Two fixes from the review of M1 come first.
+description: "The second milestone of #48. CPU agent models stop building their parameter list every tick, Network hides its engine-only methods, the exported macros reach their support items through a hidden module, every public type of the four library crates implements Debug, and a test pins each example model's schema hash to the value 0.2.0 recorded. Two fixes from the review of M1 come first."
 icon: material/broom
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

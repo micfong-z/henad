@@ -308,7 +308,13 @@ mod tests {
                 .build()
                 .expect("rayon pool");
             pool.install(|| {
-                let mut state = default_state();
+                // Three chunks of `CHUNK`, so the seeding of each chunk meets a split across workers.
+                let num_agents = 3 * <AntsModel as AgentModel>::CHUNK as u32;
+                let mut state = State::from_params(&[
+                    ParamValue::U32(num_agents),
+                    ParamValue::F32(200.0),
+                    ParamValue::F32(200.0),
+                ]);
                 for _ in 0..200 {
                     state.step();
                 }

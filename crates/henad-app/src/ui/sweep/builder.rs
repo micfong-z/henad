@@ -1559,7 +1559,7 @@ fn budget_row(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraft) {
 }
 
 /// Returns the memory budgets as the Memory budget row shows them, as in "4 GB, GPU 2 GB", or `None` for neither.
-fn budget_text(memory_budget: Option<u64>, gpu_memory_budget: Option<u64>) -> Option<String> {
+pub fn budget_text(memory_budget: Option<u64>, gpu_memory_budget: Option<u64>) -> Option<String> {
     match (memory_budget, gpu_memory_budget) {
         (None, None) => None,
         (Some(memory), None) => Some(fmt_bytes(memory)),

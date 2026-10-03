@@ -304,12 +304,9 @@ fn interleaved_spec(
     spec
 }
 
-#[test]
-fn interleaved_gpu_runs_match_sequential_ones() {
-    let Some(ctx) = headless_device() else {
-        return;
-    };
-    let cases = [
+/// Returns the spec of each case of [`interleaved_gpu_runs_match_sequential_ones`].
+fn interleaved_cases() -> [SweepSpec; 3] {
+    [
         interleaved_spec(
             "gpu_sir",
             &[
@@ -336,9 +333,16 @@ fn interleaved_gpu_runs_match_sequential_ones() {
             ("reset_colony", &["4", "12"]),
             "Total Pheromone >= 200",
         ),
-    ];
+    ]
+}
+
+#[test]
+fn interleaved_gpu_runs_match_sequential_ones() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
     let scratch = ScratchDir::new("gpu-interleaved");
-    for spec in cases {
+    for spec in interleaved_cases() {
         let model = entry(&spec.model, Some(&ctx));
         let [one, four] = [1, 4].map(|count| {
             let output_dir = scratch.path().join(format!("{}-{count}", spec.model));
@@ -433,7 +437,7 @@ fn blocking_rows(
         let steps = tick - state.tick();
         let acted = stepping::run_steps_acting(&mut *state, ctx, steps, &schedule, Fire::AfterStep);
         refused += acted.expect("the steps run").len();
-        let stats = stepping::sample_stats(&mut *state, ctx);
+        let stats = stepping::sample_stats(&mut *state, ctx).expect("the sample lands");
         measure
             .columns()
             .extract(tick, &stats, &mut row)
@@ -444,29 +448,34 @@ fn blocking_rows(
     rows
 }
 
+/// Parameter ids and values a case fixes.
+type FixedValues = &'static [(&'static str, &'static str)];
+
+/// Model, fixed values and action of each case of [`a_pipelined_gpu_sample_matches_a_blocking_one`].
+const PIPELINED_CASES: [(&str, FixedValues, &str); 3] = [
+    (
+        "gpu_sir",
+        &[("grid_width", "32"), ("grid_height", "32")],
+        "seed_outbreak",
+    ),
+    (
+        "gpu_game_of_life",
+        &[("grid_width", "32"), ("grid_height", "32")],
+        "randomise",
+    ),
+    (
+        "gpu_ants",
+        &[("num_agents", "1000"), ("world_width", "64"), ("world_height", "64")],
+        "reset_colony",
+    ),
+];
+
 #[test]
 fn a_pipelined_gpu_sample_matches_a_blocking_one() {
     let Some(ctx) = headless_device() else {
         return;
     };
-    let cases = [
-        (
-            "gpu_sir",
-            &[("grid_width", "32"), ("grid_height", "32")][..],
-            "seed_outbreak",
-        ),
-        (
-            "gpu_game_of_life",
-            &[("grid_width", "32"), ("grid_height", "32")][..],
-            "randomise",
-        ),
-        (
-            "gpu_ants",
-            &[("num_agents", "1000"), ("world_width", "64"), ("world_height", "64")][..],
-            "reset_colony",
-        ),
-    ];
-    for (id, fixed, action) in cases {
+    for (id, fixed, action) in PIPELINED_CASES {
         let model = entry(id, Some(&ctx));
         let mut spec = SweepSpec::new(id);
         spec.fixed = fixed_values(fixed);
@@ -489,6 +498,24 @@ fn a_pipelined_gpu_sample_matches_a_blocking_one() {
             );
         }
     }
+}
+
+/// Checks that the two tests holding a GPU model's results to any track count cover every GPU model that replays
+/// exactly.
+#[test]
+fn every_gpu_model_that_replays_has_a_track_case() {
+    let mut registered: Vec<String> = example_models()
+        .iter()
+        .filter(|model| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly)
+        .map(|model| model.id().to_owned())
+        .collect();
+    registered.sort_unstable();
+    let mut interleaved: Vec<String> = interleaved_cases().into_iter().map(|spec| spec.model).collect();
+    interleaved.sort_unstable();
+    let mut pipelined: Vec<String> = PIPELINED_CASES.iter().map(|&(id, _, _)| id.to_owned()).collect();
+    pipelined.sort_unstable();
+    assert_eq!(interleaved, registered, "interleaved_gpu_runs_match_sequential_ones");
+    assert_eq!(pipelined, registered, "a_pipelined_gpu_sample_matches_a_blocking_one");
 }
 
 #[test]
@@ -569,7 +596,7 @@ fn gpu_admission_respects_the_memory_budget() {
 
     let sequential = outcomes(&executor(&model, &ctx, &measure, ONE_TRACK), &plan);
     counts.most_live.store(0, Ordering::Relaxed);
-    let budgeted = executor(&model, &ctx, &measure, tracks(4)).with_gpu_memory(Some(demand * 5 / 2));
+    let budgeted = executor(&model, &ctx, &measure, tracks(4)).with_gpu_memory_budget(Some(demand * 5 / 2));
     assert_eq!(outcomes(&budgeted, &plan), sequential);
     assert_eq!(counts.most_live.load(Ordering::Relaxed), 2, "two runs fit the budget");
 }

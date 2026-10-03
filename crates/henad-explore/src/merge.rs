@@ -47,10 +47,10 @@ struct ShardInput {
 /// Merges the shard directories `shard_dirs` into `output_dir`. The output directory must hold no results.
 ///
 /// Rows of a run whose `runs.csv` row is missing, and a partial last record, are left out. A plan run that no input
-/// holds is reported as a [`ProgressEvent::Warned`] and marks the merged manifest `incomplete`. Shards whose
-/// sessions ran different engine or model builds are reported as a [`SweepWarning::BuildChanged`] for each build
-/// that differs from the lowest shard's. A resume of the
-/// merged directory runs it. A merge that fails once its manifest is written marks the manifest `failed` when it can.
+/// holds is reported as a [`ProgressEvent::Warned`] and marks the merged manifest `incomplete`. A resume of the merged
+/// directory runs it. Shards whose sessions ran different engine or model builds are reported as a
+/// [`SweepWarning::BuildChanged`] for each build of another shard that matches none of the builds of the lowest shard
+/// that records any. A merge that fails once its manifest is written marks the manifest `failed` when it can.
 ///
 /// # Errors
 ///
@@ -104,7 +104,7 @@ pub fn merge(
     } else {
         ManifestStatus::Incomplete
     };
-    // Every session of every shard is credited already, so the counts go in without `Manifest::finish`.
+    // `merged_manifest` credited every session of every shard, so the counts go in without `Manifest::finish`.
     let finished = now_unix_ms();
     manifest.status = status;
     manifest.results = Some(counts);
@@ -291,24 +291,38 @@ fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
     Ok(())
 }
 
-/// Returns a [`SweepWarning::BuildChanged`] for each engine or model build the shards' sessions record that differs
-/// from the first build recorded for its role, the lowest shard's.
+/// Returns a [`SweepWarning::BuildChanged`] for each engine or model build of a shard that is the same as none of the
+/// builds of the reference shard, the lowest shard that records any for the role.
+///
+/// The warning names the reference shard's build that [reads as](RecordedBuild::reads_as) the other, or else its
+/// first build. Builds of the other shards that read as one are warned about once.
 fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
     let mut warnings = Vec::new();
     for role in [BuildRole::Engine, BuildRole::Model] {
-        let mut builds: Vec<RecordedBuild> = Vec::new();
-        for build in shards.iter().flat_map(|input| input.manifest.recorded_builds(role)) {
-            if !builds.iter().any(|known| known.same_build(&build)) {
-                builds.push(build);
+        let mut listed = shards.iter().map(|input| input.manifest.recorded_builds(role));
+        let Some(reference) = listed.by_ref().find(|builds| !builds.is_empty()) else {
+            continue;
+        };
+        let mut others: Vec<RecordedBuild> = Vec::new();
+        for build in listed.flatten() {
+            if !others.iter().any(|known| known.reads_as(&build)) {
+                others.push(build);
             }
         }
-        if let Some((first, others)) = builds.split_first() {
-            warnings.extend(others.iter().map(|other| SweepWarning::BuildChanged {
+        for other in others {
+            if reference.iter().any(|build| build.same_build(&other)) {
+                continue;
+            }
+            let recorded = reference
+                .iter()
+                .find(|build| build.reads_as(&other))
+                .unwrap_or(&reference[0]);
+            warnings.push(SweepWarning::BuildChanged {
                 role,
-                recorded: Box::new(first.clone()),
-                current: Box::new(other.clone()),
+                recorded: Box::new(recorded.clone()),
+                current: Box::new(other),
                 between_shards: true,
-            }));
+            });
         }
     }
     warnings
@@ -318,17 +332,26 @@ fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
 ///
 /// The merge holds the whole plan, lists every session of every shard with the builds it ran, and keeps the
 /// execution and runtime of the lowest shard. A shard's session that records no engine build takes the one its
-/// shard's manifest reads for it. The engine block is the build that merges.
+/// shard's manifest reads for it. The last session of a shard left `running` or `failed` is credited with the rows
+/// the shard holds beyond those it found, as a resume credits it. The engine block is the build that merges, and the
+/// model replays exactly only when every shard's does.
 fn merged_manifest(shards: &[ShardInput], shard_dirs: &[PathBuf]) -> Manifest {
     let mut manifest = shards[0].manifest.clone();
     manifest.status = ManifestStatus::Running;
     manifest.shard = Shard::WHOLE.into();
     manifest.engine = RecordedBuild::engine();
+    manifest.model.replays_exactly = shards.iter().all(|input| input.manifest.model.replays_exactly);
     manifest.sessions = shards
         .iter()
         .flat_map(|input| {
             let mut recorded = input.manifest.clone();
             recorded.record_session_engines();
+            // A session whose process ended before `Manifest::finish` never had its runs counted.
+            if matches!(recorded.status, ManifestStatus::Running | ManifestStatus::Failed)
+                && let Some(last) = recorded.sessions.last_mut()
+            {
+                last.ran = (input.runs.records.len() as u64).saturating_sub(last.skipped);
+            }
             recorded.sessions
         })
         .collect();
@@ -466,14 +489,101 @@ impl std::error::Error for MergeError {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::{Path, PathBuf};
 
+    use henad_core::explore::plan::Shard;
     use henad_core::explore::spec::SweepSpec;
 
     use super::{MergeError, merge};
     use crate::exec::Concurrency;
     use crate::output::RUNS_FILE;
+    use crate::output::manifest::{BuildRole, RecordedBuild};
     use crate::progress::NoProgress;
-    use crate::tests::support::{ScratchDir, entry, sweep};
+    use crate::sweep::SweepOptions;
+    use crate::tests::support::{
+        Recorder, ScratchDir, entry, manifest, other_engine, provenance, rewrite_manifest, sweep, sweep_options,
+        sweep_with,
+    };
+
+    /// Returns Game of Life on an 8 by 8 grid for 2 steps, with 4 replicates.
+    fn life_spec() -> SweepSpec {
+        let mut spec = SweepSpec::new("game_of_life");
+        spec.fixed = vec![
+            ("grid_width".to_owned(), "8".to_owned()),
+            ("grid_height".to_owned(), "8".to_owned()),
+        ];
+        spec.run.steps = 2;
+        spec.run.replicates = 4;
+        spec
+    }
+
+    /// Runs shard `index` of 2 of [`life_spec`] into `dir` under `engine`.
+    fn shard_under(dir: &Path, index: u64, engine: RecordedBuild) {
+        let options = SweepOptions {
+            provenance: provenance().with_engine(engine),
+            shard: Shard::new(index, 2).expect("a valid shard"),
+            ..sweep_options(false)
+        };
+        let life = entry("game_of_life", None);
+        sweep_with(&life, None, &life_spec(), dir, &options, &mut Recorder::default()).expect("the shard runs");
+    }
+
+    /// Returns the directories of 2 shards under `scratch`.
+    fn shard_dirs(scratch: &ScratchDir) -> Vec<PathBuf> {
+        (0..2)
+            .map(|index| scratch.path().join(format!("shard-{index}")))
+            .collect()
+    }
+
+    #[test]
+    fn a_build_the_lowest_shard_ran_is_never_warned_about() {
+        let scratch = ScratchDir::new("merge-reference-builds");
+        let dirs = shard_dirs(&scratch);
+        shard_under(&dirs[0], 0, RecordedBuild::engine());
+        shard_under(&dirs[1], 1, RecordedBuild::engine());
+        // Shard 0 was resumed under another build, which wrote one of its runs.
+        rewrite_manifest(&dirs[0], |recorded| {
+            let mut resumed = recorded.sessions[0].clone();
+            (resumed.skipped, resumed.ran, resumed.engine) = (1, 1, Some(other_engine()));
+            recorded.sessions[0].ran = 1;
+            recorded.sessions.push(resumed);
+        });
+        let mut progress = Recorder::default();
+        merge(&dirs, &scratch.path().join("merged"), &mut progress).expect("the shards merge");
+        assert_eq!(progress.warnings, [], "shard 1 ran a build shard 0 ran");
+
+        let reversed = ScratchDir::new("merge-reference-other");
+        let dirs = shard_dirs(&reversed);
+        shard_under(&dirs[0], 0, RecordedBuild::engine());
+        shard_under(&dirs[1], 1, other_engine());
+        let mut progress = Recorder::default();
+        merge(&dirs, &reversed.path().join("merged"), &mut progress).expect("the shards merge");
+        assert_eq!(progress.warnings.len(), 1, "{:?}", progress.warnings);
+    }
+
+    #[test]
+    fn a_merge_credits_a_shard_session_that_never_ended() {
+        let scratch = ScratchDir::new("merge-credits");
+        let dirs = shard_dirs(&scratch);
+        shard_under(&dirs[0], 0, RecordedBuild::engine());
+        shard_under(&dirs[1], 1, RecordedBuild::engine());
+        rewrite_manifest(&dirs[1], |recorded| {
+            recorded.status = crate::output::manifest::ManifestStatus::Running;
+            recorded.results = None;
+            recorded.sessions[0].ran = 0;
+            recorded.model.replays_exactly = false;
+        });
+        let merged = scratch.path().join("merged");
+        merge(&dirs, &merged, &mut NoProgress).expect("the shards merge");
+        let recorded = manifest(&merged);
+        let ran: Vec<u64> = recorded.sessions.iter().map(|session| session.ran).collect();
+        assert_eq!(ran, [2, 2], "the killed shard's session wrote both of its runs");
+        assert_eq!(recorded.recorded_builds(BuildRole::Engine), [RecordedBuild::engine()]);
+        assert!(
+            !recorded.model.replays_exactly,
+            "a model replays exactly only when every shard's does"
+        );
+    }
 
     #[test]
     fn a_shard_listing_a_run_twice_is_refused() {

@@ -6,26 +6,52 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(ambiguous_glob_reexports)]
 
-pub use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelSetError, ModelState};
+pub use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelSetError, ModelSetIter, ModelState};
 pub use henad_compute::fault::{Fault, FaultKind, install_panic_hook};
 pub use henad_compute::simulation::{ExportError, RunSetup, SetupError, Simulation, SimulationViews, StatSample};
 pub use henad_core::metadata::{Backend, LaneSpec, ModelMetadata, Structure};
 pub use henad_core::provenance::{BuildInfo, ModelSource};
+pub use henad_core::send_sync::{WasmNotSend, WasmNotSync};
 pub use henad_core::topology::TopologyHint;
 pub use henad_explore::ENGINE_BUILD;
 
-// A glob, since henad-core's `params` names a module as well as the macro. The facade's own `params` module
-// shadows the first.
-pub use root_macros::*;
+pub use henad_compute::{agent_lanes, for_each_chunk_mut, include_shaders};
+pub use henad_core::{actions, buffers, build_info};
 
-mod root_macros {
-    pub use henad_compute::{agent_lanes, for_each_chunk_mut, include_shaders};
-    pub use henad_core::{actions, buffers, build_info, params};
+// The facade's own macro. A `use` of henad-core's would bring its `params` module along, and docs.rs would show that
+// module at `henad::params` in place of the facade's.
+/// Declares a model's parameters and their indices in one place.
+///
+/// The index is the declaration's position, so it is derived rather than written down. Expands at module scope, next
+/// to the impl that forwards `param_descriptors` to `descriptors`.
+///
+/// ```
+/// use henad::authoring::prelude::*;
+///
+/// henad::params! {
+///     /// Why this default, if it needs saying.
+///     const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01));
+/// }
+///
+/// assert_eq!(DENSITY, 0);
+/// assert_eq!(descriptors()[DENSITY].id, "density");
+/// ```
+#[macro_export]
+macro_rules! params {
+    ($($declaration:tt)*) => {
+        $crate::__macro_support::params! { $($declaration)* }
+    };
+}
+
+/// Items the exported macros name through `$crate`, so a caller needs none of them in scope.
+#[doc(hidden)]
+pub mod __macro_support {
+    pub use henad_core::params;
 }
 
 /// Parameter descriptors and values, and the text form `--set` reads.
 pub mod params {
-    pub use henad_core::explore::value::{ValueError, format_value};
+    pub use henad_core::explore::value::{ValueError, ValueKind, format_value};
     pub use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 }
 
@@ -42,12 +68,13 @@ pub mod views {
 
 /// Action descriptors and the schedule of actions a run fires.
 pub mod action {
-    pub use henad_core::action::{ActionDescriptor, Fire, Schedule, ScheduleError, Scheduled};
+    pub use henad_core::action::{ActionDescriptor, Fire, RefusedActions, Schedule, ScheduleError, Scheduled};
 }
 
 /// The GPU device a model builds on, its sizing, and the headless device a program acquires.
 pub mod gpu {
     pub use henad_compute::gpu::capacity::{Alloc, PassBindings};
+    pub use henad_compute::gpu::limits::raise as raise_limits;
     pub use henad_compute::gpu::{Demand, GpuContext, GpuNeeds, wgpu};
     pub use henad_compute::runtime_info::{HostInfo, RuntimeInfo};
     #[cfg(not(target_arch = "wasm32"))]
@@ -60,7 +87,9 @@ pub mod runner {
     pub use henad_compute::cpu::sim_thread::{SimCommand, SimThread, WakeFn};
     pub use henad_compute::fault::FaultSink;
     pub use henad_compute::gpu::sim_thread::GpuBatchSettings;
-    pub use henad_compute::gpu::{GpuAgents, GpuDisplay, GpuSimState, GpuSimThread, GpuStats, StatsPoll};
+    pub use henad_compute::gpu::{
+        GpuAgents, GpuDisplay, GpuSimState, GpuSimThread, GpuStats, MAX_STEPS_PER_SUBMISSION, StatsPoll,
+    };
     pub use henad_compute::snapshot::{
         CpuLayers, EdgeSnapshot, GpuSnapshot, GridSnapshot, PointSnapshot, Snapshot, SnapshotView,
     };
@@ -81,7 +110,7 @@ pub mod engine {
 pub mod explore {
     pub use henad_core::explore::replay::Replay;
     pub use henad_core::explore::{
-        design, design_csv, factor, measure, outcome, plan, reducer, search, seed, spec, stop,
+        design, design_csv, design_rng, factor, measure, outcome, plan, reducer, search, seed, spec, stop,
     };
     pub use henad_core::export::csv::CsvError;
     pub use henad_explore::exec::{ActiveRun, Concurrency, ExecutionError, ExecutionLayout, SweepControl};
@@ -133,14 +162,17 @@ pub mod benchmark {
 /// Everything a model is written against: the model traits, their types, the helpers and the primitives.
 pub mod authoring {
     pub use henad_core::authoring::model::agent_model::*;
-    pub use henad_core::authoring::model::binding::*;
+    pub use henad_core::authoring::model::binding::{BindingDecl, BindingKind};
     pub use henad_core::authoring::model::field::*;
     pub use henad_core::authoring::model::gpu_agent_model::*;
     pub use henad_core::authoring::model::gpu_grid_model::*;
     pub use henad_core::authoring::model::grid_model::*;
     pub use henad_core::authoring::model::network_model::*;
     pub use henad_core::grid::Grid2D;
-    pub use henad_core::helpers::*;
+    pub use henad_core::helpers::{
+        bool_param, choice_param, extract_bool, extract_choice, extract_f32, extract_u32, f32_param, stat,
+        stat_histogram, stat_vec2, u32_param,
+    };
     pub use henad_core::network::Network;
     pub use henad_core::spatial_hash::{HashGrid, SpatialHash};
     pub use henad_core::topology::NeighborhoodKind;
@@ -181,13 +213,17 @@ pub mod authoring {
         pub use henad_core::authoring::model::grid_model::GridModel;
         pub use henad_core::authoring::model::network_model::{NetworkModel, NodeCtx, Nodes};
         pub use henad_core::authoring::primitives::rng::{
-            below, choice3, mix_seed, next_bits, next_float, next_index, random_float, reservoir_accept, xorshift64,
+            below, choice3, mix_seed, next_bits, next_float, next_index, pcg_hash, random_float, reservoir_accept,
+            xorshift64,
         };
         pub use henad_core::authoring::primitives::space::{
             Boundary, MOORE_COLUMN_MAJOR, MOORE_ROW_MAJOR, VON_NEUMANN, cell_index, dist_sq, offset_cell,
         };
         pub use henad_core::grid::Grid2D;
-        pub use henad_core::helpers::*;
+        pub use henad_core::helpers::{
+            bool_param, choice_param, extract_bool, extract_choice, extract_f32, extract_u32, f32_param, stat,
+            stat_histogram, stat_vec2, u32_param,
+        };
         pub use henad_core::network::Network;
         pub use henad_core::params::{ParamDescriptor, ParamValue};
         pub use henad_core::spatial_hash::SpatialHash;
@@ -206,19 +242,11 @@ pub mod authoring {
 }
 
 /// The ten example models and the set that registers them.
+///
+/// Each model sits in a module of its own, as in [`models::ants::AntsModel`].
 #[cfg(feature = "example-models")]
 #[cfg_attr(docsrs, doc(cfg(feature = "example-models")))]
 pub mod models {
-    pub use henad_models::ants::AntsModel;
-    pub use henad_models::boids::BoidsModel;
-    pub use henad_models::game_of_life::GameOfLifeModel;
-    pub use henad_models::gpu_ants::GpuAnts;
-    pub use henad_models::gpu_boids::GpuBoids;
-    pub use henad_models::gpu_game_of_life::GpuGameOfLife;
-    pub use henad_models::gpu_sir::GpuSir;
-    pub use henad_models::sir::SirGridModel;
-    pub use henad_models::team_assembly::TeamAssembly;
-    pub use henad_models::virus_network::VirusNetwork;
     pub use henad_models::{
         ants, boids, example_models, game_of_life, gpu_ants, gpu_boids, gpu_game_of_life, gpu_sir, sir, team_assembly,
         virus_network,
@@ -226,6 +254,11 @@ pub mod models {
 }
 
 /// The app, opened over a host's own model set.
+///
+/// A native program opens it with `run_native`. A browser build on `wasm32-unknown-unknown` starts it with
+/// `start_web`, sets up logging with `init_web_logger`, and gets a `WebStartError` when the start fails. Those three
+/// exist on wasm32 alone, and their documentation is on the
+/// [wasm32 page of this module](https://docs.rs/henad/latest/wasm32-unknown-unknown/henad/app/index.html).
 #[cfg(feature = "app")]
 #[cfg_attr(docsrs, doc(cfg(feature = "app")))]
 pub mod app {

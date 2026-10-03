@@ -11,21 +11,23 @@ The template is fetched from the release it belongs to, and requires that releas
 ```bash
 mkdir my-model && cd my-model
 curl -L https://github.com/micfong-z/henad/archive/refs/tags/v0.3.0.tar.gz \
-  | tar -xz --strip-components=3 henad-0.3.0/templates/model-project
+  | tar -xzf - --strip-components=3 henad-0.3.0/templates/model-project
+git init
 ```
 <!-- --8<-- [end:fetch] -->
 
+On Windows, the commands in this README run in Git Bash or WSL.
+
 ## Renaming the project
 
-The package can be renamed alone, and every command keeps working.
-Only the `my_model::` paths follow the library's name.
+Renaming the package renames its library, and the `my_model::` paths in `src/main.rs` and `src/bin/my-model-cli.rs` have to be edited to the new name.
 A full rebrand renames these:
 
 <!-- --8<-- [start:rename] -->
 - the package name in `Cargo.toml`, and the `my_model::models()` paths in `src/main.rs` and `src/bin/my-model-cli.rs`,
 - the two `[[bin]]` names, `default-run`, and the CLI binary's file,
 - `data-bin` and `<title>` in `index.html`,
-- `cli_command` in `src/main.rs` and `command_name` in the CLI binary,
+- `cli_command` in `src/main.rs`, and `command_name` and `about` in the CLI binary,
 - the product name passed to `AppOptions::new`.
 <!-- --8<-- [end:rename] -->
 
@@ -54,6 +56,7 @@ Commit it, and pass `--locked` to the builds that run sweep shards and resumes, 
 
 A CPU model is a file under `src/`, a `mod` line in `src/lib.rs`, and an `insert` line in `models()`.
 A GPU model is a directory under `src/` with its `mod.rs` and its WGSL files, and the same two lines.
+A kind of model that `src/lib.rs` does not register yet, such as an agent model, also needs its `use henad::authoring::register_*` line there.
 The build script finds every shader under `src/` itself, and no build file changes.
 
 `cargo test` checks every model in `models()`: its declarations, a build, its determinism across thread counts and seeds, and, where a GPU exists, its GPU passes.
@@ -72,9 +75,17 @@ scripts/build_web.sh build --release      # writes dist/
 ```
 
 The web build runs on the dated nightly that `scripts/web-toolchain` names, and the script prints the command that installs it when it is missing.
-Its flags live in `.cargo/config.toml`.
+It also needs Trunk, at the release that `scripts/trunk-version` names:
+
+```bash
+cargo install --locked trunk --version "$(cat scripts/trunk-version)"
+```
+
+The web build's flags live in `.cargo/config.toml`.
 The script refuses to run while `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` is set, since either would replace them, and a wasm-only flag of your own goes into that file.
-A host serving `dist/` sends the `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers, or the app runs on one thread.
+A host serving `dist/` has to send the `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers.
+Without them the app runs on one thread in Chrome, and does not start in a browser that refuses shared memory.
+A project site on GitHub Pages sits under `/<repo>/`, and builds with `scripts/build_web.sh build --release --public-url /<repo>/`.
 Two apps served from one origin share the web app's saved settings.
 
 ## Checks

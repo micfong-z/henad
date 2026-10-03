@@ -25,16 +25,35 @@ The program below builds an example model, runs it, reads its statistics, edits 
 // build at 3 where Henad measures at 2. A crate that registers models of its own also calls
 // `henad_build::stamp_commit()` from build.rs, with henad-build under [build-dependencies]. This one registers none.
 
-use std::io::Write as _;
+use std::io::Write;
 use std::ops::ControlFlow;
+use std::path::Path;
 
 use henad::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     henad::install_panic_hook();
     let models = henad::models::example_models();
+    // A sweep refuses a folder that already holds results. Each run of the program starts from an empty one.
+    let folder = std::env::temp_dir().join("sir-rates");
+    if folder.exists() {
+        std::fs::remove_dir_all(&folder)?;
+    }
+    let replay = study(&models, &folder, &mut std::io::stdout())?;
+
+    // Then open the app on the run the study rebuilt.
+    let options = AppOptions::new(models, "SIR study", henad::build_info!()).opening(AppOpening::Run {
+        replay,
+        open_at: OpenAt::Start,
+    });
+    henad::app::run_native(options)?;
+    Ok(())
+}
+
+/// Runs SIR from `models`, sweeps it into `folder` and rebuilds one run of the sweep, writes what it finds to `out`,
+/// and returns the replay of the rebuilt run.
+fn study(models: &ModelSet, folder: &Path, out: &mut impl Write) -> Result<Replay, Box<dyn std::error::Error>> {
     let sir = models.get("sir").ok_or("the example set lacks SIR")?;
-    let mut out = std::io::stdout();
 
     // SIR on a 256 by 256 grid with seed 7. One cell in a thousand starts infected, an outbreak at tick 50 adds more,
     // and an infection rate of 0.05 spreads the epidemic slowly up to tick 100.
@@ -71,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(out, "the epidemic ended by tick {tick}")?;
     }
 
-    // Three infection rates, four replicates each, written to a folder.
+    // Three infection rates, four replicates each, written to `folder`.
     let loaded = LoadedSpec::parse(
         r#"
         model = "sir"
@@ -86,11 +105,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         factors = [{ param = "infection_rate", values = [0.2, 0.3, 0.4] }]
         "#,
     )?;
-    let folder = std::env::temp_dir().join("sir-rates");
-    // A sweep refuses a folder that already holds results. Each run of the program starts from an empty one.
-    if folder.exists() {
-        std::fs::remove_dir_all(&folder)?;
-    }
     let mut options = SweepOptions::new(Provenance::new(henad::build_info!(), std::env::args().collect()));
     options.spec_source = loaded.spec_source.clone();
     options.apply_execution(&loaded.execution);
@@ -98,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sir,
         None,
         &loaded.spec,
-        SweepOutput::Directory(folder.clone()),
+        SweepOutput::Directory(folder.to_owned()),
         &options,
         &mut NoProgress,
     )?;
@@ -106,20 +120,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "{} of {} runs ok", counts.ok, counts.rows)?;
 
     // Read the folder back and rebuild run 5 headlessly.
-    let results = ResultSet::open_dir(&folder, 64 << 20)?;
+    let results = ResultSet::open_dir(folder, 64 << 20)?;
     let replay = results.replay(sir.schema(), 5)?;
     let mut rebuilt = RunSetup::from_replay(sir, &replay)?.build(None)?;
     rebuilt.run_to(replay.ticks)?;
     let infected = rebuilt.stats()?.scalar("Infected");
     writeln!(out, "run 5 ends with {infected:?} infected")?;
-
-    // Then open the app on the same run.
-    let options = AppOptions::new(models, "SIR study", henad::build_info!()).opening(AppOpening::Run {
-        replay,
-        open_at: OpenAt::Start,
-    });
-    henad::app::run_native(options)?;
-    Ok(())
+    Ok(replay)
 }
 ```
 

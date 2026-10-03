@@ -51,6 +51,9 @@ Each lane is declared `dual` or `plain`, one decision per lane rather than one f
     Only the agent owning the slot ever touches it, and there is nothing to buffer.
     Ants declares every lane `plain`, since its ants never read one another.
 
+Every `dual` lane comes before the first `plain` lane.
+A doc comment or an attribute on a lane goes on its field, and on both fields of a `dual` lane.
+
 Beyond the lanes themselves, the macro generates two view types, named in the declaration.
 `BoidRead` holds the current side of every `dual` lane and is readable by every agent, while `BoidChunk` is the slice of each writable lane that one chunk owns.
 

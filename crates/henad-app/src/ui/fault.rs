@@ -10,32 +10,31 @@ use henad_compute::fault::{BUILDING, FaultKind};
 const MAX_MESSAGE_HEIGHT: f32 = 220.0;
 
 pub fn fault_modal(ctx: &Context, app: &mut AppState) {
-    let Some(fault) = &app.fault else {
+    let Some(shown) = &app.fault else {
         return;
     };
+    let fault = &shown.fault;
 
     let title = if fault.during == BUILDING {
         "Model build failed"
     } else {
         "Simulation aborted"
     };
-    let subject = app
-        .selected_entry()
-        .map_or_else(|| "Model".to_owned(), |entry| entry.name().to_owned());
+    let subject = shown.model.as_deref().unwrap_or("Model");
     let lead = match &fault.kind {
-        FaultKind::Device(_) | FaultKind::Poll(_) => {
-            format!("GPU reported an error while {} for {subject}.", fault.during)
-        }
         FaultKind::Panic { location: Some(at), .. } => {
             format!("{subject} panicked while {}, at {at}.", fault.during)
         }
         FaultKind::Panic { location: None, .. } => format!("{subject} panicked while {}.", fault.during),
         FaultKind::Refused(_) => format!("{subject} cannot run on this device."),
+        FaultKind::DeviceLost => format!("GPU device was lost while {} for {subject}.", fault.during),
+        _ => format!("GPU reported an error while {} for {subject}.", fault.during),
     };
     let detail = match &fault.kind {
         FaultKind::Device(error) => error.to_string(),
         FaultKind::Poll(error) => error.to_string(),
         FaultKind::Panic { message, .. } | FaultKind::Refused(message) => message.clone(),
+        _ => fault.to_string(),
     };
 
     let mut dismissed = false;

@@ -1,7 +1,5 @@
 //! Checks that every session records the builds it ran, and that a resume or a merge warns when a build changed.
 
-#![expect(clippy::print_stderr, reason = "a skipped test says why on stderr")]
-
 use std::path::PathBuf;
 
 use henad_compute::entry::{ModelEntry, ModelSet, register_grid_model};
@@ -146,7 +144,7 @@ fn a_sweep_from_a_bare_entry_records_its_type_path_and_host() {
     };
     assert_eq!(*role, BuildRole::Model);
     assert!(
-        warnings[0].to_string().contains("Call `henad_build::stamp_commit()`"),
+        warnings[0].to_string().contains("Insert it into a `ModelSet`"),
         "the warning names its cause: {}",
         warnings[0]
     );
@@ -431,24 +429,55 @@ fn a_dry_run_of_a_resume_under_the_same_build_warns_nothing() {
     assert_eq!(progress.warnings, []);
 }
 
-/// Returns the folder Henad 0.2.0 wrote, or `None` with a note when it is absent, as in a packaged crate.
+/// Returns the folder Henad 0.2.0 wrote.
 ///
 /// `tests/fixtures/manifest-0.2.0/README.md` gives the procedure that recorded it from the `v0.2.0` tag.
-fn folder_0_2_0() -> Option<PathBuf> {
+///
+/// # Panics
+///
+/// Panics when the folder holds no manifest. A test that skipped would let a change that breaks 0.2 folders pass.
+fn folder_0_2_0() -> PathBuf {
     let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/manifest-0.2.0");
-    if folder.join(MANIFEST_FILE).is_file() {
-        Some(folder)
-    } else {
-        eprintln!("note: skipped, {} is absent", folder.display());
-        None
+    assert!(
+        folder.join(MANIFEST_FILE).is_file(),
+        "{} holds no manifest. Its README.md gives the procedure that records it",
+        folder.display()
+    );
+    folder
+}
+
+#[test]
+fn a_0_2_0_manifest_still_replays_and_merges() {
+    let fixture = folder_0_2_0();
+    let sir = entry("sir", None);
+    let set = ResultSet::open_dir(&fixture, 0).expect("the fixture reads");
+    assert_eq!(set.runs().len(), 4, "2 configs by 2 replicates");
+    for recorded in set.runs() {
+        let run = &recorded.outcome.run;
+        let replay = set.replay(sir.schema(), run.run_id).expect("a 0.2 run replays");
+        assert_eq!(
+            (replay.seed, replay.ticks),
+            (run.seed, recorded.outcome.ticks),
+            "run {}",
+            run.run_id
+        );
     }
+
+    let scratch = ScratchDir::new("merge-0.2.0");
+    let merged = scratch.path().join("merged");
+    let mut progress = Recorder::default();
+    merge(std::slice::from_ref(&fixture), &merged, &mut progress).expect("a 0.2 folder merges as its one shard");
+    assert_eq!(progress.warnings, []);
+    assert_eq!(
+        OutputTables::read(&merged),
+        OutputTables::read(&fixture),
+        "the merge of the one shard holds the runs 0.2.0 wrote"
+    );
 }
 
 #[test]
 fn a_0_2_0_manifest_still_resumes() {
-    let Some(fixture) = folder_0_2_0() else {
-        return;
-    };
+    let fixture = folder_0_2_0();
     let scratch = ScratchDir::new("resume-0.2.0");
     let resumed_dir = scratch.path().join("resumed");
     std::fs::create_dir_all(&resumed_dir).expect("the folder can be created");

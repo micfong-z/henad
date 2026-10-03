@@ -31,7 +31,7 @@ use crate::result_set::ResultSet;
 use crate::sweep::{SweepEnd, SweepOptions, SweepRecord};
 use crate::tests::support::{
     CommitLimit, ScratchDir, entry, headless_device, provenance, sweep, sweep_options, sweep_with, ticks_seen,
-    without_timing,
+    without_clocks, without_timing,
 };
 
 /// Longest a test waits for a sweep to reach a state.
@@ -169,19 +169,12 @@ struct UntimedFiles {
 impl UntimedFiles {
     fn new(files: &SweepFiles) -> Self {
         let text = |bytes: &[u8]| String::from_utf8(bytes.to_vec()).expect("the files are UTF-8");
-        let mut manifest: Manifest = serde_json::from_slice(&files.manifest).expect("the manifest reads back");
-        manifest.timestamps.started_unix_ms = 0;
-        manifest.timestamps.started.clear();
-        manifest.timestamps.finished_unix_ms = None;
-        manifest.timestamps.finished = None;
-        for session in &mut manifest.sessions {
-            session.started.clear();
-        }
+        let manifest: Manifest = serde_json::from_slice(&files.manifest).expect("the manifest reads back");
         Self {
             runs: without_timing(parse_records(&text(&files.runs)).expect("runs.csv is valid CSV")),
             series: text(&files.series),
             summary: text(&files.summary),
-            manifest,
+            manifest: without_clocks(manifest),
         }
     }
 }
@@ -631,7 +624,7 @@ fn a_gpu_sweep_handed_no_device_steps_on_its_own() {
     let gpu_sir = entry("gpu_sir", Some(&host));
     let budgets = SweepRunOptions {
         memory_budget: Some(1 << 30),
-        gpu_memory: Some(1 << 26),
+        gpu_memory_budget: Some(1 << 26),
         ..options()
     };
     let mut run =

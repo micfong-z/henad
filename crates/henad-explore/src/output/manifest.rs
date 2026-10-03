@@ -133,17 +133,25 @@ impl Manifest {
         }
     }
 
-    /// Returns every distinct build the sessions record for `role`, in session order.
+    /// Returns every distinct build the sessions that wrote runs record for `role`, in session order.
     ///
-    /// Builds that [`RecordedBuild::same_build`] finds the same are listed once, as the first session records it.
+    /// Builds that [`RecordedBuild::reads_as`] finds alike are listed once, as the first session records them.
+    ///
+    /// A session known to have written no run is left out: one that records `ran` as 0 and its host, as every session
+    /// since 0.3 does, unless it is the last session of a manifest left `running` or `failed`. The next resume credits
+    /// that last session with its runs. A 0.2 session could end without its runs credited, and always counts.
     pub fn recorded_builds(&self, role: BuildRole) -> Vec<RecordedBuild> {
+        let uncredited = matches!(self.status, ManifestStatus::Running | ManifestStatus::Failed);
+        let last = self.sessions.len().saturating_sub(1);
         let mut builds: Vec<RecordedBuild> = Vec::new();
         for build in self
             .sessions
             .iter()
-            .filter_map(|session| self.session_build(session, role))
+            .enumerate()
+            .filter(|&(index, session)| session.ran > 0 || session.host.is_none() || (uncredited && index == last))
+            .filter_map(|(_, session)| self.session_build(session, role))
         {
-            if !builds.iter().any(|known| known.same_build(&build)) {
+            if !builds.iter().any(|known| known.reads_as(&build)) {
                 builds.push(build);
             }
         }
@@ -433,6 +441,22 @@ impl RecordedBuild {
             return self.commit == other.commit;
         }
         matches!((self.source_hash, other.source_hash), (Some(left), Some(right)) if left == right)
+    }
+
+    /// Returns whether `self` and `other` read as one build in a list: the same build, or two builds that record
+    /// neither a commit nor a source hash under one package, version, type path and set of engine crates.
+    ///
+    /// Note that two such builds are still never [the same](Self::same_build). A list shows them once, and a
+    /// comparison cannot tell them apart.
+    pub fn reads_as(&self, other: &Self) -> bool {
+        self.same_build(other)
+            || (!self.is_identified()
+                && !other.is_identified()
+                && self.package == other.package
+                && self.version == other.version
+                && self.type_path == other.type_path
+                && self.crate_versions == other.crate_versions
+                && self.crate_hashes == other.crate_hashes)
     }
 
     /// Returns whether the build records a commit known to be clean, or a commit alone, with neither a dirty flag nor
@@ -873,7 +897,7 @@ mod tests {
     use henad_core::explore::spec::SweepSpec;
     use serde_json::Value;
 
-    use super::{Manifest, RecordedBuild, ResultCounts, rfc3339};
+    use super::{BuildRole, Manifest, ManifestStatus, RecordedBuild, ResultCounts, rfc3339};
     use crate::exec::Concurrency;
     use crate::output::MANIFEST_FILE;
     use crate::tests::support::{ScratchDir, entry, sweep};
@@ -904,6 +928,73 @@ mod tests {
         json.as_object_mut().expect("a JSON object").remove("search");
         let without_key: Manifest = serde_json::from_value(json).expect("a manifest without the key reads");
         assert_eq!(without_key, manifest);
+    }
+
+    /// Returns the manifest of a Game of Life sweep of one run on an 8 by 8 grid, run into `dir`.
+    fn one_run_manifest(dir: &Path) -> Manifest {
+        let mut spec = SweepSpec::new("game_of_life");
+        spec.fixed = vec![
+            ("grid_width".to_owned(), "8".to_owned()),
+            ("grid_height".to_owned(), "8".to_owned()),
+        ];
+        spec.run.steps = 2;
+        sweep(&entry("game_of_life", None), None, &spec, dir, Concurrency::Auto);
+        Manifest::read(&dir.join(MANIFEST_FILE)).expect("the manifest reads back")
+    }
+
+    #[test]
+    fn a_session_that_wrote_no_run_lists_no_build() {
+        let scratch = ScratchDir::new("session-without-runs");
+        let mut manifest = one_run_manifest(scratch.path());
+        let mut older = RecordedBuild::engine();
+        older.version = "0.1.0".to_owned();
+        let mut idle = manifest.sessions[0].clone();
+        (idle.skipped, idle.ran, idle.engine) = (1, 0, Some(older.clone()));
+        manifest.sessions.push(idle);
+        assert_eq!(
+            manifest.recorded_builds(BuildRole::Engine),
+            [RecordedBuild::engine()],
+            "a resume that found every run written ran nothing"
+        );
+
+        manifest.status = ManifestStatus::Running;
+        assert_eq!(
+            manifest.recorded_builds(BuildRole::Engine),
+            [RecordedBuild::engine(), older.clone()],
+            "the last session of a running manifest waits for the next resume to credit it"
+        );
+        manifest.status = ManifestStatus::Complete;
+        if let Some(last) = manifest.sessions.last_mut() {
+            last.host = None;
+        }
+        assert_eq!(
+            manifest.recorded_builds(BuildRole::Engine),
+            [RecordedBuild::engine(), older],
+            "a 0.2 session could end without its runs credited"
+        );
+    }
+
+    #[test]
+    fn unidentified_builds_alike_are_listed_once() {
+        let scratch = ScratchDir::new("unidentified-builds");
+        let mut manifest = one_run_manifest(scratch.path());
+        let mut unidentified = RecordedBuild::engine();
+        (unidentified.commit, unidentified.dirty, unidentified.source_hash) = (String::new(), None, None);
+        manifest.sessions[0].engine = Some(unidentified.clone());
+        manifest.sessions.push(manifest.sessions[0].clone());
+        assert!(
+            !unidentified.same_build(&unidentified),
+            "neither can be told apart from the other"
+        );
+        assert_eq!(manifest.recorded_builds(BuildRole::Engine), [unidentified.clone()]);
+
+        let mut other_version = unidentified.clone();
+        other_version.version = "0.1.0".to_owned();
+        manifest.sessions[1].engine = Some(other_version.clone());
+        assert_eq!(
+            manifest.recorded_builds(BuildRole::Engine),
+            [unidentified, other_version]
+        );
     }
 
     #[test]

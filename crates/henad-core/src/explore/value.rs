@@ -8,21 +8,20 @@ use crate::params::{ParamDescriptor, ParamKind, ParamValue};
 
 /// A parameter value that cannot be read, or does not fit its descriptor.
 ///
-/// The `source` of text that does not read as its kind is the parser's error. It is `None` when
-/// [`check_value`] was given a value of another kind.
+/// The `source` of text that does not read as its kind is the parser's error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueError {
     NotANumber {
         raw: String,
-        source: Option<ParseFloatError>,
+        source: ParseFloatError,
     },
     NotAnInteger {
         raw: String,
-        source: Option<ParseIntError>,
+        source: ParseIntError,
     },
     NotABool {
         raw: String,
-        source: Option<ParseBoolError>,
+        source: ParseBoolError,
     },
     /// A number outside the descriptor's inclusive bounds. A non-finite number is outside every bound.
     OutOfRange {
@@ -49,6 +48,33 @@ pub enum ValueError {
         id: String,
         source: Box<Self>,
     },
+    /// A value of another kind than its descriptor's, handed to [`check_value`]. `value` is the value found, written
+    /// as text.
+    WrongKind {
+        expected: ValueKind,
+        found: ValueKind,
+        value: String,
+    },
+}
+
+/// Kind of a parameter value, as [`ValueError::WrongKind`] names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind {
+    F32,
+    U32,
+    Bool,
+    Choice,
+}
+
+impl fmt::Display for ValueKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::F32 => "f32",
+            Self::U32 => "u32",
+            Self::Bool => "bool",
+            Self::Choice => "choice",
+        })
+    }
 }
 
 impl fmt::Display for ValueError {
@@ -65,6 +91,15 @@ impl fmt::Display for ValueError {
             Self::UnknownParam { id, .. } => write!(f, "model has no parameter '{id}'"),
             Self::BadOverride { raw } => write!(f, "bad --set '{raw}', expected ID=VALUE"),
             Self::Param { id, .. } => write!(f, "parameter '{id}'"),
+            Self::WrongKind { expected, found, value } => {
+                let example = match expected {
+                    ValueKind::F32 => "an f32 value such as 1.0f32",
+                    ValueKind::U32 => "a u32 value such as 1u32",
+                    ValueKind::Bool => "a bool value",
+                    ValueKind::Choice => "a choice such as ParamValue::Choice(0)",
+                };
+                write!(f, "expected {example}, found the {found} {value}")
+            }
         }
     }
 }
@@ -72,15 +107,9 @@ impl fmt::Display for ValueError {
 impl std::error::Error for ValueError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::NotANumber {
-                source: Some(error), ..
-            } => Some(error),
-            Self::NotAnInteger {
-                source: Some(error), ..
-            } => Some(error),
-            Self::NotABool {
-                source: Some(error), ..
-            } => Some(error),
+            Self::NotANumber { source, .. } => Some(source),
+            Self::NotAnInteger { source, .. } => Some(source),
+            Self::NotABool { source, .. } => Some(source),
             Self::Param { source, .. } => Some(source),
             _ => None,
         }
@@ -149,17 +178,17 @@ pub fn resolve_params(
 /// Returns [`ValueError`] when `raw` does not read as the kind, or [`check_value`] refuses it.
 pub fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue, ValueError> {
     let value = match kind {
-        ParamKind::F32 { .. } => ParamValue::F32(raw.parse().map_err(|error| ValueError::NotANumber {
+        ParamKind::F32 { .. } => ParamValue::F32(raw.parse().map_err(|source| ValueError::NotANumber {
             raw: raw.to_owned(),
-            source: Some(error),
+            source,
         })?),
-        ParamKind::U32 { .. } => ParamValue::U32(raw.parse().map_err(|error| ValueError::NotAnInteger {
+        ParamKind::U32 { .. } => ParamValue::U32(raw.parse().map_err(|source| ValueError::NotAnInteger {
             raw: raw.to_owned(),
-            source: Some(error),
+            source,
         })?),
-        ParamKind::Bool { .. } => ParamValue::Bool(raw.parse().map_err(|error| ValueError::NotABool {
+        ParamKind::Bool { .. } => ParamValue::Bool(raw.parse().map_err(|source| ValueError::NotABool {
             raw: raw.to_owned(),
-            source: Some(error),
+            source,
         })?),
         ParamKind::Choice { options, .. } => {
             let index = options
@@ -181,9 +210,9 @@ pub fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue, ValueError
 ///
 /// # Errors
 ///
-/// Returns [`ValueError::OutOfRange`] for a number outside the bounds or not finite, and
-/// [`ValueError::UnknownOption`] for an index past the options. A value of another type gets the
-/// error [`parse_value`] gives text of the wrong type.
+/// Returns [`ValueError::OutOfRange`] for a number outside the bounds or not finite,
+/// [`ValueError::UnknownOption`] for an index past the options, and [`ValueError::WrongKind`] for a value of another
+/// kind. A `u32` never stands in for a choice index.
 pub fn check_value(kind: &ParamKind, value: &ParamValue) -> Result<(), ValueError> {
     let out_of_range = |value: &dyn fmt::Display, min: &dyn fmt::Display, max: &dyn fmt::Display| {
         Err(ValueError::OutOfRange {
@@ -209,22 +238,35 @@ pub fn check_value(kind: &ParamKind, value: &ParamValue) -> Result<(), ValueErro
         }
         (ParamKind::Bool { .. }, ParamValue::Bool(_)) => Ok(()),
         (ParamKind::Choice { options, .. }, ParamValue::Choice(index)) if *index < options.len() => Ok(()),
-        (ParamKind::F32 { .. }, other) => Err(ValueError::NotANumber {
-            raw: plain_text(other),
-            source: None,
-        }),
-        (ParamKind::U32 { .. }, other) => Err(ValueError::NotAnInteger {
-            raw: plain_text(other),
-            source: None,
-        }),
-        (ParamKind::Bool { .. }, other) => Err(ValueError::NotABool {
-            raw: plain_text(other),
-            source: None,
-        }),
-        (ParamKind::Choice { options, .. }, other) => Err(ValueError::UnknownOption {
-            raw: plain_text(other),
+        (ParamKind::Choice { options, .. }, ParamValue::Choice(index)) => Err(ValueError::UnknownOption {
+            raw: index.to_string(),
             options,
         }),
+        (kind, other) => Err(ValueError::WrongKind {
+            expected: param_kind(kind),
+            found: value_kind(other),
+            value: plain_text(other),
+        }),
+    }
+}
+
+/// Returns the kind of value `kind` takes.
+fn param_kind(kind: &ParamKind) -> ValueKind {
+    match kind {
+        ParamKind::F32 { .. } => ValueKind::F32,
+        ParamKind::U32 { .. } => ValueKind::U32,
+        ParamKind::Bool { .. } => ValueKind::Bool,
+        ParamKind::Choice { .. } => ValueKind::Choice,
+    }
+}
+
+/// Returns the kind of `value`.
+fn value_kind(value: &ParamValue) -> ValueKind {
+    match value {
+        ParamValue::F32(_) => ValueKind::F32,
+        ParamValue::U32(_) => ValueKind::U32,
+        ParamValue::Bool(_) => ValueKind::Bool,
+        ParamValue::Choice(_) => ValueKind::Choice,
     }
 }
 
@@ -252,7 +294,7 @@ fn plain_text(value: &ParamValue) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ValueError, check_value, format_value, parse_overrides, parse_value, resolve_params};
+    use super::{ValueError, ValueKind, check_value, format_value, parse_overrides, parse_value, resolve_params};
     use crate::helpers::{bool_param, f32_param, u32_param};
     use crate::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 
@@ -425,5 +467,49 @@ mod tests {
         assert!(check_value(&descriptors[1].kind, &ParamValue::F32(f32::INFINITY)).is_err());
         assert!(check_value(&descriptors[2].kind, &ParamValue::Choice(2)).is_err());
         assert_eq!(check_value(&descriptors[2].kind, &ParamValue::Choice(1)), Ok(()));
+    }
+
+    /// The regression. An integer for a float parameter read "'1' is not a number", with no hint of the literal that
+    /// fits.
+    #[test]
+    fn a_value_of_another_kind_names_both_kinds() {
+        let descriptors = descriptors();
+        let error = check_value(&descriptors[1].kind, &ParamValue::U32(1)).expect_err("a u32 for an f32");
+        assert_eq!(
+            error,
+            ValueError::WrongKind {
+                expected: ValueKind::F32,
+                found: ValueKind::U32,
+                value: "1".to_owned(),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "expected an f32 value such as 1.0f32, found the u32 1"
+        );
+        let error = check_value(&descriptors[0].kind, &ParamValue::F32(256.0)).expect_err("an f32 for a u32");
+        assert_eq!(
+            error.to_string(),
+            "expected a u32 value such as 1u32, found the f32 256"
+        );
+        let error = check_value(&descriptors[2].kind, &ParamValue::U32(1)).expect_err("a u32 for a choice");
+        assert!(
+            matches!(
+                error,
+                ValueError::WrongKind {
+                    expected: ValueKind::Choice,
+                    found: ValueKind::U32,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "expected a choice such as ParamValue::Choice(0), found the u32 1"
+        );
+        let wrap = bool_param("wrap", "Wrap", true);
+        let error = check_value(&wrap.kind, &ParamValue::Choice(0)).expect_err("a choice for a bool");
+        assert_eq!(error.to_string(), "expected a bool value, found the choice 0");
     }
 }

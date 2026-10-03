@@ -24,9 +24,13 @@ name = "henad-cli"
 path = "src/main.rs"
 required-features = ["example-models"]
 
-# Both run the official binary.
+# All three run the official binary.
 [[test]]
 name = "golden"
+required-features = ["example-models"]
+
+[[test]]
+name = "json_lines"
 required-features = ["example-models"]
 
 [[test]]
@@ -39,9 +43,8 @@ default = ["example-models"]
 example-models = ["dep:henad-models"]
 
 [dependencies]
-# We drive states directly (CPU via `SimState::step`, GPU via `GpuSimState::encode_steps`) rather
-# than through `SimThread`/`GpuSimThread`. henad-compute is needed for the GPU path: `GpuContext`,
-# the `GpuSimState` runner trait and its stepping helpers. henad-explore acquires the headless device.
+# henad-compute gives the model set, `Simulation` for the exports, `GpuContext` and the panic hook. henad-explore
+# gives the benchmark, the headless device and the sweeps.
 henad-core = { workspace = true }
 henad-compute = { workspace = true }
 henad-models = { workspace = true, optional = true }

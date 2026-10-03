@@ -6,7 +6,7 @@ use henad_core::action::{Fire, RefusedActions, Schedule};
 use henad_core::view::StatEntry;
 
 use crate::fault::{Fault, FaultKind, STEPPING};
-use crate::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION};
+use crate::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION, StatsPoll};
 
 /// Submits `count` steps on the GPU without waiting for them.
 ///
@@ -66,12 +66,18 @@ pub fn submit_slice(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u32, s
 ///
 /// # Errors
 ///
-/// Returns the first fault the device raised, or a [`FaultKind::Poll`] fault when the wait itself fails.
+/// Returns a [`FaultKind::DeviceLost`] fault once the device is lost, the first fault the device raised otherwise,
+/// or a [`FaultKind::Poll`] fault when the wait itself fails. A lost device fails its work as ordinary errors, and
+/// the loss is their cause. It leaves any such error in `ctx.faults`.
 pub fn wait(ctx: &GpuContext) -> Result<(), Fault> {
     ctx.device
         .poll(wgpu::PollType::wait_indefinitely())
         .map_err(poll_fault)?;
 
+    // wgpu reports a loss to the callback alone, and polls go on succeeding.
+    if ctx.is_lost() {
+        return Err(Fault::device_lost(STEPPING));
+    }
     if let Some(fault) = ctx.faults.take() {
         return Err(fault);
     }
@@ -175,8 +181,15 @@ pub fn run_due<'s>(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &'s 
 ///
 /// The sample records the stats passes alone, as a sweep track's does, with no display pass. A readback still in
 /// flight is collected first. Otherwise the sample's copy would be skipped, and the stats
-/// returned would be the older sample's. Note that a fault the sample raises is left for the next [`wait`] to report.
-pub fn sample_stats(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Vec<StatEntry> {
+/// returned would be the older sample's. Note that a device error the sample raises while its readback lands is left
+/// for the next [`wait`] to report.
+///
+/// # Errors
+///
+/// Returns a [`FaultKind::DeviceLost`] fault once the device is lost. A readback that did not land returns the fault
+/// in `ctx.faults`, or a [`FaultKind::Refused`] fault when an error scope holds the device's error. Either way the
+/// stats the state holds are an earlier sample's.
+pub fn sample_stats(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Result<Vec<StatEntry>, Fault> {
     if state.stats_readback_pending() {
         state.poll_stats_readback(&ctx.device, true);
     }
@@ -186,8 +199,17 @@ pub fn sample_stats(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Vec<StatEn
     state.encode_stats_passes(&mut encoder);
     ctx.queue.submit(Some(encoder.finish()));
     state.begin_stats_readback();
-    state.poll_stats_readback(&ctx.device, true);
-    state.stats()
+    let landed = state.poll_stats_readback(&ctx.device, true);
+    if ctx.is_lost() {
+        return Err(Fault::device_lost(STEPPING));
+    }
+    match landed {
+        StatsPoll::Landed => Ok(state.stats()),
+        StatsPoll::Pending | StatsPoll::Failed => Err(ctx
+            .faults
+            .take()
+            .unwrap_or_else(|| Fault::refused(STEPPING, "the GPU did not read the stats back"))),
+    }
 }
 
 #[cfg(test)]
@@ -292,7 +314,7 @@ mod tests {
             "a sampled slice leaves its readback in flight"
         );
         submit_steps(&mut state, &ctx, 4);
-        let stats = sample_stats(&mut state, &ctx);
+        let stats = sample_stats(&mut state, &ctx).expect("the sample lands");
         assert_eq!(stats[0].value.scalar(), 7.0, "the sample reported the slice's tick");
         assert!(ctx.faults.take().is_none());
     }

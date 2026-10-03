@@ -38,7 +38,9 @@ nav = [
             "guide/first-model/gpu-game-of-life.md",
             "guide/first-model/gpu-ants.md",
         ] },
-        "guide/library.md",
+        { "Using Henad as a library" = [
+            "guide/library.md",
+        ] },
     ] },
     { "Authoring" = [
         "authoring/index.md",
@@ -126,6 +128,7 @@ nav = [
             { "#43, 2026-10-02" = "developing/agent-record/20261002-43-library-docs.md" },
             { "#44, 2026-10-02" = "developing/agent-record/20261002-44-library-release.md" },
             { "#45, 2026-10-03" = "developing/agent-record/20261003-45-library-audit-fixes.md" },
+            { "#46, 2026-10-03" = "developing/agent-record/20261003-46-library-branch-review.md" },
         ] },
     ] },
 ]

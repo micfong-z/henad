@@ -6,7 +6,9 @@ description = "Desktop and web app for Henad, a parallel agent-based modelling e
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+# The workspace's licence, with the fonts the library embeds: IBM Plex derivatives under OFL-1.1 and two icon fonts
+# under Apache-2.0 alone. `assets/fonts/SOURCES.md` lists each.
+license = "(MIT OR Apache-2.0) AND OFL-1.1 AND Apache-2.0"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/henad-app"
@@ -26,8 +28,8 @@ required-features = ["example-models"]
 
 [features]
 default = ["example-models"]
-# The ten example models, for the official binary.
-example-models = ["dep:henad-models"]
+# The ten example models, and the logger of the official binary.
+example-models = ["dep:henad-models", "dep:env_logger"]
 # Lets an external inspector (egui_mcp) drive the app. Off unless asked for, and inert at runtime
 # until EGUI_INSPECTION is set.
 inspection = ["eframe/inspection"]
@@ -64,21 +66,37 @@ henad-explore = { workspace = true, features = ["testing"] }
 henad-build = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-env_logger = { workspace = true }
+env_logger = { workspace = true, optional = true }
 
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
 send_wrapper = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = [
+    "Blob",
+    "BlobPropertyBag",
+    "Document",
+    "Element",
+    "HtmlAnchorElement",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Location",
+    "Navigator",
+    "Node",
+    "Url",
+    "Window",
+] }
+
+# A wasm32 build without atomics, as docs.rs makes, has no thread pool and runs the models on one thread.
+# wasm-bindgen-rayon refuses to compile there.
+[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
 wasm-bindgen-rayon = { workspace = true }
-web-sys = { workspace = true }
 
 [lints]
 workspace = true
 
+# The wasm32 docs build without atomics, and so without the thread pool.
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
-# wasm-bindgen-rayon refuses to compile for wasm32 without atomics. Native targets warn about the
-# flags and continue.
-rustc-args = ["-C", "target-feature=+atomics,+bulk-memory"]
 rustdoc-args = ["--cfg", "docsrs"]

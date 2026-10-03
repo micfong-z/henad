@@ -262,7 +262,7 @@ On the GPU we need to draw our texture instead, because only the model knows how
 @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> dims: Dims; // (2)!
 
-// Palette matches `henad_models::game_of_life::PALETTE`: dead = 0x15/0x15/0x15, alive = 0x00/0xE6/0x76.
+// Palette matches the CPU model's `PALETTE`: dead = 0x15/0x15/0x15, alive = 0x00/0xE6/0x76.
 const DEAD_COLOR: vec4<f32> = vec4<f32>(21.0 / 255.0, 21.0 / 255.0, 21.0 / 255.0, 1.0); // (3)!
 const ALIVE_COLOR: vec4<f32> = vec4<f32>(0.0 / 255.0, 230.0 / 255.0, 118.0 / 255.0, 1.0);
 
@@ -366,7 +366,13 @@ The struct is empty, similar to the CPU model.
 A GPU model is const metadata with a few pure functions, and every buffer lives with the engine.
 
 This won't compile yet.
-Let's run `cargo check` and see what the compiler says is missing:
+Cargo compiles only the files `src/lib.rs` reaches, so first declare the module there, next to `mod life;`:
+
+``` rust title="src/lib.rs"
+mod gpu_life;
+```
+
+Now let's run `cargo check` and see what the compiler says is missing:
 
 ``` text title="cargo check"
 error[E0046]: not all trait items implemented, missing: `NAME`, `ID`, `DESCRIPTION`, `PALETTE`, `STATS`,
@@ -398,7 +404,7 @@ impl GpuGridModel for GpuLifeModel {
 }
 ```
 
-1. The example port already holds `gpu_game_of_life`. A model set holds each ID once, and our ID differs so that the guide's models can sit in one set beside the example models, as the guide's parity tests in Henad's repository run them.
+1. The example port already holds `gpu_game_of_life`. A model set holds each ID once, and our ID differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
 
 ### Colours
 
@@ -587,13 +593,7 @@ The prelude holds every name these use, `grid_init_rng` included, so the file co
 The model compiles, but the app can only pick models from the set it was handed, so we have to register it.
 We register it in `models()` in `src/lib.rs`, as on the [CPU page](game-of-life.md#running-it).
 That page shows the template's `src/lib.rs` whole.
-First we declare the module next to `mod life;`,
-
-``` rust title="src/lib.rs"
-mod gpu_life;
-```
-
-then we import the function that registers a GPU grid model, if `src/lib.rs` does not import it already,
+The `mod gpu_life;` line is already there, so first we import the function that registers a GPU grid model, if `src/lib.rs` does not import it already,
 
 ``` rust title="src/lib.rs"
 use henad::authoring::register_gpu_grid_model;

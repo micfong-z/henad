@@ -351,6 +351,22 @@ fn main(
         assert_eq!(leaf_blocks(256 * 65_535 + 1), 2 * 65_535);
     }
 
+    /// The regression. Partials sized from the population held 65,536 groups where the folded dispatch writes
+    /// 131,070, and the blocks past the buffer were dropped from the sum.
+    #[test]
+    fn a_built_reduce_holds_a_partial_for_every_dispatched_block() {
+        let Some(ctx) = headless_context("gpu_reduce_partials_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_built_reduce_holds_a_partial_for_every_dispatched_block: no adapter");
+            return;
+        };
+        let lanes = 2;
+        let reduce = GpuLaneReduce::new(&ctx.device, &ctx.queue, "test", lanes, 256 * 65_535 + 1);
+        let (groups_x, groups_y) = reduce.agent_groups();
+        assert_eq!((groups_x, groups_y), (65_535, 2));
+        let partial_bytes = u64::from(groups_x * groups_y) * lanes as u64 * std::mem::size_of::<f32>() as u64;
+        assert_eq!(reduce.partials.size(), partial_bytes);
+    }
+
     /// Sizes straddle the workgroup width, including a ragged tail and a multi-level chain.
     #[test]
     fn sums_match_a_cpu_reference() {

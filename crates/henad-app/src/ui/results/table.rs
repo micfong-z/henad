@@ -15,6 +15,10 @@ use crate::ui::results::ResultsRequest;
 use crate::ui::results::plot::{format_significant, labeled_combo, refresh_due, text_width};
 use crate::ui::results::store::{ResultsStore, RunsColumn, RunsFilter, RunsSort};
 
+/// Warning a run of a model that does not replay exactly carries, beside Open and on the opened run's line.
+pub const INEXACT_REPLAY: &str =
+    "This model does not replay exactly. The opened run might differ from the recorded run.";
+
 /// Height of a row of the table.
 const ROW_HEIGHT: f32 = 18.0;
 
@@ -298,7 +302,8 @@ impl TableView {
 
 /// Draws the strip for run `run_id`: its name, Open, Open at end and, with a `cli_command`, Copy command.
 ///
-/// The buttons are disabled with the store's [`ResultsStore::replay_refusal`] when the runs cannot replay.
+/// The buttons are disabled with the store's [`ResultsStore::replay_refusal`] when the runs cannot replay, and with
+/// [`ResultsStore::untold_candidate`] for a run of a search whose batch is not told yet.
 pub fn detail_strip(
     ui: &mut egui::Ui,
     store: &ResultsStore,
@@ -313,7 +318,9 @@ pub fn detail_strip(
         ui.strong(format!("Run {run_id}"));
         ui.weak(store.config_label(outcome.run.config_id));
     });
-    let refusal = store.replay_refusal();
+    let store_refusal = store.replay_refusal();
+    let untold = store.untold_candidate(run_id);
+    let refusal = store_refusal.or(untold.as_deref());
     let replays = refusal.is_none();
     let refusal_text = refusal.unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
@@ -352,45 +359,105 @@ pub fn detail_strip(
             }
         }
     });
-    if let Some(refusal) = refusal {
+    if let Some(refusal) = store_refusal {
         ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {refusal}"));
         return;
     }
-    if let Some(change) = replay_change(store) {
-        ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {change}"));
+    if let Some(untold) = &untold {
+        ui.weak(format!("{untold}."));
+        return;
+    }
+    for (warning, hint) in replay_warnings(store) {
+        let label = ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {warning}"));
+        if let Some(hint) = hint {
+            label.on_hover_text(hint);
+        }
     }
     if !store.replays_exactly {
-        ui.colored_label(
-            ui.visuals().warn_fg_color,
-            format!("{MDI_ALERT} This model does not replay exactly. The opened run might differ from its row."),
-        );
+        ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {INEXACT_REPLAY}"));
     }
 }
 
-/// Returns the warning that a replay of the store's runs might differ, `None` when the model's parameters, stats and
-/// actions and every recorded build match the current ones.
-fn replay_change(store: &ResultsStore) -> Option<String> {
+/// Tooltip of the warning that the model's build cannot be compared.
+const STAMP_COMMIT_HINT: &str = "Call henad_build::stamp_commit in the model crate's build script to record its build.";
+
+/// Returns the warnings that a replay of the store's runs might differ, each with an optional tooltip.
+///
+/// A change of the model's parameters, stats or actions, or of a build, comes first, and a build that cannot be
+/// compared after it. The list is empty when the model's declarations and every recorded build match the current
+/// ones.
+fn replay_warnings(store: &ResultsStore) -> Vec<(String, Option<&'static str>)> {
     let noun = if store.is_search() { "search" } else { "sweep" };
-    let changed = if !store.schema_matches {
-        "Model parameters, stats or actions changed"
-    } else {
+    let changed = if store.schema_matches {
         match store.changed_builds.as_slice() {
-            [] => return None,
-            [BuildRole::Engine] => "Henad build changed",
-            [BuildRole::Model] => "Model build changed",
-            _ => "Henad and model builds changed",
+            [] => None,
+            [BuildRole::Engine] => Some("Henad build changed"),
+            [BuildRole::Model] => Some("Model build changed"),
+            _ => Some("Henad and model builds changed"),
         }
+    } else {
+        Some("Model parameters, stats or actions changed")
     };
-    Some(format!("{changed} since this {noun}. The replay might differ."))
+    let changed = changed.map(|changed| (format!("{changed} since this {noun}. The replay might differ."), None));
+    changed.into_iter().chain(unidentified_build(store)).collect()
+}
+
+/// Returns the warning that a build of the store's runs cannot be compared, with a tooltip for the model's, or `None`
+/// when every build can.
+fn unidentified_build(store: &ResultsStore) -> Option<(String, Option<&'static str>)> {
+    let (builds, hint) = match store.unidentified_builds.as_slice() {
+        [] => return None,
+        [BuildRole::Engine] => ("Henad build is", None),
+        [BuildRole::Model] => ("Model build is", Some(STAMP_COMMIT_HINT)),
+        _ => ("Henad and model builds are", Some(STAMP_COMMIT_HINT)),
+    };
+    Some((format!("{builds} unidentified. The replay might differ."), hint))
 }
 
 #[cfg(test)]
 mod tests {
-    use egui::{Align, Button, Label, Layout, TextWrapMode, Widget, vec2};
+    use std::sync::Arc;
 
-    use super::{ROW_HEIGHT, header_text, min_column_width};
+    use egui::{Align, Button, Label, Layout, TextWrapMode, Widget, vec2};
+    use henad_core::explore::spec::SweepSpec;
+    use henad_explore::output::manifest::BuildRole;
+
+    use super::{ROW_HEIGHT, STAMP_COMMIT_HINT, header_text, min_column_width, replay_warnings};
     use crate::icons::material_design_icons::{MDI_MENU_DOWN, MDI_MENU_UP};
-    use crate::ui::results::store::{RunsColumn, RunsFilter};
+    use crate::ui::results::store::{ResultsStore, RunsColumn, RunsFilter};
+
+    /// The regression. A changed build dropped the warning that the model's build is unidentified, with its hint.
+    #[test]
+    fn an_unidentified_build_warns_beside_a_changed_one() {
+        let sir = henad_models::example_models()
+            .get("sir")
+            .cloned()
+            .expect("SIR is registered");
+        let mut spec = SweepSpec::new("sir");
+        spec.run.steps = 10;
+        let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
+        let mut store = ResultsStore::for_sweep(plan, &sir, None, usize::MAX);
+        assert_eq!(replay_warnings(&store), []);
+
+        let unidentified = (
+            "Model build is unidentified. The replay might differ.".to_owned(),
+            Some(STAMP_COMMIT_HINT),
+        );
+        store.changed_builds = vec![BuildRole::Engine];
+        store.unidentified_builds = vec![BuildRole::Model];
+        assert_eq!(
+            replay_warnings(&store),
+            [
+                (
+                    "Henad build changed since this sweep. The replay might differ.".to_owned(),
+                    None
+                ),
+                unidentified.clone(),
+            ]
+        );
+        store.changed_builds.clear();
+        assert_eq!(replay_warnings(&store), [unidentified]);
+    }
 
     /// Returns the width `widget` takes untruncated, laid out in a table cell `width` wide.
     fn intrinsic_width(ui: &mut egui::Ui, width: f32, widget: impl Widget) -> f32 {

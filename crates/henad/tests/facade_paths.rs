@@ -1,9 +1,13 @@
 //! Items the tutorial crate never names, reached through the facade's paths alone.
 //!
 //! The file defines no model, needs no build script and never builds on a device. The parts that need no model run,
-//! and the parts that need a model's entry compile in [`with_an_entry`], which no test calls.
+//! and the parts that need a model's entry compile in [`with_an_entry`], which no test calls. That module also holds
+//! the two snippets `docs/guide/library.md` includes from outside `examples/complete.rs`. [`named_only`] names the
+//! items whose paths are the whole check, and runs nothing.
 
-use std::any::type_name;
+// Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
+// limit of 128.
+#![recursion_limit = "256"]
 
 use henad::SetupError;
 use henad::action::ActionDescriptor;
@@ -124,25 +128,9 @@ fn a_sweep_spec_is_built_in_code() {
 fn a_parameter_refusal_names_the_text() {
     let error = SetupError::Param(ValueError::NotANumber {
         raw: "fast".to_owned(),
-        source: None,
+        source: "fast".parse::<f32>().expect_err("a word is no number"),
     });
     assert_eq!(refusal(&error), "'fast' is not a number", "the refusal names the text");
-}
-
-#[test]
-fn a_device_refusal_names_the_limit() {
-    let error = henad::gpu::DeviceError::BelowBaseline {
-        adapter: "llvmpipe".to_owned(),
-        limit: "max_storage_buffers_per_shader_stage",
-    };
-    let named = match &error {
-        henad::gpu::DeviceError::BelowBaseline { limit, .. } => *limit,
-        _ => "",
-    };
-    assert_eq!(
-        named, "max_storage_buffers_per_shader_stage",
-        "the refusal names the limit"
-    );
 }
 
 #[test]
@@ -153,25 +141,52 @@ fn the_spatial_index_and_the_components_are_reached() {
     assert_eq!(components.largest, 3, "the path holds three nodes");
 }
 
-/// Names the types a public field, variant or return value of a listed item holds, each through its facade path.
-#[test]
-fn payload_types_have_facade_paths() {
-    let names = [
-        type_name::<henad::gpu::Alloc>(),
-        type_name::<henad::gpu::PassBindings>(),
-        type_name::<henad::explore::BatchStanding>(),
-        type_name::<henad::explore::EvaluatedCandidate>(),
-        type_name::<henad::explore::EvaluationReading>(),
-        type_name::<henad::explore::ConfigFault>(),
-        type_name::<henad::explore::RefusedConfig>(),
-        type_name::<henad::explore::ProgressUpdate>(),
-        type_name::<henad::explore::SummaryError>(),
-        type_name::<henad::explore::SearchPlan>(),
-        type_name::<henad::explore::CsvError>(),
-        type_name::<henad::explore::design_csv::DesignTableError>(),
-        type_name::<henad::explore::design_csv::DesignTableValueError>(),
-    ];
-    assert!(names.iter().all(|name| !name.is_empty()), "every type is named");
+/// Items named through their facade paths, with nothing to run. The check is that the module compiles.
+#[expect(dead_code, reason = "the module names items, and no test calls them")]
+mod named_only {
+    use henad::gpu::DeviceError;
+    use henad::gpu::wgpu::{Adapter, Limits};
+
+    /// Types a public field, variant or return value of a listed item holds, and types a listed signature names.
+    type PayloadTypes = (
+        henad::gpu::Alloc,
+        henad::gpu::PassBindings,
+        henad::explore::BatchStanding,
+        henad::explore::EvaluatedCandidate,
+        henad::explore::EvaluationReading,
+        henad::explore::ConfigFault,
+        henad::explore::RefusedConfig,
+        henad::explore::ProgressUpdate,
+        henad::explore::SummaryError,
+        henad::explore::SearchPlan,
+        henad::explore::CsvError,
+        henad::explore::design_csv::DesignTableError,
+        henad::explore::design_csv::DesignTableValueError,
+        henad::explore::design_rng::DesignRng,
+        henad::action::RefusedActions<'static>,
+    );
+
+    /// Steps one command buffer of a GPU state may hold, for a host that encodes its own.
+    const SUBMISSION_STEPS: u32 = henad::runner::MAX_STEPS_PER_SUBMISSION;
+
+    /// Returns the limit a refusal of an adapter below the baseline names.
+    fn short_limit(error: &DeviceError) -> Option<&'static str> {
+        match error {
+            DeviceError::BelowBaseline { limit, .. } => Some(*limit),
+            _ => None,
+        }
+    }
+
+    /// Returns the baseline limits raised to what the GPU models of `models` need on `adapter`, for a host that
+    /// requests its own device.
+    fn limits(adapter: &Adapter, models: &henad::ModelSet) -> Limits {
+        henad::gpu::raise_limits(adapter, &Limits::default(), models.gpu_needs())
+    }
+
+    /// Calls `sample`, which a native build and a threaded web build can both hand to another thread.
+    fn forward<F: FnMut() + henad::WasmNotSend + henad::WasmNotSync>(mut sample: F) {
+        sample();
+    }
 }
 
 /// Hosts that need a model's entry. They compile against the facade and never run.
@@ -185,7 +200,7 @@ mod with_an_entry {
     use henad::explore::outcome::RunStatus;
     use henad::explore::{ExploreError, NoProgress, RunRow, SweepOutput, SweepRecord, run_spec};
     use henad::runner::{FaultSink, SimThread, Snapshot, WakeFn};
-    use henad::{ModelEntry, ModelState};
+    use henad::{Fault, ModelEntry, ModelSet, ModelState, Simulation};
 
     /// Runs the sweep of [`super::spec`] over `entry` into memory, as the second of three shards on two lanes.
     fn sweep(entry: &ModelEntry) -> Result<SweepRecord, ExploreError> {
@@ -215,5 +230,34 @@ mod with_an_entry {
     fn finished(row: &RunRow) -> bool {
         let status: RunStatus = row.outcome.status;
         matches!(status, RunStatus::Ok | RunStatus::NonFinite)
+    }
+
+    /// Builds GPU SIR from `models` on a headless device of its own, and returns its tick after ten steps.
+    fn gpu_sir(models: &ModelSet) -> Result<u64, Box<dyn std::error::Error>> {
+        // --8<-- [start:gpu_build]
+        let gpu = henad::gpu::acquire_headless(models.gpu_needs())?;
+        let mut simulation = models
+            .get("gpu_sir")
+            .ok_or("the example set lacks GPU SIR")?
+            .setup()
+            .build(Some(&gpu))?;
+        // --8<-- [end:gpu_build]
+        simulation.run_for(10)?;
+        Ok(simulation.tick())
+    }
+
+    /// Steps `simulation` a thousand ticks inside one rayon scope, with room for work of the caller's own between
+    /// two ticks.
+    fn scoped_steps(simulation: &mut Simulation) -> Result<(), Fault> {
+        // --8<-- [start:scoped_steps]
+        rayon::scope(|_| -> Result<(), henad::Fault> {
+            for _ in 0..1000 {
+                simulation.step()?;
+                // Per-tick work of your own.
+            }
+            Ok(())
+        })?;
+        // --8<-- [end:scoped_steps]
+        Ok(())
     }
 }

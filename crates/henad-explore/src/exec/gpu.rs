@@ -109,7 +109,7 @@ impl<'x> Interleaver<'x> {
             unbuilt_requests: (0..requests.len()).collect(),
             tracks: Vec::new(),
             track_cap: executor.layout.gpu_tracks.max(1),
-            gpu_memory_budget: gpu_memory_budget(executor.gpu_memory, ctx),
+            gpu_memory_budget: gpu_memory_budget(executor.gpu_memory_budget, ctx),
             admission_held: false,
             submissions: VecDeque::new(),
             failed_builds: Vec::new(),

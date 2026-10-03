@@ -8,7 +8,7 @@ struct Params {
     // Under the cell grid on a large world.
     tex: vec2<u32>,
     _pad2: vec2<u32>,
-    // `ants::field::CELL_PALETTE`, packed so the colours cannot drift from the CPU model's.
+    // The CPU field's `CELL_PALETTE`, packed so the colours cannot drift from the CPU model's.
     palette: array<vec4<u32>, 4>,
 }
 

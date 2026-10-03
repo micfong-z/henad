@@ -7,7 +7,7 @@
 #import henad::space::{wrap_index, wrap_coord, cell_index, offset_cell, axis_delta, dist_sq}
 #import henad::space::{neighbor_count, neighbor_offset, heading_octant}
 #import henad::space::{TORUS, BOUNDED, MOORE_ROW_MAJOR, MOORE_COLUMN_MAJOR, VON_NEUMANN}
-#import henad::rng::{random_float, below, choice3, reservoir_accept}
+#import henad::rng::{random_float, below, choice3, reservoir_accept, pcg_hash}
 
 // The boundary and table codes the test reads from the generated bindings. An imported constant
 // reaches them only through a reference here.
@@ -26,6 +26,7 @@ const OP_RANDOM_FLOAT: u32 = 9u;
 const OP_BELOW: u32 = 10u;
 const OP_CHOICE3: u32 = 11u;
 const OP_RESERVOIR_ACCEPT: u32 = 12u;
+const OP_PCG_HASH: u32 = 13u;
 
 struct Case {
     op: u32,
@@ -98,6 +99,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         case 12u: {
             out.i.x = i32(reservoir_accept(c.u.x, c.u.y));
+        }
+        case 13u: {
+            out.i.x = bitcast<i32>(pcg_hash(c.u.x));
         }
         default: {}
     }

@@ -99,13 +99,18 @@ See [porting a model to the GPU](porting.md) for the rest of that workflow.
 ## Contracts nothing checks
 
 Shaders are opaque strings as far as Rust is concerned, and none of the contracts below is enforced at compile time.
-Getting one wrong surfaces as a wgpu validation error when the model is first constructed, and knowing the list in advance makes that error much quicker to place.
+Getting one wrong mostly surfaces as a wgpu validation error when the model is first constructed, and knowing the list in advance makes that error much quicker to place.
 
-- `WORKGROUP_SIZE` must equal the `@workgroup_size(N, N)` that all three shaders declare.
-- `STATS.len()` must equal both the number of entries `stats` returns and the number of `atomic<u32>` in the reduce shader's `counters` binding.
+- `STATS.len()` must equal the number of `atomic<u32>` in the reduce shader's `counters` binding.
+  A shorter `counters` array validates, and the stats past its end read zero.
   GPU Game of Life binds one bare `atomic<u32>` there, and GPU SIR an array of three.
+- `STATS.len()` must equal the number of values `stats` returns.
+  The engine pairs the two by position and drops the values past the shorter.
 - `buffer_lens` must return exactly `BUFFERS.len()` lengths, and `seed_buffers` must return exactly that many vectors, each of exactly the declared length.
 
+The testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values than `STATS.len()`.
+The engine reads the `@workgroup_size` of each shader's `main` when it builds the model, and refuses a shader that declares anything but `@workgroup_size(N, N)` for a `WORKGROUP_SIZE` of N.
+It also refuses a buffer label that is reserved or ends in `_in` or `_out`, since a binding of that name resolves to something other than the buffer.
 Sizes and per-pass binding counts are checked before anything is allocated, and a model over the device's limit is refused with a readable message rather than a panic.
 Every other construction error reaches the UI as a modal.
 

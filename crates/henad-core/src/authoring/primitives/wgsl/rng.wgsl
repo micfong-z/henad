@@ -2,10 +2,11 @@
 
 // Random draws, the twin of `henad_core::authoring::primitives::rng`.
 //
-// Only the draws over a raw word are twins. The generator is not: WGSL has no 64-bit integers, so
-// this side advances with `pcg_hash` over `u32` where the Rust side runs `xorshift64` over `u64`.
+// The draws over a raw word are twins, and so is `pcg_hash`. The generators differ. WGSL has no
+// 64-bit integers, so this side advances with `pcg_hash` over `u32` where a CPU kernel runs
+// `xorshift64` over `u64`.
 
-// Mirrored in Rust by each model that seeds a buffer with it, bit for bit.
+// The twin of `rng::pcg_hash`, bit for bit. A port seeds a state buffer with the Rust one.
 fn pcg_hash(input: u32) -> u32 {
     var state = input * 747796405u + 2891336453u;
     let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;

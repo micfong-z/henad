@@ -75,6 +75,9 @@ Let a GPU model reach its steady state before anything is timed:
 cargo run --release -p henad-cli -- gpu_boids --global-warmup 1000 --steps 10000 --reps 3
 ```
 
+A GPU rep with no `--warmup` also times wgpu filling every buffer its build left unseeded with zeros, on the buffer's first use.
+The cost shows most in a short run, and `--warmup 1` keeps it out of the timed steps.
+
 Record the per-tick stat series instead of a timing:
 
 ```bash
@@ -199,6 +202,7 @@ A spec file with a `[search]` table runs a [search](#searches) instead.
 | `--merge <DIR>...` | | Merge the directories of a sweep's shards into the `--out` directory. Takes no model |
 
 `--out`, `--spec` and `--dry-run` each ask for a sweep, and every other flag in this table apart from `--merge` needs one of them.
+`--spec` needs `--out`, `--dry-run` or `--params`.
 `--resume` needs `--out`, and `--retry-failed` needs `--resume`.
 `--zip` and `--sample` need `--vary` and cannot be combined, and `--design-seed` needs `--sample`.
 `--design` cannot be combined with `--vary`, `--zip` or `--sample`.
@@ -311,6 +315,9 @@ A sampled design draws its configs from a design seed of its own, described unde
 
 Every row of `runs.csv` records its seed.
 Passing it to `--seed`, with the row's parameter values as `--set`, its action ticks as `--act`, and the sweep's `--warmup` and `--steps`, rebuilds the run on its own for `--export-stats` or `--export`.
+`--act` takes the action's id, where an `action.NAME` column names the action by its [name](#actions), such as `seed_outbreak_2`.
+Actions due at one tick fire in the order of their `--act` flags, so give those in the order the sweep lists its actions.
+The app's [Copy command](../guide/app.md#opening-a-run) writes such a command line for any run.
 
 ### Sampling and reducers
 
@@ -348,9 +355,10 @@ So is a `first` kind whose comparison never holds, and a `mean@` kind with no sa
 
 `--stop` ends a run at the first sample where a condition holds, as in `--stop 'Infected <= 0'`.
 A condition reads `COLUMN COMPARATOR THRESHOLD`.
-`COLUMN` is the text before the first `<`, `>`, `=` or `!`, trimmed, and a label with spaces works, as in `Giant Component Share >= 0.5`.
-It names a column as a reducer does.
 `COMPARATOR` is one of `<`, `<=`, `>`, `>=`, `==` and `!=`, and `THRESHOLD` is a finite number.
+`COLUMN` is the text before the last run of `<`, `>`, `=` and `!` characters, trimmed.
+A label with spaces works, as in `Giant Component Share >= 0.5`, and so does a label holding a comparator character, as in `Agents (k=3) <= 0.5`.
+It names a column as a reducer does.
 
 The condition is checked at every sample and never between two samples.
 A NaN never passes it.
@@ -437,9 +445,11 @@ A GPU run that times out gives the tick of its last sample in `ticks`.
 Runs are written in plan order at any lane or track count.
 All three CSV files come out the same byte for byte at any `--concurrent`, apart from the `build_ms`, `wall_ms` and `steps_per_s` columns.
 A rerun of the sweep gives the same three files as well, and so do shards joined by `--merge` and a sweep finished by `--resume`.
-Two exceptions apply.
+Three exceptions apply.
 A run that timed out ends wherever the clock caught it.
 `gpu_boids` leaves the order of the boids within a cell of its neighbour index open, and two sweeps of it differ.
+A model that calls `sin`, `cos`, `hypot` or `powf` gets them from the platform's maths library, which can round the last bit differently on another operating system or in a browser.
+Boids, Ants and Virus on a Network call them, and their runs on two platforms can differ.
 
 ### Output directory
 
@@ -447,6 +457,14 @@ A run that timed out ends wherever the clock caught it.
 A directory that holds `runs.csv`, `series.csv`, `summary.csv`, `manifest.json` or one of the [search tables](#search-tables) is refused unless `--resume` is given, and other files in it are left alone.
 A file ending in `.staged` counts as well.
 A [resume](#resuming) or a [merge](#shards-and-merging) that stopped while replacing its tables leaves one behind.
+A symbolic link under one of these names counts as the file, even one that points nowhere, and a sweep never writes through a link.
+
+While a sweep, a search or a merge writes to a directory, it holds the operating system's lock on a file named `.lock` there.
+A resume takes the lock before it reads the tables.
+A second sweep, resume or merge into the directory is refused until the first ends.
+The file stays in the directory when the sweep ends, and the lock goes with the process that holds it, a killed one included.
+The next sweep locks the file again, so `.lock` needs no clearing, and deleting it is safe once no process writes to the directory.
+On a filesystem without file locks, as some network filesystems are, the lock is not taken.
 
 | File | Content |
 |---|---|
@@ -563,10 +581,10 @@ Each build has these fields.
 | `commit` | Short commit hash, empty when the build could not learn it |
 | `commit_date` | Date of the commit, empty in a build from a registry download |
 | `dirty` | Whether the crate's sources, manifest or lockfile differed from the commit. `null` when the build could not tell |
-| `source_hash` | Hash of the crate's files under `src`, its manifest and, outside a package, its lockfile, as 16 hexadecimal digits |
+| `source_hash` | Hash of the crate's files under `src`, its manifest and, outside a package, its lockfile, as 16 hexadecimal digits. The example models' hash leaves out the lockfile |
 | `debug_build` | Whether the build was a debug build |
 | `type_path` | Type path of the registered model, for `model_source` alone |
-| `crate_hashes` | Hash of the sources of henad-compute and henad-explore, for the engine alone |
+| `crate_hashes` | Hash of the sources of henad-compute and henad-explore, without the lockfile, for the engine alone |
 | `crate_versions` | Version of henad-core, henad-build, henad-compute and henad-explore, for the engine alone |
 
 A build script stamps these fields when the crate's `build.rs` calls `henad_build::stamp_commit()`.
@@ -589,10 +607,12 @@ The first resume by a later Henad writes that build into the session.
 A directory with no results starts a fresh sweep.
 
 The resume reads the manifest first.
-It refuses a directory whose plan hash, model schema hash or shard differs from the sweep's.
+It refuses a directory that another process is [writing to](#output-directory), a directory of another model, and one whose plan hash, model schema hash or shard differs from the sweep's.
 The plan hash covers the model, the configs, the design seeds, the fixed values, the actions, the steps and warm-up, the sampling and series cadence, the stop condition, the reducers, and the seed root and scheme.
 It leaves out the replicate count and the timeout, and a resume can change both.
-The engine and the model are compared with every build a session recorded for them, and each build that differs gets a warning.
+The engine and the model are compared with every build a session that wrote runs recorded for them, and each build that differs gets a warning.
+A session that found every run written and ran none is left out.
+Two builds that record neither a commit nor a source hash cannot be told apart, and get one warning saying so.
 The host is recorded and never compared.
 The resume goes ahead either way.
 
@@ -626,11 +646,13 @@ A resume that raises a shard's replicate count and ends before renumbering the s
 It merges `runs.csv` and `series.csv` in run order, leaving out a partial last record and the series rows of runs with no row in `runs.csv`, and rebuilds `summary.csv`.
 Both tables are staged and renamed into place together, as a resume that rewrites them does.
 The merged manifest is that of the lowest shard, with shard 0 of 1, the sessions of every shard, the inputs under `merged_shards`, and the build that merged them as `engine`.
+A shard whose process ended without replacing its manifest has its last session credited with the runs it wrote, as a resume credits it, and `replays_exactly` is `true` only when it is for every shard.
 
 A run of the plan that no input holds is reported as a warning, and the merged manifest reads `incomplete`.
-Shards whose sessions ran different engine or model builds get a warning for each build that differs from the lowest shard's.
+Shards whose sessions ran different engine or model builds get a warning for each build of a shard that matches none of the builds of the lowest shard that records any.
 `--resume` on the merged directory, without `--shard`, runs the missing runs.
-The merged files are the same as those of the sweep run in one piece, apart from the timing columns.
+The merged files are the same as those of the sweep run in one piece, apart from the timing columns, when every shard ran on one platform.
+A merge compares no platforms, and shards of a model that calls the platform's maths functions can differ across two, as [Concurrency](#concurrency) says.
 
 ### Progress
 
@@ -666,7 +688,7 @@ Under `--json`, the sweep and the merge write JSON lines to stdout in place of t
 | `explore_search_batch` | Once per batch of a search, after its runs | See [search progress](#search-progress) |
 | `explore_end` | Once, at the end | `end` (`planned`, `complete`, `aborted` or `device_lost`), `rows`, `skipped`, `ok`, `non_finite`, `failed`, `elapsed_s`, and `output_dir`, `null` for a dry run. A search adds the fields of [search progress](#search-progress) |
 | `explore_merge` | Once, at the end of a merge | `inputs`, `rows`, `ok`, `non_finite`, `failed`, `missing`, `output_dir` |
-| `explore_warning` | Once per warning, beside its text on stderr | `warning` (`plan`, `build_changed` or `missing_runs`) and `message`. A `build_changed` warning adds `role` (`engine` or `model`), the `recorded` and `current` [builds](#builds), and `between_shards`, `true` when a merge found `current` in another shard |
+| `explore_warning` | Once per warning, beside its text on stderr | `warning` (`plan`, `build_changed`, `missing_runs` or `series_rows`) and `message`. A `build_changed` warning adds `role` (`engine` or `model`), the `recorded` and `current` [builds](#builds), and `between_shards`, `true` when a merge found `current` in another shard |
 
 `skipped` counts the runs a resume kept, and `pending` the runs left to run.
 The counts of `explore_end` and `explore_merge` cover every row of `runs.csv`, the rows a resume kept included.
@@ -684,8 +706,8 @@ None of these kinds is a benchmark kind, and one reader can take both streams.
 | Status | Meaning |
 |---|---|
 | 0 | Every run is `ok`, a dry run planned the sweep, or a merge holds every run and each is `ok` |
-| 1 | An error stopped the sweep or the merge, such as a spec the model refuses, a directory that already holds results, a resume of another plan, or a lost GPU device |
-| 2 | The command line itself was refused, before anything ran |
+| 1 | An error stopped the sweep or the merge, such as a spec the model refuses, a parameter or action the model does not declare, a directory that already holds results, a resume of another plan, or a lost GPU device |
+| 2 | The command line itself was refused before anything ran: an unknown flag, a missing or conflicting one, or a value of the wrong form, such as a `--vary` without `=` |
 | 3 | The sweep ran to its end and some run is not `ok`, or a merge lacks some run or holds one that is not `ok` |
 
 A search exits with the same statuses as a sweep.
@@ -715,7 +737,7 @@ Its other tables are read as for a sweep, and every table refuses a key it does 
 |---|---|
 | `algorithm` | `random`, `hill_climb`, `genetic` or `pse` |
 | `max_evaluations` | Evaluations the search runs, re-evaluations included, at least 1 |
-| `batch_size` | Most candidates of one batch, at least 1 |
+| `batch_size` | Most candidates of one batch, from 1 to 16,777,216. The batch size times the replicates is at most 16,777,216 runs |
 | `objective` | `{ column, goal, aggregate }`. Every algorithm but `pse` needs one, and `pse` refuses one |
 | `space` | Factors the search varies, written as a block's factors are |
 
@@ -987,7 +1009,7 @@ Every run held is read back as it ended, failed and timed-out runs included, and
 A run that came out differently would change every batch after it, and `--retry-failed` is refused.
 A search runs whole, and `--shard` is refused too.
 
-The resume refuses a directory whose search hash, model schema hash or column layout differs, a sweep's directory, and a `runs.csv` whose runs are out of order or whose key differs from the run asked for.
+The resume refuses a directory of another model, one whose search hash, model schema hash or column layout differs, a sweep's directory, and a `runs.csv` whose runs are out of order or whose key differs from the run asked for.
 Every run held is checked against its key before any table is written, and a refused resume leaves the directory as it was.
 The search hash covers the plan hash of the fixed values and actions, the replicate count, the algorithm, the budget, the batch size, the objective, the space and the algorithm's settings.
 The timeout and the execution settings can change, and the budget and the replicate count cannot.
@@ -1048,8 +1070,8 @@ The line above is cut down to one parameter and one stat.
 ## Hosting the command line
 
 The henad-cli crate is a library as well as a binary.
-A project with models of its own runs this whole command line over them, sweeps and searches included, through `henad_cli::run`.
-The official binary is three lines over it:
+A project with models of its own runs this whole command line over them, sweeps and searches included, through `henad::cli::run`, behind the facade's `cli` feature.
+The official binary is three lines over the same function, which its own crate names `henad_cli::run`:
 
 ```rust
 --8<-- "crates/henad-cli/src/main.rs"
@@ -1062,6 +1084,8 @@ An error prints to stderr as `Error:` with its causes, and returns 1.
 `CliOptions::new(models, host)` takes the `ModelSet` the command line offers and the host's `build_info!()`.
 Every sweep records that build as its [`host`](#builds), and `--version` prints its version.
 The command name defaults to the host's package name, and `CliOptions::command_name` sets another.
+`--version`, the help text and the usage lines all give that name, whatever program name the command line starts with.
+The help text opens with henad-cli's own description, and `CliOptions::about` sets the host's line in its place.
 The `info` line of [`--json`](#machine-readable-output) keeps reporting Henad's own version as `engine_version`.
 
 A host usually reaches it through the facade, with `henad`'s `cli` feature on, as the [template](../guide/your-project.md)'s command line does:

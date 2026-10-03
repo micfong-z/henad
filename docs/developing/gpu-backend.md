@@ -34,14 +34,18 @@ A GPU entry builds on whatever device the host hands it, and the host learns fro
 Each derives every buffer, layout, pipeline and bind group from what its model declares, and each implements both `SimState` and `GpuSimState`.
 
 `GpuSimState` is the extra interface a GPU model needs on top of `SimState`, and `GpuSimThread` drives the state through it.
+A host names it `henad::runner::GpuSimState`.
 
 | Method | Role |
 |---|---|
 | `encode_steps` | Records `count` steps into an encoder, advancing the tick counter |
 | `encode_action` | Records one declared action's pass, without advancing the tick counter |
 | `encode_snapshot_passes` | Records the display and reduce passes, at snapshot cadence |
+| `encode_stats_passes` | Records the reduce passes alone, for a sample that draws nothing |
 | `begin_stats_readback` | Starts the async readback, right after the submission |
-| `poll_stats_readback` | Completes one without waiting on the GPU |
+| `poll_stats_readback` | Completes a pending readback, and waits for it when `block` is set |
+| `stats_readback_pending` | Whether a readback has started and not landed |
+| `view` | The layers the UI draws, cloned into every snapshot |
 
 Ping-ponged buffers are handled through a parity index plus two pre-built bind groups per side, flipped per tick, so no bind group is rebuilt while stepping.
 A buffer written in place gets one side, and `sides()` hands back that same buffer twice.

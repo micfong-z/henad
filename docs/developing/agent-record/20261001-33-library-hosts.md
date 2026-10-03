@@ -1,7 +1,7 @@
 ---
 date: 2026-10-01
 title: "Library M4: hosts take the set"
-description: The fourth milestone of #48. The app and the CLI hold a ModelSet and find models by id, the app's selection is an id instead of an index, the two missing-model messages land, model_registry is gone, and golden tests pin --list, --params and --params --json to what 0.2.0 printed.
+description: "The fourth milestone of #48. The app and the CLI hold a ModelSet and find models by id, the app's selection is an id instead of an index, the two missing-model messages land, model_registry is gone, and golden tests pin --list, --params and --params --json to what 0.2.0 printed."
 icon: material/package-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

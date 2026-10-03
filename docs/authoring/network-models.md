@@ -279,7 +279,7 @@ The engine adds it to the state's heap count, and the Performance tab shows that
 Node positions belong to the engine once the state is built.
 A model places nodes in `init` and when it spawns one, and a spring layout moves them from then on.
 
-The layout is NetLogo's `layout-spring` with three changes, and lives in `henad_compute::cpu::layout`.
+The engine's layout is NetLogo's `layout-spring` with three changes.
 The pull along an edge levels off as the edge stretches.
 It is `spring * S * tanh((d - rest) / S)` with `S` the saturation length, divided by the mean degree of the two ends as in NetLogo.
 Repulsion stops at the cutoff radius, and the nodes within it are found through a spatial hash.
@@ -316,6 +316,7 @@ Team Assembly reads a position in its global pass to place newcomers near their 
 fn act(action: usize, nodes: &mut Nodes<'_, Self>, extent: Extent, params: &[ParamValue], rng: &mut u64);
 ```
 
+A project names the macros `henad::actions!` and `henad::params!`, where the example models, below the facade, name them through `henad_core`.
 `act` runs one entry of `ACTIONS` between two ticks.
 It receives the same `Nodes` as the global pass, and can change the graph.
 `params` is the model's own slice of raw values, as `init` receives it, and `rng` is a stream of its own.

@@ -109,11 +109,14 @@ The example models' test gives it a stock baseline device.
 ## Check it against the counterpart
 
 Register the port, then run both sides.
+In the template, the two are `vote` and `gpu_vote`:
 
 ```bash
-cargo run --release -p henad-cli -- boids --steps 1000 --reps 3
-cargo run --release -p henad-cli -- gpu_boids --steps 1000 --reps 3
+cargo run --release --bin my-model-cli -- vote --steps 1000 --reps 3
+cargo run --release --bin my-model-cli -- gpu_vote --steps 1000 --reps 3
 ```
+
+In a clone of Henad's repository, `cargo run --release -p henad-cli -- boids` and `gpu_boids` run the example pair the same way.
 
 A CPU run against a GPU run measures throughput, and it says nothing about correctness.
 For correctness, compare like with like: the same backend, the same seed, and the invariants holding on both sides.

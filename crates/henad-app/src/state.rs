@@ -43,6 +43,17 @@ pub const DEFAULT_HISTORY_LEN: usize = 10_000;
 /// Default time in milliseconds that a snapshot can spend on a network's layout.
 const DEFAULT_LAYOUT_BUDGET_MS: f32 = 4.0;
 
+/// Status a save reports until its outcome arrives, followed by what it saves.
+#[cfg(not(target_arch = "wasm32"))]
+const SAVE_PENDING: &str = "Select location to save";
+
+/// Status a download reports until its outcome arrives, followed by what it downloads.
+#[cfg(target_arch = "wasm32")]
+const SAVE_PENDING: &str = "Downloading";
+
+/// Status of the downloads of several files. A browser can hold back every download after the first.
+const DOWNLOADS_STARTED: &str = "Downloads started. Press Save results again if your browser blocked any.";
+
 /// Per-frame timing breakdown, smoothed with EMA.
 #[derive(Default)]
 pub struct FrameTimings {
@@ -77,6 +88,9 @@ pub struct AppState {
     pub seed: Option<u64>,
     /// Text of the Seed field, including text that does not parse.
     pub seed_text: String,
+    /// Values the loaded model runs with, those it was built with and any live edit since. Meaningful only while
+    /// `loaded_model` is set.
+    pub loaded_values: Vec<ParamValue>,
     /// Seed the loaded model was built with. Meaningful only while `loaded_model` is set.
     pub loaded_seed: Option<u64>,
     /// Actions the next build runs at their ticks.
@@ -128,7 +142,7 @@ pub struct AppState {
     /// its errors stay with the sweep. `gpu_ctx` below is a different thing, and gates GPU models.
     pub render_ctx: GpuContext,
     /// The fault being shown, cleared when the user dismisses the modal.
-    pub fault: Option<Fault>,
+    pub fault: Option<ShownFault>,
     pub about_open: bool,
     /// Note the Performance tab shows when the browser's thread pool failed to start.
     pub thread_pool_note: Option<String>,
@@ -153,6 +167,14 @@ pub struct AppState {
     pub gpu_adaptive: bool,
     pub gpu_target_ms: f64,
     pub gpu_batch_size: u32,
+}
+
+/// Fault the modal shows, with the model it stopped.
+#[derive(Debug)]
+pub struct ShownFault {
+    pub fault: Fault,
+    /// Name of the model the fault stopped, `None` when no model was building or loaded.
+    pub model: Option<String>,
 }
 
 /// Opening the app could not open, as the Model panel shows it.
@@ -229,6 +251,7 @@ impl AppState {
             loaded_model: None,
             seed: None,
             seed_text: String::new(),
+            loaded_values: Vec::new(),
             loaded_seed: None,
             schedule: Schedule::default(),
             loaded_schedule: Schedule::default(),
@@ -337,6 +360,7 @@ impl AppState {
         self.sim_running = false;
         self.loaded_model.clone_from(&self.selected_model);
         self.pending_reload = vec![false; self.param_values.len()];
+        self.loaded_values.clone_from(&self.param_values);
         self.loaded_seed = self.seed;
         self.loaded_schedule = self.schedule.clone();
     }
@@ -402,7 +426,7 @@ impl AppState {
             .len();
         if replay.params.len() != declared {
             return Err(format!(
-                "This run sets {} {}, but {} has {declared}",
+                "This run sets {} {}, but model '{}' has {declared}",
                 replay.params.len(),
                 crate::ui::plural(replay.params.len() as u64, "parameter"),
                 replay.model
@@ -580,10 +604,19 @@ impl AppState {
     }
 
     /// Offloads the live simulation and hands the fault to the modal. A running sweep carries on.
+    ///
+    /// A fault while building belongs to the selected model, and any other to the loaded one. The Model panel stays
+    /// usable while a model runs, and the selection can be another model by then.
     pub fn report_fault(&mut self, fault: Fault) {
         log::error!("{fault}");
+        let model = if fault.during == BUILDING {
+            self.selected_entry()
+        } else {
+            self.loaded_entry()
+        };
+        let model = model.map(|entry| entry.name().to_owned());
         self.offload_simulation();
-        self.fault = Some(fault);
+        self.fault = Some(ShownFault { fault, model });
     }
 
     pub fn offload_simulation(&mut self) {
@@ -661,7 +694,8 @@ impl AppState {
         self.models.lookup(id, self.gpu_ctx.as_ref())
     }
 
-    /// Selects model `id` with its default values and no scheduled actions.
+    /// Selects model `id` with its default values and no scheduled actions, or the values, seed and actions the
+    /// loaded model runs with when `id` is the loaded model.
     ///
     /// The model selected already keeps its values. An id the set lacks leaves no values.
     pub fn select_model(&mut self, id: &str) {
@@ -670,11 +704,39 @@ impl AppState {
         }
         self.selected_model = Some(id.to_owned());
         self.opening_refusal = None;
+        self.schedule_action_input = 0;
+        if self.loaded_model.as_deref() == Some(id) {
+            self.param_values.clone_from(&self.loaded_values);
+            self.pending_reload = vec![false; self.param_values.len()];
+            self.seed = self.loaded_seed;
+            self.seed_text = self.loaded_seed.map(|seed| seed.to_string()).unwrap_or_default();
+            self.schedule = self.loaded_schedule.clone();
+            return;
+        }
         self.param_values = self.models.get(id).map(default_values).unwrap_or_default();
         self.pending_reload = vec![false; self.param_values.len()];
         // Entries index the previous model's actions.
         self.schedule = Schedule::default();
-        self.schedule_action_input = 0;
+    }
+
+    /// Sends a live edit of parameter `index` to the loaded model, and records `value` as one the model runs with.
+    ///
+    /// Returns whether the edit was sent. It is sent only while the selection is the loaded model.
+    pub fn send_live_param(&mut self, index: usize, value: ParamValue) -> bool {
+        if !self.selection_is_loaded() {
+            return false;
+        }
+        let Some(thread) = &mut self.sim_thread else {
+            return false;
+        };
+        thread.send(SimCommand::SetParam {
+            index,
+            value: value.clone(),
+        });
+        if let Some(slot) = self.loaded_values.get_mut(index) {
+            *slot = value;
+        }
+        true
     }
 
     /// Reasons this machine cannot build the selection. Always empty for a CPU model.
@@ -692,16 +754,22 @@ impl AppState {
     ///
     /// Results can be polled via [`Self::poll_saves`].
     pub fn save_as(&mut self, target: SaveTarget, name: &str, bytes: Vec<u8>) {
-        *self.save_status(target) = Some(format!("Select location to save {name}"));
-        spawn_save(target, name.to_owned(), bytes, self.saves.0.clone());
+        *self.save_status(target) = Some(format!("{SAVE_PENDING} {name}"));
+        spawn_save(
+            target,
+            name.to_owned(),
+            bytes,
+            self.saves.0.clone(),
+            self.egui_ctx.clone(),
+        );
     }
 
     /// Opens a dialog that saves the four files of a sweep, `files`, together, for the panel `target`.
     ///
     /// Results can be polled via [`Self::poll_saves`].
     pub fn save_files(&mut self, target: SaveTarget, files: Arc<SweepFiles>) {
-        *self.save_status(target) = Some(format!("Select location to save {} files", files.entries().len()));
-        spawn_save_files(target, files, self.saves.0.clone());
+        *self.save_status(target) = Some(format!("{SAVE_PENDING} {} files", files.entries().len()));
+        spawn_save_files(target, files, self.saves.0.clone(), self.egui_ctx.clone());
     }
 
     /// Returns the status line a save for `target` reports to.
@@ -714,13 +782,18 @@ impl AppState {
 
     pub fn poll_saves(&mut self) {
         while let Ok(SaveOutcome { target, result }) = self.saves.1.try_recv() {
+            // A download of one file counts as saved. The user asked for it, and the browser asks nothing the app can
+            // read back. The downloads of several files leave them unsaved. A browser can hold back every download
+            // after the first.
             if let SaveTarget::SweepResults(generation) = target
-                && matches!(result, SaveResult::Saved(_))
+                && matches!(result, SaveResult::Saved(_) | SaveResult::Downloaded(_))
             {
                 self.results.mark_files_saved(generation);
             }
             *self.save_status(target) = Some(match result {
                 SaveResult::Saved(name) => format!("Saved {name}"),
+                SaveResult::Downloaded(name) => format!("Downloaded {name}"),
+                SaveResult::DownloadsStarted => DOWNLOADS_STARTED.to_owned(),
                 SaveResult::Failed(message) => format!("Save failed: {message}"),
                 SaveResult::Canceled => "Save canceled".to_owned(),
             });
@@ -731,7 +804,7 @@ impl AppState {
     ///
     /// Results can be polled via [`Self::poll_opens`].
     pub fn open_file(&self, target: OpenTarget) {
-        spawn_open(target, self.opens.0.clone());
+        spawn_open(target, self.opens.0.clone(), self.egui_ctx.clone());
     }
 
     pub fn poll_opens(&mut self) {
@@ -858,11 +931,14 @@ mod tests {
     use henad_core::params::ParamValue;
 
     use henad_compute::entry::ModelSet;
+    use henad_compute::fault::{BUILDING, Fault, STEPPING};
     use henad_core::metadata::Backend;
+    use henad_explore::output::details::{ChoiceForm, params_by_id_json};
 
     use super::{AppState, OpenAt, OpenedRun};
     use crate::options::AppOpening;
     use crate::ui::dock::Tab;
+    use crate::ui::export::metadata::run_details;
 
     /// Returns an app over the example models whose adapter, as the app sees it, cannot run compute shaders, or `None`
     /// to skip on a machine without a device.
@@ -974,10 +1050,112 @@ mod tests {
         assert_eq!(app.loaded_seed, Some(7));
     }
 
+    /// The regression. Picking the loaded model again reset the panel to the defaults, and the run details then
+    /// recorded values the model was not built with.
+    #[test]
+    fn picking_the_loaded_model_again_restores_what_it_runs_with() {
+        let Some(mut app) = app_without_compute() else {
+            return;
+        };
+        let sir = app.models.get("sir").expect("the example models include sir").clone();
+        let setup = sir
+            .setup()
+            .set("infection_rate", 0.4_f32)
+            .and_then(|setup| setup.act_at("seed_outbreak", 20))
+            .expect("a valid setup")
+            .with_seed(9);
+        assert_eq!(app.open_setup(&setup, OpenAt::Start), Ok(()));
+        let details = |app: &AppState| -> serde_json::Value {
+            serde_json::from_str(&run_details(app)).expect("the run details are JSON")
+        };
+        let recorded = params_by_id_json(sir.param_descriptors(), setup.values(), ChoiceForm::Name);
+
+        app.select_model("boids");
+        assert_eq!(
+            details(&app)["params"],
+            recorded,
+            "another model's values under sir's ids"
+        );
+        app.select_model("sir");
+        assert_eq!(app.param_values, setup.values());
+        assert_eq!(app.pending_reload, vec![false; setup.values().len()]);
+        assert_eq!((app.seed, app.seed_text.as_str()), (Some(9), "9"));
+        assert_eq!(app.schedule, *setup.schedule());
+        assert!(!app.seed_pending() && !app.schedule_pending());
+        assert_eq!(details(&app)["params"], recorded);
+        assert_eq!(details(&app)["params_match_running_model"], true);
+
+        let (index, live) = sir
+            .param_descriptors()
+            .iter()
+            .enumerate()
+            .find(|(_, descriptor)| descriptor.is_live())
+            .expect("sir has a live parameter");
+        let edited = match live.kind.default_value() {
+            ParamValue::F32(_) => ParamValue::F32(0.25),
+            other => other,
+        };
+        app.param_values[index] = edited.clone();
+        assert!(app.send_live_param(index, edited.clone()));
+        app.select_model("boids");
+        assert!(
+            !app.send_live_param(index, edited.clone()),
+            "an edit of a model not selected"
+        );
+        app.select_model("sir");
+        assert_eq!(
+            app.param_values[index], edited,
+            "the live edit came back with the model"
+        );
+        assert_eq!(app.loaded_values[index], edited);
+    }
+
+    /// The regression. The modal named the selected model, which can be another model than the one that faulted.
+    #[test]
+    fn a_fault_names_the_model_it_stopped() {
+        let Some(mut app) = app_without_compute() else {
+            return;
+        };
+        let name = |app: &AppState, id: &str| app.models.get(id).map(|entry| entry.name().to_owned());
+        app.reset_simulation();
+        assert_eq!(app.loaded_model.as_deref(), Some("sir"));
+        app.select_model("boids");
+        app.report_fault(Fault::refused(STEPPING, "a test fault"));
+        assert_eq!(
+            app.fault.as_ref().and_then(|shown| shown.model.clone()),
+            name(&app, "sir")
+        );
+        assert_eq!(app.loaded_model, None, "the faulted model is offloaded");
+
+        app.report_fault(Fault::refused(BUILDING, "a test fault"));
+        assert_eq!(
+            app.fault.as_ref().and_then(|shown| shown.model.clone()),
+            name(&app, "boids"),
+            "a build fault is the selected model's"
+        );
+    }
+
+    #[test]
+    fn a_run_with_another_parameter_count_names_its_model() {
+        let Some(mut app) = app_without_compute() else {
+            return;
+        };
+        let declared = app
+            .models
+            .get("sir")
+            .expect("the example models include sir")
+            .param_descriptors()
+            .len();
+        assert_eq!(
+            app.open_run(replay_of("sir"), OpenAt::Start),
+            Err(format!("This run sets 0 parameters, but model 'sir' has {declared}"))
+        );
+    }
+
     #[test]
     fn a_gpu_only_set_without_compute_opens_with_nothing_selected() {
         let mut models = ModelSet::new(henad_core::build_info!());
-        for entry in henad_models::example_models().iter() {
+        for entry in &henad_models::example_models() {
             if entry.metadata().backend == Backend::Gpu {
                 models.insert(entry.clone()).expect("example ids are unique");
             }

@@ -43,7 +43,8 @@ pub(super) fn baseline_build(entry: &ModelEntry, settings: &CheckSettings, ctx: 
 /// A model that replays exactly first runs `MAX_STEPS_PER_SUBMISSION` submissions of one step and reads their stats,
 /// then one submission of them all, and compares the two. The single steps run first. A device the full submission
 /// poisons reads zeros from then on, and would read them in both runs. A model that does not replay exactly checks
-/// that the readback landed and that some stat is not zero. Either way a device lost on the way fails the check.
+/// that the readback landed and, when it declares stats, that some stat is not zero. Either way a device lost on the
+/// way fails the check.
 pub(super) fn full_submission(entry: &ModelEntry, settings: &CheckSettings, ctx: &GpuContext) -> Result<(), String> {
     let values = settings.default_values(entry)?;
     let sliced_stats = if entry.metadata().replays_exactly {
@@ -55,7 +56,7 @@ pub(super) fn full_submission(entry: &ModelEntry, settings: &CheckSettings, ctx:
         if let Some(last) = last {
             stepping::await_submission(ctx, last).map_err(|fault| fault_text(&fault))?;
         }
-        Some(stepping::sample_stats(&mut *sliced, ctx))
+        Some(stepping::sample_stats(&mut *sliced, ctx).map_err(|fault| fault_text(&fault))?)
     } else {
         None
     };
@@ -86,7 +87,7 @@ pub(super) fn full_submission(entry: &ModelEntry, settings: &CheckSettings, ctx:
     let stats = whole.stats();
 
     let Some(sliced_stats) = sliced_stats else {
-        if stats.iter().all(|stat| stat.value.scalar() == 0.0) {
+        if !stats.is_empty() && stats.iter().all(|stat| stat.value.scalar() == 0.0) {
             return Err(format!(
                 "Every stat read back zero after a submission of {MAX_STEPS_PER_SUBMISSION} steps, as a dropped \
                  submission reads."

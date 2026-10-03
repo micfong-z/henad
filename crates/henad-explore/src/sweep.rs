@@ -164,16 +164,18 @@ pub struct SweepOptions {
     pub memory_budget: Option<u64>,
     /// Cap on the bytes of device memory the live GPU runs hold together, `None` for the device's largest buffer. A
     /// run larger than the cap runs alone.
-    pub gpu_memory: Option<u64>,
+    pub gpu_memory_budget: Option<u64>,
     /// Switch that pauses or aborts the sweep from another thread.
     pub control: SweepControl,
     /// Share of the plan's runs the sweep runs.
     pub shard: Shard,
     /// Whether to add to a directory that holds runs of the same plan, running only the runs it lacks.
     ///
-    /// A directory that holds no results starts afresh.
+    /// A directory that holds no results starts afresh, and so does a sweep held in memory.
     pub resume: bool,
     /// Whether a resume runs again the runs that ended on a fault. A run that timed out always runs again.
+    ///
+    /// Note that a sweep held in memory resumes nothing, so no run runs again.
     pub retry_failed: bool,
     /// Table each run in progress is listed in, `None` when nothing watches the runs.
     pub(crate) active_runs: Option<ActiveRuns>,
@@ -189,7 +191,7 @@ impl SweepOptions {
         Self {
             concurrency: Concurrency::Auto,
             memory_budget: None,
-            gpu_memory: None,
+            gpu_memory_budget: None,
             control: SweepControl::new(),
             shard: Shard::WHOLE,
             resume: false,
@@ -207,7 +209,7 @@ impl SweepOptions {
     pub fn apply_execution(&mut self, execution: &ExecutionTable) {
         self.concurrency = execution.concurrent;
         self.memory_budget = execution.memory;
-        self.gpu_memory = execution.gpu_memory;
+        self.gpu_memory_budget = execution.gpu_memory;
     }
 }
 
@@ -251,9 +253,11 @@ pub enum SweepWarning {
     Plan(PlanWarning),
     /// A directory whose sessions so far ran the build `recorded` for `role`, and a build `current` that differs.
     ///
-    /// A resume and a search resume compare the build that runs, `current`, against every build the sessions
-    /// record. A merge compares its shards' builds with one another. It names the lowest shard's build `recorded` and
-    /// another shard's `current`, and sets `between_shards`.
+    /// A resume and a search resume compare the build that runs, `current`, against every build the sessions that
+    /// wrote runs record. A merge compares the builds of the lowest shard that records any with those of the other
+    /// shards. It names a build of that shard `recorded` and a build of another shard that matches none of them
+    /// `current`, and sets `between_shards`. Two builds that [read as one](RecordedBuild::reads_as) are warned about
+    /// once, as builds that cannot be told apart.
     BuildChanged {
         role: BuildRole,
         recorded: Box<RecordedBuild>,
@@ -276,19 +280,29 @@ impl fmt::Display for SweepWarning {
                 between_shards,
             } => {
                 let (recorded_text, current_text) = (recorded.describe(), current.describe());
-                if *between_shards {
+                let role_name = role.as_str();
+                if recorded.reads_as(current) {
+                    let subject = if *between_shards {
+                        format!("the shards ran the same {role_name} build")
+                    } else {
+                        format!("the directory's runs so far came from this {role_name} build")
+                    };
                     write!(
                         f,
-                        "the shards ran different {} builds: {recorded_text} in the lowest shard, and \
-                         {current_text} in another",
-                        role.as_str()
+                        "cannot tell whether {subject}, {current_text}. Neither build records a commit or a source \
+                         hash"
+                    )?;
+                } else if *between_shards {
+                    write!(
+                        f,
+                        "the shards ran different {role_name} builds: {recorded_text} in one, and {current_text} in \
+                         another"
                     )?;
                 } else {
                     write!(
                         f,
-                        "the directory's runs so far came from the {} build {recorded_text}, and this build is \
-                         {current_text}",
-                        role.as_str()
+                        "the directory's runs so far came from the {role_name} build {recorded_text}, and this build \
+                         is {current_text}"
                     )?;
                 }
                 if recorded_text == current_text
@@ -296,12 +310,10 @@ impl fmt::Display for SweepWarning {
                 {
                     write!(f, ". They differ in {difference}")?;
                 }
-                if *role == BuildRole::Model && !(recorded.is_identified() && current.is_identified()) {
-                    write!(
-                        f,
-                        ". The model's build records no commit or source hash. Call `henad_build::stamp_commit()` \
-                         in the build script of the crate that registers it"
-                    )?;
+                if *role == BuildRole::Model
+                    && let Some(advice) = unidentified_model_advice(recorded, current)
+                {
+                    write!(f, ". {advice}")?;
                 }
                 Ok(())
             }
@@ -362,7 +374,10 @@ pub struct SweepRecord {
 }
 
 /// A sweep that cannot run to its end.
+///
+/// The variants differ between targets, and a match outside this crate ends in a wildcard arm.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ExploreError {
     /// A spec the model refuses, for the reason inside.
     Plan(PlanError),
@@ -475,21 +490,29 @@ impl From<SearchPlanError> for ExploreError {
 /// replaces the manifest with its final status. Runs reach the output in plan order whatever order they finish in,
 /// and a search's in the order it asks for them.
 ///
-/// `gpu` is the device a GPU model steps on. A GPU model handed no device gets one acquired for its
-/// [`ModelEntry::gpu_needs`], and the manifest records the adapter of the device the sweep steps on. A bare
-/// [`SweepSpec`] carries no execution settings. [`LoadedSpec`](crate::spec_file::LoadedSpec) keeps a spec file's
-/// `[execution]` table for [`SweepOptions::apply_execution`].
+/// `gpu` is the device a GPU model steps on, which the host shares with the sweep, its
+/// [`FaultSink`](henad_compute::fault::FaultSink) included. Note that the sink holds one fault, and whichever side
+/// reads it first takes it. A fault the sweep takes ends every live run, whichever side raised it, and one the host
+/// takes first leaves the runs going. A host that renders on its device passes `None`. A GPU model handed no device
+/// gets one of its own, acquired for its [`ModelEntry::gpu_needs`] once the spec is planned.
+///
+/// The manifest records the adapter of the device the sweep steps on when its context carries
+/// [`RuntimeInfo`](henad_compute::runtime_info::RuntimeInfo). A context acquired here does, and a host's own context
+/// does once built with [`GpuContext::with_runtime_info`]. A bare [`SweepSpec`] carries no execution settings.
+/// [`LoadedSpec`](crate::spec_file::LoadedSpec) keeps a spec file's `[execution]` table for
+/// [`SweepOptions::apply_execution`].
 ///
 /// With `options.resume`, a directory holding runs of the same plan keeps the runs its [`ResumeScan`] keeps, and the
-/// sweep runs the rest. Both tables then list every run in order of its id, as a sweep run in one go would. A run
-/// that faults is recorded with its status, and the sweep carries on. A sweep that fails once its manifest is written
-/// marks the manifest `failed` when it can.
+/// sweep runs the rest. Both tables then list every run in order of its id, as a sweep run in one go would. A sweep
+/// held in memory starts afresh whatever `options.resume` and `options.retry_failed` say. A run that faults is
+/// recorded with its status, and the sweep carries on. A sweep that fails once its manifest is written marks the
+/// manifest `failed` when it can.
 ///
 /// # Errors
 ///
-/// Returns [`ExploreError`] when no device can be acquired, the spec cannot be planned, a config does not fit the
-/// device, the probe build fails, the output directory holds results and is not resumed, the directory cannot be
-/// resumed, the results cannot be written, or a batch cannot run.
+/// Returns [`ExploreError`] when the spec cannot be planned, no device can be acquired, a config does not fit the
+/// device, the probe build fails, the output directory holds results and is not resumed, another sweep, search or
+/// merge is writing to it, the directory cannot be resumed, the results cannot be written, or a batch cannot run.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_spec(
     model: &ModelEntry,
@@ -501,7 +524,7 @@ pub fn run_spec(
 ) -> Result<SweepRecord, ExploreError> {
     use crate::search_run::{run_search_in_memory, run_search_into_directory};
 
-    let device = sweep_device(model, gpu)?;
+    let (planned, device) = plan_then_acquire(model, gpu, spec, crate::device::acquire_headless)?;
     let gpu = device.as_deref();
     let runtime = ManifestRuntime::new(gpu.and_then(GpuContext::runtime_info));
     let dir = match output {
@@ -520,23 +543,45 @@ pub fn run_spec(
         folder,
         dry_run: false,
     };
-    match (folder, spec.search.is_some()) {
-        (None, false) => run_in_memory(&inputs, None, progress),
-        (Some(dir), false) => run_into_directory(&inputs, None, dir, progress),
-        (None, true) => run_search_in_memory(&inputs, None, progress),
-        (Some(dir), true) => run_search_into_directory(&inputs, None, dir, progress),
+    match (folder, planned) {
+        (None, SpecPlan::Sweep(plan)) => run_in_memory(&inputs, Some(plan), progress),
+        (Some(dir), SpecPlan::Sweep(plan)) => run_into_directory(&inputs, Some(plan), dir, progress),
+        (None, SpecPlan::Search(plan)) => run_search_in_memory(&inputs, Some(plan), progress),
+        (Some(dir), SpecPlan::Search(plan)) => run_search_into_directory(&inputs, Some(plan), dir, progress),
+    }
+}
+
+/// Plan of a spec, a sweep's or a search's.
+#[cfg(not(target_arch = "wasm32"))]
+enum SpecPlan {
+    Sweep(Arc<Plan>),
+    Search(Arc<crate::search_run::SearchPlan>),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SpecPlan {
+    /// Plans `spec` against `entry`, as a search when it has a `[search]` table.
+    fn new(entry: &ModelEntry, spec: &SweepSpec) -> Result<Self, ExploreError> {
+        let schema = entry.schema();
+        Ok(if spec.search.is_some() {
+            Self::Search(Arc::new(crate::search_run::SearchPlan::new(spec, &schema)?))
+        } else {
+            Self::Sweep(Arc::new(spec.plan(&schema)?))
+        })
     }
 }
 
 /// Plans `spec` and probes its configs as `--dry-run` does, writing nothing. Native only.
 ///
-/// A GPU model handed no device gets one acquired for its [`ModelEntry::gpu_needs`], since a probe builds the model.
-/// With `folder` and without `options.resume`, refuses a folder that holds results, as `--out` does. With both, reads
-/// the folder as a resume would, counts the runs it would skip and run, and compares the recorded builds.
+/// `gpu` is a device the host shares with the probe builds, its [`FaultSink`](henad_compute::fault::FaultSink)
+/// included, as [`run_spec`] describes. A GPU model handed no device gets one acquired for its
+/// [`ModelEntry::gpu_needs`] once the spec is planned, since a probe builds the model. With `folder` and without
+/// `options.resume`, refuses a folder that holds results, as `--out` does. With both, reads the folder as a resume
+/// would, counts the runs it would skip and run, and compares the recorded builds.
 ///
 /// # Errors
 ///
-/// Returns [`ExploreError`] when no device can be acquired, the spec cannot be planned, a config does not fit the
+/// Returns [`ExploreError`] when the spec cannot be planned, no device can be acquired, a config does not fit the
 /// device, the probe build fails, `folder` holds results and is not resumed, or `folder` cannot be resumed.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn plan_spec(
@@ -549,7 +594,7 @@ pub fn plan_spec(
 ) -> Result<SweepReport, ExploreError> {
     use crate::search_run::SearchPreparation;
 
-    let device = sweep_device(model, gpu)?;
+    let (planned, device) = plan_then_acquire(model, gpu, spec, crate::device::acquire_headless)?;
     let gpu = device.as_deref();
     let runtime = ManifestRuntime::new(gpu.and_then(GpuContext::runtime_info));
     let inputs = SweepInputs {
@@ -563,17 +608,42 @@ pub fn plan_spec(
         folder,
         dry_run: true,
     };
-    let report = if spec.search.is_some() {
-        let preparation = SearchPreparation::new(&inputs, None, None)?;
-        preparation.announce(&inputs, progress);
-        preparation.report(SweepEnd::Planned, ResultCounts::default(), None)
-    } else {
-        let preparation = SweepPreparation::new(&inputs, None, None)?;
-        preparation.announce(&inputs, progress);
-        preparation.report(SweepEnd::Planned, ResultCounts::default(), None)
+    let report = match planned {
+        SpecPlan::Search(plan) => {
+            let preparation = SearchPreparation::new(&inputs, Some(plan), None)?;
+            preparation.announce(&inputs, progress);
+            preparation.report(SweepEnd::Planned, ResultCounts::default(), None)
+        }
+        SpecPlan::Sweep(plan) => {
+            let preparation = SweepPreparation::new(&inputs, Some(plan), None)?;
+            preparation.announce(&inputs, progress);
+            preparation.report(SweepEnd::Planned, ResultCounts::default(), None)
+        }
     };
     progress.report(&ProgressEvent::Ended(&report));
     Ok(report)
+}
+
+/// Plans `spec` against `model`, then returns the plan and the device a sweep of it steps on, acquired through
+/// `acquire` for a GPU model handed none.
+///
+/// A spec the model refuses reports its own error before any device is acquired, on a machine without an adapter
+/// as well.
+///
+/// # Errors
+///
+/// Returns [`ExploreError`] when the spec cannot be planned, and [`ExploreError::Device`] when a GPU model needs a
+/// device and `acquire` fails.
+#[cfg(not(target_arch = "wasm32"))]
+fn plan_then_acquire<'a>(
+    model: &ModelEntry,
+    gpu: Option<&'a GpuContext>,
+    spec: &SweepSpec,
+    acquire: impl FnOnce(henad_compute::gpu::GpuNeeds) -> Result<GpuContext, crate::device::DeviceError>,
+) -> Result<(SpecPlan, Option<Cow<'a, GpuContext>>), ExploreError> {
+    let planned = SpecPlan::new(model, spec)?;
+    let device = device_or_acquired(model, gpu, acquire)?;
+    Ok((planned, device))
 }
 
 /// Returns the device a sweep of `entry` steps on: `gpu` for a GPU model, or a device acquired for its needs when it
@@ -590,11 +660,26 @@ pub(crate) fn sweep_device<'a>(
     entry: &ModelEntry,
     gpu: Option<&'a GpuContext>,
 ) -> Result<Option<Cow<'a, GpuContext>>, ExploreError> {
+    device_or_acquired(entry, gpu, crate::device::acquire_headless)
+}
+
+/// Returns the device a sweep of `entry` steps on, as [`sweep_device`] does with `acquire` in place of
+/// [`acquire_headless`](crate::device::acquire_headless).
+///
+/// # Errors
+///
+/// Returns [`ExploreError::Device`] when a GPU model needs a device and `acquire` fails.
+#[cfg(not(target_arch = "wasm32"))]
+fn device_or_acquired<'a>(
+    entry: &ModelEntry,
+    gpu: Option<&'a GpuContext>,
+    acquire: impl FnOnce(henad_compute::gpu::GpuNeeds) -> Result<GpuContext, crate::device::DeviceError>,
+) -> Result<Option<Cow<'a, GpuContext>>, ExploreError> {
     match (entry.gpu_needs(), gpu) {
         (None, _) => Ok(None),
         (Some(_), Some(ctx)) => Ok(Some(Cow::Borrowed(ctx))),
         (Some(needs), None) => {
-            let ctx = crate::device::acquire_headless(needs).map_err(ExploreError::Device)?;
+            let ctx = acquire(needs).map_err(ExploreError::Device)?;
             Ok(Some(Cow::Owned(ctx)))
         }
     }
@@ -683,6 +768,13 @@ pub(crate) struct SweepPreparation {
     pending: Vec<PlannedRun>,
     /// Directory the sweep resumes, `None` for a sweep that starts afresh.
     resumed: Option<ResumeScan>,
+    /// Directory a resume holds locked from before its scan until its last write, `None` for a dry run or a sweep
+    /// that starts afresh.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "a sweep in a browser writes no directory")
+    )]
+    locked: Option<OutputDir>,
     outline: SweepOutline,
     /// Clock reading when planning started.
     started: Instant,
@@ -714,9 +806,16 @@ impl SweepPreparation {
         let resume_dir = inputs
             .folder
             .filter(|output_dir| options.resume && OutputDir::holds_results(output_dir));
-        if let (None, Some(output_dir)) = (resume_dir, inputs.folder) {
-            OutputDir::check_free(output_dir)?;
-        }
+        let locked = match (resume_dir, inputs.folder) {
+            (None, Some(output_dir)) => {
+                OutputDir::check_free(output_dir)?;
+                None
+            }
+            // Locked before the scan and held until the last write. Otherwise another writer could change the
+            // tables between the two.
+            (Some(output_dir), _) if !inputs.dry_run => Some(OutputDir::open(output_dir)?),
+            _ => None,
+        };
         if let Some(ctx) = gpu {
             check_capacity(entry, &plan, &ctx.device.limits())?;
         }
@@ -782,6 +881,7 @@ impl SweepPreparation {
             measure: Arc::new(measure),
             pending,
             resumed,
+            locked,
             outline,
             started,
             started_unix_ms,
@@ -831,14 +931,16 @@ impl SweepPreparation {
         output_dir: &Path,
         progress: &mut dyn Progress,
     ) -> Result<SweepRecord, ExploreError> {
-        let dir = if self.resumed.is_some() {
-            OutputDir::open(output_dir)?
+        let created;
+        let dir = if let Some(dir) = &self.locked {
+            dir
         } else {
-            OutputDir::create(output_dir)?
+            created = OutputDir::create(output_dir)?;
+            &created
         };
         let mut manifest = self.manifest(inputs)?;
         dir.write_manifest(&manifest)?;
-        let (end, counts) = match self.run_into(&dir, inputs, progress) {
+        let (end, counts) = match self.run_into(dir, inputs, progress) {
             Ok(finished) => finished,
             Err(error) => {
                 manifest.fail(now_unix_ms());
@@ -912,7 +1014,7 @@ impl SweepPreparation {
         )?
         .with_timeout(self.plan.run_settings().timeout)
         .with_active_runs(options.active_runs.clone())
-        .with_gpu_memory(options.gpu_memory);
+        .with_gpu_memory_budget(options.gpu_memory_budget);
         let requests: Vec<RunRequest<'_>> = self
             .pending
             .iter()
@@ -1009,7 +1111,7 @@ pub(crate) fn sized_layout(
     };
     let resources = ExecutionBudget {
         memory_budget: options.memory_budget,
-        gpu_memory_budget: gpu.map(|ctx| gpu_memory_budget(options.gpu_memory, ctx)),
+        gpu_memory_budget: gpu.map(|ctx| gpu_memory_budget(options.gpu_memory_budget, ctx)),
         ..detected
     };
     let lane_probe = rebuilt.as_ref().unwrap_or(sizing_probe);
@@ -1018,8 +1120,24 @@ pub(crate) fn sized_layout(
     Ok((layout, layout.projected_bytes(run_probe)))
 }
 
-/// Returns a [`SweepWarning::BuildChanged`] for each build `recorded`'s sessions hold that differs from the engine
-/// build of `provenance`, or from the build that registered `entry`.
+/// Returns the advice for a model build that records neither a commit nor a source hash, the build that runs first,
+/// or `None` when `recorded` and `current` both record one.
+///
+/// An entry that never went through a [`ModelSet`](henad_compute::entry::ModelSet) records no build at all, and a
+/// build script alone cannot give it one.
+fn unidentified_model_advice(recorded: &RecordedBuild, current: &RecordedBuild) -> Option<&'static str> {
+    let unidentified = [current, recorded].into_iter().find(|build| !build.is_identified())?;
+    Some(if unidentified.package.is_empty() {
+        "The model's entry records no build. Insert it into a `ModelSet` built with `henad::build_info!()` in a crate \
+         whose build script calls `henad_build::stamp_commit()`"
+    } else {
+        "The model's build records no commit or source hash. Call `henad_build::stamp_commit()` in the build script \
+         of the crate that registers it"
+    })
+}
+
+/// Returns a [`SweepWarning::BuildChanged`] for each build [`Manifest::recorded_builds`] lists for `recorded` that
+/// differs from the engine build of `provenance`, or from the build that registered `entry`.
 pub(crate) fn build_warnings(recorded: &Manifest, provenance: &Provenance, entry: &ModelEntry) -> Vec<SweepWarning> {
     let model = RecordedBuild::from(entry.source());
     [(BuildRole::Engine, provenance.engine()), (BuildRole::Model, &model)]
@@ -1067,7 +1185,7 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
     spec_file.execution = ExecutionTable {
         concurrent: options.concurrency,
         memory: options.memory_budget,
-        gpu_memory: options.gpu_memory,
+        gpu_memory: options.gpu_memory_budget,
     };
     let outline = parts.outline;
     let layout = outline.layout;
@@ -1135,7 +1253,7 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
             gpu_tracks: layout.gpu_tracks,
             projected_bytes: outline.projected_bytes,
             memory_budget: options.memory_budget,
-            gpu_memory_budget: options.gpu_memory,
+            gpu_memory_budget: options.gpu_memory_budget,
         },
         runtime: inputs.runtime.clone(),
         timestamps: ManifestTimestamps::started_at(started_unix_ms),
@@ -1197,14 +1315,18 @@ mod tests {
 
     use std::path::Path;
 
-    use henad_compute::entry::ModelEntry;
+    use henad_compute::entry::{ModelEntry, register_grid_model};
+    use henad_core::provenance::BuildInfo;
+    use henad_models::game_of_life::GameOfLifeModel;
 
     use super::{
-        ExploreError, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, SweepWarning, plan_spec, run_spec,
+        ExploreError, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, SweepWarning, plan_spec,
+        plan_then_acquire, run_spec,
     };
+    use crate::device::DeviceError;
     use crate::exec::Concurrency;
     use crate::handle::SweepOutput;
-    use crate::output::manifest::{Manifest, ManifestStatus};
+    use crate::output::manifest::{BuildRole, Manifest, ManifestStatus, RecordedBuild};
     use crate::output::{MANIFEST_FILE, OutputError, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
     use crate::probe::ProbeReport;
     use crate::progress::{NoProgress, Progress, ProgressEvent};
@@ -1481,6 +1603,89 @@ mod tests {
             let table = std::fs::read_to_string(scratch.path().join(file)).expect("the table is written");
             assert_eq!(table.lines().count(), 1, "{file} holds its header alone");
         }
+    }
+
+    /// Returns the model build warning for `recorded` against `current`.
+    fn model_warning(recorded: &RecordedBuild, current: &RecordedBuild, between_shards: bool) -> String {
+        SweepWarning::BuildChanged {
+            role: BuildRole::Model,
+            recorded: Box::new(recorded.clone()),
+            current: Box::new(current.clone()),
+            between_shards,
+        }
+        .to_string()
+    }
+
+    #[test]
+    fn a_warning_between_unidentified_builds_says_they_cannot_be_told_apart() {
+        let bare = RecordedBuild::from(register_grid_model::<GameOfLifeModel>().source());
+        let text = model_warning(&bare, &bare, false);
+        assert!(
+            text.starts_with("cannot tell whether the directory's runs so far came from this model build"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with(
+                "Insert it into a `ModelSet` built with `henad::build_info!()` in a crate whose build script calls \
+                 `henad_build::stamp_commit()`"
+            ),
+            "an entry from no set records no build: {text}"
+        );
+        let text = model_warning(&bare, &bare, true);
+        assert!(
+            text.starts_with("cannot tell whether the shards ran the same model build"),
+            "{text}"
+        );
+
+        let unstamped = RecordedBuild::from(&BuildInfo::__from_env(
+            "my-model",
+            "0.1.0",
+            Some(""),
+            None,
+            Some(""),
+            None,
+            false,
+        ));
+        let stamped = RecordedBuild::from(entry("game_of_life", None).source());
+        let text = model_warning(&stamped, &unstamped, false);
+        assert!(
+            text.starts_with("the directory's runs so far came from the model build"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Call `henad_build::stamp_commit()` in the build script of the crate that registers it"),
+            "a build script can stamp a set's build: {text}"
+        );
+    }
+
+    /// Checks that a GPU spec the model refuses fails as a plan, before any device is acquired.
+    #[test]
+    fn a_gpu_spec_is_planned_before_its_device_is_acquired() {
+        let gpu_sir = henad_models::example_models()
+            .get("gpu_sir")
+            .cloned()
+            .expect("the model is registered");
+        let mut spec = SweepSpec::new("gpu_sir");
+        spec.fixed = vec![("infection_rate".to_owned(), "2".to_owned())];
+        let mut acquisitions = 0;
+        let mut refuse = |_| {
+            acquisitions += 1;
+            Err(DeviceError::BelowBaseline {
+                adapter: "test".to_owned(),
+                limit: "max_buffer_size",
+            })
+        };
+        let refused = plan_then_acquire(&gpu_sir, None, &spec, &mut refuse).err();
+        assert!(matches!(refused, Some(ExploreError::Plan(_))), "{refused:?}");
+        let planned = plan_spec(&gpu_sir, None, &spec, None, &options(), &mut NoProgress);
+        assert!(matches!(planned, Err(ExploreError::Plan(_))), "{planned:?}");
+        let ran = run_spec(&gpu_sir, None, &spec, SweepOutput::Memory, &options(), &mut NoProgress);
+        assert!(matches!(ran, Err(ExploreError::Plan(_))), "{ran:?}");
+
+        spec.fixed.clear();
+        let unacquired = plan_then_acquire(&gpu_sir, None, &spec, &mut refuse).err();
+        assert!(matches!(unacquired, Some(ExploreError::Device(_))), "{unacquired:?}");
+        assert_eq!(acquisitions, 1, "only the spec the model accepts asks for a device");
     }
 
     #[test]

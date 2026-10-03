@@ -13,6 +13,7 @@ use henad_core::view::{StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
 use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
+use crate::gpu::contracts::{assert_buffer_labels, assert_workgroup_size};
 use crate::gpu::primitives::pipeline::{compute_pipeline, uniform_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::gpu::sim_thread::GpuSimState;
@@ -148,7 +149,8 @@ impl<M: GpuGridModel> GpuGridState<M> {
     /// # Panics
     ///
     /// If the device cannot hold the model. The backstop, not the diagnostic, since a UI
-    /// asks [`Self::demand`] first.
+    /// asks [`Self::demand`] first. Also if a shader declares another workgroup size than
+    /// [`GpuGridModel::WORKGROUP_SIZE`], or a buffer label is reserved or ends in `_in` or `_out`.
     #[expect(clippy::too_many_lines)]
     pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;
@@ -164,6 +166,19 @@ impl<M: GpuGridModel> GpuGridState<M> {
             M::ID,
             shortfalls.join("; ")
         );
+        assert_buffer_labels(M::ID, M::BUFFERS.iter().copied());
+        // Every pass dispatches square workgroups of `WORKGROUP_SIZE`.
+        let square = [M::WORKGROUP_SIZE, M::WORKGROUP_SIZE, 1];
+        for (pass, shader) in [
+            ("step", M::STEP_SHADER),
+            ("display", M::DISPLAY_SHADER),
+            ("reduce", M::REDUCE_SHADER),
+        ]
+        .into_iter()
+        .chain(M::ACTIONS.iter().map(|action| (action.desc.id, action.shader)))
+        {
+            assert_workgroup_size(M::ID, pass, shader, square);
+        }
 
         // --- Ping-ponged storage buffers, seeded from the model ---
         // Buffer lengths come from the model, not from the cell count: a bit-packed model holds

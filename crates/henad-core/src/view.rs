@@ -1,5 +1,4 @@
 /// A 2D grid for rendering, each cell a `u8` index into the palette.
-#[derive(Debug)]
 pub struct GridView<'a> {
     pub width: u32,
     pub height: u32,
@@ -7,11 +6,21 @@ pub struct GridView<'a> {
     pub palette: &'static [[u8; 4]],
 }
 
+/// Prints the grid's size, not its cells.
+impl std::fmt::Debug for GridView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GridView")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("palette_len", &self.palette.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// An agent population for rendering.
 ///
 /// Both layers are stretched to the same rect, so a composite model wants
 /// `world_w = width as f32`. Nothing checks this across the crate boundary.
-#[derive(Debug)]
 pub struct PointView<'a> {
     pub pos_x: &'a [f32],
     pub pos_y: &'a [f32],
@@ -22,8 +31,20 @@ pub struct PointView<'a> {
     pub palette: &'static [[u8; 4]],
 }
 
+/// Prints the point count and the world, not the positions.
+impl std::fmt::Debug for PointView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PointView")
+            .field("len", &self.pos_x.len())
+            .field("world_w", &self.world_w)
+            .field("world_h", &self.world_h)
+            .field("colored", &self.color.is_some())
+            .field("palette_len", &self.palette.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Edges for rendering. Endpoints are indices into the point view's positions.
-#[derive(Debug)]
 pub struct EdgeView<'a> {
     pub src: &'a [u32],
     pub dst: &'a [u32],
@@ -34,6 +55,19 @@ pub struct EdgeView<'a> {
     pub directed: bool,
     /// Used to detect when the edges, their colours or their direction have changed.
     pub version: u64,
+}
+
+/// Prints the edge count and the version, not the edges.
+impl std::fmt::Debug for EdgeView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EdgeView")
+            .field("len", &self.src.len())
+            .field("colored", &self.color.is_some())
+            .field("palette_len", &self.palette.len())
+            .field("directed", &self.directed)
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -94,7 +128,6 @@ pub fn stat_entries(descriptors: &'static [StatDescriptor], values: Vec<StatValu
 /// The charts read one `f64` per series per frame, so that is what a sample costs. A series a
 /// scalar cannot round-trip keeps its full value alongside, which is what lets an export carry the
 /// same columns the headless runner writes.
-#[derive(Debug)]
 pub struct StatsHistory {
     /// One column per stat series, each holding `capacity` entries.
     columns: Vec<Vec<f64>>,
@@ -107,6 +140,19 @@ pub struct StatsHistory {
     write_count: usize,
     /// `None` retains every sample, so a whole run can be exported.
     capacity: Option<usize>,
+}
+
+/// Prints the series labels and the sample counts, not the samples.
+impl std::fmt::Debug for StatsHistory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let labels: Vec<&str> = self.descriptors.iter().map(|descriptor| descriptor.label).collect();
+        f.debug_struct("StatsHistory")
+            .field("labels", &labels)
+            .field("len", &self.len())
+            .field("write_count", &self.write_count)
+            .field("capacity", &self.capacity)
+            .finish_non_exhaustive()
+    }
 }
 
 impl StatsHistory {

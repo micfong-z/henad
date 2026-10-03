@@ -17,7 +17,7 @@ use henad_compute::cpu::grid_engine::{GRID_INIT_SEED, grid_init_rng};
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
-use henad_core::authoring::primitives::rng::{mix_seed, xorshift64};
+use henad_core::authoring::primitives::rng::{mix_seed, pcg_hash, xorshift64};
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -68,13 +68,6 @@ pub fn seed_cells(width: u32, height: u32, initial_infected_pct: f32, mut rng: u
         *cell = u32::from(((rng >> 32) as u32) < threshold);
     }
     cells
-}
-
-/// Matches `pcg_hash` in `step.wgsl` bit-for-bit (u32 arithmetic wraps identically on both sides).
-fn pcg_hash(input: u32) -> u32 {
-    let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
-    let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
-    (word >> 22) ^ word
 }
 
 /// Initial per-cell RNG state, seeded independently of the S/I state via `RNG_INIT_SEED`.

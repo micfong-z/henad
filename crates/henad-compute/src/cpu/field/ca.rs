@@ -26,12 +26,21 @@ pub fn grid_init_rng(seed: Option<u64>) -> u64 {
 }
 
 /// Double-buffered `u8` cells stepped by `M`'s neighbourhood rule.
-#[derive(Debug)]
 pub struct CaField<M: GridModel> {
     grid: Grid2D<u8>,
     /// Advanced once per tick, then fanned out per row by `chunk_seed`.
     seed: u64,
     _marker: PhantomData<M>,
+}
+
+/// Prints the model's name and the grid's size, not its cells.
+impl<M: GridModel> std::fmt::Debug for CaField<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CaField")
+            .field("model", &M::NAME)
+            .field("grid", &self.grid)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<M: GridModel> CaField<M> {
@@ -326,5 +335,16 @@ mod tests {
         // 8192 cells is two rows at this width.
         let wide = CaField::<MooreProbe>::with_seed(Extent { w: 4096.0, h: 100.0 }, &[], None);
         assert_eq!(wide.parallel_jobs(), 50);
+    }
+
+    /// The field implements `Debug` for a model that does not, and prints its size alone. A derive would bound its
+    /// impl on the model and print every cell.
+    #[test]
+    fn the_field_prints_its_size_for_any_model() {
+        let field = CaField::<MooreProbe>::with_seed(Extent { w: 64.0, h: 32.0 }, &[], None);
+        assert_eq!(
+            format!("{field:?}"),
+            "CaField { model: \"order probe\", grid: Grid2D { width: 64, height: 32, .. }, .. }"
+        );
     }
 }

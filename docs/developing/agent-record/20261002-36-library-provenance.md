@@ -1,7 +1,7 @@
 ---
 date: 2026-10-02
 title: "Library M7: provenance"
-description: The seventh milestone of #48. henad-build stamps each crate with its commit, a dirty flag and a hash of its sources, every manifest session records the engine, host and model builds that ran it, and a resume, a merge or a replay warns when the engine's or the model's build changed.
+description: "The seventh milestone of #48. henad-build stamps each crate with its commit, a dirty flag and a hash of its sources, every manifest session records the engine, host and model builds that ran it, and a resume, a merge or a replay warns when the engine's or the model's build changed."
 icon: material/package-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

@@ -1,8 +1,9 @@
 //! The shared WGSL modules a model shader reaches with `#import henad::<module>`, as text.
 //!
-//! Each module is the twin of a Rust primitive: `henad::dispatch` of the engine's linear dispatch, `henad::rng` of
-//! [`super::rng`], and `henad::space` of [`super::space`]. `henad::dims` holds the uniform the grid engine writes for
-//! a display or reduce shader, and `henad::reduce_tree` the workgroup sum a reduce shader repeats.
+//! Three modules pair with Rust: `henad::dispatch` with the engine's linear dispatch, and `henad::rng` and
+//! `henad::space` with most of [`super::rng`] and [`super::space`]. `henad::dims` and `henad::reduce_tree` are shared
+//! modules without a Rust twin. The first holds the uniform the grid engine writes for a display or reduce shader,
+//! and the second the workgroup sum a reduce shader repeats.
 //!
 //! henad-build writes these modules beside a crate's shaders before it composes them. The text here is the one source
 //! every build and every host reads.
@@ -10,11 +11,21 @@
 use crate::explore::fingerprint::Fnv1a64;
 
 /// A WGSL module a model shader can `#import`, as text.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct SharedModule {
     /// Path a shader imports, as in `henad::rng`.
     pub import_path: &'static str,
     pub source: &'static str,
+}
+
+/// Prints the source's length, not the source.
+impl std::fmt::Debug for SharedModule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedModule")
+            .field("import_path", &self.import_path)
+            .field("source_len", &self.source.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// `henad::dispatch`, `henad::dims`, `henad::rng`, `henad::space` and `henad::reduce_tree`.

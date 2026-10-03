@@ -16,9 +16,12 @@ mesa_sha256="63915836cf582bdbf13cf41c75ac335f7ec9c8b4886fe32e76b748ff8c6393c6"
 
 root="${RUNNER_TEMP:-$(mktemp -d)}"
 
-# The Vulkan loader, and `vulkaninfo` for the summary below.
+# The Vulkan loader, `vulkaninfo` for the summary below, and the libraries the driver links against. The hosted image
+# ships them, and a container or self-hosted runner might not. A newer Mesa might link another LLVM, and then needs
+# that libllvm package in place of libllvm18.
 sudo apt-get update
-sudo apt-get install -y --no-install-recommends libvulkan1 vulkan-tools
+sudo apt-get install -y --no-install-recommends libvulkan1 vulkan-tools \
+    libllvm18 libdrm2 libexpat1 libzstd1 zlib1g
 
 curl -L --retry 5 --fail \
     "https://github.com/gfx-rs/ci-build/releases/download/$ci_build_tag/mesa-$mesa_version-linux-x86_64.tar.xz" \

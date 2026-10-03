@@ -94,7 +94,7 @@ pub fn acquire_headless(needs: GpuNeeds) -> Result<GpuContext, DeviceError> {
 /// # Errors
 ///
 /// Returns the name of the first limit of the baseline that `available` falls short of.
-fn device_limits(
+pub(crate) fn device_limits(
     available: &wgpu::Limits,
     raise: impl FnOnce(&wgpu::Limits) -> wgpu::Limits,
 ) -> Result<wgpu::Limits, &'static str> {

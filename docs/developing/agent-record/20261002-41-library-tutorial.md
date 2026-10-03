@@ -1,7 +1,7 @@
 ---
 date: 2026-10-02
 title: "Library M10c: the tutorial crate"
-description: The tenth milestone of #48, third part. The finished code of the five first-model pages moves out of henad-models' tests into examples/tutorial, a workspace member that names every item through the henad facade, carries its own shader copies, and runs the parity tests and the testing kit. The guide and the authoring reference move to facade paths with it.
+description: "The tenth milestone of #48, third part. The finished code of the five first-model pages moves out of henad-models' tests into examples/tutorial, a workspace member that names every item through the henad facade, carries its own shader copies, and runs the parity tests and the testing kit. The guide and the authoring reference move to facade paths with it."
 icon: material/package-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

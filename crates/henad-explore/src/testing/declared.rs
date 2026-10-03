@@ -3,13 +3,11 @@
 use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::simulation::RunSetup;
 use henad_core::action::Schedule;
+use henad_core::explore::spec::ACTION_COLUMN_PREFIX;
 use henad_core::metadata::{Backend, Structure};
 use henad_core::topology::TopologyHint;
 
-use super::declared_defaults;
-
-/// Parameter ids an engine prepends to a model's own.
-const PREPENDED_IDS: [&str; 5] = ["grid_width", "grid_height", "num_agents", "world_width", "world_height"];
+use super::{declared_defaults, error_text};
 
 /// Checks [`super::ModelCheck::ModelId`] by inserting `entry` into an empty set.
 pub(super) fn model_id(entry: &ModelEntry) -> Result<(), String> {
@@ -21,23 +19,52 @@ pub(super) fn model_id(entry: &ModelEntry) -> Result<(), String> {
 
 /// Checks [`super::ModelCheck::ParamIds`].
 pub(super) fn param_ids(entry: &ModelEntry) -> Result<(), String> {
+    let ids = entry.param_descriptors().iter().map(|descriptor| descriptor.id);
+    let unnamed = unnameable(ids, |id| {
+        id.starts_with(ACTION_COLUMN_PREFIX)
+            .then_some("starts with 'action.', the prefix of an action's tick")
+    });
+    let message = [
+        repeated_param_ids(entry),
+        unnamed.map(|reasons| named_ids("parameter", &reasons)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ");
+    if message.is_empty() { Ok(()) } else { Err(message) }
+}
+
+/// Returns the sentences naming the parameter ids `entry` declares more than once, `None` when it repeats none.
+fn repeated_param_ids(entry: &ModelEntry) -> Option<String> {
     let repeated = repeated(entry.param_descriptors().iter().map(|descriptor| descriptor.id));
     if repeated.is_empty() {
-        return Ok(());
+        return None;
     }
-    let prepended: Vec<&str> = repeated
-        .iter()
-        .copied()
-        .filter(|id| PREPENDED_IDS.contains(id))
-        .collect();
-    let mut message = format!("Parameter ids {} are declared more than once.", quoted(&repeated));
-    if !prepended.is_empty() {
-        message.push_str(&format!(
+    let engine_ids = prepended_ids(&entry.metadata().structure);
+    let prepended: Vec<&str> = repeated.iter().copied().filter(|id| engine_ids.contains(id)).collect();
+    let mut message = declared_twice("Parameter id", "Parameter ids", &repeated);
+    match prepended.as_slice() {
+        [] => {}
+        [id] => message.push_str(&format!(
+            " The engine prepends '{id}', and a model does not declare it itself."
+        )),
+        _ => message.push_str(&format!(
             " The engine prepends {}, and a model declares none of them itself.",
             quoted(&prepended)
-        ));
+        )),
     }
-    Err(message)
+    Some(message)
+}
+
+/// Returns the parameter ids the CPU engine of `structure` prepends to a model's own. A GPU model declares every
+/// parameter itself.
+fn prepended_ids(structure: &Structure) -> &'static [&'static str] {
+    match structure {
+        Structure::Grid { .. } => &["grid_width", "grid_height"],
+        Structure::Agents { .. } | Structure::Network { .. } => &["num_agents", "world_width", "world_height"],
+        Structure::GpuGrid { .. } | Structure::GpuAgents { .. } => &[],
+    }
 }
 
 /// Checks [`super::ModelCheck::StatLabels`].
@@ -46,20 +73,56 @@ pub(super) fn stat_labels(entry: &ModelEntry) -> Result<(), String> {
     if repeated.is_empty() {
         return Ok(());
     }
-    Err(format!(
-        "Stat labels {} are declared more than once.",
-        quoted(&repeated)
-    ))
+    Err(declared_twice("Stat label", "Stat labels", &repeated))
 }
 
 /// Checks [`super::ModelCheck::ActionIds`]. An id reaches the command line through `--act`, where two the same are
-/// ambiguous.
+/// ambiguous, and names the action in `--vary action.NAME=LEVELS` and a design table's `action.NAME` column.
 pub(super) fn action_ids(entry: &ModelEntry) -> Result<(), String> {
-    let repeated = repeated(entry.action_descriptors().iter().map(|action| action.id));
-    if repeated.is_empty() {
-        return Ok(());
-    }
-    Err(format!("Action ids {} are declared more than once.", quoted(&repeated)))
+    let ids = || entry.action_descriptors().iter().map(|action| action.id);
+    let repeated = repeated(ids());
+    let repeated = (!repeated.is_empty()).then(|| declared_twice("Action id", "Action ids", &repeated));
+    let unnamed = unnameable(ids(), |_| None).map(|reasons| named_ids("action", &reasons));
+    let message = [repeated, unnamed].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    if message.is_empty() { Ok(()) } else { Err(message) }
+}
+
+/// Returns each id of `ids` that the command line, a spec file or a design table cannot name, with the reason,
+/// `None` when it can name them all.
+///
+/// An id is refused when it is empty or holds whitespace or `=`, and otherwise for the reason `extra` gives.
+fn unnameable<'a>(
+    ids: impl Iterator<Item = &'a str>,
+    extra: impl Fn(&str) -> Option<&'static str>,
+) -> Option<Vec<(&'a str, &'static str)>> {
+    let refused: Vec<(&str, &str)> = ids
+        .filter_map(|id| {
+            let reason = if id.is_empty() {
+                Some("is empty")
+            } else if id.contains(char::is_whitespace) {
+                Some("holds whitespace")
+            } else if id.contains('=') {
+                Some("holds '='")
+            } else {
+                extra(id)
+            };
+            reason.map(|reason| (id, reason))
+        })
+        .collect();
+    (!refused.is_empty()).then_some(refused)
+}
+
+/// Returns the sentences naming each refused `(id, reason)` of a `kind` id, as `unnameable` returns them.
+fn named_ids(kind: &str, refused: &[(&str, &str)]) -> String {
+    let mut message: String = refused
+        .iter()
+        .map(|(id, reason)| format!("The {kind} id '{id}' {reason}. "))
+        .collect();
+    message.push_str(match refused {
+        [_] => "The command line and a design table cannot name it.",
+        _ => "The command line and a design table cannot name them.",
+    });
+    message
 }
 
 /// Checks [`super::ModelCheck::Palette`]. A view colours its cells or agents from the palette by index.
@@ -127,8 +190,12 @@ pub(super) fn default_setup(entry: &ModelEntry) -> Result<(), String> {
     if setup.values() != defaults.as_slice() {
         return Err("The setup at the defaults holds other values than the declared defaults.".to_owned());
     }
-    let checked = RunSetup::from_parts(entry, setup.values(), None, Schedule::default())
-        .map_err(|error| format!("RunSetup::from_parts refuses the declared defaults: {error}."))?;
+    let checked = RunSetup::from_parts(entry, setup.values(), None, Schedule::default()).map_err(|error| {
+        format!(
+            "RunSetup::from_parts refuses the declared defaults: {}.",
+            error_text(&error)
+        )
+    })?;
     if checked.values() != setup.values() {
         return Err("RunSetup::from_parts changed the declared defaults.".to_owned());
     }
@@ -143,7 +210,7 @@ pub(super) fn defaults_fit(entry: &ModelEntry) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "The declared defaults exceed the WebGPU baseline: {}.",
+        "At the declared defaults, the model exceeds the WebGPU baseline: {}.",
         shortfalls.join("; ")
     ))
 }
@@ -162,6 +229,14 @@ fn repeated<'a>(items: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
         }
     }
     repeated
+}
+
+/// Returns the sentence saying that `repeated` are declared more than once, each named by `singular` or `plural`.
+fn declared_twice(singular: &str, plural: &str, repeated: &[&str]) -> String {
+    match repeated {
+        [item] => format!("{singular} '{item}' is declared more than once."),
+        _ => format!("{plural} {} are declared more than once.", quoted(repeated)),
+    }
 }
 
 /// Returns `items` quoted and joined by commas.

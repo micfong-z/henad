@@ -14,8 +14,8 @@ use crate::gpu::primitives::pipeline::compute_pipeline;
 use crate::shader_bindings::henad::space as codes;
 use crate::shader_bindings::tests::parity::{
     Case, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT, OP_NEIGHBOR_COUNT,
-    OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD, OP_WRAP_INDEX, Out,
-    SHADER_STRING, WgpuBindGroup0,
+    OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_PCG_HASH, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD,
+    OP_WRAP_INDEX, Out, SHADER_STRING, WgpuBindGroup0,
 };
 
 /// Absolute slack allowed on a float result that goes through WGSL's float `%`.
@@ -94,8 +94,9 @@ fn wrap_index_checks(out: &mut Vec<Check>) {
 
 fn wrap_coord_checks(out: &mut Vec<Check>) {
     for world in [1.0f32, 7.5, 10.0, 128.0] {
-        for k in -40i32..=40 {
-            let v = k as f32 * 0.5;
+        // A tiny negative value whose wrap rounds up to `world`.
+        let tiny = [-1e-8f32, -1e-12];
+        for v in (-40i32..=40).map(|k| k as f32 * 0.5).chain(tiny) {
             let mut case = blank(OP_WRAP_COORD);
             case.f = [v, world, 0.0, 0.0];
             out.push(Check {
@@ -261,6 +262,15 @@ fn rng_checks(out: &mut Vec<Check>) {
                 call: format!("random_float({bits}, {max})"),
             });
         }
+
+        let mut case = blank(OP_PCG_HASH);
+        case.u = [bits, 0, 0, 0];
+        out.push(Check {
+            case,
+            // The shader returns the word through a bitcast, since the result lane holds `i32`.
+            expected: ints([rng::pcg_hash(bits).cast_signed(), 0, 0, 0]),
+            call: format!("pcg_hash({bits})"),
+        });
 
         let mut case = blank(OP_CHOICE3);
         case.u = [bits, 0, 0, 0];

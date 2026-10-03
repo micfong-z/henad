@@ -18,10 +18,11 @@ fn wrap_index(v: i32, m: i32) -> i32 {
     return ((v % m) + m) % m;
 }
 
-// Wraps `v` into `0.0..world`.
+// Wraps `v` into `0.0..world`. A `v` a little below 0.0 whose wrap rounds up to `world` wraps to 0.0.
 fn wrap_coord(v: f32, world: f32) -> f32 {
     let r = v % world;
-    return select(r, r + abs(world), r < 0.0);
+    let wrapped = select(r, r + abs(world), r < 0.0);
+    return select(wrapped, 0.0, wrapped == world);
 }
 
 fn cell_index(x: u32, y: u32, w: u32) -> u32 {

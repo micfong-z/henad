@@ -1,7 +1,7 @@
 //! The menu bar above the docking area.
 
 use crate::icons::material_design_icons::{
-    MDI_BOOK_OPEN_VARIANT, MDI_GITHUB, MDI_INFORMATION_OUTLINE, MDI_OPEN_IN_NEW, MDI_RESTART,
+    MDI_BOOK_OPEN_VARIANT, MDI_CODE_BRACES, MDI_GITHUB, MDI_INFORMATION_OUTLINE, MDI_OPEN_IN_NEW, MDI_RESTART,
     MDI_VIEW_DASHBOARD_OUTLINE,
 };
 use crate::state::AppState;
@@ -40,7 +40,7 @@ fn about_menu(ui: &mut egui::Ui, app: &mut AppState) {
     ui.menu_button(format!("{MDI_INFORMATION_OUTLINE}  About"), |ui| {
         let product = &app.product;
         if let Some(url) = &product.source_url {
-            link_button(ui, MDI_GITHUB, "Source code", url);
+            link_button(ui, source_icon(url), "Source code", url);
         }
         if let Some(url) = &product.documentation_url {
             link_button(ui, MDI_BOOK_OPEN_VARIANT, "Documentation", url);
@@ -58,6 +58,16 @@ fn about_menu(ui: &mut egui::Ui, app: &mut AppState) {
     });
 }
 
+/// Returns the icon of the Source code link to `url`: GitHub's mark for a link to GitHub, and braces otherwise.
+fn source_icon(url: &str) -> &'static str {
+    let address = url.split_once("://").map_or(url, |(_, address)| address);
+    let host = address.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    let host = host.split(':').next().unwrap_or_default();
+    let on_github = host.eq_ignore_ascii_case("github.com") || host.eq_ignore_ascii_case("www.github.com");
+    if on_github { MDI_GITHUB } else { MDI_CODE_BRACES }
+}
+
 fn link_button(ui: &mut egui::Ui, icon: &str, label: &str, url: &str) {
     if ui
         .button(format!("{icon}  {label}  {MDI_OPEN_IN_NEW}"))
@@ -66,5 +76,22 @@ fn link_button(ui: &mut egui::Ui, icon: &str, label: &str, url: &str) {
     {
         ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         ui.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_icon;
+    use crate::icons::material_design_icons::{MDI_CODE_BRACES, MDI_GITHUB};
+
+    /// The regression. Every source link showed GitHub's mark, a link to a university server included.
+    #[test]
+    fn only_a_link_to_github_shows_its_mark() {
+        assert_eq!(source_icon("https://github.com/micfong-z/henad"), MDI_GITHUB);
+        assert_eq!(source_icon("https://www.GitHub.com/a/b"), MDI_GITHUB);
+        assert_eq!(source_icon("https://gitlab.com/a/b"), MDI_CODE_BRACES);
+        assert_eq!(source_icon("https://codeberg.org/a/github.com"), MDI_CODE_BRACES);
+        assert_eq!(source_icon("https://github.com.example.org/a"), MDI_CODE_BRACES);
+        assert_eq!(source_icon("https://git.example.ac.uk:8443/lab/model"), MDI_CODE_BRACES);
     }
 }

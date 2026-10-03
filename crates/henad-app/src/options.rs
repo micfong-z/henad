@@ -7,12 +7,13 @@
 use std::path::PathBuf;
 
 use henad_compute::entry::ModelSet;
-use henad_compute::simulation::RunSetup;
+use henad_compute::simulation::{RunSetup, SetupError};
 use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::replay::Replay;
 use henad_core::provenance::BuildInfo;
 
 use crate::state::OpenAt;
+use crate::ui::sweep::draft::error_chain;
 
 /// Henad's icon, the default of [`AppOptions::icon_png`].
 const HENAD_ICON_PNG: &[u8] = include_bytes!("../assets/icon-256.png");
@@ -30,7 +31,8 @@ pub struct AppOptions {
 impl AppOptions {
     /// Returns options that open `models` under the name `product`.
     ///
-    /// `product` names the window, and on native targets the folder eframe stores the app's state in. `host` is the
+    /// `product` names the window, and on native targets the folder eframe stores the app's state in, with `-` for
+    /// each character a folder name cannot hold and `henad-app` for a name with nothing left. `host` is the
     /// build recorded as the host in each sweep's manifest, in the run details and in the About window. The app opens
     /// on the first model of `models` that runs on the device, with Henad's icon, no links, no licence and no command
     /// line.
@@ -117,15 +119,17 @@ impl AppOptions {
                     .models
                     .get(&replay.model)
                     .ok_or_else(|| OpeningError::NotInSet(replay.model.clone()))?;
-                let declared = entry.param_descriptors().len();
-                if replay.params.len() == declared {
-                    Ok(())
-                } else {
-                    Err(OpeningError::ParamCount {
+                match RunSetup::from_replay(entry, replay) {
+                    Ok(_) => Ok(()),
+                    Err(SetupError::ParamCount { expected, found }) => Err(OpeningError::ParamCount {
                         model: replay.model.clone(),
-                        given: replay.params.len(),
-                        declared,
-                    })
+                        given: found,
+                        declared: expected,
+                    }),
+                    Err(error) => Err(OpeningError::RunRefused {
+                        model: replay.model.clone(),
+                        reason: refusal_reason(&error),
+                    }),
                 }
             }
             AppOpening::Setup { setup, .. } => {
@@ -211,6 +215,16 @@ pub(crate) enum OpeningError {
     },
     /// The set's model under the setup's id declares another schema than the setup's.
     OtherSchema(String),
+    /// The model refuses a value or a scheduled action of the run, for the reason given.
+    RunRefused { model: String, reason: String },
+}
+
+/// Returns the reason `error` gives, as the [`OpeningError::RunRefused`] message ends with it.
+fn refusal_reason(error: &SetupError) -> String {
+    match error {
+        SetupError::Param(reason) => error_chain(reason),
+        other => error_chain(other),
+    }
 }
 
 impl std::fmt::Display for OpeningError {
@@ -226,6 +240,9 @@ impl std::fmt::Display for OpeningError {
                 formatter,
                 "the setup to open declares other parameters, stats or actions than model '{model}' of this build"
             ),
+            Self::RunRefused { model, reason } => {
+                write!(formatter, "model '{model}' refuses the run to open: {reason}")
+            }
         }
     }
 }
@@ -355,7 +372,7 @@ impl std::error::Error for WebStartError {}
 #[cfg(test)]
 mod tests {
     use henad_compute::entry::{ModelSet, register_grid_model};
-    use henad_core::action::Schedule;
+    use henad_core::action::{Schedule, Scheduled};
     use henad_core::authoring::model::grid_model::GridModel;
     use henad_core::explore::replay::Replay;
     use henad_core::grid::Grid2D;
@@ -434,6 +451,37 @@ mod tests {
                 model: "sir".to_owned(),
                 given: declared - 1,
                 declared,
+            })
+        );
+
+        let rate = sir
+            .param_descriptors()
+            .iter()
+            .position(|descriptor| descriptor.id == "infection_rate")
+            .expect("sir declares infection_rate");
+        let mut out_of_bounds = defaults.clone();
+        out_of_bounds[rate] = ParamValue::F32(2.0);
+        assert!(
+            matches!(
+                options(examples.clone(), run_of("sir", out_of_bounds)).check_opening(),
+                Err(OpeningError::RunRefused { model, reason })
+                    if model == "sir" && reason.starts_with("parameter 'infection_rate'")
+            ),
+            "a value out of bounds opened the window"
+        );
+        let mut unknown_action = run_of("sir", defaults.clone());
+        if let AppOpening::Run { replay, .. } = &mut unknown_action {
+            replay.schedule = Schedule::from_entries(vec![Scheduled {
+                index: 0,
+                id: "absent".to_owned(),
+                tick: 5,
+            }]);
+        }
+        assert_eq!(
+            options(examples.clone(), unknown_action).check_opening(),
+            Err(OpeningError::RunRefused {
+                model: "sir".to_owned(),
+                reason: "model has no action 'absent'".to_owned(),
             })
         );
 

@@ -1,7 +1,7 @@
 ---
 date: 2026-10-02
 title: "Library M10b: the facade"
-description: The tenth milestone of #48, second part. The henad crate puts the engine, sweeps and model authoring under one module tree with two preludes, the example models, app, command line and testing kit behind features, and a complete program kept as an example and in its README. The nightly atomics clippy joins CI after its existing findings were fixed.
+description: "The tenth milestone of #48, second part. The henad crate puts the engine, sweeps and model authoring under one module tree with two preludes, the example models, app, command line and testing kit behind features, and a complete program kept as an example and in its README. The nightly atomics clippy joins CI after its existing findings were fixed."
 icon: material/package-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
@@ -24,7 +24,7 @@ delta_state: uncommitted on `48-library`, on top of M10a's commit
 
 `48-library` stood at dada65c (M10a, the testing kit), with a clean tree.
 The workspace held seven crates, and a program depended on henad-core, henad-compute and henad-explore separately, naming items by their crate paths.
-Record #38 listed 12 findings of the nightly atomics clippy on henad-app, and records #36 and #39 noted `drop_non_drop` in henad-compute and henad-explore.
+Record #38 listed 12 findings of the nightly atomics clippy on henad-app, and records #31 and #39 noted `drop_non_drop` in henad-compute and henad-explore.
 No CI job ran that clippy.
 `docs/license.html` lacked henad-build, which M5 added, so the lint job's licence check would have failed on this branch.
 `docs/developing/releasing.md` does not exist yet, and [5.5] holds the release checklist.

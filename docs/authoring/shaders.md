@@ -26,6 +26,8 @@ A project made from the [template](../guide/your-project.md) has both already:
 `stamp_commit` records the commit the crate was built from, whether its sources differed from that commit, and a hash of its sources, and a sweep's manifest records them beside each model the crate registers.
 A crate without shaders keeps its `build.rs` for the stamp, and drops the `ShaderBuild` line and `henad::include_shaders!()`.
 A file a model reads at compile time, through `include_bytes!` or `include_str!`, belongs under `src`, where the stamp sees it.
+The stamp follows no symlink to a folder, and sees no file outside `src` that a shader imports.
+A change to a shader in either place reaches the bindings and goes unrecorded.
 A model crate keeps its shaders under `src` and passes `"src"` to `discover`.
 
 ``` rust title="src/lib.rs"
@@ -33,10 +35,14 @@ henad::include_shaders!();
 ```
 
 `ShaderBuild::discover` takes every `.wgsl` file under `src` without a `#define_import_path` line as an entry point, and a new shader joins the bindings the next time the crate builds.
+A symlink to a folder under `src` is followed, and a folder reached twice is read once.
 A shader's path below `src` becomes its names.
 `gpu_sir/step.wgsl` is the module `shader_bindings::gpu_sir::step` and the constant `binding_decls::bindings::GPU_SIR_STEP`, the path's components upper-cased and joined by `_`.
 Each component of a `.wgsl` path is therefore a Rust identifier and no keyword, and a folder named `gpu-sir` fails the build.
 So do two shaders whose names collide, as `gpu/sir_step.wgsl` and `gpu_sir/step.wgsl` both give `GPU_SIR_STEP`.
+Two structs can collide as well.
+Each struct's layout assertion takes its module path and its name in upper snake case, so `TallyParams` in `gpu_vote/step.wgsl` and `Params` in `gpu_vote/step_tally.wgsl` both give `GPU_VOTE_STEP_TALLY_PARAMS_ASSERTS`.
+rustc reports that pair inside the generated file, and renaming one of the structs resolves it.
 
 Uniform structs, workgroup sizes and bind group layouts come from the WGSL instead of being retyped in Rust.
 Your model fills in the generated struct and hands back its bytes, and declares no uniform struct of its own.
@@ -89,13 +95,19 @@ An import resolves by file path alone, so the import path mirrors the file's pat
 The root `henad` is reserved for the shared modules, in any case.
 A file named `henad.wgsl`, or a folder named `henad` holding a `.wgsl` file, shadows one of them, and fails the build.
 So does a path starting with a name the generated bindings use at their root: `wgpu`, `bytemuck`, `std`, `core`, `alloc`, `_root`, `ShaderEntry`, `layout_asserts` or `bytemuck_impls`.
+The bindings name an imported module by the import path it resolved through, and an import path starting with one of those names fails the build too.
 A module declares no binding, since bindings belong in the entry shader.
+An import can also name a file by its path, in quotes, as `#import "../shared/noise" as noise`.
+The bindings name that module after the stem of the file name, here `noise`, and a stem such as `std` or `henad` fails the build as well.
+A change to such a file reruns the build script and the generator, inside `src` or outside it.
 
 ## Bindings
 
 henad-build reads the `@group(0)` lines of every entry point into `binding_decls`, in `@binding` order.
 Every pass of either GPU trait points at one of its constants, as `crate::binding_decls::bindings::GPU_SIR_STEP` is for `gpu_sir/step.wgsl`.
 Each binding sits on one line, as `@group(0) @binding(N) var<...> name: Type;`, and a line holding `@binding` or `@group` in any other form fails the build.
+Group 0 of an entry point holds storage buffers, uniforms and storage textures, and a sampler or a sampled texture fails the build.
+Keep a render shader outside `src`, or name the entry points one by one with `ShaderBuild::new`.
 A compile-time assertion holds each list to the length of the layout naga derives from the composed shader.
 The engine resolves each name itself.
 Otherwise a slot index could disagree with the shader that owns it.

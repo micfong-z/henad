@@ -25,6 +25,7 @@ Ants runs two passes over seven in-place buffers, together with a display pass a
 ```
 
 `buffers!` gives each buffer a label and an index derived from its declaration position, in the same way `params!` does.
+A project names it `henad::buffers!`, where the example models, below the facade, name `henad_core::buffers!`.
 Flags are named rather than positional, and every flag defaults to off.
 
 `double_buffered`
@@ -96,11 +97,14 @@ Seven names are reserved for resources the engine owns.
 | Name | Resource |
 |---|---|
 | `params` | The pass's own uniform block |
-| `dims` | Grid and display texture size |
+| `dims` | Grid and display texture size, for a grid model only |
 | `output` | The display texture |
 | `cell_start`, `sorted` | The neighbour index |
 | `counters` | The persistent counters |
 | `partials` | The reduction's leaf output |
+
+The agent engine has no `dims` resource, and a pass that binds it fails to build.
+A display pass carries its texture size in its own uniform block, from `geom.display` in the `PassCtx` that `pass_params_bytes` receives.
 
 Anything else names one of your own buffers by its label, optionally with an `_in` or `_out` suffix.
 The access mode decides which side a name resolves to, and the suffix does not, so a buffer that one pass reads and another writes needs no special naming.
@@ -111,7 +115,9 @@ The access mode decides which side a name resolves to, and the suffix does not, 
 Boids sets it.
 Ants leaves it off, since ants read the field instead of each other.
 
-With it set, `cell_start` and `sorted` become bindable, `index_cell_size` is read every tick so that a live parameter edit lands, and the resolved `HashGrid` geometry arrives in `Geometry::index` for the uniform block to carry onward.
+With it set, `cell_start` and `sorted` become bindable, and the resolved `HashGrid` geometry arrives in `Geometry::index` for the uniform block to carry onward.
+The engine fixes the hash grid from `index_cell_size` at construction.
+A GPU model takes no live edit, and every parameter applies when the model is rebuilt.
 
 ## Parameters and geometry
 
@@ -131,9 +137,16 @@ Only the current side is seeded, since a double-buffered lane has its other side
 ## Contracts nothing checks
 
 - A binding's declared WGSL type must match what the buffer actually holds, because resolution goes by name and every storage slot looks alike.
-- A pass shader must declare `@workgroup_size(256)` and fold with `linear_index`, and a display shader must declare the `@workgroup_size(N, N)` matching its `DisplaySpec::workgroup`.
+- A pass shader must fold with `linear_index`.
 - `buffer_lens` and `seed_buffers` must each return one entry per `BUFFERS` entry, and a non-empty seed must be exactly `len * 4` bytes long.
 - `STATS.len()` must equal the number of values `stats` returns.
+  The engine pairs the two by position and drops the values past the shorter.
+
+The engine reads the `@workgroup_size` of each shader's `main` when it builds the model.
+It refuses a pass shader that declares anything but `@workgroup_size(256)`, and a display shader whose `@workgroup_size(N, N)` differs from its `DisplaySpec::workgroup`.
+It also refuses a buffer label that is reserved or ends in `_in` or `_out`, since a binding of that name resolves to something other than the buffer.
+
+The testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values than `STATS.len()`.
 
 ## Next
 

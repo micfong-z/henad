@@ -1,7 +1,7 @@
 ---
 date: 2026-10-02
 title: "Library M10a: the testing kit"
-description: The tenth milestone of #48, first part. henad-explore gains henad_explore::testing behind a testing feature, the contract checks every registered model can run, with headless_test_device, and the example models' registry tests and test devices move onto it.
+description: "The tenth milestone of #48, first part. henad-explore gains henad_explore::testing behind a testing feature, the contract checks every registered model can run, with headless_test_device, and the example models' registry tests and test devices move onto it."
 icon: material/package-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
@@ -125,6 +125,7 @@ It also asserts that every CPU model reached more than one job.
 `ZeroesFullSubmissions` shares one stopped flag among every state its entry builds, since every buffer of a device the watchdog stopped reads zero. Put back in the old order (the full submission first), `FullSubmission` passed that model. The mutation was run and reverted.
 Three more: Game of Life passes at 14 jobs and skips the four GPU checks as `OtherBackend`, a set report names `game_of_lfe` and `missing` from an override and an exemption, and `assert_set_conforms` panics with "1 of 1 models failed their checks" and the model's summary line.
 No self-test covers `Metadata`, `DefaultSetup`, `DefaultsFit`, `ParallelJobs`, `BaselineBuild` or `SampledSlice`. A model breaking one of them needs a hand-built entry, or a GPU model past the baseline.
+Correction after a later review: `register_grid_model` accepts a default outside its bounds, so `DefaultSetup` needs no hand-built entry, and `a_default_outside_its_bounds_fails_every_check_through_a_run_setup` now covers it.
 
 ### The review
 
@@ -230,6 +231,7 @@ Proposed commits, in order:
 - **`assert_set_conforms` prints to standard output.** The workspace warns on `print_stdout`, and the call carries an `expect` with its reason.
 - **The grid search builds up to a dozen times.** It knows no `rows_per_leaf`, which is private to henad-compute, and reads `parallel_jobs` from builds. At 128 columns that is 12 small builds.
 - **No self-test covers `Metadata`, `DefaultSetup`, `DefaultsFit`, `ParallelJobs`, `BaselineBuild` or `SampledSlice`.** Breaking one takes an entry built by hand, which `register_*` cannot produce, or a GPU model past the baseline.
+  Correction after a later review: `register_grid_model` accepts a default outside its bounds, so `DefaultSetup` needs no hand-built entry, and `a_default_outside_its_bounds_fails_every_check_through_a_run_setup` now covers it.
 - **A missing device under `HENAD_REQUIRE_GPU` has no self-test.** Setting the variable inside a test changes it for every test of the process, and `set_var` is `unsafe` on edition 2024, which the workspace denies. check.sh's run sets it for every test, and a kit run without a device would fail there.
 - **`authoring/testing.md` is not written.** [8] gives it its own page with the template's test, and the template arrives in M10d. The determinism page carries the kit until then.
 - **henad-models' `flume` dev-dependency has no user**, before and after M10a.

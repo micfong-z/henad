@@ -68,6 +68,7 @@ pub struct ExploreArgs {
     #[arg(
         long,
         value_name = "FILE",
+        requires = "spec_use",
         conflicts_with_all = [
             "set", "act", "steps", "warmup", "reps", "seed", "stats_every",
             "vary", "zip", "sample", "design_seed", "design", "independent_seeds", "series_every",
@@ -80,7 +81,7 @@ pub struct ExploreArgs {
     /// The step of an integer range defaults to 1. With `--sample`, a range without a step covers every value from
     /// min to max. `action.NAME=TICKS` varies the tick of an action `--act` adds. Repeatable. Every combination runs
     /// unless `--zip` or `--sample` is given.
-    #[arg(long, value_name = "ID=LEVELS", requires = "explore")]
+    #[arg(long, value_name = "ID=LEVELS", value_parser = check_vary, requires = "explore")]
     pub vary: Vec<String>,
 
     /// Pair the levels of every `--vary` by position instead of running every combination.
@@ -118,13 +119,13 @@ pub struct ExploreArgs {
 
     /// End a run at the first sample where a condition holds, e.g. `'Infected <= 0'`. The comparator is one of
     /// `<`, `<=`, `>`, `>=`, `==` and `!=`.
-    #[arg(long, value_name = "CONDITION", requires = "explore")]
+    #[arg(long, value_name = "CONDITION", value_parser = check_stop, requires = "explore")]
     pub stop: Option<String>,
 
     /// Add a reducer over a stat column, e.g. `Infected:max`. Kinds are final, min, max, mean, argmax, argmin,
     /// `first<=10` for the first tick where a comparison holds, and `mean@200..600` for the mean from tick 200 to
     /// tick 600. Repeatable.
-    #[arg(long, value_name = "COLUMN:KIND", requires = "explore")]
+    #[arg(long, value_name = "COLUMN:KIND", value_parser = check_reduce, requires = "explore")]
     pub reduce: Vec<String>,
 
     /// Drop the final, min, max and mean reducers every stat column gets by default.
@@ -136,15 +137,17 @@ pub struct ExploreArgs {
     #[arg(long, value_name = "SECONDS", value_parser = parse_timeout, requires = "explore")]
     pub timeout: Option<Duration>,
 
-    /// Number of concurrent runs, or `auto` [default: auto].
+    /// Number of concurrent runs, or `auto`. Defaults to the spec's `[execution]` value, else `auto`.
     #[arg(long, value_name = "N|auto", requires = "explore")]
     pub concurrent: Option<Concurrency>,
 
-    /// Combined memory limit in bytes for concurrent runs.
+    /// Combined memory limit in bytes for concurrent runs. Defaults to the spec's `[execution]` value, else no
+    /// limit.
     #[arg(long, value_name = "BYTES", requires = "explore")]
     pub memory: Option<u64>,
 
-    /// Combined GPU memory limit in bytes for concurrent GPU runs. Defaults to the device's largest buffer size.
+    /// Combined GPU memory limit in bytes for concurrent GPU runs. Defaults to the spec's `[execution]` value, else
+    /// the device's largest buffer size.
     #[arg(long, value_name = "BYTES", requires = "explore")]
     pub gpu_memory: Option<u64>,
 
@@ -254,7 +257,7 @@ fn sweep_and_options(
         options.memory_budget = Some(memory);
     }
     if let Some(gpu_memory) = args.explore.gpu_memory {
-        options.gpu_memory = Some(gpu_memory);
+        options.gpu_memory_budget = Some(gpu_memory);
     }
     options.shard = args.explore.shard.unwrap_or_default();
     options.resume = args.explore.resume;
@@ -423,6 +426,31 @@ pub fn parse_vary(raw: &str) -> Result<FactorSpec> {
     })
 }
 
+/// Checks that `--vary` reads as `ID=LEVELS`, and returns it unchanged.
+///
+/// The model checks the id and the levels once it is known. A malformed flag is then a refused command line.
+fn check_vary(raw: &str) -> Result<String, String> {
+    let (_, levels) = raw.split_once('=').ok_or("expected ID=LEVELS")?;
+    LevelSpec::parse(levels).map_err(|error| error.to_string())?;
+    Ok(raw.to_owned())
+}
+
+/// Checks that `--stop` reads as a condition, and returns it unchanged.
+///
+/// The sweep checks the column once the model's columns are known.
+fn check_stop(raw: &str) -> Result<String, String> {
+    StopSpec::parse(raw, 0).map_err(|error| error.to_string())?;
+    Ok(raw.to_owned())
+}
+
+/// Checks that `--reduce` reads as `COLUMN:KIND`, and returns it unchanged.
+///
+/// The sweep checks the column once the model's columns are known.
+fn check_reduce(raw: &str) -> Result<String, String> {
+    raw.parse::<ReducerSpec>().map_err(|error| error.to_string())?;
+    Ok(raw.to_owned())
+}
+
 /// Returns the actions `--act` adds to every run of a sweep.
 ///
 /// An action is named by its id, or by the first of `ID_2`, `ID_3` and so on that no earlier action has taken. The
@@ -435,8 +463,9 @@ pub fn parse_vary(raw: &str) -> Result<FactorSpec> {
 pub fn fixed_actions(raw: &[String]) -> Result<Vec<ActionSpec>, ScheduleError> {
     let mut actions: Vec<ActionSpec> = Vec::with_capacity(raw.len());
     for entry in raw {
+        // A tick holds no `@`, and an id can.
         let (id, tick) = entry
-            .split_once('@')
+            .rsplit_once('@')
             .ok_or_else(|| ScheduleError::BadEntry { raw: entry.clone() })?;
         let tick = tick.parse().map_err(|source| ScheduleError::BadTick {
             raw: entry.clone(),
@@ -471,12 +500,17 @@ fn parse_sample(raw: &str) -> Result<DesignKind, String> {
     }
 }
 
-/// Reads `--timeout` as a number of seconds from 0.
+/// Reads `--timeout` as a number of seconds from 0 to `u64::MAX`.
 fn parse_timeout(raw: &str) -> Result<Duration, String> {
     raw.parse::<f64>()
         .ok()
         .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-        .ok_or_else(|| format!("expected a non-negative number of seconds, got '{raw}'"))
+        .ok_or_else(|| {
+            format!(
+                "expected a finite number of seconds from 0 to {}, got '{raw}'",
+                u64::MAX
+            )
+        })
 }
 
 /// Progress of a sweep as JSON lines on stdout, or as text on stderr.
@@ -555,11 +589,18 @@ impl Reporter {
             } else {
                 "--series-every"
             };
-            eprintln!(
-                "warning: series.csv will hold about {} rows. \
-                 Increase {name} to write fewer, or set it to 0 to write none.",
+            let message = format!(
+                "series.csv will hold about {} rows. Increase {name} to write fewer, or set it to 0 to write none.",
                 outline.series_rows
             );
+            eprintln!("warning: {message}");
+            if self.json {
+                json_report::emit(&json!({
+                    "kind": "explore_warning",
+                    "warning": "series_rows",
+                    "message": message,
+                }));
+            }
         }
     }
 
@@ -643,11 +684,15 @@ impl Reporter {
         match report.end {
             SweepEnd::Planned => eprintln!("dry run, nothing written"),
             SweepEnd::Complete if skipped > 0 => {
-                eprintln!("wrote {written} runs to {dir} in {elapsed} and skipped {skipped}: {tally} in total");
+                eprintln!(
+                    "wrote {} to {dir} in {elapsed} and skipped {}: {tally} in total",
+                    plural(written, "run"),
+                    plural(skipped, "run")
+                );
             }
-            SweepEnd::Complete => eprintln!("wrote {written} runs to {dir} in {elapsed}: {tally}"),
-            SweepEnd::Aborted => eprintln!("aborted after {written} runs, written to {dir}"),
-            SweepEnd::DeviceLost => eprintln!("GPU device lost after {written} runs, written to {dir}"),
+            SweepEnd::Complete => eprintln!("wrote {} to {dir} in {elapsed}: {tally}", plural(written, "run")),
+            SweepEnd::Aborted => eprintln!("aborted after {}, written to {dir}", plural(written, "run")),
+            SweepEnd::DeviceLost => eprintln!("GPU device lost after {}, written to {dir}", plural(written, "run")),
         }
         if let (Some(search), Some(standing), false) =
             (&self.search, &self.search_standing, report.end == SweepEnd::Planned)
@@ -869,8 +914,8 @@ fn layout_text(layout: &ExecutionLayout) -> String {
 }
 
 fn progress_text(update: &ProgressUpdate, skipped: u64) -> String {
-    let left = update.remaining_s.map_or_else(String::new, |remaining| {
-        format!(", about {} left", format_seconds(remaining))
+    let left = update.remaining.map_or_else(String::new, |remaining| {
+        format!(", about {} left", format_seconds(remaining.as_secs_f64()))
     });
     let skipped = if skipped > 0 {
         format!(", {skipped} skipped")
@@ -882,7 +927,7 @@ fn progress_text(update: &ProgressUpdate, skipped: u64) -> String {
         update.done,
         update.total,
         update.failed,
-        format_seconds(update.elapsed_s)
+        format_seconds(update.elapsed.as_secs_f64())
     )
 }
 
@@ -1067,8 +1112,8 @@ fn progress_json(update: &ProgressUpdate, skipped: u64) -> Value {
         "total": update.total,
         "skipped": skipped,
         "failed": update.failed,
-        "elapsed_s": update.elapsed_s,
-        "remaining_s": update.remaining_s,
+        "elapsed_s": update.elapsed.as_secs_f64(),
+        "remaining_s": update.remaining.as_ref().map(Duration::as_secs_f64),
     })
 }
 
@@ -1347,6 +1392,15 @@ mod tests {
         assert_eq!(names(&["seed@1", "seed_2@2", "seed@3"]), ["seed", "seed_2", "seed_3"]);
     }
 
+    /// The regression. An entry split at its first `@`, so an id holding one read the rest of the id as its tick.
+    #[test]
+    fn an_action_id_can_hold_an_at_sign() {
+        let actions = fixed_actions(&["spawn@centre@100".to_owned()]).expect("the entry reads");
+        assert_eq!(actions, [ActionSpec::new("spawn@centre", 100)]);
+        let args = Args::try_parse_from(["henad-cli", "sir", "--act", "spawn@centre@100"]);
+        assert!(args.is_ok(), "the flag reads");
+    }
+
     /// The regression. `--info` or `--list` with no model printed and exited, and the sweep asked for never ran.
     #[test]
     fn info_and_list_do_not_drop_a_sweep() {
@@ -1362,7 +1416,10 @@ mod tests {
             "the sweep then asks for a model"
         );
         assert_eq!(mode(&["henad-cli", "--info", "--dry-run"]), Ok(Mode::Explore));
-        assert_eq!(mode(&["henad-cli", "--info", "--spec", "s.toml"]), Ok(Mode::Explore));
+        assert_eq!(
+            mode(&["henad-cli", "--info", "--spec", "s.toml", "--out", "d"]),
+            Ok(Mode::Explore)
+        );
         let listed: [&[&str]; 3] = [
             &["henad-cli", "--list", "--out", "d"],
             &["henad-cli", "--list", "--dry-run"],
@@ -1445,14 +1502,48 @@ mod tests {
             ];
             assert_eq!(parse(&line), Err(ErrorKind::ValueValidation), "--sample {bad}");
         }
-        for bad in ["-1", "soon", "NaN"] {
+        for bad in ["-1", "soon", "NaN", "inf", "1e30"] {
             let line = ["henad-cli", "sir", "--out", "d", &format!("--timeout={bad}")];
             assert_eq!(parse(&line), Err(ErrorKind::ValueValidation), "--timeout {bad}");
+            let message = Args::try_parse_from(line).err().map(|error| error.to_string());
+            assert!(
+                message
+                    .as_deref()
+                    .is_some_and(|message| message.contains("finite number of seconds")),
+                "--timeout {bad}: {message:?}"
+            );
         }
-        let unread = ["--stop", "Infected", "--reduce", "Infected:median"];
-        for pair in unread.chunks(2) {
-            let args = Args::parse_from(["henad-cli", "sir", "--out", "d", pair[0], pair[1]]);
-            assert!(spec_from_flags(&args, "sir").is_err(), "{pair:?}");
+    }
+
+    /// The regression. A malformed `--set`, `--act`, `--vary`, `--stop` or `--reduce` was read after the parser, so
+    /// the command exited 1, the status of a failed sweep, in place of 2.
+    #[test]
+    fn malformed_flag_values_are_refused_by_the_parser() {
+        let refused = [
+            ("--set", "grid_width"),
+            ("--act", "seed_outbreak"),
+            ("--act", "seed_outbreak@soon"),
+            ("--act", "seed_outbreak@-1"),
+            ("--vary", "infection_rate"),
+            ("--vary", "infection_rate=0.1:x:0.1"),
+            ("--stop", "Infected"),
+            ("--reduce", "Infected:median"),
+            ("--reduce", "Infected"),
+        ];
+        for (flag, value) in refused {
+            let line = ["henad-cli", "sir", "--out", "d", flag, value];
+            assert_eq!(parse(&line), Err(ErrorKind::ValueValidation), "{flag} {value}");
+        }
+        let accepted = [
+            ("--set", "grid_width=64"),
+            ("--act", "seed_outbreak@40"),
+            ("--vary", "infection_rate=0.1:0.5:0.1"),
+            ("--stop", "Infected <= 0"),
+            ("--reduce", "Infected:first<=10"),
+        ];
+        for (flag, value) in accepted {
+            let line = ["henad-cli", "sir", "--out", "d", flag, value];
+            assert_eq!(parse(&line), Ok(()), "{flag} {value}");
         }
     }
 
@@ -1561,7 +1652,11 @@ mod tests {
 
     #[test]
     fn explore_flags_need_a_sweep() {
-        let missing: [&[&str]; 11] = [
+        let missing: [&[&str]; 13] = [
+            // A spec needs `--out`, `--dry-run` or `--params`. Such a line once parsed, and the sweep refused it after
+            // acquiring a device and reading the file.
+            &["henad-cli", "--spec", "s.toml"],
+            &["henad-cli", "--info", "--spec", "s.toml"],
             &["henad-cli", "sir", "--vary", "infection_rate=0.1,0.2"],
             &["henad-cli", "gpu_sir", "--gpu-memory", "1000000"],
             &["henad-cli", "sir", "--out", "d", "--zip"],
@@ -1684,6 +1779,28 @@ mod tests {
         );
     }
 
+    /// Checks that an `explore_progress` line holds the fields `docs/reference/cli.md` lists. A sweep quick enough for
+    /// the integration tests sends none.
+    #[test]
+    fn a_progress_line_holds_the_documented_fields() {
+        let update = henad_explore::progress::ProgressUpdate::new(3, 8, 1, Duration::from_secs(2));
+        let line = super::progress_json(&update, 2);
+        let mut fields: Vec<&str> = line
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        let mut expected = ["kind", "done", "total", "skipped", "failed", "elapsed_s", "remaining_s"];
+        expected.sort_unstable();
+        assert_eq!(fields, expected);
+        assert_eq!(
+            (&line["kind"], &line["skipped"]),
+            (&"explore_progress".into(), &2.into())
+        );
+    }
+
     #[test]
     fn sizes_and_durations_read_as_a_person_writes_them() {
         assert_eq!(format_bytes(512), "512 bytes");
@@ -1789,14 +1906,14 @@ mod tests {
         let from_table = options(&[]);
         assert_eq!(from_table.concurrency.to_string(), "4");
         assert_eq!(
-            (from_table.memory_budget, from_table.gpu_memory),
+            (from_table.memory_budget, from_table.gpu_memory_budget),
             (Some(1000), Some(2000))
         );
 
         let overridden = options(&["--concurrent", "auto", "--memory", "500"]);
         assert_eq!(overridden.concurrency, Concurrency::Auto);
         assert_eq!(
-            (overridden.memory_budget, overridden.gpu_memory),
+            (overridden.memory_budget, overridden.gpu_memory_budget),
             (Some(500), Some(2000))
         );
         std::fs::remove_dir_all(&dir).ok();

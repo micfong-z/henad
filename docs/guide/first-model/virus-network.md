@@ -186,7 +186,7 @@ impl NetworkModel for VirusModel {
 }
 ```
 
-1. The example model already uses the ID `virus_network`. A model set holds each ID once, and our ID differs so that the guide's models can sit in one set beside the example models, as the guide's parity tests in Henad's repository run them.
+1. The example model already uses the ID `virus_network`. A model set holds each ID once, and our ID differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
 2. The engine prepends the node count, world width and world height to the parameter list, and these two consts supply their defaults.
    `MAX_NODES` sets the upper bound, and we keep its default of ten million.
 3. The world is only used for drawing.

@@ -152,7 +152,7 @@ fn build_info(product: &Product, models: &ModelSet) -> Vec<InfoRow> {
         ));
     }
     let mut sources: Vec<String> = Vec::new();
-    for entry in models.iter() {
+    for entry in models {
         let source = entry.source();
         let text = format!(
             "{} {} ({})",

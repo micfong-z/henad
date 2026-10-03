@@ -9,8 +9,12 @@ use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, Once};
 
 thread_local! {
-    /// Written by [`install_panic_hook`], read by [`catching`] on the same thread.
-    static LAST_PANIC_LOCATION: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Last panic raised on this thread, as `(message, site)`. Written by [`install_panic_hook`], read by
+    /// [`catching`] on the same thread when the message matches.
+    ///
+    /// Note that a pool worker waiting in a join can run another host's job and record its panic here. The message
+    /// check keeps that site off the catch in progress.
+    static LAST_PANIC: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
 }
 
 /// Fallback for a panic raised on a thread other than the one catching it, as `(message, site)`.
@@ -19,8 +23,8 @@ thread_local! {
 /// caller with `resume_unwind`, which does not run the hook a second time. Without this the modal
 /// loses the line for exactly the panics most worth locating.
 ///
-/// Keyed by message and read newest first, so a catch can only pick up a site belonging to some
-/// other panic when two of them have the same message.
+/// Keyed by message and read newest first. A catch can pick up a site belonging to some other panic only when two
+/// panics on concurrent threads have the same message.
 static RECENT_PANIC_SITES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
 /// How many go-unclaimed before the oldest is dropped. Nothing reads a stale entry, and every
@@ -41,6 +45,7 @@ pub struct Fault {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum FaultKind {
     /// A wgpu error, from an error scope or from the device's uncaptured error handler.
     Device(wgpu::Error),
@@ -49,10 +54,17 @@ pub enum FaultKind {
         /// `None` when nothing installed [`install_panic_hook`].
         location: Option<String>,
     },
-    /// The host refused to build the model, usually because it is not compatible with the device.
+    /// The host refused to build or step the model.
+    ///
+    /// A model incompatible with the device is refused, and so is a [`Simulation`](crate::simulation::Simulation)
+    /// that already returned a fault.
     Refused(String),
     /// A failed wait for the GPU to finish its submitted work.
     Poll(wgpu::PollError),
+    /// The GPU device was lost, and runs no more work.
+    ///
+    /// wgpu reports a loss to no error scope. [`GpuContext::is_lost`](crate::gpu::GpuContext::is_lost) reads it.
+    DeviceLost,
 }
 
 impl Fault {
@@ -67,6 +79,13 @@ impl Fault {
         Self {
             during,
             kind: FaultKind::Refused(message.into()),
+        }
+    }
+
+    pub fn device_lost(during: &'static str) -> Self {
+        Self {
+            during,
+            kind: FaultKind::DeviceLost,
         }
     }
 
@@ -93,6 +112,7 @@ impl fmt::Display for Fault {
             }
             FaultKind::Refused(message) => write!(f, "{message}"),
             FaultKind::Poll(error) => write!(f, "the GPU failed to finish the submitted work: {error}"),
+            FaultKind::DeviceLost => f.write_str("the GPU device was lost"),
         }
     }
 }
@@ -102,7 +122,7 @@ impl std::error::Error for Fault {
         match &self.kind {
             FaultKind::Device(error) => Some(error),
             FaultKind::Poll(error) => Some(error),
-            FaultKind::Panic { .. } | FaultKind::Refused(_) => None,
+            FaultKind::Panic { .. } | FaultKind::Refused(_) | FaultKind::DeviceLost => None,
         }
     }
 }
@@ -116,7 +136,7 @@ impl std::error::Error for Fault {
 /// If [`install_panic_hook`] has been run, the location of the panic is also recorded.
 pub fn catching<T>(during: &'static str, f: impl FnOnce() -> T) -> Result<T, Fault> {
     // A panic caught and swallowed inside `f` would otherwise leave its site here for the next one.
-    LAST_PANIC_LOCATION.with(|slot| slot.borrow_mut().take());
+    LAST_PANIC.with(|slot| slot.borrow_mut().take());
     std::panic::catch_unwind(AssertUnwindSafe(f)).map_err(|payload| {
         let message = payload_message(payload.as_ref());
         Fault {
@@ -138,12 +158,13 @@ pub fn install_panic_hook() {
         std::panic::set_hook(Box::new(move |info| {
             if let Some(at) = info.location() {
                 let site = format!("{}:{}", at.file(), at.line());
-                LAST_PANIC_LOCATION.with(|slot| *slot.borrow_mut() = Some(site.clone()));
+                let message = payload_message(info.payload());
+                LAST_PANIC.with(|slot| *slot.borrow_mut() = Some((message.clone(), site.clone())));
                 if let Ok(mut recent) = RECENT_PANIC_SITES.lock() {
                     if recent.len() >= RECENT_PANIC_SITES_CAP {
                         recent.remove(0);
                     }
-                    recent.push((payload_message(info.payload()), site));
+                    recent.push((message, site));
                 }
             }
             previous(info);
@@ -151,12 +172,27 @@ pub fn install_panic_hook() {
     });
 }
 
-/// Returns the location of the panic, if any.
+/// Returns the location of the panic that carried `message`, if any.
+///
+/// The site this thread recorded wins when its message matches. Otherwise the newest site recorded with `message` on
+/// any thread is taken. Either way the site leaves the process-wide list.
 fn take_location(message: &str) -> Option<String> {
-    if let Some(here) = LAST_PANIC_LOCATION.with(|slot| slot.borrow_mut().take()) {
-        return Some(here);
+    let here = LAST_PANIC
+        .with(|slot| slot.borrow_mut().take())
+        .filter(|(seen, _)| seen == message);
+    let mut recent = RECENT_PANIC_SITES.lock().ok();
+    let Some(recent) = recent.as_mut() else {
+        return here.map(|(_, site)| site);
+    };
+    if let Some((_, site)) = here {
+        if let Some(found) = recent
+            .iter()
+            .rposition(|(seen, seen_site)| seen == message && *seen_site == site)
+        {
+            recent.remove(found);
+        }
+        return Some(site);
     }
-    let mut recent = RECENT_PANIC_SITES.lock().ok()?;
     let found = recent.iter().rposition(|(seen, _)| seen == message)?;
     Some(recent.remove(found).1)
 }
@@ -276,6 +312,33 @@ mod tests {
             .as_deref()
             .expect("a worker panic must still carry its location");
         assert!(location.contains("fault.rs"), "{location}");
+    }
+
+    /// A pool worker waiting in a join can run another host's job. The site of a panic in that job stays on the
+    /// worker's thread, and the regression pinned it onto the next panic caught there.
+    #[test]
+    fn a_site_recorded_on_the_thread_for_another_panic_is_not_taken() {
+        use rayon::prelude::*;
+
+        install_panic_hook();
+        let nested_line = line!() + 3;
+        let worker_line = line!() + 4;
+        let outcome: Result<(), Fault> = catching("testing", || {
+            drop(std::panic::catch_unwind(|| panic!("from a nested job")));
+            (0..64).into_par_iter().for_each(|i| {
+                assert!(i < 32, "from a worker beside a nested job");
+            });
+        });
+        let fault = outcome.expect_err("the worker's panic should have been caught");
+        let FaultKind::Panic { location, .. } = &fault.kind else {
+            panic!("expected a panic fault, got {fault:?}");
+        };
+        let location = location.as_deref().expect("the worker's panic carries its location");
+        assert!(
+            !location.ends_with(&format!(":{nested_line}")),
+            "the nested job's site was taken: {location}"
+        );
+        assert!(location.ends_with(&format!(":{worker_line}")), "{location}");
     }
 
     /// A stale location from an earlier caught panic must not be pinned onto a later one.

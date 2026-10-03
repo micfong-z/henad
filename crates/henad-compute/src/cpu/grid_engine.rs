@@ -193,6 +193,39 @@ mod tests {
     counting_model!(MooreCount, "moore_count", NeighborhoodKind::Moore);
     counting_model!(VnCount, "vn_count", NeighborhoodKind::VonNeumann);
 
+    /// A model whose every cell draws from the step's random stream. A change to how a row is seeded changes the
+    /// grid.
+    struct Noisy;
+
+    impl GridModel for Noisy {
+        const NAME: &'static str = "noisy";
+        const ID: &'static str = "noisy";
+        const DESCRIPTION: &'static str = "noisy";
+        const PALETTE: &'static [[u8; 4]] = &[[0, 0, 0, 255]; 2];
+        const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
+        const STATS: &'static [StatDescriptor] = &[];
+        type Params = ();
+
+        fn param_descriptors() -> Vec<ParamDescriptor> {
+            Vec::new()
+        }
+
+        fn from_params(_params: &[ParamValue]) -> Self::Params {}
+
+        fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
+            MooreCount::init(grid, params, rng);
+        }
+
+        fn step_cell(_cell: u8, neighbors: &[u8], _params: &Self::Params, rng: &mut u64) -> u8 {
+            *rng = xorshift64(*rng);
+            (live_neighbors(neighbors) + (*rng >> 63) as u8) & 1
+        }
+
+        fn stats(_grid: &Grid2D<u8>) -> Vec<StatValue> {
+            Vec::new()
+        }
+    }
+
     /// The plain modulo gather the row loops peel their edge columns to avoid.
     fn reference(cells: &[u8], w: usize, h: usize, moore: bool) -> Vec<u8> {
         let mut out = vec![0u8; cells.len()];
@@ -290,7 +323,8 @@ mod tests {
     }
 
     /// The row seed comes from the row index, so a grid stepped in one thread and the same grid
-    /// stepped across many must agree bit for bit.
+    /// stepped across many must agree bit for bit. Every cell of [`Noisy`] draws. The row seeds
+    /// then reach the result.
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
         // A 128-column grid holds 64 rows a job, and 1024 rows split into 16 jobs.
@@ -301,7 +335,7 @@ mod tests {
                 .build()
                 .expect("rayon pool");
             pool.install(|| {
-                let mut state = GridModelState::<MooreCount>::from_params(&params);
+                let mut state = GridModelState::<Noisy>::from_params(&params);
                 for _ in 0..20 {
                     state.step();
                 }

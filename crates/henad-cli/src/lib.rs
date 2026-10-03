@@ -45,6 +45,7 @@
 //! `--out`, `--spec` or `--dry-run` runs a sweep instead, many runs over a grid of parameter values written to a
 //! directory, and `--merge` joins the directories of a sweep's shards.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![expect(
     clippy::print_stdout,
     clippy::print_stderr,
@@ -89,30 +90,43 @@ pub struct CliOptions {
     models: ModelSet,
     /// Build of the host, recorded in every sweep's manifest.
     host: BuildInfo,
-    /// Name `--version` and the help text give the command.
+    /// Name `--version`, the help text and the usage lines give the command.
     command_name: String,
+    /// Line the help text opens with, or `None` for henad-cli's own description.
+    about: Option<String>,
 }
 
 impl CliOptions {
     /// Returns options that run `models` and record `host` as the build that ran each sweep.
     ///
-    /// The command name defaults to the package name `host` records, and `--version` prints its version.
+    /// The command name defaults to the package name `host` records, and `--version` prints its version. The help
+    /// text opens with henad-cli's own description until [`Self::about`] sets another.
     pub fn new(models: ModelSet, host: BuildInfo) -> Self {
         Self {
             command_name: host.package().to_owned(),
             models,
             host,
+            about: None,
         }
     }
 
-    /// Sets the name `--version` and the help text give the command.
+    /// Sets the name `--version`, the help text and the usage lines give the command.
+    ///
+    /// The usage lines take this name in place of the program name the command line starts with.
     pub fn command_name(mut self, name: impl Into<String>) -> Self {
         self.command_name = name.into();
         self
     }
+
+    /// Sets the line the help text opens with.
+    pub fn about(mut self, text: impl Into<String>) -> Self {
+        self.about = Some(text.into());
+        self
+    }
 }
 
-/// Exit code of a sweep that ran to its end with a run not `ok`, or of a merge that lacked a run.
+/// Exit code of a sweep that ran to its end with a run not `ok`, or of a merge that lacks a run or holds one not
+/// `ok`.
 pub const SOME_RUNS_NOT_OK: u8 = 3;
 
 /// Parses `arguments`, the program name first, runs them over the options' models, and returns the exit code.
@@ -128,9 +142,10 @@ pub fn run(options: CliOptions, arguments: impl IntoIterator<Item = OsString>) -
         models,
         host,
         command_name,
+        about,
     } = options;
     let arguments: Vec<OsString> = arguments.into_iter().collect();
-    let args = match parse_args(command_name, host.version(), &arguments) {
+    let args = match parse_args(command_name, host.version(), about, &arguments) {
         Ok(args) => args,
         Err(error) => {
             // Help and the version go to stdout with code 0, a usage error to stderr with code 2.
@@ -147,13 +162,22 @@ pub fn run(options: CliOptions, arguments: impl IntoIterator<Item = OsString>) -
     }
 }
 
-/// Parses `arguments` as the command `name` at `version`.
+/// Parses `arguments` as the command `name` at `version`, whose help text opens with `about` when it is set.
 ///
 /// # Errors
 ///
 /// Returns clap's error for a command line that does not parse, and for `--help` and `--version`.
-fn parse_args(name: String, version: &'static str, arguments: &[OsString]) -> Result<Args, clap::Error> {
-    let mut command = Args::command().name(name).version(version);
+fn parse_args(
+    name: String,
+    version: &'static str,
+    about: Option<String>,
+    arguments: &[OsString],
+) -> Result<Args, clap::Error> {
+    // Without `bin_name`, clap names the command in usage lines after the program name.
+    let mut command = Args::command().name(name.clone()).bin_name(name).version(version);
+    if let Some(about) = about {
+        command = command.about(about);
+    }
     let mut matches = command.try_get_matches_from_mut(arguments)?;
     Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))
 }
@@ -167,6 +191,8 @@ fn parse_args(name: String, version: &'static str, arguments: &[OsString]) -> Re
         .multiple(true)
         .conflicts_with_all(["list", "export", "export_stats", "global_warmup"])
 ))]
+// The flags a spec file needs one of. Each puts the spec to a use.
+#[command(group(ArgGroup::new("spec_use").args(["out", "dry_run", "params"]).multiple(true)))]
 struct Args {
     /// Model id to run (see `--list`). Optional with `--spec`.
     #[arg(required_unless_present_any = ["list", "info", "spec", "merge"])]
@@ -194,15 +220,15 @@ struct Args {
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
     reps: u64,
 
-    /// Override a model parameter, e.g. `--set grid_size=512`. Repeatable.
-    #[arg(long = "set", value_name = "ID=VALUE")]
+    /// Override a model parameter, e.g. `--set grid_width=512`. Repeatable.
+    #[arg(long = "set", value_name = "ID=VALUE", value_parser = check_set)]
     set: Vec<String>,
 
     /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable. An unknown id is
     /// refused, and the error lists the ids the model declares. Each rep and each run of a sweep replays the same
     /// schedule. A sweep names the action by its id, or `ID_2` for the second `--act` of an id, skipping a name an
     /// earlier `--act` has taken.
-    #[arg(long = "act", value_name = "ID@TICK")]
+    #[arg(long = "act", value_name = "ID@TICK", value_parser = check_act)]
     act: Vec<String>,
 
     /// Write the final state (after warmup + steps) to this path, then exit.
@@ -306,18 +332,27 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
 
     // Best-effort headless GPU: acquire a device so GPU models can be listed and run. If none is
     // available (e.g. CI with no GPU), list and run the CPU models alone rather than failing.
-    let gpu_ctx = match acquire_headless(models.gpu_needs()) {
-        Ok(ctx) => Some(ctx),
-        Err(err) => {
-            eprintln!("note: no GPU available ({err}); GPU models disabled");
-            None
+    // A set without GPU models asks for a device only under `--info`, to report its adapter.
+    let gpu_models = has_gpu_models(models);
+    let gpu_ctx = if gpu_models || args.info {
+        match acquire_headless(models.gpu_needs()) {
+            Ok(ctx) => Some(ctx),
+            Err(err) => {
+                if gpu_models {
+                    eprintln!("note: no GPU available ({err}); GPU models disabled");
+                }
+                None
+            }
         }
+    } else {
+        None
     };
     let runtime = gpu_ctx.as_ref().and_then(GpuContext::runtime_info);
 
     // `force_fallback_adapter: false` does not stop a software rasteriser (lavapipe, WARP) being
     // returned when it is the only adapter present.
     if let Some(runtime) = runtime
+        && gpu_models
         && classify_adapter(&runtime.adapter) == GpuVerdict::Absent
     {
         eprintln!(
@@ -331,7 +366,7 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         if args.json {
             json_report::runtime(runtime);
         } else {
-            print_runtime_info(runtime);
+            print_runtime_info(runtime, gpu_models);
         }
     }
 
@@ -368,6 +403,11 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         _ => return run_single(entry, args, mode, gpu_ctx.as_ref(), runtime).map(|()| 0),
     }
     Ok(0)
+}
+
+/// Returns whether `models` holds a GPU model.
+fn has_gpu_models(models: &ModelSet) -> bool {
+    models.iter().any(|entry| entry.gpu_needs().is_some())
 }
 
 /// Returns the builds of Henad and of `host`, with the command line `arguments`.
@@ -429,7 +469,9 @@ fn run_single(
 }
 
 /// Benchmark provenance. Goes to stdout with the results, not the progress log.
-fn print_runtime_info(runtime: Option<&RuntimeInfo>) {
+///
+/// `gpu_models` says whether the set holds a GPU model. A missing adapter disables every GPU model.
+fn print_runtime_info(runtime: Option<&RuntimeInfo>, gpu_models: bool) {
     let collected;
     let host = if let Some(runtime) = runtime {
         &runtime.host
@@ -447,7 +489,8 @@ fn print_runtime_info(runtime: Option<&RuntimeInfo>) {
     println!("    worker threads:  {}", fmt_opt(host.worker_threads));
 
     match runtime {
-        None => println!("  gpu:               none (GPU models disabled)"),
+        None if gpu_models => println!("  gpu:               none (GPU models disabled)"),
+        None => println!("  gpu:               none"),
         Some(runtime) => {
             let adapter = &runtime.adapter;
             println!("  gpu:");
@@ -525,71 +568,85 @@ fn benchmark(setup: RunSetup, args: &Args, gpu_ctx: Option<&GpuContext>, adapter
     settings.global_warmup = args.global_warmup;
     settings.repetitions = args.reps;
     let mut backend = Backend::Cpu;
-    let report = run_benchmark(&settings, gpu_ctx, &mut |event| match event {
-        BenchmarkEvent::Started {
-            backend: started,
-            parallel_jobs,
-        } => {
-            backend = started;
-            let (variant, adapter, tag) = match started {
-                Backend::Gpu => ("gpu", adapter, " [GPU]"),
-                Backend::Cpu => ("cpu", None, ""),
-            };
-            if args.json {
-                json_report::info(
-                    entry.id(),
-                    variant,
-                    rayon::current_num_threads(),
-                    parallel_jobs,
-                    adapter,
-                );
-            }
-            eprintln!(
-                "benchmarking {} ({}){tag}: {} steps x {} reps, {} warmup, {} global-warmup",
-                entry.name(),
-                entry.id(),
-                args.steps,
-                args.reps,
-                args.warmup,
-                args.global_warmup
-            );
-            if cfg!(debug_assertions) {
-                eprintln!("!!! warning: debug build; use --release for benchmarking !!!");
-            }
-        }
-        BenchmarkEvent::GlobalWarmupFinished(elapsed) => {
-            eprintln!(
-                "  #{: >4}: {elapsed:>8.3?}  ({} global warmup steps)",
-                0, args.global_warmup
-            );
-        }
-        BenchmarkEvent::RepetitionFinished(repetition) => {
-            eprintln!("  #{: >4}: {:>8.3?}", repetition.index + 1, repetition.elapsed);
-            let (population, after) = (repetition.population_after_warmup, repetition.population_after_steps);
-            // A population that fluctuates at steady state moves by about its square root, which is not worth a note.
-            let noise = (3.0 * (population as f64).sqrt()) as u64;
-            if backend == Backend::Cpu && after.abs_diff(population) > (population / 10).max(noise) {
+    // Whether stderr ends in a repetition's number with no time after it yet.
+    let mut number_open = false;
+    let finished = run_benchmark(&settings, gpu_ctx, &mut |event| {
+        number_open = matches!(
+            event,
+            BenchmarkEvent::GlobalWarmupStarted | BenchmarkEvent::RepetitionStarted(_)
+        );
+        match event {
+            BenchmarkEvent::Started {
+                backend: started,
+                parallel_jobs,
+            } => {
+                backend = started;
+                let (variant, adapter, tag) = match started {
+                    Backend::Gpu => ("gpu", adapter, " [GPU]"),
+                    Backend::Cpu => ("cpu", None, ""),
+                };
+                if args.json {
+                    json_report::info(
+                        entry.id(),
+                        variant,
+                        rayon::current_num_threads(),
+                        parallel_jobs,
+                        adapter,
+                    );
+                }
                 eprintln!(
-                    "  note: the population went from {population} to {after} during the timed steps. \
+                    "benchmarking {} ({}){tag}: {} steps x {} reps, {} warmup, {} global-warmup",
+                    entry.name(),
+                    entry.id(),
+                    args.steps,
+                    args.reps,
+                    args.warmup,
+                    args.global_warmup
+                );
+                if cfg!(debug_assertions) {
+                    eprintln!("!!! warning: debug build; use --release for benchmarking !!!");
+                }
+            }
+            // The number shows while the state builds and steps, and the time follows on the same line.
+            BenchmarkEvent::GlobalWarmupStarted => eprint!("  #{: >4}: ", 0),
+            BenchmarkEvent::GlobalWarmupFinished(elapsed) => {
+                eprintln!("{elapsed:>8.3?}  ({} global warmup steps)", args.global_warmup);
+            }
+            BenchmarkEvent::RepetitionStarted(index) => eprint!("  #{: >4}: ", index + 1),
+            BenchmarkEvent::RepetitionFinished(repetition) => {
+                eprintln!("{:>8.3?}", repetition.elapsed);
+                let (population, after) = (repetition.population_after_warmup, repetition.population_after_steps);
+                // A population that fluctuates at steady state moves by about its square root, which is not worth a note.
+                let noise = (3.0 * (population as f64).sqrt()) as u64;
+                if backend == Backend::Cpu && after.abs_diff(population) > (population / 10).max(noise) {
+                    eprintln!(
+                        "  note: the population went from {population} to {after} during the timed steps. \
                      Updates per second are computed from the population after warmup. \
                      A longer --warmup can reach a steady population first."
-                );
+                    );
+                }
+                if args.json {
+                    json_report::rep(
+                        repetition.index,
+                        repetition.seed,
+                        args.steps,
+                        args.warmup,
+                        repetition.elapsed,
+                        population,
+                        repetition.heap_bytes,
+                    );
+                }
             }
-            if args.json {
-                json_report::rep(
-                    repetition.index,
-                    repetition.seed,
-                    args.steps,
-                    args.warmup,
-                    repetition.elapsed,
-                    population,
-                    repetition.heap_bytes,
-                );
-            }
+            // Other events print nothing.
+            _ => {}
         }
-        // Other events print nothing.
-        _ => {}
-    })?;
+    });
+    // The line of a repetition that failed after its number was printed ends here. Otherwise `Error:` follows the
+    // number on the same line.
+    if finished.is_err() && number_open {
+        eprintln!();
+    }
+    let report = finished?;
 
     let samples: Vec<Duration> = report.repetitions.iter().map(|repetition| repetition.elapsed).collect();
     // For grid models the population is the total cell count, and for agent models the agent count, sampled after
@@ -780,12 +837,37 @@ fn set_error(error: ValueError) -> anyhow::Error {
     }
 }
 
+/// Checks that `--set` reads as `ID=VALUE`, and returns it unchanged.
+///
+/// The model checks the id and the value once it is known. A malformed flag is then a refused command line.
+fn check_set(raw: &str) -> Result<String, String> {
+    if raw.contains('=') {
+        Ok(raw.to_owned())
+    } else {
+        Err("expected ID=VALUE".to_owned())
+    }
+}
+
+/// Checks that `--act` reads as `ID@TICK` with a tick in `u64`, and returns it unchanged.
+///
+/// The model checks the id once it is known.
+fn check_act(raw: &str) -> Result<String, String> {
+    let (_, tick) = raw.rsplit_once('@').ok_or("expected ID@TICK")?;
+    match tick.parse::<u64>() {
+        Ok(_) => Ok(raw.to_owned()),
+        Err(_) => Err(format!("expected a tick from 0 to {}, got '{tick}'", u64::MAX)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
-    use super::{Args, CliOptions, Mode, SOME_RUNS_NOT_OK, params_text, run, test_provenance, write_series};
+    use super::{
+        Args, CliOptions, Mode, SOME_RUNS_NOT_OK, has_gpu_models, params_text, parse_args, run, test_provenance,
+        write_series,
+    };
     use crate::explore::{self, ExploreArgs};
     use crate::json_report;
     use clap::Parser as _;
@@ -1064,10 +1146,51 @@ mod tests {
             "--merge needs --out"
         );
         assert_eq!(
+            run(options(), line(&["henad-cli", "--spec", "s.toml"])),
+            2,
+            "a spec needs --out, --dry-run or --params"
+        );
+        assert_eq!(
+            run(options(), line(&["henad-cli", "sir", "--set", "grid_width"])),
+            2,
+            "a malformed --set is refused before the model is looked up"
+        );
+        assert_eq!(
             run(options(), line(&["henad-cli", "sir", "--steps", "1"])),
             1,
             "an empty set holds no sir"
         );
+    }
+
+    /// Checks that the usage lines name the command as the options do, whatever the program name, and that the help
+    /// text opens with the host's line, or with henad-cli's description by default.
+    #[test]
+    fn the_options_name_and_describe_the_command() {
+        let render = |about: Option<&str>, arguments: &[&str]| {
+            let arguments: Vec<OsString> = arguments.iter().map(OsString::from).collect();
+            let about = about.map(str::to_owned);
+            let Err(error) = parse_args("my-models".to_owned(), "1.2.3", about, &arguments) else {
+                panic!("{arguments:?} ends the parse");
+            };
+            error.render().to_string()
+        };
+        let refused = render(None, &["other-name", "--no-such-flag"]);
+        assert!(refused.contains("Usage: my-models"), "{refused}");
+        let help = render(Some("Runs my models."), &["other-name", "--help"]);
+        assert!(help.starts_with("Runs my models."), "{help}");
+        assert!(help.contains("Usage: my-models"), "{help}");
+        let default = render(None, &["other-name", "--help"]);
+        assert!(default.starts_with(env!("CARGO_PKG_DESCRIPTION")), "{default}");
+        assert_eq!(render(None, &["other-name", "--version"]), "my-models 1.2.3\n");
+    }
+
+    /// Checks that a set holding CPU models alone asks for no device.
+    #[test]
+    fn a_cpu_only_set_has_no_gpu_models() {
+        let mut cpu_only = ModelSet::new(henad_core::build_info!());
+        cpu_only.insert(cpu_entry("sir")).expect("one id");
+        assert!(!has_gpu_models(&cpu_only));
+        assert!(has_gpu_models(&example_models()));
     }
 
     /// Checks that `--params` prints what it printed before sweeps, byte for byte.

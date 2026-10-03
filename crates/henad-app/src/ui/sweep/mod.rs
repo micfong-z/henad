@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use egui::{CentralPanel, Frame, Id, Margin, Panel, ScrollArea};
-use henad_compute::cpu::sim_thread::{SimCommand, WakeFn};
+use henad_compute::cpu::sim_thread::WakeFn;
 use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_core::explore::plan::{ModelSchema, PlanWarning};
@@ -1113,11 +1113,7 @@ fn apply_panel_values(app: &mut AppState, panel_values: &[Option<ParamValue>]) {
         app.param_values[index] = value.clone();
         if !descriptor.is_live() {
             app.pending_reload[index] = true;
-        } else if loaded && let Some(thread) = &mut app.sim_thread {
-            thread.send(SimCommand::SetParam {
-                index,
-                value: value.clone(),
-            });
+        } else if loaded && app.send_live_param(index, value.clone()) {
             sent_live = true;
         }
     }

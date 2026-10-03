@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::state::PointRenderMode;
-use crate::ui::agent_layer::AgentLayer;
+use crate::ui::agent_layer::{AgentLayer, padded_palette};
 use crate::ui::painted::{Painted, painted};
 use crate::{icons::material_design_icons::MDI_CUBE_OFF_OUTLINE, state::AppState};
 use eframe::egui_wgpu;
@@ -255,20 +255,19 @@ fn has_points(app: &AppState) -> bool {
 /// One texel per cell.
 fn expand_grid(grid: &GridSnapshot) -> Vec<egui::Color32> {
     use rayon::prelude::*;
-    grid.cells
-        .par_iter()
-        .map(|&cell| palette_color(grid.palette, cell))
-        .collect()
+    let colors = grid_colors(grid.palette);
+    grid.cells.par_iter().map(|&cell| colors[usize::from(cell)]).collect()
 }
 
 /// One representative cell per texel, for a grid too large to upload whole.
 fn sample_grid(grid: &GridSnapshot, tex_w: u32, tex_h: u32) -> Vec<egui::Color32> {
     let width = grid.width as usize;
+    let colors = grid_colors(grid.palette);
     let row = |ty: u32| {
         let sy = source_row(ty, grid.height, tex_h) as usize;
         let cells = &grid.cells[sy * width..(sy + 1) * width];
         (0..tex_w as usize)
-            .map(|tx| palette_color(grid.palette, cells[tx * width / tex_w as usize]))
+            .map(|tx| colors[usize::from(cells[tx * width / tex_w as usize])])
             .collect::<Vec<_>>()
     };
 
@@ -318,10 +317,12 @@ fn upload_agents(app: &mut AppState, points: &PointSnapshot, edges: Option<&Edge
 const DENSITY_W: usize = 512;
 const DENSITY_H: usize = 512;
 
-#[inline]
-fn palette_color(palette: &[[u8; 4]], cell: u8) -> egui::Color32 {
-    let [r, g, b, a] = palette[cell as usize];
-    egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+/// Returns the colour of every cell value under `palette`, a value past its end taking the first colour.
+///
+/// Note that a cell value is the model's to choose. Indexing `palette` itself would panic on the UI thread for a
+/// value past its end.
+fn grid_colors(palette: &[[u8; 4]]) -> [egui::Color32; 256] {
+    padded_palette(palette).map(|[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a))
 }
 
 /// 5-stop piecewise linear approximation of the Inferno colormap.
@@ -409,5 +410,30 @@ fn render_density_heatmap(
         None => {
             app.density_texture = Some(ctx.load_texture("density_heatmap", image, TextureOptions::LINEAR));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use henad_compute::snapshot::GridSnapshot;
+
+    use super::{expand_grid, sample_grid};
+
+    /// A model's cell value can run past its palette. The upload used to panic on the UI thread and end the app.
+    #[test]
+    fn a_cell_past_the_palette_takes_the_first_colour() {
+        let grid = GridSnapshot {
+            width: 4,
+            height: 2,
+            cells: vec![0, 1, 2, 255, 1, 1, 7, 0],
+            palette: &[[10, 20, 30, 255], [40, 50, 60, 255]],
+        };
+        let first = egui::Color32::from_rgb(10, 20, 30);
+        let second = egui::Color32::from_rgb(40, 50, 60);
+        assert_eq!(
+            expand_grid(&grid),
+            [first, second, first, first, second, second, first, first]
+        );
+        assert_eq!(sample_grid(&grid, 2, 1), [first, first]);
     }
 }

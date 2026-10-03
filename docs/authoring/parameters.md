@@ -15,6 +15,8 @@ This page covers the declaration API, when an edit lands live, when it needs a r
 ```
 
 The `params!` macro expands to one `const` per entry, holding an index derived from the entry's position in the declaration, together with a `descriptors()` function that returns the whole list.
+The example models sit below the facade, in henad-models, and name it `henad_core::params!`.
+A project names it `henad::params!`, as the template's `src/vote.rs` does.
 Your impl forwards `param_descriptors` to `descriptors`, and reads values back through the generated index constants.
 
 ```rust
@@ -156,7 +158,7 @@ See [the command line](../reference/cli.md) for the full CLI, and [the models](.
 ## Actions
 
 An action is a one-off change to the state that the user asks for between ticks, such as Game of Life's Randomise and Clear.
-You declare actions next to the parameters, through the `actions!` macro.
+You declare actions next to the parameters, through the `actions!` macro, which a project names `henad::actions!`.
 
 ```rust
 --8<-- "crates/henad-models/src/game_of_life.rs:actions"
@@ -224,6 +226,9 @@ The Parameters tab draws one button per action under the parameter widgets, disa
 
 The testing kit's `Actions` check presses every declared action on a freshly built state, and asserts that the state accepts each one and refuses an index past the last.
 Its `ActionIds` check asserts that no two actions of a model share an id, since `--act` could not tell them apart.
+It also refuses an id that is empty or holds whitespace or `=`.
+Neither `--vary action.NAME=LEVELS` nor a design table can name one.
+`ParamIds` refuses the same in a parameter id, and an id that starts with `action.`.
 
 ## Actions on the GPU
 

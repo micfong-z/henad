@@ -5,27 +5,31 @@
 //! (`henad_compute::gpu::grid_engine`) derives every buffer, layout, pipeline, bind group, and
 //! the whole `SimState`/`GpuSimState` impl from them.
 //!
-//! # Binding conventions
+//! # Bindings
 //!
-//! The engine resolves each binding by the name the shader gives it, so a
-//! model's shaders must declare exactly these bindings, all in `@group(0)`:
+//! The engine resolves each `@group(0)` binding by the name the shader gives it, so a slot index
+//! cannot disagree with the shader that owns it. Each pass's declarations are generated from its
+//! shader at build time, as [`GpuGridModel::STEP_BINDINGS`] and its siblings.
 //!
-//! **`STEP_SHADER`**, for `K = BUFFER_COUNT` ping-ponged buffers. Bindings `0..2K` are
-//! interleaved read/write pairs, and binding `2K` is the step uniform.
+//! A buffer is bound by its [`GpuGridModel::BUFFERS`] label, with an optional `_in` or `_out`
+//! suffix. The access mode picks the side. A `read` binding gets the current side, and a
+//! `read_write` one the next side. Four names are reserved for resources the engine owns: `params`
+//! for the step's uniform block, `dims` for the `Dims` uniform below, `output` for the display
+//! texture and `counters` for the reduce totals. [`crate::authoring::model::binding`] lists every
+//! reserved name.
 //!
 //! ```wgsl
-//! @group(0) @binding(0) var<storage, read>       buf0_in;   // buffer 0, current
-//! @group(0) @binding(1) var<storage, read_write> buf0_out;  // buffer 0, next
-//! @group(0) @binding(2) var<storage, read>       buf1_in;   // buffer 1, current  (K >= 2)
-//! @group(0) @binding(3) var<storage, read_write> buf1_out;  // buffer 1, next     (K >= 2)
-//! @group(0) @binding(4) var<uniform>             params;    // at binding 2K
+//! // step.wgsl, for BUFFERS = &["state", "rng"]
+//! @group(0) @binding(0) var<storage, read> state_in: array<u32>;
+//! @group(0) @binding(1) var<storage, read_write> state_out: array<u32>;
+//! @group(0) @binding(2) var<storage, read> rng_in: array<u32>;
+//! @group(0) @binding(3) var<storage, read_write> rng_out: array<u32>;
+//! @group(0) @binding(4) var<uniform> params: Params;
 //! ```
 //!
-//! All `K` buffers are ping-ponged together, in lockstep. A step reads every buffer's current
-//! side and writes every buffer's next side.
-//!
-//! **`DISPLAY_SHADER`** and **`REDUCE_SHADER`** see only buffer 0, the *primary* state buffer.
-//! Auxiliary buffers, a per-cell RNG say, are step-private.
+//! All buffers are ping-ponged together, in lockstep. A step reads every buffer's current side and
+//! writes every buffer's next side. Display and reduce can bind any buffer by label, and the
+//! shipped ones read only the first.
 //!
 //! # Buffer length and dispatch domain
 //!
@@ -53,25 +57,31 @@
 //!
 //! // display.wgsl
 //! @group(0) @binding(0) var<storage, read> state: array<u32>;
-//! @group(0) @binding(1) var out_tex: texture_storage_2d<rgba8unorm, write>;
+//! @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
 //! @group(0) @binding(2) var<uniform> dims: Dims;
 //!
-//! // reduce.wgsl
+//! // reduce.wgsl, for three stats
 //! @group(0) @binding(0) var<storage, read> state: array<u32>;
-//! @group(0) @binding(1) var<storage, read_write> totals: array<atomic<u32>, STAT_COUNT>;
+//! @group(0) @binding(1) var<storage, read_write> counters: array<atomic<u32>, 3>;
 //! @group(0) @binding(2) var<uniform> dims: Dims;
 //! ```
 //!
-//! # Unchecked contracts
+//! # Contracts
 //!
-//! Nothing here can be verified at compile time. The shaders are opaque strings to Rust, so a
-//! mismatch surfaces as a wgpu validation error at model construction. A valid model has all of
-//! the following true.
-//! - [`GpuGridModel::WORKGROUP_SIZE`] must equal the `@workgroup_size(N, N)` all three shaders declare,
-//! - [`GpuGridModel::STATS`] length must equal the reduce shader's `atomic<u32>` array length and the
-//!   number of entries [`GpuGridModel::stats`] returns,
+//! The shaders are opaque strings to Rust, so nothing here can be verified at compile time. A valid
+//! model has all of the following true.
+//! - [`GpuGridModel::WORKGROUP_SIZE`] must equal the `@workgroup_size(N, N)` every shader declares.
+//!   The engine reads each shader's literal size at construction and panics on a mismatch,
+//! - a buffer label must not be reserved or end in `_in` or `_out`. The engine checks this at
+//!   construction,
+//! - [`GpuGridModel::STATS`] length must equal the reduce shader's `atomic<u32>` array length. A
+//!   shorter array validates, and the stats past its end read zero,
+//! - [`GpuGridModel::STATS`] length must equal the number of values [`GpuGridModel::stats`]
+//!   returns. The engine pairs the two by position and drops the values past the shorter. The
+//!   testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values,
 //! - [`GpuGridModel::buffer_lens`] must return exactly [`GpuGridModel::BUFFERS`]`.len()` lengths, and
-//!   [`GpuGridModel::seed_buffers`] exactly that many vectors, of exactly those lengths.
+//!   [`GpuGridModel::seed_buffers`] exactly that many vectors, of exactly those lengths. The engine
+//!   asserts both at construction.
 
 use crate::action::ActionDescriptor;
 use crate::authoring::model::binding::BindingDecl;
@@ -83,16 +93,26 @@ use crate::view::{StatDescriptor, StatValue};
 /// Dispatched over [`GpuGridModel::step_dims`] like a step, but writing the current side in place,
 /// since nothing ping-pongs afterwards. Its bindings therefore resolve read and write alike to the
 /// side that holds the state now.
-#[derive(Debug)]
 pub struct GpuGridAction {
     pub desc: ActionDescriptor,
     pub shader: &'static str,
     pub bindings: &'static [BindingDecl],
 }
 
+/// Prints the shader's length, not its source.
+impl std::fmt::Debug for GpuGridAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuGridAction")
+            .field("desc", &self.desc)
+            .field("shader_len", &self.shader.len())
+            .field("bindings", &self.bindings)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A grid model stepped by a compute shader, with its state resident in GPU storage buffers.
 ///
-/// See the module docs for the binding conventions the shaders must follow.
+/// See the module docs for the bindings and the contracts the shaders must follow.
 pub trait GpuGridModel: Send + Sync + 'static {
     const NAME: &'static str;
     const ID: &'static str;
@@ -102,7 +122,8 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// copy of the colours, and keeping the two in agreement is on the model.
     const PALETTE: &'static [[u8; 4]];
 
-    /// Must match the `@workgroup_size(N, N)` declared by all three shaders.
+    /// Must match the `@workgroup_size(N, N)` declared by every shader, actions included. The engine panics at
+    /// construction on a shader that declares another literal size.
     const WORKGROUP_SIZE: u32 = 16;
 
     /// Stat series for the history chart. Its length is how many `u32` counters the reduce shader
@@ -128,8 +149,9 @@ pub trait GpuGridModel: Send + Sync + 'static {
 
     /// Whether two builds on one seed step through identical states.
     ///
-    /// A model whose passes leave the order of their writes to the GPU declares `false`. The sweep tests then skip
-    /// the checks that compare two runs on one seed. A rebuilt run of such a model might differ from its recorded row.
+    /// A model whose passes leave the order of their writes to the GPU declares `false`. The testing kit then skips
+    /// the checks that compare two runs on one seed, and the app notes that a replayed run might differ from its
+    /// recorded row.
     const REPLAYS_EXACTLY: bool = true;
 
     /// The full descriptor list. Unlike [`crate::authoring::model::grid_model::GridModel`], width and

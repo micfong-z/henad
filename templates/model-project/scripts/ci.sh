@@ -11,6 +11,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# shellcheck source=scripts/web-checks.sh
+source scripts/web-checks.sh
+
 locked=()
 if [[ -f Cargo.lock ]]; then
     locked=(--locked)
@@ -21,12 +24,10 @@ stage_lint() {
 }
 
 stage_lint_web() {
-    if [[ -n "${RUSTFLAGS+set}" || -n "${CARGO_ENCODED_RUSTFLAGS+set}" ]]; then
-        echo "RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS is set, and either would replace the wasm flags in .cargo/config.toml." >&2
-        exit 1
-    fi
+    local toolchain
+    toolchain="$(web_toolchain)"
     # A target directory of its own. The nightly would otherwise rebuild what the stable stages built.
-    RUSTUP_TOOLCHAIN="$(cat scripts/web-toolchain)" \
+    RUSTUP_TOOLCHAIN="$toolchain" \
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}/lint-web" \
         cargo clippy ${locked[@]+"${locked[@]}"} --all-features --target wasm32-unknown-unknown -- -D warnings
 }
@@ -37,7 +38,7 @@ stage_test() {
 }
 
 stage_web() {
-    scripts/build_web.sh build --release ${locked[@]+"${locked[@]}"}
+    bash scripts/build_web.sh build --release ${locked[@]+"${locked[@]}"}
     # The worker pool starts from glue that wasm-bindgen-rayon exports, and a build without it still succeeds.
     local binary
     binary="$(sed -n 's/.*data-bin="\([^"]*\)".*/\1/p' index.html)"

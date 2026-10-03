@@ -6,21 +6,32 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
+use henad_explore::device::acquire_headless;
 
 /// Returns the folder of reference output.
 fn golden_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
 }
 
-/// Returns whether this machine offers a compute adapter, as the CLI acquires one.
+/// Returns whether this machine offers a compute adapter, through the call the CLI acquires its device with.
+///
+/// An adapter below the WebGPU baseline gives no device there, and the CLI then lists the CPU models alone.
 ///
 /// # Panics
 ///
-/// Panics when `HENAD_REQUIRE_GPU` is set and no adapter is available.
+/// Panics when `HENAD_REQUIRE_GPU` is set to anything but empty or `0` and no device is available.
 fn has_adapter() -> bool {
-    let request = TestDeviceRequest::raised(henad_models::example_models().gpu_needs());
-    headless_test_device(&request).is_some()
+    match acquire_headless(henad_models::example_models().gpu_needs()) {
+        Ok(_) => true,
+        Err(error) => {
+            let required = std::env::var_os("HENAD_REQUIRE_GPU").is_some_and(|value| !value.is_empty() && value != "0");
+            assert!(
+                !required,
+                "HENAD_REQUIRE_GPU is set, but the CLI finds no device: {error}"
+            );
+            false
+        }
+    }
 }
 
 /// Returns what `henad-cli` with `arguments` writes to standard output.

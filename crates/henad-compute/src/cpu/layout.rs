@@ -34,7 +34,6 @@ const MIN_SPEED: f64 = 1e-3;
 const MAX_SPEED: f64 = 1e3;
 
 /// Buffers reused across layout iterations, along with the layout's RNG seed and global speed.
-#[derive(Debug)]
 pub struct LayoutScratch {
     hash: Option<SpatialHash>,
     disp_x: Vec<f32>,
@@ -46,6 +45,18 @@ pub struct LayoutScratch {
     speed: f64,
     seed: u64,
     iteration: u32,
+}
+
+/// Prints the node count and the layout's progress, not the per-node buffers.
+impl std::fmt::Debug for LayoutScratch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LayoutScratch")
+            .field("len", &self.disp_x.len())
+            .field("speed", &self.speed)
+            .field("seed", &self.seed)
+            .field("iteration", &self.iteration)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LayoutScratch {

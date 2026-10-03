@@ -9,7 +9,7 @@ icon: material/check-decagram-outline
 Henad runs every kernel in parallel and gives no guarantee about which chunk lands on which core.
 The answer still has to come out the same every time, and this page covers the rules that make sure it does.
 
-A chunk's RNG comes from `chunk_seed(base, tick, chunk_index)` and from nothing a worker mutates, which keeps a result independent of how rayon schedules the chunks.
+The engine seeds a chunk's RNG from the tick's seed and the chunk's index, and from nothing a worker mutates, which keeps a result independent of how rayon schedules the chunks.
 The same has to hold on the web, where the pool width is whatever `navigator.hardwareConcurrency` reported.
 
 Reductions obey the same rule.
@@ -26,6 +26,9 @@ Float addition is not associative, so if any of these folded in arrival order in
 The `ThreadCount` check of the [testing kit](testing.md) runs this comparison on every CPU model, at a size that splits a step into 14 jobs.
 Both agent models carry a `results_do_not_depend_on_the_thread_count` test of their own as well, for a busier configuration than the kit's.
 If your model draws random numbers during a step, consider one for it too.
+The test builds thread pools of its own through `rayon`.
+In a project made from the template, add `rayon = "1"` under `[dev-dependencies]` first.
+Cargo resolves it to the rayon Henad steps on.
 
 ```rust
 #[test]
@@ -65,15 +68,17 @@ Three details of the test matter.
 To run a single test by name:
 
 ```bash
-cargo test -p henad-models results_do_not_depend_on_the_thread_count
+cargo test results_do_not_depend_on_the_thread_count
 ```
+
+In a clone of Henad's repository, `-p henad-models` runs the example models' tests of that name.
 
 ## Network models
 
 After `init`, a [network model](network-models.md) draws random numbers in three places, and each has a stream of its own.
 
 The node pass is seeded like an agent pass.
-The engine hands it a per-tick seed, and `run_pass` splits that seed per chunk through `chunk_seed`.
+The engine hands it a per-tick seed, and `run_pass` splits that seed per chunk.
 The global pass runs on one thread and draws from a single stream, in the order the model asks for numbers.
 That stream carries over from one tick to the next.
 An [action](parameters.md#actions) draws from a third stream, seeded apart from the other two.
@@ -156,16 +161,19 @@ The Team Assembly tests compare the lanes and the graph with a scan or a closed 
 
 ## Before calling it green
 
+In a project made from the [template](../guide/your-project.md), this script runs the stages its CI runs:
+
 ```bash
-./check.sh
+scripts/ci.sh
 ```
 
-This script runs the CI-equivalent check set.
 GPU tests skip silently on a machine with no adapter, so set the environment variable that turns the skip into a failure:
 
 ```bash
-HENAD_REQUIRE_GPU=1 cargo test --workspace --all-targets
+HENAD_REQUIRE_GPU=1 cargo test
 ```
+
+In a clone of Henad's repository, `./check.sh` runs Henad's own check set, and `HENAD_REQUIRE_GPU=1 cargo test --workspace --all-targets` its tests.
 
 ## Next
 

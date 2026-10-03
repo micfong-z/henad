@@ -50,7 +50,8 @@ A network model's `init` also adds the edges.
 
 **A step.** The kernel itself, which stays pure apart from the RNG it is handed.
 
-Every model also declares a `PALETTE`, and [palettes and views](views.md) covers what the renderer does with it.
+Every model but a GPU agent model also declares a `PALETTE`, and [palettes and views](views.md) covers what the renderer does with it.
+A GPU agent model colours its agents from its own colour buffer.
 
 ## Where to start
 

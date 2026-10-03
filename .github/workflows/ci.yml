@@ -6,8 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Each event takes a group of its own. A push to `master` and the release checklist's dispatch on it would otherwise
+# cancel each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -37,18 +39,17 @@ jobs:
       - name: clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -W clippy::all
 
-      # Without atomics, so a `std::thread` reaching the web build fails here. henad-app is left
-      # out because `wasm-bindgen-rayon` refuses to compile without them, and the `web` job builds
-      # it the way it actually ships.
+      # Without atomics, so a `std::thread` reaching the web build fails here. henad-app then has
+      # no thread pool, as docs.rs builds it, and the `web` job builds it the way it actually ships.
       - name: wasm typecheck
-        run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-explore --all-features --lib --target wasm32-unknown-unknown
+        run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features --lib --target wasm32-unknown-unknown
 
-      # Without `--all-features`, which would turn on the facade's `app` and with it henad-app. henad-cli sits behind
-      # a native target gate and never joins.
+      # The facade with no feature and with all four, without atomics, as docs.rs builds it. henad-cli sits behind a
+      # native target gate and never joins.
       - name: Facade wasm typecheck
         run: |
           cargo check --locked -p henad --lib --target wasm32-unknown-unknown
-          cargo check --locked -p henad --features example-models,testing --lib --target wasm32-unknown-unknown
+          cargo check --locked -p henad --all-features --lib --target wasm32-unknown-unknown
 
       - name: Install nightly
         run: |
@@ -67,9 +68,9 @@ jobs:
           cargo clippy --locked -p henad --features app,example-models --target wasm32-unknown-unknown \
             -- -D warnings -W clippy::all
 
-      # The release workflow runs this extractor on a tag push, where a parsing bug would surface
-      # at the worst possible moment.
-      - name: Changelog extractor
+      # The changelog extractor, the docs.rs driver and the docs frontmatter check. The release workflow runs the
+      # extractor on a tag push, where a parsing bug would surface at the worst possible moment.
+      - name: Scripts' tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
       # Workspace versions, licence copies, paths that climb out of a crate, and the template's release profile.
@@ -221,11 +222,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Checked against the template's pin. The template's own workflow checks it too.
       - name: Install trunk
         run: |
           version="$(cat templates/model-project/scripts/trunk-version)"
-          curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xzf - -C "$HOME/.cargo/bin"
+          curl -sSfL --retry 5 -o "$RUNNER_TEMP/trunk.tar.gz" \
+            "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$(cat templates/model-project/scripts/trunk-sha256)  $RUNNER_TEMP/trunk.tar.gz" | sha256sum --check --quiet -
+          tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$HOME/.cargo/bin"
 
       # Release, the build users deploy. Trunk runs `data-wasm-opt` only under `--release`.
       - name: Build
@@ -246,6 +250,9 @@ jobs:
     name: downstream template
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    # The steps grep cargo's log for a status word and a crate name together. A colour code would sit between them.
+    env:
+      CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v5
 
@@ -254,11 +261,14 @@ jobs:
           rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
             --component rust-src,clippy --target wasm32-unknown-unknown
 
+      # Checked against the template's pin. The template's own workflow checks it too.
       - name: Install trunk
         run: |
           version="$(cat templates/model-project/scripts/trunk-version)"
-          curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xzf - -C "$HOME/.cargo/bin"
+          curl -sSfL --retry 5 -o "$RUNNER_TEMP/trunk.tar.gz" \
+            "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$(cat templates/model-project/scripts/trunk-sha256)  $RUNNER_TEMP/trunk.tar.gz" | sha256sum --check --quiet -
+          tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$HOME/.cargo/bin"
 
       - name: Install lavapipe
         run: templates/model-project/scripts/install-lavapipe.sh
@@ -270,6 +280,10 @@ jobs:
           CARGO_TARGET_DIR="$RUNNER_TEMP/verify" cargo package --workspace --exclude henad-tutorial --locked
           CARGO_TARGET_DIR="$RUNNER_TEMP/verify-features" cargo package --workspace --exclude henad-tutorial --locked \
             --features henad/example-models,henad/app,henad/cli,henad/testing
+          # The later steps read only the unpacked crates under `verify/package`. The two builds would hold several
+          # gigabytes of the runner's disk while the template builds.
+          rm -rf "$RUNNER_TEMP/verify/debug" "$RUNNER_TEMP/verify-features"
+          df -h "$RUNNER_TEMP"
 
       # The template ships no lock, and a lock resolved before the patch would no longer match it.
       - name: Copy the template onto the packaged crates
@@ -295,7 +309,7 @@ jobs:
         run: |
           cargo metadata --format-version 1 --locked | jq -e '
             [.packages[] | select(.name | startswith("henad"))]
-            | (map(.name) | contains(["henad", "henad-build"])) and all(.source == null)'
+            | (map(.name) | index("henad") != null and index("henad-build") != null) and all(.source == null)'
 
       # `cargo tree -i henad-models` would exit 101 when the package is correctly absent.
       - name: henad-models is absent
@@ -434,10 +448,11 @@ jobs:
         if: steps.manifests.outputs.changed == 'true'
         run: cargo package --workspace --exclude henad-tutorial --no-verify --locked
 
-  # Every feature of the facade builds alone, so none leans on another for an item it names.
+  # Every feature of the facade builds alone, so none leans on another for an item it names. A pull request and the
+  # release checklist's dispatch run it.
   features:
     name: facade features
-    if: github.event_name == 'pull_request'
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -459,10 +474,10 @@ jobs:
             cargo check --locked -p henad --features "$feature"
           done
 
-  # Holds the declared `rust-version` true.
+  # Holds the declared `rust-version` true. A pull request and the release checklist's dispatch run it.
   msrv:
     name: msrv
-    if: github.event_name == 'pull_request'
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -479,14 +494,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # `--workspace` turns on none of the facade's features, and leaves out the testing kit every template project
+      # builds in its tests.
       - name: Check
-        run: cargo +1.95 check --workspace --locked
+        run: |
+          cargo +1.95 check --workspace --locked
+          cargo +1.95 check --locked -p henad --features example-models,app,cli,testing
 
-  # The docs.rs builds, reproduced. henad-app's wasm32 half needs the atomics flags, which only a
-  # nightly applies. They go in both variables, since only `RUSTFLAGS` reaches the dependencies.
+  # The workspace's documentation, and every published crate's as docs.rs builds it. A pull request and the release
+  # checklist's dispatch run it.
   docs:
     name: docs
-    if: github.event_name == 'pull_request'
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -505,16 +524,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Native docs
+      - name: Workspace docs
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --workspace --no-deps --all-features
 
-      - name: henad-app wasm32 docs
-        env:
-          CARGO_TARGET_DIR: target/docs-wasm
-          RUSTFLAGS: -C target-feature=+atomics,+bulk-memory
-          RUSTDOCFLAGS: -D warnings -C target-feature=+atomics,+bulk-memory
-        run: |
-          RUSTUP_TOOLCHAIN="$(cat templates/model-project/scripts/web-toolchain)" \
-            cargo doc --locked -p henad-app --no-deps --target wasm32-unknown-unknown
+      # Each crate on every target of its `[package.metadata.docs.rs]` table, with that table's features and flags,
+      # on the pinned nightly.
+      - name: docs.rs builds
+        run: python3 scripts/docs_rs.py

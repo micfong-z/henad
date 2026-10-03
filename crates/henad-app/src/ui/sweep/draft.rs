@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::time::Duration;
 
-use henad_core::explore::design::{DesignError, DesignKind};
+use henad_core::explore::design::{DesignError, DesignKind, MAX_CONFIGS};
 use henad_core::explore::factor::{
     Factor, FactorDomain, FactorError, FactorLevel, FactorSpec, FactorTarget, LevelSpec, LevelSpecError,
 };
@@ -1959,6 +1959,7 @@ impl SweepDraft {
             }
             MeasureError::Stop(source) => DraftIssue::new(DraftSite::Stop, describe_error(source)),
             MeasureError::TooManyTicks { .. } => DraftIssue::new(DraftSite::RunLength, describe_error(error)),
+            MeasureError::TimeoutTooLong { .. } => DraftIssue::new(DraftSite::Timeout, describe_error(error)),
         }
     }
 
@@ -2300,6 +2301,9 @@ fn setting_message(error: &SearchSpecError) -> String {
     match error {
         SearchSpecError::NoEvaluations => "Evaluations must be at least 1".to_owned(),
         SearchSpecError::NoBatch => "Batch size must be at least 1".to_owned(),
+        SearchSpecError::BatchTooLarge { batch_size } => {
+            format!("Batch size must be at most {MAX_CONFIGS}, got {batch_size}")
+        }
         SearchSpecError::MissingObjective { .. } => "Objective: Select output".to_owned(),
         SearchSpecError::Setting { key, value, expected } => {
             format!("{} must be {expected}, got {value}", setting_label(key))
@@ -2339,7 +2343,9 @@ fn value_message(error: &ValueError) -> String {
         ValueError::OutOfRange { value, min, max } => format!("{value} is outside the range {min} to {max}"),
         ValueError::UnknownOption { raw, options } => format!("'{raw}' is not one of {}", options.join(", ")),
         ValueError::Param { source, .. } => value_message(source),
-        ValueError::UnknownParam { .. } | ValueError::BadOverride { .. } => describe_error(error),
+        ValueError::UnknownParam { .. } | ValueError::BadOverride { .. } | ValueError::WrongKind { .. } => {
+            describe_error(error)
+        }
     }
 }
 
@@ -2477,6 +2483,11 @@ fn read_value(schema: &ModelSchema<'_>, index: usize, text: &str) -> Result<Para
 
 /// Returns `error` and each of its causes, joined by colons, starting with a capital letter.
 pub fn describe_error(error: &dyn Error) -> String {
+    capitalize(&error_chain(error))
+}
+
+/// Returns `error` and each of its causes, joined by colons.
+pub fn error_chain(error: &dyn Error) -> String {
     let mut text = error.to_string();
     let mut cause = error.source();
     while let Some(source) = cause {
@@ -2484,7 +2495,7 @@ pub fn describe_error(error: &dyn Error) -> String {
         text.push_str(&source.to_string());
         cause = source.source();
     }
-    capitalize(&text)
+    text
 }
 
 /// Returns the words the Sweep tab reads `comparator` as, as in "at most".

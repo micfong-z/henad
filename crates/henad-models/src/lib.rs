@@ -2,6 +2,11 @@
 //!
 //! [`example_models`] returns all ten as a [`ModelSet`], the set the app and the CLI offer.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+// Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
+// limit of 128.
+#![recursion_limit = "256"]
+
 henad_compute::include_shaders!();
 
 pub mod ants;
@@ -23,23 +28,20 @@ use henad_compute::entry::{
     register_network_model,
 };
 
+// --8<-- [start:example_models]
 /// Returns the ten example models, with henad-models' own build as their source.
 pub fn example_models() -> ModelSet {
     let entries = [
-        // --8<-- [start:cpu_entries]
         register_grid_model::<crate::sir::SirGridModel>(),
         register_agent_model::<crate::boids::BoidsModel>(),
         register_grid_model::<crate::game_of_life::GameOfLifeModel>(),
         register_agent_model::<crate::ants::AntsModel>(),
         register_network_model::<crate::virus_network::VirusNetwork>(),
         register_network_model::<crate::team_assembly::TeamAssembly>(),
-        // --8<-- [end:cpu_entries]
-        // --8<-- [start:gpu_entries]
         register_gpu_grid_model::<crate::gpu_game_of_life::GpuGameOfLife>(),
         register_gpu_grid_model::<crate::gpu_sir::GpuSir>(),
         register_gpu_agent_model::<crate::gpu_boids::GpuBoids>(),
         register_gpu_agent_model::<crate::gpu_ants::GpuAnts>(),
-        // --8<-- [end:gpu_entries]
     ];
     let mut models = ModelSet::new(henad_core::build_info!());
     for entry in entries {
@@ -48,3 +50,4 @@ pub fn example_models() -> ModelSet {
     }
     models
 }
+// --8<-- [end:example_models]

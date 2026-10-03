@@ -21,8 +21,9 @@ pub fn run_details(app: &AppState) -> String {
         "model_name": entry.map(|e| e.name()),
         "backend": entry.map(|e| e.metadata().backend.label()),
         "model_source": entry.map(|e| RecordedBuild::from(e.source())),
-        "params": entry.map(|e| params_by_id_json(e.param_descriptors(), &app.param_values, ChoiceForm::Name)),
-        "params_match_running_model": app.selection_is_loaded() && !app.pending_reload.iter().any(|p| *p),
+        "params": entry.map(|e| params_by_id_json(e.param_descriptors(), &app.loaded_values, ChoiceForm::Name)),
+        // Kept from the files of 0.2. `params` holds the loaded model's own values.
+        "params_match_running_model": entry.is_some(),
         // Null with a model loaded is the model's default seed.
         "seed": entry.and(app.loaded_seed),
         "scheduled_actions": entry.map(|_| scheduled_actions_json(&app.loaded_schedule)),

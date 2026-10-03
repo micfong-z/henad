@@ -21,7 +21,7 @@ pub enum ProgressEvent<'a> {
     Planned(&'a SweepOutline),
     /// Something about the sweep that runs, though likely not as meant.
     Warned(&'a SweepWarning),
-    /// A run was written. Runs arrive in plan order.
+    /// A run was written. Runs arrive in plan order, and a search's in the order it asks for them.
     RunCommitted(&'a RunOutcome),
     /// Runs have finished since the last update. Sent at most once per [`PROGRESS_INTERVAL`].
     Progressed(ProgressUpdate),
@@ -45,7 +45,7 @@ impl Progress for NoProgress {
 }
 
 /// Runs finished so far, and the time left at the pace so far.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgressUpdate {
     /// Runs finished so far. A run counts once it finishes, before it is written.
     pub done: u64,
@@ -53,23 +53,26 @@ pub struct ProgressUpdate {
     pub total: u64,
     /// Finished runs that ended on a fault or a timeout.
     pub failed: u64,
-    /// Seconds since the [`ProgressMeter`] started. The meter starts before the first run is built.
-    pub elapsed_s: f64,
-    /// Seconds left at the mean pace of the finished runs, `None` before the first one.
-    pub remaining_s: Option<f64>,
+    /// Time since the [`ProgressMeter`] started. The meter starts before the first run is built.
+    pub elapsed: Duration,
+    /// Time left at the mean pace of the finished runs, `None` before the first one.
+    ///
+    /// A time too long for a [`Duration`] reads as `None` as well.
+    pub remaining: Option<Duration>,
 }
 
 impl ProgressUpdate {
     /// Returns the update after `done` of `total` runs in `elapsed`, `failed` of them on a fault or a timeout.
     pub fn new(done: u64, total: u64, failed: u64, elapsed: Duration) -> Self {
-        let elapsed_s = elapsed.as_secs_f64();
-        let remaining_s = (done > 0).then(|| elapsed_s / done as f64 * total.saturating_sub(done) as f64);
+        let remaining = (done > 0)
+            .then(|| elapsed.as_secs_f64() / done as f64 * total.saturating_sub(done) as f64)
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok());
         Self {
             done,
             total,
             failed,
-            elapsed_s,
-            remaining_s,
+            elapsed,
+            remaining,
         }
     }
 }
@@ -132,12 +135,17 @@ mod tests {
     #[test]
     fn the_remaining_time_scales_the_elapsed_time_by_the_runs_left() {
         let update = ProgressUpdate::new(4, 10, 1, Duration::from_secs(8));
-        assert_eq!(update.remaining_s, Some(12.0));
-        assert_eq!(update.elapsed_s, 8.0);
-        assert_eq!(ProgressUpdate::new(0, 10, 0, Duration::from_secs(3)).remaining_s, None);
+        assert_eq!(update.remaining, Some(Duration::from_secs(12)));
+        assert_eq!(update.elapsed, Duration::from_secs(8));
+        assert_eq!(ProgressUpdate::new(0, 10, 0, Duration::from_secs(3)).remaining, None);
         assert_eq!(
-            ProgressUpdate::new(10, 10, 0, Duration::from_secs(3)).remaining_s,
-            Some(0.0)
+            ProgressUpdate::new(10, 10, 0, Duration::from_secs(3)).remaining,
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            ProgressUpdate::new(1, u64::MAX, 0, Duration::from_secs(2)).remaining,
+            None,
+            "a time too long for a duration reads as none"
         );
     }
 

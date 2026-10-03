@@ -1,7 +1,7 @@
 ---
 date: 2026-10-02
 title: "Library M11: the release"
-description: The release half of the last milestone of #48. The workspace moves to 0.3.0 with every requirement and the template's, the final comparison of the performance protocol passes against v0.2.0 for the checkout build and the installed form, and codegen-units stays at the default after one codegen unit measured slower.
+description: "The release half of the last milestone of #48. The workspace moves to 0.3.0 with every requirement and the template's, the final comparison of the performance protocol passes against v0.2.0 for the checkout build and the installed form, and codegen-units stays at the default after one codegen unit measured slower."
 icon: material/rocket-launch-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)

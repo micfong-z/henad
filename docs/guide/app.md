@@ -172,6 +172,7 @@ The row `--export-stats` writes for tick 10 includes the action too.
 The list is read when the model is built, as the seed is.
 Changing it turns the heading amber and counts towards the **Reload needed** banner.
 Picking another model in the <span class="ui" markdown>:material-cog-outline: Model</span> tab clears the list.
+Picking the running model again brings back the parameters, seed and scheduled actions it runs with.
 
 ## :material-play-circle-outline: Playback tab
 
@@ -366,9 +367,10 @@ A network's edges are drawn as the **Edges** and **Arrows** checkboxes in the <s
 <span class="ui" markdown>:material-tray-arrow-down: Save details</span> writes a JSON file about running metadata, including the model, its resolved parameters, the tick reached, and the host and adapter and more entries.
 
 `seed` is the seed the model was built with, or `null` for **Default**, and `scheduled_actions` lists the `id` and `tick` of each scheduled action.
-`params` holds the values in the <span class="ui" markdown>:material-tune: Parameters</span> tab when the file is saved, and `params_match_running_model` is `false` while another model is selected or a parameter waits for a build.
-When it is `true` and nothing changed during the run, `henad-cli` repeats the run from these fields: each parameter as a `--set`, the seed as `--seed` (left out when `null`), each scheduled action as `--act ID@TICK`, and `tick` as `--steps`.
-The file does not record a live parameter edit or a press of an action button.
+`params` holds the values the running model uses, those it was built with and any live edit since, and `params_match_running_model` is `true` whenever a model is built.
+An edit in the <span class="ui" markdown>:material-tune: Parameters</span> tab that waits for a build, or a value of another selected model, is left out.
+When nothing changed during the run, `henad-cli` repeats the run from these fields: each parameter as a `--set`, the seed as `--seed` (left out when `null`), each scheduled action as `--act ID@TICK`, and `tick` as `--steps`.
+The file records the value a live edit set but not the tick it was set at, and records no press of an action button.
 
 ## :material-flask-outline: Sweep tab
 
@@ -612,8 +614,9 @@ Under the bar, <span class="ui" markdown>:material-pencil-outline: Edit sweep</s
 <span class="ui" markdown>:material-tray-arrow-down: Save results</span>
 : Saves the four files of a sweep held in memory: `runs.csv`, `series.csv`, `summary.csv` and `manifest.json`.
   The desktop app asks for a folder, and refuses one that already holds a file of the same name.
-  A browser downloads the files one after another.
-  The button goes once the files are saved.
+  A browser downloads the files one after another, with no dialog, and the status reads **Downloads started. Press Save results again if your browser blocked any.**
+  In the desktop app the button goes once the files are saved.
+  In a browser it stays, with the warnings about unsaved results, because the browser can hold back every download after the first.
   A sweep with an output folder wrote its files as it ran, and has no such button.
 
 <span class="ui" markdown>:material-chart-box-outline: Show results</span>
@@ -863,11 +866,15 @@ From a clone, run it as `target/release/henad-cli` after a release build, or put
 The <span class="ui" markdown>:material-play-circle-outline: Playback</span> tab names the opened run, as in **Sweep run 6: config 1, replicate 1**, or **Search run 6: candidate 1, replicate 2** for a run of a search.
 A live parameter edit or an action press adds **(modified)** to the name.
 GPU Boids is the one example model whose runs do not replay, for the reason under [Seed](#seed).
-A model that declares it does not replay exactly shows a note beside <span class="ui" markdown>:material-play-box-outline: Open</span> saying so.
+A model that declares it does not replay exactly shows a note beside <span class="ui" markdown>:material-play-box-outline: Open</span> saying so, and the same note under the run's name in the <span class="ui" markdown>:material-play-circle-outline: Playback</span> tab.
 
 The three buttons are disabled when this device lacks the run's model, such as a GPU model on a machine without a suitable GPU.
 They are also disabled when the model refuses the sweep's spec, for example after a parameter was removed, and the reason shows below them.
+A sweep of more than 1,048,576 configurations disables them as well.
+The app opens such a sweep from `runs.csv` alone, without planning it.
 A warning shows when the model's parameters, stats or actions changed after the sweep ran, or when the build of Henad or of the model differs from any build a session of the sweep recorded, and the replay might then differ.
+A model crate whose `build.rs` does not call `henad_build::stamp_commit` has an unidentified build that cannot be compared.
+A second warning then reads **Model build is unidentified**, below any warning of a change.
 
 ### Opening results
 
@@ -887,6 +894,9 @@ When those are unsaved results in memory, a **Replace results?** dialog asks fir
 
 A folder a stopped sweep left behind opens with the runs it wrote, even when it wrote none.
 In the desktop app, <span class="ui" markdown>:material-play: Resume sweep</span> runs the runs the folder lacks, as `henad-cli --resume` does.
+It keeps the memory budgets the folder's manifest records, and a line under the button names them until the resume starts.
+**Concurrent runs** is automatic, as on a new sweep.
+`henad-cli --resume` takes both from its flags and its spec's `[execution]` table instead.
 For a search the button reads <span class="ui" markdown>:material-play: Resume search</span>, and it [replays the search](search.md#resuming-a-search) up to where it stopped before running the rest.
 The progress shows in the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab, and the folder is read again once the sweep ends.
 
@@ -973,17 +983,23 @@ Although Henad is designed so that the web app runs identically to the native ap
 
 - **GPU time/step** reads `N/A` due to backend limitations.
 - **Layout budget** is capped at 6 ms, the time the simulation gets in each frame.
-- Device limits can be lower than the native app as broswers may not expose the full capabilities of the GPU.
+- Device limits can be lower than the native app as browsers may not expose the full capabilities of the GPU.
 - Append `?threads=N` to the URL to cap the worker pool.
 - The <span class="ui" markdown>:material-flask-outline: Sweep</span> tab sweeps and searches CPU models only, and a GPU model shows **GPU sweeps are unavailable in a browser.**
   <span class="ui" markdown>:material-tray-arrow-down: Save spec</span> still saves its spec for `henad-cli --spec`.
 - A sweep or search steps one run at a time, a little in each frame, and **Concurrent runs** stays at 1.
 - The results of a sweep or search stay in memory, and **In a folder** is disabled.
   Closing the page loses them unless you press <span class="ui" markdown>:material-tray-arrow-down: Save results</span>.
+- Every save is a download that starts at once, with no dialog in the app.
+  The browser puts the file in its downloads folder or asks where to save it, as its settings say, and it can ask before it lets a page download several files.
+  <span class="ui" markdown>:material-tray-arrow-down: Save results</span> therefore stays after its downloads start.
 - A panic in a run of a sweep or search ends the page.
   The desktop app records such a run as failed and carries on.
 - A browser cannot open a folder, and <span class="ui" markdown>:material-folder-open-outline: Open results</span> reads the files picked from one.
   <span class="ui" markdown>:material-play: Resume sweep</span>, <span class="ui" markdown>:material-play: Resume search</span> and <span class="ui" markdown>Load series</span> need the desktop app.
+- Boids, Ants and Virus on a Network call maths functions such as `sin` and `cos`.
+  The web build computes them with a maths library of its own, and the desktop app with the system's, and the two can round the last bit differently.
+  A run of one of them saved in a browser and opened in the desktop app can diverge from its row, with no warning.
 
 *[UI]: User interface
 *[TPS]: Ticks per second

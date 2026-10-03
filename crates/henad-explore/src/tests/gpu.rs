@@ -411,7 +411,11 @@ mod sampling_cadence_does_not_change_the_trajectory {
         for tick in measure.sample_ticks() {
             let steps = tick - state.tick();
             stepping::run_steps(&mut *state, ctx, steps).expect("the steps run");
-            assert!(!stepping::sample_stats(&mut *state, ctx).is_empty());
+            assert!(
+                !stepping::sample_stats(&mut *state, ctx)
+                    .expect("the sample lands")
+                    .is_empty()
+            );
         }
         // A sample records the stats passes alone, and the display pass of a snapshot draws the view read below.
         let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
