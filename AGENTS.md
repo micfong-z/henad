@@ -35,31 +35,16 @@ The records are published with the rest of the site, so a new one also needs its
 the page builds but nothing links to it. `docs/developing/agent-record/agent-record.md` is the
 landing page telling readers what the records are.
 
-After all the above, add a final section for human comments, as
+After all the above, add a final section for human comments, and leave it empty:
 
 ```md
 <!-- ─────────────────────────────────────────────────────────────────────────
      EVERYTHING BELOW THIS LINE IS WRITTEN BY THE HUMAN MAINTAINER.
      Agents: do not edit, summarise, reformat, or regenerate this section.
-     The one exception is the seed comment below, written once when the record
-     is created. Any later pass leaves the whole section alone.
      ───────────────────────────────────────────────────────────────────── -->
 
 ## Manual notes (human)
-
-<!-- Seeded by the agent: what the human did this session, from the agent's point of view.
-     Raw material to reframe, not notes. Delete this block once rewritten.
-
-     - ...
--->
 ```
-
-Seed that comment with what the _human_ did: the calls they made, the corrections they gave, the things
-they caught that the agent had wrong. It is there so the maintainer can reframe a session into their own
-notes without reconstructing it from the transcript, so keep it factual and specific — a decision and the
-reason behind it, an intervention and what it changed. Not praise, and not a summary of the agent's own
-work, which the sections above already cover. Write it only when creating the record; a later pass leaves
-it alone, since by then the human may have started rewriting the section.
 
 ## Documentation site
 
