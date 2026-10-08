@@ -40,47 +40,48 @@ use crate::ui::params::display_value;
 use crate::ui::plural;
 use crate::ui::results::store::{action_label, output_label};
 
-/// Most runs a sweep started from the app can have.
+/// Maximum number of runs in a sweep started from the app.
 pub const MAX_DRAFT_RUNS: u64 = 1 << 20;
 
-/// Most values one varied parameter or action tick can take in a draft.
+/// Maximum number of values for one varied parameter or action tick in a draft.
 pub const MAX_DRAFT_LEVELS: u64 = 1 << 20;
 
-/// Most bytes of `series.csv` a sweep can hold in memory.
+/// Maximum size in bytes of `series.csv` that a sweep can hold in memory.
 #[cfg(not(target_arch = "wasm32"))]
 pub const MAX_MEMORY_SERIES_BYTES: u64 = 4 << 30;
 
-/// Most bytes of `series.csv` a sweep can hold in memory. The web build has 4 GiB of memory in all.
+/// Maximum size in bytes of `series.csv` that a sweep can hold in memory. The web build has 4 GiB of memory in total.
 #[cfg(target_arch = "wasm32")]
 pub const MAX_MEMORY_SERIES_BYTES: u64 = 1 << 30;
 
-/// Fewest seconds the Timeout field can be set to.
+/// Minimum value of the Seconds per run field under Timeout.
 ///
-/// Note that a loaded spec can hold less, as `henad-cli` accepts it.
+/// Note that a loaded spec can hold a shorter timeout, which `henad-cli` accepts.
 pub const MIN_TIMEOUT_SECONDS: f64 = 1.0;
 
-/// Approximate bytes one value of `series.csv` takes as text.
+/// Approximate size in bytes of one `series.csv` value, written as text.
 const SERIES_VALUE_BYTES: u64 = 12;
 
-/// Samples a sampled design draws until the user asks for another number.
+/// Number of samples that a sampled design draws until the user sets another number.
 const DEFAULT_SAMPLES: usize = 20;
 
-/// Name a design table read from a spec file goes by.
+/// Name given to a design table read from a spec file.
 const SPEC_TABLE_NAME: &str = "the spec";
 
-/// Evaluations a search runs until the user asks for another number.
+/// Number of evaluations that a search runs until the user sets another number.
 const DEFAULT_EVALUATIONS: u64 = 200;
 
-/// Candidates a search evaluates at once until the user asks for another number.
+/// Number of candidates that a search evaluates at once until the user sets another number.
 const DEFAULT_BATCH_SIZE: usize = 16;
 
-/// Cells of a Pattern Space Exploration axis until the user sets another number.
+/// Number of cells in a Pattern Space Exploration axis until the user sets another number.
 const DEFAULT_AXIS_CELLS: u32 = 20;
 
-/// Most values of one parameter or action tick a preview formats.
+/// Maximum number of values of one parameter or action tick that a preview formats.
 pub const MAX_PREVIEW_VALUES: usize = 50;
 
-/// Most times the check of a search method's settings repairs one setting and checks again, one per setting.
+/// Maximum number of checks of a search method's settings, one per setting.
+/// Each rejected setting is repaired before the next check.
 const MAX_SETTING_CHECKS: usize = 8;
 
 /// Example of the ticks an action takes, as a hint and in the note of an empty row.
@@ -154,13 +155,13 @@ impl From<&SearchAlgorithm> for DraftAlgorithm {
 
 /// A search as the Sweep tab edits it.
 ///
-/// The draft keeps the settings of every method, so switching the method loses none of them.
+/// The draft keeps the settings of every method, so switching the method loses no settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchDraft {
     pub algorithm: DraftAlgorithm,
-    /// Evaluations the search runs, re-evaluations included.
+    /// Number of evaluations the search runs, re-evaluations included.
     pub max_evaluations: u64,
-    /// Most candidates evaluated at once.
+    /// Maximum number of candidates evaluated at once.
     pub batch_size: usize,
     /// Output column the objective reads, as in `Infected:max`.
     pub objective_column: String,
@@ -170,9 +171,9 @@ pub struct SearchDraft {
     pub hill_climb: HillClimbSettings,
     pub genetic: GeneticSettings,
     pub pattern_space: PatternSpaceSettings,
-    /// Minimum and maximum each axis held before its range was made automatic, the X axis's first.
+    /// Minimum and maximum that each axis held before its range was made automatic, X axis first.
     ///
-    /// Unchecking Automatic range gives them back to the axis.
+    /// Unchecking Automatic range restores them to the axis.
     pub remembered_ranges: [(f64, f64); 2],
 }
 
@@ -180,7 +181,7 @@ impl SearchDraft {
     /// Returns a random search that maximizes the first stat's maximum, with every setting at its default.
     ///
     /// The axes of a Pattern Space Exploration start with an automatic range. Their bounds hold an empty range, from
-    /// 0 to 0. The check refuses it once Automatic range is unchecked.
+    /// 0 to 0. The check rejects it once Automatic range is unchecked.
     pub fn new(schema: &ModelSchema<'_>) -> Self {
         let stat_output = |position: usize, kind: ReducerKind| {
             schema
@@ -208,7 +209,8 @@ impl SearchDraft {
         }
     }
 
-    /// Returns grid axis `axis` of the Pattern Space Exploration, with the range it gets back from automatic.
+    /// Returns grid axis `axis` of the Pattern Space Exploration, with the range remembered from before it
+    /// became automatic.
     pub fn pattern_axis_mut(&mut self, axis: GridAxis) -> (&mut PatternAxis, &mut (f64, f64)) {
         let [x_range, y_range] = &mut self.remembered_ranges;
         match axis {
@@ -217,7 +219,7 @@ impl SearchDraft {
         }
     }
 
-    /// Makes the range of `axis` automatic, keeping the range its bounds held, or gives the axis that range back.
+    /// Makes the range of `axis` automatic, keeping the range its bounds held, or restores that range to the axis.
     pub fn set_automatic_range(&mut self, axis: GridAxis, automatic: bool) {
         let (pattern_axis, remembered) = self.pattern_axis_mut(axis);
         if automatic {
@@ -293,8 +295,8 @@ pub enum DraftDesign {
     EveryCombination,
     /// The first values of every parameter together, then the second, and so on.
     Zip,
-    /// One block per varied parameter or action tick, every other varied one at its Parameters tab value or its
-    /// action's tick.
+    /// One block per varied parameter or action tick, with every other varied parameter at its Parameters tab value
+    /// and every other varied tick at its action's tick.
     VaryEachAlone,
     LatinHypercube,
     UniformRandom,
@@ -323,7 +325,7 @@ impl DraftDesign {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FactorDraft {
     pub vary: bool,
-    /// Values as `--vary` takes them, read by [`LevelSpec::parse`]: `v1, v2`, `min:max:step`, `min:max` or `all`.
+    /// Values as `--vary` accepts them, read by [`LevelSpec::parse`]: `v1, v2`, `min:max:step`, `min:max` or `all`.
     pub levels_text: String,
 }
 
@@ -332,18 +334,18 @@ pub struct FactorDraft {
 pub struct ActionDraft {
     /// Index of the action in the model's declarations.
     pub action_index: usize,
-    /// Name the spec gives the action, unique within the draft.
+    /// Name of the action in the spec, unique within the draft.
     pub name: String,
     /// Tick the action fires at, unless the tick varies.
     pub tick: u64,
     pub vary_tick: bool,
-    /// Ticks the action fires at when its tick varies, in the text [`FactorDraft::levels_text`] takes.
+    /// Ticks the action fires at when its tick varies, in the format of [`FactorDraft::levels_text`].
     pub ticks_text: String,
 }
 
 impl ActionDraft {
     /// Returns the label `schema` declares for the action, with the number its name adds for a repeat, as in "Seed
-    /// outbreak 2". An action the model does not declare goes by its name.
+    /// outbreak 2". An action the model does not declare is labelled with its name.
     pub fn label(&self, schema: &ModelSchema<'_>) -> String {
         schema.actions.get(self.action_index).map_or_else(
             || self.name.clone(),
@@ -371,7 +373,7 @@ pub struct DesignTableDraft {
 }
 
 impl DesignTableDraft {
-    /// Returns the parameter ids and `action.<name>` columns the table's header names, or nothing when the header is
+    /// Returns the parameter ids and `action.<name>` columns the table's header lists, or nothing when the header is
     /// not CSV.
     pub fn columns(&self) -> Vec<String> {
         let text = self.text.trim_start_matches('\u{feff}');
@@ -396,15 +398,16 @@ impl DesignTableDraft {
 pub struct SweepDraft {
     /// Id of the model the draft sweeps.
     pub model_id: String,
-    /// Program the advice on a sweep over the app's limit names, `None` for none.
+    /// Program that the advice on a sweep over the app's limit refers to, `None` when the product has no
+    /// command-line program.
     pub cli_command: Option<String>,
     pub mode: DraftMode,
-    /// One entry per parameter, in descriptor order. A search varies the ticked ones over its space.
+    /// One entry per parameter, in descriptor order. A search varies the ticked parameters over its space.
     pub factors: Vec<FactorDraft>,
-    /// Search a draft in [`DraftMode::Search`] runs in place of the design.
+    /// Search a draft in [`DraftMode::Search`] runs instead of the design.
     pub search: SearchDraft,
     pub design: DraftDesign,
-    /// Configurations a sampled design draws.
+    /// Number of configurations that a sampled design draws.
     pub samples: usize,
     /// Seed of a sampled design's draws, empty to derive it from the root seed.
     pub design_seed_text: String,
@@ -423,28 +426,29 @@ pub struct SweepDraft {
     pub stop: Option<StopDraft>,
     /// Stat column of the stop condition last cleared. A spec never holds it.
     pub last_stop_column: Option<String>,
-    /// Seconds of wall-clock time after which a run is abandoned.
+    /// Wall-clock time in seconds after which a run is abandoned.
     pub timeout_s: Option<f64>,
     /// Whether every stat gets its final, minimum, maximum and mean.
     pub default_reducers: bool,
     /// Outputs added after the defaults.
     pub reducers: Vec<ReducerSpec>,
     pub concurrency: Concurrency,
-    /// Bytes of host memory the live runs can hold together, as a loaded spec's `[execution]` table sets it.
+    /// Host memory budget in bytes for all live runs together, as a loaded spec's `[execution]` table sets it.
     ///
     /// The Execution section shows it read-only, Save spec writes it back unchanged, and a sweep the tab starts runs
     /// under it.
     pub memory_budget: Option<u64>,
-    /// Bytes of device memory the live GPU runs can hold together, kept from a loaded spec as
+    /// Device memory budget in bytes for all live GPU runs together, kept from a loaded spec as
     /// [`Self::memory_budget`] is.
     pub gpu_memory_budget: Option<u64>,
-    /// Whether the results stream into [`Self::output_dir_text`] in place of staying in memory. A spec never holds it.
+    /// Whether the results stream into [`Self::output_dir_text`] instead of staying in memory. A spec never holds it.
     pub results_in_folder: bool,
-    /// Folder the results stream into while [`Self::results_in_folder`] is set. Only the desktop app writes one.
+    /// Folder the results stream into while [`Self::results_in_folder`] is set. Only the desktop app writes results
+    /// to a folder.
     pub output_dir_text: String,
-    /// Stat columns a build of the model samples. They name the parts of a vector or histogram stat.
+    /// Stat columns a build of the model samples. They identify the parts of a vector or histogram stat.
     ///
-    /// Until [`Self::set_stat_columns`] gives them, they are `None` and every stat counts as one column. A spec never
+    /// Until [`Self::set_stat_columns`] sets them, they are `None` and every stat counts as one column. A spec never
     /// holds them.
     pub stat_columns: Option<StatColumns>,
     /// Whether a build of the model is still sampling [`Self::stat_columns`]. The draft cannot start until the build
@@ -491,7 +495,7 @@ pub enum DraftSite {
     Parameters,
     Design,
     DesignSeed,
-    /// Method, budget and every other search field without a site of its own.
+    /// Method, budget and every other search field without its own site.
     Search,
     Objective,
     /// Output and range of one axis of a Pattern Space Exploration.
@@ -519,7 +523,7 @@ pub enum DraftSite {
 /// Kind of a draft issue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IssueKind {
-    /// Input the plan refuses.
+    /// Input the plan rejects.
     Invalid,
     /// Input the user has not given yet.
     Missing,
@@ -534,7 +538,7 @@ pub struct DraftIssue {
 }
 
 impl DraftIssue {
-    /// Returns an issue of input the plan refuses.
+    /// Returns an issue of input the plan rejects.
     pub fn new(site: DraftSite, message: impl Into<String>) -> Self {
         Self {
             site,
@@ -553,7 +557,7 @@ impl DraftIssue {
     }
 }
 
-/// Values one varied parameter or action tick takes.
+/// Number of values that one varied parameter or action tick takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LevelCount {
     /// This many values, listed or stepped.
@@ -564,10 +568,10 @@ pub enum LevelCount {
 
 /// Values one varied parameter or action tick takes, as its row previews them.
 ///
-/// A parameter's values read as the Parameters tab shows them, a fraction as a percentage.
+/// A parameter's values appear as the Parameters tab shows them, a fraction as a percentage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LevelPreview {
-    /// Values listed or stepped: how many, the first [`MAX_PREVIEW_VALUES`] of them, and the last.
+    /// Values listed or stepped: their count, the first [`MAX_PREVIEW_VALUES`] of them, and the last.
     Listed {
         count: usize,
         values: Vec<String>,
@@ -616,13 +620,13 @@ pub struct DraftPlan {
     pub plan: Plan,
     /// Plan of a search, `None` for a sweep.
     pub search_plan: Option<SearchPlan>,
-    /// Approximate bytes of `series.csv` once every run reaches its last step.
+    /// Approximate size in bytes of `series.csv` once every run reaches its last step.
     pub series_bytes: u64,
 }
 
 impl DraftPlan {
-    /// Returns the configurations of a sweep or the evaluations of a search, then the replicates of each, then the
-    /// runs of all of them.
+    /// Returns the number of configurations of a sweep or evaluations of a search, the number of replicates of each,
+    /// and the total number of runs.
     pub fn counts(&self) -> (u64, u64, u64) {
         match &self.search_plan {
             Some(search_plan) => (
@@ -640,7 +644,7 @@ impl DraftPlan {
 }
 
 impl SweepDraft {
-    /// Returns a draft of `schema`'s model that varies nothing, with the settings a spec file takes by default.
+    /// Returns a draft of `schema`'s model that varies nothing, with the default settings of a spec file.
     pub fn new(schema: &ModelSchema<'_>) -> Self {
         let run = RunSettings::default();
         let measure = MeasureSettings::default();
@@ -685,11 +689,11 @@ impl SweepDraft {
         }
     }
 
-    /// Gives the draft the stat columns a build of its model samples.
+    /// Sets the stat columns that a build of the draft's model samples.
     ///
-    /// Each output a search reads that names a vector or histogram stat by its label alone, as in `Velocity:max`,
-    /// becomes the output of the column the label stands for, `Velocity.magnitude:max`. A reducer reads a bare label
-    /// the same way.
+    /// Each output that a search reads and that refers to a vector or histogram stat by its bare label, as in
+    /// `Velocity:max`, becomes the output of the column that the label resolves to, `Velocity.magnitude:max`. A
+    /// reducer resolves a bare label the same way.
     pub fn set_stat_columns(&mut self, columns: &StatColumns) {
         self.columns_pending = false;
         if self.stat_columns.as_ref() == Some(columns) {
@@ -720,7 +724,7 @@ impl SweepDraft {
         }
     }
 
-    /// Returns where the tick of `action`, one of the draft's actions, comes from in each run.
+    /// Returns the source of the tick of `action`, one of the draft's actions, in each run.
     ///
     /// A design table sets the tick of each action it has a column for. The action's ticks in the draft then go
     /// unused.
@@ -784,7 +788,8 @@ impl SweepDraft {
         }
     }
 
-    /// Returns whether the draft runs the rows of a design table. The rows set the parameters and ticks they name.
+    /// Returns whether the draft runs the rows of a design table. The rows set the parameters and ticks that the
+    /// table's header lists.
     pub fn runs_table(&self) -> bool {
         self.mode == DraftMode::Sweep && self.design == DraftDesign::Table
     }
@@ -858,7 +863,7 @@ impl SweepDraft {
             .map_err(|error| (IssueKind::Invalid, factor_message(&error)))
     }
 
-    /// Returns the values each varied parameter takes, then those each varied action tick takes, `None` for one that
+    /// Returns the values each varied parameter takes, then those each varied action tick takes, `None` for a row that
     /// is not varied or has an issue.
     pub fn level_previews(&self, schema: &ModelSchema<'_>) -> LevelPreviews {
         let actions = self.declared_actions(schema);
@@ -891,7 +896,7 @@ impl SweepDraft {
         let mut row_issues = Vec::new();
         let actions = self.declared_actions(schema);
         let runs_table = self.runs_table();
-        // Label and number of values of each varied row that lists its values, for a zip to compare.
+        // Each varied row that lists its values adds its label and number of values, for a zip to compare.
         let mut listed: Vec<(String, usize)> = Vec::new();
         let mut varied_rows = 0;
         if !runs_table {
@@ -988,7 +993,7 @@ impl SweepDraft {
 
     /// Returns the issue of a stop condition whose threshold is not a finite number.
     ///
-    /// The plan takes any threshold. A spec file refuses one that is not finite.
+    /// The plan accepts any threshold. A spec file rejects a threshold that is not finite.
     fn stop_issue(&self) -> Option<DraftIssue> {
         self.stop
             .as_ref()
@@ -998,7 +1003,7 @@ impl SweepDraft {
 
     /// Returns the time limit of each run, `None` for no limit.
     ///
-    /// A limit under [`MIN_TIMEOUT_SECONDS`] is taken, 0 included, as `henad-cli` takes it.
+    /// A limit under [`MIN_TIMEOUT_SECONDS`] is accepted, 0 included, as in `henad-cli`.
     ///
     /// # Errors
     ///
@@ -1023,7 +1028,8 @@ impl SweepDraft {
     /// Returns an issue for each output row whose window ends before it starts, or whose crossing threshold is not a
     /// finite number.
     ///
-    /// The plan takes a window in either order and any threshold. A spec file refuses both.
+    /// The plan accepts a window in either order and any threshold. A spec file rejects a reversed window and a
+    /// threshold that is not finite.
     fn output_issues(&self) -> impl Iterator<Item = DraftIssue> + '_ {
         self.reducers.iter().enumerate().filter_map(|(position, reducer)| {
             let message = match reducer.kind {
@@ -1070,9 +1076,9 @@ impl SweepDraft {
         issues
     }
 
-    /// Returns an issue for each setting of the search's method that its check refuses.
+    /// Returns an issue for each setting of the search's method that its check rejects.
     ///
-    /// The check stops at the first setting it refuses. That setting is set to a value it takes, and the check runs
+    /// The check stops at the first setting it rejects. That setting is set to a value it accepts, and the check runs
     /// again, until it passes. A grid axis is checked with the rows of the axes.
     fn setting_issues(&self) -> Vec<DraftIssue> {
         let search = &self.search;
@@ -1089,7 +1095,7 @@ impl SweepDraft {
                 let fallback = GeneticSettings::default();
                 match key {
                     "genetic.population" => settings.population = fallback.population,
-                    // No elite count below 1 is refused, whatever the population.
+                    // An elite count of 0 is never rejected, whatever the population.
                     "genetic.elite_count" => settings.elite_count = 0,
                     "genetic.tournament_size" => settings.tournament_size = fallback.tournament_size,
                     "genetic.crossover_rate" => settings.crossover_rate = fallback.crossover_rate,
@@ -1100,8 +1106,8 @@ impl SweepDraft {
             }),
             DraftAlgorithm::PatternSpace => {
                 let mut settings = search.pattern_space.clone();
-                // The rows of the axes report their ranges, so the check here meets only a range it takes. An
-                // automatic range is left as it is. The check needs it to refuse zero initial samples.
+                // The rows of the axes report their ranges, so the check here sees only a range it accepts. An
+                // automatic range is left as it is. The check needs it to reject zero initial samples.
                 for axis in [&mut settings.x_axis, &mut settings.y_axis] {
                     if !axis.is_automatic() {
                         axis.min = Some(0.0);
@@ -1210,9 +1216,9 @@ impl SweepDraft {
     ///
     /// # Errors
     ///
-    /// Returns every issue of [`Self::issues`] when there is any. Otherwise returns the one issue of a sweep or search
-    /// of more than [`MAX_DRAFT_RUNS`] runs, one held in memory whose series pass [`MAX_MEMORY_SERIES_BYTES`], or the
-    /// reason the model refuses the spec.
+    /// Returns every issue of [`Self::issues`] when there are any. Otherwise returns a single issue: a sweep or search
+    /// of more than [`MAX_DRAFT_RUNS`] runs, a sweep or search held in memory whose series exceed
+    /// [`MAX_MEMORY_SERIES_BYTES`], or the reason the model rejects the spec.
     pub fn check(&self, schema: &ModelSchema<'_>, panel_values: &[ParamValue]) -> Result<DraftPlan, Vec<DraftIssue>> {
         let issues = self.issues(schema);
         if !issues.is_empty() {
@@ -1285,7 +1291,7 @@ impl SweepDraft {
     ///
     /// A scalar stat is one column, as in `Infected:max`. A vector stat records its parts, as in
     /// `Velocity.magnitude:max`, and a histogram stat its total. An added output whose column the model does not
-    /// give is left out. Until [`Self::stat_columns`] are given, an added output over a part of a stat, as in
+    /// provide is left out. Until [`Self::stat_columns`] are given, an added output over a part of a stat, as in
     /// `Velocity.x:argmax`, keeps the name it is written with.
     pub fn output_names(&self, schema: &ModelSchema<'_>) -> Vec<String> {
         let columns = self.stat_layout(schema);
@@ -1328,7 +1334,8 @@ impl SweepDraft {
             .collect()
     }
 
-    /// Returns whether the draft's runs record the output column `column`, named as [`Self::output_names`] names it.
+    /// Returns whether the draft's runs record the output column `column`, in the form that
+    /// [`Self::output_names`] returns.
     ///
     /// Until [`Self::stat_columns`] are given, a column of a stat's part, as in `Velocity.x:max`, also counts when
     /// the draft records the defaults of every stat and the kind is one of them.
@@ -1343,10 +1350,10 @@ impl SweepDraft {
             })
     }
 
-    /// Adds the output column `column` reads, as in `Infected:max`, as an output row of its own.
+    /// Adds the output column `column`, as in `Infected:max`, as its own output row.
     ///
-    /// Nothing is added when a row records it already, or when `column` does not read as a stat and a kind. Note that
-    /// the defaults of every stat do not count. Returns whether a row was added.
+    /// Nothing is added when a row records it already, or when `column` cannot be parsed as a stat and a kind. Note
+    /// that the defaults of every stat do not count. Returns whether a row was added.
     pub fn add_watched_output(&mut self, column: &str) -> bool {
         let Some((stat, kind)) = column.rsplit_once(':') else {
             return false;
@@ -1373,7 +1380,7 @@ impl SweepDraft {
 
     /// Stops recording the final, minimum, maximum and mean of every stat.
     ///
-    /// Each of those outputs that a search reads is first added as an output row of its own, so the search keeps it.
+    /// Each of those outputs that a search reads is first added as its own output row, so the search keeps it.
     pub fn drop_default_outputs(&mut self) {
         if self.mode == DraftMode::Search {
             let watched: Vec<String> = self
@@ -1414,8 +1421,8 @@ impl SweepDraft {
     /// Returns the stat column a new stop condition reads.
     ///
     /// A search takes the stat its objective reads, or its X axis for a Pattern Space Exploration. A sweep takes the
-    /// stat of its first output row. Without one, or when it names no stat of `schema`, the stat of the stop
-    /// condition last cleared follows, then the model's first stat.
+    /// stat of its first output row. Without an output row, or when that row refers to no stat of `schema`, the stat
+    /// of the stop condition last cleared follows, then the model's first stat.
     pub fn default_stop_column(&self, schema: &ModelSchema<'_>) -> String {
         let watched = match self.mode {
             DraftMode::Search => self
@@ -1441,7 +1448,8 @@ impl SweepDraft {
             .unwrap_or_default()
     }
 
-    /// Adds a stop condition on [`Self::default_stop_column`], at most 0 from tick 0. A draft with one keeps it.
+    /// Adds a stop condition on [`Self::default_stop_column`], at most 0 from tick 0. A draft that already has a stop
+    /// condition keeps it.
     pub fn add_stop(&mut self, schema: &ModelSchema<'_>) {
         if self.stop.is_some() {
             return;
@@ -1454,7 +1462,7 @@ impl SweepDraft {
         });
     }
 
-    /// Clears the stop condition, keeping its stat for the next one.
+    /// Clears the stop condition, keeping its stat for the next stop condition.
     pub fn clear_stop(&mut self) {
         if let Some(stop) = self.stop.take() {
             self.last_stop_column = Some(stop.column);
@@ -1475,9 +1483,9 @@ impl SweepDraft {
     ///
     /// # Errors
     ///
-    /// Returns the issues of [`Self::to_spec`], and the issue of each value a spec file refuses: a window that ends
-    /// before it starts, or a threshold that is not finite. Returns the reason [`Self::from_spec_file`] gives for
-    /// any other file it would refuse to read back.
+    /// Returns the issues of [`Self::to_spec`], and the issue of each value a spec file rejects: a window that ends
+    /// before it starts, or a threshold that is not finite. Returns the reason that [`Self::from_spec_file`]
+    /// reports for any other file it would fail to read back.
     pub fn to_toml(&self, schema: &ModelSchema<'_>, panel_values: &[ParamValue]) -> Result<String, Vec<DraftIssue>> {
         let refused: Vec<DraftIssue> = self.stop_issue().into_iter().chain(self.output_issues()).collect();
         if !refused.is_empty() {
@@ -1506,7 +1514,7 @@ impl SweepDraft {
     ///
     /// # Errors
     ///
-    /// Returns the reason for a file that does not read as a spec, or a spec [`Self::from_spec`] refuses.
+    /// Returns the reason for a file that is not a valid spec, or for a spec that [`Self::from_spec`] rejects.
     pub fn from_spec_file(file: SpecFile, schema: &ModelSchema<'_>) -> Result<(Self, Vec<Option<ParamValue>>), String> {
         let execution = file.execution;
         let spec = file.into_spec().map_err(|error| describe_error(&error))?;
@@ -1523,7 +1531,7 @@ impl SweepDraft {
     ///
     /// # Errors
     ///
-    /// Returns the reason for a spec of another model, a value or action the model refuses, or blocks the tab cannot
+    /// Returns the reason for a spec of another model, a value or action the model rejects, or blocks the tab cannot
     /// edit. The tab edits one block, or the blocks [`DraftDesign::VaryEachAlone`] writes.
     pub fn from_spec(
         spec: &SweepSpec,
@@ -1632,7 +1640,7 @@ impl SweepDraft {
         }]
     }
 
-    /// Returns the block of the draft's design table, or notes an issue when there is none.
+    /// Returns the block of the draft's design table, or notes an issue when the draft has no design table.
     fn table_blocks(&self, issues: &mut Vec<DraftIssue>) -> Vec<BlockSpec> {
         let Some(table) = &self.table else {
             issues.push(DraftIssue::missing(DraftSite::Design, "No table loaded"));
@@ -1648,7 +1656,7 @@ impl SweepDraft {
     }
 
     /// Returns a factor for each varied parameter with its index, and one for each varied action tick, noting an
-    /// issue for each whose values do not parse.
+    /// issue for each factor whose values do not parse.
     fn varied_factors(
         &self,
         schema: &ModelSchema<'_>,
@@ -1737,8 +1745,8 @@ impl SweepDraft {
         Ok(())
     }
 
-    /// Reads blocks that [`DraftDesign::VaryEachAlone`] writes, and the Parameters tab values they hold varied
-    /// parameters at outside their own block.
+    /// Reads blocks that [`DraftDesign::VaryEachAlone`] writes, and the Parameters tab value at which they hold each
+    /// varied parameter outside its own block.
     fn read_vary_each_alone(
         &mut self,
         blocks: &[BlockSpec],
@@ -1856,7 +1864,7 @@ impl SweepDraft {
         }
     }
 
-    /// Returns the issue of a factor the plan or the search space refuses, placed on the row it names.
+    /// Returns the issue of a factor the plan or the search space rejects, placed on its row.
     fn factor_issue(&self, error: &FactorError, schema: &ModelSchema<'_>) -> DraftIssue {
         let site = match error {
             FactorError::Level { id, .. } | FactorError::MissingStep { id } | FactorError::RangeOverOptions { id } => {
@@ -1872,7 +1880,7 @@ impl SweepDraft {
         DraftIssue::new(site, factor_message(error))
     }
 
-    /// Returns the issue of a search the model or its settings refuse, placed on the row or section it names.
+    /// Returns the issue of a search the model or its settings reject, placed on its row or section.
     fn search_issue(&self, error: &SearchPlanError, spec: &SweepSpec, schema: &ModelSchema<'_>) -> DraftIssue {
         match error {
             SearchPlanError::Plan(source) => self.plan_issue(source, spec, schema),
@@ -1909,7 +1917,7 @@ impl SweepDraft {
         }
     }
 
-    /// Returns the issue of a plan error, placed on the row of the factor, action or output it names.
+    /// Returns the issue of a plan error, placed on the row of the factor, action or output that it concerns.
     fn plan_issue(&self, error: &PlanError, spec: &SweepSpec, schema: &ModelSchema<'_>) -> DraftIssue {
         match error {
             PlanError::Factor { source, .. } => self.factor_issue(source, schema),
@@ -1933,7 +1941,7 @@ impl SweepDraft {
         }
     }
 
-    /// Returns the issue of measurement settings the plan refuses, in the words of the tab's labels.
+    /// Returns the issue of measurement settings the plan rejects, in the words of the tab's labels.
     fn measure_issue(&self, error: &MeasureError) -> DraftIssue {
         match error {
             MeasureError::ZeroStatsEvery => DraftIssue::new(DraftSite::Sampling, "Sample every must be at least 1"),
@@ -2030,7 +2038,8 @@ fn default_levels_text(kind: &ParamKind) -> String {
 
 /// Returns an example of the values a parameter of `kind` takes, as a hint and in the note of an empty row.
 ///
-/// A range steps by about a quarter of it, rounded to one digit of 1, 2 or 5, and whole for a whole number.
+/// The example's range steps by about a quarter of the parameter's range, rounded to 1, 2 or 5 times a power of ten,
+/// and to a whole number for an integer parameter.
 pub fn levels_example(kind: &ParamKind) -> String {
     let (min, max) = match *kind {
         ParamKind::F32 { min, max, .. } => (f64::from(min), f64::from(max)),
@@ -2085,7 +2094,7 @@ pub fn whole_range_text(kind: &ParamKind) -> String {
 /// Reads the levels of a row's `text`, or returns the kind and message of its issue. An empty row is missing input,
 /// described by `missing`.
 ///
-/// A range of more than [`MAX_DRAFT_LEVELS`] values is refused, unless it has no step and `draws_ranges` is set. A
+/// A range of more than [`MAX_DRAFT_LEVELS`] values is rejected, unless it has no step and `draws_ranges` is set. A
 /// sampled design or a search draws its values from such a range and lists none of them.
 fn row_levels(
     text: &str,
@@ -2153,9 +2162,9 @@ fn zip_issue(listed: &[(String, usize)]) -> Option<DraftIssue> {
 }
 
 /// Returns the kind and message of the issue of a grid axis's range, `None` for an automatic range or a range the
-/// search takes.
+/// search accepts.
 ///
-/// A range from 0 to 0 is the one an axis's fields start with, and is missing input.
+/// A range from 0 to 0, the range an axis's fields start with, is missing input.
 fn axis_range_issue(axis: &PatternAxis) -> Option<(IssueKind, String)> {
     let (min, max) = axis.range()?;
     if min == 0.0 && max == 0.0 {
@@ -2169,18 +2178,18 @@ fn axis_range_issue(axis: &PatternAxis) -> Option<(IssueKind, String)> {
     }
 }
 
-/// Returns the evaluations of each generation after the first of a genetic algorithm with `settings`: the members it
-/// re-evaluates and a child for every member but the elites.
+/// Returns the number of evaluations in each generation after the first of a genetic algorithm with `settings`:
+/// the members it re-evaluates and a child for every member but the elites.
 fn later_generation_size(settings: &GeneticSettings) -> u64 {
     let children = settings.population.saturating_sub(settings.elite_count);
     (settings.reevaluation_count() + children) as u64
 }
 
-/// Returns about the number of generations a genetic algorithm with `settings` starts within `max_evaluations`, a
+/// Returns the approximate number of generations a genetic algorithm with `settings` starts within `max_evaluations`, a
 /// partial last one included, or `None` for a budget smaller than one generation.
 ///
-/// Generation 0 evaluates the whole population. Note that a child whose configuration an earlier candidate has can
-/// leave a generation smaller than planned.
+/// Generation 0 evaluates the whole population. Note that a child with the same configuration as an earlier
+/// candidate can leave a generation smaller than planned.
 pub fn generation_estimate(max_evaluations: u64, settings: &GeneticSettings) -> Option<u64> {
     let population = settings.population as u64;
     if max_evaluations < population {
@@ -2192,8 +2201,8 @@ pub fn generation_estimate(max_evaluations: u64, settings: &GeneticSettings) -> 
     }
 }
 
-/// Returns about the number of batches of at most `batch_size` candidates that `max_evaluations` take, for a genetic
-/// algorithm with `genetic` settings when set.
+/// Returns the approximate number of batches of at most `batch_size` candidates that `max_evaluations` take, for a
+/// genetic algorithm with `genetic` settings when set.
 ///
 /// No batch of a genetic algorithm spans two generations.
 pub fn batch_estimate(max_evaluations: u64, batch_size: usize, genetic: Option<&GeneticSettings>) -> u64 {
@@ -2210,9 +2219,9 @@ pub fn batch_estimate(max_evaluations: u64, batch_size: usize, genetic: Option<&
     population.div_ceil(batch) + rest / later * later.div_ceil(batch) + (rest % later).div_ceil(batch)
 }
 
-/// Returns the key and message of every setting of `settings` that `check` refuses.
+/// Returns the key and message of every setting of `settings` that `check` rejects.
 ///
-/// `repair` sets the refused setting named by its key to a value `check` takes, so the next check reaches the next
+/// `repair` sets the rejected setting named by its key to a value `check` accepts, so the next check reaches the next
 /// setting.
 fn every_refusal<S>(
     mut settings: S,
@@ -2235,14 +2244,14 @@ fn every_refusal<S>(
     refusals
 }
 
-/// Reads levels as `--vary` takes them, with spaces around each listed value ignored.
+/// Reads levels as `--vary` accepts them, with spaces around each listed value ignored.
 ///
-/// Note that a range of any length reads. The check refuses one of more than [`MAX_DRAFT_LEVELS`] values where the
-/// draft lists them.
+/// Note that a range of any length parses. The check rejects a range of more than [`MAX_DRAFT_LEVELS`] values where
+/// the draft lists them.
 ///
 /// # Errors
 ///
-/// Returns a message for text with no values, or a range that does not read.
+/// Returns a message for text with no values, or a range that does not parse.
 pub fn parse_levels(text: &str) -> Result<LevelSpec, String> {
     let text = text.trim();
     if text.is_empty() {
@@ -2265,7 +2274,7 @@ pub fn parse_levels(text: &str) -> Result<LevelSpec, String> {
     }
 }
 
-/// Returns the message of text that does not read as levels, in the words of the Sweep tab.
+/// Returns the message of text that does not parse as levels, in the words of the Sweep tab.
 fn level_spec_message(error: &LevelSpecError) -> String {
     match error {
         LevelSpecError::NotANumber { part, .. } => format!("'{}' is not a number", part.trim()),
@@ -2273,9 +2282,9 @@ fn level_spec_message(error: &LevelSpecError) -> String {
     }
 }
 
-/// Returns the message of a factor the plan refuses, in the words of the Sweep tab.
+/// Returns the message of a factor the plan rejects, in the words of the Sweep tab.
 ///
-/// The row the issue lands on names the parameter or the action, so the message leaves it out.
+/// The row that the issue is placed on already identifies the parameter or the action, so the message leaves it out.
 fn factor_message(error: &FactorError) -> String {
     match error {
         FactorError::Level { source, .. } => value_message(source),
@@ -2296,7 +2305,7 @@ fn factor_message(error: &FactorError) -> String {
     }
 }
 
-/// Returns the message of search settings the search refuses, in the words of the Sweep tab.
+/// Returns the message of search settings the search rejects, in the words of the Sweep tab.
 fn setting_message(error: &SearchSpecError) -> String {
     match error {
         SearchSpecError::NoEvaluations => "Evaluations must be at least 1".to_owned(),
@@ -2334,7 +2343,7 @@ fn setting_label(key: &str) -> &str {
     }
 }
 
-/// Returns the message of a value a parameter refuses, in the words of the Sweep tab.
+/// Returns the message of a value a parameter rejects, in the words of the Sweep tab.
 fn value_message(error: &ValueError) -> String {
     match error {
         ValueError::NotANumber { raw, .. } => format!("'{raw}' is not a number"),
@@ -2379,7 +2388,7 @@ fn level_estimate(levels: &LevelSpec) -> u64 {
     }
 }
 
-/// Returns about the number of configurations of `spec`, cheap enough to count before planning.
+/// Returns the approximate number of configurations of `spec`, cheap enough to count before planning.
 fn estimated_configs(spec: &SweepSpec) -> u64 {
     if spec.blocks.is_empty() {
         return 1;
@@ -2398,7 +2407,7 @@ fn estimated_configs(spec: &SweepSpec) -> u64 {
         .fold(0, u64::saturating_add)
 }
 
-/// Returns the rows of the design table `text` after its header, blank lines left out.
+/// Returns the number of rows of the design table `text` after its header, blank lines left out.
 fn table_row_count(text: &str) -> usize {
     text.lines()
         .filter(|line| !line.trim().is_empty())
@@ -2406,8 +2415,8 @@ fn table_row_count(text: &str) -> usize {
         .saturating_sub(1)
 }
 
-/// Returns about the bytes of `series.csv` that `run_count` runs with the settings of `plan` write, for a model of
-/// `column_count` stat columns.
+/// Returns the approximate size in bytes of `series.csv` that `run_count` runs with the settings of `plan` write, for a
+/// model of `column_count` stat columns.
 ///
 /// Every run counts as running to its last step.
 fn estimated_series_bytes(plan: &Plan, run_count: u64, column_count: usize) -> u64 {
@@ -2439,7 +2448,7 @@ fn memory_refusal(bytes: u64) -> String {
 /// Returns the output column `reducer` writes among the stat columns `columns`, as in `Velocity.magnitude:max` for a
 /// reducer over the bare label `Velocity`.
 ///
-/// A column that `columns` lacks, or any column while `columns` is `None`, is written as the reducer names it.
+/// A column missing from `columns`, or any column while `columns` is `None`, is written as the reducer spells it.
 pub fn written_name(reducer: &ReducerSpec, columns: Option<&StatColumns>) -> String {
     let column = columns
         .and_then(|columns| Some(columns.name(columns.resolve(&reducer.column)?)))
@@ -2498,7 +2507,7 @@ pub fn error_chain(error: &dyn Error) -> String {
     text
 }
 
-/// Returns the words the Sweep tab reads `comparator` as, as in "at most".
+/// Returns the words that the Sweep tab uses for `comparator`, as in "at most".
 pub fn comparator_words(comparator: Comparator) -> &'static str {
     match comparator {
         Comparator::Less => "below",
@@ -2641,7 +2650,7 @@ mod tests {
         draft
     }
 
-    /// Writes `draft` as TOML, reads it back, and returns the draft and panel values it reads as.
+    /// Writes `draft` as TOML, reads it back, and returns the draft and panel values that it reads back.
     fn round_trip(entry: &ModelEntry, draft: &SweepDraft) -> (SweepDraft, Vec<Option<ParamValue>>) {
         let schema = entry.schema();
         let text = draft

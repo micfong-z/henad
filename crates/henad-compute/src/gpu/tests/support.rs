@@ -6,16 +6,17 @@ use crate::gpu::GpuContext;
 /// Set in CI to turn "no GPU here" from a skip into a failure.
 const REQUIRE_GPU: &str = "HENAD_REQUIRE_GPU";
 
-/// Empty counts as unset, so a workflow matrix can blank it out on runners without a GPU.
+/// Returns whether `HENAD_REQUIRE_GPU` is set. Empty counts as unset, so a workflow matrix can blank it out on
+/// runners without a GPU.
 pub fn gpu_required() -> bool {
     std::env::var_os(REQUIRE_GPU).is_some_and(|v| !v.is_empty() && v != "0")
 }
 
-/// A headless device, or `None` when this machine cannot give one.
+/// Returns a headless device, or `None` when this machine cannot provide one.
 ///
 /// # Panics
 ///
-/// If [`REQUIRE_GPU`] is set and no adapter or device could be acquired. Missing
+/// Panics if [`REQUIRE_GPU`] is set and no adapter or device could be acquired. Missing
 /// `required_features` still returns `None`, since a software rasteriser owes us nothing
 /// optional.
 pub fn headless_context(label: &str, required_features: wgpu::Features) -> Option<GpuContext> {
@@ -37,7 +38,7 @@ pub fn headless_context(label: &str, required_features: wgpu::Features) -> Optio
     let device = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some(label),
         required_features,
-        // No binding count: henad-compute cannot see the models, and its own tests bind few.
+        // No binding count. henad-compute cannot see the models, and its own tests bind few.
         required_limits: crate::gpu::limits::raise(&adapter, &wgpu::Limits::default(), crate::gpu::GpuNeeds::default()),
         ..Default::default()
     }));

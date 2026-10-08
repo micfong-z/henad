@@ -20,21 +20,27 @@ use henad_core::view::{StatDescriptor, StatValue};
 pub use crate::virus_network::lanes::{VirusChunk, VirusLanes, VirusRead};
 
 // Node states, which are also indices into `PALETTE`.
+/// State of a node the virus can infect.
 pub const SUSCEPTIBLE: u8 = 0;
+/// State of an infected node.
 pub const INFECTED: u8 = 1;
+/// State of a node the virus can no longer infect.
 pub const RESISTANT: u8 = 2;
 
 // Edge colours, which are also indices into `EDGE_PALETTE`.
+/// Colour of an edge with no resistant endpoint.
 pub const EDGE_OPEN: u8 = 0;
 /// Colour of an edge with a resistant endpoint, which the virus can no longer cross.
 pub const EDGE_BLOCKED: u8 = 1;
 
+/// Node colours, indexed by state.
 pub const PALETTE: [[u8; 4]; 3] = [
     [0x00, 0x7A, 0xF5, 0xFF], // Susceptible - blue
     [0xE4, 0x37, 0x48, 0xFF], // Infected - red
     [0x80, 0x80, 0x80, 0xFF], // Resistant - gray
 ];
 
+/// Edge colours, indexed by an edge's colour byte.
 // --8<-- [start:edge_palette]
 pub const EDGE_PALETTE: [[u8; 4]; 2] = [
     [0xC8, 0xC8, 0xC8, 0xB0], // Open - light gray
@@ -78,6 +84,7 @@ henad_core::actions! {
 }
 // --8<-- [end:actions]
 
+/// Virus on a Network as a [`NetworkModel`].
 #[derive(Debug)]
 pub struct VirusNetwork;
 
@@ -217,8 +224,9 @@ fn infect_distinct(state: &mut [u8], count: u32, rng: &mut u64) {
 
 /// Greys every edge that touches a resistant node.
 ///
-/// Returns whether any edge changed. Each edge is checked before any is written. A publish while paused, or after the
-/// outbreak has died out, finds nothing to change, and a write would make the snapshot copy every edge again.
+/// Returns whether any edge changed. Every edge is checked before any edge is written.
+/// A publish while paused, or after the outbreak has died out, finds nothing to change, and a write would make the
+/// snapshot copy every edge again.
 fn recolor(src: &[u32], dst: &[u32], color: &mut [u8], state: &[u8]) -> bool {
     let wanted = |e: usize| edge_color(state[src[e] as usize], state[dst[e] as usize]);
     let stale = {
@@ -269,6 +277,7 @@ mod tests {
     /// Returns the default params with some overridden by id.
     ///
     /// # Panics
+    ///
     /// Panics if an id is not declared by the model.
     fn params(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
         let descs = network_model_param_descriptors::<VirusNetwork>();

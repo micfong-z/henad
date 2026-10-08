@@ -1,8 +1,8 @@
 // Cargo.toml: henad = { version = "0.3", features = ["example-models", "app"] }
 // Copy the template's profile block, `[profile.dev] opt-level = 1`, `[profile.dev.package."*"] opt-level = 2` and
 // `[profile.release] opt-level = 2`. Without it a debug build runs the example kernels at opt-level 0, and a release
-// build at 3 where Henad measures at 2. A crate that registers models of its own also calls
-// `henad_build::stamp_commit()` from build.rs, with henad-build under [build-dependencies]. This one registers none.
+// build at 3 where Henad measures at 2. A crate that registers its own models also calls `henad_build::stamp_commit()`
+// from build.rs, with henad-build under [build-dependencies]. This example registers no models.
 
 use std::io::Write;
 use std::ops::ControlFlow;
@@ -13,7 +13,7 @@ use henad::prelude::*;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     henad::install_panic_hook();
     let models = henad::models::example_models();
-    // A sweep refuses a folder that already holds results. Each run of the program starts from an empty one.
+    // A sweep rejects a folder that already holds results. Each run of the program starts from an empty folder.
     let folder = std::env::temp_dir().join("sir-rates");
     if folder.exists() {
         std::fs::remove_dir_all(&folder)?;
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Runs SIR from `models`, sweeps it into `folder` and rebuilds one run of the sweep, writes what it finds to `out`,
-/// and returns the replay of the rebuilt run.
+/// and returns the rebuilt run's replay.
 fn study(models: &ModelSet, folder: &Path, out: &mut impl Write) -> Result<Replay, Box<dyn std::error::Error>> {
     // --8<-- [start:build]
     let sir = models.get("sir").ok_or("the example set lacks SIR")?;

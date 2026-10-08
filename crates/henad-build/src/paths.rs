@@ -8,11 +8,11 @@ use heck::ToPascalCase as _;
 use crate::ShaderBuildError;
 use crate::binding_lines::strip_block_comments;
 
-/// Name reserved for the shared modules' import root, in any case.
+/// Name reserved for the shared modules' import root, regardless of case.
 const RESERVED: &str = "henad";
 
-/// Names the generated bindings use at their root, beside the shader modules. A shader whose path starts with one
-/// would shadow it.
+/// Names the generated bindings use at their root, beside the shader modules. A shader whose path starts with one of
+/// these names would shadow the generated item.
 const GENERATED_NAMES: &[&str] = &[
     "wgpu",
     "bytemuck",
@@ -69,15 +69,14 @@ pub(crate) fn wgsl_files(root: &Path) -> Result<Vec<PathBuf>, ShaderBuildError> 
                 files.push(path);
             }
         }
-        // Pushed in reverse, so the walk takes each directory's subdirectories in name order.
+        // Pushed in reverse, so the walk visits each directory's subdirectories in name order.
         pending.extend(directories.into_iter().rev());
     }
     files.sort();
     Ok(files)
 }
 
-/// Returns whether `source` declares an import path outside a block comment, which makes its file a module and not an
-/// entry point.
+/// Returns whether `source` declares an import path outside a block comment, making its file a module.
 pub(crate) fn is_module(source: &str) -> bool {
     strip_block_comments(source)
         .lines()
@@ -94,7 +93,7 @@ pub(crate) fn defines_reserved_path(source: &str) -> bool {
     })
 }
 
-/// Returns an error when the last component of `root` is the reserved name, in any case.
+/// Returns an error when the last component of `root` is the reserved name, regardless of case.
 pub(crate) fn check_root(root: &Path) -> Result<(), ShaderBuildError> {
     let absolute = std::path::absolute(root).map_err(|source| ShaderBuildError::Io {
         path: root.to_path_buf(),
@@ -109,8 +108,8 @@ pub(crate) fn check_root(root: &Path) -> Result<(), ShaderBuildError> {
     Ok(())
 }
 
-/// Returns an error for the first of `files` named `henad.wgsl` or lying in a directory named `henad`, in any case,
-/// or whose path starts with a name the generated bindings use.
+/// Returns an error for the first file in `files` that is named `henad.wgsl` or lies in a directory named `henad`,
+/// regardless of case, or whose path starts with a name the generated bindings use.
 pub(crate) fn check_reserved(root: &Path, files: &[PathBuf]) -> Result<(), ShaderBuildError> {
     for file in files {
         let reserved = |name: &str| ShaderBuildError::ReservedName {
@@ -139,9 +138,9 @@ pub(crate) fn check_reserved(root: &Path, files: &[PathBuf]) -> Result<(), Shade
 /// Returns an error when the bindings would put the file at `path`, imported as `module`, at their root under the
 /// name `henad` or a name they use there.
 ///
-/// The bindings name an imported module by its import path, and a quoted one by the stem of its file name. An import
-/// resolved from the importing file's directory can start with any name, and a check of the file's path alone would
-/// miss it.
+/// The bindings refer to an imported module by its import path, or by the stem of its file name when the import path
+/// is quoted. An import resolved from the importing file's directory can start with any name, and a check of the
+/// file's path alone would miss it.
 pub(crate) fn check_module_name(path: &Path, module: &str) -> Result<(), ShaderBuildError> {
     let module_path = bindings_module(module);
     let first = module_path.split("::").next().unwrap_or_default();
@@ -157,7 +156,7 @@ pub(crate) fn check_module_name(path: &Path, module: &str) -> Result<(), ShaderB
 
 /// Returns the module path the generated bindings give a module imported as `module`.
 ///
-/// `wgsl_bindgen` keeps an unquoted import path as it stands. A quoted one loses its quotes and keeps only the stem of
+/// `wgsl_bindgen` keeps an unquoted import path as it stands. A quoted path loses its quotes and keeps only the stem of
 /// its last component, so `"./std.inc"`, `"std.inc"` and `"../shared/std"` all give `std`. The steps follow
 /// `make_valid_rust_import` in `wgsl_bindgen` 0.23.3.
 fn bindings_module(module: &str) -> String {
@@ -168,12 +167,12 @@ fn bindings_module(module: &str) -> String {
         .map_or_else(|| unquoted.clone(), str::to_owned)
 }
 
-/// Returns whether `name` is the reserved name, in any case.
+/// Returns whether `name` is the reserved name, regardless of case.
 fn is_reserved(name: &std::ffi::OsStr) -> bool {
     name.to_str().is_some_and(|name| name.eq_ignore_ascii_case(RESERVED))
 }
 
-/// Returns an error when a component of `file`, a `.wgsl` path relative to `root`, is no Rust identifier or is a
+/// Returns an error when a component of `file`, a `.wgsl` path relative to `root`, is not a Rust identifier or is a
 /// keyword.
 pub(crate) fn check_components(root: &Path, file: &Path) -> Result<(), ShaderBuildError> {
     let invalid = |component: String| ShaderBuildError::InvalidName {
@@ -187,11 +186,12 @@ pub(crate) fn check_components(root: &Path, file: &Path) -> Result<(), ShaderBui
     }
 }
 
-/// Returns an error when two of `entries` give one module path, `ShaderEntry` variant or binding constant, when one
-/// entry's module path holds another's, or when the `ShaderEntry` variant of an entry is no Rust identifier.
+/// Returns an error when two of `entries` give the same module path, `ShaderEntry` variant or binding constant, when
+/// one entry's module path contains another entry's module path, or when the `ShaderEntry` variant of an entry is not
+/// a Rust identifier.
 pub(crate) fn check_collisions(root: &Path, entries: &[PathBuf]) -> Result<(), ShaderBuildError> {
     let mut names: BTreeMap<(&'static str, String), &PathBuf> = BTreeMap::new();
-    // Modules that hold another entry's module, each with the first entry inside it.
+    // Modules that contain another entry's module, each with the first entry inside it.
     let mut parents: BTreeMap<String, &PathBuf> = BTreeMap::new();
     for entry in entries {
         let Some(components) = components(entry) else {
@@ -235,7 +235,7 @@ pub(crate) fn check_collisions(root: &Path, entries: &[PathBuf]) -> Result<(), S
 }
 
 /// Returns the components of `file`, a `.wgsl` path, with the final `.wgsl` removed, or `None` for a component that
-/// is not plain Unicode or a path that is not a normal relative one.
+/// is not plain Unicode or a path that is not a normal relative path.
 pub(crate) fn components(file: &Path) -> Option<Vec<String>> {
     let mut names = Vec::new();
     for component in file.with_extension("").components() {
@@ -261,7 +261,7 @@ fn variant_name(components: &[String]) -> String {
     components.join("_").to_pascal_case()
 }
 
-/// Returns whether `name` is an ASCII Rust identifier and no keyword.
+/// Returns whether `name` is an ASCII Rust identifier and not a keyword.
 fn is_identifier(name: &str) -> bool {
     let mut characters = name.chars();
     let starts_well = characters

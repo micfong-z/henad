@@ -1,3 +1,8 @@
+//! The CPU runner [`SimThread`]. It steps a [`SimState`] and publishes [`Snapshot`]s for the host to draw.
+//!
+//! A capped run steps a batch of ticks at a target rate in ticks per second (TPS), and an uncapped one steps as fast
+//! as it can. [`crate::runner`] decides whether the loop runs on its own thread or from the host's frame loop.
+
 use crate::fault::FaultSink;
 use henad_core::action::Schedule;
 use henad_core::model::SimState;
@@ -8,7 +13,7 @@ use crate::snapshot::{CpuLayers, GridSnapshot, PointSnapshot, Snapshot, Snapshot
 use std::time::Duration;
 use web_time::Instant;
 
-/// Wall-clock seconds between capped batches.
+/// Returns the wall-clock seconds between capped batches.
 fn capped_batch_interval_secs(target_tps: f64, ticks_per_snapshot: u32) -> f64 {
     let tps = if target_tps.is_finite() && target_tps > 0.0 {
         target_tps
@@ -18,38 +23,53 @@ fn capped_batch_interval_secs(target_tps: f64, ticks_per_snapshot: u32) -> f64 {
     f64::from(ticks_per_snapshot.max(1)) / tps
 }
 
-/// Called on every publish, so an idle UI knows to come and collect the snapshot.
+/// Callback run after every publish, for an idle UI to come and collect the snapshot.
 ///
 /// Without it a publish while the UI is idle, like a single step or the final one after pause,
-/// sits unread until some unrelated input event wakes the event loop. Must not block.
+/// sits unread until some unrelated input event wakes the event loop. The callback must not block.
 #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
 pub type WakeFn = std::sync::Arc<dyn Fn() + Send + Sync>;
 
-/// An `egui::Context` is not `Send` under atomics, and no thread waits on this one anyway.
+/// Callback run after every publish, with no `Send` or `Sync` bound.
+///
+/// An `egui::Context` is not `Send` under atomics, and no other thread calls this callback.
 #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
 pub type WakeFn = std::sync::Arc<dyn Fn()>;
 
 /// Commands sent from the UI thread to the simulation thread.
 #[derive(Debug)]
 pub enum SimCommand {
+    /// Start stepping. It cancels a pending [`Self::RunTo`].
     Play,
+    /// Stop stepping, and publish the state the run stopped at.
     Pause,
+    /// Run one step and publish.
     StepOnce,
+    /// Set the target rate in ticks per second.
     SetTargetTps(f64),
+    /// Step as fast as possible when `true`, ignoring the target rate.
     SetUncapped(bool),
+    /// Set the number of ticks one capped batch steps, at least 1.
     SetTicksPerSnapshot(u32),
+    /// Set one parameter of the running model.
     SetParam {
+        /// Position of the parameter in the full parameter list.
         index: usize,
+        /// New value.
         value: ParamValue,
     },
     /// Run the model's declared action at this index, once.
     Act(usize),
     /// Turn the layout on or off, with a time budget per publish in milliseconds.
     ///
-    /// The layout relaxes after every tick. While paused, it relaxes only if `while_paused` is set.
+    /// The layout relaxes on every publish that follows a tick. While paused, it relaxes only if `while_paused` is set.
     SetLayout {
+        /// Whether the layout runs.
         on: bool,
+        /// Time in milliseconds that one publish may spend relaxing the layout, capped at
+        /// [`MAX_VIEW_BUDGET_MS`](crate::runner::MAX_VIEW_BUDGET_MS).
         budget_ms: f32,
+        /// Whether the layout keeps relaxing while paused.
         while_paused: bool,
     },
     /// Replace the actions fired at their ticks, and fire those due at the current tick at once unless it has fired.
@@ -61,23 +81,23 @@ pub enum SimCommand {
     ///
     /// `Play`, `Pause` and `StepOnce` cancel it. A tick at or behind the current one pauses at once.
     RunTo(u64),
+    /// Stop the loop. A runner sends it when dropped.
     Shutdown,
 }
 
-/// Publish cadence. Independent of how fast the sim is running.
+/// Shortest time between two publishes that no command forced, whatever the rate of the sim.
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(16);
 
-/// Ceiling on a single uncapped pump, so a bad estimate cannot buy a long stall.
+/// Largest number of steps in one uncapped pump, so a bad estimate cannot buy a long stall.
 const MAX_UNCAPPED_STEPS: u32 = 4096;
 
-/// Wall clock one uncapped pump aims to fill.
+/// Wall-clock time in milliseconds that one uncapped pump aims to fill.
 ///
-/// The threaded driver would happily run one step per pump. The frame driver hands the frame back
-/// between pumps, and one step per frame pinned a fast model to the refresh rate. Matching the
-/// driver's own budget keeps a frame to one pump.
+/// The frame driver returns the frame to the host between pumps, and one step per pump would pin a fast model to the
+/// refresh rate. Matching the driver's own budget keeps a frame to one pump.
 const UNCAPPED_PUMP_MS: f64 = crate::runner::PUMP_BUDGET_MS;
 
-/// Steps that fit [`UNCAPPED_PUMP_MS`], from the measured cost of a step.
+/// Returns the number of steps that fit [`UNCAPPED_PUMP_MS`], from the measured cost of a step.
 ///
 /// `engine_ms` is `None` until a step has been timed, and one step is enough to measure with.
 fn uncapped_steps_for(engine_ms: Option<f64>, ticks_per_snapshot: u32) -> u32 {
@@ -116,7 +136,8 @@ struct Loop {
     relax_paused: bool,
     /// Whether a tick has run since the last publish.
     ticked: bool,
-    /// Smoothed engine time per tick (EMA). `None` until the first step has been timed.
+    /// Engine time per tick in milliseconds, as an exponential moving average. `None` until the first step has been
+    /// timed.
     engine_ms: Option<f64>,
     /// When the next capped batch falls due.
     next_step_at: Instant,
@@ -252,7 +273,7 @@ impl SimLoop for Loop {
 }
 
 impl Loop {
-    /// Keeps publishing while paused, so the layout can keep relaxing if asked to. Otherwise returns [`Pace::Idle`].
+    /// Keeps publishing while paused, so the layout can keep relaxing if requested. Otherwise returns [`Pace::Idle`].
     fn relax_while_paused(&mut self) -> Pace {
         if !(self.layout_on && self.relax_paused) {
             return Pace::Idle;
@@ -289,8 +310,9 @@ impl Loop {
         std::time::Duration::from_secs_f64(capped_batch_interval_secs(self.target_tps, self.ticks_per_snapshot))
     }
 
-    /// Only ever moves the deadline earlier. Re-anchoring it to now would let a slider drag fire a
-    /// batch per event and outrun the cap.
+    /// Pulls the next deadline in to at most one batch interval from now. It never moves the deadline later.
+    ///
+    /// Re-anchoring it to now would let a slider drag fire a batch per event and outrun the cap.
     fn reclamp_deadline(&mut self) {
         let limit = Instant::now() + self.batch_interval();
         if self.next_step_at > limit {
@@ -298,7 +320,7 @@ impl Loop {
         }
     }
 
-    /// Step, and fold its cost into the smoothed engine time.
+    /// Steps once, folds the step's cost into the smoothed engine time, then fires the actions due.
     ///
     /// The first sample is taken whole. Easing it in from zero would leave `uncapped_steps_for`
     /// reading far too fast, and a frame would be spent paying for that.
@@ -308,7 +330,7 @@ impl Loop {
         self.step_count += 1;
         self.ticked = true;
         let sample = t0.elapsed().as_secs_f64() * 1000.0;
-        // EMA with a = 0.1
+        // Exponential moving average with a weight of 0.1.
         self.engine_ms = Some(match self.engine_ms {
             Some(prev) => prev + 0.1 * (sample - prev),
             None => sample,
@@ -353,8 +375,10 @@ impl Loop {
         self.publish_snapshot();
     }
 
-    /// Built outside the lock, or the UI thread would block on `take_snapshot` for the whole grid
-    /// copy.
+    /// Builds a snapshot and publishes it.
+    ///
+    /// The snapshot is built outside the lock. Otherwise the UI thread would block on `take_snapshot` for the whole
+    /// grid copy.
     fn publish_snapshot(&mut self) {
         let spare = crate::runner::claim_spare(&self.slot);
         let engine_ms = self.engine_ms.unwrap_or(0.0);
@@ -371,8 +395,10 @@ impl Loop {
     }
 }
 
-/// Handle on a running simulation. The sim itself is off the UI thread wherever the platform has
-/// somewhere to put it.
+/// Handle on a running CPU simulation.
+///
+/// The sim runs on its own thread on native targets. In a browser [`Self::update`] steps it from the host's
+/// frame loop.
 pub struct SimThread {
     driver: Driver<Loop>,
     slot: SharedSlot,
@@ -385,12 +411,13 @@ impl std::fmt::Debug for SimThread {
 }
 
 impl SimThread {
+    /// Starts a paused runner over `state`, capped at `target_tps` ticks per second.
+    ///
     /// `wake` is `None` only for a headless caller that polls on its own schedule.
     ///
-    /// A panic out of the loop lands in `faults`. The GPU sibling has no such parameter and reads
-    /// the same sink off its `GpuContext`.
+    /// A panic out of the loop is stored in `faults`. The GPU runner reads the same sink off its `GpuContext`.
     pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
-        // So the UI has something to draw before play is pressed.
+        // The first snapshot gives the UI something to draw before play is pressed.
         let slot = SnapshotSlot::with_initial(build_snapshot(None, &mut *state, 0.0, 0.0, 0, false));
         let now = Instant::now();
         let sim = Loop {
@@ -426,41 +453,50 @@ impl SimThread {
         Self { driver, slot }
     }
 
+    /// Sends a command to the loop.
     pub fn send(&mut self, cmd: SimCommand) {
         self.driver.send(cmd);
     }
 
-    /// `None` when nothing new has been published since the last take.
+    /// Takes the latest snapshot, or `None` when nothing new has been published since the last take.
     pub fn take_snapshot(&mut self) -> Option<Snapshot> {
         crate::runner::take_snapshot(&self.slot)
     }
 
-    /// Purely an optimisation, dropping it instead just means the next publish allocates.
+    /// Stores a taken snapshot as the spare for the next publish to refill.
+    ///
+    /// This is only an optimisation. Dropping the snapshot instead only means the next publish allocates.
     pub fn recycle(&mut self, snap: Snapshot) {
         crate::runner::recycle(&self.slot, snap);
     }
 
+    /// Sends [`SimCommand::Play`].
     pub fn play(&mut self) {
         self.send(SimCommand::Play);
     }
 
+    /// Sends [`SimCommand::Pause`].
     pub fn pause(&mut self) {
         self.send(SimCommand::Pause);
     }
 
+    /// Sends [`SimCommand::StepOnce`].
     pub fn step_once(&mut self) {
         self.send(SimCommand::StepOnce);
     }
 
+    /// Sends [`SimCommand::SetSchedule`].
     pub fn set_schedule(&mut self, schedule: Schedule) {
         self.send(SimCommand::SetSchedule(schedule));
     }
 
+    /// Sends [`SimCommand::RunTo`].
     pub fn run_to(&mut self, tick: u64) {
         self.send(SimCommand::RunTo(tick));
     }
 
-    /// Advances the sim where the driver has no thread of its own. A no-op where it has.
+    /// Advances the sim when the driver runs inside the frame loop, and does nothing when the driver has its own
+    /// thread.
     pub fn update(&mut self, dt: f64) {
         self.driver.update(dt);
     }
@@ -477,10 +513,10 @@ fn refill<T: Copy>(dst: &mut Vec<T>, src: &[T]) {
     dst.extend_from_slice(src);
 }
 
-/// Refills `reuse`'s buffers, so a publish is a copy and not also a fresh multi-megabyte
-/// allocation. `reuse` comes back from the UI thread via `recycle`.
+/// Builds a snapshot of `state`, refilling the buffers of `reuse`.
 ///
-/// Both views are consulted, so a composite model publishes its field and its agents.
+/// `reuse` comes back from the UI thread through `recycle`, and a publish is then a copy without a fresh
+/// multi-megabyte allocation. Every view is consulted, so a composite model publishes its field and its agents.
 fn build_snapshot(
     reuse: Option<Snapshot>,
     state: &mut dyn SimState,
@@ -496,7 +532,7 @@ fn build_snapshot(
         state.relax_layout();
     }
     let view_ms = view_started.elapsed().as_secs_f64() * 1000.0;
-    // Destructured up front so both layers can claim buffers without moving `recycled` twice.
+    // The recycled layers are destructured up front, so both layers can claim buffers without moving `recycled` twice.
     let recycled = match reuse.map(|s| s.view) {
         Some(SnapshotView::Cpu(layers)) => layers,
         _ => CpuLayers::default(),
@@ -575,7 +611,7 @@ mod pacing_timing_tests {
     use std::time::Duration;
     use web_time::Instant;
 
-    /// Longest a test waits for the loop to show what it waits for.
+    /// Longest time a test waits for the loop to reach the state it expects.
     const DEADLINE: Duration = Duration::from_secs(10);
 
     /// Polls `condition` until it holds, and returns whether it held before [`DEADLINE`].
@@ -748,8 +784,8 @@ mod pacing_timing_tests {
         }
     }
 
-    /// A panicking kernel used to take the thread with it and leave the UI polling a viewport
-    /// that never updated again. The panic still prints. This test is noisy by design.
+    /// A panicking kernel must not take the thread with it and leave the UI polling a viewport
+    /// that never updates again. The panic still prints. This test is noisy by design.
     #[test]
     fn a_panicking_step_lands_in_the_sink_instead_of_killing_the_thread() {
         let faults = FaultSink::new();
@@ -811,8 +847,8 @@ mod pacing_timing_tests {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    /// Pause used to leave the last running rate on screen, where the GPU runner already reported
-    /// zero, and a step after a long pause was divided by the whole pause.
+    /// A pause reports a rate of zero, as the GPU runner does, and a step after a long pause is not
+    /// divided by the whole pause.
     #[test]
     fn a_pause_and_a_step_after_it_report_no_rate() {
         let ticks = Arc::new(AtomicU64::new(0));
@@ -826,11 +862,11 @@ mod pacing_timing_tests {
         );
 
         thread.pause();
-        // Every snapshot of the running sim since the window closed reports a rate. The first without one is the
-        // pause's own.
+        // Every snapshot of the running sim since the window closed reports a rate. The first snapshot without a rate
+        // is the one the pause published.
         let paused = snapshot_where(&mut thread, |snap| snap.actual_tps == 0.0).expect("a paused sim reported a rate");
 
-        // The stale window a single step used to be divided by.
+        // A single step must not be divided by this stale window.
         std::thread::sleep(std::time::Duration::from_millis(1100));
         thread.step_once();
         let stepped = snapshot_at(&mut thread, paused.tick + 1).expect("a step publishes");
@@ -932,8 +968,8 @@ mod pacing_timing_tests {
         );
     }
 
-    /// A snapshot nobody is told about is a snapshot nobody draws. Stepping used to only refresh
-    /// the viewport once you moved the mouse.
+    /// A snapshot nobody is told about is a snapshot nobody draws. A step has to wake the UI, or the
+    /// viewport refreshes only once the mouse moves.
     #[test]
     fn a_publish_while_paused_wakes_the_ui() {
         let ticks = Arc::new(AtomicU64::new(0));
@@ -1087,8 +1123,7 @@ mod pacing_timing_tests {
         assert_eq!(fired_ticks(&fired), [0, 0, 1]);
     }
 
-    /// The regression. A second schedule used to fire the actions of the tick the loop sat at. That tick had fired
-    /// already.
+    /// A second schedule must not fire the actions of the tick the loop sits at. That tick has fired already.
     #[test]
     fn a_replaced_schedule_never_fires_a_tick_again() {
         let (mut thread, _, fired) = action_recorder();
@@ -1144,7 +1179,7 @@ mod pacing_timing_tests {
 mod tests {
     use super::{MAX_UNCAPPED_STEPS, UNCAPPED_PUMP_MS, capped_batch_interval_secs, uncapped_steps_for};
 
-    /// The regression. Batching used to multiply the tick rate by the batch size.
+    /// Batching must not multiply the tick rate by the batch size.
     #[test]
     fn batching_does_not_change_effective_tick_rate() {
         for &tps in &[1.0, 30.0, 250.0, 1000.0] {
@@ -1180,12 +1215,12 @@ mod tests {
         assert!((capped_batch_interval_secs(50.0, 0) - capped_batch_interval_secs(50.0, 1)).abs() < 1e-12);
     }
 
-    /// A frame is handed back between pumps, so a pump has to be worth a frame's work.
+    /// The frame is returned to the host between pumps, so a pump has to be worth a frame's work.
     #[test]
     fn an_uncapped_pump_fills_the_budget() {
-        // A step costing a tenth of the budget earns ten of them.
+        // A step costing a tenth of the budget earns ten steps.
         assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS / 10.0), 1), 10);
-        // One costing more than the budget still earns one.
+        // A step costing more than the budget still earns one step.
         assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS * 5.0), 1), 1);
     }
 
@@ -1196,8 +1231,8 @@ mod tests {
         assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS / 12.0), 5), 10);
     }
 
-    /// The regression. The floor used to be a whole stride, so a slow model with a large stride ran
-    /// one anyway and spent however long that took.
+    /// The floor is one step. A whole stride would make a slow model with a large stride run a whole stride
+    /// anyway, however long that took.
     #[test]
     fn a_stride_too_slow_for_the_budget_is_not_run_whole() {
         // Three steps fit, where a stride is a hundred.
@@ -1206,7 +1241,7 @@ mod tests {
         assert_eq!(uncapped_steps_for(Some(UNCAPPED_PUMP_MS * 2.0), 100), 1);
     }
 
-    /// Before anything has been timed, and where a step measures as free.
+    /// Checks the pump size before any step is timed, and when a step measures as free.
     #[test]
     fn an_unmeasured_step_is_bounded() {
         assert_eq!(uncapped_steps_for(None, 1), 1);
@@ -1286,7 +1321,7 @@ mod snapshot_tests {
         }
     }
 
-    /// A model with a field and agents, the shape `build_snapshot` used to collapse.
+    /// A model with a field and agents. `build_snapshot` has to publish both.
     struct Composite {
         cells: Vec<u8>,
         pos_x: Vec<f32>,
@@ -1351,8 +1386,8 @@ mod snapshot_tests {
         }
     }
 
-    /// The regression. Publishing used to reach `point_view` only when there was no grid, so a
-    /// composite model silently dropped every agent.
+    /// Publishing reaches `point_view` when there is a grid too. Otherwise a composite model silently
+    /// drops every agent.
     #[test]
     fn a_composite_model_publishes_both_layers() {
         let mut state = Composite::new(3, true);
@@ -1369,7 +1404,7 @@ mod snapshot_tests {
         assert_eq!(points.color, vec![0, 1, 0]);
     }
 
-    /// An absent lane must arrive empty, which is what the renderer reads as uniform.
+    /// An absent lane must arrive empty. The renderer treats an empty lane as uniform.
     #[test]
     fn a_model_without_a_color_lane_publishes_an_empty_one() {
         let mut state = Composite::new(2, false);

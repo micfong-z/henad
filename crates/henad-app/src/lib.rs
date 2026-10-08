@@ -1,8 +1,8 @@
 //! The app of Henad, a parallel agent-based modelling engine, as a library.
 //!
 //! `run_native` opens a window over the models an [`AppOptions`] holds, and `start_web` starts the same app in a
-//! browser. The official `henad-app` binary calls them with the example models. A project with models of its own opens
-//! the same app over its own [`ModelSet`](henad_compute::entry::ModelSet).
+//! browser. The official `henad-app` binary calls them with the example models. A project that defines its own models
+//! opens the same app over its [`ModelSet`](henad_compute::entry::ModelSet).
 //!
 //! ```no_run
 //! use henad_app::AppOptions;
@@ -15,10 +15,11 @@
 //! }
 //! ```
 //!
-//! An [`AppOpening`] opens the app on a results folder, a recorded run or a setup the host built, in place of the
+//! An [`AppOpening`] opens the app on a results folder, a recorded run or a setup the host built, instead of the
 //! first model of the set.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 // Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
 // limit of 128.
 #![recursion_limit = "256"]
@@ -62,10 +63,10 @@ use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
 #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
-/// Pool width asked for by a `?threads=N` query string, clamped to what the host offers.
+/// Returns the pool width that a `?threads=N` query in `search` requests, clamped to `available` cores, or
+/// `available` when the query sets no count.
 ///
-/// `?threads=1` is how the threaded build gets compared against no pool at all, without keeping a
-/// second build around to compare against.
+/// `?threads=1` requests a single worker. The threaded build then behaves like a build without a thread pool.
 #[cfg(any(all(target_arch = "wasm32", target_feature = "atomics"), test))]
 pub(crate) fn requested_threads(search: &str, available: usize) -> usize {
     let available = available.max(1);
@@ -80,7 +81,7 @@ pub(crate) fn requested_threads(search: &str, available: usize) -> usize {
 
 use crate::state::FrameTimings;
 
-/// Longest time between two repaints while a sweep runs on a thread of its own.
+/// Longest time between two repaints while a sweep runs on its own thread.
 const SWEEP_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 struct HenadApp {
@@ -89,8 +90,8 @@ struct HenadApp {
 }
 
 impl HenadApp {
-    /// Returns the app `options` describe, on the device eframe created from [`init::wgpu_configuration`], opened on
-    /// the options' opening.
+    /// Returns the app that `options` describe, on the device that eframe created from
+    /// [`init::wgpu_configuration`], opened on the options' opening.
     ///
     /// Note that the device has to be requested for the models' `gpu_needs()`. Otherwise a GPU model that binds more
     /// storage buffers than the WebGPU baseline allows will fail to build.
@@ -105,9 +106,8 @@ impl HenadApp {
         let adapter_info = render_state.adapter.get_info();
         log::info!("{}", egui_wgpu::adapter_info_summary(&adapter_info));
 
-        // egui's `RenderState` is the sole authority on device acquisition; `henad-compute` never
-        // creates a device, it only ever receives cloned handles. Building the context also takes
-        // the device's error handling off wgpu's fatal default.
+        // A live GPU model and the renderer share egui's device. Building the context also replaces the device's
+        // default error handling. Left to wgpu, every error is fatal.
         let render_ctx = henad_compute::gpu::GpuContext::new(
             render_state.device.clone(),
             render_state.queue.clone(),
@@ -147,14 +147,14 @@ impl HenadApp {
 
 impl eframe::App for HenadApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Advances the sim where it has no thread of its own. A no-op where it has.
+        // Advances the sim where it has no dedicated thread. Where it has one, this does nothing.
         let dt = ctx.input(|i| f64::from(i.unstable_dt));
         if let Some(thread) = &mut self.state.sim_thread {
             thread.update(dt);
         }
         ui::sweep::update(&mut self.state, dt);
 
-        // --- Poll snapshot from sim thread ---
+        // Takes the latest snapshot from the sim thread.
         let fresh = self.state.sim_thread.as_mut().and_then(SimRunner::take_snapshot);
         if let Some(snap) = fresh {
             // The loop can be past the target by the time it handles `RunTo`, and then pauses where it is. A second
@@ -172,7 +172,7 @@ impl eframe::App for HenadApp {
                 history.push_entries(&snap.stats, snap.tick);
             }
             self.state.record(&snap);
-            // Handing the outgoing one back lets the sim thread refill it instead of allocating.
+            // Passing the outgoing snapshot back lets the sim thread refill it instead of allocating.
             if let Some(previous) = self.state.snapshot.replace(snap)
                 && let Some(thread) = &mut self.state.sim_thread
             {

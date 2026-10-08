@@ -29,7 +29,7 @@ use crate::sweep::{ExploreError, Provenance, SweepOptions, SweepReport, SweepWar
 use crate::testing::{TestDeviceRequest, headless_test_device};
 
 /// Returns a headless device raised to the example models' needs, or `None` to skip a GPU test on a machine without
-/// one.
+/// a device.
 ///
 /// # Panics
 ///
@@ -39,7 +39,7 @@ pub fn headless_device() -> Option<GpuContext> {
 }
 
 /// Returns a headless device with the limits of `wgpu::Limits::default()`, the WebGPU baseline, or `None` to skip a
-/// GPU test on a machine without one.
+/// GPU test on a machine without a device.
 ///
 /// # Panics
 ///
@@ -66,7 +66,7 @@ pub struct ScratchDir {
 }
 
 impl ScratchDir {
-    /// Returns a path named after `name` that nothing exists at yet.
+    /// Returns a path, named after `name`, where nothing exists yet.
     pub fn new(name: &str) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let index = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -94,7 +94,7 @@ fn remove(path: &Path) {
     }
 }
 
-/// Returns an engine build that [`RecordedBuild::same_build`] tells apart from Henad's own, clean or dirty.
+/// Returns an engine build that [`RecordedBuild::same_build`] tells apart from Henad's own build, clean or dirty.
 pub fn other_engine() -> RecordedBuild {
     let mut other = RecordedBuild::engine();
     other.commit = "0ther000".to_owned();
@@ -103,7 +103,7 @@ pub fn other_engine() -> RecordedBuild {
     other
 }
 
-/// Returns the provenance of a sweep the tests run, with henad-explore's own build as the host's.
+/// Returns the provenance of a sweep that the tests run, with henad-explore's own build as the host build.
 pub fn provenance() -> Provenance {
     Provenance::new(henad_core::build_info!(), vec!["henad-explore-tests".to_owned()])
 }
@@ -190,7 +190,7 @@ impl Progress for Recorder {
 }
 
 /// Progress that resumes `spec` over `entry` in `dir` a second time once the first resume reports its outline, after
-/// its scan, and keeps the result of the second.
+/// its scan, and keeps the result of the second resume.
 #[derive(Debug)]
 pub struct SecondResume<'a> {
     entry: &'a ModelEntry,

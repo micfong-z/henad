@@ -1,8 +1,8 @@
 //! Run cursors, each holding one CPU run of a sweep from its build to its [`RunOutcome`].
 //!
 //! A cursor steps its run a slice at a time, fires the run's actions and samples it at every tick its
-//! [`MeasurePlan`] names. The CPU executors drive their runs through cursors. A GPU run steps on a track of
-//! `exec::gpu` instead, and both end a run through `run_outcome`.
+//! [`MeasurePlan`] specifies. The CPU executors drive their runs through cursors. A GPU run steps on a track of
+//! `exec::gpu` instead, and both call `run_outcome` to end a run.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,11 +19,11 @@ use henad_core::model::SimState;
 
 use crate::exec::RunRequest;
 
-/// Reason a cursor refuses to build a GPU model.
+/// Reason a cursor rejects a GPU model without building it.
 #[cfg(not(target_arch = "wasm32"))]
 const GPU_REFUSAL: &str = "a GPU model cannot run on a CPU lane";
 
-/// Reason a cursor refuses to build a GPU model. A browser cannot block on the device.
+/// Reason a cursor rejects a GPU model without building it. A browser cannot block on the device.
 #[cfg(target_arch = "wasm32")]
 const GPU_REFUSAL: &str = "a GPU sweep needs a native build";
 
@@ -58,9 +58,9 @@ impl std::fmt::Debug for RunCursor {
 
 enum Phase {
     Live(Box<LiveRun>),
-    /// A run whose build failed, holding the outcome to hand out.
+    /// A run whose build failed, holding the outcome to return.
     BuildFailed(Box<RunOutcome>),
-    /// A run whose outcome was handed out.
+    /// A run whose outcome was returned.
     Spent,
 }
 
@@ -87,7 +87,7 @@ struct Timeline {
     population: u64,
     /// Whether the actions due at tick 0 have fired.
     fired_start_actions: bool,
-    /// One note per action the model refused, in the order they were due.
+    /// One note per action the model rejected, in the order they were due.
     refusals: Vec<String>,
 }
 
@@ -103,7 +103,7 @@ impl From<Fault> for RunFailure {
         let status = match fault.kind {
             FaultKind::Panic { .. } => RunStatus::Panicked,
             FaultKind::Refused(_) => RunStatus::Refused,
-            // A device error, a failed wait or a lost device.
+            // Any other fault is a device error, a failed wait or a lost device.
             _ => RunStatus::GpuError,
         };
         Self {
@@ -124,7 +124,7 @@ impl From<StatsWriteError> for RunFailure {
 
 /// End of a run whose model was built.
 pub(crate) enum RunEnd {
-    /// The run took its last sample, for the reason inside.
+    /// The run ended after its last sample, with the reason it stopped.
     Stopped(StopReason),
     Failed(RunFailure),
     /// The run passed its timeout with ticks left.
@@ -143,14 +143,14 @@ pub(crate) struct OutcomeParts {
     /// live tracks.
     pub(crate) wall: Duration,
     pub(crate) timeout: Option<Duration>,
-    /// One note per action the model refused, in the order they were due.
+    /// One note per action the model rejected, in the order they were due.
     pub(crate) refusals: Vec<String>,
 }
 
 /// Returns the outcome of `run` once it ends as `end`.
 ///
-/// A run that reached its end with a non-finite sample is `non_finite`. The notes of the refused actions come
-/// before the note of the end.
+/// A run that reached its end with a non-finite sample is `non_finite`. Notes for rejected actions come
+/// before the note for the end.
 pub(crate) fn run_outcome(run: PlannedRun, run_key: u64, end: RunEnd, parts: OutcomeParts) -> RunOutcome {
     let ticks = parts.ticks;
     let measured = parts.sampler.finish();
@@ -205,7 +205,7 @@ pub(crate) fn failed_build_outcome(
     }
 }
 
-/// Returns the note of `action`, refused by the model.
+/// Returns the note for `action`, which the model rejected.
 pub(crate) fn refusal_note(action: &Scheduled) -> String {
     format!("model refused action '{}' at tick {}", action.id, action.tick)
 }
@@ -214,7 +214,7 @@ impl RunCursor {
     /// Builds the model of `request` with the request's seed, and times the build.
     ///
     /// A run ends with the slice in which its stepping and sampling pass `timeout`. A cursor whose build failed
-    /// finishes on its first [`Self::advance`], with the failure as its status. A GPU model is refused.
+    /// finishes on its first [`Self::advance`], with the failure as its status. A GPU model is rejected.
     pub fn new(
         entry: &ModelEntry,
         measure: &Arc<MeasurePlan>,
@@ -293,7 +293,7 @@ impl RunCursor {
 }
 
 impl LiveRun {
-    /// Steps by at most `max_steps` steps, and returns the end of the run once it has one.
+    /// Steps by at most `max_steps` steps, and returns the end of the run once the run ends.
     fn advance(&mut self, max_steps: u64) -> Option<RunEnd> {
         let started = Instant::now();
         let (timeline, schedule, state) = (&mut self.timeline, &self.schedule, &mut self.state);
@@ -369,7 +369,7 @@ impl Timeline {
 }
 
 /// Steps `state` by `count` ticks, firing the actions due after each step, and adds a note to `refusals` for each
-/// one refused.
+/// action that the model rejects.
 fn step_by(state: &mut dyn SimState, count: u64, schedule: &Schedule, refusals: &mut Vec<String>) {
     if schedule.is_empty() {
         for _ in 0..count {
@@ -388,7 +388,7 @@ fn note_refused(refused: RefusedActions<'_>, refusals: &mut Vec<String>) {
     refusals.extend(refused.into_iter().map(refusal_note));
 }
 
-/// Returns the CPU state of `state`, refusing a GPU model.
+/// Returns the CPU state of `state`, rejecting a GPU model.
 fn cpu_state(state: ModelState) -> Result<Box<dyn SimState>, Fault> {
     match state {
         ModelState::Cpu(state) => Ok(state),

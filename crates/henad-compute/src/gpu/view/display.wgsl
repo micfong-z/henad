@@ -1,3 +1,5 @@
+// Samples a GPU model's display texture into the viewport, over one fullscreen triangle.
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,

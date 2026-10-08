@@ -20,19 +20,19 @@ use crate::ui::mcs;
 use crate::ui::plural;
 use crate::ui::sweep::draft::{DraftMode, DraftSite, IssueKind};
 
-/// Widest the form's column grows, in points. The rest of a wide tab goes to the Plan panel or stays empty.
+/// Maximum width of the form column, in points. The rest of a wide tab goes to the Plan panel or stays empty.
 pub const FORM_MAX_WIDTH: f32 = 680.0;
 
-/// Narrowest the label column gets, in points.
+/// Minimum width of the label column, in points.
 pub const MIN_LABEL_WIDTH: f32 = 96.0;
 
-/// Widest the label column gets, as a share of the form's width.
+/// Maximum width of the label column, as a share of the form width.
 pub const MAX_LABEL_SHARE: f32 = 0.4;
 
-/// Width of the form from which the parameter rows show the Parameters tab value in a column of its own, in points.
+/// Minimum form width at which the parameter rows show the Parameters tab value in a column of its own, in points.
 pub const BASELINE_COLUMN_FROM: f32 = 520.0;
 
-/// Widest a combo box or a text field alone in a row's cell grows, in points.
+/// Maximum width of a combo box or a text field alone in a row cell, in points.
 pub const CONTROL_MAX_WIDTH: f32 = 320.0;
 
 /// Width of the footer below which its secondary buttons show only their icon, in points.
@@ -58,8 +58,8 @@ pub fn cap_form_width(ui: &mut Ui) {
 
 /// Widths at which a layout flag turns on and off.
 ///
-/// A width between the two keeps the flag as it was. Otherwise a width hovering at one edge would flip the layout on
-/// every frame.
+/// A width between the two widths keeps the flag as it was. Otherwise a width hovering at one edge would flip the
+/// layout on every frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Breakpoint {
     /// Width from which an off flag turns on.
@@ -117,7 +117,7 @@ pub enum SweepSection {
     RunLength,
     Outputs,
     Execution,
-    /// The plan, as a section of its own while the Plan panel does not fit.
+    /// The plan, as its own section while the Plan panel does not fit.
     Plan,
 }
 
@@ -207,7 +207,7 @@ impl Reveal {
     }
 
     /// Returns the reveal as a draft in `mode` draws it. The Design and Search sections swap with the mode, and a
-    /// reveal of either lands on the one drawn.
+    /// reveal of either section is applied to the section drawn.
     pub fn in_mode(self, mode: DraftMode) -> Self {
         let section = match (self.section, mode) {
             (SweepSection::Design, DraftMode::Search) => SweepSection::Search,
@@ -231,8 +231,8 @@ pub struct Typing {
 
 /// Returns whether a text field holds back the issue of its text.
 ///
-/// It does while it has focus, `focused`, and less than [`ISSUE_DELAY`] passed since its last edit, `since_edit`
-/// seconds ago, `None` for a field not edited.
+/// A field holds back the issue while it has focus, `focused`, and less than [`ISSUE_DELAY`] has passed since its
+/// last edit, `since_edit` seconds ago. `since_edit` is `None` for a field not edited.
 pub fn holds_back_issue(focused: bool, since_edit: Option<f64>) -> bool {
     focused && since_edit.is_some_and(|elapsed| elapsed < ISSUE_DELAY.as_secs_f64())
 }
@@ -271,15 +271,16 @@ impl FormRows {
         self.revealed = true;
     }
 
-    /// Asks for the text field `field` to take focus once the pointer is still.
+    /// Requests focus for the text field `field` once the pointer is still.
     ///
-    /// A text field gives up its focus on any press or release of the pointer outside it, as on the click that asks.
+    /// A text field gives up its focus on any press or release of the pointer outside it, as on the click that
+    /// requests it.
     pub fn focus_later(&mut self, ui: &Ui, field: Id) {
         self.focus_field = Some(field);
         ui.ctx().request_repaint();
     }
 
-    /// Focuses the text field `response` when it was asked to take focus and the pointer is still.
+    /// Focuses the text field `response` when focus was requested for it and the pointer is still.
     pub fn take_focus(&mut self, ui: &Ui, response: &Response) {
         if self.focus_field != Some(response.id) {
             return;
@@ -327,8 +328,8 @@ pub fn issue_icon(kind: IssueKind) -> &'static str {
     }
 }
 
-/// Returns the colour an issue of `kind` is drawn in: the text colour for input still to give, the error colour for
-/// input the plan refuses.
+/// Returns the colour an issue of `kind` is drawn in: the text colour for input not given yet, the error colour for
+/// input the plan rejects.
 pub fn issue_color(ui: &Ui, kind: IssueKind) -> Color32 {
     match kind {
         IssueKind::Missing => ui.visuals().text_color(),
@@ -356,7 +357,7 @@ impl IssueCount {
         self.missing + self.invalid
     }
 
-    /// Kind the count is drawn as: invalid while any issue is, `None` for no issue.
+    /// Kind the count is drawn as: invalid while any issue is invalid, `None` for no issue.
     pub fn kind(self) -> Option<IssueKind> {
         if self.invalid > 0 {
             Some(IssueKind::Invalid)
@@ -367,7 +368,7 @@ impl IssueCount {
         }
     }
 
-    /// Returns the count in words: "2 problems" while any issue is invalid, "2 missing" while every one is missing
+    /// Returns the count in words: "2 problems" while any issue is invalid, "2 missing" while every issue is missing
     /// input, and `None` for no issue.
     pub fn phrase(self) -> Option<String> {
         let total = self.total() as u64;
@@ -617,7 +618,7 @@ impl FormLayout {
     ///
     /// The label truncates to the column and shows its whole text on hover. The cell lays out top to bottom.
     ///
-    /// Returns the label's response, for the controls it names, and what `add_control` returns.
+    /// Returns the label's response, for the controls it labels, and the value `add_control` returns.
     pub fn row<R>(
         &self,
         ui: &mut Ui,
@@ -717,8 +718,8 @@ impl FormLayout {
         self.cell_width.min(CONTROL_MAX_WIDTH)
     }
 
-    /// Draws the control `add_control` adds on a line of its own, with `feedback` after it, or on a reserved line
-    /// below it in a stacked form.
+    /// Draws the control `add_control` adds on its own line, with `feedback` after it, or on a reserved line below
+    /// it in a stacked form.
     pub fn with_feedback<R>(&self, ui: &mut Ui, feedback: &Note, add_control: impl FnOnce(&mut Ui) -> R) -> R {
         let inner = ui
             .horizontal(|ui| {
@@ -736,7 +737,8 @@ impl FormLayout {
     }
 }
 
-/// Draws what `add_contents` adds in a slot `width` wide and one control high, left to right, truncating its text.
+/// Draws the widgets `add_contents` adds in a slot `width` wide and one control high, left to right, truncating their
+/// text.
 pub fn slot<R>(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     let line_height = ui.spacing().interact_size.y;
     ui.allocate_ui_with_layout(vec2(width, line_height), Layout::left_to_right(Align::Center), |ui| {
@@ -747,7 +749,7 @@ pub fn slot<R>(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui) -> R)
     .inner
 }
 
-/// Draws what `add_contents` adds in a column `width` wide, top to bottom.
+/// Draws the widgets `add_contents` adds in a column `width` wide, top to bottom.
 pub fn column<R>(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     let line_height = ui.spacing().interact_size.y;
     ui.allocate_ui_with_layout(vec2(width, line_height), Layout::top_down(Align::Min), add_contents)
@@ -770,7 +772,7 @@ pub enum Note {
 }
 
 impl Note {
-    /// Returns the note of the first of `issues`, or `fallback` when there is none.
+    /// Returns the note of the first of `issues`, or `fallback` when `issues` is empty.
     pub fn issue_or<'a>(
         issues: impl IntoIterator<Item = &'a crate::ui::sweep::draft::DraftIssue>,
         fallback: Self,
@@ -782,7 +784,7 @@ impl Note {
     }
 }
 
-/// Draws `note` on one line `width` wide, reserved even for an empty note so nothing below moves when one comes.
+/// Draws `note` on one line `width` wide, reserved even for an empty note so nothing below moves when a note appears.
 ///
 /// Returns the note's response, `None` for an empty note.
 pub fn note_line(ui: &mut Ui, width: f32, note: &Note) -> Option<Response> {
@@ -803,7 +805,7 @@ pub struct NoteButton<'a> {
 
 /// Draws `note` on one reserved line `width` wide, as [`note_line`] does, with `button` at its end when set.
 ///
-/// The note truncates to the room the button leaves it. Returns whether the button was clicked.
+/// The note truncates to the space that the button leaves free. Returns whether the button was clicked.
 pub fn note_line_with_button(ui: &mut Ui, width: f32, note: &Note, button: Option<NoteButton<'_>>) -> bool {
     let height = ui.text_style_height(&TextStyle::Body);
     ui.allocate_ui_with_layout(vec2(width, height), Layout::left_to_right(Align::Center), |ui| {
@@ -818,7 +820,7 @@ pub fn note_line_with_button(ui: &mut Ui, width: f32, note: &Note, button: Optio
     .inner
 }
 
-/// Draws `note` in a block `width` wide and as many lines high as `reserved` takes, wrapped at that width.
+/// Draws `note` in a block `width` wide and as many lines high as the text `reserved` needs, wrapped at that width.
 ///
 /// The block keeps its height whatever the note, so nothing below moves when another note takes its place. A note
 /// longer than the block truncates on its last line and shows its whole text on hover.
@@ -875,7 +877,7 @@ pub fn note_label(ui: &mut Ui, note: &Note) -> Option<Response> {
     Some(ui.add(Label::new(RichText::new(text).color(color)).truncate()))
 }
 
-/// Draws a segmented control of `choices`, each a value, its text and its tooltip, writing the one picked into
+/// Draws a segmented control of `choices`, each a value, its text and its tooltip, writing the picked value into
 /// `value`.
 ///
 /// Returns whether the value changed. A choice not `enabled` is drawn disabled, with its reason on hover.

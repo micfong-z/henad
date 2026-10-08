@@ -17,6 +17,6 @@ However, this usage is inconsistent.
 
 The records of issue #48 cite the maintainer's unpublished design and audit documents.
 A bracketed section number such as `[7.1]`, a question number such as `Q4` and an id such as `R-048` point into those documents, and nothing on this site resolves them.
-The release checklist those records cite as `[5.5]` is published as [Releasing](../releasing.md).
+The release checklist that those records cite as `[5.5]` is published as [Releasing](../releasing.md).
 
 See [AI usage](../contributing.md#ai-usage) for AI usage suggestions for Henad development.

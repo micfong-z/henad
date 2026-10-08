@@ -1,12 +1,15 @@
 //! Engine machinery that turns an authoring impl into something runnable.
 //!
-//! [`cpu`] and [`gpu`] are siblings, not a base and a specialisation. Each holds its own runner,
-//! its own engines, and its own primitives. [`snapshot`], [`runtime_info`], [`display_scale`] and
-//! [`fault`] are shared, since both backends publish through them. [`runner`] is how either
-//! one gets driven. [`entry`] type-erases a model behind one entry a host can list and build, and
-//! [`simulation`] builds one with checked values and steps it from a program.
+//! [`cpu`] and [`gpu`] each hold one backend's engines, runner and primitives. An engine state, such as
+//! [`GridModelState`](cpu::GridModelState) or [`GpuAgentState`](gpu::GpuAgentState), runs one authoring trait as a
+//! [`SimState`](henad_core::model::SimState). Both backends share [`snapshot`], [`runtime_info`],
+//! [`display_scale`] and [`fault`], and [`runner`] drives either backend's loop.
+//!
+//! [`entry`] type-erases a model behind one entry a host can list and build, and [`simulation`] builds one with
+//! checked values and steps it from a program.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 // Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
 // limit of 128.
 #![recursion_limit = "256"]
@@ -15,15 +18,16 @@
 /// `binding_decls`.
 ///
 /// Call it once, at the crate root of a crate whose build script runs `henad_build::ShaderBuild`. A shader at
-/// `gpu_vote/step.wgsl` below the shader root then reads as `crate::shader_bindings::gpu_vote::step::SHADER_STRING`,
-/// and its `@group(0)` declarations as `crate::binding_decls::bindings::GPU_VOTE_STEP`.
+/// `gpu_vote/step.wgsl` below the shader root is then available as
+/// `crate::shader_bindings::gpu_vote::step::SHADER_STRING`, and its `@group(0)` declarations as
+/// `crate::binding_decls::bindings::GPU_VOTE_STEP`.
 ///
 /// Generated code is not held to the caller's lints, and both modules allow every lint it trips. `unsafe_code` is the
 /// one that matters. The generator writes `unsafe impl bytemuck::Pod` and an `unsafe fn from_raw`, so a crate denies
 /// `unsafe_code` rather than forbidding it.
 ///
-/// Note that the expansion fails to compile when henad-build composed the shaders against other shared WGSL than this
-/// crate links. Use the same 0.x of henad and henad-build.
+/// Note that the expansion fails to compile when the shared WGSL that henad-build composed the shaders against differs
+/// from the shared WGSL this crate links. Use the same 0.x of henad and henad-build.
 #[macro_export]
 macro_rules! include_shaders {
     () => {
@@ -87,7 +91,7 @@ pub mod snapshot;
 #[doc(hidden)]
 pub const __COMPUTE_BUILD: henad_core::provenance::BuildInfo = henad_core::build_info!();
 
-/// Items the code [`include_shaders!`] brings in names through `$crate`.
+/// Items that the code from [`include_shaders!`] refers to through `$crate`.
 #[doc(hidden)]
 pub mod __shader_support {
     pub use henad_core::authoring::model::binding::{BindingDecl, BindingKind};
@@ -95,7 +99,7 @@ pub mod __shader_support {
     pub use {bytemuck, wgpu};
 }
 
-/// Items the exported macros name through `$crate`, so a caller needs none of them in scope.
+/// Items that the exported macros refer to through `$crate`, so a caller needs none of them in scope.
 #[doc(hidden)]
 pub mod __macro_support {
     pub use henad_core::authoring::model::agent_model::{AgentLanes, ChunkTally};

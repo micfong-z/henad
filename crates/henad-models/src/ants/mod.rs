@@ -1,3 +1,8 @@
+//! Ant foraging as an [`AgentModel`] over a pheromone [`ScalarField`].
+//!
+//! Ants walk between a nest and a food source, around two obstacles. A searching ant lays the trail home and follows
+//! the trail to food, and an ant carrying food does the reverse. Both trails decay each tick.
+
 pub mod field;
 mod lanes;
 mod step;
@@ -16,7 +21,7 @@ use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::ants::field::{PheromoneField, TO_FOOD, TO_HOME, nest_cell};
 
-/// Indexed by `has_food` itself, not by a copy of it.
+/// Ant colours, indexed by the `has_food` lane: searching, then carrying food.
 pub const ANT_PALETTE: [[u8; 4]; 2] = [
     [0xE8, 0xE8, 0xF0, 0xFF], // searching
     [0x3D, 0xD5, 0x8C, 0xFF], // carrying food
@@ -42,24 +47,31 @@ henad_core::actions! {
 
 /// Ant foraging, ported from krABMaga's `antsforaging`.
 ///
-/// Three semantic divergences a comparison has to state. Deposits combine with `max` rather than
-/// last-writer-wins. The pheromone field is all read old, all write new. The RNG is seeded per
-/// chunk per tick rather than drawn per call.
+/// A comparison with the reference has to state three differences. Deposits combine with `max`
+/// instead of the last writer winning. Every pheromone read sees the old field, and every write goes to the new
+/// field. The RNG is seeded per chunk per tick instead of drawn per call.
 ///
-/// The reference's biased neighbour tie-break is reproduced rather than corrected, see
-/// `step::advect_agent`.
+/// The reference's biased neighbour tie-break is reproduced as it is (see `step::advect_agent`).
 #[derive(Debug)]
 pub struct AntsModel;
 
+/// Parameters of [`AntsModel`], read once per tick.
 #[derive(Debug)]
 pub struct AntParams {
+    /// Width of the field in cells.
     pub w: i32,
+    /// Height of the field in cells.
     pub h: i32,
+    /// Factor that multiplies the pheromone of the cell and of its orthogonal neighbours in a deposit,
+    /// `update_cutdown`.
     pub cutdown: f32,
-    /// Cutdown raised to the diagonal distance, since those neighbours are further away.
+    /// Cutdown raised to the diagonal distance, since diagonal neighbours are further away.
     pub diagonal: f32,
+    /// Reward an ant receives at the nest or the food source, `reward`.
     pub reward: f32,
+    /// Probability that an ant with no pheromone nearby keeps its last direction, `momentum`.
     pub momentum: f32,
+    /// Probability that an ant takes a random step instead of the one it chose, `random_action`.
     pub random_action: f32,
 }
 
@@ -74,6 +86,7 @@ impl AgentModel for AntsModel {
         StatDescriptor::new("Deliveries", STAT_PALETTE[1]),
         StatDescriptor::new("Total Pheromone", STAT_PALETTE[2]),
     ];
+    /// Agents per chunk. The movement draws are seeded per chunk, so another value gives other results.
     const CHUNK: usize = 4096;
     const ACTIONS: &'static [ActionDescriptor] = ACTION_SPECS;
     const DEFAULT_AGENTS: u32 = 2_000;
@@ -153,7 +166,7 @@ impl AgentModel for AntsModel {
 /// Wipes both trails and puts the ants back on the nest, holding a reward.
 ///
 /// Wiping the trails alone would end the run. A deposit is the neighbourhood's best value lifted by
-/// the ant's reward, and only a site grants one, so from an empty field ants that are not standing
+/// the ant's reward, and only a site grants a reward, so from an empty field ants that are not standing
 /// on a site lay nothing and nothing ever grows back.
 fn reset_colony(
     lanes: &mut AntLanes,
@@ -170,7 +183,7 @@ fn reset_colony(
     lanes.last_step.fill(NO_STEP);
 }
 
-/// Summed chunk by chunk in index order, so rayon's scheduling cannot change the total.
+/// Sums both pheromone layers chunk by chunk in index order, so rayon's scheduling cannot change the total.
 fn total_pheromone(to_food: &Grid2D<f32>, to_home: &Grid2D<f32>) -> f64 {
     field_sum(to_food.current()) + field_sum(to_home.current())
 }
@@ -228,7 +241,7 @@ mod tests {
     }
 
     /// Forgetting the refresh leaves the grid layer frozen at construction, with sites still
-    /// rendering and pheromone never appearing. It was wrong that way first.
+    /// rendering and pheromone never appearing.
     #[test]
     fn the_grid_layer_shows_pheromone_laid_since_construction() {
         let mut state = default_state();
@@ -251,7 +264,7 @@ mod tests {
         );
     }
 
-    /// Handed to the renderer directly, so it may only ever hold a valid palette index.
+    /// `has_food` goes to the renderer as a palette index, and every value it holds has to index the palette.
     #[test]
     fn has_food_stays_a_valid_palette_index() {
         let mut state = default_state();
@@ -280,7 +293,7 @@ mod tests {
         }
     }
 
-    /// The momentum and random action fallbacks are the easy ones to forget an obstacle check in.
+    /// An obstacle check is easy to forget in the momentum and random action fallbacks.
     #[test]
     fn ants_never_enter_an_obstacle() {
         let mut state = default_state();
@@ -297,18 +310,17 @@ mod tests {
 
     /// Three things could leak scheduling into the result. The scatter arm comes from the worker
     /// count, the movement RNG is seeded per chunk, and deliveries are a parallel reduction.
-    ///
-    /// One worker also stands in for wasm, where the shadow arm reduces through a single grid.
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
-        /// Ant cells, deliveries, and both pheromone fields as raw bits.
+        /// Returns the ant cells, the deliveries and both pheromone fields as raw bits after a run on
+        /// `threads` workers.
         fn run(threads: usize) -> (Vec<u32>, u64, Vec<u32>) {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .expect("rayon pool");
             pool.install(|| {
-                // Three chunks of `CHUNK`, so the seeding of each chunk meets a split across workers.
+                // Three chunks of `CHUNK`, so the per-chunk seeding runs with the work split across workers.
                 let num_agents = 3 * <AntsModel as AgentModel>::CHUNK as u32;
                 let mut state = State::from_params(&[
                     ParamValue::U32(num_agents),

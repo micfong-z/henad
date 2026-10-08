@@ -1,31 +1,12 @@
-//! GPU Game of Life. The same rules as [`crate::game_of_life`], with all state resident in GPU
-//! storage buffers.
+//! Game of Life as a [`GpuGridModel`], with the rules of [`crate::game_of_life`] and the grid in a storage buffer.
 //!
-//! # State layout
+//! Cells are bit-packed, 32 to a `u32`. Cell `x` of row `y` is bit `x % 32` of word `y * words_per_row + x / 32`, and
+//! each row is padded with zero bits to [`words_per_row`] whole words.
+//! The step dispatches one invocation per word. Per cell, 32 invocations would write the same word and race.
+//! Display dispatches one invocation per texel and reduce one per cell. Each invocation extracts the bit of its cell.
 //!
-//! One `array<u32>` storage buffer, ping-ponged, so each step reads one side and writes the other.
-//!
-//! Cells are bit-packed, 32 per `u32`. Cell `x` of row `y` is bit `x % 32` of word
-//! `y * words_per_row + x / 32`, where rows are padded out to `words_per_row = ceil(width / 32)`
-//! whole words.
-//!
-//! Packing is what puts the 100M-cell target in reach. At 1 bit per cell a 100M grid is 12.5 MB
-//! per side, against 400 MB unpacked, which would blow the 128 MB storage-binding limit outright.
-//!
-//! The step pass therefore dispatches **one invocation per word**, not per cell. That is a
-//! correctness requirement, not an optimisation. 32 cells share an output word, so 32 invocations
-//! would each read-modify-write it and race. One owner per word means one plain store. Display
-//! and reduce still dispatch per cell and extract their own bit.
-//!
-//! The grid never leaves the GPU. The CPU sees only an RGBA display texture and a single `u32`
-//! alive count read back asynchronously.
-//!
-//! # Correctness oracle
-//!
-//! Seeding uses the same `xorshift64` PRNG, the same `GRID_INIT_SEED`, the same traversal order,
-//! and the same density threshold as the CPU `GameOfLifeModel`. Given identical params the two
-//! backends therefore start from a **bit-identical** grid and must agree forever after, which is
-//! what `tests::gpu_alive_count_matches_cpu_model` checks.
+//! [`seed_random`] repeats the draws of the CPU model's `init`. For the same seed both backends start from the same
+//! grid, and the CPU model is an exact oracle on every tick after.
 
 use henad_compute::cpu::grid_engine::grid_init_rng;
 use henad_core::action::ActionDescriptor;
@@ -39,8 +20,8 @@ use henad_core::view::{StatDescriptor, StatValue};
 use crate::game_of_life::PALETTE;
 use crate::shader_bindings::gpu_game_of_life::randomise::Params as ActionParams;
 
-// The whole list, matching what the CPU engine composes for `GameOfLifeModel`, so this model is a
-// drop-in comparison against it.
+// The list repeats the ids and order the CPU engine composes for `GameOfLifeModel`, so one parameter vector drives
+// either backend.
 henad_core::params! {
     const PARAM_WIDTH = u32_param("grid_width", "Grid Width", DEFAULT_DIM, 1, 16_384);
     const PARAM_HEIGHT = u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384);
@@ -50,21 +31,17 @@ henad_core::params! {
 const DEFAULT_DIM: u32 = 1024;
 const DEFAULT_DENSITY: f32 = 0.3;
 
-/// Words per padded row: 32 cells to a `u32`, rounded up. See the module docs on state layout.
+/// Returns the number of words in a padded row of `width` cells, 32 cells to a word.
 pub fn words_per_row(width: u32) -> usize {
     (width as usize).div_ceil(32)
 }
 
-/// CPU-seeded random fill at the given density, bit-packed into the layout the shaders read.
+/// Returns a bit-packed grid of `width` by `height` cells, each alive with probability `density`.
 ///
-/// The PRNG is drawn per cell in row-major order, with the same PRNG, traversal order and
-/// threshold as `GameOfLifeModel::init`, so the two backends still start from an identical grid
-/// even though this one stores it 32 cells to a word. Only the *storage* differs, not the bit
-/// sequence, which is what makes the CPU model a usable oracle.
+/// The cells are drawn from `rng` in row-major order, with the draws and the threshold of `GameOfLifeModel::init`.
+/// With `rng` from `grid_init_rng`, the grid matches the CPU model's bit for bit.
 ///
-/// Padding bits, present when `width % 32 != 0`, are left zero and never read. The step pass
-/// writes them from cells that don't exist and nothing extracts them, since display and reduce
-/// are both bounded by `width`.
+/// Padding bits, present when `width % 32 != 0`, start at zero, and the step keeps them at zero.
 pub fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u32> {
     let threshold = (density * u32::MAX as f32) as u32;
     let stride = words_per_row(width);
@@ -80,6 +57,7 @@ pub fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u
     words
 }
 
+/// Conway's Game of Life as a [`GpuGridModel`], over a bit-packed grid.
 #[derive(Debug)]
 pub struct GpuGameOfLife;
 
@@ -128,7 +106,7 @@ impl GpuGridModel for GpuGameOfLife {
         vec![words_per_row(width) * (height as usize)]
     }
 
-    /// One invocation per word
+    /// Returns one invocation per word of each row.
     fn step_dims(width: u32, height: u32) -> (u32, u32) {
         (words_per_row(width) as u32, height)
     }
@@ -195,7 +173,7 @@ mod tests {
         }
     }
 
-    /// Drives display + reduce + readback exactly as the sim thread's one-shot snapshot path does.
+    /// Runs the display, reduce and readback passes as the sim thread's one-shot snapshot does.
     fn refresh_stats(ctx: &GpuContext, state: &mut State) {
         let mut encoder = ctx
             .device
@@ -230,9 +208,9 @@ mod tests {
         }
     }
 
-    /// End-to-end agreement with the CPU model, which is the real correctness oracle: identical
-    /// params seed a bit-identical grid, so the alive count the GPU reduces on-device must equal
-    /// the alive count the CPU model counts in Rust, tick for tick.
+    /// Checks the alive count that the GPU reduces against the CPU model's count, tick for tick.
+    ///
+    /// Equal params seed the same grid on both backends, and the CPU model is the oracle.
     #[test]
     fn gpu_alive_count_matches_cpu_model() {
         let Some(ctx) = headless_context() else {
@@ -242,17 +220,14 @@ mod tests {
         check_agreement_over_ticks(&ctx, 64, 64);
     }
 
-    /// The same oracle at a width that is neither a multiple of 32 nor a power of two, which is
-    /// what actually exercises bit-packing's two distinct x-wrap boundaries:
+    /// Checks the same oracle at a width that is neither a multiple of 32 nor a power of two.
     ///
-    /// - **ragged last word** (50 % 32 = 18): the last word holds cells 32..=49 in bits 0..=17, so
-    ///   cell 49's right neighbour must wrap to cell 0 from a bit that is *not* 31.
-    /// - **non-power-of-two width**: the x=0 column's left neighbour is computed by a `% width`,
-    ///   which silently gives the right answer for any width dividing 2^32 even when the
-    ///   arithmetic feeding it is wrong.
+    /// The width exercises both x-wrap boundaries of the packing.
     ///
-    /// Every other size in this file (16/32/64/128/256) is a power of two, so this is the only
-    /// test that can see either mistake.
+    /// - The last word is ragged (50 % 32 = 18). It holds cells 32 to 49 in bits 0 to 17, and cell 49's right neighbour
+    ///   wraps to cell 0 from a bit other than 31.
+    /// - The width is not a power of two. The left neighbour of column 0 comes from a `% width`, which gives the right
+    ///   answer for any width dividing 2^32 even when the arithmetic feeding it is wrong.
     #[test]
     fn gpu_alive_count_matches_cpu_model_at_ragged_width() {
         let Some(ctx) = headless_context() else {
@@ -262,10 +237,10 @@ mod tests {
         check_agreement_over_ticks(&ctx, 50, 30);
     }
 
-    /// A grid wider than `max_texture_dimension_2d`, which used to fail at `create_texture`.
+    /// Checks that a grid wider than `max_texture_dimension_2d` builds and steps.
     ///
-    /// Only the width is over, so this also pins the per-axis capping: display runs 4096x64 while
-    /// step and reduce still cover all 8200 columns.
+    /// Only the width is over the limit, and this also pins the per-axis capping. Display runs at 4096 by 64, and step
+    /// and reduce cover all 8200 columns.
     #[test]
     fn a_grid_past_the_texture_limit_still_builds_and_steps() {
         let Some(ctx) = headless_context() else {
@@ -310,7 +285,7 @@ mod tests {
             cpu.step();
         }
 
-        // Sanity: the assertions above would also pass if both counts were stuck at zero.
+        // The assertions above would also pass with both counts stuck at zero.
         refresh_stats(&ctx, &mut gpu);
         assert!(
             reported_alive(&gpu) > 0,
@@ -318,22 +293,19 @@ mod tests {
         );
     }
 
-    /// Like `headless_context`, but requests `TIMESTAMP_QUERY` explicitly (mirroring what the app
-    /// does when the adapter supports it), since the default test device requests no features.
+    /// Returns a baseline test device with `TIMESTAMP_QUERY`, which the app requests where the adapter supports it.
+    ///
+    /// The default test device requests no features.
     fn headless_timing_context() -> Option<GpuContext> {
         headless_test_device(
             &TestDeviceRequest::baseline().features(henad_compute::gpu::wgpu::Features::TIMESTAMP_QUERY),
         )
     }
 
-    /// Regression test for "GPU time/step flickers to 0/None during a sustained run": runs many
-    /// batches back to back exactly like `GpuSimLoop::step_batch` records/resolves/reads a
-    /// timestamped batch, but takes a reading on *every* iteration instead of once/second, to
-    /// shake out an intermittent zero or failed readback far more aggressively than the real
-    /// once-per-second cadence would in a short-lived interactive session.
+    /// Checks that the GPU time per step is never zero and its readback never fails over many batches run back to back.
     ///
-    /// Lives here rather than next to `TimestampQuery` in `henad-compute` because it needs a
-    /// concrete GPU model to stamp real batches with, and `henad-compute` has none by design.
+    /// Each batch is recorded, resolved and read as `GpuSimLoop::step_batch` does it. The test takes a reading after
+    /// every batch, where the runner takes a reading once a second.
     #[test]
     fn gpu_timing_readback_is_stable_over_many_batches() {
         let Some(ctx) = headless_timing_context() else {
@@ -380,20 +352,16 @@ mod tests {
         );
     }
 
-    /// `step.wgsl` evaluates the rule SWAR-style: a hand-built carry-save adder produces the
-    /// neighbour count bit-sliced across sb0/sb1/sb2, and the rule collapses to the identity
-    /// `alive = ~sb2 & sb1 & (sb0 | cells)`. Two steps of that are derived by hand and worth
-    /// pinning directly:
+    /// Checks the bit-sliced rule of `step.wgsl` against Conway's rule for all 256 neighbourhoods, n == 8 included.
     ///
-    /// - the identity itself (that 2-survives/3-births really is that expression), and
-    /// - dropping the weight-8 carry, which is only sound because n == 8 has sb1 == 0.
+    /// The shader counts neighbours with a carry-save adder, bit-sliced across sb0, sb1 and sb2, and the rule
+    /// collapses to `alive = ~sb2 & sb1 & (sb0 | cells)`. The test pins two steps derived by hand: that identity
+    /// for the 2-survives, 3-births rule, and the dropped weight-8 carry, which is sound only because n == 8 has
+    /// sb1 == 0. `gpu_alive_count_matches_cpu_model` compares alive counts, and a rule error that kept the
+    /// population would pass it.
     ///
-    /// `gpu_alive_count_matches_cpu_model` compares reduced *alive counts*, not grids, so a rule
-    /// error that preserved population would pass it. This checks all 256 neighbourhoods against
-    /// Conway's rule stated plainly, including n == 8.
-    ///
-    /// Mirrors the shader's ops rather than invoking them. Every op is bitwise and the 32 lanes
-    /// are independent, so exercising lane 0 suffices.
+    /// The test mirrors the shader's operations instead of invoking them. Every operation is bitwise and the 32 lanes
+    /// are independent, so lane 0 suffices.
     #[test]
     fn swar_rule_matches_conway_for_every_neighbourhood() {
         fn full_add(a: u32, b: u32, c: u32) -> (u32, u32) {
@@ -428,8 +396,9 @@ mod tests {
         }
     }
 
-    /// `population()` reports total cells like `GridModelState` does, *not* the alive count,
-    /// which is a stat. Pinned because it is an easy thing to conflate.
+    /// Checks that `population()` reports the total cell count, as `GridModelState` does.
+    ///
+    /// The alive count is a stat, and the two counts are easy to conflate.
     #[test]
     fn population_is_total_cells_not_alive_count() {
         let Some(ctx) = headless_context() else {
@@ -450,14 +419,9 @@ mod tests {
     }
 }
 
-/// Tests that drive the real [`henad_compute::gpu::GpuSimThread`] rather than poking the state
-/// directly, so they cover the integration surface the GUI uses. Registry, `ModelState::Gpu`,
-/// spawn thread, play/pause/step, then read the published `Snapshot`.
+/// Tests that drive a [`henad_compute::gpu::GpuSimThread`] or a registry entry as the app does.
 ///
-/// These exist because the GUI itself cannot be driven headlessly. Everything the manual "select
-/// the GPU model, press play, check the stat, switch away and back" check would exercise is
-/// covered here except the final texture *sampling* (the egui paint callback), which needs a
-/// surface to draw into.
+/// The texture sampling in egui's paint callback needs a surface, and no test here covers it.
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod runner_tests {
@@ -472,9 +436,9 @@ mod runner_tests {
     use henad_compute::entry::ModelState;
     use henad_core::view::StatValue;
 
-    /// Spins until the thread publishes a snapshot satisfying `pred`, or the deadline passes.
-    /// The GPU thread publishes on a ~16ms wall-clock cadence, so polling is the honest way to
-    /// wait for one. A fixed sleep would be flakier.
+    /// Polls until the thread publishes a snapshot satisfying `pred`, or the deadline passes.
+    ///
+    /// The GPU thread publishes on a wall-clock cadence, and a fixed sleep would be flakier.
     fn wait_for(thread: &mut GpuSimThread, timeout: Duration, pred: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -495,9 +459,9 @@ mod runner_tests {
         }
     }
 
-    /// The end-to-end path the viewport depends on: a GPU-backed model must publish snapshots
-    /// carrying `SnapshotView::Gpu` (never a `Grid`), because the viewport branches on exactly
-    /// that variant to choose between uploading a `ColorImage` and issuing the paint callback.
+    /// Checks that a GPU model's thread publishes snapshots carrying `SnapshotView::Gpu`, and steps when played.
+    ///
+    /// The viewport uses that variant to choose between uploading a `ColorImage` and issuing the paint callback.
     #[test]
     fn gpu_thread_publishes_gpu_snapshots_and_runs() {
         let Some(ctx) = headless_context() else {
@@ -509,8 +473,8 @@ mod runner_tests {
         let state = GpuGridState::<GpuGameOfLife>::new(&ctx, &params(width, height, 0.3));
         let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default(), None);
 
-        // The thread publishes an initial snapshot before anything runs, so the viewport shows the
-        // seeded grid the moment the model is loaded rather than staying blank until Play.
+        // The thread publishes an initial snapshot before anything runs, and the viewport shows the
+        // seeded grid before Play.
         let initial = wait_for(&mut thread, Duration::from_secs(5), |_| true)
             .expect("the GPU thread must publish an initial snapshot before Play");
 
@@ -540,11 +504,11 @@ mod runner_tests {
         drop(thread);
     }
 
-    /// The manual check that cannot be clicked headlessly: select GPU, play, switch to another
-    /// model, switch back. Each switch drops the `GpuSimThread` (shutting down and joining its OS
-    /// thread, releasing its buffers/pipelines) and builds a fresh one from the *same* injected
-    /// context. A thread that fails to join, or GPU state left dangling in the shared context,
-    /// shows up here as a hang or a panic.
+    /// Checks that a `GpuSimThread` can be dropped mid-run and built again on the same context, three times.
+    ///
+    /// A model switch away and back does the same. Each drop shuts down and joins the OS thread and releases its
+    /// buffers and pipelines. A thread that fails to join, or GPU state left dangling in the shared context, shows up
+    /// here as a hang or a panic.
     #[test]
     fn gpu_thread_teardown_and_respawn_is_clean() {
         let Some(ctx) = headless_context() else {
@@ -559,14 +523,13 @@ mod runner_tests {
             let snap = wait_for(&mut thread, Duration::from_secs(5), |s| s.tick > 0)
                 .unwrap_or_else(|| panic!("round {round}: a respawned GPU thread must step"));
             assert!(matches!(snap.view, SnapshotView::Gpu(_)));
-            // Dropped mid-run, exactly as a model switch does, not from a paused state.
+            // The thread is dropped mid-run, as a model switch drops it.
             drop(thread);
         }
     }
 
-    /// With a context, a lookup in the example set returns the GPU entry, its factory yields a
-    /// `ModelState::Gpu` (so `HenadApp` routes it to the GPU thread rather than the CPU one), and
-    /// the state it builds is drivable.
+    /// Checks that a lookup in the example set with a context returns the GPU entry, and that its factory builds a
+    /// `ModelState::Gpu` that steps. `HenadApp` routes that variant to the GPU thread.
     #[test]
     fn registry_with_gpu_context_offers_a_drivable_gpu_model() {
         let Some(ctx) = headless_context() else {

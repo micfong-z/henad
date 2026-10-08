@@ -1,6 +1,6 @@
 //! GPU boids, [`crate::boids`] with its population in GPU buffers.
 //!
-//! Tick 0 is bit identical since seeding goes through [`BoidsModel::init`]. After that, the
+//! Tick 0 is bit identical since seeding uses [`BoidsModel::init`]. After that, the
 //! neighbour index does not fix the order within a cell, so trajectories are likely different.
 
 use henad_compute::cpu::agent_engine::{
@@ -22,8 +22,8 @@ use crate::shader_bindings::gpu_boids::reduce::Params as ReduceParams;
 use crate::shader_bindings::gpu_boids::step::Params as StepParams;
 
 // The param list is [`agent_model_param_descriptors`] for [`BoidsModel`] verbatim, so both
-// backends take the same vector. Only the engine's own three are read here, by the names
-// `cpu::agent_engine` gives them. The rest go through [`BoidsModel::from_params`].
+// backends take the same vector. Only the three engine parameters are read here, under the names
+// that `cpu::agent_engine` assigns them. The other parameters come from [`BoidsModel::from_params`].
 
 // --8<-- [start:buffers]
 henad_core::buffers! {
@@ -33,6 +33,7 @@ henad_core::buffers! {
 }
 // --8<-- [end:buffers]
 
+/// Boids flocking as a [`GpuAgentModel`], seeded through [`BoidsModel::init`].
 #[derive(Debug)]
 pub struct GpuBoids;
 
@@ -44,8 +45,8 @@ impl GpuAgentModel for GpuBoids {
 
     const STATS: &'static [StatDescriptor] = BoidsModel::STATS;
 
-    /// All double buffered, since a boid reads its neighbours' current values while writing its
-    /// own next ones.
+    /// Position, velocity and colour, each double buffered, since a boid reads its neighbours' current values while
+    /// writing its own next values.
     const BUFFERS: &'static [BufferSpec] = BUFFER_SPECS;
     const POS_BUFFER: usize = POS;
     const COLOR_BUFFER: usize = COLOR;
@@ -74,7 +75,7 @@ impl GpuAgentModel for GpuBoids {
         },
     }];
 
-    /// Speed, x velocity, y velocity.
+    /// Reduction of three lanes: speed, x velocity and y velocity.
     const REDUCE: ReduceSpec = ReduceSpec {
         shader: crate::shader_bindings::gpu_boids::reduce::SHADER_STRING,
         bindings: crate::binding_decls::bindings::GPU_BOIDS_REDUCE,
@@ -105,13 +106,12 @@ impl GpuAgentModel for GpuBoids {
     fn seed_buffers(geom: &Geometry, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u8>> {
         let n = geom.num_agents as usize;
 
-        // Seeding through the model's own `init` is what keeps tick 0 bit identical. A port
-        // would be free to drift.
+        // Seeding through the model's own `init` keeps tick 0 bit identical with the CPU model.
         let mut lanes = BoidLanes::alloc(n);
         let mut rng = agent_init_rng(seed);
         BoidsModel::init(&mut lanes, geom.extent, split_params::<BoidsModel>(params).0, &mut rng);
 
-        // The CPU lane holds palette indices, this one is drawn directly so it holds colours.
+        // The CPU lane holds palette indices. The GPU draws this buffer directly, and it holds colours.
         let colors: Vec<u32> = lanes.color.iter().map(|&c| packed_palette_color(c)).collect();
         vec![
             bytemuck::cast_slice(&interleave(&lanes.pos_x, &lanes.pos_y)).to_vec(),
@@ -189,12 +189,12 @@ impl GpuAgentModel for GpuBoids {
     }
 }
 
-/// Into the `vec2` layout the shaders read.
+/// Interleaves `xs` and `ys` into the `vec2` layout the shaders read.
 fn interleave(xs: &[f32], ys: &[f32]) -> Vec<f32> {
     xs.iter().zip(ys).flat_map(|(&x, &y)| [x, y]).collect()
 }
 
-/// Packed for the step uniform, from the one palette in `boids` so colours cannot drift.
+/// Packs [`HEADING_PALETTE`] for the step uniform, keeping both backends on one palette.
 fn packed_heading_palette() -> [[u32; 4]; 2] {
     let mut packed = [[0u32; 4]; 2];
     for (i, rgba) in HEADING_PALETTE.iter().enumerate() {
@@ -203,7 +203,7 @@ fn packed_heading_palette() -> [[u32; 4]; 2] {
     packed
 }
 
-/// Same packing the CPU agent upload uses.
+/// Returns palette entry `index` packed into a `u32` as the CPU agent upload packs it, or entry 0 past the end.
 fn packed_palette_color(index: u8) -> u32 {
     let rgba = HEADING_PALETTE
         .get(index as usize)
@@ -237,7 +237,7 @@ mod tests {
         values
     }
 
-    /// Back into the two scalar lanes the CPU model keeps.
+    /// Splits an interleaved buffer into the two scalar lanes the CPU model keeps.
     fn split(interleaved: &[u32]) -> (Vec<f32>, Vec<f32>) {
         let floats: Vec<f32> = interleaved.iter().map(|&w| f32::from_bits(w)).collect();
         (
@@ -246,7 +246,7 @@ mod tests {
         )
     }
 
-    /// Current-side positions and velocities, as `(pos_x, pos_y, vel_x, vel_y)`.
+    /// Returns the current-side positions and velocities as `(pos_x, pos_y, vel_x, vel_y)`.
     fn lanes(state: &State) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
         let (pos_x, pos_y) = split(&state.read_buffer(POS));
         let (vel_x, vel_y) = split(&state.read_buffer(VEL));
@@ -283,7 +283,7 @@ mod tests {
         };
 
         let values = params(4_000, 800.0);
-        // Through the model's own extraction, so the test cannot disagree with the kernel.
+        // The bounds come from the model's own `from_params`, so the test cannot disagree with the kernel.
         let hot = BoidsModel::from_params(split_params::<BoidsModel>(&values).0, GpuBoids::dims(&values).1);
         let (max_speed, min_speed) = (hot.max_speed, hot.min_speed);
 
@@ -301,8 +301,8 @@ mod tests {
         }
     }
 
-    /// Both backends seed through `BoidsModel::init`, by default and from a seed, so any later divergence is the
-    /// step's.
+    /// Both backends seed through `BoidsModel::init`, by default and from a seed, so any later divergence comes from
+    /// the step.
     #[test]
     fn initial_flock_matches_the_cpu_model() {
         let Some(ctx) = headless_context() else {
@@ -333,7 +333,7 @@ mod tests {
         };
 
         let values = params(10_000, 1_000.0);
-        // Through the model's own extraction, so the test cannot disagree with the kernel.
+        // The bounds come from the model's own `from_params`, so the test cannot disagree with the kernel.
         let hot = BoidsModel::from_params(split_params::<BoidsModel>(&values).0, GpuBoids::dims(&values).1);
         let (max_speed, min_speed) = (hot.max_speed, hot.min_speed);
 
@@ -372,7 +372,7 @@ mod tests {
             return;
         };
 
-        // Not a multiple of the workgroup width, so the ragged tail is covered.
+        // The count is not a multiple of the workgroup width, so the ragged tail is covered.
         let world = 4_000.0f32;
         let mut state = State::new(&ctx, &params(300_037, world));
         state.run_batched(5);

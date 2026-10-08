@@ -11,10 +11,10 @@ use crate::ui::results::response::{output_combo, pins_row};
 use crate::ui::results::store::{HeatColor, HeatGrid, HeatQuery, ResultsStore};
 use crate::ui::show_plot;
 
-/// Most levels an axis can have to be a side of the heatmap.
+/// Maximum number of levels an axis can have to be a side of the heatmap.
 pub const MAX_HEATMAP_LEVELS: usize = 64;
 
-/// Most cells a heatmap writes its values on.
+/// Maximum number of cells that a heatmap writes its values on.
 const MAX_LABELED_CELLS: usize = 100;
 
 impl HeatColor {
@@ -161,7 +161,7 @@ fn controls(ui: &mut egui::Ui, store: &ResultsStore, view: &mut HeatmapView, sid
 }
 
 impl HeatmapView {
-    /// Brings the settings within the axes `sides` and the outputs of `store`, the two axes apart.
+    /// Clamps the settings to the axes `sides` and the outputs of `store`, keeping the x and y axes different.
     fn fit(&mut self, store: &ResultsStore, sides: &[usize]) {
         if !sides.contains(&self.x_axis) {
             self.x_axis = sides[0];

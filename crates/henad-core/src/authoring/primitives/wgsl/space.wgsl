@@ -5,6 +5,7 @@
 // Integer results are bit-equal to the Rust side. Float results agree to a tolerance instead, since
 // WGSL's float `%` is defined through a division while Rust's is an exact fmod.
 
+// Boundary codes, matching `Boundary::Torus` and `Boundary::Bounded`.
 const TORUS: u32 = 0u;
 const BOUNDED: u32 = 1u;
 
@@ -25,6 +26,7 @@ fn wrap_coord(v: f32, world: f32) -> f32 {
     return select(wrapped, 0.0, wrapped == world);
 }
 
+// Flat index of cell `(x, y)` in a row-major grid `w` wide.
 fn cell_index(x: u32, y: u32, w: u32) -> u32 {
     return y * w + x;
 }
@@ -62,8 +64,8 @@ fn axis_delta(a: f32, b: f32, world: f32, boundary: u32) -> f32 {
     return c;
 }
 
-// Squared distance, taking points as `vec2` since that is how the agent buffers are packed. The
-// Rust side takes four scalars instead, since its lanes are struct-of-arrays.
+// Squared distance between two points. A point is a `vec2`, as the agent buffers pack it, where the
+// Rust side takes four scalars from its struct-of-arrays lanes.
 fn dist_sq(a: vec2<f32>, b: vec2<f32>, world: vec2<f32>, boundary: u32) -> f32 {
     let d = vec2<f32>(
         axis_delta(a.x, b.x, world.x, boundary),
@@ -72,6 +74,7 @@ fn dist_sq(a: vec2<f32>, b: vec2<f32>, world: vec2<f32>, boundary: u32) -> f32 {
     return dot(d, d);
 }
 
+// Number of neighbours in a table.
 fn neighbor_count(table: u32) -> u32 {
     return select(8u, 4u, table == VON_NEUMANN);
 }

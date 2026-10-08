@@ -17,8 +17,9 @@ pub struct ComponentStats {
 
 /// Labels every node with the lowest node index in its component.
 ///
-/// Uses min-label propagation with pointer jumping.
+/// Uses min-label propagation with pointer jumping, and ignores the direction of an edge.
 /// A retired slot keeps its own index and is not counted.
+/// On return `label` holds the label of every slot. `scratch` is working space, and both are resized to the slot count.
 pub fn label_components(graph: &Network, label: &mut Vec<u32>, scratch: &mut Vec<u32>) -> ComponentStats {
     let n = graph.slot_count();
     label.clear();
@@ -82,7 +83,7 @@ fn jump(label: &[u32], out: &mut [u32]) {
     });
 }
 
-/// Counts the components and the size of the largest, using `size` as scratch.
+/// Counts the components and the size of the largest component, using `size` as scratch.
 fn summarize(graph: &Network, label: &[u32], size: &mut Vec<u32>) -> ComponentStats {
     size.clear();
     size.resize(label.len(), 0);

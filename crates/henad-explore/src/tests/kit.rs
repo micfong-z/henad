@@ -52,7 +52,7 @@ fn assert_fails_under(entry: &ModelEntry, settings: &CheckSettings, expected: &[
     assert_eq!(failed(&report), names(expected), "{report}");
 }
 
-/// Returns example model `id`, a GPU model included on a machine without a device.
+/// Returns example model `id`, even a GPU model on a machine without a device.
 fn example(id: &str) -> ModelEntry {
     example_models()
         .get(id)
@@ -60,7 +60,8 @@ fn example(id: &str) -> ModelEntry {
         .unwrap_or_else(|| panic!("the example models include {id}"))
 }
 
-/// Checks that build a GPU model. Every check that builds a model is one, apart from the CPU check `ThreadCount`.
+/// Checks that build a GPU model. Every check that builds a model is in this list, apart from the CPU check
+/// `ThreadCount`.
 const GPU_BUILDING_CHECKS: [ModelCheck; 11] = [
     ModelCheck::ApplyModes,
     ModelCheck::Views,
@@ -90,7 +91,7 @@ fn a_repeated_action_id_fails_the_action_ids_check() {
     assert_fails(&register_grid_model::<RepeatsActionId>(), &[ModelCheck::ActionIds]);
 }
 
-/// The regression. An id holding `=` or whitespace passed the kit, and the command line could not name it.
+/// An id holding `=` or whitespace fails its check. The command line cannot accept it.
 #[test]
 fn an_id_the_command_line_cannot_name_fails_its_check() {
     let model = register_grid_model::<UnnameableIds>();
@@ -133,7 +134,7 @@ fn a_parameter_repeating_an_engine_id_fails_the_param_ids_check() {
     );
 }
 
-/// `DefaultSetup` and every check that builds through `RunSetup::from_parts` refuse the default, and each failure
+/// `DefaultSetup` and every check that builds with `RunSetup::from_parts` reject the default, and each failure
 /// names the parameter and its bounds.
 #[test]
 fn a_default_outside_its_bounds_fails_every_check_through_a_run_setup() {
@@ -219,7 +220,7 @@ fn a_build_panic_fails_every_check_that_builds() {
     );
 }
 
-/// A stat that stops being finite is a run's status in a sweep, and no contract of the model.
+/// A stat that stops being finite sets a run's status in a sweep, and breaks no contract of the model.
 #[test]
 fn a_stat_that_stops_being_finite_breaks_no_contract() {
     assert_fails(
@@ -312,9 +313,9 @@ fn a_seed_that_moves_the_state_alone_passes_the_seed_sensitivity_check() {
 
 /// Checks the shared accumulator up to [`SHARED_ACCUMULATOR_ATTEMPTS`] times, until `ThreadCount` reports it.
 ///
-/// Note that the model's result depends on the order its chunks take a lock, and a pool of seven workers can take
-/// them in the single thread's order by chance, under a loaded machine most of all. Any one check can then pass.
-/// [`a_build_that_reads_the_pool_width_fails_the_thread_count_check`] pins `ThreadCount` deterministically.
+/// Note that the model's result depends on the order in which its chunks take a lock, and a pool of seven workers can
+/// take the lock in the single thread's order by chance, under a loaded machine most of all. Any one check can then
+/// pass. [`a_build_that_reads_the_pool_width_fails_the_thread_count_check`] pins `ThreadCount` deterministically.
 #[test]
 fn a_shared_accumulator_fails_the_thread_count_check() {
     let model = register_agent_model::<SharedAccumulator>();
@@ -337,10 +338,10 @@ fn a_shared_accumulator_fails_the_thread_count_check() {
     );
 }
 
-/// Attempts [`a_shared_accumulator_fails_the_thread_count_check`] makes before it fails.
+/// Number of attempts that [`a_shared_accumulator_fails_the_thread_count_check`] makes before it fails.
 const SHARED_ACCUMULATOR_ATTEMPTS: usize = 5;
 
-/// A device the watchdog stopped reads zeros from then on, from every state on it. The check runs the single steps
+/// A device that the watchdog stopped reads zeros from then on, from every state on it. The check runs the single steps
 /// first, and they read back what they computed.
 #[test]
 fn a_full_submission_that_reads_zeros_fails_the_full_submission_check() {
@@ -352,7 +353,7 @@ fn a_full_submission_that_reads_zeros_fails_the_full_submission_check() {
     assert_eq!(failed(&report), names(&[ModelCheck::FullSubmission]), "{report}");
 }
 
-/// A model that does not replay exactly runs one full submission alone, and fails on every stat reading zero.
+/// A model that does not replay exactly runs one full submission alone, and fails when every stat reads zero.
 #[test]
 fn an_inexact_full_submission_that_reads_zeros_fails_the_full_submission_check() {
     let Some(ctx) = headless_device() else {
@@ -366,7 +367,7 @@ fn an_inexact_full_submission_that_reads_zeros_fails_the_full_submission_check()
     );
 }
 
-/// A model with no stats has no value to read zero, and its landed readback and its tick show the steps ran.
+/// A model with no stats has no value to read zero, and its completed readback and its tick show the steps ran.
 #[test]
 fn a_model_with_no_stats_passes_the_full_submission_check() {
     let Some(ctx) = headless_device() else {
@@ -451,7 +452,7 @@ fn an_override_of_an_undeclared_parameter_fails_without_a_device() {
     }
 }
 
-/// A grid of 128 columns holds 64 rows a job, and 896 rows split into 14 jobs.
+/// A grid of 128 columns holds 64 rows per job, and 896 rows split into 14 jobs.
 #[test]
 fn the_thread_count_check_splits_a_grid_into_twice_the_high_thread_count() {
     let report = check(&entry("game_of_life", None), &CheckSettings::default());
@@ -459,7 +460,7 @@ fn the_thread_count_check_splits_a_grid_into_twice_the_high_thread_count() {
     assert_eq!(report.thread_count_jobs(), Some(14));
 }
 
-/// A grid of 1024 columns holds 8 rows a job, and 112 rows split into 14 jobs.
+/// A grid of 1024 columns holds 8 rows per job, and 112 rows split into 14 jobs.
 #[test]
 fn the_thread_count_check_shrinks_a_grid_an_override_widens() {
     let settings = CheckSettings::default().set_text("game_of_life", "grid_width", "1024");

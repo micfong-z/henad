@@ -17,7 +17,7 @@ pub fn menu_bar_panel(ui: &mut egui::Ui, dock: &mut DockState<Tab>, app: &mut Ap
     });
 }
 
-/// Tab visibility, and the only way to reopen a closed tab.
+/// Draws the View menu. Its entries toggle each tab, and are the only way to reopen a closed tab.
 fn view_menu(ui: &mut egui::Ui, dock: &mut DockState<Tab>) {
     ui.menu_button(format!("{MDI_VIEW_DASHBOARD_OUTLINE}  View"), |ui| {
         for tab in Tab::ALL {
@@ -84,7 +84,7 @@ mod tests {
     use super::source_icon;
     use crate::icons::material_design_icons::{MDI_CODE_BRACES, MDI_GITHUB};
 
-    /// The regression. Every source link showed GitHub's mark, a link to a university server included.
+    /// The host decides. A path or a longer host containing `github.com` gets the braces.
     #[test]
     fn only_a_link_to_github_shows_its_mark() {
         assert_eq!(source_icon("https://github.com/micfong-z/henad"), MDI_GITHUB);

@@ -1,8 +1,8 @@
 // Refills the grid at the density the model was built with, one invocation per packed word.
 //
 // Draws per cell as `GameOfLifeModel::init` does, but from `pcg_hash` over the cell index rather
-// than a walked xorshift64 stream. An action is no part of the tick-0 oracle, so the two backends
-// need not land on the same grid here.
+// than a walked xorshift64 stream. An action is not part of the tick-0 oracle, so the two backends
+// need not produce the same grid here.
 
 #import henad::rng::{pcg_hash, below}
 
@@ -28,12 +28,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Trailing bits of a ragged last word hold no cell and must stay zero, so the loop stops at
-    // the real ones rather than filling all 32.
+    // the last real cell rather than filling all 32 bits.
     let first = word * 32u;
     let cells_here = min(width - first, 32u);
     var bits = 0u;
     for (var j = 0u; j < cells_here; j = j + 1u) {
-        // Its own word per cell. Two cells off one draw would correlate.
+        // Each cell has its own draw. Two cells sharing one draw would correlate.
         let draw = pcg_hash(params.seed ^ pcg_hash(y * width + first + j));
         if below(draw, params.threshold) {
             bits = bits | (1u << j);

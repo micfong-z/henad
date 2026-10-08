@@ -1,12 +1,11 @@
-//! GPU timing (diagnostic) and the adaptive-batching controller (load-bearing).
+//! GPU timing and the adaptive batch-size controller.
 //!
-//! [`TimestampQuery`] measures true GPU execution time and is *only* surfaced as a readout. The
-//! controller ([`ema_update`] / [`next_batch_size`]) runs off wall-clock time instead. See
-//! [`crate::gpu::sim_thread`] for why.
+//! [`TimestampQuery`] measures GPU execution time for a readout alone. The controller ([`ema_update`] and
+//! [`next_batch_size`]) runs off wall-clock time, through an exponential moving average (EMA) of the time per step.
 
 use std::time::Duration;
 
-/// Default steps-per-submission in fixed mode, tunable at runtime from the UI.
+/// Default batch size of fixed mode, in steps. The UI can change it at run time.
 pub const DEFAULT_BATCH_SIZE: u32 = 64;
 
 /// Default per-batch wall-clock budget in adaptive mode, in milliseconds.
@@ -17,16 +16,15 @@ pub const DEFAULT_TARGET_MS: f64 = 8.0;
 
 /// Smoothing factor for the adaptive controller's EMA of `time_per_step`.
 ///
-/// Reacts within a handful of batches to a real change in per-step cost, while still averaging
-/// out scheduling jitter on the sim thread. A single-sample estimate made the output jump around.
+/// It reacts within a handful of batches to a real change in per-step cost, while still averaging
+/// out scheduling jitter on the sim thread. A single-sample estimate makes the output jump around.
 pub const ADAPTIVE_EMA_ALPHA: f64 = 0.25;
 
 /// Hard upper bound on the adaptive controller's output.
 ///
 /// A cheap grid could otherwise drive `target_ms / time_per_step` into tens of thousands of steps
 /// per batch, and an oversized batch is already committed by the time a slowdown needs reacting
-/// to. `pub` so the UI's live batch size readout bounds its range the same way, rather than
-/// silently clamping a controller output above it.
+/// to. The UI's live batch size readout bounds its range by it too.
 pub const MAX_BATCH_SIZE: u32 = 4096;
 
 /// GPU timestamp-query resources, created only if the device supports `Features::TIMESTAMP_QUERY`.
@@ -42,7 +40,7 @@ pub struct TimestampQuery {
 impl TimestampQuery {
     const BUFFER_SIZE: u64 = 2 * std::mem::size_of::<u64>() as u64;
 
-    /// `None` when the device lacks `TIMESTAMP_QUERY`, in which case timing is not reported.
+    /// Creates the query resources, or returns `None` when the device does not support `TIMESTAMP_QUERY`.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
@@ -72,7 +70,7 @@ impl TimestampQuery {
         })
     }
 
-    /// The query set a model stamps its first/last step pass into (indices 0 and 1).
+    /// Returns the query set that a model stamps its first and last step pass into, at indices 0 and 1.
     pub fn query_set(&self) -> &wgpu::QuerySet {
         &self.query_set
     }
@@ -80,7 +78,7 @@ impl TimestampQuery {
     /// Resolves the timestamps `write_submission` wrote, in a *separate* command buffer submitted
     /// only after that one has fully completed on the GPU.
     ///
-    /// The split is required, not cosmetic. Resolving in the same command buffer as the writes is
+    /// The split is required. Resolving in the same command buffer as the writes is
     /// accepted by wgpu, but on Metal the driver's counter sample buffer is only guaranteed
     /// populated once the writing command buffer's completion handler has run, so an earlier
     /// resolve reads back whatever was resident from a previous submission. A stale `end` below
@@ -100,8 +98,11 @@ impl TimestampQuery {
         queue.submit(Some(encoder.finish()));
     }
 
-    /// Blocking readback of the two timestamps the last stamped batch wrote, called at most once
-    /// per stats interval. The stall is negligible next to a sim running at thousands of TPS.
+    /// Reads back the two timestamps the last stamped batch wrote, blocking, and returns the GPU time per step in
+    /// microseconds, or `None` when the readback fails.
+    ///
+    /// The runner calls it at most once per stats interval. The stall is negligible next to a sim running at thousands
+    /// of ticks per second.
     pub fn read_gpu_us_per_step(&self, device: &wgpu::Device, batch_size: u32) -> Option<f64> {
         let slice = self.readback_buffer.slice(..);
         let (tx, rx) = flume::bounded(1);
@@ -135,9 +136,9 @@ impl TimestampQuery {
     }
 }
 
-/// Exponential moving average update.
+/// Returns `prev` moved towards `sample` by weight `alpha`, as an exponential moving average.
 ///
-/// The first sample seeds the EMA directly, rather than blending against an arbitrary start.
+/// The first sample seeds the average directly, rather than blending against an arbitrary start.
 pub fn ema_update(prev: Option<f64>, sample: f64, alpha: f64) -> f64 {
     match prev {
         Some(prev) => alpha.mul_add(sample, (1.0 - alpha) * prev),
@@ -162,14 +163,14 @@ pub fn time_per_step_ms(elapsed: Duration, batch_size_submitted: u32) -> f64 {
     elapsed.as_secs_f64() * 1000.0 / f64::from(batch_size_submitted.max(1))
 }
 
-/// Shortest window worth dividing by. A refresh is meant to cover a whole stats interval, so a
+/// Shortest window that a rate is computed over. A refresh is meant to cover a whole stats interval, so a
 /// window an order of magnitude under one is two clocks having fallen out of step.
 pub const MIN_TPS_WINDOW: Duration = Duration::from_millis(100);
 
-/// Steps per second over `elapsed`, or `None` when the window is too short to mean anything.
+/// Returns the steps per second over `elapsed`, or `None` when the window is too short to mean anything.
 ///
-/// A whole batch divided by a near-zero window reads as a plausible-looking billion, not as an
-/// obvious error, so this refuses rather than reporting it.
+/// A whole batch divided by a near-zero window appears as a plausible-looking billion. Rejecting it keeps that number
+/// off the readout.
 pub fn tps_over(step_count: u64, elapsed: Duration) -> Option<f64> {
     (elapsed >= MIN_TPS_WINDOW).then(|| step_count as f64 / elapsed.as_secs_f64())
 }
@@ -185,8 +186,8 @@ mod tps_window_tests {
         assert!((tps - 320.0).abs() < 1e-9, "expected 320, got {tps}");
     }
 
-    /// The failure this exists for: a whole batch against the gap between two clocks reads as
-    /// 1.5e9 TPS, which looks like a number rather than like an error.
+    /// A whole batch over the gap between two clocks would read as 1.5e9 TPS, which looks like a number instead of an
+    /// error.
     #[test]
     fn a_near_zero_window_reports_nothing() {
         assert_eq!(tps_over(64, Duration::from_nanos(42)), None);
@@ -255,9 +256,8 @@ mod adaptive_controller_tests {
 
     #[test]
     fn controller_never_returns_zero_even_at_zero_ema() {
-        // Defensive: a degenerate zero EMA (shouldn't occur given `.max(f64::EPSILON)` clamping
-        // inside `next_batch_size`, but worth pinning as a regression guard) must not divide by
-        // zero into NaN/inf and must still clamp to a valid, non-zero batch size.
+        // A zero EMA cannot occur, since `next_batch_size` clamps with `.max(f64::EPSILON)`. If it did, it must not
+        // divide into NaN or infinity, and must still give a valid, non-zero batch size.
         assert_eq!(next_batch_size(0.0, 8.0), MAX_BATCH_SIZE);
     }
 }

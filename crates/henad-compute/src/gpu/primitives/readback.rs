@@ -1,15 +1,8 @@
 //! Async readback of some `u32` counters reduced on the GPU.
 //!
-//! Lets a GPU model answer `SimState::stats()` without ever copying the grid back to the CPU.
-//! Reducing on-GPU and reading back a few bytes costs nothing next to a full grid readback.
-//!
-//! # Why the map is asynchronous
-//!
-//! Blocking on `map_async` right after submission would stall the sim thread at the display
-//! cadence, capping throughput at roughly one in-flight batch per frame. Instead the map is
-//! *started* right after submission and *completed* on some later loop iteration, whenever the
-//! GPU gets around to it ([`CounterReadback::poll`] never blocks). The value a model reports is
-//! therefore a few milliseconds stale, same as the display texture already accepts.
+//! A GPU model answers `SimState::stats()` from these counters without copying its state back to the CPU. The map
+//! starts right after submission and completes on a later loop iteration, and [`CounterReadback::poll`] never blocks.
+//! A reported value is therefore a few milliseconds stale, as the display texture already is.
 
 use std::mem::size_of;
 
@@ -18,9 +11,9 @@ use std::mem::size_of;
 pub enum StatsPoll {
     /// A readback has begun and not finished.
     Pending,
-    /// No readback is in flight, and none has begun or the latest to finish succeeded.
+    /// No readback is in flight, and either no readback has begun or the latest one to finish succeeded.
     Landed,
-    /// No readback is in flight, and the latest to finish failed, leaving the values from before it.
+    /// No readback is in flight, and the latest one to finish failed and left the earlier values in place.
     Failed,
 }
 
@@ -41,6 +34,8 @@ pub struct CounterReadback {
 }
 
 impl CounterReadback {
+    /// Creates the accumulator and its staging buffer for `count` counters.
+    ///
     /// `count` must match the length of the `atomic<u32>` array the reduce shader declares.
     pub fn new(device: &wgpu::Device, label: &str, count: usize) -> Self {
         let size = (count * size_of::<u32>()) as u64;
@@ -70,22 +65,22 @@ impl CounterReadback {
         (self.values.len() * size_of::<u32>()) as u64
     }
 
-    /// Bind this as the reduce shader's `read_write` storage target.
+    /// Returns the accumulator, to bind as the reduce shader's `read_write` storage target.
     pub fn binding(&self) -> wgpu::BindingResource<'_> {
         self.storage.as_entire_binding()
     }
 
-    /// Zero the accumulator. Must be recorded *before* the model's reduce pass.
+    /// Clears the accumulator to zero. Record it before the model's reduce pass.
     pub fn encode_clear(&self, encoder: &mut wgpu::CommandEncoder) {
         encoder.clear_buffer(&self.storage, 0, None);
     }
 
-    /// Copy the accumulated totals into the staging buffer. Must be recorded *after* the model's
-    /// reduce pass, in the same encoder (wgpu inserts the pass/copy barrier for us).
+    /// Copies the accumulated totals into the staging buffer. Record it after the model's
+    /// reduce pass, in the same encoder, where wgpu inserts the barrier between the pass and the copy.
     ///
-    /// Skipped while a previous map is still in flight, since writing into a buffer that is
-    /// mapped or pending-map is invalid. Dropping a sample is harmless, the next display tick
-    /// takes another one.
+    /// Note that the copy is skipped while a previous map is still in flight, since writing into a buffer that is
+    /// mapped or pending a map is invalid. The sample is then dropped, and the stats repeat the older values with no
+    /// error.
     pub fn encode_copy(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if self.pending.is_some() {
             return;
@@ -94,8 +89,8 @@ impl CounterReadback {
         self.copied = true;
     }
 
-    /// Start the async map. Call once, immediately after submitting the encoder that
-    /// [`Self::encode_copy`] was recorded into, since mapping any earlier races the copy.
+    /// Starts the async map. Call it once, immediately after submitting the encoder that
+    /// [`Self::encode_copy`] was recorded into. Mapping any earlier races the copy.
     pub fn begin_map(&mut self) {
         if self.pending.is_some() || !self.copied {
             return;
@@ -108,16 +103,16 @@ impl CounterReadback {
         self.pending = Some(rx);
     }
 
-    /// True while a map started by [`Self::begin_map`] has not been consumed yet.
+    /// Returns whether a map started by [`Self::begin_map`] has not been consumed yet.
     pub fn is_pending(&self) -> bool {
         self.pending.is_some()
     }
 
-    /// Non-blocking. If the in-flight map has completed, consume it and update [`Self::values`].
+    /// Consumes the in-flight map if it has completed, updating [`Self::values`], and returns the state of the
+    /// readback after the poll. It never blocks.
     ///
-    /// `device.poll` is what actually runs wgpu's map callbacks on native, so this must be called
-    /// on every loop iteration, not only when a value is expected.
-    /// Returns the state of the readback after the poll.
+    /// On native, `device.poll` runs wgpu's map callbacks. Call this on every loop iteration, whether or not a value
+    /// is expected.
     pub fn poll(&mut self, device: &wgpu::Device) -> StatsPoll {
         let Some(rx) = self.pending.as_ref() else {
             return self.status();
@@ -137,11 +132,10 @@ impl CounterReadback {
         self.status()
     }
 
-    /// Blocking counterpart to [`Self::poll`]: waits for the GPU to drain, then consumes the map.
+    /// Waits for the GPU to drain, then consumes the map, and returns the state of the readback after the wait. It is
+    /// the blocking counterpart of [`Self::poll`].
     ///
-    /// Only for one-shot snapshots (initial load, pause, step-once). Never call from the hot
-    /// batching loop.
-    /// Returns the state of the readback after the wait.
+    /// It is meant for one-shot snapshots and samples. Never call it from the hot batching loop.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn poll_blocking(&mut self, device: &wgpu::Device) -> StatsPoll {
         if let Some(rx) = self.pending.as_ref() {
@@ -161,8 +155,8 @@ impl CounterReadback {
         self.status()
     }
 
-    /// Nothing to wait on. WebGPU's `poll` is a no-op and the map resolves on the JS microtask
-    /// queue, so a wait here hangs the tab. The value lands on a later [`Self::poll`] instead.
+    /// Polls once without waiting. WebGPU's `poll` is a no-op and the map resolves on the JS microtask
+    /// queue, so a wait here hangs the tab. The value arrives on a later [`Self::poll`] instead.
     #[cfg(target_arch = "wasm32")]
     pub fn poll_blocking(&mut self, device: &wgpu::Device) -> StatsPoll {
         self.poll(device)
@@ -213,14 +207,13 @@ impl CounterReadback {
         true
     }
 
-    /// The most recently read-back values. All zero until the first readback completes.
+    /// Most recently read-back values, all zero until the first readback completes.
     pub fn values(&self) -> &[u32] {
         &self.values
     }
 
-    /// The most recently read-back values as floats, for [`crate::gpu::primitives::reduce`].
-    /// The staging path only moves 4-byte words, so it is shared rather than duplicated
-    /// per element type.
+    /// Most recently read-back values, each word's bits reinterpreted as an `f32`, for
+    /// [`crate::gpu::primitives::reduce`].
     pub fn values_f32(&self) -> impl Iterator<Item = f32> + '_ {
         self.values.iter().copied().map(f32::from_bits)
     }
@@ -283,7 +276,7 @@ mod tests {
         begin_read_back(&ctx, &mut readback, &[1, 2, 3]);
         assert_eq!(readback.poll_blocking(&ctx.device), StatsPoll::Landed);
 
-        // A destroyed staging buffer refuses the map.
+        // A destroyed staging buffer rejects the map.
         let mut encoder = ctx
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -298,8 +291,8 @@ mod tests {
         assert!(ctx.faults.take().is_some(), "the device reports the refused map");
     }
 
-    /// The regression. A map given up without being read left the staging buffer mapped or pending, and the next
-    /// copy into it was a validation error.
+    /// A map given up without being read must not leave the staging buffer mapped or pending. The next copy into it
+    /// would be a validation error.
     #[test]
     fn an_abandoned_map_leaves_the_next_readback_working() {
         let Some(ctx) = headless_context("henad_readback_abandoned_test", wgpu::Features::empty()) else {
@@ -316,7 +309,7 @@ mod tests {
             "an abandoned map polls as failed"
         );
 
-        // This time the map lands before it is given up.
+        // This time the map completes before it is given up.
         begin_read_back(&ctx, &mut readback, &[4, 5, 6]);
         ctx.device
             .poll(wgpu::PollType::wait_indefinitely())

@@ -25,21 +25,22 @@ Ants runs two passes over seven in-place buffers, together with a display pass a
 ```
 
 `buffers!` gives each buffer a label and an index derived from its declaration position, in the same way `params!` does.
-A project names it `henad::buffers!`, where the example models, below the facade, name `henad_core::buffers!`.
+A project uses `henad::buffers!`.
+The example models sit below the facade and use `henad_core::buffers!`.
 Flags are named rather than positional, and every flag defaults to off.
 
 `double_buffered`
 
-:   Allocates a second side, for a buffer whose previous values a pass reads while writing this tick's.
-    The engine builds that side only when some `BufferSpec` asks for it, so a model that writes in place pays nothing for the feature.
-    Ants declares none: its ants never read one another, and deposits land in a separate accumulator instead of in the field the step is reading.
+:   Allocates a second side, so that a pass can read the buffer's previous values while it writes this tick's values.
+    The engine builds that side only when some `BufferSpec` requests it, so a model that writes in place pays nothing for the feature.
+    Ants double-buffers none of its buffers: its ants never read one another, and deposits land in a separate accumulator instead of in the field the step is reading.
 
 `drawable`
 
 :   Also binds the buffer as a vertex stream, letting the view draw it without a copy.
-    `POS_BUFFER` and `COLOR_BUFFER` name the two buffers the renderer reads.
+    `POS_BUFFER` and `COLOR_BUFFER` specify the two buffers that the renderer reads.
 
-`buffer_lens` gives each buffer its length in `u32`-sized elements, worked out from the resolved geometry.
+`buffer_lens` returns each buffer's length in `u32`-sized elements, worked out from the resolved geometry.
 
 ## Passes
 
@@ -48,7 +49,7 @@ Flags are named rather than positional, and every flag defaults to off.
 ```
 
 `STEP_PASSES` runs in declaration order, once per step.
-Each pass names its shader, its generated binding declarations and its invocation domain.
+Each pass specifies its shader, its generated binding declarations and its invocation domain.
 
 ```rust
 pub enum Domain {
@@ -59,7 +60,7 @@ pub enum Domain {
 ```
 
 `Cells(n)` dispatches `n` invocations per cell, for a field with `n` layers.
-`AgentsOrCells` takes the larger of the two counts, for a pass whose lanes span both.
+`AgentsOrCells` takes the larger of the two counts, for a pass whose lanes span both agents and cells.
 The enum stops at three variants, one per case the two shipped models actually use, and more will appear only when a real model needs them.
 
 Ants declares two passes: `step` over agents, then `merge` over `Cells(2)` for its two pheromone layers.
@@ -81,7 +82,7 @@ const REDUCE: ReduceSpec = ReduceSpec { shader, bindings, lanes, domain };
 ```
 
 The engine owns every level of the reduction tree above the leaf, and your shader only computes one per-lane value.
-`lanes` says how many values the leaf sums, and boids uses three, for speed and the two velocity components.
+`lanes` says how many values the leaf sums, and boids uses three lanes, for speed and the two velocity components.
 For the workgroup fold, the leaf's shader imports `henad::reduce_tree::block_sum`.
 
 `COUNTERS` is a separate mechanism for persistent `u32` counters, which a kernel accumulates into and nothing ever clears.
@@ -106,27 +107,27 @@ Seven names are reserved for resources the engine owns.
 The agent engine has no `dims` resource, and a pass that binds it fails to build.
 A display pass carries its texture size in its own uniform block, from `geom.display` in the `PassCtx` that `pass_params_bytes` receives.
 
-Anything else names one of your own buffers by its label, optionally with an `_in` or `_out` suffix.
+Anything else refers to one of your own buffers by its label, optionally with an `_in` or `_out` suffix.
 The access mode decides which side a name resolves to, and the suffix does not, so a buffer that one pass reads and another writes needs no special naming.
 
 ## The neighbour index
 
-`const INDEX: bool` asks the engine to rebuild a spatial hash from the positions before every step.
+`const INDEX: bool` tells the engine to rebuild a spatial hash from the positions before every step.
 Boids sets it.
 Ants leaves it off, since ants read the field instead of each other.
 
 With it set, `cell_start` and `sorted` become bindable, and the resolved `HashGrid` geometry arrives in `Geometry::index` for the uniform block to carry onward.
 The engine fixes the hash grid from `index_cell_size` at construction.
-A GPU model takes no live edit, and every parameter applies when the model is rebuilt.
+A GPU model accepts no live edit, and every parameter applies when the model is rebuilt.
 
 ## Parameters and geometry
 
 As with a GPU grid model, nothing is prepended to the parameter list, and you spell the whole list out yourself.
-Both ports reuse their CPU counterpart's composed list verbatim, which lets both backends take the same vector and be driven from the same UI state.
+Both ports reuse their CPU counterpart's composed list verbatim, which lets both backends accept the same vector and be driven from the same UI state.
 
 `Geometry` is resolved once at construction and carries the population, the extent, the cell grid, the display size and the index geometry.
-Once per pass, identified by `PassId`, the engine then asks `pass_params_bytes` for that pass's uniform block.
-You hand back the bytes of the `Params` struct generated from that pass's shader, as `bytemuck::bytes_of(&Params { .. })`.
+Once per pass, identified by `PassId`, the engine then requests that pass's uniform block from `pass_params_bytes`.
+You return the bytes of the `Params` struct generated from that pass's shader, as `bytemuck::bytes_of(&Params { .. })`.
 
 ## Seeding
 
@@ -136,15 +137,15 @@ Only the current side is seeded, since a double-buffered lane has its other side
 
 ## Contracts nothing checks
 
-- A binding's declared WGSL type must match what the buffer actually holds, because resolution goes by name and every storage slot looks alike.
+- A binding's declared WGSL type must match what the buffer actually holds, because the engine resolves bindings by name and every storage slot looks alike.
 - A pass shader must fold with `linear_index`.
 - `buffer_lens` and `seed_buffers` must each return one entry per `BUFFERS` entry, and a non-empty seed must be exactly `len * 4` bytes long.
 - `STATS.len()` must equal the number of values `stats` returns.
-  The engine pairs the two by position and drops the values past the shorter.
+  The engine pairs the two lists by position and drops the entries past the end of the shorter list.
 
 The engine reads the `@workgroup_size` of each shader's `main` when it builds the model.
-It refuses a pass shader that declares anything but `@workgroup_size(256)`, and a display shader whose `@workgroup_size(N, N)` differs from its `DisplaySpec::workgroup`.
-It also refuses a buffer label that is reserved or ends in `_in` or `_out`, since a binding of that name resolves to something other than the buffer.
+It rejects a pass shader that declares anything but `@workgroup_size(256)`, and a display shader whose `@workgroup_size(N, N)` differs from its `DisplaySpec::workgroup`.
+It also rejects a buffer label that is reserved or ends in `_in` or `_out`, since a binding of that name resolves to something other than the buffer.
 
 The testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values than `STATS.len()`.
 

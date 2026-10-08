@@ -5,11 +5,12 @@
 
 use std::io::{self, Write};
 
-/// Write the grid section: a `# grid WxH` marker, then one line of comma-separated cell indices
+/// Writes the grid section: a `# grid WxH` marker, then one line of comma-separated cell indices
 /// per row.
 ///
 /// # Errors
-/// If writing fails.
+///
+/// Returns the error of the first write that fails.
 pub fn write_grid<W: Write>(out: &mut W, width: u32, height: u32, cells: &[u8]) -> io::Result<()> {
     writeln!(out, "# grid {width}x{height}")?;
     for row in cells.chunks(width as usize) {
@@ -19,7 +20,7 @@ pub fn write_grid<W: Write>(out: &mut W, width: u32, height: u32, cells: &[u8]) 
     Ok(())
 }
 
-/// Row index that [`point_rows`] gives a point left out of the point section.
+/// Row index that [`point_rows`] assigns to a point left out of the point section.
 pub const NO_ROW: u32 = u32::MAX;
 
 /// Returns whether a point has a finite position.
@@ -29,13 +30,14 @@ fn is_placed(x: f32, y: f32) -> bool {
     x.is_finite() && y.is_finite()
 }
 
-/// Write the point section: a `# points N` marker, a header row, then one line per agent.
+/// Writes the point section: a `# points N` marker, a header row, then one line per agent.
 ///
 /// The `color` column appears only if the model carries the lane.
 /// A point without a finite position is left out.
 ///
 /// # Errors
-/// If writing fails.
+///
+/// Returns the error of the first write that fails.
 pub fn write_points<W: Write>(out: &mut W, pos_x: &[f32], pos_y: &[f32], color: Option<&[u8]>) -> io::Result<()> {
     let placed = pos_x.iter().zip(pos_y).filter(|&(&x, &y)| is_placed(x, y)).count();
     writeln!(out, "# points {placed}")?;
@@ -75,13 +77,14 @@ pub fn point_rows(pos_x: &[f32], pos_y: &[f32]) -> Vec<u32> {
         .collect()
 }
 
-/// Write the edge section: a `# edges N` marker, a header row, then one line per edge.
+/// Writes the edge section: a `# edges N` marker, a header row, then one line per edge.
 ///
 /// Endpoints are mapped through `rows`, as returned by [`point_rows`], so they index the point section as written.
 /// An edge with an endpoint left out of that section is dropped as well.
 ///
 /// # Errors
-/// If writing fails.
+///
+/// Returns the error of the first write that fails.
 pub fn write_edges<W: Write>(out: &mut W, src: &[u32], dst: &[u32], color: &[u8], rows: &[u32]) -> io::Result<()> {
     let row = |node: u32| rows.get(node as usize).copied().unwrap_or(NO_ROW);
     let kept = |&(&a, &b): &(&u32, &u32)| row(a) != NO_ROW && row(b) != NO_ROW;

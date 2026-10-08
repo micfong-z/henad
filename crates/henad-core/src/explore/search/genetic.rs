@@ -1,15 +1,15 @@
 //! Generational genetic algorithm for a noisy objective.
 //!
-//! Generation 0 is drawn at random. Each later generation re-evaluates the best members of the one before, keeps its
-//! elites and fills the rest with children. The children are bred as the generation starts, from the fitness the
-//! members had before its re-evaluations. The elites are chosen once the re-evaluations are told.
+//! Generation 0 is drawn at random. Each later generation re-evaluates the best members of the previous generation,
+//! keeps its elites and fills the rest with children. The children are bred as the generation starts, from the
+//! fitness the members had before its re-evaluations. The elites are chosen once the re-evaluations are told.
 //!
 //! A child comes from a tournament winner, crossed with a second winner at the crossover rate, then mutated gene by
 //! gene. Fitness is the objective over every replicate a member has, re-evaluations included.
 //!
-//! No two first evaluations share a config. A child whose config an earlier candidate has is mutated again. When no
-//! draw finds a new config, the generation re-evaluates that candidate, and the candidate joins it in the child's
-//! place.
+//! No two first evaluations share a config. A child is mutated again when an earlier candidate has the same config.
+//! When no draw finds a new config, the generation re-evaluates that candidate, and the candidate joins it in the
+//! child's place.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -21,20 +21,20 @@ use crate::explore::search::{
     Objective, Proposal, RankingEntry, SearchReport, SearchSpecError, Searcher, check_setting, draw_config,
 };
 
-/// Most members a generation can have.
+/// Maximum number of members in a generation.
 pub const MAX_POPULATION: usize = 1 << 16;
 
-/// Most members one tournament can draw.
+/// Maximum number of members that one tournament can draw.
 pub const MAX_TOURNAMENT_SIZE: usize = 1 << 16;
 
 /// Settings of a genetic algorithm.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GeneticSettings {
-    /// Members of each generation.
+    /// Number of members in each generation.
     pub population: usize,
-    /// Best members of a generation carried unchanged into the next.
+    /// Number of best members carried unchanged into the next generation.
     pub elite_count: usize,
-    /// Members drawn for each tournament, the best of whom becomes a parent.
+    /// Number of members drawn for each tournament, the best of whom becomes a parent.
     pub tournament_size: usize,
     /// Probability that a child has a second parent.
     pub crossover_rate: f64,
@@ -105,7 +105,7 @@ impl GeneticSettings {
     /// Returns the number of members re-evaluated each generation.
     pub fn reevaluation_count(&self) -> usize {
         let exact = self.reevaluate_fraction * self.population as f64;
-        // A product such as 0.1 * 30 lands a hair above the whole number it means, and would round up past it.
+        // A product such as 0.1 * 30 comes out a hair above the whole number it represents, and would round up past it.
         ((exact - 1e-9).ceil().max(0.0) as usize).min(self.population)
     }
 }
@@ -120,13 +120,13 @@ pub struct GeneticAlgorithm {
     log: EvaluationLog,
     /// First candidate of each config, by config key.
     config_candidates: BTreeMap<ConfigKey, u64>,
-    /// Candidates of the current generation not yet asked for.
+    /// Candidates of the current generation not yet requested.
     queue: VecDeque<Proposal>,
     /// Members of the last finished generation.
     members: Vec<u64>,
-    /// Children of the current generation asked for so far.
+    /// Children of the current generation requested so far.
     children: Vec<u64>,
-    /// Earlier candidates that join the current generation in place of a child with the same config.
+    /// Earlier candidates that join the current generation instead of a child with the same config.
     revisited: BTreeSet<u64>,
     generations: Vec<GenerationSummary>,
 }
@@ -138,7 +138,7 @@ impl GeneticAlgorithm {
     ///
     /// # Errors
     ///
-    /// Returns [`SearchSpecError`] when [`GeneticSettings::check`] refuses `settings`.
+    /// Returns [`SearchSpecError`] when [`GeneticSettings::check`] rejects `settings`.
     pub fn new(
         space: SearchSpace,
         settings: GeneticSettings,
@@ -173,8 +173,8 @@ impl GeneticAlgorithm {
         })
     }
 
-    /// Ends the current generation, whose members are the elites of the last one, the new children and the
-    /// candidates revisited in place of a child.
+    /// Ends the current generation, whose members are the elites of the last generation, the new children and the
+    /// candidates revisited instead of a child.
     fn finish_generation(&mut self) {
         let mut members = self.log.rank(&self.members);
         members.truncate(self.settings.elite_count);
@@ -203,7 +203,7 @@ impl GeneticAlgorithm {
 
     /// Queues the next generation, re-evaluations of the best members first and the children after them.
     ///
-    /// A child whose draws all give a known config re-evaluates the candidate the first draw matched in its place,
+    /// A child whose draws all produce a known config re-evaluates the candidate the first draw matched in its place,
     /// or is left out when the match is another child of the generation.
     fn breed(&mut self) {
         let reevaluations = self.settings.reevaluation_count().min(self.members.len());

@@ -34,7 +34,7 @@ fn small_sir() -> RunSetup {
 
 /// Checks that a tick-0 action has fired by the time the build returns, and fires once.
 ///
-/// A press on a fresh build draws from the action stream's start, as the scheduled entry did, so the two agree.
+/// A press on a fresh build draws from the action stream's start, as the scheduled entry did, so both runs agree.
 #[test]
 fn a_tick_zero_action_is_in_the_state_build_returns() {
     let mut plain = small_sir().build(None).expect("SIR builds");
@@ -66,8 +66,8 @@ fn a_tick_zero_action_is_in_the_state_build_returns() {
     );
 }
 
-/// Checks that a panic in `run_sampled`'s callback unwinds out of the call as the caller's own panic, with no fault
-/// in place of it.
+/// Checks that a panic in `run_sampled`'s callback unwinds out of the call as the caller's own panic, and is not
+/// turned into a fault.
 #[test]
 fn a_panicking_sample_callback_unwinds_as_a_panic() {
     let mut simulation = small_sir().build(None).expect("SIR builds");
@@ -94,7 +94,7 @@ fn a_break_at_the_first_sample_leaves_the_tick() {
     assert_eq!(simulation.tick(), 3);
 }
 
-/// Returns the reason inside a [`SetupError::Param`] that names parameter `id`.
+/// Returns the inner error of `error`, a [`SetupError::Param`] for parameter `id`.
 fn param_reason(error: SetupError, id: &str) -> ValueError {
     match error {
         SetupError::Param(ValueError::Param { id: refused, source }) if refused == id => *source,
@@ -240,7 +240,7 @@ fn a_setup_refuses_a_wrong_value_count() {
 /// `From<usize>`. An unsuffixed literal then no longer infers one type.
 ///
 /// An impl for `i32` or `f64`, the types an unsuffixed literal falls back to, would still compile here. A static check
-/// beside the test refuses those two.
+/// beside the test rejects those two impls.
 #[test]
 fn an_unsuffixed_literal_sets_a_parameter() {
     let sir = entry("sir");
@@ -268,7 +268,7 @@ const _: fn() = || {
     let _ = <ParamValue as AmbiguousIfFrom<_>>::some_item;
 };
 
-/// Checks that the ants field read through `views` is the field of the tick it is read at, not the one last
+/// Checks that the ants field from `views` is the field at the tick of the read, not the field that was last
 /// quantised.
 #[test]
 fn views_are_prepared_at_the_read() {
@@ -306,12 +306,12 @@ fn views_are_prepared_at_the_read() {
     assert!(!exported.is_empty());
 }
 
-/// A GPU model that steps `inner`, and asks the device for a buffer over its limit on every live parameter edit and,
+/// A GPU model that steps `inner`, and requests a buffer over the device limit on every live parameter edit and,
 /// from another thread, on every action.
 ///
 /// A live edit submits nothing and waits for nothing. Only the error scopes around the call can then report the error
-/// to it. Without them the error lands in the context's sink, for whichever holder waits next. Error scopes are
-/// thread-local, and an action's error lands in the sink whatever scopes its call pushes.
+/// to it. Without them the error goes to the context's sink, for whichever holder waits next. Error scopes are
+/// thread-local, and an action's error goes to the sink whatever scopes its call pushes.
 struct FaultyGpu {
     inner: Box<dyn GpuSimState>,
     device: wgpu::Device,
@@ -368,7 +368,7 @@ impl GpuSimState for FaultyGpu {
     }
 }
 
-/// Asks `device` for a buffer over its limit, which raises a validation error.
+/// Requests a buffer larger than `device` allows, which raises a validation error.
 fn request_oversized_buffer(device: &wgpu::Device) {
     drop(device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("henad_simulation_test_oversized"),
@@ -440,8 +440,8 @@ fn small_gpu_life() -> RunSetup {
 
 /// Checks that a lost device fails the stepping and the sampling of every simulation on it.
 ///
-/// wgpu reports a loss to no error scope, and polls go on succeeding. The regression returned `Ok` from both, advanced
-/// the tick and repeated the last stats it had read.
+/// wgpu reports a loss to no error scope, and polls go on succeeding. Without the check, both calls would return `Ok`,
+/// advance the tick and repeat the last stats read.
 #[test]
 fn a_lost_device_fails_the_next_step_and_sample() {
     let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
@@ -465,7 +465,7 @@ fn a_lost_device_fails_the_next_step_and_sample() {
     assert!(matches!(fault.kind, FaultKind::DeviceLost), "{fault:?}");
 }
 
-/// SIR's CPU state, panicking at the start of the step from tick 2, in place of a kernel that panics part way.
+/// SIR's CPU state, panicking at the start of the step from tick 2 to simulate a kernel that panics part way.
 struct PanicsOnce {
     inner: Box<dyn SimState>,
     panicked: bool,
@@ -499,9 +499,10 @@ impl SimState for PanicsOnce {
     }
 }
 
-/// Checks that a simulation refuses every call that runs model code once a call has faulted.
+/// Checks that a simulation rejects every call that runs model code once a call has faulted.
 ///
-/// The regression stepped on from the half-done step and returned `Ok`, reaching a state no rebuild reproduces.
+/// Without the rejection, a call would continue from the half-done step and return `Ok`, reaching a state that no
+/// rebuild reproduces.
 #[test]
 fn a_simulation_refuses_every_call_after_a_fault() {
     let broken = entry("sir").wrap_factory(|factory| {
@@ -561,7 +562,8 @@ fn scalars(simulation: &mut henad_compute::simulation::Simulation) -> Vec<f64> {
     sample.entries().iter().map(|entry| entry.value.scalar()).collect()
 }
 
-/// Checks that a live edit reaches the parameter it names, as the same value set before the build does.
+/// Checks that a live edit reaches the parameter it specifies, with the same effect as setting that value before
+/// the build.
 #[test]
 fn a_live_edit_steps_as_the_same_value_set_at_the_build() {
     let mut live = small_sir().build(None).expect("SIR builds");

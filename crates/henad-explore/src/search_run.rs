@@ -1,13 +1,14 @@
 //! Searches that run a spec's `[search]` table against a model, a batch of candidates at a time.
 //!
-//! A search asks its searcher for a batch of candidates, runs each candidate's config on the executor a sweep uses,
-//! and tells the searcher the watched reducer values of every run. Run `r` of candidate `c` has run id
-//! `c * replicates + r`, config id `c`, replicate index `c`'s replicate offset plus `r`, and the seed the spec's seed
-//! scheme gives that replicate. Under common random numbers, replicate `k` of every candidate shares one seed.
+//! A search requests a batch of candidates from its searcher, runs each candidate's config on the executor that a
+//! sweep uses, and tells the searcher the watched reducer values of every run. Run `r` of candidate `c` has run id
+//! `c * replicates + r`, config id `c`, replicate index `c`'s replicate offset plus `r`, and the seed that the spec's
+//! seed scheme assigns to that replicate.
+//! Under common random numbers, replicate `k` of every candidate shares one seed.
 //!
 //! A search writes `runs.csv`, `series.csv` and `summary.csv` as a sweep does, with the candidate id as the config id,
 //! and the tables of [`search_tables`](crate::output::search_tables). A resume replays the search from its seed, and
-//! reads back every run the directory holds in place of running it again, a failed or timed-out run included. The
+//! reads back every run the directory holds instead of running it again, a failed or timed-out run included. The
 //! resumed search then follows the trajectory of the interrupted one.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,7 +66,7 @@ use crate::sweep::{
 /// A search spec checked against a model, with its space resolved.
 #[derive(Debug, Clone)]
 pub struct SearchPlan {
-    /// Plan of the spec's fixed values and actions alone. Every candidate's config starts from its one config.
+    /// Plan of the spec's fixed values and actions alone. Every candidate's config starts from the plan's one config.
     base: Arc<Plan>,
     search: SearchSpec,
     space: SearchSpace,
@@ -78,9 +79,9 @@ impl SearchPlan {
     ///
     /// # Errors
     ///
-    /// Returns [`SearchPlanError`] for a spec with no search or with blocks, search settings or a space the search
-    /// refuses, fixed values or actions the model refuses, a batch of more than [`MAX_RUNS`] runs, or a budget whose
-    /// runs overflow a 64-bit count.
+    /// Returns [`SearchPlanError`] for a spec with no search or with blocks, search settings or a space that the search
+    /// rejects, fixed values or actions that the model rejects, a batch of more than [`MAX_RUNS`] runs, or a budget
+    /// whose runs overflow a 64-bit count.
     pub fn new(spec: &SweepSpec, schema: &ModelSchema<'_>) -> Result<Self, SearchPlanError> {
         let search = spec.search.as_ref().ok_or(SearchPlanError::NotASearch)?;
         if !spec.blocks.is_empty() {
@@ -109,15 +110,17 @@ impl SearchPlan {
         })
     }
 
-    /// Plan of the spec's fixed values and actions, whose one config every candidate starts from.
+    /// Plan of the spec's fixed values and actions. Every candidate starts from the plan's one config.
     pub fn base(&self) -> &Arc<Plan> {
         &self.base
     }
 
+    /// Search settings of the spec.
     pub fn search(&self) -> &SearchSpec {
         &self.search
     }
 
+    /// Space of the search, resolved against the model.
     pub fn space(&self) -> &SearchSpace {
         &self.space
     }
@@ -127,11 +130,12 @@ impl SearchPlan {
         self.search_hash
     }
 
-    /// Runs the whole budget takes, every evaluation times the replicates.
+    /// Number of runs in the whole budget, every evaluation times the replicates.
     pub fn run_count(&self) -> u64 {
         self.run_count
     }
 
+    /// Number of runs of each evaluation.
     pub fn replicates(&self) -> u64 {
         self.base.replicates()
     }
@@ -140,7 +144,7 @@ impl SearchPlan {
     ///
     /// # Panics
     ///
-    /// Panics when `genome` has a gene count other than the space's.
+    /// Panics when `genome` and the space have different gene counts.
     pub fn config(&self, genome: &Genome) -> Config {
         let base = self.base.config(0).expect("a plan with no blocks has one config");
         self.space.decode(genome, base)
@@ -162,7 +166,7 @@ impl SearchPlan {
         }
     }
 
-    /// Returns the key naming the results of `run`, a run of a candidate whose config is `config`.
+    /// Returns the key that identifies the results of `run`, a run of a candidate whose config is `config`.
     pub fn run_key(&self, run: &PlannedRun, config: &Config) -> u64 {
         run_key(
             self.base.results_fingerprint(),
@@ -192,7 +196,7 @@ impl SearchPlan {
     ///
     /// # Errors
     ///
-    /// Returns [`SearchPlanError::UnknownColumn`] for a watched column no reducer writes.
+    /// Returns [`SearchPlanError::UnknownColumn`] for a watched column that no reducer writes.
     pub fn watched_reducers(&self, measure: &MeasurePlan) -> Result<Vec<usize>, SearchPlanError> {
         let names = measure.reducers().names();
         self.search
@@ -233,25 +237,35 @@ impl SearchPlan {
 /// A search spec that cannot run.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchPlanError {
-    /// A spec with no `[search]` table, handed to a search.
+    /// A spec with no `[search]` table, passed to a search.
     NotASearch,
     /// A search spec that lists blocks as well.
     Blocks,
-    /// Fixed values or actions the model refuses, for the reason inside.
+    /// Fixed values or actions that the model rejects.
     Plan(PlanError),
-    /// Search settings refused for the reason inside.
+    /// Search settings that the check rejects.
     Settings(SearchSpecError),
-    /// A search space refused for the reason inside.
+    /// A search space that cannot be resolved.
     Space(SearchSpaceError),
-    /// A watched column no reducer writes. `known` lists the reducer columns.
-    UnknownColumn { column: String, known: Vec<String> },
+    /// A watched column that no reducer writes.
+    UnknownColumn {
+        /// Name of the watched column, as written in the search spec.
+        column: String,
+        /// Names of the reducer columns, in the order of `runs.csv`.
+        known: Vec<String>,
+    },
     /// A batch of `batch_size` candidates at `replicates` runs each, more than [`MAX_RUNS`] runs in all.
-    BatchTooLarge { batch_size: usize, replicates: u64 },
+    BatchTooLarge {
+        /// Candidates per batch.
+        batch_size: usize,
+        /// Runs per candidate.
+        replicates: u64,
+    },
     /// More runs than a 64-bit count holds.
     TooManyRuns,
     /// A search run as one shard of several.
     Sharded,
-    /// A resume asked to run a search's failed runs again.
+    /// A search resume set to run its failed runs again.
     RetryFailed,
 }
 
@@ -304,15 +318,17 @@ impl std::error::Error for SearchPlanError {
 /// Budget, objective and space of a planned search.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchOutline {
-    /// Name a spec file gives the algorithm, as in `genetic`.
+    /// Name of the algorithm in a spec file, as in `genetic`.
     pub algorithm: &'static str,
+    /// Number of evaluations that the search can request, re-evaluations included.
     pub max_evaluations: u64,
+    /// Maximum number of candidates that one ask returns.
     pub batch_size: usize,
     /// Objective of a random search, hill climb or genetic algorithm, `None` for a Pattern Space Exploration.
     pub objective: Option<Objective>,
     /// Reducer columns each run reports to the searcher.
     pub watched_columns: Vec<String>,
-    /// Axes of a Pattern Space Exploration as the spec gives them, the x axis first. `None` for any other search.
+    /// Axes of a Pattern Space Exploration as written in the spec, the x axis first. `None` for any other search.
     pub pattern_axes: Option<[PatternAxis; 2]>,
     /// Factors of the space, in gene order.
     pub space: Vec<FactorSpec>,
@@ -325,9 +341,9 @@ pub struct SearchOutline {
 pub struct SearchUpdate {
     /// Index of the batch, counting from 0.
     pub batch: u64,
-    /// Evaluations told so far, the batch's included.
+    /// Number of evaluations told so far, including the batch's evaluations.
     pub evaluations: u64,
-    /// Runs of those evaluations.
+    /// Number of runs in those evaluations.
     pub runs: u64,
     /// Evaluations of the batch, in candidate order.
     pub evaluated: Vec<EvaluatedCandidate>,
@@ -335,12 +351,12 @@ pub struct SearchUpdate {
     pub best: Option<RankingEntry>,
     /// Generations of a genetic algorithm that finished with the batch, in order.
     pub generations: Vec<GenerationSummary>,
-    /// Archive entries of the cells of a Pattern Space Exploration that the batch landed in, as they stand after it,
-    /// in cell order.
+    /// Archive entries for the cells that the batch touched in a Pattern Space Exploration, as they stand after the
+    /// batch, in cell order.
     pub landed_entries: Vec<ArchiveEntry>,
-    /// Cells the archive fills after the batch, 0 for any other search.
+    /// Number of cells that the archive fills after the batch, 0 for any other search.
     pub filled_cells: u64,
-    /// Settings a Pattern Space Exploration places outputs with, each axis with its range. `None` for any other
+    /// Settings that a Pattern Space Exploration uses to place outputs, each axis with its range. `None` for any other
     /// search, or while an automatic range waits for the initial samples.
     pub pattern_settings: Option<PatternSpaceSettings>,
 }
@@ -348,18 +364,21 @@ pub struct SearchUpdate {
 /// One evaluation a search was told.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvaluatedCandidate {
+    /// Id of the candidate, its position among every candidate of the search.
     pub candidate_id: u64,
-    /// Index of the batch that asked for the candidate.
+    /// Index of the batch that requested the candidate.
     pub batch: u64,
+    /// Source of the candidate's genome.
     pub origin: CandidateOrigin,
     /// Replicate index of the evaluation's first run.
     pub replicate_offset: u64,
-    /// Runs of the evaluation.
+    /// Number of runs in the evaluation.
     pub replicates: u64,
     /// Config the candidate's genome decodes to.
     pub config: Config,
-    /// Replicates with a watched value that is missing or not finite.
+    /// Number of replicates with a watched value that is missing or not finite.
     pub failed_count: u64,
+    /// Objective or cell that the evaluation produced.
     pub reading: EvaluationReading,
 }
 
@@ -373,7 +392,7 @@ pub enum EvaluationReading {
         /// Objective over every replicate the candidate has so far. A re-evaluation reports the candidate it
         /// repeats.
         pooled_objective: f64,
-        /// Replicates behind `pooled_objective`.
+        /// Number of replicates behind `pooled_objective`.
         pooled_replicates: u64,
     },
     /// Cell of a Pattern Space Exploration.
@@ -381,7 +400,7 @@ pub enum EvaluationReading {
         /// Outputs of the evaluation and their cell, `None` when an axis has no finite value. The placement has no
         /// cell while an automatic range waits for the initial samples.
         placement: Option<PatternPlacement>,
-        /// Whether the evaluation is the first to land in its cell, the cell's exemplar.
+        /// Whether the evaluation is the first in its cell, the cell's exemplar.
         new_cell: bool,
     },
 }
@@ -394,12 +413,12 @@ pub(crate) struct SearchSession {
     watched_reducers: Vec<usize>,
     /// Runs a resumed directory holds, by run id from 0.
     recorded_runs: Arc<[RecordedRun]>,
-    /// Config of every candidate asked for its first evaluation, by candidate id.
+    /// Config of every candidate requested for its first evaluation, by candidate id.
     configs: BTreeMap<u64, Config>,
     batch_count: u64,
     evaluations: u64,
     runs: u64,
-    /// Generations of a genetic algorithm reported so far.
+    /// Number of generations of a genetic algorithm reported so far.
     reported_generations: usize,
     /// Whether a Pattern Space Exploration has reported the range of each axis.
     reported_ranges: bool,
@@ -436,7 +455,7 @@ impl AskedBatch {
             .collect()
     }
 
-    /// Returns the request of the run at `position` among the runs left to run, or `None` past the last.
+    /// Returns the request of the run at `position` among the runs left to run, or `None` past the last run.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn request(&self, position: usize) -> Option<RunRequest<'_>> {
         let batch_run = self.runs.get(self.recorded_values.len() + position)?;
@@ -467,12 +486,12 @@ impl AskedBatch {
 }
 
 impl SearchSession {
-    /// Returns a session of `plan` from its first batch, reading the runs `recorded_runs` holds in place of running
+    /// Returns a session of `plan` from its first batch, reading the runs `recorded_runs` holds instead of running
     /// them.
     ///
     /// # Errors
     ///
-    /// Returns [`SearchPlanError::Settings`] when the searcher refuses the plan's settings.
+    /// Returns [`SearchPlanError::Settings`] when the searcher rejects the plan's settings.
     pub(crate) fn new(
         plan: Arc<SearchPlan>,
         watched_reducers: Vec<usize>,
@@ -502,13 +521,13 @@ impl SearchSession {
         &self.watched_reducers
     }
 
-    /// Asks for the next batch, or returns `None` once the search is done.
+    /// Requests the next batch, or returns `None` once the search is done.
     ///
     /// The runs a resumed directory holds come first, with their values read back.
     ///
     /// # Errors
     ///
-    /// Returns [`ResumeError::SearchRunChanged`] for a held run whose key is not the key of the run asked for.
+    /// Returns [`ResumeError::SearchRunChanged`] for a held run whose key is not the key of the requested run.
     pub(crate) fn ask(&mut self) -> Result<Option<AskedBatch>, ResumeError> {
         if self.searcher.is_done() {
             return Ok(None);
@@ -562,11 +581,11 @@ impl SearchSession {
 
     /// Tells the searcher every batch whose runs a resumed directory holds in full, without running anything.
     ///
-    /// The runs held of the batch after them are checked too, as [`Self::ask`] checks every run.
+    /// The held runs of the next batch are checked too, as [`Self::ask`] checks every run.
     ///
     /// # Errors
     ///
-    /// Returns [`ResumeError::SearchRunChanged`] for a held run whose key is not the key of the run asked for.
+    /// Returns [`ResumeError::SearchRunChanged`] for a held run whose key is not the key of the requested run.
     pub(crate) fn replay_recorded_runs(&mut self) -> Result<(), ResumeError> {
         while let Some(batch) = self.ask()? {
             if batch.recorded_values.len() < batch.runs.len() {
@@ -577,8 +596,10 @@ impl SearchSession {
         Ok(())
     }
 
-    /// Tells the searcher the evaluations of `batch`, whose runs gave `values` after the values it read back, and
-    /// returns the standing after it.
+    /// Tells the searcher the evaluations of `batch`, and returns the standing after it.
+    ///
+    /// `values` holds the watched values of the runs that the batch ran. They follow the values that `batch` read
+    /// back from a resumed directory.
     ///
     /// # Panics
     ///
@@ -681,7 +702,7 @@ impl SearchSession {
         }
     }
 
-    /// Returns the archive entries of `touched`, the cells the last batch landed in, as they stand after it.
+    /// Returns the archive entries of `touched`, the cells that the last batch touched, as they stand after it.
     ///
     /// The batch that fixes an automatic range files the evaluations held before it as well, and gets the whole
     /// archive. With both bounds given, the first batch's cells are the whole archive.
@@ -722,7 +743,7 @@ impl SearchSession {
         record
     }
 
-    /// Writes the search's closing table from `report` to `dest`, `best.csv` or `archive.csv`, and hands `dest` back.
+    /// Writes the search's closing table from `report` to `dest`, `best.csv` or `archive.csv`, and returns `dest`.
     ///
     /// # Errors
     ///
@@ -783,7 +804,7 @@ fn writes_generations(plan: &SearchPlan) -> bool {
 /// Returns the values `outcome` reports for the reducers at positions `watched_reducers`, each `None` for a run that
 /// failed.
 ///
-/// A value that is not finite reads as `None`, as it does once written to `runs.csv` and read back.
+/// A value that is not finite becomes `None`, as it does once written to `runs.csv` and read back.
 pub(crate) fn watched_values(outcome: &RunOutcome, watched_reducers: &[usize]) -> Vec<Option<f64>> {
     watched_reducers
         .iter()
@@ -819,11 +840,12 @@ pub(crate) struct RecordedSearch {
     /// Runs the directory holds, by run id from 0.
     runs: Arc<[RecordedRun]>,
     counts: ResultCounts,
-    /// Bytes `runs.csv` keeps, cutting a partial last record.
+    /// Number of bytes of `runs.csv` to keep, cutting a partial last record.
     runs_bytes: u64,
-    /// Bytes `series.csv` keeps, cutting a partial last line and the rows of runs `runs.csv` never recorded.
+    /// Number of bytes of `series.csv` to keep, cutting a partial last line and the rows of runs that `runs.csv`
+    /// never recorded.
     series_bytes: u64,
-    /// Whether a table lacks its header, so both are written afresh and no run is kept.
+    /// Whether a table lacks its header, so both tables are written afresh and no run is kept.
     fresh_tables: bool,
 }
 
@@ -836,9 +858,9 @@ impl RecordedSearch {
     ///
     /// # Errors
     ///
-    /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds a sweep, another
-    /// search, another model, another model schema or another column layout, or `runs.csv` lists its runs out of
-    /// order or more runs than the search's budget.
+    /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds a sweep, a different
+    /// search, model, model schema or column layout, or `runs.csv` lists its runs out of order or more runs than the
+    /// search's budget.
     pub(crate) fn read(
         path: &Path,
         plan: &SearchPlan,
@@ -944,7 +966,7 @@ impl RecordedSearch {
         })
     }
 
-    /// Cuts the tables of `dir` to the runs kept, or removes both when they are written afresh.
+    /// Cuts the tables of `dir` to the runs kept, or removes both tables when they are written afresh.
     #[cfg(not(target_arch = "wasm32"))]
     fn repair(&self, dir: &OutputDir) -> Result<(), OutputError> {
         for (file, length) in [(RUNS_FILE, self.runs_bytes), (SERIES_FILE, self.series_bytes)] {
@@ -980,7 +1002,7 @@ impl RecordedSearch {
 /// # Errors
 ///
 /// Returns [`ExploreError`] when the search cannot be planned, its config does not fit the device, the probe build
-/// fails, a watched column names no reducer, the output directory holds results and is not resumed, the directory
+/// fails, a watched column refers to no reducer, the output directory holds results and is not resumed, the directory
 /// cannot be resumed, the results cannot be written, or a batch cannot run.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_search_into_directory(
@@ -999,7 +1021,7 @@ pub(crate) fn run_search_into_directory(
 /// Runs the search of `inputs.spec`, holding its files in memory, and returns its record.
 ///
 /// `plan`, when given, is the search plan of `inputs.spec`, and the spec is planned here otherwise. The files hold the
-/// bytes a directory would. The caller's `inputs` name no folder.
+/// bytes a directory would. The caller passes `inputs` with no `folder`.
 ///
 /// # Errors
 ///
@@ -1053,8 +1075,8 @@ pub(crate) struct SearchWriters<W: Write> {
 
 impl SearchPreparation {
     /// Checks and probes `plan`, the search of `inputs.spec`, and chooses its layout. With no `plan`, the spec is
-    /// planned first. `probe`, when given, takes the place of the report [`ProbeReport::for_plan`] gives for
-    /// [`SearchPlan::base`], and its clock readings the ones taken on entry.
+    /// planned first. `probe`, when given, replaces the report that [`ProbeReport::for_plan`] returns for
+    /// [`SearchPlan::base`], and its clock readings replace the ones taken on entry.
     pub(crate) fn new(
         inputs: &SweepInputs<'_>,
         plan: Option<Arc<SearchPlan>>,
@@ -1083,8 +1105,8 @@ impl SearchPreparation {
                 OutputDir::check_free(output_dir)?;
                 None
             }
-            // Locked before the scan and held until the last write. Otherwise another writer could change the
-            // tables between the two.
+            // The directory is locked before the scan and held until the last write. Otherwise another writer could
+            // change the tables between the two.
             (Some(output_dir), _) if !inputs.dry_run => Some(OutputDir::open(output_dir)?),
             _ => None,
         };
@@ -1155,8 +1177,8 @@ impl SearchPreparation {
         })
     }
 
-    /// Reports the outline, then each warning of the plan and of a resume under another build than the engine or
-    /// model build of `inputs`.
+    /// Reports the outline, then each warning of the plan and of a resume under a build that differs from the engine
+    /// or model build of `inputs`.
     pub(crate) fn announce(&self, inputs: &SweepInputs<'_>, progress: &mut dyn Progress) {
         progress.report(&ProgressEvent::Planned(&self.outline));
         let mut warnings: Vec<SweepWarning> = self

@@ -230,7 +230,7 @@ fn a_run_with_rows_on_both_sides_of_the_budget_is_held_without_its_series() {
     let mut picked = directory_entries(scratch.path());
     picked.retain(|(name, _)| !name.ends_with(SERIES_FILE));
     picked.push((SERIES_FILE.to_owned(), reordered.into_bytes()));
-    // A held row takes its tick and each stat value as an `f64`, every column but the run id.
+    // A held row stores its tick and each stat value as an `f64`, every column except the run id.
     let row_bytes = (header.split(',').count() - 1) * size_of::<f64>();
     let set = ResultSet::from_files(picked, (split + 1) * row_bytes).expect("the files read");
 
@@ -423,7 +423,7 @@ fn a_sweep_replay_refuses_a_row_of_another_sweep() {
     run_sweep(&second, &other_spec);
     let own = ResultSet::open_dir(&first, usize::MAX).expect("the directory reads");
 
-    // The rows of the second sweep carry the ids, replicates and seeds of the first's, with other rates.
+    // The rows of the second sweep carry the ids, replicates and seeds of the first sweep, with different rates.
     let mut picked = directory_entries(&first);
     picked.retain(|(name, _)| !name.ends_with(RUNS_FILE));
     picked.push((

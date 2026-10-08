@@ -7,7 +7,7 @@ icon: material/bug-outline
 # Writing a CPU agent model
 
 In this tutorial we'll build the Ant Foraging model on the CPU from scratch, which automatically uses all available cores.
-This is classified as an **agent model** (as opposed from a **grid model**).
+This is classified as an **agent model** (as opposed to a **grid model**).
 
 !!! info "Henad 0.3"
 
@@ -76,7 +76,7 @@ We can declare this in lane form as follows:
 ``` { .rust .annotate title="src/foraging/mod.rs" }
 use henad::agent_lanes;
 
-/// No step taken yet, so momentum has nothing to continue.
+/// Value of `last_step` before an ant's first step. Momentum then has no direction to continue.
 pub const NO_STEP: u8 = u8::MAX;
 
 agent_lanes! {
@@ -87,7 +87,7 @@ agent_lanes! {
         plain pos_y: f32 = 0.0,
         /// Last direction, encoded `(dx + 1) * 3 + (dy + 1)`, or [`NO_STEP`].
         plain last_step: u8 = NO_STEP, // (4)!
-        /// `0` searching, `1` carrying. Doubles as the render lane.
+        /// `0` while searching and `1` while carrying food. The value is also the ant's palette index.
         plain has_food: u8 = 0,
         plain reward: f32 = 0.0,
     }
@@ -144,7 +144,7 @@ pub const TO_HOME: usize = 1;
 !!! warning "Separate module must be used"
 
     `henad::params!` generates a function named `descriptors()` into the module it expands in, which means a module can hold only one parameter list.
-    A field layer declares parameters of its own, separately from the model above it, so it needs to be in a separate module.
+    A field layer declares its own parameters, separately from the model above it, so it needs to be in a separate module.
 
 The field itself carries a single parameter, which controls how fast a trail fades:
 
@@ -188,7 +188,7 @@ impl ScalarFieldSpec for PheromoneField {
 
 1. We need 2 grids, `TO_FOOD` and `TO_HOME`.
 2. The rule for combining the deposits of two ants that write into the same cell on the same tick.
-3. Hot parameters for the layer, extracted once per tick exactly as a model's are.
+3. Hot parameters for the layer, extracted once per tick exactly like a model's hot parameters.
 
 Let's look at `COMBINE` more closely.
 All combiners have to be commutative and associative, because otherwise the result would depend on which core arrived at a cell first.
@@ -222,7 +222,7 @@ We will build two elliptical walls of obstacles, and place the nest and food sou
             }
         }
 
-        // Placed after the blobs so a site is never buried under an obstacle.
+        // The sites go in after the blobs, so an obstacle never buries a site.
         sites[food_cell(width, height)] = FOOD;
         sites[nest_cell(width, height)] = HOME;
     }
@@ -273,7 +273,7 @@ Displaying the field is controlled by `quantize`, which maps the `f32` pheromone
             FOOD => 14,
             HOME => 15,
             _ => {
-                // Stronger route wins the cell, so overlapping trails stay legible.
+                // The stronger trail wins the cell, so overlapping trails stay legible.
                 let (food, home) = (values[TO_FOOD], values[TO_HOME]);
                 let (v, base) = if food > home { (food, 6) } else { (home, 0) }; // (1)!
                 match ramp_step(v) {
@@ -293,7 +293,7 @@ The ramp itself is logarithmic because trails decay geometrically.
 const DISPLAY_DECADES: f32 = 3.0;
 const RAMP_STEPS: u8 = 6;
 
-/// Log scaled strength in `0..=RAMP_STEPS`, where 0 means not worth drawing.
+/// Returns the log-scaled strength of `v` in `0..=RAMP_STEPS`, where 0 means not worth drawing.
 fn ramp_step(v: f32) -> u8 {
     if v <= LOW_PHEROMONE {
         return 0;
@@ -511,7 +511,7 @@ We only need to implement the two passes, and the rest is handled by the engine.
 
 |     | Stage                                                        | Implementation                     |
 | --- | ------------------------------------------------------------ | ---------------------------------- |
-| 1   | Hot parameters are extracted, yours and the field's          | Engine, calling `from_params`      |
+| 1   | Hot parameters are extracted for the model and the field     | Engine, calling `from_params`      |
 | 2   | The neighbour index is rebuilt from agent positions          | Engine, skipped for `NoIndex`      |
 | 3   | Deposit lanes are filled. Nothing moves                      | **Pending**, in `run_deposit_pass` |
 | 4   | Every agent steps, returning a per-chunk tally               | **Pending**, in `run_step_pass`    |
@@ -541,7 +541,7 @@ fn advect_agent(
     rng: &mut u64,
 ) -> AntMove {
     let sites = field.sites;
-    // Ants follow the trip they are not currently making, so carrying food reads the home field.
+    // An ant follows the trail it does not lay, so an ant carrying food reads the to-home field.
     let trail = if has_food != 0 { // (1)!
         field.field(TO_HOME)
     } else {
@@ -571,7 +571,7 @@ fn advect_agent(
     }
 
     if best == 0.0 && last_step != NO_STEP {
-        // No pheromone nearby, so probably keep going the way we were.
+        // With no pheromone nearby, the ant keeps its last direction with probability `momentum`.
         if next_float(rng, 1.0) < p.momentum { // (5)!
             let (dx, dy) = decode_step(last_step);
             let (mx, my) = (x + dx, y + dy);
@@ -616,7 +616,7 @@ fn advect_agent(
 ```
 
 1. See rule 3.
-2. The count starts at 2, which gives the first neighbour visited twice the odds of every other. This reproduces an off-by-one quirk in the reference implementation (from krABMga) on purpose.
+2. The count starts at 2, which gives the first neighbour visited twice the odds of every other neighbour. This reproduces an off-by-one quirk in the reference implementation (from krABMga) on purpose.
 3. `dx` iterates on the outside and `dy` on the inside. Because ties are broken by a draw, the visit order shapes the result, and this ordering will be a feature of our model.
 4. A strictly better neighbour wins outright, and equal strengths go to a reservoir draw. `reservoir_accept(bits, k)` accepts the `k`-th candidate of a run with probability `1/k`, spreading the choice evenly across however many neighbours tied. This matters because early in a run the whole grid reads zero, every direction ties, and a positional tie-break there would march the entire colony off together.
 5. This branch handles a lost ant. With no pheromone anywhere in reach, the ant most likely repeats its last step.
@@ -638,7 +638,7 @@ fn decode_step(s: u8) -> (i32, i32) {
     (s / 3 - 1, s % 3 - 1)
 }
 
-/// Inside the field and not an obstacle. This model is bounded, not toroidal.
+/// Returns whether `(x, y)` lies inside the bounded field and off every obstacle.
 #[inline]
 fn passable(x: i32, y: i32, sites: &[u8], p: &AntParams) -> bool { // (2)!
     x >= 0 && y >= 0 && x < p.w && y < p.h && sites[(y * p.w + x) as usize] != OBSTACLE
@@ -693,7 +693,7 @@ fn advect(lanes: &mut AntLanes, ctx: &StepCtx<'_, ForagingModel>, seed: u64, tic
 1. The closure takes five arguments: the global agent index, the index within the chunk, the read-only half of any `dual` lanes, this chunk's writable slice, and a random generator. Ants uses three of the five.
 2. The closure returns this agent's contribution to the tally, and `run_pass` folds contributions within a chunk, then across chunks in chunk order.
 
-Under the hood, `run_pass` splits the lanes into chunks, hands each chunk a generator seeded from the run's seed, the tick and the chunk's index, and feeds our closure one agent at a time.
+Under the hood, `run_pass` splits the lanes into chunks, passes each chunk a generator seeded from the run's seed, the tick and the chunk's index, and feeds our closure one agent at a time.
 A chunk's seed derives from those three alone, so which agent meets which random stream is deterministic and reproducible.
 
 That leaves `ctx`, which bundles everything an agent kernel reads beyond its own lanes: the field, the neighbour index, the hot parameters and the extent.
@@ -707,7 +707,7 @@ Running the deposits as a separate pass keeps that guarantee intact.
 Rule 2 governs how much pheromone to lay, and it is subtler than it first sounds.
 
 ``` { .rust .annotate title="src/foraging/mod.rs" }
-/// Largest pheromone in the 3x3 neighbourhood, cut down by distance and lifted by the reward.
+/// Returns the largest pheromone in the 3x3 neighbourhood, cut down by distance and lifted by the reward.
 #[inline]
 fn deposit_value(x: i32, y: i32, reward: f32, field: &[f32], p: &AntParams) -> f32 {
     let here = field[cell_index(x as u32, y as u32, p.w as u32) as usize];
@@ -726,7 +726,7 @@ fn deposit_value(x: i32, y: i32, reward: f32, field: &[f32], p: &AntParams) -> f
 }
 ```
 
-1. The result is floored at whatever the cell already holds, so a deposit can never come out weaker than the standing value. Because of that floor, `Combine::Max` can stand in for a plain overwrite.
+1. The result is floored at whatever the cell already holds, so a deposit can never come out weaker than the standing value. Because of that floor, `Combine::Max` can act as a plain overwrite.
 2. At an edge, `Boundary::Bounded` returns `None` instead of wrapping. If we swapped in `Boundary::Torus`, the same call would wrap around the world.
 3. Diagonal neighbours sit further away, so they take the steeper cut. Recall that `p.diagonal` holds `cutdown` raised to √2, computed once per tick back in `from_params`.
 
@@ -772,7 +772,7 @@ fn deposit(lanes: &AntLanes, deposits: &mut Deposits, ctx: &StepCtx<'_, Foraging
 ```
 
 1. This makes two mutable borrows out of one `Vec<Vec<f32>>`. Nothing clever is going on, only the split that keeps the borrow checker content.
-2. This is where the ant's deposit will land. Each agent identifies one cell, and any number of agents can identify the same one.
+2. This is where the ant's deposit will land. Each agent identifies one cell, and any number of agents can identify the same cell.
 3. Since everything passes through `Max`, `0.0` acts as the identity.
 
 Lastly, wire both passes into the trait:
@@ -850,7 +850,7 @@ The template's `src/lib.rs` imports only the grid registration functions so far,
 use henad::authoring::register_agent_model;
 ```
 
-then insert our model next to the others in `models()`:
+then insert our model next to the other models in `models()`:
 
 ``` rust title="src/lib.rs"
     models.insert(register_agent_model::<foraging::ForagingModel>())?;

@@ -6,7 +6,7 @@ icon: material/check-decagram-outline
 
 # Determinism and testing
 
-Henad runs every kernel in parallel and gives no guarantee about which chunk lands on which core.
+Henad runs every kernel in parallel and gives no guarantee about which chunk runs on which core.
 The answer still has to come out the same every time, and this page covers the rules that make sure it does.
 
 The engine seeds a chunk's RNG from the tick's seed and the chunk's index, and from nothing a worker mutates, which keeps a result independent of how rayon schedules the chunks.
@@ -24,11 +24,11 @@ Float addition is not associative, so if any of these folded in arrival order in
 ## The thread-count test
 
 The `ThreadCount` check of the [testing kit](testing.md) runs this comparison on every CPU model, at a size that splits a step into 14 jobs.
-Both agent models carry a `results_do_not_depend_on_the_thread_count` test of their own as well, for a busier configuration than the kit's.
-If your model draws random numbers during a step, consider one for it too.
-The test builds thread pools of its own through `rayon`.
+Both agent models also carry their own `results_do_not_depend_on_the_thread_count` test, with a busier configuration than the kit uses.
+If your model draws random numbers during a step, consider adding that test too.
+The test builds its own thread pools with `rayon`.
 In a project made from the template, add `rayon = "1"` under `[dev-dependencies]` first.
-Cargo resolves it to the rayon Henad steps on.
+Cargo resolves it to the same rayon that Henad uses.
 
 ```rust
 #[test]
@@ -75,22 +75,22 @@ In a clone of Henad's repository, `-p henad-models` runs the example models' tes
 
 ## Network models
 
-After `init`, a [network model](network-models.md) draws random numbers in three places, and each has a stream of its own.
+After `init`, a [network model](network-models.md) draws random numbers in three places, and each has its own stream.
 
 The node pass is seeded like an agent pass.
-The engine hands it a per-tick seed, and `run_pass` splits that seed per chunk.
-The global pass runs on one thread and draws from a single stream, in the order the model asks for numbers.
+The engine passes it a per-tick seed, and `run_pass` splits that seed per chunk.
+The global pass runs on one thread and draws from a single stream, in the order that the model requests numbers.
 That stream carries over from one tick to the next.
-An [action](parameters.md#actions) draws from a third stream, seeded apart from the other two.
+An [action](parameters.md#actions) draws from a third stream, seeded separately from the other two streams.
 A press advances neither the node pass's seed nor the global pass's stream.
 
 Node positions are outside the contract.
 The layout runs when a snapshot is published, under a time budget, and never inside `step`.
-How far it has moved the nodes by a given tick depends on how many publishes there were and how many iterations each one fitted in.
-Neither is a function of the tick.
-The layout itself is deterministic for a fixed number of iterations, and `layout.rs` carries a thread-count test of its own.
+How far it has moved the nodes by a given tick depends on how many publishes there were and how many iterations each publish fitted in.
+Neither count is a function of the tick.
+The layout itself is deterministic for a fixed number of iterations, and `layout.rs` carries its own thread-count test.
 Keep positions out of anything a tick decides.
-Team Assembly reads one in its global pass to place newcomers next to their team's first incumbent, and that placement only changes the picture.
+Team Assembly reads a position in its global pass to place newcomers next to their team's first incumbent, and that placement only changes the picture.
 
 The order of neighbours inside a row is deterministic.
 It follows from the sequence of edits made to the graph and from nothing else, and a repack keeps every row in order.
@@ -99,7 +99,7 @@ Removing an edge moves the last entry of each affected row into the gap, and fli
 A kernel can walk a row in order, but it must not give an entry a meaning by where it sits, for example by reading the first entry as the oldest edge.
 
 Each network model carries two tests.
-If yours draws random numbers or writes anything in `prepare_view`, write both for it too.
+If your model draws random numbers or writes anything in `prepare_view`, write both tests for it too.
 
 `results_do_not_depend_on_the_thread_count` runs a busy configuration at 1 and at 7 threads, calls `prepare_view` after every tick, and compares the two runs bit for bit.
 The population spans several chunks, and a parameter changes halfway through.
@@ -108,8 +108,8 @@ It compares the `state` and `timer` lanes, the edge list and the edge colours.
 Team Assembly lowers `max_downtime` at the midpoint.
 It compares the occupied slots, the spawn and team ticks, the positions, the edge list with its colours, the node colours and the bits of every stat.
 
-`results_do_not_depend_on_the_publish_cadence` runs the same configuration twice, calling `prepare_view` after every tick in one run and never in the other, and asserts that both end in the same state.
-The second run then calls `prepare_view` once, and the colours it paints have to match the first run's.
+`results_do_not_depend_on_the_publish_cadence` runs the same configuration twice, calling `prepare_view` after every tick in one run and never in the other, and asserts that both runs end in the same state.
+The second run then calls `prepare_view` once, and the colours it paints have to match the first run's colours.
 `prepare_view` can write to the graph and the lanes, and the test pins that nothing it writes feeds back into a tick.
 
 Virus on a Network leaves positions out of both comparisons.
@@ -117,12 +117,12 @@ Team Assembly keeps them in, since its own tick places newcomers and neither tes
 
 ## The testing kit
 
-The [testing kit](testing.md) runs the thread-count, seed and sampling comparisons on every model of a set, beside the checks of its declarations.
+The [testing kit](testing.md) runs the thread-count, seed and sampling comparisons on every model of a set, beside the checks on each model's declarations.
 A project made from the template runs it from `cargo test`.
 
 ## Checking the rule itself
 
-Determinism aside, the model's rule still needs an oracle of its own.
+Determinism aside, the model's rule still needs its own oracle.
 The repository leans on three kinds, in descending order of strength.
 
 **A bit-identical reference.** This is only available when nothing in the model is stochastic.
@@ -154,7 +154,7 @@ For a stochastic model the two engines draw from different generators, and a fix
 
 The two network models are compared with NetLogo the same way.
 Their procedures are `virus_network_fixture.md` and `team_assembly_fixture.md` in `crates/henad-models/tests/fixtures/docs/`.
-`scripts/compare_network.py` judges their runs as `compare_sir.py` judges SIR's.
+`scripts/compare_network.py` judges their runs the same way `compare_sir.py` judges SIR runs.
 On the Henad side, `crates/henad-models/tests/consistency_virus_network.rs` and `consistency_team_assembly.rs` hold the consistency tests, and they need no reference engine.
 The Virus on a Network tests check every rate against the edge list instead of the model's own rows, and a row that drifted from the list fails them too.
 The Team Assembly tests compare the lanes and the graph with a scan or a closed form instead of the model's own bookkeeping.
@@ -173,7 +173,7 @@ GPU tests skip silently on a machine with no adapter, so set the environment var
 HENAD_REQUIRE_GPU=1 cargo test
 ```
 
-In a clone of Henad's repository, `./check.sh` runs Henad's own check set, and `HENAD_REQUIRE_GPU=1 cargo test --workspace --all-targets` its tests.
+In a clone of Henad's repository, `./check.sh` runs Henad's own check set, and `HENAD_REQUIRE_GPU=1 cargo test --workspace --all-targets` runs its tests.
 
 ## Next
 

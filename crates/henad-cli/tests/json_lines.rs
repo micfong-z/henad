@@ -1,8 +1,8 @@
-//! Checks the lines `--json` prints: the benchmark's, which `benchmarks/protocol.md` fixes, and a sweep's, which
-//! `docs/reference/cli.md` lists.
+//! Checks the lines that `--json` prints: the benchmark lines, which `benchmarks/protocol.md` fixes, and the sweep
+//! lines, which `docs/reference/cli.md` lists.
 //!
-//! Each line kind holds exactly the fields its table lists. A driver reads the lines by name, and a field renamed or
-//! dropped breaks it.
+//! Each line kind holds exactly the fields its table lists. A driver reads the lines by name, and renaming or dropping
+//! a field breaks the driver.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -66,7 +66,7 @@ fn kinds(lines: &[Value]) -> Vec<&str> {
     lines.iter().map(|line| line["kind"].as_str().unwrap_or("")).collect()
 }
 
-/// Checks that `object` holds exactly the fields `fields` names.
+/// Checks that `object` holds exactly the fields in `fields`.
 fn assert_fields(object: &Value, fields: &[&str]) {
     let held: BTreeSet<&str> = object
         .as_object()
@@ -78,7 +78,7 @@ fn assert_fields(object: &Value, fields: &[&str]) {
     assert_eq!(held, expected, "{object}");
 }
 
-/// Checks that every line of kind `kind` in `lines` holds exactly `fields`, and returns how many there are.
+/// Checks that every line of kind `kind` in `lines` holds exactly `fields`, and returns their count.
 fn assert_kind_fields(lines: &[Value], kind: &str, fields: &[&str]) -> usize {
     let matching: Vec<&Value> = lines.iter().filter(|line| line["kind"] == kind).collect();
     for line in &matching {

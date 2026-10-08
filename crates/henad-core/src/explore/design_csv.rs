@@ -1,6 +1,6 @@
 //! Design tables, the comma-separated form of a table design.
 //!
-//! The header names one parameter id or `action.<name>` per column, and each row after it is one config. A config
+//! The header lists one parameter id or `action.<name>` per column, and each row after it is one config. A config
 //! keeps the fixed value of every parameter and action the table leaves out.
 
 use std::fmt;
@@ -16,12 +16,13 @@ const BYTE_ORDER_MARK: char = '\u{feff}';
 
 /// Reads the design table `text` into one factor per column, whose levels are the column's values in row order.
 ///
-/// A zip over the factors gives one config per row. Spaces around a field are ignored, and so are blank lines.
+/// A zip over the factors yields one config per row. Spaces around a field are ignored, and so are blank lines.
 ///
 /// # Errors
 ///
-/// Returns [`DesignTableError`] for text that is not CSV or holds no row after its header, a column that names no
-/// parameter or action or names one twice, a row of another width than the header, or a value its column refuses.
+/// Returns [`DesignTableError`] for text that is not CSV or holds no row after its header, a column that matches no
+/// parameter or action or appears twice, a row whose width differs from the header, or a value that its column
+/// rejects.
 pub fn read_table(
     text: &str,
     params: &[ParamDescriptor],
@@ -77,7 +78,7 @@ pub fn read_table(
     Ok(factors)
 }
 
-/// Returns the slot the column named `column` writes.
+/// Returns the slot that the column `column` writes.
 fn column_slot(
     column: &str,
     params: &[ParamDescriptor],
@@ -103,7 +104,7 @@ fn column_slot(
     })
 }
 
-/// Returns the level `field` gives the factor writing `slot`.
+/// Returns the level that `field` sets for the factor that writes `slot`.
 fn table_level(
     slot: FactorSlot,
     field: &str,
@@ -121,25 +122,43 @@ fn table_level(
     }
 }
 
-/// A design table that gives no configs. Rows count from 1 at the header.
+/// A design table that yields no configs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesignTableError {
-    /// Text that is not CSV, for the reason inside.
+    /// Text that is not CSV.
     Csv(CsvError),
     /// Text with no header.
     NoHeader,
     /// A header with no row after it.
     NoRows,
-    /// A column that names no parameter id and no `action.<name>`. `known` lists the columns there can be.
-    UnknownColumn { column: String, known: Vec<String> },
-    /// A column named twice.
-    DuplicateColumn { column: String },
-    /// Row `row`, with `found` fields where the header has `expected`.
-    Width { row: usize, expected: usize, found: usize },
-    /// A value in row `row` that column `column` refuses, for the reason in `source`.
-    Value {
-        row: usize,
+    /// A column that matches no parameter id and no `action.<name>`.
+    UnknownColumn {
+        /// Column as written in the header, after trimming.
         column: String,
+        /// Columns the table can have, every parameter id and then every action's `action.<name>`.
+        known: Vec<String>,
+    },
+    /// A column that appears twice in the header.
+    DuplicateColumn {
+        /// Column as written in the header, after trimming.
+        column: String,
+    },
+    /// Row `row`, with `found` fields where the header has `expected`.
+    Width {
+        /// Position of the record in the text, counting from 1 with blank lines included.
+        row: usize,
+        /// Number of fields in the header.
+        expected: usize,
+        /// Number of fields in the row.
+        found: usize,
+    },
+    /// A value in row `row` that column `column` rejects.
+    Value {
+        /// Position in the text of the record holding the value, counting from 1 with blank lines included.
+        row: usize,
+        /// Column of the value, as written in the header, after trimming.
+        column: String,
+        /// Reason the column rejects the value.
         source: DesignTableValueError,
     },
 }
@@ -183,13 +202,16 @@ impl std::error::Error for DesignTableError {
     }
 }
 
-/// A value of a design table that its column refuses.
+/// A value of a design table that its column rejects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesignTableValueError {
-    /// A value the parameter's descriptor refuses, for the reason inside.
+    /// A value the parameter's descriptor rejects.
     Param(ValueError),
-    /// An action tick that is not a whole number from 0.
-    Tick { raw: String },
+    /// An action tick that is not a non-negative whole number.
+    Tick {
+        /// Tick as written, after trimming.
+        raw: String,
+    },
 }
 
 impl fmt::Display for DesignTableValueError {

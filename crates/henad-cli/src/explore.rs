@@ -1,9 +1,9 @@
-//! Sweeps and searches from the command line, through `--out`, `--spec` or `--dry-run`, and merges of their shards
-//! through `--merge`.
+//! Sweeps and searches from the command line, selected by `--out`, `--spec` or `--dry-run`, and shard merges selected
+//! by `--merge`.
 //!
 //! Flags build a sweep of one block: a factorial over every `--vary`, a zip with `--zip`, a sample with `--sample`,
-//! or a table with `--design`. A spec file gives the whole sweep instead, and conflicts with every flag that changes
-//! a result. A spec file with a `[search]` table runs a search. Flags cannot describe one.
+//! or a table with `--design`. A spec file describes the whole sweep instead, and conflicts with every flag that
+//! changes a result. A spec file with a `[search]` table runs a search. Flags cannot describe a search.
 
 use std::fs;
 use std::io::{self, IsTerminal as _};
@@ -45,7 +45,7 @@ use henad_explore::sweep::{
 use crate::json_report;
 use crate::{Args, SOME_RUNS_NOT_OK};
 
-/// Rows of `series.csv` above which the plan carries a warning.
+/// Number of rows in `series.csv` above which the plan carries a warning.
 pub const SERIES_ROWS_WARNING: u64 = 10_000_000;
 
 /// Time between two progress lines when stderr is not a terminal.
@@ -53,7 +53,7 @@ const LOGGED_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Flags that make a sweep, or merge the shards of one.
 ///
-/// `--out`, `--spec` and `--dry-run` each ask for a sweep, and every other flag apart from `--merge` needs one of
+/// `--out`, `--spec` and `--dry-run` each request a sweep, and every other flag apart from `--merge` needs one of
 /// them.
 #[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
 #[command(next_help_heading = "Sweeps")]
@@ -186,13 +186,13 @@ pub struct ExploreArgs {
 }
 
 impl ExploreArgs {
-    /// Returns whether the flags ask for a sweep.
+    /// Returns whether the flags request a sweep.
     pub fn is_sweep(&self) -> bool {
         self.out.is_some() || self.spec.is_some() || self.dry_run
     }
 }
 
-/// Runs the sweep the flags or `spec` describe over `entry`, and returns the exit status.
+/// Runs a sweep of `entry` from the flags or `spec`, and returns the exit status.
 ///
 /// The status is success when every run is `ok`, and [`SOME_RUNS_NOT_OK`] when the sweep ran to its end with some
 /// run in another status.
@@ -228,8 +228,8 @@ pub fn run(
 
 /// Returns the sweep the flags or `spec` describe, and its options.
 ///
-/// A spec's `[execution]` table goes in first, and each of `--concurrent`, `--memory` and `--gpu-memory` given on
-/// the command line then replaces its setting.
+/// A spec's `[execution]` table is applied first, and then each of `--concurrent`, `--memory` and `--gpu-memory` given
+/// on the command line replaces its setting.
 ///
 /// # Errors
 ///
@@ -265,9 +265,9 @@ fn sweep_and_options(
     Ok((sweep, options))
 }
 
-/// Merges the shard directories `--merge` names into the `--out` directory, and returns the exit status.
+/// Merges the shard directories that `--merge` lists into the `--out` directory, and returns the exit status.
 ///
-/// The status is success when the merged directory holds every run of the plan and each is `ok`, and
+/// The status is success when the merged directory holds every run of the plan and every run is `ok`, and
 /// [`SOME_RUNS_NOT_OK`] otherwise.
 ///
 /// # Errors
@@ -312,7 +312,7 @@ fn exit_status(end: SweepEnd, counts: &ResultCounts) -> Result<u8> {
 /// # Errors
 ///
 /// Returns an error for a `--set`, `--act`, `--vary`, `--stop` or `--reduce` that cannot be read, a `--vary` over the
-/// tick of an action no `--act` adds, or a `--design` table that cannot be read.
+/// tick of an action that no `--act` adds, or a `--design` table that cannot be read.
 pub fn spec_from_flags(args: &Args, model: &str) -> Result<SweepSpec> {
     let reducers = args
         .explore
@@ -407,14 +407,14 @@ fn flags_source(args: &Args, spec: &SweepSpec) -> SpecSource {
     }
 }
 
-/// Reads `--vary ID=LEVELS` into a factor, with `LEVELS` in the text [`LevelSpec::parse`] reads.
+/// Reads `--vary ID=LEVELS` into a factor, with `LEVELS` in the text form that [`LevelSpec::parse`] accepts.
 ///
 /// An id of the form `action.NAME` makes a factor over the tick of the action named `NAME`. The model checks the
 /// levels when the sweep is planned.
 ///
 /// # Errors
 ///
-/// Returns an error for text with no `=`, or levels [`LevelSpec::parse`] refuses.
+/// Returns an error for text with no `=`, or levels that [`LevelSpec::parse`] rejects.
 pub fn parse_vary(raw: &str) -> Result<FactorSpec> {
     let (target, levels) = raw
         .split_once('=')
@@ -426,16 +426,16 @@ pub fn parse_vary(raw: &str) -> Result<FactorSpec> {
     })
 }
 
-/// Checks that `--vary` reads as `ID=LEVELS`, and returns it unchanged.
+/// Checks that `--vary` has the form `ID=LEVELS`, and returns it unchanged.
 ///
-/// The model checks the id and the levels once it is known. A malformed flag is then a refused command line.
+/// The model checks the id and the levels once it is known. The parser then rejects a malformed flag.
 fn check_vary(raw: &str) -> Result<String, String> {
     let (_, levels) = raw.split_once('=').ok_or("expected ID=LEVELS")?;
     LevelSpec::parse(levels).map_err(|error| error.to_string())?;
     Ok(raw.to_owned())
 }
 
-/// Checks that `--stop` reads as a condition, and returns it unchanged.
+/// Checks that `--stop` parses as a condition, and returns it unchanged.
 ///
 /// The sweep checks the column once the model's columns are known.
 fn check_stop(raw: &str) -> Result<String, String> {
@@ -443,7 +443,7 @@ fn check_stop(raw: &str) -> Result<String, String> {
     Ok(raw.to_owned())
 }
 
-/// Checks that `--reduce` reads as `COLUMN:KIND`, and returns it unchanged.
+/// Checks that `--reduce` parses as `COLUMN:KIND`, and returns it unchanged.
 ///
 /// The sweep checks the column once the model's columns are known.
 fn check_reduce(raw: &str) -> Result<String, String> {
@@ -453,13 +453,13 @@ fn check_reduce(raw: &str) -> Result<String, String> {
 
 /// Returns the actions `--act` adds to every run of a sweep.
 ///
-/// An action is named by its id, or by the first of `ID_2`, `ID_3` and so on that no earlier action has taken. The
-/// second `--act` of an id is then `ID_2` and the third `ID_3`, unless an earlier entry took the name. The model
+/// An action is named by its id, or by the first of `ID_2`, `ID_3` and so on that no earlier action uses. The
+/// second `--act` of an id is then `ID_2` and the third `ID_3`, unless an earlier entry uses that name. The model
 /// checks the ids when the sweep is planned.
 ///
 /// # Errors
 ///
-/// Returns [`ScheduleError`] for an entry that does not read as `ID@TICK`.
+/// Returns [`ScheduleError`] for an entry that is not of the form `ID@TICK`.
 pub fn fixed_actions(raw: &[String]) -> Result<Vec<ActionSpec>, ScheduleError> {
     let mut actions: Vec<ActionSpec> = Vec::with_capacity(raw.len());
     for entry in raw {
@@ -526,9 +526,9 @@ pub struct Reporter {
     /// Whether the sweep came from a `--spec` file rather than flags.
     from_spec: bool,
     terminal: bool,
-    /// Runs the output directory holds already. The sweep skips them.
+    /// Number of runs that the output directory already holds. The sweep skips them.
     skipped: u64,
-    /// Characters of the progress line on the terminal, 0 when none is showing.
+    /// Number of characters in the progress line on the terminal, 0 when no line is showing.
     shown_width: usize,
     last_logged: Option<Instant>,
     /// Outline of a search, `None` for a sweep.
@@ -537,13 +537,13 @@ pub struct Reporter {
     search_standing: Option<SearchStanding>,
 }
 
-/// Best candidate or filled cells of a search after a batch, and the evaluations told.
+/// Best candidate or filled cells of a search after a batch, and the number of evaluations told to the searcher.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct SearchStanding {
     evaluations: u64,
-    /// Best candidate and its objective, over its replicates.
+    /// Id, objective and replicate count of the best candidate.
     best: Option<(u64, f64, u64)>,
-    /// Generations of a genetic algorithm finished so far.
+    /// Number of generations of a genetic algorithm finished so far.
     generation_count: u64,
     filled_cells: u64,
 }
@@ -739,9 +739,9 @@ impl Progress for WarningPrinter {
 
 /// Returns the `explore_warning` line of `warning`.
 ///
-/// `warning` names its kind, `message` holds the text the warning prints, and a `build_changed` warning adds its
-/// `role`, the `recorded` and `current` builds as the manifest records them, and `between_shards`, true when a merge
-/// found `current` in another shard.
+/// The `warning` field holds the warning's kind, `message` holds the text that the warning prints, and a
+/// `build_changed` warning adds its `role`, the `recorded` and `current` builds as the manifest records them, and
+/// `between_shards`, true when a merge found `current` in another shard.
 fn warning_json(warning: &SweepWarning) -> Value {
     let mut line = json!({
         "kind": "explore_warning",
@@ -769,7 +769,7 @@ fn warning_json(warning: &SweepWarning) -> Value {
 
 /// Returns the plan of a sweep over the model named `model_name`, as the lines a person reads.
 ///
-/// A `resume` adds a line counting the runs skipped and the runs to run.
+/// A `resume` adds a line that counts the skipped runs and the runs to run.
 fn plan_text(model_name: &str, outline: &SweepOutline, resume: bool) -> String {
     let mut text = match &outline.search {
         Some(search) => format!(
@@ -788,7 +788,7 @@ fn plan_text(model_name: &str, outline: &SweepOutline, resume: bool) -> String {
             plural(outline.runs, "run")
         ),
     };
-    // A line with no label continues the list of the line above.
+    // A line with no label continues the list from the line above.
     let mut line = |label: &str, value: String| {
         let label = if label.is_empty() {
             String::new()
@@ -1375,8 +1375,8 @@ mod tests {
         );
     }
 
-    /// The regression. A repeated id was numbered by its count alone, so an explicit `ID_2` after it took the same
-    /// name and the plan refused the sweep.
+    /// Checks that a repeated id takes the first free name. Numbered by its count alone, it could share a name with an
+    /// explicit `ID_2`, and the plan would reject the sweep.
     #[test]
     fn a_repeated_action_takes_the_first_free_name() {
         let names = |raw: &[&str]| {
@@ -1392,7 +1392,8 @@ mod tests {
         assert_eq!(names(&["seed@1", "seed_2@2", "seed@3"]), ["seed", "seed_2", "seed_3"]);
     }
 
-    /// The regression. An entry split at its first `@`, so an id holding one read the rest of the id as its tick.
+    /// Checks that an entry splits at its last `@`. If it split at the first `@`, the rest of an id that contains `@`
+    /// would be read as the tick.
     #[test]
     fn an_action_id_can_hold_an_at_sign() {
         let actions = fixed_actions(&["spawn@centre@100".to_owned()]).expect("the entry reads");
@@ -1401,7 +1402,8 @@ mod tests {
         assert!(args.is_ok(), "the flag reads");
     }
 
-    /// The regression. `--info` or `--list` with no model printed and exited, and the sweep asked for never ran.
+    /// Checks that `--info` beside a sweep runs the sweep, and that `--list` rejects a sweep. Otherwise either flag
+    /// would print and exit, and the requested sweep would never run.
     #[test]
     fn info_and_list_do_not_drop_a_sweep() {
         let mode = |line: &[&str]| {
@@ -1515,8 +1517,8 @@ mod tests {
         }
     }
 
-    /// The regression. A malformed `--set`, `--act`, `--vary`, `--stop` or `--reduce` was read after the parser, so
-    /// the command exited 1, the status of a failed sweep, in place of 2.
+    /// Checks that the parser rejects a malformed `--set`, `--act`, `--vary`, `--stop` or `--reduce`. If the value
+    /// were read after parsing, the command would exit 1, the status of a failed sweep, instead of 2.
     #[test]
     fn malformed_flag_values_are_refused_by_the_parser() {
         let refused = [
@@ -1588,7 +1590,7 @@ mod tests {
         assert_eq!((lone.seeds.root, lone.seeds.scheme), (0, SeedScheme::Common));
     }
 
-    /// Returns the kind of error `line` gives, or `Ok` when it parses.
+    /// Returns the kind of error that `line` produces, or `Ok` when it parses.
     fn parse(line: &[&str]) -> Result<(), ErrorKind> {
         Args::try_parse_from(line).map(|_| ()).map_err(|error| error.kind())
     }
@@ -1653,8 +1655,8 @@ mod tests {
     #[test]
     fn explore_flags_need_a_sweep() {
         let missing: [&[&str]; 13] = [
-            // A spec needs `--out`, `--dry-run` or `--params`. Such a line once parsed, and the sweep refused it after
-            // acquiring a device and reading the file.
+            // A spec needs `--out`, `--dry-run` or `--params`. The parser rejects a line with none of these flags,
+            // before a device is acquired or the file read.
             &["henad-cli", "--spec", "s.toml"],
             &["henad-cli", "--info", "--spec", "s.toml"],
             &["henad-cli", "sir", "--vary", "infection_rate=0.1,0.2"],
@@ -1780,7 +1782,7 @@ mod tests {
     }
 
     /// Checks that an `explore_progress` line holds the fields `docs/reference/cli.md` lists. A sweep quick enough for
-    /// the integration tests sends none.
+    /// the integration tests sends no such line.
     #[test]
     fn a_progress_line_holds_the_documented_fields() {
         let update = henad_explore::progress::ProgressUpdate::new(3, 8, 1, Duration::from_secs(2));
@@ -1880,7 +1882,7 @@ mod tests {
     }
 
     /// Checks that a flag given on the command line replaces the spec table's setting, `--concurrent auto` included,
-    /// and that a setting no flag gives keeps the table's value.
+    /// and that a setting with no flag keeps the table's value.
     #[test]
     fn an_explicit_concurrent_auto_overrides_the_spec_table() {
         let dir = std::env::temp_dir().join(format!("henad-cli-execution-table-{}", std::process::id()));

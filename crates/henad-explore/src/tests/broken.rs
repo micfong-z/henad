@@ -69,7 +69,7 @@ impl GridModel for DividesByParam {
     }
 }
 
-/// Counts every cell down by one a step from `countdown`, and reports the inverse of the first cell's count.
+/// Counts every cell down by one per step from `countdown`, and reports the inverse of the first cell's count.
 ///
 /// The inverse is not finite from the tick the count reaches 0.
 pub struct InverseOfCountdown;
@@ -113,7 +113,7 @@ fn param_as_u8(params: &[ParamValue], index: usize) -> u8 {
 /// One bug a [`BuggyState`] adds to the state it wraps.
 #[derive(Clone, Copy)]
 pub enum Bug {
-    /// Refuses every action.
+    /// Rejects every action.
     RefusesActions,
     /// Returns every stat but the last.
     DropsLastStat,
@@ -221,8 +221,8 @@ henad_compute::agent_lanes! {
     }
 }
 
-/// Moves each agent by the next value of a counter every chunk shares, so its position depends on the order the
-/// workers reach the agents.
+/// Moves each agent by the next value of a counter that every chunk shares, so its position depends on the order in
+/// which the workers reach the agents.
 ///
 /// One worker takes the chunks in order, and several interleave them. The positions then depend on the thread count.
 pub struct SharedAccumulator;
@@ -408,7 +408,7 @@ grid_model! {
 }
 
 grid_model! {
-    /// Keeps one live cell, placed by the seed, so two seeds differ in the state alone. A sound model.
+    /// Keeps one live cell, placed by the seed, so two seeds differ in the state alone. The model is sound.
     PlacesCellBySeed, id: "places_cell_by_seed", palette: TWO_COLORS, stats: LIVE, actions: &[], init: |grid, rng| {
         let cells = grid.current_mut();
         cells.fill(0);
@@ -418,8 +418,8 @@ grid_model! {
     }
 }
 
-/// Declares parameter and action ids the command line cannot name, and an action id holding `@`. The command line
-/// can name that one.
+/// Declares parameter and action ids that the command line cannot accept, and an action id holding `@`. The command
+/// line accepts `@` in an action id.
 pub struct UnnameableIds;
 
 impl GridModel for UnnameableIds {
@@ -499,7 +499,7 @@ impl GridModel for DefaultOutOfBounds {
     }
 }
 
-/// Declares a parameter `num_agents` of its own beside the engine's, and a `grid_width` of its own twice.
+/// Declares its own `num_agents` parameter beside the engine's `num_agents`, and its own `grid_width` parameter twice.
 pub struct DeclaresNumAgents;
 
 impl AgentModel for DeclaresNumAgents {
@@ -601,7 +601,7 @@ impl NetworkModel for CountsViews {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GpuBug {
     /// Once any state of the entry has encoded [`MAX_STEPS_PER_SUBMISSION`] steps in one submission, every state of
-    /// the entry reads every stat back as zero, as every buffer of a device the watchdog stopped does.
+    /// the entry reads every stat back as zero, as every buffer of a device that the watchdog stopped does.
     ZeroesFullSubmissions,
     /// Records no stats passes, so a sampled slice begins no readback.
     SkipsStatsPasses,
@@ -611,8 +611,8 @@ pub enum GpuBug {
 pub struct BuggyGpuState {
     state: Box<dyn GpuSimState>,
     bug: GpuBug,
-    /// Whether a state of the entry has encoded a full submission, shared by every state the entry builds, as one
-    /// device is.
+    /// Whether a state of the entry has encoded a full submission, shared by every state the entry builds, as a single
+    /// device is shared.
     stopped: Arc<AtomicBool>,
 }
 
@@ -793,7 +793,7 @@ impl GpuGridModel for OversizedGpuSir {
     }
 }
 
-/// [`GpuBoids`] with no stats, as a model that only draws declares it. A sound model.
+/// [`GpuBoids`] declaring no stats, like a model that only draws. The model is sound.
 pub struct StatlessGpuBoids;
 
 impl GpuAgentModel for StatlessGpuBoids {

@@ -1,4 +1,4 @@
-//! Multi-level exclusive prefix sum, standing in for the counting sort's serial running total.
+//! Multi-level exclusive prefix sum, replacing the counting sort's serial running total.
 //!
 //! Each workgroup scans [`WORKGROUP`] elements, the level above scans their totals, and the
 //! results are added back down the chain. Levels are built once at construction.
@@ -7,15 +7,16 @@ use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
 use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
 use crate::shader_bindings::primitives::scan::ScanParams;
 
-/// Its bind groups keep the buffers it touches alive.
+/// One level of the scan. Its bind groups keep the buffers it touches alive.
 #[derive(Debug)]
 struct Level {
     groups: (u32, u32),
     scan_bind: wgpu::BindGroup,
-    /// `None` at the top, whose single block already holds the whole scan.
+    /// Bind group of the add-back pass, `None` at the top level, whose single block already holds the whole scan.
     add_bind: Option<wgpu::BindGroup>,
 }
 
+/// Multi-level exclusive prefix sum over a caller's buffer, with its intermediate levels.
 #[derive(Debug)]
 pub struct PrefixScan {
     levels: Vec<Level>,
@@ -23,7 +24,8 @@ pub struct PrefixScan {
     add_pipeline: wgpu::ComputePipeline,
 }
 
-/// The caller's `n`, then one entry per workgroup, until one workgroup covers the level.
+/// Returns the size of each level: the caller's `n`, then one entry per workgroup of the level below, until one
+/// workgroup covers a level.
 fn level_sizes(n: u32) -> Vec<u32> {
     let mut sizes = Vec::new();
     let mut level = n.max(1);
@@ -37,7 +39,7 @@ fn level_sizes(n: u32) -> Vec<u32> {
     }
 }
 
-/// Level independent, so built once.
+/// Builds the layouts and pipelines, which every level shares.
 fn build_pipelines(
     device: &wgpu::Device,
     label: &str,
@@ -67,7 +69,8 @@ fn build_pipelines(
 }
 
 impl PrefixScan {
-    /// Scans `n` elements of `input` into `output`, both caller owned. Intermediates are ours.
+    /// Builds a scan of `n` elements of `input` into `output`, both owned by the caller. The scan owns its
+    /// intermediate levels.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -80,7 +83,7 @@ impl PrefixScan {
 
         let sizes = level_sizes(n);
 
-        // Level 0 writes the caller's output, the rest need their own. Built before the bind
+        // Level 0 writes the caller's output, and each higher level gets its own output buffer. Built before the bind
         // groups, since a level's add pass reads the next level's output.
         let upper_outputs: Vec<wgpu::Buffer> = sizes[1..]
             .iter()
@@ -172,8 +175,8 @@ impl PrefixScan {
         }
     }
 
-    /// Records the whole scan. Each pass depends on the last, and wgpu only synchronises between
-    /// passes, not within one.
+    /// Records the whole scan. Each pass depends on the last, and wgpu synchronises only between
+    /// passes.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
         for level in &self.levels {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -185,7 +188,7 @@ impl PrefixScan {
             pass.dispatch_workgroups(level.groups.0, level.groups.1, 1);
         }
 
-        // Top down, since a level can only be lifted once the one above it is correct.
+        // Top down, since a level can only be lifted once the level above it is correct.
         for level in self.levels.iter().rev() {
             let Some(add_bind) = &level.add_bind else {
                 continue;
@@ -205,7 +208,7 @@ impl PrefixScan {
 mod tests {
     use super::{WORKGROUP, level_sizes};
 
-    /// Never an empty chain.
+    /// The chain of levels is never empty, and ends at a single workgroup.
     #[test]
     fn levels_bottom_out_at_a_single_workgroup() {
         assert_eq!(level_sizes(0), vec![1]);

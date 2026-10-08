@@ -1,9 +1,9 @@
 //! Resumes of a sweep into a directory that holds some of its runs.
 //!
-//! A resume takes a directory only when its manifest names the same model, plan, model schema and shard, and no more
-//! replicates than the sweep runs. It keeps every run that ended `ok` or `non_finite`, and every failed run unless
-//! asked to retry failures. A run that timed out is always run again. Kept runs take their ids in the current plan.
-//! A changed replicate count gives them new ids.
+//! A resume accepts a directory only when its manifest records the same model, plan, model schema and shard, and no
+//! more replicates than the sweep runs. It keeps every run that ended `ok` or `non_finite`, and every failed run unless
+//! asked to retry failures. A run that timed out is always run again. Kept runs take their ids in the current plan. A
+//! changed replicate count assigns them new ids.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -31,13 +31,13 @@ pub struct ResumeScan {
     finished: BTreeSet<u64>,
     counts: ResultCounts,
     repair: Repair,
-    /// Header line of `runs.csv` the sweep writes.
+    /// Header line that the sweep writes to `runs.csv`.
     runs_header: String,
-    /// Header line of `series.csv` the sweep writes.
+    /// Header line that the sweep writes to `series.csv`.
     series_header: String,
 }
 
-/// Change a resumed directory's tables need before new runs are added.
+/// Change that a resumed directory's tables need before new runs are added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Repair {
     None,
@@ -59,7 +59,7 @@ impl ResumeScan {
     /// # Errors
     ///
     /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds another model, plan,
-    /// model schema, shard or column layout or more replicates, or a row names a run the plan does not have.
+    /// model schema, shard or column layout or more replicates, or a row refers to a run that the plan does not have.
     pub fn read(
         path: &Path,
         plan: &Plan,
@@ -82,7 +82,7 @@ impl ResumeScan {
         let mut finished = BTreeSet::new();
         // Current id of each kept run, by the id it was written with.
         let mut written_ids = BTreeMap::new();
-        // Ids of every record, as written and in the current plan. Series rows name a run by its written id alone.
+        // Ids of every record, as written and in the current plan. Series rows identify a run by its written id alone.
         let (mut seen_written, mut seen_current) = (BTreeSet::new(), BTreeSet::new());
         let mut counts = ResultCounts::default();
         for record in &runs.records {
@@ -156,7 +156,7 @@ impl ResumeScan {
         self.counts
     }
 
-    /// Cuts or rewrites the tables of `dir` to hold the kept runs alone, with the ids the current plan gives them.
+    /// Cuts or rewrites the tables of `dir` to hold the kept runs alone, under their ids in the current plan.
     ///
     /// # Errors
     ///
@@ -193,7 +193,8 @@ impl ResumeScan {
             }
         }
         records.sort_by_key(|&(run_id, _)| run_id);
-        // Opening the directory moved any staged tables into place, so the scanned series is at its own name.
+        // Opening the directory moved any staged tables into place, so the scanned series is at the path of
+        // `series.csv`.
         let series_path = dir.path().join(SERIES_FILE);
         let segments: Vec<SeriesSegment> = self
             .series
@@ -260,10 +261,10 @@ fn check_recorded(recorded: &Manifest, plan: &Plan, shard: Shard) -> Result<(), 
     Ok(())
 }
 
-/// Checks that `recorded`, the manifest of a directory to resume, names the model `model`.
+/// Checks that `recorded`, the manifest of a directory to resume, records the model `model`.
 ///
-/// Called before the schema hash is compared. The hash covers the model's id, and another model would read as a
-/// changed version of the same one.
+/// Called before the schema hash is compared. The hash covers the model's id, and another model would look like a
+/// changed version of the recorded model.
 pub(crate) fn check_model(recorded: &Manifest, model: &str) -> Result<(), ResumeError> {
     if recorded.model.id == model {
         Ok(())
@@ -302,40 +303,90 @@ fn current_id(
     Ok(run.run_id)
 }
 
-/// A directory a sweep cannot resume into.
+/// A directory that a sweep cannot resume into.
 #[derive(Debug)]
 pub enum ResumeError {
-    /// The manifest cannot be read, for the reason inside.
+    /// The manifest cannot be read.
     Manifest(ManifestError),
-    /// A table cannot be read back, for the reason inside.
+    /// A table cannot be read back.
     Table(ReadError),
-    /// A directory holding another plan, each hash as 16 hexadecimal digits.
-    PlanChanged { recorded: String, current: String },
+    /// A directory holding another plan.
+    PlanChanged {
+        /// Plan hash the directory's manifest records, as 16 hexadecimal digits.
+        recorded: String,
+        /// Plan hash of the resuming sweep, as 16 hexadecimal digits.
+        current: String,
+    },
     /// A directory holding runs of the model `recorded`, resumed for the model `current`.
-    ModelChanged { recorded: String, current: String },
-    /// A directory holding runs of another model schema, each hash as 16 hexadecimal digits.
-    SchemaChanged { recorded: String, current: String },
-    /// A directory holding another shard of the plan.
-    ShardChanged { recorded: ManifestShard, current: Shard },
-    /// A table whose columns differ from those the sweep writes.
-    ColumnsChanged { file: &'static str },
+    ModelChanged {
+        /// Model id the directory's manifest records.
+        recorded: String,
+        /// Id of the model passed to the resume.
+        current: String,
+    },
+    /// A directory holding runs of another model schema.
+    SchemaChanged {
+        /// Schema hash the directory's manifest records, as 16 hexadecimal digits.
+        recorded: String,
+        /// Schema hash of the model passed to the resume, as 16 hexadecimal digits.
+        current: String,
+    },
+    /// A directory holding shard `recorded` of the plan, resumed as shard `current`.
+    ShardChanged {
+        /// Shard the directory's manifest records.
+        recorded: ManifestShard,
+        /// Shard of the resuming sweep.
+        current: Shard,
+    },
+    /// Table `file`, whose columns differ from the columns that the sweep writes.
+    ColumnsChanged {
+        /// File name of the table, `runs.csv` or `series.csv`.
+        file: &'static str,
+    },
     /// Run `run_id` of `runs.csv`, whose config, replicate or key the plan does not have.
-    UnknownRun { run_id: u64 },
+    UnknownRun {
+        /// Run id as written in `runs.csv`.
+        run_id: u64,
+    },
     /// A directory holding `recorded` replicates per config, more than the `current` count.
-    ReplicatesLowered { recorded: u64, current: u64 },
+    ReplicatesLowered {
+        /// Number of replicates per config that the directory's manifest records.
+        recorded: u64,
+        /// Number of replicates per config in the resuming sweep.
+        current: u64,
+    },
     /// Run `run_id` of `runs.csv`, outside `shard` at the plan's replicate count.
-    OutsideShard { run_id: u64, shard: Shard },
+    OutsideShard {
+        /// Run id as written in `runs.csv`.
+        run_id: u64,
+        /// Shard of the resuming sweep.
+        shard: Shard,
+    },
     /// Run `run_id`, written twice in `runs.csv`.
-    DuplicateRun { run_id: u64 },
+    DuplicateRun {
+        /// Run id as written in `runs.csv`.
+        run_id: u64,
+    },
     /// A directory holding a `recorded` kind of exploration, resumed as the `current` kind.
     ModeChanged {
+        /// Kind of exploration the directory's manifest records.
         recorded: ManifestMode,
+        /// Kind of the resuming exploration.
         current: ManifestMode,
     },
-    /// A directory holding another search, each hash as 16 hexadecimal digits.
-    SearchChanged { recorded: String, current: String },
-    /// Run `run_id` of `runs.csv`, other than the run the resumed search asks for at that position.
-    SearchRunChanged { run_id: u64 },
+    /// A directory holding another search.
+    SearchChanged {
+        /// Search hash the directory's manifest records, as 16 hexadecimal digits, or empty when the manifest records
+        /// no search hash.
+        recorded: String,
+        /// Search hash of the resuming search, as 16 hexadecimal digits.
+        current: String,
+    },
+    /// Run `run_id` of `runs.csv`, different from the run that the resumed search requests at that position.
+    SearchRunChanged {
+        /// Run id as written in `runs.csv`.
+        run_id: u64,
+    },
     /// A `series.csv` whose rows are not in order of their run ids.
     SeriesOutOfOrder,
 }

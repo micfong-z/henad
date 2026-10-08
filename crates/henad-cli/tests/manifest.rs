@@ -1,5 +1,5 @@
-//! Checks that a sweep's manifest records the builds `henad-cli` ran, and that a resume under the same binary warns
-//! of no build change.
+//! Checks that a sweep's manifest records the builds of the `henad-cli` binary that ran it, and that a resume under the
+//! same binary prints no `build_changed` warning.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

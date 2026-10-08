@@ -1,4 +1,4 @@
-//! Capturing the viewport.
+//! Viewport capture to a PNG image.
 
 use henad_compute::display_scale::{MAX_DISPLAY_DIM, display_dims};
 use henad_compute::gpu::view::display::GpuDisplay;
@@ -7,28 +7,26 @@ use henad_compute::snapshot::{CpuLayers, GpuSnapshot, GridSnapshot, SnapshotView
 use crate::state::AppState;
 use crate::ui::agent_layer::{AgentDraw, padded_palette};
 
-/// A capture waiting on the GPU. Polled every frame, never blocking, the way a stats readback is.
+/// Capture waiting on the GPU, polled every frame without blocking, as a stats readback is.
 pub struct PendingCapture {
     buffer: wgpu::Buffer,
     width: u32,
     height: u32,
-    /// Rows in the staging buffer are padded to `COPY_BYTES_PER_ROW_ALIGNMENT`.
+    /// Length in bytes of one staging buffer row, padded to `COPY_BYTES_PER_ROW_ALIGNMENT`.
     padded_row: u32,
     format: wgpu::TextureFormat,
     mapped: flume::Receiver<Result<(), wgpu::BufferAsyncError>>,
     pub name: String,
 }
 
-/// Long side an export carrying agents is grown to, a whole number of times over the field.
+/// Long side that an export with agents is scaled up to, by a whole-number multiple of the field size.
 ///
 /// A field is coarse next to the population over it. Ants lay pheromone on 200 cells a side and
 /// put 50 000 agents inside them, so a field-sized image is one dense mass with every sub-cell
 /// position rounded away.
 const MIN_AGENT_DIM: u32 = 1000;
 
-/// Pixel dimensions an export of this snapshot gets.
-///
-/// Returns `None` if there is nothing to draw.
+/// Returns the pixel dimensions of an export of the current snapshot, or `None` when there is nothing to draw.
 pub fn capture_dims(app: &AppState, device_max: u32) -> Option<(u32, u32)> {
     let view = &app.snapshot.as_ref()?.view;
     let (base, agents) = match view {
@@ -64,7 +62,7 @@ pub fn capture_dims(app: &AppState, device_max: u32) -> Option<(u32, u32)> {
     Some((width * scale, height * scale))
 }
 
-/// Whole-number scale taking `long_side` to [`MIN_AGENT_DIM`] without passing `cap`.
+/// Returns the whole-number scale that takes `long_side` to [`MIN_AGENT_DIM`] without passing `cap`.
 fn agent_scale(long_side: u32, cap: u32) -> u32 {
     let long_side = long_side.max(1);
     let wanted = MIN_AGENT_DIM.div_ceil(long_side).max(1);
@@ -72,10 +70,11 @@ fn agent_scale(long_side: u32, cap: u32) -> u32 {
     wanted.min(allowed)
 }
 
-/// Draw the layers into an offscreen target and start reading it back.
+/// Draws the layers into an offscreen target and starts reading it back.
 ///
 /// # Errors
-/// If the snapshot has no layer to draw.
+///
+/// Returns an error when there is no snapshot, or the snapshot has no layer to draw.
 pub fn start(app: &AppState, name: String) -> Result<PendingCapture, String> {
     let ctx = &app.render_ctx;
     let device_max = ctx.device.limits().max_texture_dimension_2d;
@@ -86,8 +85,8 @@ pub fn start(app: &AppState, name: String) -> Result<PendingCapture, String> {
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let snapshot = app.snapshot.as_ref().ok_or("no snapshot")?;
 
-    // A CPU grid has no pipeline of its own, the panel uploads it as a texture. Writing the cells
-    // straight into the target is the same picture with nothing sampling it.
+    // A CPU grid has no dedicated pipeline, and the panel uploads it as a texture. Writing the cells straight
+    // into the target gives the same picture with nothing sampling it.
     if let SnapshotView::Cpu(layers) = &snapshot.view
         && let Some(grid) = &layers.grid
     {
@@ -177,7 +176,7 @@ fn write_grid(
     );
 }
 
-/// The field first and agents over the top, the same order the panel composites in.
+/// Records the field first and the agents over it, in the order the panel composites them.
 fn draw_layers(
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
@@ -235,11 +234,13 @@ fn extent(width: u32, height: u32) -> wgpu::Extent3d {
 }
 
 impl PendingCapture {
-    /// The PNG once the GPU is done, `None` while it is not. Never blocks, so this can run every
-    /// frame on the web, where blocking on the main thread is not allowed.
+    /// Returns the PNG once the GPU is done, or `None` while the GPU is still working.
+    ///
+    /// It never blocks, and can run every frame on the web, where the main thread cannot block.
     ///
     /// # Errors
-    /// If the mapping fails, or the PNG cannot be encoded.
+    ///
+    /// Returns an error when the mapping fails or the PNG cannot be encoded.
     pub fn poll(&self, device: &wgpu::Device) -> Option<Result<Vec<u8>, String>> {
         device.poll(wgpu::PollType::Poll).ok();
         match self.mapped.try_recv() {
@@ -281,7 +282,7 @@ impl PendingCapture {
     }
 }
 
-/// The population as a draw into a `width` x `height` target, or `None` when there is none.
+/// Returns the population as a draw into a `width` x `height` target, or `None` when there is no population.
 fn agent_draw(app: &AppState, width: u32, height: u32) -> Option<AgentDraw> {
     let target = egui::vec2(width as f32, height as f32);
     let layer = app.agent_layer.as_ref()?;
@@ -293,8 +294,8 @@ fn agent_draw(app: &AppState, width: u32, height: u32) -> Option<AgentDraw> {
     }
 }
 
-/// The grid as target-format bytes, one pixel per cell, sampled the way the panel's texture is
-/// once the grid is past the cap.
+/// Returns the grid as bytes in the target's format, one pixel per cell, sampled as the panel's texture is once the
+/// grid is past the cap.
 ///
 /// A cell value past the end of the palette takes its first colour, as in the viewport.
 fn grid_pixels(grid: &GridSnapshot, width: u32, height: u32, format: wgpu::TextureFormat) -> Vec<u8> {
@@ -314,14 +315,15 @@ fn grid_pixels(grid: &GridSnapshot, width: u32, height: u32, format: wgpu::Textu
     pixels
 }
 
-/// Rows a texture copy needs, padded to `COPY_BYTES_PER_ROW_ALIGNMENT`.
+/// Returns the length in bytes of one row of a texture copy, padded to `COPY_BYTES_PER_ROW_ALIGNMENT`.
 fn padded_row(width: u32) -> u32 {
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     width * 4 + (align - (width * 4) % align) % align
 }
 
-/// Swap red and blue where the surface is BGRA. Its own inverse, so the upload into the target and
-/// the readback out of it both go through this.
+/// Swaps red and blue where the surface is BGRA.
+///
+/// The swap is its own inverse, so the upload into the target and the readback out of it both use it.
 fn match_channel_order(pixels: &mut [u8], format: wgpu::TextureFormat) {
     if !matches!(
         format,
@@ -340,7 +342,7 @@ mod tests {
     use henad_compute::display_scale::MAX_DISPLAY_DIM;
     use henad_compute::snapshot::GridSnapshot;
 
-    /// A model's cell value can run past its palette. The capture used to panic on it and end the app.
+    /// A model's cell value can run past its palette. Indexing past its end would panic and end the app.
     #[test]
     fn a_cell_past_the_palette_takes_the_first_colour() {
         let grid = GridSnapshot {
@@ -361,7 +363,7 @@ mod tests {
         assert_eq!(padded_row(1024), 4096);
     }
 
-    /// Ants: 200 cells a side, so five pixels a cell and the agents get somewhere to land.
+    /// Ants has 200 cells a side, and gets five pixels a cell for the agents to land on.
     #[test]
     fn a_coarse_field_is_grown_a_whole_number_of_times() {
         assert_eq!(agent_scale(200, MAX_DISPLAY_DIM), 5);
@@ -376,7 +378,7 @@ mod tests {
         assert_eq!(agent_scale(4096, MAX_DISPLAY_DIM), 1);
     }
 
-    /// Growing past the texture cap would refuse to allocate.
+    /// Growing past the texture cap would fail to allocate.
     #[test]
     fn the_cap_wins_over_the_minimum() {
         assert_eq!(agent_scale(700, 1024), 1, "2x would be 1400, past a 1024 cap");

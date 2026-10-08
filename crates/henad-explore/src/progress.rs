@@ -1,6 +1,7 @@
 //! Progress of a sweep or search, reported to the host as events.
 //!
-//! The library never prints. A host renders the events as it likes, a line on a terminal, JSON lines or a panel.
+//! The library never prints. A host renders the events as it likes, such as a line on a terminal, JSON lines or a
+//! panel.
 
 use std::time::Duration;
 
@@ -19,9 +20,9 @@ pub const PROGRESS_INTERVAL: Duration = Duration::from_secs(1);
 pub enum ProgressEvent<'a> {
     /// The sweep is planned and probed. A dry run ends here.
     Planned(&'a SweepOutline),
-    /// Something about the sweep that runs, though likely not as meant.
+    /// A warning. The sweep still runs, but likely not as intended.
     Warned(&'a SweepWarning),
-    /// A run was written. Runs arrive in plan order, and a search's in the order it asks for them.
+    /// A run was written. Runs arrive in plan order, and a search's runs in the order that it requests them.
     RunCommitted(&'a RunOutcome),
     /// Runs have finished since the last update. Sent at most once per [`PROGRESS_INTERVAL`].
     Progressed(ProgressUpdate),
@@ -33,6 +34,7 @@ pub enum ProgressEvent<'a> {
 
 /// Receiver of a sweep's progress.
 pub trait Progress {
+    /// Receives `event` as it happens.
     fn report(&mut self, event: &ProgressEvent<'_>);
 }
 
@@ -47,17 +49,17 @@ impl Progress for NoProgress {
 /// Runs finished so far, and the time left at the pace so far.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgressUpdate {
-    /// Runs finished so far. A run counts once it finishes, before it is written.
+    /// Number of runs finished so far. A run counts once it finishes, before it is written.
     pub done: u64,
-    /// Runs this session runs.
+    /// Number of runs this session executes.
     pub total: u64,
-    /// Finished runs that ended on a fault or a timeout.
+    /// Number of finished runs that ended on a fault or a timeout.
     pub failed: u64,
     /// Time since the [`ProgressMeter`] started. The meter starts before the first run is built.
     pub elapsed: Duration,
-    /// Time left at the mean pace of the finished runs, `None` before the first one.
+    /// Time left at the mean pace of the finished runs, `None` before the first run finishes.
     ///
-    /// A time too long for a [`Duration`] reads as `None` as well.
+    /// A time too long for a [`Duration`] is `None` as well.
     pub remaining: Option<Duration>,
 }
 
@@ -100,7 +102,8 @@ impl ProgressMeter {
         }
     }
 
-    /// Counts a finished run with `status`. Returns an update once [`PROGRESS_INTERVAL`] has passed since the last.
+    /// Counts a finished run with `status`. Returns an update once [`PROGRESS_INTERVAL`] has passed since the last
+    /// update.
     pub fn record_finished_run(&mut self, status: RunStatus) -> Option<ProgressUpdate> {
         self.tally(status);
         let now = Instant::now();

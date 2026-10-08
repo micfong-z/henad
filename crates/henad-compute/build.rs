@@ -1,8 +1,8 @@
 //! Generates Rust bindings for this crate's WGSL from the shaders themselves, and records a hash of the crate's
 //! sources.
 
-/// Compute shaders, relative to `src/gpu`. The render shader in `view/` is not here, since it goes
-/// through `include_wgsl!` and has no bindings to generate.
+/// Compute shaders, relative to `src/gpu`. The render shader in `view/` is not here, since it is loaded
+/// with `include_wgsl!` and has no bindings to generate.
 const ENTRY_POINTS: &[&str] = &[
     "primitives/hash_count.wgsl",
     "primitives/hash_scatter.wgsl",

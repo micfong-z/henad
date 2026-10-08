@@ -29,10 +29,10 @@ use crate::ui::sweep::search::algorithm_label;
 use crate::ui::sweep::session::SweepSession;
 use crate::ui::sweep::{CheckSummary, DraftCheck, IssueLine, SweepRequest};
 
-/// Value of a row that needs a plan, while the draft has none.
+/// Value of a row that needs a plan, while the draft has no plan.
 pub const NOT_COUNTED: &str = "Unknown";
 
-/// Most varied ticks of an action the Actions row lists one by one.
+/// Maximum number of varied ticks of an action that the Actions row lists one by one.
 const MAX_LISTED_TICKS: usize = 4;
 
 /// One row of the plan.
@@ -42,9 +42,9 @@ pub struct PlanRow {
     pub value: String,
     /// Text shown on hover over the value.
     pub tooltip: Option<String>,
-    /// Whether the value nears a limit of the app.
+    /// Whether the value is close to a limit of the app.
     pub warn: bool,
-    /// Section the label opens, `None` for a label that opens none.
+    /// Section the label opens, `None` for a label that opens no section.
     pub section: Option<SweepSection>,
 }
 
@@ -70,13 +70,13 @@ pub struct PlanSummary {
     pub held: Vec<String>,
     pub problems: Vec<IssueLine>,
     pub warnings: Vec<String>,
-    /// Runs of the plan, `None` until counted.
+    /// Number of runs in the plan, `None` until counted.
     pub runs: Option<u64>,
 }
 
 impl PlanSummary {
-    /// Returns the plan of the draft `check` holds, a draft of `schema`'s model named `model_name`, with the
-    /// problems and warnings of `summary`.
+    /// Returns the plan of the draft in `check`, a draft for `schema`'s model named `model_name`, with the
+    /// problems and warnings from `summary`.
     pub(super) fn for_draft(
         check: &DraftCheck,
         schema: &ModelSchema<'_>,
@@ -237,7 +237,7 @@ fn level_counts((params, ticks): &LevelPreviews) -> (Vec<Option<LevelCount>>, Ve
 
 /// Returns the rows of a run's length, its stop condition, its timeout, its actions and its outputs.
 ///
-/// `tick_previews` holds the values of each action row's varied ticks, as [`SweepDraft::level_previews`] gives them.
+/// `tick_previews` holds the values of each action row's varied ticks, as [`SweepDraft::level_previews`] returns them.
 fn run_rows(draft: &SweepDraft, schema: &ModelSchema<'_>, tick_previews: &[Option<LevelPreview>]) -> [PlanRow; 6] {
     [
         PlanRow::new(
@@ -320,8 +320,8 @@ fn runs_row(runs: Option<u64>) -> PlanRow {
     row
 }
 
-/// Returns the Series row for series written every `series_every` ticks, taking `bytes` once counted, and warning
-/// from half the memory limit while the results stay `in_memory`.
+/// Returns the Series row for series written every `series_every` ticks, taking up `bytes` once counted, and
+/// warning from half the memory limit while the results stay `in_memory`.
 fn series_row(series_every: u64, bytes: Option<u64>, in_memory: bool) -> PlanRow {
     let mut row = PlanRow::new("Series", NOT_COUNTED, Some(SweepSection::Outputs));
     if series_every == 0 {
@@ -341,7 +341,7 @@ fn series_row(series_every: u64, bytes: Option<u64>, in_memory: bool) -> PlanRow
     row
 }
 
-/// Returns a row for each memory budget of `draft`, which only a loaded spec file sets.
+/// Returns a row for each memory budget of `draft`. Only a loaded spec file sets a memory budget.
 fn budget_rows(draft: &SweepDraft) -> Vec<PlanRow> {
     let budgets = [
         ("Memory budget", draft.memory_budget),
@@ -367,7 +367,7 @@ fn results_row(folder: Option<&Path>) -> PlanRow {
     row
 }
 
-/// Returns the last part of `folder`'s path, or the whole path when it has none.
+/// Returns the last part of `folder`'s path, or the whole path when it has no file name.
 pub fn folder_name(folder: &Path) -> String {
     folder.file_name().map_or_else(
         || folder.display().to_string(),
@@ -383,8 +383,8 @@ fn steps_text(steps: u64, warmup: u64) -> String {
     }
 }
 
-/// Returns the samples a run of `steps` measured ticks takes at one every `stats_every` ticks, the first and the last
-/// included, `None` for no sampling.
+/// Returns the number of samples that a run of `steps` measured ticks takes, one every `stats_every` ticks, the
+/// first and the last included, `None` for no sampling.
 ///
 /// A count past `u64::MAX` saturates.
 pub fn sample_count(steps: u64, stats_every: u64) -> Option<u64> {
@@ -432,8 +432,8 @@ pub fn concurrency_text(concurrency: Concurrency) -> String {
 
 /// Returns the actions of `draft`, one per line, each with its tick or ticks, as in "Seed outbreak at 0, 100 or 200".
 ///
-/// `tick_previews` holds the values of each action row's varied ticks, as [`SweepDraft::level_previews`] gives them.
-/// Ticks with an issue read as typed.
+/// `tick_previews` holds the values of each action row's varied ticks, as [`SweepDraft::level_previews`] returns them.
+/// Ticks with an issue are shown as typed.
 fn actions_text(draft: &SweepDraft, schema: &ModelSchema<'_>, tick_previews: &[Option<LevelPreview>]) -> String {
     if draft.actions.is_empty() {
         return "None".to_owned();
@@ -457,7 +457,7 @@ fn actions_text(draft: &SweepDraft, schema: &ModelSchema<'_>, tick_previews: &[O
     actions.join("\n")
 }
 
-/// Returns the ticks of `preview` as the Actions row reads them: "0, 100 or 200", "one of 11 ticks from 0 to 100", or
+/// Returns the ticks of `preview` as the Actions row shows them: "0, 100 or 200", "one of 11 ticks from 0 to 100", or
 /// "any tick from 0 to 400" for ticks drawn from a range.
 fn ticks_text(preview: &LevelPreview) -> String {
     match preview {
@@ -479,8 +479,8 @@ fn either_text(values: &[String]) -> String {
     }
 }
 
-/// Returns the configurations of a sweep of `draft` with `configs` in all, as its design combines them: "5 × 3 =
-/// 15", "5 zipped", "5 + 3 = 8", "20 samples" or "12 rows of sir-design.csv".
+/// Returns the Configurations row of a sweep of `draft` with `configs` configurations, as its design combines
+/// them: "5 × 3 = 15", "5 zipped", "5 + 3 = 8", "20 samples" or "12 rows of sir-design.csv".
 fn configurations_text(
     draft: &SweepDraft,
     configs: u64,
@@ -603,7 +603,7 @@ fn held_values(draft: &SweepDraft, schema: &ModelSchema<'_>, panel_values: &[Par
 
 /// Draws `summary`, with `caption` after the title during a session.
 ///
-/// While `interactive` is set, each row label and each problem opens its section through `request`.
+/// While `interactive` is set, a click on a row label or a problem sets `request` to open its section.
 pub fn plan_ui(
     ui: &mut egui::Ui,
     summary: &PlanSummary,
@@ -622,7 +622,7 @@ pub fn plan_ui(
 
 /// Draws `summary` without its title, as the Plan section does under its own header.
 ///
-/// While `interactive` is set, each row label and each problem opens its section through `request`.
+/// While `interactive` is set, a click on a row label or a problem sets `request` to open its section.
 pub fn plan_body(ui: &mut egui::Ui, summary: &PlanSummary, interactive: bool, request: &mut Option<SweepRequest>) {
     kv_grid(ui, "henad_sweep_plan_grid").show(ui, |ui, grid_rows| {
         for row in &summary.rows {
@@ -713,7 +713,7 @@ mod tests {
             .collect()
     }
 
-    /// Returns the plan of the draft that `edit` makes of a new SIR draft.
+    /// Returns the plan of a new SIR draft after `edit` changes it.
     fn plan_of(edit: impl FnOnce(&mut crate::ui::sweep::draft::SweepDraft, &[&str])) -> PlanSummary {
         let entry = sir();
         let schema = entry.schema();
@@ -726,7 +726,7 @@ mod tests {
         PlanSummary::for_draft(check, &schema, entry.name(), &summary)
     }
 
-    /// Returns the plan of the draft `panel` holds for `entry`'s model, checked against the model's defaults.
+    /// Returns the plan of the draft that `panel` holds for `entry`'s model, checked against the model's defaults.
     fn plan_of_panel(panel: &mut SweepPanel, entry: &ModelEntry) -> PlanSummary {
         let schema = entry.schema();
         let check = panel.cached_check(&schema, &default_values(entry));
@@ -882,7 +882,7 @@ mod tests {
         assert_eq!(either_text(&["7".to_owned()]), "7");
     }
 
-    /// Returns the Actions row of the plan of a SIR draft with one action at tick 50, which `edit` changes.
+    /// Returns the Actions row of the plan of a SIR draft with one action at tick 50, after `edit` changes the draft.
     fn actions_row(edit: impl FnOnce(&mut crate::ui::sweep::draft::SweepDraft)) -> String {
         let plan = plan_of(|draft, _| {
             let entry = sir();

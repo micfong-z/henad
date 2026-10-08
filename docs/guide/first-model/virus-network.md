@@ -35,8 +35,8 @@ Roughly, the rules are:
 !!! info
 
     This model is a port of NetLogo's Virus on a Network model[^1].
-    NetLogo repeatedly links a random node to its nearest unlinked node, and ours joins random pairs with no regard to distance.
-    NetLogo stops the run once no node is infected, and ours keeps ticking.
+    NetLogo repeatedly links a random node to its nearest unlinked node, and our model joins random pairs with no regard to distance.
+    NetLogo stops the run once no node is infected, and our model keeps ticking.
     We'll also add two things that NetLogo's version does not have: directed edges, and rewiring, where an edge moves to a new pair of nodes.
 
 ## Moving from agents to a network
@@ -57,7 +57,7 @@ It keeps a list of every node's neighbours for fast reads, next to a plain edge 
 
 A tick runs in two passes.
 The **global pass** runs once, on one thread, and it is the only part of a tick that can change the graph.
-The **node pass** then runs over every node in parallel, and every node can read the graph but none can change it.
+The **node pass** then runs over every node in parallel, and every node can read the graph but no node can change it.
 
 ``` mermaid
 flowchart LR
@@ -69,7 +69,7 @@ flowchart LR
 ```
 
 These pieces, plus `act` for a button press, are the ones we need to write ourselves.
-The Henad engine handles the rest of the simulation, such as storing the graph, switching it between directed and undirected, splitting nodes across cores, handing each chunk its own random number generator, arranging the nodes on screen, and the snapshot the UI draws.
+The Henad engine handles the rest of the simulation, such as storing the graph, switching it between directed and undirected, splitting nodes across cores, providing each chunk with its own random number generator, arranging the nodes on screen, and the snapshot the UI draws.
 
 Let's set up by making a file at `src/virus.rs`.
 
@@ -116,7 +116,7 @@ The kernel reads every node's `state` through `VirusRead`, and writes its own ne
 Once the node pass is done, the engine swaps the two sides.
 Every node sees its neighbours as they were at the start of the tick, whichever core reached them first.
 
-The macro expects every `dual` lane before the first `plain` one.
+The macro expects every `dual` lane before the first `plain` lane.
 A `dual` lane also takes no initial value.
 Both of its sides start at the type's default, 0 for a `u8`.
 Our states start from that default, with 0 for susceptible:
@@ -133,7 +133,7 @@ pub const PALETTE: [[u8; 4]; 3] = [
 ];
 ```
 
-Edges get a colour too, one byte per edge, and it indexes a palette of its own:
+Edges get a colour too, one byte per edge, and it indexes its own palette:
 
 ``` rust title="src/virus.rs"
 pub const EDGE_OPEN: u8 = 0;
@@ -194,7 +194,7 @@ impl NetworkModel for VirusModel {
 4. The hot parameters, extracted once per tick.
    We'll write this struct [below](#hot-parameters).
 5. `Aux` holds any state the model keeps outside the lanes and the graph.
-   Ours keeps none.
+   Our model has no such state.
 
 `CHUNK` keeps its default of 512 nodes per chunk, for the reasons given in [Deciding on `CHUNK`](ants.md#deciding-on-chunk).
 
@@ -202,7 +202,7 @@ The prelude holds every other name that `impl` relies on, `Extent`, `Nodes`, `No
 
 ### Parameters
 
-The model declares eight parameters of its own:
+The model declares its own eight parameters:
 
 ``` rust title="src/virus.rs"
 henad::params! {
@@ -221,16 +221,16 @@ henad::params! {
 ```
 
 Only `init` reads the degree and the outbreak size.
-Both take `.on_reload()`, as the density did in Life.
+Both parameters take `.on_reload()`, as the density did in Life.
 
 The three chances are probabilities, stored as fractions from 0 to 1.
 NetLogo's sliders show them as percentages.
-`.percent()` asks the Parameters tab to do the same, where `0.025` reads `2.5%`.
+`.percent()` tells the Parameters tab to do the same, so `0.025` shows as `2.5%`.
 Only the display changes.
 The model still reads `0.025`, and `--set virus_spread_chance=0.1` on the command line means 10%.
 
 `bool_param` declares a bool parameter, and the Parameters tab draws it as a checkbox.
-Both of ours are live, and can be flipped while the model runs.
+Both bool parameters are live, and can be flipped while the model runs.
 
 Here is the full list for our model:
 
@@ -249,12 +249,12 @@ parameters for virus (Virus on a Network):
   index=10 id=keep_rewiring kind=bool default=false apply=live label="Keep Rewiring"
 ```
 
-The highlighted lines are the three the engine prepends.
-The node count keeps the ID `num_agents`, the same one an agent model uses.
+The highlighted lines are the three parameters that the engine prepends.
+The node count keeps the ID `num_agents`, the same ID that an agent model uses.
 
 !!! tip "The example model's Network parameter"
 
-    The example model declares one more parameter than ours, a `choice_param` named Network.
+    The example model declares one more parameter than our model, a `choice_param` named Network.
     It picks between the random graph we write below and a random geometric graph.
     The geometric graph joins every pair of nodes closer than some distance.
     The geometric generator lives in [`crates/henad-models/src/virus_network/wiring.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/virus_network/wiring.rs).
@@ -305,9 +305,9 @@ The engine calls it at the start of every tick, and switches the graph over when
 Ticking the Directed checkbox takes effect on the next tick.
 
 Switching keeps every edge and only changes how it is read.
-An undirected edge joins its two ends both ways, and a directed one runs from its first end to its second.
+An undirected edge joins its two ends both ways, and a directed edge runs from its first end to its second end.
 Our kernel will read neighbours through `in_neighbors`.
-On a directed graph, it lists only the nodes with an edge pointing at this one.
+On a directed graph, it lists only the nodes with an edge pointing at this node.
 Once Directed is ticked, the virus can only travel in the direction of an edge.
 
 Without this function a model stays undirected.
@@ -380,7 +380,7 @@ fn joined(graph: &Network, a: u32, b: u32) -> bool {
 
 1. The second draw picks from the `n - 1` nodes other than `a`, by stepping over `a`.
    The two ends always differ, with no redraw needed.
-   An edge from a node to itself has no meaning here, and `add_edge` asserts against one in debug builds.
+   An edge from a node to itself has no meaning here, and `add_edge` asserts against such an edge in debug builds.
 2. On an undirected graph, `has_edge` already finds an edge in either direction.
    On a directed graph it only looks from `a` to `b`, and we look the other way ourselves.
    Otherwise switching back to undirected could find two edges between the same pair of nodes.
@@ -481,14 +481,14 @@ fn step_node(
 ```
 
 1. The timer counts up and wraps back to 0 every `check_frequency` ticks.
-   A check is due on a tick where it reads 0.
+   A check is due on a tick where the timer is 0.
 2. `read` holds every node's state as it was at the start of the tick, indexed by the global index `i`.
    `out` holds this chunk's lanes, indexed by `k`, the position within the chunk.
 3. See rule 2, and the section [below](#pulling-the-infection).
 4. One infected neighbour is enough, and further draws could not change the outcome.
 5. See rule 3.
    This runs after spreading.
-   As in NetLogo, a node infected on this tick can already recover on it.
+   As in NetLogo, a node infected on this tick can already recover on the same tick.
 6. This writes the next side of the `dual` lane.
 
 ### Pulling the infection
@@ -499,7 +499,7 @@ The kernel only receives its own chunk's slice, and a neighbour can sit in anoth
 The neighbour also writes its own next state in the same pass, and whichever write came last would win.
 
 So we turn the rule around.
-Each susceptible node looks at its own in-neighbours, and rolls once for every infected one it finds.
+Each susceptible node looks at its own in-neighbours, and rolls once for every infected in-neighbour it finds.
 It writes only its own state.
 Either way, every infected neighbour gives a susceptible node one independent chance, drawn against the states at the start of the tick, and the chance of catching the virus comes out the same.
 
@@ -563,7 +563,7 @@ Then a first version of `prepare_view` that walks every edge:
 
 1. The two sides of `state` were swapped at the end of the last tick.
    This side holds the newest state of every node.
-2. `update_colors` hands the closure the edge list, as the two endpoint slices `src` and `dst`, and a mutable slice of the colours.
+2. `update_colors` passes the closure the edge list, as the two endpoint slices `src` and `dst`, and a mutable slice of the colours.
 3. The closure returns whether it changed any colour, and the graph's version moves only if it did.
 
 The version tells the snapshot whether it has to copy the edge list again.
@@ -603,7 +603,7 @@ fn recolor(src: &[u32], dst: &[u32], color: &mut [u8], state: &[u8]) -> bool {
 
 1. A first pass that only reads.
    A publish while paused, or after the outbreak has died out, finds no edge to change and stops here.
-2. `for_each_chunk_mut!` hands each chunk its own slice to write, in parallel, and `base` is the index of the chunk's first edge.
+2. `for_each_chunk_mut!` passes each chunk its own slice to write, in parallel, and `base` is the index of the chunk's first edge.
    Once anything is stale, every colour is written again.
    We never have to track which edges changed.
 
@@ -637,7 +637,7 @@ We report how many nodes are in each state.
     }
 ```
 
-1. `stats` also receives the graph and the aux, and it can read both but change neither.
+1. `stats` also receives the graph and the aux, and it can read them but not change them.
    `(): &()` matches our empty aux.
 
 The count is a parallel reduction, like the one in Life:
@@ -668,7 +668,7 @@ fn count_states(state: &[u8]) -> [u64; 3] {
 
 So far the graph never changes after `init`.
 The last two things we add both move edges while the virus spreads.
-Both use the same rewire.
+Both additions use the same rewire.
 It picks an edge at random and moves it to a random pair of nodes that are not joined yet.
 
 This follows `rewire-a-link` from NetLogo's [Diffusion on a Directed Network](https://ccl.northwestern.edu/netlogo/models/DiffusiononaDirectedNetwork) model, except that any pair that is not joined can receive the edge.
@@ -704,7 +704,7 @@ The edge count stays the same, and so does the average degree.
 ### An action
 
 An action is a one-off change to the state that the user triggers between two ticks.
-Declaring one works much like declaring parameters:
+Declaring an action works much like declaring parameters:
 
 ``` { .rust .annotate title="src/virus.rs" }
 henad::actions! {
@@ -739,7 +739,7 @@ The button stays disabled until the model is built.
 
 !!! note "Actions draw from their own stream"
 
-    The `rng` handed to `act` is a random number stream of its own, and a press leaves the streams the ticks draw from untouched.
+    The `rng` passed to `act` is a separate random number stream, and a press leaves the streams the ticks draw from untouched.
     The same seed and the same presses at the same ticks give the same run.
 
 ### Keep rewiring
@@ -754,7 +754,7 @@ The Keep Rewiring parameter runs the same rewire once per tick, in the global pa
     }
 ```
 
-The global pass sees the states the last tick left behind, and draws from a random number stream of its own.
+The global pass sees the states the last tick left behind, and draws from its own random number stream.
 
 ## Running it
 
@@ -796,7 +796,7 @@ and add a line to `models()`:
 
     A timed run never publishes a snapshot, and the timing leaves out `prepare_view` and the layout.
 
-    To press Rewire a link part way through a run, name the action and the tick:
+    To press Rewire a link part way through a run, specify the action and the tick:
 
     ``` bash
     cargo run --release --bin my-model-cli -- virus --steps 1000 --act rewire@500
@@ -820,7 +820,7 @@ In Sprites mode, the Edges and Arrows checkboxes in the [Viewport tab](../app.md
 
 The layout runs as a snapshot is published, outside `step()`, and it only moves positions.
 Our model never reads a position, so the layout cannot change how the virus spreads.
-A model can tune the springs through its `LAYOUT` const, and ours keeps the defaults.
+A model can tune the springs through its `LAYOUT` const, and our model keeps the defaults.
 
 ## Testing
 
@@ -886,10 +886,10 @@ fn the_virus_walks_a_path_and_stops_at_a_resistant_node() {
 }
 ```
 
-1. This is the full parameter list, with the engine's three first.
-   The degree and the outbreak size only matter to `init`, whose graph and outbreak the closure below replaces.
+1. This is the full parameter list, with the engine's three parameters first.
+   The degree and the outbreak size only matter to `init`, and the closure below replaces the graph and the outbreak that `init` sets up.
 2. Unlike `from_cells` on the grid page, `from_graph` still runs `init`.
-   It then hands the closure the nodes to change before the first tick.
+   It then passes the closure the nodes to change before the first tick.
 3. This throws away the random graph `init` drew.
    `Network::new(5, false)` holds five nodes and no edges.
 4. The test calls `prepare_view` itself, the way a publish would, before it reads the colours.

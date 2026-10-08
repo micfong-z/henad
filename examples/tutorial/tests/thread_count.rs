@@ -1,4 +1,4 @@
-//! Holds the foraging tutorial's results to the same bits on any number of threads.
+//! Checks that the foraging tutorial's results have the same bits on any number of threads.
 
 use henad::engine::AgentModelState;
 use henad::params::ParamValue;
@@ -12,7 +12,7 @@ fn ant_cells(threads: usize) -> Vec<u32> {
         .build()
         .expect("rayon pool");
     pool.install(|| {
-        // Three chunks of `ForagingModel::CHUNK`, so the seeding of each chunk meets a split across workers.
+        // Three chunks of `ForagingModel::CHUNK`, so the chunks, each with its own seed, are split across workers.
         let mut state = AgentModelState::<ForagingModel>::from_params(&[
             ParamValue::U32(12_000),
             ParamValue::F32(200.0),

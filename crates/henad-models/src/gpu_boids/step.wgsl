@@ -68,7 +68,7 @@ fn main(
     let cell_x = wrap_index(i32(floor(p.x * params.cell_w_inv)), grid_w);
     let cell_y = wrap_index(i32(floor(p.y * params.cell_h_inv)), grid_h);
 
-    // A radius wider than the world would walk the same cell twice. Same guard as the CPU query.
+    // A radius wider than the world would walk the same cell twice. The CPU query has the same guard.
     var x_lo = cell_x - cell_radius_x;
     var x_hi = cell_x + cell_radius_x;
     if (2 * cell_radius_x + 1 > grid_w) {
@@ -141,7 +141,7 @@ fn main(
         new_v = vec2<f32>(params.min_speed, 0.0);
     }
 
-    // `rem_euclid`, so a boid leaving one edge re-enters at the other rather than clamping.
+    // The position wraps as `rem_euclid` does, and a boid leaving one edge re-enters at the opposite edge.
     let world = vec2<f32>(params.world_w, params.world_h);
     let moved = p + new_v;
     pos_out[i] = moved - floor(moved / world) * world;

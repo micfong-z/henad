@@ -110,7 +110,7 @@ fn param_json(index: usize, descriptor: &ParamDescriptor) -> Value {
     Value::Object(param)
 }
 
-/// Returns `value` as the JSON number with the shortest decimal form that reads back as `value`.
+/// Returns `value` as the JSON number with the shortest decimal form that parses back to `value`.
 ///
 /// A plain conversion widens to `f64` first and writes `0.025` as `0.02500000037252903`.
 pub(crate) fn f32_json(value: f32) -> Value {
@@ -134,7 +134,7 @@ mod tests {
 
     /// Each example model's `schema_hash` as Henad 0.2.0 wrote it, at commit 773a7a5.
     ///
-    /// `crates/henad-models/tests/fixtures/docs/schema-hashes-0.2.0.md` gives the procedure that recorded them.
+    /// `crates/henad-models/tests/fixtures/docs/schema-hashes-0.2.0.md` describes the procedure that recorded them.
     const SCHEMA_HASHES_0_2_0: [(&str, &str); 10] = [
         ("sir", "6ff1dc3971fd0a96"),
         ("boids", "ae99f3e0d37c8d3d"),

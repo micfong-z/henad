@@ -14,17 +14,18 @@ pub const DESIGN_SALT: u64 = 0x00DE_5160_5EED_0001;
 /// Domain separator for [`search_seed`].
 pub const SEARCH_SALT: u64 = 0x005E_A6C4_5EED_0001;
 
-/// Rule that gives each run its seed.
+/// Rule that assigns a seed to each run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SeedScheme {
     /// Replicate `r` of every config shares one seed, so configs are compared on common random numbers.
     #[default]
     Common,
-    /// Every run gets a seed of its own.
+    /// Every run gets its own seed.
     Independent,
 }
 
 impl SeedScheme {
+    /// Returns the scheme's name in a spec file, as in `common`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Common => "common",
@@ -32,7 +33,7 @@ impl SeedScheme {
         }
     }
 
-    /// Formula behind the seeds, in terms of [`mix_seed`], [`SWEEP_SALT`] and [`CONFIG_SALT`].
+    /// Returns the formula behind the seeds, in terms of [`mix_seed`], [`SWEEP_SALT`] and [`CONFIG_SALT`].
     pub fn formula(self) -> &'static str {
         match self {
             Self::Common => "mix_seed(mix_seed(root ^ SWEEP_SALT) + rep)",
@@ -63,12 +64,12 @@ pub fn independent_run_seed(root: u64, config_id: u64, rep: u64) -> u64 {
     run_seed(mix_seed(root ^ CONFIG_SALT).wrapping_add(config_id), rep)
 }
 
-/// Returns the seed of the draws of block `block`, when the spec gives the block none of its own.
+/// Returns the draw seed of block `block`, used when the spec sets no seed for the block.
 pub fn design_seed(root: u64, block: usize) -> u64 {
     mix_seed(mix_seed(root ^ DESIGN_SALT).wrapping_add(block as u64))
 }
 
-/// Returns the seed of the draws of a search.
+/// Returns the draw seed of a search.
 pub fn search_seed(root: u64) -> u64 {
     mix_seed(mix_seed(root ^ SEARCH_SALT))
 }
@@ -79,7 +80,7 @@ mod tests {
 
     use super::{SWEEP_SALT, SeedScheme, design_seed, independent_run_seed, run_seed, search_seed};
 
-    /// Root `r` and replicate `k` must not land on the seed of root `r + 1` and replicate `k - 1`.
+    /// Root `r` and replicate `k` must not produce the seed of root `r + 1` and replicate `k - 1`.
     #[test]
     fn run_seeds_do_not_overlap_across_nearby_roots() {
         let seeds: BTreeSet<u64> = (0..64)

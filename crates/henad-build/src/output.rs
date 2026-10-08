@@ -20,9 +20,9 @@ use crate::{ShaderBuildError, binding_lines, paths};
 const SHARED_DIRECTORY: &str = "henad_wgsl";
 /// File that holds the hash of the inputs the last `wgsl_bindgen` pass read.
 const STAMP: &str = "shader_bindings.stamp";
-/// Release of `wgsl_bindgen` the workspace's pin names. A new one regenerates every binding.
+/// Release of `wgsl_bindgen` that the workspace pins. A new release regenerates every binding.
 ///
-/// `scripts/check_packaging.sh` holds it equal to the pin.
+/// `scripts/check_packaging.sh` checks that it equals the pin.
 const WGSL_BINDGEN_VERSION: &str = "0.23.3";
 /// Source of this file, which sets every option of the `wgsl_bindgen` pass. An edit to it regenerates every binding.
 const GENERATOR_SOURCE: &str = include_str!("output.rs");
@@ -39,9 +39,9 @@ pub(crate) struct Generated {
 /// Writes the shared modules, `shader_bindings.rs` and `binding_decls.rs` to `out_dir`.
 ///
 /// `entries` are relative to `root`, and `sources` holds every `.wgsl` file under it with its text. The
-/// `wgsl_bindgen` pass is skipped when the hash of its inputs matches the stamp the last pass left. Those inputs
-/// include every file an entry point reaches through its imports, outside the root and without the `.wgsl` extension
-/// as well.
+/// `wgsl_bindgen` pass is skipped when the hash of its inputs matches the stamp the last pass left. The inputs cover
+/// every file that an entry point reaches through its imports, including a file outside the root or without the
+/// `.wgsl` extension.
 pub(crate) fn generate(
     root: &Path,
     entries: &[PathBuf],
@@ -58,9 +58,10 @@ pub(crate) fn generate(
         bound: false,
     };
     if entries.is_empty() {
-        // `wgsl_bindgen` refuses an empty list, and its output for one would not compile.
+        // `wgsl_bindgen` rejects an empty list, and its output for an empty list would not compile.
         write_if_changed(&bindings_path, "")?;
-        // A stamp left from shaders since removed would match their return, and skip the pass over empty bindings.
+        // A stamp left by shaders that were since removed would match those shaders when they are restored. The pass
+        // would then be skipped and leave the empty bindings.
         if stamp_path.exists() {
             std::fs::remove_file(&stamp_path).map_err(|source| ShaderBuildError::Io {
                 path: stamp_path.clone(),
@@ -91,7 +92,7 @@ pub(crate) fn generate(
     Ok(generated)
 }
 
-/// Writes the shared modules under `shared`, and removes any `.wgsl` file there that no shared module names.
+/// Writes the shared modules under `shared`, and removes any `.wgsl` file there that matches no shared module.
 ///
 /// A copy of a module that henad-core has since renamed or removed would otherwise stay importable.
 fn write_shared_modules(shared: &Path) -> Result<(), ShaderBuildError> {
@@ -126,13 +127,14 @@ fn write_shared_modules(shared: &Path) -> Result<(), ShaderBuildError> {
     Ok(())
 }
 
-/// Returns the files `wgsl_bindgen` reads for `entries` that `sources` does not hold, each with its text: a file
-/// outside the root, or one without the `.wgsl` extension. Each path is absolute, with no `.` or `..` component.
+/// Returns the files that `wgsl_bindgen` reads for `entries` and that `sources` does not hold, each with its text: a
+/// file outside the root, or a file without the `.wgsl` extension. Each path is absolute, with no `.` or `..`
+/// component.
 ///
 /// # Errors
 ///
 /// Returns [`ShaderBuildError::Compose`] for an import that does not resolve, [`ShaderBuildError::ModuleBinding`] for
-/// an imported file that declares a binding and is no entry point, and [`ShaderBuildError::ReservedImport`] for a
+/// an imported file that declares a binding and is not an entry point, and [`ShaderBuildError::ReservedImport`] for a
 /// module whose import path makes it `henad` or a name the generated bindings use.
 fn imported_files(
     root: &Path,
@@ -183,7 +185,7 @@ fn imported_files(
     Ok(imported)
 }
 
-/// Returns an error naming the files of an import cycle in `tree`.
+/// Returns an error that lists the files of an import cycle in `tree`.
 ///
 /// `wgsl_bindgen` follows a cycle until the stack overflows. The build script then aborts with no message.
 fn refuse_cycles(tree: &DependencyTree) -> Result<(), ShaderBuildError> {
@@ -240,7 +242,7 @@ fn refuse_cycles(tree: &DependencyTree) -> Result<(), ShaderBuildError> {
     Ok(())
 }
 
-/// Returns what `compose` returns, or [`ShaderBuildError::Compose`] with its message when it panics.
+/// Returns the result of `compose`, or [`ShaderBuildError::Compose`] with its message when it panics.
 ///
 /// `wgsl_bindgen` panics on an import inside an imported module that does not resolve, and on an import it cannot
 /// parse. The panic hook still prints the panic before the error is returned.
@@ -256,8 +258,10 @@ fn catch_composer_panic<T>(compose: impl FnOnce() -> Result<T, ShaderBuildError>
     })
 }
 
-/// Returns the file and the import that a panic for an import that does not resolve names, read from the `Debug` text
-/// of the error it carries. `None` for any other panic.
+/// Returns a message with the file and the import for a panic caused by an import that does not resolve, or `None`
+/// for any other panic.
+///
+/// The file and the import are read from the `Debug` text of the error that the panic carries.
 fn missing_import(text: &str) -> Option<String> {
     let quoted = |marker: &str| {
         let start = text.find(marker)? + marker.len();
@@ -293,8 +297,8 @@ fn bind(root: &Path, entries: &[PathBuf], shared: &Path) -> Result<String, Shade
     builder
         .workspace_root(root)
         .additional_scan_dir((None, shared.to_string_lossy().as_ref()))
-        // Every rerun line is this crate's own. Left on, the pass names the copies of the shared modules under
-        // `OUT_DIR`, and prints its lines in the double-colon form of Cargo 1.77.
+        // This crate prints every rerun line itself. With this option on, the pass would print its own rerun lines in
+        // the double-colon form of Cargo 1.77, including lines for the copies of the shared modules under `OUT_DIR`.
         .emit_rerun_if_change(false)
         .serialization_strategy(WgslTypeSerializeStrategy::Bytemuck)
         .type_map(RustWgslTypeMap)
@@ -305,9 +309,9 @@ fn bind(root: &Path, entries: &[PathBuf], shared: &Path) -> Result<String, Shade
     catch_composer_panic(|| builder.build().map_err(compose)?.generate_string().map_err(compose))
 }
 
-/// Returns the hash of what the `wgsl_bindgen` pass reads: the generator's releases and this file's source, the root,
-/// the entry points, every `.wgsl` file under the root, the files the entry points import that are not among them,
-/// and the shared modules.
+/// Returns the hash of the `wgsl_bindgen` pass inputs: the henad-build and `wgsl_bindgen` releases, this file's
+/// source, the root, the entry points, every `.wgsl` file under the root, every other file that the entry points reach
+/// through their imports, and the shared modules.
 fn input_hash(root: &Path, entries: &[PathBuf], sources: &[(PathBuf, String)], imported: &[(PathBuf, String)]) -> u64 {
     let mut hasher = Fnv1a64::new();
     hasher.write_str(env!("CARGO_PKG_VERSION"));
@@ -330,7 +334,7 @@ fn input_hash(root: &Path, entries: &[PathBuf], sources: &[(PathBuf, String)], i
 }
 
 /// Returns the text of `binding_decls.rs`: the shared modules' hash, each entry's `@group(0)` declarations and the
-/// assertions holding each list to the length of its generated layout.
+/// assertions checking each list against the length of its generated layout.
 fn binding_decls(root: &Path, entries: &[PathBuf], sources: &[(PathBuf, String)]) -> Result<String, ShaderBuildError> {
     let mut constants = String::new();
     let mut assertions = String::new();
@@ -363,7 +367,8 @@ fn binding_decls(root: &Path, entries: &[PathBuf], sources: &[(PathBuf, String)]
 
         if !bindings.is_empty() {
             let module = names.join("::");
-            // Forward slashes on every platform. The literal is written through `Debug`, which escapes the rest.
+            // The path uses forward slashes on every platform. Writing the literal through `Debug` escapes any other
+            // special characters.
             let message = format!(
                 "henad-build read another number of @group(0) bindings from {} than naga composed",
                 entry.to_string_lossy().replace('\\', "/")

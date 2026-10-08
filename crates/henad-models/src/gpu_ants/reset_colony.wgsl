@@ -1,7 +1,8 @@
 // Wipes both trails and puts the ants back on the nest, holding a reward.
 //
-// One invocation covers a cell of each field layer and, where the index reaches, an ant. The
-// domain is the longer of the two, so neither half is left short.
+// One invocation covers a cell of each field layer and, where the index is below the ant count,
+// an ant. The domain is the larger of the cell count and the ant count, so neither half is left
+// short.
 
 #import henad::dispatch::linear_index
 #import gpu_ants::state::{HAS_REWARD_BIT}
@@ -12,7 +13,7 @@ struct Params {
     num_agents: u32,
     n_cells: u32,
     nest: vec2<f32>,
-    // Searching, which every ant is again after this.
+    // Colour of a searching ant, as every ant is after the reset.
     color: u32,
     _pad: u32,
 }
@@ -24,7 +25,7 @@ struct Params {
 @group(0) @binding(4) var<storage, read_write> accum: array<u32>;
 @group(0) @binding(5) var<uniform> params: Params;
 
-// Matches `ants::lanes::NO_STEP`. No step taken yet, so momentum has nothing to continue.
+// Matches `ants::lanes::NO_STEP`, the `last_step` of an ant that has not stepped yet.
 const NO_STEP: u32 = 255u;
 
 @compute
@@ -38,7 +39,7 @@ fn main(
         return;
     }
 
-    // Both layers per invocation, since the domain counts cells once.
+    // Each invocation clears both layers, since the domain counts cells once.
     if i < params.n_cells {
         field[i] = 0.0;
         field[i + params.n_cells] = 0.0;

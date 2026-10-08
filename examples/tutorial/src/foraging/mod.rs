@@ -1,7 +1,6 @@
 //! Ant foraging as `docs/guide/first-model/ants.md` builds it.
 //!
-//! The id is `foraging` rather than `ants`, since the shipped model already holds that one and the
-//! page tells a reader the same thing.
+//! The id is `foraging`. The example model uses `ants`, and a set holds each id once.
 
 pub mod field;
 
@@ -11,7 +10,7 @@ use henad::for_each_chunk_mut;
 
 use self::field::{FOOD, HOME, OBSTACLE, PheromoneField, TO_FOOD, TO_HOME, nest_cell};
 
-/// No step taken yet, so momentum has nothing to continue.
+/// Value of `last_step` before an ant's first step. Momentum then has no direction to continue.
 pub const NO_STEP: u8 = u8::MAX;
 
 agent_lanes! {
@@ -22,7 +21,7 @@ agent_lanes! {
         plain pos_y: f32 = 0.0,
         /// Last direction, encoded `(dx + 1) * 3 + (dy + 1)`, or [`NO_STEP`].
         plain last_step: u8 = NO_STEP,
-        /// `0` searching, `1` carrying. Doubles as the render lane.
+        /// `0` while searching and `1` while carrying food. The value is also the ant's palette index.
         plain has_food: u8 = 0,
         plain reward: f32 = 0.0,
     }
@@ -129,9 +128,9 @@ impl AgentModel for ForagingModel {
     }
 }
 
-// --- Pass one, deposit ---
+// Pass one, deposit.
 
-/// Largest pheromone in the 3x3 neighbourhood, cut down by distance and lifted by the reward.
+/// Returns the largest pheromone in the 3x3 neighbourhood, cut down by distance and lifted by the reward.
 #[inline]
 fn deposit_value(x: i32, y: i32, reward: f32, field: &[f32], p: &AntParams) -> f32 {
     let here = field[cell_index(x as u32, y as u32, p.w as u32) as usize];
@@ -183,7 +182,7 @@ fn deposit(lanes: &AntLanes, deposits: &mut Deposits, ctx: &StepCtx<'_, Foraging
     );
 }
 
-// --- Pass two, move ---
+// Pass two, move.
 
 #[inline]
 fn encode_step(dx: i32, dy: i32) -> u8 {
@@ -196,7 +195,7 @@ fn decode_step(s: u8) -> (i32, i32) {
     (s / 3 - 1, s % 3 - 1)
 }
 
-/// Inside the field and not an obstacle. This model is bounded, not toroidal.
+/// Returns whether `(x, y)` lies inside the bounded field and off every obstacle.
 #[inline]
 fn passable(x: i32, y: i32, sites: &[u8], p: &AntParams) -> bool {
     x >= 0 && y >= 0 && x < p.w && y < p.h && sites[(y * p.w + x) as usize] != OBSTACLE
@@ -221,7 +220,7 @@ fn advect_agent(
     rng: &mut u64,
 ) -> AntMove {
     let sites = field.sites;
-    // Ants follow the trip they are not currently making, so carrying food reads the home field.
+    // An ant follows the trail it does not lay, so an ant carrying food reads the to-home field.
     let trail = if has_food != 0 {
         field.field(TO_HOME)
     } else {
@@ -231,8 +230,8 @@ fn advect_agent(
     // An impossible pheromone, so the first passable neighbour always wins.
     let mut best = -1.0f32;
     let (mut bx, mut by) = (x, y);
-    // 2 not 1 reproduces the reference's off-by-one, giving the first neighbour visited 2/(k+1)
-    // against 1/(k+1) for the rest.
+    // Starting at 2 reproduces the reference's off-by-one. Among k tied neighbours, the first visited is
+    // kept with probability 2/(k+1) and every other neighbour with 1/(k+1).
     let mut count = 2u32;
 
     for &(dx, dy) in &MOORE_COLUMN_MAJOR {
@@ -253,7 +252,7 @@ fn advect_agent(
     }
 
     if best == 0.0 && last_step != NO_STEP {
-        // No pheromone nearby, so probably keep going the way we were.
+        // With no pheromone nearby, the ant keeps its last direction with probability `momentum`.
         if next_float(rng, 1.0) < p.momentum {
             let (dx, dy) = decode_step(last_step);
             let (mx, my) = (x + dx, y + dy);
@@ -296,7 +295,7 @@ fn advect_agent(
     out
 }
 
-/// Moves every ant, returning how many delivered food home.
+/// Moves every ant and returns the number of ants that delivered food home.
 fn advect(lanes: &mut AntLanes, ctx: &StepCtx<'_, ForagingModel>, seed: u64, tick: u64) -> u64 {
     let p = ctx.params;
     let field = ctx.field;
@@ -324,7 +323,7 @@ fn advect(lanes: &mut AntLanes, ctx: &StepCtx<'_, ForagingModel>, seed: u64, tic
     )
 }
 
-// --- Statistics ---
+// Statistics.
 
 fn total_pheromone(to_food: &Grid2D<f32>, to_home: &Grid2D<f32>) -> f64 {
     field_sum(to_food.current()) + field_sum(to_home.current())

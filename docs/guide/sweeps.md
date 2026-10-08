@@ -16,8 +16,8 @@ Before we start, make sure you can [run the CLI](running.md#cli).
 Every example here uses SIR, but any model that `--list` prints works the same way.
 
 The commands below run the CLI from a clone of Henad's repository, as `cargo run --release -p henad-cli --`.
-With the CLI installed, write `henad-cli` in place of that.
-A [project of your own](your-project.md) runs its own models through `cargo run --release --bin my-model-cli --`, and SIR is not among them.
+With the CLI installed, write `henad-cli` instead.
+[Your own project](your-project.md) runs its own models through `cargo run --release --bin my-model-cli --`, and SIR is not among them.
 The template's `vote` sweeps the same way, as in `--vary density=0.45:0.55:0.05`, and its `specs/vote.toml` is a spec file to start from.
 
 ## A first sweep
@@ -29,10 +29,10 @@ cargo run --release -p henad-cli -- sir \
   --vary infection_rate=0.1:0.5:0.1 --reps 5 --steps 500 --out sir-sweep
 ```
 
-`--vary` names a parameter and the values it takes, here from 0.1 to 0.5 in steps of 0.1.
+`--vary` specifies a parameter and the values it takes, here from 0.1 to 0.5 in steps of 0.1.
 Each value gives one **config**, a full set of parameter values.
 The parameters you do not vary keep their defaults.
-`--reps 5` runs every config five times, each time with a different seed, and `--out` names the directory the results go to.
+`--reps 5` runs every config five times, each time with a different seed, and `--out` specifies the directory that receives the results.
 
 The sweep prints its plan before the first run, and a line of counts at the end:
 
@@ -103,8 +103,8 @@ A range written `min:max`, with no step, stands for every value between its ends
 `lhs:40` draws 40 configs as a **Latin hypercube**.
 The range of each parameter is cut into 40 equal strata, and each stratum holds exactly one config.
 An `f32` range places that config at a random point inside its stratum.
-Each parameter shuffles its strata on its own, and the configs spread over the whole space without lining up along a grid.
-`random:40` draws every value of every config on its own, uniformly over its range.
+Each parameter shuffles its strata independently, and the configs spread over the whole space without lining up along a grid.
+`random:40` draws every value of every config independently, uniformly over its range.
 
 A list, `all` or a range with a step gives a parameter a set of values to sample from.
 A random design picks among them with equal chances.
@@ -119,7 +119,7 @@ The draws come from a **design seed**, and the plan prints it beside the block:
 ```
 
 A design seed draws the same configs every time, on any machine.
-Unless you give one, it is derived from the root seed of the [next section](#replicates-and-seeds), and a new `--seed` draws a new design as well.
+Unless you set a design seed, it is derived from the root seed of the [next section](#replicates-and-seeds), and a new `--seed` draws a new design as well.
 `--design-seed` fixes the design while `--seed` changes the runs.
 
 ### Checking a sweep first
@@ -152,7 +152,7 @@ This is known as **common random numbers**.
 Two configs then start each replicate from the same seed, and less of the difference between their results is noise.
 You can see it in the [results below](#reading-the-results), where every infection rate starts from the same number of infected cells at tick 0.
 
-`--independent-seeds` mixes the config's id into the seed as well, and every run then gets a seed of its own.
+`--independent-seeds` mixes the config's id into the seed as well, and every run then gets its own seed.
 Use it when your analysis treats configs as independent samples.
 
 Every row of `runs.csv` records its seed, and you can rebuild any run on its own from it.
@@ -189,8 +189,8 @@ Save it as `sir_sweep.toml` and run it:
 cargo run --release -p henad-cli -- --spec sir_sweep.toml --out sir-spec
 ```
 
-The spec names its own model, and the command line leaves it out.
-`--spec` refuses every flag that would change a result, such as `--steps` or `--vary`, and the file stays the whole record of the sweep.
+The spec file sets the model, and the command line leaves it out.
+`--spec` rejects every flag that would change a result, such as `--steps` or `--vary`, and the file stays the whole record of the sweep.
 
 We will go through the file one table at a time.
 
@@ -204,7 +204,7 @@ We will go through the file one table at a time.
 --8<-- "crates/henad-explore/specs/sir_sweep.toml:run"
 ```
 
-`[run]` takes the place of `--steps`, `--warmup` and `--reps`, the last under the name `replicates`.
+`[run]` replaces `--steps`, `--warmup` and `--reps`, the last under the name `replicates`.
 `timeout_s` and `stop` end a run early, as `--timeout` and `--stop` do, and [ending a run early](#ending-a-run-early) covers both.
 
 ``` toml
@@ -212,7 +212,7 @@ We will go through the file one table at a time.
 ```
 
 `[measure]` sets how often a run is sampled and what is kept, as described under [measuring a run](#measuring-a-run).
-Each entry in `reducers` names a stat column and the kinds of reducer to apply to it.
+Each entry in `reducers` specifies a stat column and the kinds of reducer to apply to it.
 
 ``` toml
 --8<-- "crates/henad-explore/specs/sir_sweep.toml:seeds"
@@ -236,7 +236,7 @@ Each `[[block]]` lists its factors, the parameters it varies, and a design that 
 --8<-- "crates/henad-explore/specs/sir_sweep.toml:factorial"
 ```
 
-A factor names a parameter with `param`, or the tick of an action with `action`.
+A factor refers to a parameter with `param`, or to the tick of an action with `action`.
 It then gives its values as `values = [...]`, `range = { min, max, step }` or `levels = "all"`.
 A `factorial` block runs every combination, as repeated `--vary` does.
 
@@ -252,7 +252,7 @@ A `zip` block pairs the values by position, as `--zip` does.
 
 An `lhs` block draws `samples` configs as a Latin hypercube, as `--sample lhs:40` does, and a `random` block draws them as `--sample random:40` does.
 `design_seed` fixes a block's design seed.
-Without it, each block derives its own from the root seed and its position in the file.
+Without it, each block derives its own design seed from the root seed and its position in the file.
 A `table` block reads its configs from a CSV file, as [designs from a table](#designs-from-a-table) shows.
 
 The sweep runs the configs of every block, one block after the other.
@@ -265,9 +265,9 @@ A parameter can appear in several blocks, but only once within a block.
 ```
 
 `[execution]` decides how the runs are spread over the machine, and never changes a result.
-`concurrent`, `memory` and `gpu_memory` take what `--concurrent`, `--memory` and `--gpu-memory` take, and those flags override them.
+`concurrent`, `memory` and `gpu_memory` accept the same values as `--concurrent`, `--memory` and `--gpu-memory`, and those flags override them.
 
-Every table refuses a key it does not know, and a misspelt key stops the sweep with an error.
+Every table rejects a key that it does not recognise, and a misspelt key stops the sweep with an error.
 A table you leave out takes its defaults: 1000 steps, no warm-up, one replicate, no stop condition or timeout, a sample every tick, the four default reducers, root seed 0 and common random numbers.
 A block without a `design` is a factorial.
 
@@ -280,9 +280,9 @@ The **series** keeps a sample every `--series-every` ticks, plus the last one.
 `--series-every` has to be a multiple of `--stats-every`, and 0 turns the series off.
 
 A **reducer** folds a run's samples of one stat into one number.
-By default every stat gets four, `final`, `min`, `max` and `mean`.
+By default every stat gets four reducers: `final`, `min`, `max` and `mean`.
 They appear in `runs.csv` as `Infected:final`, `Infected:min` and so on.
-`--no-default-reducers` drops them, and `--reduce Infected:max` adds one back.
+`--no-default-reducers` drops them, and `--reduce Infected:max` adds that reducer back.
 
 `--reduce` also takes four kinds that no stat gets by default:
 
@@ -302,11 +302,11 @@ In the spec above, `Infected:argmax` is the tick of the epidemic's peak, and `In
 
 Quote a kind that holds `<` or `>`, or the shell reads it as a redirect.
 
-A reducer sees only the samples, and a tick it gives is always a sampled tick.
+A reducer sees only the samples, and a tick that a reducer returns is always a sampled tick.
 With `--stats-every 5`, the peak is found to within 5 ticks.
 
 A sample costs time.
-Ant Foraging, for one, converts its whole pheromone field for drawing before each sample.
+Ant Foraging, for example, converts its whole pheromone field for drawing before each sample.
 When you only need the reducers, a larger `--stats-every` makes the sweep faster.
 
 ## Ending a run early
@@ -324,14 +324,14 @@ cargo run --release -p henad-cli -- sir \
 ```
 
 A condition is a stat column, a comparator and a number.
-The column is written as a reducer names it, and can hold spaces, as in `'Giant Component Share >= 0.5'` for Team Assembly.
+The column name takes the same form as in `--reduce`, and can hold spaces, as in `'Giant Component Share >= 0.5'` for Team Assembly.
 The comparator is one of `<`, `<=`, `>`, `>=`, `==` and `!=`, read from the last run of those characters in the condition.
 A label holding `<`, `>`, `=` or `!` therefore works too.
 A NaN never meets a condition.
 
 The condition is checked at each sample, and `--stats-every` sets how soon after the event a run stops.
 A run that stops ends on that sample.
-Its `ticks` column holds the sample's tick, `stop_reason` reads `condition`, and its series and reducers end there too.
+Its `ticks` column holds the sample's tick, `stop_reason` is `condition`, and its series and reducers end there too.
 The run does not count as failed.
 An action due after the stop never fires, and a reducer whose window starts after it stays empty.
 
@@ -353,7 +353,7 @@ cargo run --release -p henad-cli -- sir \
 The clock counts the time a run spends stepping and sampling, and leaves out its build.
 With several GPU runs at once, it counts a run's share of that time, as [concurrency](#concurrency) describes.
 It is read between slices of steps, and a run ends a little after its limit.
-A run past its limit gets the status `timed_out` and the stop reason `timeout`, and its note gives the tick it reached.
+A run past its limit gets the status `timed_out` and the stop reason `timeout`, and its note records the tick it reached.
 It counts as failed, and its reducers cover only the ticks it stepped.
 
 The ticks a run reaches in a set time depend on the machine and its load.
@@ -364,7 +364,7 @@ The timeout is not part of the plan, and the resume can raise it or drop it.
 ## Actions in a sweep
 
 A model's actions fire in a sweep as they do in a benchmark.
-`--act` adds one to every run:
+`--act` adds an action to every run:
 
 ``` bash
 cargo run --release -p henad-cli -- sir \
@@ -376,22 +376,22 @@ Every run seeds a second outbreak at tick 400.
 `runs.csv` and `summary.csv` gain a column `action.seed_outbreak` after the parameters, with the action's tick in each config.
 
 An action's tick can be a factor too.
-`--vary action.NAME=LEVELS` varies the tick of the action `--act` added under that name:
+`--vary action.NAME=LEVELS` varies the tick of the action that `--act` added under that name:
 
 ``` bash
 --act seed_outbreak@400 --vary action.seed_outbreak=200:600:100
 ```
 
-The levels take the same forms as a parameter's, in whole ticks, and a sampled design draws ticks from a range with no step.
+The levels take the same forms as a parameter's values, in whole ticks, and a sampled design draws ticks from a range with no step.
 An action added with `--act` is named by its id.
-A second `--act` with the same id is named `ID_2`, a third `ID_3`, and so on, skipping any name an earlier `--act` has taken.
-Each can be varied on its own.
-In a spec file, factors and columns call an `[[action]]` by its `name`.
+A second `--act` with the same id is named `ID_2`, a third `ID_3`, and so on, skipping any name that an earlier `--act` has taken.
+Each action can be varied separately.
+In a spec file, factors and columns refer to an `[[action]]` by its `name`.
 An `[[action]]` without a `name` goes by its id.
 The factorial block [above](#blocks) varies `second_wave` that way.
 
 An action due at tick 0 fires before the first step.
-One due at a later tick fires after the step that reaches it, and that tick's sample already shows its effect.
+An action due at a later tick fires after the step that reaches it, and that tick's sample already shows its effect.
 Actions due at the same tick fire in the order the command line or the spec lists them.
 An action due past the last tick never fires, and the plan warns about it:
 
@@ -399,11 +399,11 @@ An action due past the last tick never fires, and the plan warns about it:
 warning: action 'seed_outbreak' is due after the last tick 300 in 1 config (latest tick 400) and will not run there
 ```
 
-An action draws its random numbers from a stream of its own.
+An action draws its random numbers from its own stream.
 Two configs that differ only in an action's tick match on every sample before the earlier of the two ticks.
 
-A model can refuse an action at a tick.
-The refusal goes in the run's `note` column, and the run stays `ok`.
+A model can reject an action at a tick.
+The rejection goes in the run's `note` column, and the run stays `ok`.
 
 ## Designs from a table
 
@@ -414,16 +414,16 @@ A design table holds one config per row:
 --8<-- "crates/henad-explore/specs/sir_design.csv"
 ```
 
-The header names a parameter id or `action.NAME` in each column.
+Each column header is a parameter id or `action.NAME`.
 Row `i` after the header becomes config `i` of its block, counted from 0.
-A parameter or action the table leaves out keeps its fixed value, its default or its own tick.
+A parameter or action that the table omits keeps its fixed value, its default or its own tick.
 Values are written as `--set` takes them, and spaces around a field and blank lines are ignored.
-A column that names nothing is refused, and the error lists the columns there can be.
+A column that matches no parameter or action is rejected, and the error lists the valid columns.
 
-`--design FILE` runs a table from the command line, in place of `--vary`.
+`--design FILE` runs a table from the command line, instead of `--vary`.
 The table is then the sweep's only block, and row `i` is config `i` of the sweep.
-There an `action.NAME` column names an action `--act` adds, by its id.
-A spec file names its table in a block:
+There an `action.NAME` column refers to an action that `--act` adds, by its id.
+A spec file specifies its table in a block:
 
 ``` toml title="sir_table.toml"
 --8<-- "crates/henad-explore/specs/sir_table.toml:table"
@@ -445,12 +445,12 @@ cargo run --release -p henad-cli -- --spec sir_table.toml --out sir-table
 
 `file` is relative to the spec file, and cannot be absolute or hold `..`.
 The manifest records the table's path and a hash of its text.
-Its copy of the spec holds the table itself under `table_text`, a key that a spec file can also use in place of `file`.
+Its copy of the spec holds the table itself under `table_text`, a key that a spec file can also use instead of `file`.
 
 ### Sensitivity analysis with SALib
 
 [SALib](https://salib.readthedocs.io) draws the designs of a global sensitivity analysis, such as Sobol and Morris, and computes the indices from the outputs.
-Henad draws neither design itself, and a design table carries one from SALib to Henad.
+Henad draws neither design itself, and a design table carries the design from SALib to Henad.
 
 First, save the model's parameters and their bounds as JSON:
 
@@ -482,7 +482,7 @@ cargo run --release -p henad-cli -- sir --design sobol.csv \
   --set grid_width=256 --set grid_height=256 --reps 4 --steps 500 --out sir-sobol
 ```
 
-Then hand an output back to SALib:
+Then pass an output back to SALib:
 
 ``` python
 from SALib.analyze import sobol
@@ -522,15 +522,15 @@ The [CLI reference](../reference/cli.md#output-directory) lists every column.
 
 Each run is written as soon as the runs before it are.
 A sweep you stop part way keeps what it wrote.
-Henad refuses a directory that already holds results, so give each sweep a directory of its own, or [resume](#resuming-a-sweep) the one it stopped in.
+Henad rejects a directory that already holds results, so give each sweep its own directory, or [resume](#resuming-a-sweep) a stopped sweep in its directory.
 
 A run can fail, for example when a model panics at one parameter value.
 The failure is recorded in `runs.csv` with its status and the panic message, and the sweep carries on with the next run.
-The command then exits with status 3 in place of 0, for a script to check.
+The command then exits with status 3 instead of 0, for a script to check.
 
 ## Concurrency
 
-A sweep steps several runs at once, and the `layout` line of the plan shows how many.
+A sweep steps several runs at once, and the `layout` line of the plan shows how many runs.
 Henad picks the layout from the first config that builds without a fault and the last config, whichever of the two holds more memory.
 
 The layout never changes a result.
@@ -544,9 +544,9 @@ All three CSV files come out the same byte for byte at any `--concurrent`, apart
 
 ### CPU lanes
 
-On a CPU model, each run steps in a lane of its own.
+On a CPU model, each run steps in its own lane.
 A small model gets many lanes of one thread each, and a large model fewer lanes of more threads, down to a single lane on every core.
-`--concurrent N` sets the number of lanes yourself, and `--memory` caps the bytes the lanes hold together:
+`--concurrent N` sets the number of lanes yourself, and `--memory` caps the bytes that the lanes hold together:
 
 ``` bash
 cargo run --release -p henad-cli -- sir \
@@ -556,8 +556,8 @@ cargo run --release -p henad-cli -- sir \
 
 ### GPU tracks
 
-On a GPU model, each run steps on a **track** of its own, and the tracks share the GPU.
-Henad visits the tracks in turn, and each visit hands the GPU a batch of up to 64 steps of that track's run.
+On a GPU model, each run steps on its own **track**, and the tracks share the GPU.
+Henad visits the tracks in turn, and each visit submits a batch of up to 64 steps of that track's run to the GPU.
 `auto` picks at most four tracks, and a small grid gets all four:
 
 ``` bash
@@ -571,7 +571,7 @@ cargo run --release -p henad-cli -- gpu_sir --set grid_width=256 --set grid_heig
 ```
 
 A small model finishes each batch quickly, and a single run leaves the GPU waiting: for its next batch, and for each sample's stats to reach the CPU.
-Other tracks fill those waits with batches of their own.
+Other tracks fill those waits with their own batches.
 The gain depends on the model.
 Time a short sweep at `--concurrent 1` and at `auto` before a long one.
 
@@ -579,14 +579,14 @@ A large model keeps the GPU busy on its own.
 More tracks then split the GPU between runs and hold more of its memory.
 With `auto`, a model of 1,048,576 cells or agents or more gets a single track, such as `gpu_sir` at its default grid of 1024 by 1024.
 
-`--concurrent N` sets the number of tracks yourself, and `--gpu-memory` caps the bytes of GPU memory the runs on the tracks hold together.
+`--concurrent N` sets the number of tracks yourself, and `--gpu-memory` caps the bytes of GPU memory that the runs on the tracks hold together.
 A run starts only once it fits beside the runs already on the GPU.
 A run that fits beside no other run steps alone.
-The graphics API reports no total for a GPU's memory, and without `--gpu-memory` the largest buffer the GPU allows stands in for the cap.
+The graphics API reports no total for a GPU's memory, and without `--gpu-memory` the largest buffer that the GPU allows acts as the cap.
 A run that still finds the GPU out of memory waits for another run to finish, and the sweep runs one track fewer from then on.
 
 With several tracks, the time the sweep spends visiting them is split evenly between their runs.
-A run's `wall_ms`, its `steps_per_s` and its `--timeout` all read its share.
+A run's `wall_ms`, its `steps_per_s` and its `--timeout` all count only that share.
 Pass `--concurrent 1` when the time of each run matters.
 
 A fault in one run ends that run alone, and the other tracks carry on.
@@ -605,20 +605,20 @@ cargo run --release --locked -p henad-cli -- sir \
   --vary infection_rate=0.1:0.5:0.1 --reps 5 --steps 500 --out sir-sweep --resume
 ```
 
-The plan counts the runs the directory holds and the runs left:
+The plan counts the runs that the directory holds and the runs left:
 
 ```text
   resume:       20 runs skipped, 5 to run
 ```
 
 A resume first checks that the directory holds the same sweep.
-The model and its declarations, the configs, the steps, the sampling, the stop condition and reducers, the actions, the seeds and the shard all have to match, and a resume of anything else is refused.
+The model and its declarations, the configs, the steps, the sampling, the stop condition and reducers, the actions, the seeds and the shard all have to match, and a resume of anything else is rejected.
 Only the replicate count and the timeout can change.
-The manifest's `sessions` lists every process that wrote runs, with three builds each: Henad's, the binary's and that of the crate that registered the model.
+The manifest's `sessions` lists every process that wrote runs, with three builds each: Henad's build, the binary's build and the build of the crate that registered the model.
 A build records its commit, whether the sources differed from the commit, and a hash of the sources.
-A resume warns when Henad's build or the model's differs from one a session recorded, and goes ahead.
+A resume warns when Henad's build or the model's build differs from a build that a session recorded, and goes ahead.
 An uncommitted edit to a kernel counts as a different build, since its source hash changes.
-The [CLI reference](../reference/cli.md#builds) gives the fields and the rule that compares two builds.
+The [CLI reference](../reference/cli.md#builds) lists the fields and the rule that compares two builds.
 
 The resume then repairs what a cut-off write left behind.
 A partial last line of `runs.csv` is dropped, and so are the rows of `series.csv` whose run never reached `runs.csv`.
@@ -628,7 +628,7 @@ A run that timed out runs again.
 
 When the resume ends, the three CSV files are the same as those of a sweep that ran without a break, byte for byte apart from the timing columns.
 `--resume` on a directory with no results starts a fresh sweep, and a script can pass it every time.
-A resume of a directory that another sweep is still writing to is refused.
+A resume of a directory that another sweep is still writing to is rejected.
 A sweep leaves a file named `.lock` in its directory, killed or not, and the next resume locks it again, so it needs no clearing.
 With `--dry-run`, a resume prints its counts and changes nothing.
 In the desktop app, open the directory in the [Results tab](app.md#opening-results) and press <span class="ui" markdown>:material-play: Resume sweep</span>.
@@ -651,8 +651,8 @@ A resume can raise the replicate count and never lower it.
 
 ## Sharding a sweep
 
-A sweep too large for one machine can be split into shards, each run on a machine of its own.
-`--shard I/N` runs only the runs whose `run_id` leaves remainder `I` when divided by `N`, and writes them to a directory of its own:
+A sweep too large for one machine can be split into shards, each run on its own machine.
+`--shard I/N` runs only the runs whose `run_id` leaves remainder `I` when divided by `N`, and writes them to its own directory:
 
 ``` bash
 cargo run --release --locked -p henad-cli -- --spec sir_sweep.toml --shard 0/4 --out shard-0
@@ -671,7 +671,7 @@ The merged CSV files are the same as those of the sweep run in one piece, apart 
 A merge warns when the shards ran different builds of Henad or of the model.
 
 Build every shard, and every later resume, from one commit with `--locked`.
-Cargo then builds from the committed `Cargo.lock` and refuses to change it.
+Cargo then builds from the committed `Cargo.lock` and fails rather than change it.
 A lockfile updated on one machine changes the source hash of the build there, and the merge or resume warns that the build changed.
 
 A merge with a shard missing still writes what it has.
@@ -679,7 +679,7 @@ It warns about the missing runs, marks the manifest `incomplete` and exits with 
 Resuming the merged directory with the whole sweep's command, without `--shard`, runs the missing runs.
 
 Raising the replicate count renumbers the runs, and a finished run can land in another shard.
-Resume refuses a sharded directory whenever that happens.
+Resume rejects a sharded directory whenever that happens.
 To add replicates, merge the shards first, then resume the merged directory.
 
 ### A Slurm array job
@@ -712,7 +712,7 @@ target/release/henad-cli --merge sir-sweep/shard-* --out sir-sweep/merged
 ## Reading the results
 
 The app's [Results tab](app.md#results-tab) plots a results directory with no code.
-Open the directory there with <span class="ui" markdown>:material-folder-open-outline: Open results</span>, or name it when the app starts:
+Open the directory there with <span class="ui" markdown>:material-folder-open-outline: Open results</span>, or pass it when the app starts:
 
 ``` bash
 cargo run --release --bin henad-app -- --open sir-sweep
@@ -721,7 +721,7 @@ cargo run --release --bin henad-app -- --open sir-sweep
 In its **Response** view, pick **Infected, max** as the **Output** to plot the mean peak against the infection rate, with a 95% confidence interval on each point.
 In its **Series** view, pick **Infected** as the **Stat** to draw the mean epidemic curve of each infection rate, with a band over the replicates.
 
-Any tool that reads CSV can take the results.
+Any tool that reads CSV can load the results.
 Here they are in [pandas](https://pandas.pydata.org).
 Start with `runs.csv`, one row per run:
 

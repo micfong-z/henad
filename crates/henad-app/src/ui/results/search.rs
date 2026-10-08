@@ -21,7 +21,7 @@ use crate::ui::sweep::draft::DraftAlgorithm;
 use crate::ui::sweep::search::algorithm_label;
 use crate::ui::{plural, show_plot};
 
-/// Most cells a grid can have for the view to draw it.
+/// Maximum number of cells a grid can have for the view to draw it.
 const MAX_DRAWN_CELLS: u64 = 1 << 16;
 
 /// State the Search view keeps between frames.
@@ -55,7 +55,7 @@ pub struct PatternGrid {
     pub columns: usize,
     /// Number of cells along the y axis.
     pub rows: usize,
-    /// Candidates that landed in each cell, not finite for a cell none landed in.
+    /// Number of candidates that landed in each cell, not finite for an empty cell.
     pub hits: Vec<f64>,
     /// Exemplar of each cell, the first candidate to land in it.
     pub exemplars: Vec<Option<u64>>,
@@ -116,8 +116,8 @@ pub fn best_so_far_points(history: &SearchHistory) -> Vec<[f64; 2]> {
     points
 }
 
-/// Returns the best, the median and the worst objective of each finished generation against its index, finite
-/// values alone.
+/// Returns the best, the median and the worst objective of each finished generation against its index, using
+/// finite values only.
 pub fn generation_lines(generations: &[GenerationSummary]) -> [Vec<[f64; 2]>; 3] {
     let line = |value: fn(&GenerationSummary) -> f64| -> Vec<[f64; 2]> {
         generations
@@ -205,7 +205,8 @@ fn heading_text(search: &SearchLog) -> String {
     }
 }
 
-/// Draws the evaluations told of the budget, and the best candidate with a button that selects its first run.
+/// Draws the number of evaluations told out of the budget, and the best candidate with a button that selects its
+/// first run.
 fn best_line(ui: &mut egui::Ui, store: &ResultsStore, search: &SearchLog, request: &mut Option<ResultsRequest>) {
     let last = search.history.batches.last();
     let evaluations = last.map_or(0, |standing| standing.evaluations);
@@ -255,7 +256,7 @@ fn best_so_far_plot(ui: &mut egui::Ui, search: &SearchLog) {
     });
 }
 
-/// Draws the best, median and worst fitness of each finished generation, or why there is none to draw.
+/// Draws the best, median and worst fitness of each finished generation, or the reason there is no generation to draw.
 ///
 /// `running` is set while the search runs, and `generations_missing` for results without `generations.csv`.
 fn generations_plot(ui: &mut egui::Ui, search: &SearchLog, running: bool, generations_missing: bool) {
@@ -436,8 +437,8 @@ fn axis_cell_index(value: f64, axis: &PatternAxis) -> Option<usize> {
     Some(axis.cell_index(value)?.0 as usize)
 }
 
-/// Returns the colour of a cell `hits` candidates landed in, on a log scale up to `max_hits`, or [`NO_DATA_COLOR`] for
-/// a cell none landed in.
+/// Returns the colour of a cell that `hits` candidates landed in, on a log scale up to `max_hits`, or
+/// [`NO_DATA_COLOR`] for an empty cell.
 fn hits_color(hits: f64, max_hits: f64) -> Color32 {
     if !hits.is_finite() {
         return NO_DATA_COLOR;

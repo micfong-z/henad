@@ -158,7 +158,7 @@ fn a_sweep_that_fails_once_its_manifest_is_written_is_marked_failed() {
     let spec = spec_over("divides_by_param", "divisor", &["1", "2"]);
     let scratch = ScratchDir::new("failed-sweep");
     sweep(&model, None, &spec, scratch.path(), Concurrency::Auto);
-    // A directory in place of summary.csv stops the resume after it has written its manifest.
+    // A directory instead of summary.csv stops the resume after it has written its manifest.
     std::fs::remove_file(scratch.path().join(SUMMARY_FILE)).expect("summary.csv is written");
     std::fs::create_dir(scratch.path().join(SUMMARY_FILE)).expect("a directory takes its place");
     let error = sweep_with(

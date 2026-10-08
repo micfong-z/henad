@@ -7,7 +7,7 @@ authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 # The workspace's licence, with the fonts the library embeds: IBM Plex derivatives under OFL-1.1 and two icon fonts
-# under Apache-2.0 alone. `assets/fonts/SOURCES.md` lists each.
+# under Apache-2.0 alone. `assets/fonts/SOURCES.md` lists every font.
 license = "(MIT OR Apache-2.0) AND OFL-1.1 AND Apache-2.0"
 repository.workspace = true
 homepage.workspace = true
@@ -19,7 +19,7 @@ categories = ["simulation", "science", "visualization", "gui"]
 [lib]
 path = "src/lib.rs"
 
-# The official binary opens the example models. A host with models of its own calls `henad_app::run_native` or
+# The official binary opens the example models. A host with its own models calls `henad_app::run_native` or
 # `henad_app::start_web`.
 [[bin]]
 name = "henad-app"
@@ -30,7 +30,7 @@ required-features = ["example-models"]
 default = ["example-models"]
 # The ten example models, and the logger of the official binary.
 example-models = ["dep:henad-models", "dep:env_logger"]
-# Lets an external inspector (egui_mcp) drive the app. Off unless asked for, and inert at runtime
+# Lets an external inspector (egui_mcp) drive the app. Off by default, and inert at runtime
 # until EGUI_INSPECTION is set.
 inspection = ["eframe/inspection"]
 
@@ -89,7 +89,7 @@ web-sys = { workspace = true, features = [
 ] }
 
 # A wasm32 build without atomics, as docs.rs makes, has no thread pool and runs the models on one thread.
-# wasm-bindgen-rayon refuses to compile there.
+# wasm-bindgen-rayon does not compile there.
 [target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
 wasm-bindgen-rayon = { workspace = true }
 

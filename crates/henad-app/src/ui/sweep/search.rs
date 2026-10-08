@@ -25,10 +25,10 @@ use crate::ui::sweep::layout::{
     note_line_with_button, slot, text_width,
 };
 
-/// Most candidates the Batch size field takes.
+/// Maximum number of candidates that the Batch size field accepts.
 const MAX_BATCH_SIZE: usize = 1 << 16;
 
-/// Most cells the Cells field of a grid axis takes.
+/// Maximum number of cells that the Cells field of a grid axis accepts.
 const MAX_AXIS_CELLS: u32 = 256;
 
 /// Width of an axis's Minimum and Maximum fields, in points.
@@ -43,7 +43,7 @@ const METHOD_SETTINGS_ID: &str = "henad_sweep_method_settings";
 /// Key of the population setting. Its row sits beside the budget, outside Method settings.
 const POPULATION_KEY: &str = "genetic.population";
 
-/// Note under the axes while either still spans 0 to 0.
+/// Note under the axes while either axis still spans 0 to 0.
 pub const AXES_UNSET: &str =
     "Set Minimum and Maximum for each axis. Values outside the range will be counted in the edge cells.";
 
@@ -72,7 +72,7 @@ const PATTERN_AGGREGATE_TOOLTIP: &str =
 
 const STEP_SIZE_TOOLTIP: &str = "Largest change to a parameter, as a fraction of its range";
 
-/// Returns the name the Sweep and Results tabs give `algorithm`.
+/// Returns the name that the Sweep and Results tabs use for `algorithm`.
 pub fn algorithm_label(algorithm: DraftAlgorithm) -> &'static str {
     match algorithm {
         DraftAlgorithm::Random => "Random search",
@@ -91,7 +91,7 @@ fn algorithm_tooltip(algorithm: DraftAlgorithm) -> &'static str {
     }
 }
 
-/// Returns the line under the Method field that says what `algorithm` does.
+/// Returns the line under the Method field that describes `algorithm`.
 pub fn algorithm_description(algorithm: DraftAlgorithm) -> &'static str {
     match algorithm {
         DraftAlgorithm::Random => "Tries random configurations and keeps the best.",
@@ -103,7 +103,7 @@ pub fn algorithm_description(algorithm: DraftAlgorithm) -> &'static str {
     }
 }
 
-/// Returns the labels of the rows Method settings holds for `algorithm`.
+/// Returns the labels of the rows that Method settings holds for `algorithm`.
 fn method_setting_labels(algorithm: DraftAlgorithm) -> &'static [&'static str] {
     match algorithm {
         DraftAlgorithm::Random => &[],
@@ -228,9 +228,9 @@ pub fn method_settings_summary(search: &SearchDraft) -> String {
 /// Returns the note under the axes of `settings`: the cells of the grid, or the issues of both axes at once.
 ///
 /// `issues` are the issues of the two axis rows. Invalid input comes first, each issue led by its axis. An axis still
-/// spanning 0 to 0 is missing input, and [`AXES_UNSET`] asks for the range of both.
+/// spanning 0 to 0 is missing input, and [`AXES_UNSET`] tells the user to set the range of each axis.
 pub fn axes_note(settings: &PatternSpaceSettings, issues: &[&DraftIssue]) -> Note {
-    // Each issue is led by its axis, unless its message names the axis already.
+    // Each issue is led by its axis, unless its message already refers to the axis.
     let lines = |keep: &dyn Fn(&DraftIssue) -> bool| -> String {
         let lines: Vec<String> = issues
             .iter()
@@ -262,7 +262,7 @@ pub fn axes_note(settings: &PatternSpaceSettings, issues: &[&DraftIssue]) -> Not
 
 /// Reads a bound of an axis as its field writes it, digits grouped by commas.
 ///
-/// Spaces are ignored, and the minus sign U+2212 reads as a hyphen.
+/// Spaces are ignored, and the minus sign U+2212 is read as a hyphen.
 pub fn parse_bound(text: &str) -> Option<f64> {
     let text: String = text
         .chars()
@@ -296,7 +296,7 @@ pub(super) fn search_section(ui: &mut Ui, rows: &mut FormRows, draft: &mut Sweep
     let schema = input.schema;
     let summary = input.summary;
     let choices = OutputChoices::of(draft, schema);
-    // Outputs a loaded search reads that its runs do not record, for the button that adds them.
+    // A loaded search can read outputs its runs do not record. The Add to Outputs button records them.
     let unrecorded: Vec<String> = draft
         .search
         .watched_columns()
@@ -343,7 +343,7 @@ struct OutputLists<'a> {
 
 fn method_row(ui: &mut Ui, rows: &mut FormRows, search: &mut SearchDraft, summary: &CheckSummary) {
     let layout = rows.layout;
-    // An issue of the search as a whole takes the place of the description.
+    // An issue of the search as a whole replaces the description.
     let note = Note::issue_or(
         summary.issues_at(DraftSite::Search),
         Note::Weak(algorithm_description(search.algorithm).to_owned()),
@@ -370,7 +370,8 @@ fn method_row(ui: &mut Ui, rows: &mut FormRows, search: &mut SearchDraft, summar
     rows.reveal_row(ui, DraftSite::Search, &method, None);
 }
 
-/// Draws the Objective, Goal and Across replicates rows. An output picked among those not recorded goes to `added`.
+/// Draws the Objective, Goal and Across replicates rows. An output picked from those not recorded is written to
+/// `added`.
 fn objective_rows(
     ui: &mut Ui,
     rows: &mut FormRows,
@@ -426,7 +427,7 @@ struct AxisContext<'a> {
     results: Option<&'a ResultsStore>,
 }
 
-/// Returns the part of an axis's id that names it.
+/// Returns the part of an axis's id that identifies it.
 fn axis_key(axis: GridAxis) -> &'static str {
     match axis {
         GridAxis::X => "x",
@@ -435,7 +436,7 @@ fn axis_key(axis: GridAxis) -> &'static str {
 }
 
 /// Draws a row per axis with its output and range, the note of both axes, and the Across replicates row. An output
-/// picked among those not recorded goes to `added`.
+/// picked from those not recorded is written to `added`.
 fn axis_rows(
     ui: &mut Ui,
     rows: &mut FormRows,
@@ -508,7 +509,7 @@ type AxisField<'a> = (&'a str, &'a mut dyn FnMut(&mut Ui) -> Response);
 /// Draws the Automatic range checkbox of an axis under the axis's row, whose label is `axis_label`, then its
 /// Minimum, Maximum and Cells: on one line, or one line each in a cell narrower than [`AXIS_FIELDS_STACK_BELOW`].
 ///
-/// `search` and `axis` name the axis in the draft. While its range is automatic, Cells shows alone, and the draft
+/// `search` and `axis` identify the axis in the draft. While its range is automatic, Cells shows alone, and the draft
 /// keeps the range the bounds held. While the Results tab holds runs of the model, a button beside the checkbox sets
 /// both bounds to `range`.
 fn range_rows(
@@ -615,8 +616,7 @@ fn bound_drag_value(value: &mut f64, speed: f64) -> DragValue<'_> {
         .custom_parser(parse_bound)
 }
 
-/// Draws the Evaluations and Batch size rows, and Population for a genetic algorithm, each with what its value
-/// means for the runs.
+/// Draws the Evaluations and Batch size rows, and Population for a genetic algorithm, each with its feedback.
 fn budget_rows(ui: &mut Ui, rows: &mut FormRows, search: &mut SearchDraft, replicates: u64, summary: &CheckSummary) {
     let layout = rows.layout;
     let feedback = Note::Weak(evaluations_feedback(search.max_evaluations, replicates));
@@ -721,7 +721,8 @@ fn feedback_row(
     response.on_hover_text(tooltip).labelled_by(label.id)
 }
 
-/// Draws the row of the method setting `key`, with its issue in the feedback slot, and reveals it when asked.
+/// Draws the row of the method setting `key`, with its issue in the feedback slot, and reveals the row when it is the
+/// row to reveal.
 fn setting_row(
     ui: &mut Ui,
     rows: &mut FormRows,
@@ -932,7 +933,7 @@ fn goal_combo(ui: &mut Ui, width: f32, goal: &mut Goal) -> Response {
         .response
 }
 
-/// Draws the Across replicates row, whose combo box of id `id` writes `aggregate`.
+/// Draws the Across replicates row, whose combo box with id `id` writes `aggregate`.
 fn aggregate_row(ui: &mut Ui, layout: &FormLayout, id: Id, aggregate: &mut Aggregate, tooltip: &str) {
     let text = |aggregate: Aggregate| match aggregate {
         Aggregate::Median => "Median",

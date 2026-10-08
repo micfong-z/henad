@@ -8,7 +8,7 @@ icon: material/layers-outline
 
 A field is the grid slot an [agent model](agent-models.md) sits over.
 It owns the cells, updates them once per tick and draws them.
-An `AgentModel` names one as its `Field` associated type, and Henad ships three implementations.
+An `AgentModel` declares its field as the `Field` associated type, and Henad ships three implementations.
 
 | Type | Contents | Used by |
 |---|---|---|
@@ -27,7 +27,7 @@ Pick `ScalarField` for agents that leave deposits behind them and let those depo
 Alongside them sit a `u8` layer of static terrain and a `u8` layer of quantised palette indices.
 Ants runs two layers, a route-to-food trail and a route-to-home trail.
 
-The mechanics belong to the engine, and your model fills in the rules it cannot know through `ScalarFieldSpec`.
+The mechanics belong to the engine, and you implement `ScalarFieldSpec` to supply the rules that the engine cannot know.
 
 | Item | Role |
 |---|---|
@@ -52,7 +52,7 @@ pub struct Deposits {
 }
 ```
 
-An agent that writes one layer leaves the others at the combine's identity, which keeps every lane dense and saves each layer from needing its own agent list.
+An agent that writes one layer leaves the other layers at the combine's identity, which keeps every lane dense and saves each layer from needing its own agent list.
 The lanes are allocated once for the population and reused every tick, and ants fills them from `run_deposit_pass`.
 
 ### Combining
@@ -79,7 +79,7 @@ Its `deposit_value` floors at the value the cell already holds, so a maximum rep
 
 **Banded.** The grid is split into one contiguous band per worker, and each band merges only the deposits landing in it.
 Nothing is allocated per worker, and a deposit of the identity is dropped rather than merged.
-This is the arm a field layer normally takes, since a model's grid is sized by its world and its deposits by its population.
+This is the arm that a field layer normally uses, since a model's grid is sized by its world and its deposits by its population.
 
 **Shadow.** Every rayon worker fills its own private grid without contention, and the grids are then reduced across workers per cell.
 The scratch cost is `n_cells * workers`, paid whether one agent deposits or a million.
@@ -91,9 +91,9 @@ Between the two dense arms the choice is made at construction, from whether the 
 Banded takes over per call, whenever there are more cells than deposits.
 Both judgements depend on things that vary with the machine, which puts a hard requirement on the arms: **all three must produce identical bits**.
 Otherwise a model's results would depend on where it ran.
-A test pins each arm explicitly and checks that they agree, in the dense regime and the sparse one.
+A test pins each arm explicitly and checks that they agree, in both the dense and the sparse regime.
 
-A field that decays every tick hands its decay to the scatter rather than walking the grid again afterwards.
+A field that decays every tick passes its decay to the scatter rather than walking the grid again afterwards.
 
 !!! warning "Atomics scale badly here"
 
@@ -113,16 +113,16 @@ See [palettes and views](views.md).
 ## `CaField`
 
 `CaField<M>` puts a whole `GridModel` underneath a population.
-The grid steps by `M`'s neighbourhood rule, the agent kernel reads it as a plain `&[u8]`, and the field takes no deposits.
+The grid steps by `M`'s neighbourhood rule, the agent kernel reads it as a plain `&[u8]`, and the field accepts no deposits.
 
 `M::init` and `M::step_cell` behave exactly as they do for a standalone grid model.
 A `GridModel` you have already written and tested drops in underneath a population unchanged.
 
 ## Parameters
 
-A field declares its own parameters, which are appended after the model's own.
+A field declares its own parameters, and the engine appends them after the model's parameters.
 Both `from_params` calls receive their own 0-based slice, worked out from the descriptor lengths.
-A model or a layer that gains a parameter therefore cannot shift the other's indices.
+A parameter added to the model therefore cannot shift the field's indices, and a parameter added to the field cannot shift the model's indices.
 
 For ants, the composed list looks like this:
 

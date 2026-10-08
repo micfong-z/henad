@@ -1,6 +1,17 @@
-//! Parameter sweeps and searches over Henad models.
+//! Parameter sweeps and searches over Henad models, and the folders of results they write.
+//!
+//! A sweep plans a spec against a model and runs every planned run. A search runs a spec's `[search]` table a batch of
+//! candidates at a time. On native, `sweep::run_spec` runs either and blocks until it ends, and `sweep::plan_spec`
+//! plans and probes one without running it. [`handle::SweepRun`] runs one beside a host's frame loop, on its own
+//! thread on native and pumped from the frames in a browser. [`spec_file`] reads and writes the TOML form of a spec.
+//!
+//! A sweep writes `manifest.json`, `runs.csv`, `series.csv` and `summary.csv` to a folder or to memory, and a search
+//! writes its own tables beside them. [`merge::merge`] joins the folders of a sweep's shards, and
+//! [`result_set::ResultSet`] reads a folder back. `benchmark` times a model's step loop, and `testing` holds the
+//! checks that a model's tests run against its entry.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 // Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
 // limit of 128.
 #![recursion_limit = "256"]

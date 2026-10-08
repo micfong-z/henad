@@ -15,10 +15,10 @@ use henad_core::params::ParamValue;
 
 use crate::output::manifest::now_unix_ms;
 
-/// Most refused configs a [`CapacityError`] lists.
+/// Maximum number of rejected configs that a [`CapacityError`] lists.
 pub const MAX_LISTED_CONFIGS: usize = 5;
 
-/// Most configs [`ProbeReport::for_plan`] builds before it gives up.
+/// Maximum number of configs that [`ProbeReport::for_plan`] builds before it gives up.
 pub const MAX_PROBED_CONFIGS: usize = 8;
 
 /// Stat columns and footprint of one build of a model, sampled at tick 0.
@@ -30,10 +30,11 @@ pub struct ProbeReport {
     pub seed: Option<u64>,
     /// Columns of the sample at tick 0. Every later sample of the sweep must fit them.
     pub columns: StatColumns,
-    /// Bytes the state holds on the host.
+    /// Size in bytes of the state on the host.
     pub heap_bytes: u64,
+    /// Population at tick 0.
     pub population: u64,
-    /// Jobs one step splits into, `None` when the backend does not say.
+    /// Number of jobs that one step splits into, `None` when the backend does not say.
     pub parallel_jobs: Option<usize>,
     /// Device resources of the build, `None` for a CPU model.
     pub demand: Option<Demand>,
@@ -97,8 +98,8 @@ impl ProbeReport {
 
     /// Builds the last config of `plan` with the seed of its first run.
     ///
-    /// Returns `None` for a plan of one config or a last config `probed` already built. A last config that faults
-    /// gives `None` too, and is left for its runs to record.
+    /// Returns `None` for a plan of one config or a last config `probed` already built. Also returns `None` for a last
+    /// config that faults, and leaves the fault for its runs to record.
     pub fn for_last_config(entry: &ModelEntry, gpu: Option<&GpuContext>, plan: &Plan, probed: &Self) -> Option<Self> {
         let config_id = plan.configs().len().checked_sub(1)? as u64;
         let config = plan.config(config_id)?;
@@ -109,18 +110,18 @@ impl ProbeReport {
         Self::build(entry, gpu, &config.params, Some(run.seed)).ok()
     }
 
-    /// Bytes the build holds, on the host and on the device together.
+    /// Memory in bytes that the build holds, on the host and on the device together.
     pub fn footprint(&self) -> u64 {
         self.heap_bytes + self.demand.as_ref().map_or(0, Demand::bytes)
     }
 
-    /// Returns the report of the same CPU build made on a thread pool of `threads` workers.
+    /// Returns the report of the same CPU build made on a thread pool with `threads` workers.
     ///
     /// Note that a buffer sized to the pool, such as a scatter grid's scratch, can change the host bytes.
     ///
     /// # Errors
     ///
-    /// Returns [`ProbeError::Pool`] when the pool cannot be built, and the error [`Self::build`] gives.
+    /// Returns [`ProbeError::Pool`] when the pool cannot be built, and the error that [`Self::build`] returns.
     pub fn rebuilt_on(&self, entry: &ModelEntry, threads: usize) -> Result<Self, ProbeError> {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -232,7 +233,7 @@ fn probe_gpu(
     })
 }
 
-/// Refuses a GPU model. A browser cannot block on the device, and a sample blocks.
+/// Rejects a GPU model. A browser cannot block on the device, and a sample blocks.
 #[cfg(target_arch = "wasm32")]
 fn probe_gpu(
     _entry: &ModelEntry,
@@ -247,20 +248,22 @@ fn probe_gpu(
 /// Fault of the probe build of one config.
 #[derive(Debug)]
 pub struct ConfigFault {
+    /// Id of the config in its plan.
     pub config_id: u64,
+    /// Fault of the build or of its sample at tick 0.
     pub fault: Fault,
 }
 
 /// A probe build that cannot run.
 #[derive(Debug)]
 pub enum ProbeError {
-    /// A GPU model with no device to sample it on. A browser never has one.
+    /// A GPU model with no device to sample it on. In a browser the probe never receives a device.
     NoDevice,
     /// The build or its sample at tick 0 faulted.
     Fault(Fault),
     /// Every config [`ProbeReport::for_plan`] tried faulted, each with its fault.
     EveryConfigFaulted(Vec<ConfigFault>),
-    /// Building the thread pool of a probe build failed.
+    /// Building the thread pool for a probe build failed.
     Pool(rayon::ThreadPoolBuildError),
 }
 
@@ -298,17 +301,18 @@ impl std::error::Error for ProbeError {
 /// A config the device cannot host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefusedConfig {
+    /// Id of the config in its plan.
     pub config_id: u64,
-    /// Reasons the device refuses the config, from [`ModelEntry::shortfalls`].
+    /// Reasons the device rejects the config, from [`ModelEntry::shortfalls`].
     pub reasons: Vec<String>,
 }
 
 /// Configs of a plan the device cannot host, found before any run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapacityError {
-    /// First refused configs, up to [`MAX_LISTED_CONFIGS`] of them.
+    /// First rejected configs, up to [`MAX_LISTED_CONFIGS`] of them.
     pub refused: Vec<RefusedConfig>,
-    /// Number of refused configs.
+    /// Number of rejected configs.
     pub count: u64,
 }
 

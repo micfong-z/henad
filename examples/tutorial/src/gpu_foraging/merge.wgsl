@@ -1,8 +1,8 @@
 // Folds this tick's deposits into the field and decays it, one invocation per cell per layer.
 //
-// The CPU equivalent is `ScalarField::update`: scatter with `Combine::Max` into the next buffer,
-// then decay it. Resetting `accum` here rather than clearing the buffer each tick costs nothing,
-// since this pass already owns the cell.
+// The CPU equivalent, `ScalarField::update`, scatters with `Combine::Max` into the next buffer,
+// then decays it. This pass also resets each `accum` entry it reads, instead of clearing the
+// whole buffer every tick.
 
 #import henad::dispatch::linear_index
 
@@ -14,7 +14,7 @@ struct Params {
 }
 
 @group(0) @binding(0) var<storage, read_write> field: array<f32>;
-// `atomic<u32>` in the step shader. Only one invocation touches each entry here.
+// The step shader binds this as `atomic<u32>`. Only one invocation touches each entry here.
 @group(0) @binding(1) var<storage, read_write> accum: array<u32>;
 @group(0) @binding(2) var<uniform> params: Params;
 
@@ -36,7 +36,7 @@ fn main(
     // Decay after the merge, so a fresh deposit is already one step old when read.
     var v = max(field[i], deposited) * params.evaporation;
     if (v < params.low) {
-        // Without the floor a trail never disappears, it just asymptotes.
+        // Without the floor a trail never disappears.
         v = 0.0;
     }
     field[i] = v;

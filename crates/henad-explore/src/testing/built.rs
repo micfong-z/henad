@@ -15,7 +15,7 @@ fn build(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuContext>) ->
         .map_err(|fault| format!("The model did not build. {}", fault_text(&fault)))
 }
 
-/// Returns the runner interface of either arm.
+/// Returns the runner interface of either variant of `ModelState`.
 fn sim_state(state: &mut ModelState) -> &mut dyn SimState {
     match state {
         ModelState::Cpu(state) => state.as_mut(),
@@ -24,7 +24,7 @@ fn sim_state(state: &mut ModelState) -> &mut dyn SimState {
 }
 
 /// Checks [`super::ModelCheck::ApplyModes`]. The Parameters panel labels a parameter from its descriptor and the
-/// state decides what it accepts, and the two disagreeing make the panel misreport an edit.
+/// state decides what it accepts. When the descriptor and the state disagree, the panel misreports an edit.
 pub(super) fn apply_modes(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuContext>) -> Result<(), String> {
     let mut built = build(entry, values, gpu)?;
     let state = sim_state(&mut built);
@@ -59,7 +59,7 @@ pub(super) fn views(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuC
             Some(state.point_view().is_some()),
             Some(state.edge_view().is_some()),
         ),
-        // A GPU state publishes through its snapshot rather than through the CPU views.
+        // A GPU state publishes its views through its snapshot.
         (ModelState::Gpu(state), Backend::Gpu) => {
             let view = state.view();
             (Some(view.display.is_some()), Some(view.agents.is_some()), None)
@@ -90,8 +90,8 @@ pub(super) fn views(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuC
     }
 }
 
-/// Checks [`super::ModelCheck::ParallelJobs`]. The benchmark CSV carries the job count beside the thread count, where
-/// a blank cell has to mean a GPU model rather than a CPU one that reports nothing.
+/// Checks [`super::ModelCheck::ParallelJobs`]. The benchmark CSV carries the job count beside the thread count, and a
+/// blank cell there has to mean a GPU model.
 pub(super) fn parallel_jobs(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuContext>) -> Result<(), String> {
     let mut built = build(entry, values, gpu)?;
     let cpu = matches!(built, ModelState::Cpu(_));
@@ -104,7 +104,7 @@ pub(super) fn parallel_jobs(entry: &ModelEntry, values: &[ParamValue], gpu: Opti
 }
 
 /// Checks [`super::ModelCheck::Actions`]. The Parameters panel draws a button per declared action and the state
-/// decides what it runs, and the two disagreeing make a button that does nothing.
+/// decides what it runs. When the declaration and the state disagree, a button does nothing.
 pub(super) fn actions(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuContext>) -> Result<(), String> {
     let mut built = build(entry, values, gpu)?;
     let state = sim_state(&mut built);

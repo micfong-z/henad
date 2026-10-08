@@ -1,24 +1,30 @@
-//! Combines per-agent deposits into a grid, for models where many agents write the same cell.
+//! Scatter of per-agent deposits into a grid, for models where many agents write the same cell.
 //!
-//! Three arms behind one API. Two dense ones are picked from how much scratch the shadow route
-//! would need, and a sparse one takes over when the deposits are thinner than the grid. The choice
-//! depends on the worker count and on the deposit count, so every arm has to produce identical
-//! bits.
+//! A [`ScatterGrid`] has three arms behind one API. The shadow arm gives each worker a copy of the grid, the sorted arm
+//! counting-sorts the deposits by cell, and the banded arm gives each worker a contiguous band of cells. One of the two
+//! dense arms is picked from how much scratch the shadow arm would need, and the banded arm takes over a
+//! [`Combine::Max`] call whose deposits are thinner than the grid. The choice depends on the worker count and on the
+//! deposit count, so every arm has to produce identical bits.
+//!
+//! No arm uses atomics. They scale negatively under this contention. `benches/scatter.rs` measures the choice.
 
 use rayon::prelude::*;
 
-/// Shadow scratch above this falls back to sorting.
+/// Maximum shadow scratch size, in bytes, before a grid falls back to the sorted arm.
 pub const SHADOW_BUDGET_BYTES: usize = 256 << 20;
 
 /// Rule for combining deposits that land in the same cell.
 ///
-/// Both are commutative and associative, which is what lets the scatter run in parallel at all.
+/// Both rules are commutative and associative. The scatter can then combine deposits in any order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Combine {
-    /// Values and the base grid must be non-negative, since `0.0` is the identity.
+    /// Largest value. Values and the base grid must be non-negative, since `0.0` is the identity.
     Max,
-    /// Fixed point at `scale` steps per unit, because f32 addition is not associative.
-    SumFixed { scale: f32 },
+    /// Sum in fixed point, because f32 addition is not associative.
+    SumFixed {
+        /// Fixed-point steps per unit of value. Each deposit rounds down to a whole step.
+        scale: f32,
+    },
 }
 
 impl Combine {
@@ -33,16 +39,18 @@ impl Combine {
 /// The arm a [`ScatterGrid`] resolved to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
+    /// One copy of the grid per worker, merged cell by cell.
     Shadow,
+    /// Deposits counting-sorted by cell, each cell reducing its own run.
     Sorted,
     /// Cells in one contiguous band per worker, each band merging only the deposits that land in
-    /// it. Needs no scratch proportional to the grid, so it is picked per call.
+    /// it. It needs no scratch proportional to the grid, and is picked per call. It serves [`Combine::Max`] alone.
     Banded,
 }
 
 /// Reusable scratch for combining per-agent deposits into a grid.
 ///
-/// Only the chosen arm's buffers get allocated, the other arm's stay empty.
+/// Only the chosen dense arm's buffers are allocated. The banded arm's scratch follows the deposit count of each call.
 pub struct ScatterGrid {
     n_cells: usize,
     combine: Combine,
@@ -52,7 +60,7 @@ pub struct ScatterGrid {
     shadow_max: Vec<Vec<f32>>,
     shadow_sum: Vec<Vec<u64>>,
 
-    // Banded arm. Deposits bucketed by band, so a band reads only its own.
+    // Banded arm. Deposits bucketed by band, so a band reads only its own deposits.
     band_start: Vec<u32>,
     band_write: Vec<u32>,
     band_cells: Vec<u32>,
@@ -60,7 +68,7 @@ pub struct ScatterGrid {
 
     // Sorted arm.
     cell_start: Vec<u32>,
-    /// Retained rather than cloned from `cell_start` per call, so a scatter does not allocate.
+    /// Write cursor of each cell, kept between calls so a scatter does not allocate.
     write_pos: Vec<u32>,
     sorted_values: Vec<f32>,
 
@@ -82,11 +90,16 @@ impl std::fmt::Debug for ScatterGrid {
 }
 
 impl ScatterGrid {
+    /// Creates the scratch for a grid of `n_cells` cells, with a shadow budget of [`SHADOW_BUDGET_BYTES`].
     pub fn new(n_cells: usize, combine: Combine) -> Self {
         Self::with_budget(n_cells, combine, SHADOW_BUDGET_BYTES)
     }
 
-    /// Explicit budget, so a test can pin either dense arm and check the arms agree.
+    /// Creates the scratch with a shadow budget of `budget_bytes`.
+    ///
+    /// The dense arm is the shadow one when a copy of the grid per worker fits the budget, and the sorted one
+    /// otherwise.
+    /// Note that the worker count is read from the current rayon pool here.
     pub fn with_budget(n_cells: usize, combine: Combine, budget_bytes: usize) -> Self {
         let workers = worker_count();
         let shadow_bytes = n_cells
@@ -128,12 +141,12 @@ impl ScatterGrid {
     }
 
     /// The dense arm this grid allocated for. A thin enough call takes [`Strategy::Banded`]
-    /// instead, which needs no scratch of its own. See [`Self::arm_for`].
+    /// instead. Its scratch follows the deposit count of each call. See [`Self::arm_for`].
     pub fn strategy(&self) -> Strategy {
         self.strategy
     }
 
-    /// The arm a [`Self::scatter`] of `n_deposits` values takes.
+    /// Returns the arm that a [`Self::scatter`] call with `n_deposits` values takes.
     pub fn arm_for(&self, n_deposits: usize) -> Strategy {
         #[cfg(test)]
         if let Some(forced) = self.forced {
@@ -146,21 +159,31 @@ impl ScatterGrid {
         }
     }
 
+    /// Rule that combines deposits landing in one cell.
     pub fn combine(&self) -> Combine {
         self.combine
     }
 
     /// Writes `out[c] = combine(base[c], every value whose cell is c)`.
     ///
-    /// Lanes rather than a per-call deposit, since the sorted arm needs the whole mapping up front.
+    /// `cells` and `values` are lanes with one entry per deposit, since the sorted arm needs the whole mapping up
+    /// front.
     /// Depositing the identity is a no-op, so a model with two fields can keep one dense lane set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cells` and `values` differ in length, or if `base` or `out` is not the grid's size.
     pub fn scatter(&mut self, cells: &[u32], values: &[f32], base: &[f32], out: &mut [f32]) {
         self.scatter_then(cells, values, base, out, |v| v);
     }
 
-    /// As [`Self::scatter`], with `finish` applied to every combined cell before it is written.
+    /// Scatters as [`Self::scatter`] does, with `finish` applied to every combined cell before it is written.
     ///
-    /// A field that decays every tick passes its decay here rather than running a pass of its own.
+    /// A field that decays every tick passes its decay here rather than running its own pass.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cells` and `values` differ in length, or if `base` or `out` is not the grid's size.
     pub fn scatter_then<F: Fn(f32) -> f32 + Sync>(
         &mut self,
         cells: &[u32],
@@ -184,7 +207,7 @@ impl ScatterGrid {
         }
     }
 
-    /// Approximate heap bytes owned by the scratch, for a model's `heap_bytes`.
+    /// Approximate heap memory held by the scratch, in bytes, for a model's `heap_bytes`.
     pub fn heap_bytes(&self) -> usize {
         self.shadow_max
             .iter()
@@ -202,8 +225,7 @@ impl ScatterGrid {
     }
 }
 
-// Shared inner loops. The parallel and wasm drivers differ only in how they iterate, so all the
-// arithmetic lives here and the two cannot drift apart.
+// Inner loops of the three arms, and the fixed-point conversion they share.
 
 #[inline]
 fn shadow_chunk_max(shadow: &mut [f32], cells: &[u32], values: &[f32]) {
@@ -252,7 +274,7 @@ fn reduce_shadow_max(c: usize, base: &[f32], shadows: &[Vec<f32>]) -> f32 {
 
 #[inline]
 fn reduce_shadow_sum(c: usize, base: &[f32], shadows: &[Vec<u64>], scale: f32) -> f32 {
-    // Totalled in fixed point before touching f32, so the grouping across shadows cannot matter.
+    // The total is taken in fixed point before any f32 arithmetic, and the grouping across shadows cannot matter.
     let total: u64 = shadows.iter().map(|s| s[c]).sum();
     base[c] + unfixed(total, scale)
 }
@@ -268,6 +290,8 @@ fn reduce_run_sum(c: usize, base: &[f32], run: &[f32], scale: f32) -> f32 {
     base[c] + unfixed(total, scale)
 }
 
+/// Converts `v` to fixed point at `scale` steps per unit.
+///
 /// Float to int casts saturate, so a negative deposit floors at 0 instead of wrapping.
 #[inline]
 fn fixed(v: f32, scale: f32) -> u64 {
@@ -279,7 +303,7 @@ fn unfixed(total: u64, scale: f32) -> f32 {
     total as f32 / scale
 }
 
-/// Chunk length that hands each worker exactly one contiguous run of agents.
+/// Chunk length that assigns each worker exactly one contiguous run of agents.
 #[inline]
 fn chunk_len(n_agents: usize, workers: usize) -> usize {
     n_agents.div_ceil(workers.max(1)).max(1)
@@ -289,12 +313,11 @@ fn worker_count() -> usize {
     rayon::current_num_threads()
 }
 
-/// Whether the sparse arm beats the dense one for this shape of call.
+/// Returns whether the banded arm beats the dense one for this shape of call.
 ///
 /// Shadow touches `workers * n_cells` slots however few deposits arrive, where banded touches each
-/// cell once and each deposit twice. The crossover sits at one deposit per cell, and it does not
-/// move with the worker count: `benches/scatter.rs` has banded ahead by 2.3x to 12.3x across every
-/// sparse rung and every pool width, and behind at one deposit per cell even on one worker.
+/// cell once and each deposit twice. The crossover sits at one deposit per cell at every worker count, as
+/// `benches/scatter.rs` measures.
 #[inline]
 fn banded_wins(n_cells: usize, n_deposits: usize) -> bool {
     n_deposits < n_cells
@@ -384,7 +407,7 @@ impl ScatterGrid {
             });
     }
 
-    /// Counting sort of the deposits by which band their cell falls in, identities dropped.
+    /// Counting-sorts the deposits by the band their cell falls in, dropping identities.
     fn bucket_by_band(&mut self, cells: &[u32], values: &[f32], bands: usize, band_len: usize) {
         self.band_start.clear();
         self.band_start.resize(bands + 1, 0);
@@ -416,9 +439,9 @@ impl ScatterGrid {
         }
     }
 
-    /// Counting sort by cell, permuting the values so the reduce reads contiguously.
+    /// Counting-sorts the values by cell, so the reduce reads each cell's run contiguously.
     ///
-    /// Sequential. The count and permute passes are scatter writes themselves.
+    /// This runs sequentially. The count and permute passes are scatter writes themselves.
     fn build_runs(&mut self, cells: &[u32], values: &[f32]) {
         self.sorted_values.clear();
         self.sorted_values.resize(cells.len(), 0.0);
@@ -470,7 +493,7 @@ mod tests {
     use super::*;
 
     impl ScatterGrid {
-        /// Pins the arm, so a workload the rule would hand to one arm can be run through another.
+        /// Pins the arm, so a workload the rule would assign to one arm can be run through another.
         fn pin(mut self, arm: Strategy) -> Self {
             self.forced = Some(arm);
             if arm == Strategy::Sorted && self.cell_start.is_empty() {
@@ -493,7 +516,7 @@ mod tests {
         (cells, values, base)
     }
 
-    /// Written the obvious way rather than the fast way.
+    /// Returns the scatter written the obvious way instead of the fast way.
     fn reference(combine: Combine, cells: &[u32], values: &[f32], base: &[f32], n_cells: usize) -> Vec<f32> {
         let mut out = base.to_vec();
         match combine {
@@ -571,7 +594,7 @@ mod tests {
         }
     }
 
-    /// The arm is picked per call and not once per grid, so the rule is what has to hold.
+    /// The arm is picked per call, so the rule itself has to hold.
     #[test]
     fn the_rule_sends_thin_calls_to_the_banded_arm() {
         assert!(banded_wins(40_000, 2_000), "a field layer's density should be banded");
@@ -595,7 +618,7 @@ mod tests {
         }
     }
 
-    /// Scratch has to be consumed, not accumulated.
+    /// Each scatter starts from cleared scratch.
     #[test]
     fn repeated_scatters_do_not_accumulate() {
         for combine in [Combine::Max, SUM] {
@@ -630,7 +653,7 @@ mod tests {
             let expected = reference(combine, &cells[..3], &values[..3], &base, n_cells);
             assert_bits_eq(&expected, &small, "shrunken population");
 
-            // Growing back must not be contaminated by either.
+            // The regrown scatter must not be contaminated by either earlier scatter.
             let mut again = vec![0.0; n_cells];
             grid.scatter(&cells, &values, &base, &mut again);
             assert_bits_eq(&big, &again, "regrown population");

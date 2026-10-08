@@ -1,4 +1,4 @@
-//! Model selection, and what the selected model declares about itself.
+//! The Model panel: model selection, and the declarations of the selected model.
 
 use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::capacity::Demand;
@@ -17,7 +17,7 @@ const NO_MODEL_RUNS: &str = "No model in this build runs on this device. GPU mod
 /// Text the Model panel shows for a set without models.
 const NO_MODELS: &str = "This build includes no models.";
 
-/// Draws what the app could not open and why, then `next_step`.
+/// Draws the opening that the app rejected and the reason, then `next_step`.
 fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str) {
     ui.colored_label(ui.visuals().warn_fg_color, refusal.lead);
     ui.label(format!("{}.", refusal.reason));
@@ -30,7 +30,7 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
         .map(|entry| (entry.id().to_owned(), entry.name().to_owned()))
         .collect();
     if offered.is_empty() {
-        // The refusal of a hidden GPU model already names the GPU, and an empty set has no GPU to blame.
+        // The refusal of a hidden GPU model already mentions the GPU, and an empty set has no GPU to blame.
         match &app.opening_refusal {
             Some(refusal) => opening_refusal(ui, refusal, "No model in this build runs on this device."),
             None if app.models.is_empty() => {
@@ -81,8 +81,8 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     let mut scroll = egui::ScrollArea::vertical();
     if changed_model {
-        // Models differ in how many rows they declare, so a carried-over offset can land the
-        // next one halfway down.
+        // Models differ in how many rows they declare, so a carried-over offset can open the
+        // next model halfway down.
         scroll = scroll.vertical_scroll_offset(0.0);
     }
 
@@ -124,9 +124,9 @@ fn row(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: impl Into<e
     rows.end_row(ui);
 }
 
-/// A row whose cells both carry the names behind the count they report.
+/// Adds a row with the count `value`, whose two cells both list `names` on hover.
 ///
-/// Both, since a value as short as "7" is barely a pointer wide on its own.
+/// A value as short as "7" is barely a pointer wide on its own.
 fn row_listing(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: String, names: &str) {
     ui.label(label).on_hover_text(names);
     ui.label(value).on_hover_text(names);
@@ -155,7 +155,8 @@ fn yes_no(present: bool) -> &'static str {
     if present { MDI_CHECK } else { MDI_CLOSE }
 }
 
-/// `n` of a thing, with the subset that carries `flag` named after it.
+/// Returns the count `n`, followed by the count `flagged` labelled `flag` unless `flagged` is zero, as in
+/// "7 (2 reload)".
 fn count_of(n: usize, flagged: usize, flag: &str) -> String {
     if flagged == 0 {
         n.to_string()
@@ -284,7 +285,7 @@ fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) 
     }
 }
 
-/// Expected footprint of the model.
+/// Adds the rows of the model's expected footprint on the GPU.
 fn footprint_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, id: &str, demand: &Demand, storage_limit: u32) {
     row(ui, rows, "Expected memory", fmt_bytes(demand.bytes()));
 
@@ -314,7 +315,7 @@ fn footprint_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, id: &str, demand: &D
     }
 }
 
-/// Buffer labels are prefixed with the model id, which the panel has already said.
+/// Returns `label` without its `{id}_` prefix. The panel already shows the model's name.
 fn strip_id<'a>(label: &'a str, id: &str) -> &'a str {
     label
         .strip_prefix(id)
@@ -322,7 +323,7 @@ fn strip_id<'a>(label: &'a str, id: &str) -> &'a str {
         .unwrap_or(label)
 }
 
-/// A row of colour chips
+/// Draws a row of colour chips.
 fn swatches(ui: &mut egui::Ui, colors: impl Iterator<Item = [u8; 4]>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
@@ -352,14 +353,14 @@ mod tests {
         assert_eq!(topology_label(TopologyHint::NONE), "None");
     }
 
-    /// A model with nothing flagged should read as a bare count, not "5 (0 reload)".
+    /// A model with nothing flagged shows as a bare count, without "(0 reload)".
     #[test]
     fn a_count_drops_its_qualifier_when_nothing_carries_it() {
         assert_eq!(count_of(5, 0, "reload"), "5");
         assert_eq!(count_of(5, 2, "reload"), "5 (2 reload)");
     }
 
-    /// A buffer whose label does not start with the id keeps every character of it.
+    /// A buffer whose label does not start with the id keeps its whole label.
     #[test]
     fn a_buffer_label_loses_only_the_model_id() {
         assert_eq!(strip_id("gpu_ants_accum_a", "gpu_ants"), "accum_a");

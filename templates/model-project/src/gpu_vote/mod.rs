@@ -41,7 +41,7 @@ impl GpuGridModel for GpuVote {
     }
 
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
-        // Runs the CPU twin's `init` from the engine's starting state, and tick 0 matches it bit for bit.
+        // Runs the CPU twin's `init` from the engine's starting state, and tick 0 matches the CPU model bit for bit.
         // The port declares `grid_width` and `grid_height` first, where the CPU engine prepends them.
         let mut grid = Grid2D::new(width, height);
         <Vote as GridModel>::init(

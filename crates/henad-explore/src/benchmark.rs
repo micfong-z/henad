@@ -63,7 +63,9 @@ impl BenchmarkSettings {
 pub enum BenchmarkEvent<'a> {
     /// Reported before any repetition, after a probe build of a CPU model. A GPU model is not probed.
     Started {
+        /// Backend the model runs on.
         backend: Backend,
+        /// Number of jobs one step of the probe build split into. `None` for a GPU model.
         parallel_jobs: Option<usize>,
     },
     /// The global warm-up is about to build its state and run its steps.
@@ -82,7 +84,7 @@ pub enum BenchmarkEvent<'a> {
 pub struct RepetitionReport {
     /// Position of the repetition, from 0.
     pub index: u64,
-    /// Seed of the repetition's build. `None` for the model's default seed, as [`RunSetup::seed`] reads.
+    /// Seed of the repetition's build. `None` for the model's default seed, as in [`RunSetup::seed`].
     pub seed: Option<u64>,
     /// Time the timed steps took.
     pub elapsed: Duration,
@@ -95,7 +97,7 @@ pub struct RepetitionReport {
     pub heap_bytes: Option<usize>,
 }
 
-/// Timings of every repetition, and what the benchmark measured.
+/// Timings of every repetition, with the job count and grid size of the model benchmarked.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct BenchmarkReport {
@@ -105,7 +107,7 @@ pub struct BenchmarkReport {
     pub parallel_jobs: Option<usize>,
     /// The live state's grid on the CPU. On the GPU, the values of a grid model's parameters named `grid_width` and
     /// `grid_height`, the names Henad's models and the template use. `None` for a model without a grid, and for a GPU
-    /// grid model that names its size otherwise.
+    /// grid model that specifies its size another way.
     pub grid_size: Option<(u32, u32)>,
 }
 
@@ -121,8 +123,8 @@ pub struct BenchmarkReport {
 ///
 /// # Errors
 ///
-/// Returns a [`Fault`] when a build fails, the model panics, the device reports an error or the model refuses a
-/// scheduled action. A GPU model handed no device fails its first build.
+/// Returns a [`Fault`] when a build fails, the model panics, the device reports an error or the model rejects a
+/// scheduled action. A GPU model with no device fails its first build.
 pub fn run_benchmark(
     settings: &BenchmarkSettings,
     gpu: Option<&GpuContext>,
@@ -164,7 +166,8 @@ pub fn run_benchmark(
         on_event(BenchmarkEvent::GlobalWarmupFinished(elapsed));
     }
 
-    // Grown as repetitions finish. A count large enough to run until interrupted would abort a reservation up front.
+    // The list grows as repetitions finish. A count large enough to run until interrupted would abort a reservation
+    // up front.
     let mut repetitions = Vec::new();
     let mut grid_size = None;
     for index in 0..settings.repetitions {
@@ -212,7 +215,7 @@ fn cpu_repetition(
 ) -> Result<(RepetitionReport, Option<(u32, u32)>), Fault> {
     let schedule = settings.setup.schedule();
     let mut refusals = Refusals::default();
-    // Stepped from inside the pool. A caller outside it would otherwise inject every parallel pass a kernel runs, and
+    // The steps run inside the pool. A caller outside it would otherwise inject every parallel pass a kernel runs, and
     // park until it finishes. One inject per loop replaces one per pass per step.
     rayon::scope(|_| {
         for _ in 0..settings.warmup {
@@ -220,8 +223,8 @@ fn cpu_repetition(
             state.step();
         }
     });
-    // A grid model's population is its cell count, and an agent model's its agent count. Either way it is the right
-    // denominator for updates per second.
+    // A grid model's population is its cell count, and an agent model's population is its agent count. Either way it
+    // is the right denominator for updates per second.
     let population_after_warmup = state.population();
     let heap_bytes = state.heap_bytes();
     let grid = state.grid_view().map(|grid| (grid.width, grid.height));
@@ -234,7 +237,7 @@ fn cpu_repetition(
         }
     });
     let elapsed = start.elapsed();
-    // Outside the timer, so an action on the last tick still lands without being measured.
+    // This runs outside the timer, so an action on the last tick still fires without being measured.
     refusals.note(&schedule.run_due(state));
     refusals.check()?;
     let report = RepetitionReport {
@@ -251,7 +254,7 @@ fn cpu_repetition(
 /// Runs one GPU repetition on `state`, `warmup` untimed steps and then `steps` timed ones, both under [`BENCH_FIRE`].
 ///
 /// An action due on the tick the repetition stops on fires after the timer stops, and is waited for there. Otherwise
-/// its work would land in the next repetition, inside the timer when that one has no warm-up, and a fault it raised
+/// its work would run in the next repetition, inside the timer when that one has no warm-up, and a fault it raised
 /// would be reported late or not at all.
 fn gpu_repetition(
     state: &mut dyn GpuSimState,
@@ -291,10 +294,10 @@ fn gpu_repetition(
     })
 }
 
-/// First scheduled action a state refused, kept until the repetition ends.
+/// First scheduled action that a state rejected, kept until the repetition ends.
 ///
-/// A setup checks every action id before it stores an entry, and an engine refuses only an index past its model's
-/// actions. A refusal is therefore an engine contract violation.
+/// A setup checks every action id before it stores an entry, and an engine rejects only an index past its model's
+/// actions. A rejection is therefore an engine contract violation.
 #[derive(Default)]
 struct Refusals {
     first: Option<(String, u64)>,
@@ -324,7 +327,8 @@ impl Refusals {
 /// Returns the grid a GPU grid model was built with, read from its parameters named `grid_width` and `grid_height`.
 ///
 /// A GPU state exposes no grid view. Nothing is prepended to a GPU model's parameters, and the two names are the
-/// convention Henad's models and the template follow. A model that names its size otherwise has none here.
+/// convention Henad's models and the template follow. For a model that specifies its size another way, this returns
+/// `None`.
 fn grid_size_from_params(descriptors: &[ParamDescriptor], values: &[ParamValue]) -> Option<(u32, u32)> {
     let find = |id: &str| -> Option<u32> {
         let index = descriptors.iter().position(|descriptor| descriptor.id == id)?;
@@ -460,7 +464,7 @@ mod tests {
     }
 
     /// Checks that a repetition count large enough to run until interrupted reports its first repetition. A
-    /// reservation for every report up front would abort the process before it.
+    /// reservation for every report up front would abort the process before the first report.
     #[test]
     fn a_benchmark_of_endless_repetitions_reports_the_first() {
         let setup = register_grid_model::<Counter>()
@@ -483,7 +487,7 @@ mod tests {
         assert_eq!(reported, 1);
     }
 
-    /// Checks that a GPU benchmark builds one state per repetition and no probe, and that a GPU model handed no
+    /// Checks that a GPU benchmark builds one state per repetition and no probe, and that a GPU model with no
     /// device fails before it starts.
     #[test]
     fn a_gpu_benchmark_builds_no_probe() {
@@ -565,7 +569,7 @@ mod tests {
     /// Checks that a GPU repetition fires each action once and on its own tick, the tick it stops on included.
     ///
     /// Its counts have to match a simulation stepped over the same ticks. `seed_outbreak` infects a share of the
-    /// cells still susceptible, so a press missed, repeated or moved to another tick changes the counts.
+    /// cells still susceptible, so a press that is missed, repeated or moved to another tick changes the counts.
     #[test]
     fn a_gpu_benchmark_repetition_fires_every_action_once() {
         let Some(ctx) = headless_device() else {

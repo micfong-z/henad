@@ -6,7 +6,7 @@ use crate::icons::material_design_icons::{MDI_ALERT_CIRCLE_OUTLINE, MDI_CONTENT_
 use crate::state::AppState;
 use henad_compute::fault::{BUILDING, FaultKind};
 
-/// Past this a long validation message scrolls instead of pushing the buttons off.
+/// Height in points past which a long message scrolls, to keep the buttons in the modal.
 const MAX_MESSAGE_HEIGHT: f32 = 220.0;
 
 pub fn fault_modal(ctx: &Context, app: &mut AppState) {

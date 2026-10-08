@@ -162,7 +162,7 @@ fn shaders_removed_and_restored_are_generated_again() {
     );
 }
 
-/// An entry point that calls a function of the module `gpu_vote::state`.
+/// An entry point that calls a function from the module `gpu_vote::state`.
 const CALLING_SHADER: &str = "\
 #import henad::dispatch::{WORKGROUP, linear_index}
 #import gpu_vote::state::voted
@@ -194,7 +194,7 @@ fn an_edited_shader_or_module_is_generated_again() {
     assert!(first.contains("+ 11u") && first.contains("return 3u;"), "{first}");
     assert!(!generate().bound, "nothing changed");
 
-    // The same files, with other text.
+    // The same files now contain different text.
     scratch.write("gpu_vote/step.wgsl", &CALLING_SHADER.replace("11u", "13u"));
     assert!(generate().bound, "an edited entry point reruns the pass");
     let edited = scratch.generated("shader_bindings.rs");
@@ -308,7 +308,7 @@ fn a_file_without_the_wgsl_extension_is_hashed() {
     assert!(generate().bound, "an edit to an imported file reruns the pass");
     assert!(scratch.generated("shader_bindings.rs").contains("return 5u;"));
 
-    // An entry point named one by one can have another extension too.
+    // An entry point added through `ShaderBuild::entry_point` can have another extension too.
     let explicit = Scratch::new("other_extension_entry");
     explicit.write("gpu_vote/step.shader", STEP_SHADER);
     let generate = || {

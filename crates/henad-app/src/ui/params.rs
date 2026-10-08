@@ -18,7 +18,7 @@ use web_time::{SystemTime, UNIX_EPOCH};
 /// Line shown under the Seed field while its text is not a seed.
 pub const INVALID_SEED: &str = "Seed must be an integer from 0 to 18446744073709551615.";
 
-/// Line the panel shows in place of its rows while no model is selected.
+/// Line the panel shows instead of its rows while no model is selected.
 const NO_MODEL_SELECTED: &str = "No model selected.";
 
 /// Space between the Seed field's frame and its text, egui's default for a text field.
@@ -32,7 +32,7 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
     };
     let descriptors = entry.param_descriptors().to_vec();
 
-    // Before the sliders draw: a long slider label widens the region behind it, and the footer
+    // Drawn before the sliders. A long slider label widens the region behind it, and the footer
     // would then wrap against that width and be clipped.
     let panel_width = ui.available_width();
 
@@ -117,8 +117,7 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     let mut sent_live = false;
     for (idx, val) in &param_changed {
-        // Reload-only parameters are rejected by the running state anyway, so remember the edit
-        // instead of sending it and having the runner complain.
+        // The running state rejects a reload-only parameter, so the edit is only marked pending.
         if !descriptors[*idx].is_live() {
             if let Some(mark) = app.pending_reload.get_mut(*idx) {
                 *mark = true;
@@ -137,7 +136,7 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
     notice(ui, app, &descriptors, panel_width);
 }
 
-/// Draws the Seed field and its dice button, with an error line while [`parse_seed`] refuses the field's text.
+/// Draws the Seed field and its dice button, with an error line while [`parse_seed`] rejects the field's text.
 fn seed_row(ui: &mut egui::Ui, app: &mut AppState) {
     let pending = app.seed_pending();
     let hint = if pending {
@@ -216,10 +215,9 @@ pub(crate) fn draw_seed(previous: Option<u64>) -> u64 {
     mix_seed(nanos ^ previous.unwrap_or(0))
 }
 
-/// A button per action the model declares, under the parameter widgets.
+/// Draws a button per action the model declares, under the parameter widgets, then the scheduled actions.
 ///
-/// Sent to the running sim rather than remembered, since an action changes state that only exists
-/// once the model is built.
+/// A press goes to the running sim. An action changes state that exists only once the model is built.
 fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let actions: Vec<ActionDescriptor> = app
         .selected_entry()
@@ -259,7 +257,7 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
     schedule_ui(ui, app, &actions);
 }
 
-/// Draws the actions each build runs at their ticks, with a row to add one.
+/// Draws the actions each build runs at their ticks, with a row to add an action.
 fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[ActionDescriptor]) {
     let pending = app.schedule_pending();
     let mut heading = egui::RichText::new("Scheduled actions").strong();
@@ -328,7 +326,7 @@ fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[ActionDescripto
     }
 }
 
-/// Adds the button removing the scheduled action that the row reads as `entry`.
+/// Adds the button that removes the scheduled action shown in its row as `entry`.
 fn remove_button(ui: &mut egui::Ui, entry: &str) -> egui::Response {
     icon_button(ui, MDI_DELETE_OUTLINE, &format!("Remove {entry}"), "Remove action")
 }
@@ -350,12 +348,12 @@ fn without_entry(schedule: &Schedule, position: usize) -> Schedule {
     Schedule::from_entries(entries)
 }
 
-/// True when `index` has been edited to a value the running sim will not pick up on its own.
+/// Returns whether parameter `index` has been edited to a value the running sim will not pick up on its own.
 fn is_pending_reload(app: &AppState, index: usize, desc: &ParamDescriptor) -> bool {
     !desc.is_live() && app.selection_is_loaded() && app.pending_reload.get(index) == Some(&true)
 }
 
-/// Widget label, marked and coloured when the parameter needs a reload.
+/// Returns the widget label, marked when the parameter needs a reload and coloured while an edit of it is pending.
 fn param_text(ui: &egui::Ui, desc: &ParamDescriptor, pending: bool) -> egui::RichText {
     if desc.is_live() {
         return egui::RichText::new(desc.label);
@@ -387,7 +385,7 @@ fn f32_slider(value: &mut f32, min: f32, max: f32, step: Option<f32>) -> egui::S
     }
 }
 
-/// Returns `value` as the decimal it is written as.
+/// Returns `value` widened to `f64` through its shortest decimal form.
 ///
 /// A slider snaps to multiples of its step in `f64`. A step of `0.01_f32` widened in binary would snap 0.05 to the
 /// `f32` below it.
@@ -410,7 +408,7 @@ fn percent_text(fraction: f64, decimals: usize) -> String {
     format!("{:.decimals$}%", fraction * 100.0)
 }
 
-/// Displays a fraction as a percentage.
+/// Returns `slider` showing and reading its fraction as a percentage.
 fn as_percent(slider: egui::Slider<'_>, step: Option<f32>) -> egui::Slider<'_> {
     let decimals = percent_decimals(step);
     slider
@@ -421,7 +419,7 @@ fn as_percent(slider: egui::Slider<'_>, step: Option<f32>) -> egui::Slider<'_> {
         })
 }
 
-/// Returns the fewest decimals that still show every step as a distinct percentage.
+/// Returns the smallest number of decimals that shows each step as a distinct percentage.
 fn percent_decimals(step: Option<f32>) -> usize {
     let Some(step) = step else {
         return 1;
@@ -442,7 +440,8 @@ fn with_hint(response: egui::Response, hint: Option<&str>) -> egui::Response {
     }
 }
 
-/// Information on the parameter state, if any, that the user should be aware of.
+/// Draws a banner on the state of the parameters when one applies: a size the device cannot hold, no simulation,
+/// another model loaded, or edits awaiting a build.
 fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], width: f32) {
     let pending_count = descriptors
         .iter()
@@ -702,7 +701,7 @@ mod tests {
         accessible_texts(add, |node| node.label())
     }
 
-    /// Returns the text `read` takes from each accessible node `add` draws in one frame.
+    /// Returns the text that `read` extracts from each accessible node that `add` draws in one frame.
     fn accessible_texts(
         add: impl FnMut(&mut egui::Ui),
         read: impl Fn(&egui::accesskit::Node) -> Option<&str>,
@@ -726,7 +725,7 @@ mod tests {
         texts
     }
 
-    /// The regression. With no model selected, the panel offered a Seed field and said the model had no parameters.
+    /// With no model selected, the panel shows neither a Seed field nor a claim that the model has no parameters.
     #[test]
     fn with_no_model_selected_the_panel_offers_nothing_to_edit() {
         let mut models = ModelSet::new(henad_core::build_info!());
@@ -752,7 +751,7 @@ mod tests {
         );
     }
 
-    /// The regression. The dice and remove buttons were named by their icon glyphs, which a screen reader cannot read.
+    /// The dice and remove buttons carry names a screen reader can read, instead of their icon glyphs.
     #[test]
     fn the_icon_buttons_are_named_for_what_they_do() {
         let names = accessible_names(|ui| {

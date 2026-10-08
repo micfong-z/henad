@@ -60,6 +60,7 @@ impl std::fmt::Debug for LayoutScratch {
 }
 
 impl LayoutScratch {
+    /// Creates empty scratch for a layout whose jitter draws from `seed`.
     pub fn new(seed: u64) -> Self {
         Self {
             hash: None,
@@ -73,6 +74,7 @@ impl LayoutScratch {
         }
     }
 
+    /// Heap memory held by the buffers and the spatial hash, in bytes.
     pub fn heap_bytes(&self) -> usize {
         let lanes = self.disp_x.capacity() + self.disp_y.capacity() + self.prev_x.capacity() + self.prev_y.capacity();
         lanes * size_of::<f32>() + self.hash.as_ref().map_or(0, SpatialHash::heap_bytes)
@@ -521,7 +523,7 @@ mod tests {
         assert!(moved < 0.02, "a random graph still moves {moved} spacings a step");
     }
 
-    /// Uses enough nodes to span several chunks.
+    /// Checks that the layout does not depend on the thread count, over enough nodes to span several chunks.
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
         fn run(threads: usize) -> Vec<u32> {

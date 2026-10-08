@@ -1,8 +1,8 @@
 //! Identity of compiled crates and the source of each model.
 //!
-//! A [`BuildInfo`] names one compiled crate: its package, its version and, once a build script stamps it, its
-//! commit, a dirty flag and a hash of its sources. [`build_info!`](crate::build_info) returns the one of the crate it
-//! expands in. A [`ModelSource`] names the origin of a model's code: the type registered, and the build of the
+//! A [`BuildInfo`] identifies one compiled crate: its package, its version and, once a build script stamps it, its
+//! commit, a dirty flag and a hash of its sources. [`build_info!`](crate::build_info) returns the build of the crate it
+//! expands in. A [`ModelSource`] identifies the origin of a model's code: the type registered, and the build of the
 //! crate that registered it.
 
 use std::borrow::Cow;
@@ -20,10 +20,10 @@ pub struct BuildInfo {
 }
 
 impl BuildInfo {
-    /// Returns the build that the environment of [`build_info!`](crate::build_info) describes.
+    /// Returns the build described by the environment variables that [`build_info!`](crate::build_info) reads.
     ///
-    /// `dirty` reads `true` or `false`, and `source_hash` 16 lowercase hexadecimal digits. Any other text reads as
-    /// unknown.
+    /// `dirty` accepts `true` or `false`, and `source_hash` 16 lowercase hexadecimal digits. Any other text is treated
+    /// as unknown.
     #[doc(hidden)]
     pub const fn __from_env(
         package: &'static str,
@@ -57,10 +57,12 @@ impl BuildInfo {
         }
     }
 
+    /// Cargo package name.
     pub fn package(&self) -> &'static str {
         self.package
     }
 
+    /// Package version.
     pub fn version(&self) -> &'static str {
         self.version
     }
@@ -83,7 +85,7 @@ impl BuildInfo {
 
     /// Hash of the crate's files under `src` and its manifest. A crate stamped with its commit, Henad's engine
     /// included, adds the nearest `Cargo.lock` outside a package. In Henad's checkout the engine's hash covers its four
-    /// crates. `None` when the build did not compute one.
+    /// crates. `None` when the build did not compute a hash.
     pub fn source_hash(&self) -> Option<u64> {
         self.source_hash
     }
@@ -126,7 +128,7 @@ const fn parse_hash(text: &str) -> Option<u64> {
 /// Returns the [`BuildInfo`] of the crate the macro expands in.
 ///
 /// The package and version come from Cargo. The commit, its date, the dirty flag and the source hash come from
-/// variables a build script sets, and read as unknown where none does.
+/// variables that a build script sets, and are unknown where no script sets them.
 #[macro_export]
 macro_rules! build_info {
     () => {
@@ -162,7 +164,7 @@ impl ModelSource {
         }
     }
 
-    /// Returns the source with `build` recorded as the registering crate's.
+    /// Returns the source with `build` recorded as the registering crate's build.
     #[doc(hidden)]
     pub fn __with_build(self, build: BuildInfo) -> Self {
         Self {
@@ -181,26 +183,29 @@ impl ModelSource {
         self.build.as_ref().map_or("", BuildInfo::package)
     }
 
+    /// Version of the registering crate, empty until a set records its build.
     pub fn version(&self) -> &str {
         self.build.as_ref().map_or("", BuildInfo::version)
     }
 
+    /// Short commit hash of the registering crate, as [`BuildInfo::commit`] returns it, and empty until a set
+    /// records its build.
     pub fn commit(&self) -> &str {
         self.build.as_ref().map_or("", BuildInfo::commit)
     }
 
     /// Whether the registering crate's sources, manifest or lockfile differed from its commit, as
-    /// [`BuildInfo::dirty`] reads it.
+    /// [`BuildInfo::dirty`] returns it.
     pub fn dirty(&self) -> Option<bool> {
         self.build.as_ref().and_then(BuildInfo::dirty)
     }
 
-    /// Hash of the registering crate's files, as [`BuildInfo::source_hash`] reads it.
+    /// Hash of the registering crate's files, as [`BuildInfo::source_hash`] returns it.
     pub fn source_hash(&self) -> Option<u64> {
         self.build.as_ref().and_then(BuildInfo::source_hash)
     }
 
-    /// Type path of the registered model, from `std::any::type_name`. For reading only.
+    /// Type path of the registered model, from `std::any::type_name`.
     ///
     /// Note that the format of a type path is not stable across compiler releases, so no check compares it.
     pub fn type_path(&self) -> &str {

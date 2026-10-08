@@ -1,6 +1,6 @@
-//! Faults caught during build or simulation.
+//! Faults caught while building or stepping a model.
 //!
-//! We try to avoid letting a panic or device error end the process, and instead report it to the user.
+//! A panic or a device error becomes a [`Fault`] the host reports, and the process carries on.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -27,47 +27,54 @@ thread_local! {
 /// panics on concurrent threads have the same message.
 static RECENT_PANIC_SITES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
-/// How many go-unclaimed before the oldest is dropped. Nothing reads a stale entry, and every
+/// Number of unclaimed sites kept before the oldest is dropped. Nothing reads a stale entry, and every
 /// claimed one is removed, so this only bounds what a burst can leave behind.
 const RECENT_PANIC_SITES_CAP: usize = 16;
 
-/// Everything a host does to get a model running, as a `during`.
+/// Phase of a fault raised while a host builds a model.
 pub const BUILDING: &str = "building the model";
 
-/// After a model is built, everything the simulation does to advance a tick, as a `during`.
+/// Phase of a fault raised while a built model advances a tick.
 pub const STEPPING: &str = "stepping the simulation";
 
 /// A failure Henad caught.
 #[derive(Debug)]
 pub struct Fault {
+    /// Phase the fault happened in, such as [`BUILDING`] or [`STEPPING`].
     pub during: &'static str,
+    /// Kind of failure, with its details.
     pub kind: FaultKind,
 }
 
+/// Kind of failure a [`Fault`] records.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FaultKind {
     /// A wgpu error, from an error scope or from the device's uncaptured error handler.
     Device(wgpu::Error),
+    /// A panic out of model or engine code, caught by [`catching`].
     Panic {
+        /// Message the panic carried.
         message: String,
-        /// `None` when nothing installed [`install_panic_hook`].
+        /// Source location of the panic, `None` when nothing installed [`install_panic_hook`].
         location: Option<String>,
     },
     /// The host refused to build or step the model.
     ///
-    /// A model incompatible with the device is refused, and so is a [`Simulation`](crate::simulation::Simulation)
+    /// A model incompatible with the device is rejected, and so is a [`Simulation`](crate::simulation::Simulation)
     /// that already returned a fault.
     Refused(String),
     /// A failed wait for the GPU to finish its submitted work.
     Poll(wgpu::PollError),
     /// The GPU device was lost, and runs no more work.
     ///
-    /// wgpu reports a loss to no error scope. [`GpuContext::is_lost`](crate::gpu::GpuContext::is_lost) reads it.
+    /// wgpu does not report a loss to any error scope.
+    /// [`GpuContext::is_lost`](crate::gpu::GpuContext::is_lost) reads it.
     DeviceLost,
 }
 
 impl Fault {
+    /// Creates a fault for a wgpu error.
     pub fn device(during: &'static str, error: wgpu::Error) -> Self {
         Self {
             during,
@@ -75,6 +82,7 @@ impl Fault {
         }
     }
 
+    /// Creates a [`FaultKind::Refused`] fault explained by `message`.
     pub fn refused(during: &'static str, message: impl Into<String>) -> Self {
         Self {
             during,
@@ -82,6 +90,7 @@ impl Fault {
         }
     }
 
+    /// Creates a fault for a lost device.
     pub fn device_lost(during: &'static str) -> Self {
         Self {
             during,
@@ -131,11 +140,10 @@ impl std::error::Error for Fault {
 ///
 /// # Errors
 ///
-/// If `f` panics. The message comes from the panic payload.
-///
-/// If [`install_panic_hook`] has been run, the location of the panic is also recorded.
+/// Returns a [`FaultKind::Panic`] fault if `f` panics. The message comes from the panic payload, and the location is
+/// recorded once [`install_panic_hook`] has run.
 pub fn catching<T>(during: &'static str, f: impl FnOnce() -> T) -> Result<T, Fault> {
-    // A panic caught and swallowed inside `f` would otherwise leave its site here for the next one.
+    // A panic caught and swallowed inside `f` would otherwise leave its site here for the next panic caught.
     LAST_PANIC.with(|slot| slot.borrow_mut().take());
     std::panic::catch_unwind(AssertUnwindSafe(f)).map_err(|payload| {
         let message = payload_message(payload.as_ref());
@@ -149,8 +157,9 @@ pub fn catching<T>(during: &'static str, f: impl FnOnce() -> T) -> Result<T, Fau
     })
 }
 
-/// Records where each panic came from, then hands over to the hook already installed. Stderr and
-/// test output are unchanged. Only the first call has an effect.
+/// Installs a panic hook that records where each panic came from, then calls the hook that was already installed.
+///
+/// Stderr and test output are unchanged. Only the first call has an effect.
 pub fn install_panic_hook() {
     static INSTALLED: Once = Once::new();
     INSTALLED.call_once(|| {
@@ -197,7 +206,7 @@ fn take_location(message: &str) -> Option<String> {
     Some(recent.remove(found).1)
 }
 
-/// The `&str` or `String` a panic carried, or `"panicked"` for anything else.
+/// Returns the `&str` or `String` that a panic carried, or `"panicked"` for anything else.
 fn payload_message(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_owned()
@@ -208,17 +217,20 @@ fn payload_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
-/// Slot for a fault raised away from a `Result` boundary, emptied by the UI each frame.
+/// Slot for a fault raised away from a `Result` boundary, for the host to take each frame.
 ///
-/// Keeps the first one. A device error usually produces a cascade, and the first is the cause.
+/// The sink keeps the first fault. A device error usually produces a cascade, and the first is the cause. A clone
+/// shares the slot.
 #[derive(Clone, Default)]
 pub struct FaultSink(Arc<Mutex<Option<Fault>>>);
 
 impl FaultSink {
+    /// Creates an empty sink.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Stores `fault` unless the sink already holds one.
     pub fn set_once(&self, fault: Fault) {
         if let Ok(mut slot) = self.0.lock()
             && slot.is_none()
@@ -227,10 +239,12 @@ impl FaultSink {
         }
     }
 
+    /// Takes the stored fault, leaving the sink empty.
     pub fn take(&self) -> Option<Fault> {
         self.0.lock().ok()?.take()
     }
 
+    /// Returns whether the sink holds a fault.
     pub fn is_set(&self) -> bool {
         self.0.lock().is_ok_and(|slot| slot.is_some())
     }
@@ -279,7 +293,7 @@ mod tests {
         assert_eq!(panic_message(&fault), "a formatted 1 message");
     }
 
-    /// Without the hook the modal can name the panic but not the line it came from.
+    /// Without the hook the modal can show the panic message but not the line it came from.
     #[test]
     fn the_hook_attaches_a_location() {
         install_panic_hook();
@@ -315,7 +329,7 @@ mod tests {
     }
 
     /// A pool worker waiting in a join can run another host's job. The site of a panic in that job stays on the
-    /// worker's thread, and the regression pinned it onto the next panic caught there.
+    /// worker's thread, and must not be pinned onto the next panic caught there.
     #[test]
     fn a_site_recorded_on_the_thread_for_another_panic_is_not_taken() {
         use rayon::prelude::*;

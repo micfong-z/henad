@@ -35,7 +35,7 @@ pub(super) fn param_ids(entry: &ModelEntry) -> Result<(), String> {
     if message.is_empty() { Ok(()) } else { Err(message) }
 }
 
-/// Returns the sentences naming the parameter ids `entry` declares more than once, `None` when it repeats none.
+/// Returns the sentences naming the parameter ids that `entry` declares more than once, `None` when no id repeats.
 fn repeated_param_ids(entry: &ModelEntry) -> Option<String> {
     let repeated = repeated(entry.param_descriptors().iter().map(|descriptor| descriptor.id));
     if repeated.is_empty() {
@@ -57,8 +57,8 @@ fn repeated_param_ids(entry: &ModelEntry) -> Option<String> {
     Some(message)
 }
 
-/// Returns the parameter ids the CPU engine of `structure` prepends to a model's own. A GPU model declares every
-/// parameter itself.
+/// Returns the parameter ids that the CPU engine for `structure` prepends to a model's own parameters. A GPU model
+/// declares every parameter itself.
 fn prepended_ids(structure: &Structure) -> &'static [&'static str] {
     match structure {
         Structure::Grid { .. } => &["grid_width", "grid_height"],
@@ -76,8 +76,8 @@ pub(super) fn stat_labels(entry: &ModelEntry) -> Result<(), String> {
     Err(declared_twice("Stat label", "Stat labels", &repeated))
 }
 
-/// Checks [`super::ModelCheck::ActionIds`]. An id reaches the command line through `--act`, where two the same are
-/// ambiguous, and names the action in `--vary action.NAME=LEVELS` and a design table's `action.NAME` column.
+/// Checks [`super::ModelCheck::ActionIds`]. An id reaches the command line through `--act`, where duplicate ids are
+/// ambiguous. It also identifies the action in `--vary action.NAME=LEVELS` and a design table's `action.NAME` column.
 pub(super) fn action_ids(entry: &ModelEntry) -> Result<(), String> {
     let ids = || entry.action_descriptors().iter().map(|action| action.id);
     let repeated = repeated(ids());
@@ -87,10 +87,10 @@ pub(super) fn action_ids(entry: &ModelEntry) -> Result<(), String> {
     if message.is_empty() { Ok(()) } else { Err(message) }
 }
 
-/// Returns each id of `ids` that the command line, a spec file or a design table cannot name, with the reason,
-/// `None` when it can name them all.
+/// Returns each id of `ids` that is invalid on the command line, in a spec file or in a design table, with the
+/// reason, or `None` when every id is valid.
 ///
-/// An id is refused when it is empty or holds whitespace or `=`, and otherwise for the reason `extra` gives.
+/// An id is rejected when it is empty or holds whitespace or `=`, or when `extra` returns a reason for it.
 fn unnameable<'a>(
     ids: impl Iterator<Item = &'a str>,
     extra: impl Fn(&str) -> Option<&'static str>,
@@ -112,7 +112,8 @@ fn unnameable<'a>(
     (!refused.is_empty()).then_some(refused)
 }
 
-/// Returns the sentences naming each refused `(id, reason)` of a `kind` id, as `unnameable` returns them.
+/// Returns the sentences that name each rejected `kind` id with its reason, from the `(id, reason)` pairs that
+/// `unnameable` returns.
 fn named_ids(kind: &str, refused: &[(&str, &str)]) -> String {
     let mut message: String = refused
         .iter()
@@ -182,7 +183,7 @@ pub(super) fn metadata(entry: &ModelEntry) -> Result<(), String> {
     }
 }
 
-/// Checks [`super::ModelCheck::DefaultSetup`]. A default outside its own bounds, or of another kind than its
+/// Checks [`super::ModelCheck::DefaultSetup`]. A default outside its own bounds, or of a different kind from its
 /// descriptor, leaves the app's Build disabled on a fresh selection.
 pub(super) fn default_setup(entry: &ModelEntry) -> Result<(), String> {
     let setup = entry.setup();
@@ -202,8 +203,8 @@ pub(super) fn default_setup(entry: &ModelEntry) -> Result<(), String> {
     Ok(())
 }
 
-/// Checks [`super::ModelCheck::DefaultsFit`] against the WebGPU baseline, never against the test device's limits.
-/// Otherwise a model past the baseline passes every check and is refused at its first Build in a browser.
+/// Checks [`super::ModelCheck::DefaultsFit`] against the WebGPU baseline, whatever limits the test device has.
+/// Otherwise a model past the baseline passes every check and is rejected at its first Build in a browser.
 pub(super) fn defaults_fit(entry: &ModelEntry) -> Result<(), String> {
     let shortfalls = entry.shortfalls(&declared_defaults(entry), &wgpu::Limits::default());
     if shortfalls.is_empty() {

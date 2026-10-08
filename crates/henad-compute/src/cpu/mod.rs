@@ -1,7 +1,7 @@
 //! CPU engine machinery, the sibling of [`crate::gpu`].
 //!
-//! [`sim_thread`] runs a state, on a thread of its own on native and inside the frame loop on the web. The three
-//! `*_engine` modules each build one out of an authoring trait. [`field`] holds the grid layers an agent model can
+//! [`sim_thread`] runs a state on its own thread on native and inside the frame loop on the web. The three
+//! `*_engine` modules each build a state from an authoring trait. [`field`] holds the grid layers an agent model can
 //! sit over, and [`layout`] relaxes a network model's node positions. [`primitives`] holds the chunking, scatter,
 //! lane and connected-component building blocks that the engines and models call.
 

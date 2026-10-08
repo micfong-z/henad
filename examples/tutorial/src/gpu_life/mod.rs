@@ -1,10 +1,9 @@
 //! GPU Game of Life as `docs/guide/first-model/gpu-game-of-life.md` builds it.
 //!
-//! The id is `gpu_life` rather than `gpu_game_of_life`, since the shipped model already holds
-//! that one and the page tells a reader the same thing.
+//! The id is `gpu_life`. The example model uses `gpu_game_of_life`, and a set holds each id once.
 //!
-//! The three shaders beside this file are copies of the shipped model's own. A shader carries no
-//! id, so what the page writes is `gpu_game_of_life/*.wgsl` line for line.
+//! The three shaders beside this file are copies of the example model's shaders, line for line.
+//! No shader refers to a model id.
 
 use henad::authoring::prelude::*;
 
@@ -69,7 +68,7 @@ impl GpuGridModel for GpuLifeModel {
     }
 }
 
-/// Words per padded row. 32 cells to a `u32`, rounded up.
+/// Returns the number of `u32` words in a row of `width` cells, at 32 cells to a word, rounded up.
 pub fn words_per_row(width: u32) -> usize {
     (width as usize).div_ceil(32)
 }
@@ -106,7 +105,7 @@ mod tests {
         }
     }
 
-    /// Runs display and reduce, then waits for the count to land, as a one-shot snapshot does.
+    /// Runs display and reduce, then waits for the count to arrive, as a one-shot snapshot does.
     fn refresh_stats(ctx: &GpuContext, state: &mut GpuGridState<GpuLifeModel>) {
         let mut encoder = ctx
             .device

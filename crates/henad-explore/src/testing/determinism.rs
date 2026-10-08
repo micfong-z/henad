@@ -14,7 +14,8 @@ use henad_core::view::StatEntry;
 use super::settings::CheckSettings;
 use super::{Ran, SEED, SkipReason, error_text, fault_text, first_stat_difference};
 
-/// Coarser of the two cadences [`super::ModelCheck::SamplingCadence`] compares. The finer samples every tick.
+/// Coarser of the two cadences that [`super::ModelCheck::SamplingCadence`] compares.
+/// The finer cadence samples every tick.
 pub(super) const COARSE_CADENCE: u64 = 7;
 
 /// End of one run: its stats and, for a CPU model, its state as `--export` writes it.
@@ -216,9 +217,10 @@ fn jobs_at(entry: &ModelEntry, values: &[ParamValue]) -> Result<usize, String> {
 /// Sets the size parameter of `entry` in `values` so a step splits into as close to `target` jobs as its bounds
 /// allow, from below.
 ///
-/// An agent or network model takes `num_agents` at `target` chunks. A grid model takes the largest `grid_height`
-/// that splits into no more than `target` jobs, found by building it, since the rows a job holds depend on the width.
-/// A parameter an override sets keeps its value.
+/// For an agent or network model, `num_agents` is set to `target` chunks. For a grid model, `grid_height` is set to
+/// the largest value that splits into no more than `target` jobs, found by building the model, since the rows a job
+/// holds depend on the width.
+/// A parameter that an override sets keeps its value.
 ///
 /// Returns the id of that parameter when an override sets it, `None` otherwise.
 fn size_for_jobs(
@@ -255,7 +257,8 @@ fn size_for_jobs(
         jobs_at(entry, values)
     };
     // Doubles until a size splits into too many jobs, then bisects for the largest size that does not. A start that
-    // already splits into too many, as a grid an override widens can, bisects up from the lower bound instead.
+    // already splits into too many jobs, as a grid widened by an override can, bisects up from the lower bound
+    // instead.
     let (mut fits, mut too_many) = if jobs_with(start)? > target {
         (min, Some(start))
     } else {

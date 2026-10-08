@@ -54,7 +54,7 @@ The core of the Game of Life model looks like this:
 
 -   **[Your own project](guide/your-project.md)**
 
-    A project of your own from the template, with its own models, app, command line and web build.
+    Your own project, made from the template, with its own models, app, command line and web build.
 
 -   **[Example models](reference/models.md)**
     
@@ -82,8 +82,7 @@ You can also submit bug reports or feature requests via [issues](https://github.
 
 ## Licence
 
-Henad is licensed under [MIT](https://github.com/micfong-z/henad/blob/master/LICENSE-MIT) or
-[Apache-2.0](https://github.com/micfong-z/henad/blob/master/LICENSE-APACHE), at your option.
+Henad is licensed under [MIT](https://github.com/micfong-z/henad/blob/master/LICENSE-MIT) or [Apache-2.0](https://github.com/micfong-z/henad/blob/master/LICENSE-APACHE), at your option.
 
 Compiled distributions additionally carry third-party dependencies under their own terms.
 See the [third-party licences](license.html) page for more information.

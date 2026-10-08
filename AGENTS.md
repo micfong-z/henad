@@ -126,6 +126,15 @@ things never share a name. The same rules cover TOML keys, CSV headers, CLI flag
 
 These apply everywhere prose does: comments, UI text, markdown, PR bodies.
 
+- **Plain technical English.** Use the standard term and the simplest grammar that reads naturally.
+  Strict grammar is not the goal.
+  - A compound noun beats an "of" chain: "device descriptor", not "the descriptor of the device".
+  - Name the noun. Never end a clause on a possessive or a quantifier that leaves the reader to
+    supply it: "forwards to the `params!` macro in henad-core", not "forwards to henad-core's";
+    "or every core when the query sets no count", not "or all of them when it asks for none".
+  - Use the usual technical verb: "requests a single worker", not "asks for a single worker";
+    "returns", "passes", "rejects", "uses" and "instead of", not "gives", "hands", "refuses",
+    "goes through" and "in place of".
 - **One clause per idea.** Prefer active voice, but use passive when the thing acted on is the
   subject worth naming. "Popped in reverse order" beats "the caller pops them in reverse order".
 - **No rhetorical framing.** Three shapes keep creeping in, and all three say less than the plain
@@ -173,9 +182,9 @@ reference, so read it before documenting new code.
     of each row." "Time in milliseconds that one publish may spend relaxing the layout."
   - A type says what it holds, then how it behaves. "When a row is full, [`Csr::relocate`] will be
     called."
-- **Complete sentences.** Write the subject and the verb out. A clipped note like "Asked first and
-  on its own." becomes "Called before the `&&`. Inside it, a switch-off would short-circuit and
-  never reach the state."
+- **No clipped notes.** A fragment in the style of standard API docs is fine ("Panics if `i` is out
+  of range."). A note that drops what it is about is not: "Asked first and on its own." becomes
+  "Called before the `&&`. Inside it, a switch-off would short-circuit and never reach the state."
 - **Caveats and contracts are spelled out.** "Note that ..." for a surprise, a `# Panics` section
   for a panic, `# Errors` for a `Result`, and the meaning of a parameter whose name does not carry
   it ("`entries` is an iterator over `(row, neighbor, edge)` tuples ...").
@@ -459,6 +468,12 @@ preference: the whole cache-efficiency story is supposed to come from safe data 
 flat `Vec`s, rayon), not from unsafe tricks. The workspace `Cargo.toml` also enables a large
 `clippy::` lint set (`unwrap_used`, `indexing_slicing = "allow"` is a deliberate exception,
 `missing_errors_doc`, etc.) — run `./check.sh` rather than guessing whether something will pass CI.
+
+The eight published crates set `#![warn(missing_docs)]` at the top of `lib.rs`, after the `doc_cfg`
+attribute, and clippy's `-D warnings` makes it an error. Every public item of a published crate
+takes a doc comment, fields and enum variants included. The tutorial, the template and the binaries
+are outside the lint. On wasm32 only CI's clippy over henad-app and the facade fails on it, and the
+wasm32 typecheck of `./check.sh` prints a web-only item of another crate as a warning.
 
 henad-compute, henad-explore, henad-app, henad-models, the tutorial (its `lib.rs` and
 `tests/parity.rs`), the template's `src/lib.rs` and the facade's `tests/facade_paths.rs` set

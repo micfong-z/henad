@@ -1,6 +1,6 @@
 //! Executors for batches of runs, with each outcome committed to a sink in request order.
 //!
-//! A CPU model runs in lanes. Each lane drives one run at a time on a thread pool of its own, a single lane included.
+//! A CPU model runs in lanes. Each lane drives one run at a time on its own thread pool, a single lane included.
 //! A GPU model runs on tracks, several runs sharing the device from the calling thread.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -32,25 +32,25 @@ use henad_core::params::ParamValue;
 use crate::cursor::{CursorState, RunCursor};
 use crate::probe::ProbeReport;
 
-/// Jobs of one step for each thread of a lane.
+/// Number of jobs of one step for each thread of a lane.
 pub const JOBS_PER_THREAD: usize = 4;
 
 /// Population counted as one job when a model does not report its jobs.
 pub const POPULATION_PER_JOB: u64 = 4096;
 
-/// Wall time in milliseconds one slice of steps aims to take. A pause or an abort lands within about this long.
+/// Wall time in milliseconds one slice of steps aims to take. A pause or an abort takes effect within about this long.
 const SLICE_TARGET_MS: f64 = 20.0;
 
-/// Most steps one slice can take.
+/// Maximum number of steps one slice can take.
 const MAX_SLICE_STEPS: u64 = 1 << 20;
 
-/// Most GPU tracks `choose_layout` picks on its own.
+/// Maximum number of GPU tracks that `choose_layout` picks on its own.
 pub(crate) const MAX_AUTO_GPU_TRACKS: usize = 4;
 
-/// Population from which `choose_layout` gives a GPU run the device to itself.
+/// Population from which `choose_layout` uses a single track for a GPU model.
 pub(crate) const LARGE_GPU_POPULATION: u64 = 1 << 20;
 
-/// Number of runs a sweep keeps going at once.
+/// Number of runs that a sweep keeps running at once.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Concurrency {
     /// Chosen from a probe build by `choose_layout`.
@@ -72,7 +72,7 @@ impl fmt::Display for Concurrency {
 impl FromStr for Concurrency {
     type Err = ParseIntError;
 
-    /// Reads `auto`, or a count of at least 1.
+    /// Parses `auto`, or a count of at least 1.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         if raw == "auto" {
             Ok(Self::Auto)
@@ -85,20 +85,20 @@ impl FromStr for Concurrency {
 /// Machine resources a sweep can spread its runs over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExecutionBudget {
-    /// Worker threads the runs share.
+    /// Number of worker threads that the runs share.
     pub(crate) workers: usize,
-    /// Bytes of host memory the live runs can hold together, `None` for no limit. The lanes are sized from the probed
+    /// Host memory budget in bytes for all live runs together, `None` for no limit. The lanes are sized from the probed
     /// run, and a probed run larger than the budget leaves one lane.
     pub(crate) memory_budget: Option<u64>,
-    /// Bytes of device memory the live GPU runs can hold together, `None` for no limit. A run larger than the budget
+    /// Device memory budget in bytes for all live GPU runs together, `None` for no limit. A run larger than the budget
     /// runs alone.
     pub(crate) gpu_memory_budget: Option<u64>,
-    /// Whether lanes can run on threads of their own.
+    /// Whether lanes can run on their own threads.
     pub(crate) can_spawn_threads: bool,
 }
 
 impl ExecutionBudget {
-    /// Returns the width of rayon's global pool as the workers, with no memory budget.
+    /// Returns a budget with the width of rayon's global pool as its workers, and no memory budget.
     pub(crate) fn detect() -> Self {
         Self {
             workers: rayon::current_num_threads(),
@@ -109,10 +109,10 @@ impl ExecutionBudget {
     }
 }
 
-/// Returns the bytes of device memory GPU runs can hold together on `ctx`: `budget` when given, and otherwise the
-/// device's largest buffer.
+/// Returns the device memory budget in bytes for all GPU runs together on `ctx`: `budget` when given, and otherwise
+/// the device's largest buffer.
 ///
-/// Note that wgpu reports no total for the device's memory. The largest buffer stands in for it.
+/// Note that wgpu reports no total for the device's memory. The largest buffer is used instead.
 pub fn gpu_memory_budget(budget: Option<u64>, ctx: &GpuContext) -> u64 {
     budget.unwrap_or_else(|| ctx.device.limits().max_buffer_size)
 }
@@ -122,16 +122,16 @@ pub fn gpu_memory_budget(budget: Option<u64>, ctx: &GpuContext) -> u64 {
 /// A CPU model has no GPU tracks, and a GPU model has no lanes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionLayout {
-    /// Runs stepped at once on the CPU, each in its own lane.
+    /// Number of runs stepped at once on the CPU, each in its own lane.
     pub cpu_lanes: usize,
-    /// Worker threads of each lane.
+    /// Number of worker threads in each lane.
     pub threads_per_lane: usize,
-    /// GPU runs alive at once.
+    /// Number of GPU runs alive at once.
     pub gpu_tracks: usize,
 }
 
 impl ExecutionLayout {
-    /// Returns the bytes the live runs hold together, each as large as the probed run.
+    /// Returns the projected size in bytes of all live runs together, each as large as the probed run.
     ///
     /// A CPU run counts its host bytes, and a GPU run its device bytes.
     pub fn projected_bytes(&self, probe: &ProbeReport) -> u64 {
@@ -148,9 +148,9 @@ impl ExecutionLayout {
 ///
 /// Either way the lanes are capped by `runs` and by the memory budget, and a single lane takes every worker. One lane
 /// runs even when the probe holds more than the budget. A target that cannot spawn threads gets one lane, whatever
-/// `concurrency` asks.
+/// `concurrency` requests.
 ///
-/// A GPU model gets as many tracks as the GPU memory budget holds runs like the probe, up to
+/// A GPU model gets one track for each run the size of the probe that fits in the GPU memory budget, up to
 /// [`MAX_AUTO_GPU_TRACKS`], and one track from a population of [`LARGE_GPU_POPULATION`]. [`Concurrency::Fixed`] sets
 /// the track count instead. The tracks are capped by `runs`.
 pub(crate) fn choose_layout(
@@ -237,6 +237,7 @@ struct ControlState {
 }
 
 impl SweepControl {
+    /// Returns a control that lets runs through.
     pub fn new() -> Self {
         Self::default()
     }
@@ -265,10 +266,12 @@ impl SweepControl {
         self.shared.resumed.notify_all();
     }
 
+    /// Returns whether the runs are held by a pause.
     pub fn is_paused(&self) -> bool {
         self.shared.mode.load(Ordering::Acquire) == PAUSED
     }
 
+    /// Returns whether the sweep is aborted.
     pub fn is_aborted(&self) -> bool {
         self.shared.mode.load(Ordering::Acquire) == ABORTED
     }
@@ -279,8 +282,8 @@ impl SweepControl {
     ///
     /// # Panics
     ///
-    /// On wasm32, panics or traps while the sweep is paused on a thread that cannot wait, as a browser's main thread
-    /// cannot. A host there reads [`Self::is_paused`] between slices instead.
+    /// Panics or traps on wasm32 while the sweep is paused on a thread that cannot wait, such as a browser's main
+    /// thread. A host on wasm32 reads [`Self::is_paused`] between slices instead.
     pub fn proceed(&self) -> bool {
         match self.shared.mode.load(Ordering::Acquire) {
             RUNNING => true,
@@ -321,6 +324,7 @@ struct ActiveRunsTable {
 /// One run in progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActiveRun {
+    /// Ids, replicate index and seed of the run.
     pub run: PlannedRun,
     /// Tick the run has reached.
     pub tick: u64,
@@ -329,6 +333,7 @@ pub struct ActiveRun {
 }
 
 impl ActiveRuns {
+    /// Returns an empty table.
     pub fn new() -> Self {
         Self::default()
     }
@@ -396,8 +401,9 @@ impl Drop for RunWatch {
 /// One run for an executor to build and drive.
 #[derive(Debug, Clone)]
 pub struct RunRequest<'p> {
+    /// Ids, replicate index and seed of the run.
     pub run: PlannedRun,
-    /// Key naming the results of the run.
+    /// Key that identifies the results of the run.
     pub run_key: u64,
     /// Values of the run's config, one per parameter.
     pub params: &'p [ParamValue],
@@ -426,14 +432,14 @@ impl<'p> RunRequest<'p> {
 
 /// Receiver of the outcomes of a batch.
 pub trait RunSink {
-    /// Takes a finished run. Runs arrive on the calling thread in request order.
+    /// Receives a finished run. Runs arrive on the calling thread in request order.
     ///
     /// # Errors
     ///
     /// Returns the error that stopped the sink. The batch ends with it, and the executor aborts its control.
     fn commit(&mut self, outcome: RunOutcome) -> io::Result<()>;
 
-    /// Sees a run as it finishes, before [`Self::commit`] takes it. Runs arrive on the calling thread in the order
+    /// Sees a run as it finishes, before [`Self::commit`] receives it. Runs arrive on the calling thread in the order
     /// they finish.
     fn finished(&mut self, _outcome: &RunOutcome) {}
 }
@@ -453,9 +459,9 @@ pub enum BatchEnd {
 /// Command buffers and steps each GPU track keeps on the device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GpuTrackDepth {
-    /// Command buffers of one track the device can hold at once.
+    /// Maximum number of command buffers of one track on the device at once.
     pub submissions_per_track: usize,
-    /// Most steps one command buffer holds, at most [`MAX_STEPS_PER_SUBMISSION`].
+    /// Maximum number of steps in one command buffer, no more than [`MAX_STEPS_PER_SUBMISSION`].
     pub steps_per_submission: u32,
 }
 
@@ -478,7 +484,7 @@ pub enum ExecutionError {
     Pool(rayon::ThreadPoolBuildError),
     /// Spawning a lane's thread failed.
     Spawn(io::Error),
-    /// The sink refused a finished run.
+    /// The sink rejected a finished run.
     Sink(io::Error),
     /// A lane's thread panicked outside any run, and its runs were lost.
     LanePanicked,
@@ -515,14 +521,14 @@ pub struct Executor<'a> {
     measure: Arc<MeasurePlan>,
     layout: ExecutionLayout,
     control: SweepControl,
-    /// Wall time after which a run is abandoned, read as [`Self::with_timeout`] describes.
+    /// Wall time after which a run is abandoned, interpreted as [`Self::with_timeout`] describes.
     timeout: Option<Duration>,
-    /// Table each run in progress is listed in, `None` when nothing watches the runs.
+    /// Table that lists each run in progress, `None` when nothing watches the runs.
     active_runs: Option<ActiveRuns>,
     /// One pool per lane. Empty for a GPU model, and on a target that cannot spawn threads.
     pools: Vec<rayon::ThreadPool>,
-    /// Cap on the bytes of device memory the live GPU runs hold together, `None` for the device's largest buffer. A
-    /// run larger than the cap runs alone.
+    /// Device memory budget in bytes for all live GPU runs together, `None` for the device's largest buffer. A run
+    /// larger than the budget runs alone.
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
     gpu_memory_budget: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
@@ -530,11 +536,11 @@ pub struct Executor<'a> {
 }
 
 impl<'a> Executor<'a> {
-    /// Returns an executor for `entry` sampled as `measure` asks, with a pool for each lane of `layout`.
+    /// Returns an executor for `entry` sampled as `measure` specifies, with a pool for each lane of `layout`.
     ///
-    /// A single lane gets a pool of its own as well, even one as wide as rayon's global pool. Note that a target that
+    /// A single lane gets its own pool as well, even a lane as wide as rayon's global pool. Note that a target that
     /// cannot spawn threads builds no pool, and runs a CPU model in a single lane on the calling thread, whatever
-    /// `layout` asks.
+    /// `layout` requests.
     ///
     /// # Errors
     ///
@@ -599,7 +605,7 @@ impl<'a> Executor<'a> {
     }
 
     /// Returns the executor with a budget of `budget` bytes of device memory for the live GPU runs, as
-    /// [`gpu_memory_budget`] reads it.
+    /// [`gpu_memory_budget`] interprets it.
     ///
     /// A run is built once its demand fits the budget beside the demand of the live runs. A run larger than the budget
     /// is built once no other run is live, and runs alone.
@@ -631,6 +637,7 @@ impl<'a> Executor<'a> {
         self.layout
     }
 
+    /// Control the executor reads between slices of steps.
     pub fn control(&self) -> &SweepControl {
         &self.control
     }
@@ -642,7 +649,7 @@ impl<'a> Executor<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`ExecutionError`] when a lane's thread cannot start or panics outside a run, or `sink` refuses a run.
+    /// Returns [`ExecutionError`] when a lane's thread cannot start or panics outside a run, or `sink` rejects a run.
     pub fn run_batch(&self, requests: &[RunRequest<'_>], sink: &mut dyn RunSink) -> Result<BatchEnd, ExecutionError> {
         match (self.entry.metadata().backend, self.pools.as_slice()) {
             #[cfg(not(target_arch = "wasm32"))]
@@ -650,7 +657,7 @@ impl<'a> Executor<'a> {
                 let ctx = self.gpu.ok_or(ExecutionError::NoDevice)?;
                 gpu::run_on_tracks(self, ctx, requests, sink)
             }
-            // A browser cannot block on the device. Each run's cursor refuses its GPU model.
+            // A browser cannot block on the device. Each run's cursor rejects its GPU model.
             #[cfg(target_arch = "wasm32")]
             (Backend::Gpu, _) => self.run_in_order(requests, sink, Placement::CallingThread),
             // A target that cannot spawn threads builds no lane pools.
@@ -680,7 +687,7 @@ impl<'a> Executor<'a> {
         Ok(BatchEnd::Complete)
     }
 
-    /// Drives the run of `request` on the threads `placement` names.
+    /// Drives the run of `request` on the threads that `placement` specifies.
     ///
     /// Entering the lane's pool once per run keeps each parallel pass of the run's kernels starting on a worker. From
     /// outside the pool every pass would be injected, parking the calling thread once per pass.
@@ -723,7 +730,7 @@ impl<'a> Executor<'a> {
         }
     }
 
-    /// Commits `outcome` to `sink`, aborting the control when the sink refuses it.
+    /// Commits `outcome` to `sink`, aborting the control when the sink rejects it.
     fn commit(&self, sink: &mut dyn RunSink, outcome: RunOutcome) -> Result<(), ExecutionError> {
         if let Some(active_runs) = &self.active_runs {
             active_runs.mark_committed(outcome.run.run_id);
@@ -757,7 +764,7 @@ enum Placement<'p> {
     LanePool(&'p rayon::ThreadPool),
 }
 
-/// Steps a lane takes between two checks of its control, sized to take about a target wall time.
+/// Number of steps that a lane takes between two checks of its control, sized to take about a target wall time.
 ///
 /// The default target is [`SLICE_TARGET_MS`].
 #[derive(Debug, Clone, Copy)]
@@ -796,11 +803,11 @@ impl SliceSize {
     }
 }
 
-/// Items that arrive out of order, handed out in index order.
+/// Items that arrive out of order, returned in index order.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 struct ReorderBuffer<T> {
-    /// Index of the next item to hand out.
+    /// Index of the next item to return.
     next: usize,
     waiting: BTreeMap<usize, T>,
 }
@@ -829,7 +836,7 @@ impl<T> ReorderBuffer<T> {
         Some(item)
     }
 
-    /// Number of items handed out.
+    /// Number of items returned.
     fn handed_out(&self) -> usize {
         self.next
     }
@@ -1249,7 +1256,7 @@ mod tests {
     struct AbortsAfterFirstRun {
         control: SweepControl,
         committed: usize,
-        /// Thread that aborts the control, handing back the time it did.
+        /// Thread that aborts the control, and returns the time it did so.
         aborter: Option<std::thread::JoinHandle<Instant>>,
     }
 
@@ -1315,7 +1322,7 @@ mod tests {
         );
     }
 
-    /// Returns the tick the first run in progress has reached, `None` while none is.
+    /// Returns the tick the first run in progress has reached, `None` while no run is in progress.
     fn first_tick(active_runs: &ActiveRuns) -> Option<u64> {
         active_runs.list().first().map(|run| run.tick)
     }

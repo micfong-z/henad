@@ -15,11 +15,11 @@ use crate::result_set::ResultSet;
 use crate::sweep::{SweepEnd, SweepOptions};
 use crate::tests::support::{CommitLimit, ScratchDir, entry, provenance, sweep_options, sweep_with};
 
-/// Upper bound of the x axis, 17 significant digits that `serde_json`'s default parser reads one unit in the last
-/// place off.
+/// Upper bound of the x axis, 17 significant digits that `serde_json`'s default parser reads with an error of one unit
+/// in the last place.
 const AXIS_MAX: f64 = 255.556_822_519_348_06;
 
-/// Longest the resume may take.
+/// Maximum time the resume may take.
 const PATIENCE: Duration = Duration::from_secs(120);
 
 /// Returns a Pattern Space Exploration of SIR on a 16 by 16 grid, with [`AXIS_MAX`] as the x axis's upper bound.
@@ -89,7 +89,7 @@ fn a_search_resumes_from_a_manifest_holding_a_seventeen_digit_axis_bound() {
         "the bound reads back bit for bit"
     );
 
-    // The resume plans the spec its manifest records, and refuses a search hash other than the recorded one.
+    // The resume plans the spec that its manifest records, and rejects a search hash other than the recorded hash.
     let options = SweepRunOptions::new(provenance());
     let mut run =
         SweepRun::resume_directory(entry("sir", None), None, scratch.path(), options).expect("the resume starts");

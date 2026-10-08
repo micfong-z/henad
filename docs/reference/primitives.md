@@ -24,7 +24,7 @@ use henad::authoring::primitives::rng::{next_bits, random_float};
 Where a primitive exists in both languages, the names match.
 `henad::authoring::prelude` holds every Rust draw, and `Boundary`, `cell_index`, `offset_cell`, `dist_sq` and the three offset tables of the space helpers.
 A model imports the other space helpers from `henad::authoring::primitives::space`.
-Each entry below gives the Rust signature, and calls out the WGSL one wherever it differs.
+Each entry below gives the Rust signature, and calls out the WGSL signature wherever it differs.
 
 ## Index
 
@@ -87,7 +87,7 @@ See also: [`wrap_coord`](#wrap_coord), [`offset_cell`](#offset_cell).
 fn wrap_coord(v: f32, world: f32) -> f32
 ```
 
-Wraps `v` into `0.0..world`, the position wrap an agent leaving one edge needs to re-enter at the other.
+Wraps `v` into `0.0..world`, the position wrap that an agent leaving one edge needs to re-enter at the opposite edge.
 
 ```rust
 wrap_coord(10.5, 10.0)   // 0.5
@@ -121,7 +121,7 @@ fn offset_cell(x: u32, y: u32, dx: i32, dy: i32, w: u32, h: u32, boundary: Bound
 
 The cell `(dx, dy)` away from `(x, y)`.
 Under `Torus` the result is always `Some`, since both axes wrap.
-Under `Bounded` a step past any edge gives `None`.
+Under `Bounded` a step past any edge returns `None`.
 
 ```rust
 offset_cell(0, 0, -1, 0, 8, 8, Boundary::Torus)     // Some((7, 0))
@@ -158,7 +158,7 @@ Inputs outside `[0, world)` are wrapped, so a caller need not normalise first.
 The WGSL twin assumes the two positions are within one world of each other.
 Every position the engine produces satisfies that.
 
-Both sides name the arguments `a` and `b`.
+Both versions use `a` and `b` as argument names.
 `from` and `target` are reserved words in WGSL.
 
 See also: [`dist_sq`](#dist_sq), [`wrap_coord`](#wrap_coord).
@@ -169,7 +169,7 @@ See also: [`dist_sq`](#dist_sq), [`wrap_coord`](#wrap_coord).
 fn dist_sq(ax: f32, ay: f32, bx: f32, by: f32, world_w: f32, world_h: f32, boundary: Boundary) -> f32
 ```
 
-Squared distance between two points, wrapping each axis through [`axis_delta`](#axis_delta).
+Squared distance between two points, wrapping each axis with [`axis_delta`](#axis_delta).
 Compare it against a squared radius rather than taking a `sqrt`.
 
 ```rust
@@ -231,7 +231,7 @@ The 8 surrounding cells, `dy` outer and `dx` inner.
 (-1, -1)  (0, -1)  (1, -1)  (-1, 0)  (1, 0)  (-1, 1)  (0, 1)  (1, 1)
 ```
 
-This is the order `GridModel::step_cell` receives its `neighbors` slice in.
+This is the order of the `neighbors` slice that `GridModel::step_cell` receives.
 A model indexes that slice by position, so the order is published API.
 
 See also: [`MOORE_COLUMN_MAJOR`](#moore_column_major), [`VON_NEUMANN`](#von_neumann), [`offsets`](#offsets).
@@ -278,12 +278,12 @@ fn offsets(kind: NeighborhoodKind) -> &'static [(i32, i32)]
 ```
 
 The table for a `NeighborhoodKind`, in `step_cell` order.
-`Moore` gives [`MOORE_ROW_MAJOR`](#moore_row_major) and `VonNeumann` gives [`VON_NEUMANN`](#von_neumann).
+`Moore` returns [`MOORE_ROW_MAJOR`](#moore_row_major) and `VonNeumann` returns [`VON_NEUMANN`](#von_neumann).
 
 `NeighborhoodKind` is at `henad::authoring::NeighborhoodKind`, and the authoring prelude holds it.
 
 Rust only.
-A shader names a table by its id instead, as in [`neighbor_count`](#neighbor_count).
+A shader refers to a table by its id instead, as in [`neighbor_count`](#neighbor_count).
 
 See also: [`for_each_neighbor`](#for_each_neighbor).
 
@@ -323,7 +323,7 @@ fn neighbor_count(table: u32) -> u32
 How many offsets a table holds, 4 for `VON_NEUMANN` and 8 for either Moore table.
 WGSL only.
 
-Tables are named by id there.
+Tables are identified by id there.
 
 ```wgsl
 const MOORE_ROW_MAJOR: u32 = 0u;
@@ -391,7 +391,8 @@ The GPU generator, and the WGSL counterpart of [`xorshift64`](#xorshift64).
 fn pcg_hash(input: u32) -> u32
 ```
 
-The Rust twin, bit-equal to the WGSL one, which a GPU port calls to seed a state buffer the shader then draws from.
+The Rust twin, bit-equal to the WGSL version.
+A GPU port calls it to seed a state buffer that the shader then draws from.
 The authoring prelude brings it in.
 
 See also: [`next_bits`](#next_bits).
@@ -439,7 +440,7 @@ random_float(u32::MAX, 1.0)   // strictly under 1.0
 ```
 
 24 bits is the f32 mantissa width, so every value the draw can produce is exact and the range really is half-open.
-Both backends run the same form, and the two are bit-equal.
+Both backends run the same form, and their results are bit-equal.
 
 See also: [`next_float`](#next_float), [`below`](#below), [`reservoir_accept`](#reservoir_accept).
 
@@ -477,11 +478,11 @@ Every result is equally likely for any `n`.
 The draw multiplies a fresh word by `n` and keeps the top 32 bits (Lemire's method), then redraws the few words that would favour some results over the rest.
 A plain `next_bits(rng) % n` favours the low results.
 
-Unlike [`next_float`](#next_float), it has no pure form taking a raw word.
+Unlike [`next_float`](#next_float), it has no pure form that takes a raw word.
 A rejected word needs another draw from the generator.
 
 Rust only.
-The redraw needs a 64-bit product, and WGSL has none.
+The redraw needs a 64-bit product, and WGSL has no 64-bit integers.
 
 See also: [`next_bits`](#next_bits), [`next_float`](#next_float).
 
@@ -558,7 +559,7 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 |---|---|
 | Agents within a radius | `SpatialHash::query_radius`, on `henad::authoring::SpatialHash`. Takes a caller-provided result buffer, so a query does not allocate |
 | World size | `henad::authoring::Extent`. The engine prepends world size to every agent model's params |
-| A per-chunk RNG | The `run_pass` that `agent_lanes!` generates hands the kernel its chunk's generator, seeded from the tick and the chunk's index |
+| A per-chunk RNG | The `run_pass` that `agent_lanes!` generates passes the kernel its chunk's generator, seeded from the tick and the chunk's index |
 | Counting cells | `henad::authoring::reduce_chunks` |
 | A node's neighbours | `Network::in_neighbors` and `Network::out_neighbors`, on `henad::authoring::Network`. Each returns a slice of node indices without allocating. On an undirected graph the two return the same list |
 | Whether two nodes are joined | `Network::has_edge`, or `Network::edge_between` for the edge's index. A lookup walks one node's neighbours, the shorter list on an undirected graph. On a directed graph it looks only for an edge from the first node to the second |
@@ -567,11 +568,11 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 
 ## Not provided
 
-- **Agentsets.** There is no first-class filtered collection of agents, and no ask-style iteration over one. A model filters inside its own kernel, over flat lanes.
+- **Agentsets.** There is no first-class filtered collection of agents, and no ask-style iteration over such a collection. A model filters inside its own kernel, over flat lanes.
 - **Global ordering.** Nothing sorts agents or picks a global maximum across them.
 - **A per-cell list of agents.** Nothing keeps a second copy of where each agent stands. `SpatialHash` is rebuilt from positions each tick and answers the same queries.
 - **A global RNG seed.** A chunk's RNG is seeded from the tick and the chunk's index. A run is then independent of the thread count.
-  A network model's global pass is sequential and draws from one stream of its own.
+  A network model's global pass is sequential and draws from its own single stream.
 - **Dynamic populations of agents.** An agent model's agents are neither created nor removed mid-run.
   A network model can add and remove nodes through `Nodes::spawn` and `Nodes::retire`.
 - **Non-uniform activation.** Every agent steps every tick. A model wanting less carries its own phase counter.

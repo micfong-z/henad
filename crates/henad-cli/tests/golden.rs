@@ -13,9 +13,9 @@ fn golden_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
 }
 
-/// Returns whether this machine offers a compute adapter, through the call the CLI acquires its device with.
+/// Returns whether this machine offers a compute adapter, through the call that the CLI uses to acquire its device.
 ///
-/// An adapter below the WebGPU baseline gives no device there, and the CLI then lists the CPU models alone.
+/// An adapter below the WebGPU baseline yields no device there, and the CLI then lists only the CPU models.
 ///
 /// # Panics
 ///
@@ -34,7 +34,7 @@ fn has_adapter() -> bool {
     }
 }
 
-/// Returns what `henad-cli` with `arguments` writes to standard output.
+/// Returns the standard output of `henad-cli` run with `arguments`.
 ///
 /// # Panics
 ///

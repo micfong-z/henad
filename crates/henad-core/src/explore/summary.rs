@@ -47,7 +47,7 @@ const Z_975: f64 = 1.959_963_984_540_054;
 /// Returns the 97.5% quantile of Student's t distribution with `degrees_of_freedom` degrees of freedom.
 ///
 /// Up to 30 degrees of freedom the value comes from a table, and past it from the Cornish-Fisher expansion in
-/// `1 / degrees_of_freedom`. Note that `degrees_of_freedom` 0 gives infinity.
+/// `1 / degrees_of_freedom`. Note that the result is infinity for 0 degrees of freedom.
 pub fn student_t_975(degrees_of_freedom: u64) -> f64 {
     if degrees_of_freedom == 0 {
         return f64::INFINITY;
@@ -129,6 +129,7 @@ impl RunningMoments {
 pub struct ReplicateSummary {
     /// Number of finite values.
     pub n: u64,
+    /// Mean of the finite values, `None` when there are no finite values.
     pub mean: Option<f64>,
     /// Sample standard deviation, `None` below two values.
     pub standard_deviation: Option<f64>,
@@ -148,11 +149,13 @@ pub fn summarize(values: impl IntoIterator<Item = f64>) -> ReplicateSummary {
 /// Run counts and statistics of one config.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SummaryRow {
+    /// Id of the config.
     pub config_id: u64,
+    /// Number of runs of the config, whatever their status.
     pub runs: u64,
-    /// Runs whose status is [`RunStatus::Ok`].
+    /// Number of runs whose status is [`RunStatus::Ok`].
     pub ok: u64,
-    /// Runs that ended on a fault or a timeout, as [`RunStatus::is_failure`] decides.
+    /// Number of runs that ended on a fault or a timeout, as [`RunStatus::is_failure`] decides.
     pub failed: u64,
     /// Tick each run ended on.
     pub ticks: ReplicateSummary,
@@ -189,7 +192,7 @@ impl SummaryAccumulator {
 
     /// Adds a run of config `config_id` that ended with `status` at tick `ticks`, with the values of its reducers.
     ///
-    /// `reducers` holds one value per reducer. Note that the statistics depend on the order runs are added in, down
+    /// `reducers` holds one value per reducer. Note that the order in which runs are added affects the statistics down
     /// to the last bit.
     pub fn push(&mut self, config_id: u64, status: RunStatus, ticks: u64, reducers: &[Option<f64>]) {
         let reducer_count = self.reducer_count;

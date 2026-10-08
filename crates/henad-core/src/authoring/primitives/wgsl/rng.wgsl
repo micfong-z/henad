@@ -13,17 +13,19 @@ fn pcg_hash(input: u32) -> u32 {
     return (word >> 22u) ^ word;
 }
 
+// Advances `r` with `pcg_hash` and returns the new state.
 fn next_bits(r: ptr<function, u32>) -> u32 {
     *r = pcg_hash(*r);
     return *r;
 }
 
-// A uniform float in `[0, max)`. The top 24 bits over a power of two, so nothing rounds and the
-// range stays half-open.
+// Returns a uniform float in `[0, max)` drawn from `bits`. The top 24 bits over a power of two leave
+// nothing to round, and the range stays half-open.
 fn random_float(bits: u32, max: f32) -> f32 {
     return f32(bits >> 8u) / 16777216.0 * max;
 }
 
+// Advances `r`, then draws with `random_float`.
 fn next_float(r: ptr<function, u32>, max: f32) -> f32 {
     return random_float(next_bits(r), max);
 }

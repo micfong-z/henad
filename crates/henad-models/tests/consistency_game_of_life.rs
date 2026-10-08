@@ -39,7 +39,7 @@ fn pattern(scenario: &str) -> &'static [(u32, u32)] {
 
 /// Grid and tick count the declaration fixes for a scenario, in `game_of_life_fixture.md`.
 ///
-/// The gate runs Henad at these rather than at whatever the candidate's header says. A port that
+/// The gate runs Henad with these values rather than with whatever the candidate's header says. A port that
 /// ran the wrong length would otherwise write a self-consistent fixture and pass.
 fn declared(scenario: &str) -> (u32, u32, u32) {
     match scenario.split_whitespace().next().unwrap_or_default() {
@@ -49,10 +49,10 @@ fn declared(scenario: &str) -> (u32, u32, u32) {
     }
 }
 
-/// Where the reference fixtures live.
+/// Returns the directory of the reference fixtures for `model`.
 ///
 /// `HENAD_FIXTURE_DIR` points the gate at a directory holding one engine's candidates, so a
-/// failure names that engine and no tracked fixture is written or removed to find out.
+/// failure identifies that engine and no tracked fixture is written or removed to find out.
 fn fixture_dir(model: &str) -> std::path::PathBuf {
     match std::env::var_os("HENAD_FIXTURE_DIR") {
         Some(root) => std::path::PathBuf::from(root).join(model),
@@ -164,7 +164,7 @@ fn glider_returns_to_origin_after_full_wrap() {
     );
 }
 
-/// Henad's final grid against every reference.
+/// Checks Henad's final grid against every reference.
 #[test]
 fn matches_every_reference_fixture() {
     let dir = fixture_dir("game_of_life");
@@ -195,7 +195,7 @@ fn matches_every_reference_fixture() {
              rather than comparing against a run of a different length."
         );
 
-        // Truncated file guard
+        // A truncated file fails here.
         assert_eq!(
             fixture.cells.len(),
             (width * height) as usize,
@@ -215,6 +215,6 @@ fn matches_every_reference_fixture() {
         checked.push(format!("{engine} / {scenario}"));
     }
 
-    // In case some unexpected renaming or deletion happen.
+    // A renamed or deleted fixture would otherwise leave nothing checked.
     assert!(!checked.is_empty(), "no fixtures found in {}", dir.display());
 }

@@ -1,4 +1,4 @@
-//! Opens that read the files, or take the folder, the user picks.
+//! Open dialogs that read the files or return the folder the user picks.
 
 use super::{DialogFile, OpenOutcome, OpenResult, OpenTarget, spawn};
 
@@ -79,7 +79,7 @@ async fn pick_results() -> OpenResult {
     pick_folder().await
 }
 
-/// A browser cannot hand over a folder, so the user picks the manifest and the CSV files inside one.
+/// A browser cannot provide a folder, so the user picks the manifest and the CSV files inside a results folder.
 #[cfg(target_arch = "wasm32")]
 async fn pick_results() -> OpenResult {
     let Some(handles) = rfd::AsyncFileDialog::new()

@@ -1,7 +1,7 @@
 //! Resources a model would allocate, checked against the device before anything is created.
 //!
-//! Over budget, wgpu names a bind group and panics on the UI thread. Asking first names the
-//! model's own buffer instead.
+//! Over budget, wgpu panics on the UI thread with a message that refers to a bind group. Checking first lets the
+//! message refer to the model's own buffer instead.
 
 use henad_core::helpers::fmt_bytes;
 
@@ -9,13 +9,13 @@ use crate::display_scale::display_dims;
 use crate::gpu::primitives::pipeline::{storage_entry, uniform_entry};
 use henad_core::authoring::model::binding::{BindingDecl, BindingKind};
 
-/// Bindings that count against `max_storage_buffers_per_shader_stage`. A uniform and a storage
-/// texture each count against their own limit, not this one.
+/// Returns the number of bindings that count against `max_storage_buffers_per_shader_stage`. A uniform and a storage
+/// texture each count against a separate limit.
 pub(crate) fn storage_bindings(decls: &[BindingDecl]) -> u32 {
     decls.iter().filter(|d| d.kind.is_storage_buffer()).count() as u32
 }
 
-/// The layout entry a declaration asks for.
+/// Returns the layout entry that a declaration requires.
 pub(crate) fn layout_entry(i: u32, decl: &BindingDecl) -> wgpu::BindGroupLayoutEntry {
     match decl.kind {
         BindingKind::Storage { read_only } => storage_entry(i, read_only),
@@ -33,17 +33,21 @@ pub(crate) fn layout_entry(i: u32, decl: &BindingDecl) -> wgpu::BindGroupLayoutE
     }
 }
 
-/// Labelled as wgpu would label it, so a message points at something greppable.
+/// One buffer a model would allocate, labelled as wgpu would label it so a message points at something greppable.
 #[derive(Debug)]
 pub struct Alloc {
+    /// Label of the buffer.
     pub label: String,
+    /// Size in bytes.
     pub bytes: u64,
 }
 
-/// Counted against a different limit than the buffers' size.
+/// Storage buffers one pass binds, counted against `max_storage_buffers_per_shader_stage`.
 #[derive(Debug)]
 pub struct PassBindings {
+    /// Label of the pass.
     pub label: String,
+    /// Number of storage buffers the pass binds.
     pub storage: u32,
 }
 
@@ -53,14 +57,16 @@ pub struct PassBindings {
 /// rather than declared, and both are negligible next to what they sit beside.
 #[derive(Debug, Default)]
 pub struct Demand {
+    /// Buffers the model would allocate.
     pub buffers: Vec<Alloc>,
-    /// Already capped by [`crate::display_scale`].
+    /// Size of the display texture, already capped by [`crate::display_scale`].
     pub texture: Option<(u32, u32)>,
+    /// Storage bindings of each pass.
     pub passes: Vec<PassBindings>,
 }
 
 impl Demand {
-    /// `words` is a `u32` count, not bytes.
+    /// Records buffer `label` of `words` `u32` words.
     pub fn push(&mut self, label: String, words: usize) {
         self.buffers.push(Alloc {
             label,
@@ -68,6 +74,7 @@ impl Demand {
         });
     }
 
+    /// Records side `_a` of buffer `label`, and side `_b` as well when `doubled` is set.
     pub fn push_sides(&mut self, label: &str, words: usize, doubled: bool) {
         self.push(format!("{label}_a"), words);
         if doubled {
@@ -75,7 +82,8 @@ impl Demand {
         }
     }
 
-    /// The five tables [`crate::gpu::GpuSpatialHash`] rebuilds every tick.
+    /// Records the five tables a [`GpuSpatialHash`](crate::gpu::GpuSpatialHash) of `n_cells` cells rebuilds every
+    /// tick for `num_agents` agents.
     pub fn push_index(&mut self, label: &str, n_cells: u32, num_agents: u32) {
         let table = n_cells as usize + 1;
         for name in ["counts", "cell_start", "cursor"] {
@@ -86,11 +94,12 @@ impl Demand {
         }
     }
 
-    /// Caps the texture for `limits` first, so the recorded size is the one that would be created.
+    /// Records the display texture of a `width` by `height` grid, capped for `limits` as the engine would create it.
     pub fn set_display(&mut self, width: u32, height: u32, limits: &wgpu::Limits) {
         self.texture = Some(display_dims(width, height, limits.max_texture_dimension_2d));
     }
 
+    /// Records pass `label`, binding `storage` storage buffers.
     pub fn push_pass(&mut self, label: String, storage: u32) {
         self.passes.push(PassBindings { label, storage });
     }
@@ -104,9 +113,9 @@ impl Demand {
         buffers + texture
     }
 
-    /// Reasons `limits` cannot host this, empty when it can.
+    /// Returns the reasons `limits` cannot host the model, empty when it can.
     ///
-    /// Grouped by size, since a ping-ponged buffer's two sides would otherwise say the same
+    /// Buffers of one size share a line. A ping-ponged buffer's two sides would otherwise say the same
     /// sentence twice.
     pub fn shortfalls(&self, limits: &wgpu::Limits) -> Vec<String> {
         let mut lines = self.size_shortfalls(limits);
@@ -184,7 +193,7 @@ mod tests {
         }
     }
 
-    /// Otherwise the UI refuses a model that would have built.
+    /// A model that fits reports no shortfall. Otherwise the UI would reject a model that would have built.
     #[test]
     fn a_model_that_fits_has_no_shortfalls() {
         let mut demand = Demand::default();
@@ -193,7 +202,7 @@ mod tests {
         assert!(demand.shortfalls(&wgpu::Limits::default()).is_empty());
     }
 
-    /// The `gpu_sir` 6000x6000 case from issue #9, which used to be a wgpu panic.
+    /// The `gpu_sir` 6000x6000 case from issue #9, which would otherwise be a wgpu panic.
     #[test]
     fn a_buffer_past_the_binding_limit_is_named() {
         let mut demand = Demand::default();
@@ -234,7 +243,7 @@ mod tests {
         assert!(found[0].contains("for one buffer"), "{}", found[0]);
     }
 
-    /// The limit that filed issue #30. No amount of shrinking the grid fixes it, so it reads
+    /// The limit behind issue #30. No amount of shrinking the grid fixes it, so it reads
     /// differently from a size.
     #[test]
     fn a_pass_over_the_binding_count_is_named() {

@@ -12,8 +12,9 @@ pub fn charts_ui(ui: &mut egui::Ui, app: &mut AppState) {
     });
 }
 
-/// How much of a run the history keeps. Unlimited retains all of it, which is what an export off
-/// a long run needs, and grows with the run.
+/// Draws the Unlimited history checkbox and the History length slider.
+///
+/// Unlimited history keeps the whole run for an export, and grows with the run.
 fn history_controls(ui: &mut egui::Ui, app: &mut AppState) {
     let mut unlimited = app.history_capacity.is_none();
     let mut changed = ui.checkbox(&mut unlimited, "Unlimited history").changed();
@@ -66,7 +67,7 @@ fn stats_chart(ui: &mut egui::Ui, app: &AppState) {
         }
     });
 
-    // Render vector arrow plots and histogram bar charts for the latest snapshot
+    // The latest snapshot's vector and histogram stats get a plot each.
     if let Some(snap) = &app.snapshot {
         for stat in &snap.stats {
             match &stat.value {
@@ -107,7 +108,7 @@ fn vector_arrow_chart(ui: &mut egui::Ui, label: &str, x: f64, y: f64, color: [u8
                 .color(arrow_color)
                 .tip_length(8.0),
         );
-        // Reference circle at current magnitude
+        // A reference circle sits at the current magnitude.
         if mag > 1e-6 {
             let n = 64;
             let circle: Vec<[f64; 2]> = (0..=n)

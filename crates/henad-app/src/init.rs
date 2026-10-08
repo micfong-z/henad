@@ -49,7 +49,6 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
         .or_default()
         .insert(0, "ibm_plex_mono_font".to_owned());
 
-    // Tell egui to use these fonts:
     ctx.set_fonts(fonts);
 }
 
@@ -65,15 +64,15 @@ pub fn wgpu_configuration(needs: GpuNeeds) -> egui_wgpu::WgpuConfiguration {
     }
 }
 
-/// Returns the device Henad asks for to run models that need `needs`, on top of what egui would have requested.
+/// Returns the device descriptor that Henad requests for models that need `needs`, added to egui's request.
 ///
-/// `raise` clamps to what the adapter offers. On the web the adapter reports the browser's
-/// ceiling, well under the hardware's.
+/// `raise` clamps to the adapter's limits. On the web the adapter reports the browser's
+/// ceiling, well under the hardware limits.
 pub fn device_descriptor(adapter: &wgpu::Adapter, needs: GpuNeeds) -> wgpu::DeviceDescriptor<'static> {
     let base = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     let mut descriptor = (base.device_descriptor)(adapter);
     // Feeds the GPU time/step readout, "N/A" without it. Reading the timestamps back blocks, and
-    // the browser's main thread must not.
+    // the browser's main thread must not block.
     #[cfg(not(target_arch = "wasm32"))]
     if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
         descriptor.required_features |= wgpu::Features::TIMESTAMP_QUERY;

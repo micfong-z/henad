@@ -1,4 +1,4 @@
-//! Bucket queue of live nodes, keyed by the tick at which each last joined a team.
+//! Bucket queue of live nodes, keyed by the tick at which each node last joined a team.
 
 /// Marks the end of a bucket's list.
 const NIL: u32 = u32::MAX;
@@ -22,8 +22,9 @@ pub(super) fn due_key(now: u64, max_downtime: u32) -> Option<u64> {
 ///
 /// The number of buckets is a power of two, at least the largest `max_downtime + 2` seen, and never shrinks.
 /// Every live key lies after the last drained key and no later than the current tick.
-/// That span is at most `max_downtime + 2` keys, or the previous value's span in the tick `max_downtime` is lowered.
-/// Either way it fits in the buckets, and no two live keys share one.
+/// That span is at most `max_downtime + 2` keys.
+/// In the tick that `max_downtime` is lowered, the bound uses its previous value.
+/// Either way the span fits in the buckets, and no two live keys share a bucket.
 /// Each bucket is a doubly linked list threaded through `prev` and `next`. A node moves between buckets in constant
 /// time.
 #[derive(Debug, Default)]
@@ -42,7 +43,7 @@ pub(super) struct RetirementRing {
 impl RetirementRing {
     /// Makes room for keys spanning `max_downtime + 2` ticks.
     ///
-    /// If the buckets are too few, they are laid out again from `live`, at a cost of O(live).
+    /// If there are too few buckets, they are laid out again from `live`, at a cost of O(live).
     /// A lower `max_downtime` needs no layout. [`Self::drain_through`] then drains the keys it made overdue.
     pub fn prepare(&mut self, max_downtime: u32, live: &[u32], team_tick: &[u64]) {
         let needed = (max_downtime as usize + 2).next_power_of_two();
@@ -94,10 +95,11 @@ impl RetirementRing {
         }
     }
 
-    /// Empties into `out` the buckets of every key after the last drained one, up to and including `due`.
+    /// Empties the buckets for every key after the last drained key, up to and including `due`, and appends their
+    /// nodes to `out`.
     ///
-    /// This is one key per tick while `max_downtime` holds, more in the tick it is lowered,
-    /// and none for a while after it is raised.
+    /// This drains one key per tick while `max_downtime` stays the same, more than one key in the tick it is lowered,
+    /// and no key for a while after it is raised.
     pub fn drain_through(&mut self, due: u64, out: &mut Vec<u32>) {
         while self.drained < due {
             self.drained += 1;

@@ -12,10 +12,7 @@ use henad_core::view::GridView;
 use crate::cpu::primitives::chunked::{advance_tick_seed, chunk_seed};
 use crate::for_each_chunk_mut;
 
-/// Seed every `GridModel`'s `init` starts from.
-///
-/// Exported so a GPU re-implementation of a CPU model can seed its grid bit-identically and
-/// therefore be checked against the CPU model as an oracle.
+/// State a grid model's random number generator (RNG) starts from when a run has no seed.
 pub const GRID_INIT_SEED: u64 = 0xDEAD_BEEF_CAFE_1234;
 
 /// Returns the state a grid model's RNG starts from: `seed` mixed, or [`GRID_INIT_SEED`] when it is `None`.
@@ -28,7 +25,7 @@ pub fn grid_init_rng(seed: Option<u64>) -> u64 {
 /// Double-buffered `u8` cells stepped by `M`'s neighbourhood rule.
 pub struct CaField<M: GridModel> {
     grid: Grid2D<u8>,
-    /// Advanced once per tick, then fanned out per row by `chunk_seed`.
+    /// Base seed, advanced once per tick and fanned out per row by `chunk_seed`.
     seed: u64,
     _marker: PhantomData<M>,
 }
@@ -61,7 +58,7 @@ impl<M: GridModel> CaField<M> {
         height.div_ceil(rows_per_leaf(width, height))
     }
 
-    /// Build a field seeded from `seed`, or from [`GRID_INIT_SEED`] when it is `None`.
+    /// Builds a field seeded from `seed`, or from [`GRID_INIT_SEED`] when it is `None`.
     pub fn with_seed(extent: Extent, params: &[ParamValue], seed: Option<u64>) -> Self {
         let (width, height) = extent.cells();
         let mut grid = Grid2D::new(width, height);
@@ -74,7 +71,9 @@ impl<M: GridModel> CaField<M> {
         }
     }
 
-    /// `None` unless `cells` is exactly the length `extent` implies.
+    /// Builds a field holding `cells`, seeded from [`GRID_INIT_SEED`].
+    ///
+    /// Returns `None` unless `cells` is exactly the length `extent` implies.
     pub fn from_cells(extent: Extent, cells: &[u8]) -> Option<Self> {
         let (width, height) = extent.cells();
         if cells.len() != width as usize * height as usize {
@@ -139,21 +138,16 @@ impl<M: GridModel> FieldLayer for CaField<M> {
     }
 }
 
-/// Cells a rayon leaf should be worth taking. Below this the split tree and the wake-up cost more
+/// Floor on the number of cells one rayon leaf takes. Below this the split tree and the wake-up cost more
 /// than the rows do.
 ///
-/// Measured across both grid models from 64 squared to 4096 squared. Twice this left a 4096 wide
-/// SIR grid 8% slower than no floor at all, since a row's cost varies with what its cells hold and
-/// coarser leaves stop rayon balancing that by stealing.
+/// A row's cost varies with what its cells hold, and a larger floor stops rayon balancing that by stealing.
 const MIN_LEAF_CELLS: usize = 8_192;
 
-/// Rows one rayon leaf takes.
+/// Returns the floor on the number of rows one rayon leaf takes, at least one and at most the grid's height.
 ///
-/// A leaf of one row hands 48 workers a 64 by 64 grid as 64 jobs of 64 cells, and the tick then
-/// costs more to hand out than to run. Only a floor, so a grid with rows to spare still splits
-/// down to it and rayon balances the rest by stealing. Clamped to the grid, which makes a small
-/// one a single job. Not a function of the worker count, so how the work divides does not change
-/// with the pool.
+/// A grid with rows to spare still splits down to it, and rayon balances the rest by stealing. A small grid is a
+/// single job. The floor does not depend on the worker count.
 fn rows_per_leaf(width: usize, height: usize) -> usize {
     MIN_LEAF_CELLS.div_ceil(width.max(1)).min(height).max(1)
 }
@@ -180,8 +174,10 @@ fn step_grid<M: GridModel>(grid: &mut Grid2D<u8>, hot: &M::Params, seed: u64, ti
     }
 }
 
-/// The rows above, at, and below `y`, wrapped vertically. Sliced to exactly one row wide so a
-/// neighbour access is a single index rather than a `row * stride + x` multiply-add.
+/// Returns the rows above, at and below `y`, wrapped vertically.
+///
+/// Each slice is exactly one row wide. A neighbour access is then a single index instead of a `row * stride + x`
+/// multiply-add.
 #[inline]
 fn neighbor_rows(current: &[u8], ws: usize, y: usize, h: u32) -> [&[u8]; 3] {
     let hs = h as usize;
@@ -208,8 +204,11 @@ fn vn_cell<M: GridModel>(rows: [&[u8]; 3], xm: usize, x: usize, xp: usize, hot: 
     M::step_cell(mid[x], &neighbors, hot, rng)
 }
 
-/// Only the first and last column wrap in x, so both are peeled off and the interior runs without
-/// the per-cell modulo. `last.min(1)` covers a one-column grid, where both wraps land on x 0.
+/// Steps one row of a Moore grid into `next_row`.
+///
+/// Only the first and last column wrap in x. Both columns are peeled off, and the interior runs an `enumerate()`
+/// loop without a per-cell modulo. Keep that shape on this hot path. `last.min(1)` covers a one-column grid, where
+/// both wraps land on x 0.
 #[inline(always)]
 fn step_row_moore<M: GridModel>(rows: [&[u8]; 3], next_row: &mut [u8], hot: &M::Params, rng: &mut u64) {
     let Some(last) = next_row.len().checked_sub(1) else {
@@ -326,7 +325,7 @@ mod tests {
     }
 
     /// A grid under the leaf floor runs on one worker however wide the pool is, and the benchmark
-    /// CSV carries this number so such a run is not read as a full-width one.
+    /// CSV carries this number so such a run is not mistaken for a full-width one.
     #[test]
     fn a_grid_under_the_leaf_floor_is_one_job() {
         let small = CaField::<MooreProbe>::with_seed(Extent { w: 64.0, h: 64.0 }, &[], None);

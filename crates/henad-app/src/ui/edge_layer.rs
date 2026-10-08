@@ -1,7 +1,7 @@
 //! Instanced renderer for network edges, drawn under the agent sprites.
 //!
 //! Node positions are read directly from the agent layer's position lanes, which are bound as storage buffers.
-//! Only the edge list is copied to the GPU (if changed).
+//! Only the edge list is copied to the GPU, and only when it changes.
 
 use crate::shader_bindings::edges::Uniforms;
 use crate::ui::agent_layer::{AGENT_SIZE_PT, palette_lut};
@@ -28,7 +28,7 @@ const WORDS: usize = 3;
 
 pub struct EdgeDraw {
     pipeline: wgpu::RenderPipeline,
-    /// Pipeline for arrowheads, set only if `EdgeStyle.arrows` is true.
+    /// Pipeline for arrowheads, set only when `EdgeStyle.arrows` is on and the edges are directed.
     arrow_pipeline: Option<wgpu::RenderPipeline>,
     bind_group: wgpu::BindGroup,
     instances: wgpu::Buffer,
@@ -67,7 +67,7 @@ pub struct EdgeLayer {
     directed: bool,
     /// Version and length of the edge list currently in `instances`.
     uploaded: Option<(u64, usize)>,
-    /// Buffer where the instances are packed into before being copied to the GPU.
+    /// Instances packed for the next copy to the GPU, reused across uploads.
     scratch: Vec<u32>,
 }
 
@@ -245,8 +245,7 @@ impl EdgeLayer {
         self.count = u32::try_from(n).unwrap_or(u32::MAX);
     }
 
-    /// Grows the instance buffer to hold at least `n` edges.
-    /// Capacity grows in powers of two.
+    /// Grows the instance buffer to hold at least `n` edges, in powers of two.
     ///
     /// Returns false if the edge list is too large for one buffer.
     fn grow_to(&mut self, n: usize) -> bool {

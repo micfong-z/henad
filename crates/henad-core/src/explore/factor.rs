@@ -13,7 +13,7 @@ use crate::explore::spec::ActionSpec;
 use crate::explore::value::{ValueError, check_value, parse_value};
 use crate::params::{ParamDescriptor, ParamKind, ParamValue};
 
-/// Most levels one factor can have.
+/// Maximum number of levels in one factor.
 pub const MAX_LEVELS: u64 = 1 << 24;
 
 /// Relative amount by which a range may miss a whole number of steps and still end on its `max`.
@@ -22,7 +22,7 @@ const ROUNDING: f64 = 1e-9;
 /// Levels of a factor, as a spec writes them.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LevelSpec {
-    /// Values in the text [`parse_value`] reads, or ticks for an action.
+    /// Values in the text form that [`parse_value`] accepts, or ticks for an action.
     ///
     /// A plan trims the spaces around each value before it reads it.
     Values(Vec<String>),
@@ -30,7 +30,14 @@ pub enum LevelSpec {
     ///
     /// A whole-number factor takes a step of 1 when `step` is `None`. An `F32` parameter needs a step, except in a
     /// sampled design. A sampled design draws from the whole range.
-    Range { min: f64, max: f64, step: Option<f64> },
+    Range {
+        /// Lowest value of the range.
+        min: f64,
+        /// Highest value the range can reach.
+        max: f64,
+        /// Distance between two consecutive values.
+        step: Option<f64>,
+    },
     /// Every value of a `Bool` or `Choice` parameter.
     All,
 }
@@ -77,17 +84,23 @@ impl LevelSpec {
     }
 }
 
-/// Text that does not read as a [`LevelSpec`].
+/// Text that cannot be parsed as a [`LevelSpec`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LevelSpecError {
-    /// A part of range `range` that is not a number, for the reason in `source`.
+    /// A part of range `range` that is not a number.
     NotANumber {
+        /// Part that is not a number, as written.
         part: String,
+        /// Range the part belongs to, as written, after trimming.
         range: String,
+        /// Reason the part cannot be parsed as an `f64`.
         source: ParseFloatError,
     },
     /// A range with other than two or three parts.
-    BadRange { range: String },
+    BadRange {
+        /// Range as written, after trimming.
+        range: String,
+    },
 }
 
 impl fmt::Display for LevelSpecError {
@@ -108,12 +121,12 @@ impl std::error::Error for LevelSpecError {
     }
 }
 
-/// Part of a config a factor varies, named as a spec names it.
+/// Part of a config that a factor varies, identified by the id or name that a spec uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FactorTarget {
     /// Parameter with this id.
     Param(String),
-    /// Tick of the action with this name, as [`ActionSpec::name`] gives it.
+    /// Tick of the action with this [`ActionSpec::name`].
     Action(String),
 }
 
@@ -129,7 +142,9 @@ impl fmt::Display for FactorTarget {
 /// A factor as a spec writes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FactorSpec {
+    /// Parameter or action tick the factor varies.
     pub target: FactorTarget,
+    /// Levels the factor takes, as written.
     pub levels: LevelSpec,
 }
 
@@ -158,7 +173,7 @@ impl FactorSpec {
     /// # Errors
     ///
     /// Returns [`FactorError`] for a parameter or action the sweep does not have, levels the target cannot take, or
-    /// a level the target refuses.
+    /// a level the target rejects.
     pub fn resolve(
         &self,
         params: &[ParamDescriptor],
@@ -173,7 +188,7 @@ impl FactorSpec {
     /// # Errors
     ///
     /// Returns [`FactorError`] for a parameter or action the sweep does not have, levels the target cannot take, or
-    /// a level the target refuses.
+    /// a level the target rejects.
     pub fn resolve_sampled(&self, params: &[ParamDescriptor], actions: &[ActionSpec]) -> Result<Factor, FactorError> {
         self.resolve_domain(params, actions, true)
     }
@@ -244,7 +259,9 @@ pub enum FactorSlot {
 /// One level of a resolved factor.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FactorLevel {
+    /// Value of a parameter.
     Param(ParamValue),
+    /// Tick of an action.
     Tick(u64),
 }
 
@@ -254,15 +271,27 @@ pub enum FactorDomain {
     /// Levels listed one by one.
     Levels(Vec<FactorLevel>),
     /// Every `f32` value from `min` to `max`, for a sampled design to draw from.
-    Continuous { min: f64, max: f64 },
+    Continuous {
+        /// Lower bound of the draws.
+        min: f64,
+        /// Upper bound of the draws.
+        max: f64,
+    },
     /// Every whole number from `min` to `max` inclusive, for a sampled design to draw from.
-    WholeNumbers { min: u64, max: u64 },
+    WholeNumbers {
+        /// Lowest whole number a draw can take.
+        min: u64,
+        /// Highest whole number a draw can take.
+        max: u64,
+    },
 }
 
 /// A factor resolved against a model's parameters and a spec's actions, with every level checked.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Factor {
+    /// Part of a config the factor writes.
     pub slot: FactorSlot,
+    /// Values the factor takes.
     pub domain: FactorDomain,
 }
 
@@ -279,8 +308,7 @@ impl Factor {
     ///
     /// # Panics
     ///
-    /// Panics when a tick meets a parameter slot or a parameter value meets an action slot, or the slot is past the
-    /// end of `config`.
+    /// Panics when the kind of `level` does not match the slot, or the slot is past the end of `config`.
     pub fn apply(&self, level: &FactorLevel, config: &mut Config) {
         match (self.slot, level) {
             (FactorSlot::Param(index), FactorLevel::Param(value)) => config.params[index] = value.clone(),
@@ -290,15 +318,28 @@ impl Factor {
     }
 }
 
-/// A range that gives no values.
+/// A range that yields no values.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RangeError {
     /// A range with an end that is not finite.
-    NotFinite { min: f64, max: f64 },
+    NotFinite {
+        /// End the range starts from, as given.
+        min: f64,
+        /// End the range runs to, as given.
+        max: f64,
+    },
     /// A step that is zero, negative or not finite.
-    BadStep { step: f64 },
+    BadStep {
+        /// Step as given.
+        step: f64,
+    },
     /// A `min` above `max`.
-    Reversed { min: f64, max: f64 },
+    Reversed {
+        /// End the range starts from, as given.
+        min: f64,
+        /// End the range runs to, as given.
+        max: f64,
+    },
     /// A range of more than [`MAX_LEVELS`] values.
     TooManyLevels,
 }
@@ -319,26 +360,68 @@ impl std::error::Error for RangeError {}
 /// A factor that cannot be resolved against a model's parameters and a spec's actions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FactorError {
-    /// An id no descriptor has. `known` lists the ids the descriptors do have.
-    UnknownParam { id: String, known: Vec<&'static str> },
-    /// A name no action of the spec has. `known` lists the names the actions do have.
-    UnknownAction { name: String, known: Vec<String> },
-    /// A level the descriptor of parameter `id` refuses, for the reason in `source`.
-    Level { id: String, source: ValueError },
-    /// A tick of action `name` that is not a whole number from 0.
-    BadTick { name: String, raw: String },
-    /// A range over `target` that gives no values, for the reason in `source`.
-    Range { target: FactorTarget, source: RangeError },
+    /// An id no descriptor has.
+    UnknownParam {
+        /// Id as given.
+        id: String,
+        /// Ids the descriptors have.
+        known: Vec<&'static str>,
+    },
+    /// A name that no action of the spec has.
+    UnknownAction {
+        /// Name as given.
+        name: String,
+        /// Names the spec's actions have.
+        known: Vec<String>,
+    },
+    /// A level that parameter `id` rejects.
+    Level {
+        /// Id of the parameter.
+        id: String,
+        /// Reason the descriptor rejects the level.
+        source: ValueError,
+    },
+    /// A tick of action `name` that is not a non-negative whole number.
+    BadTick {
+        /// Name of the action.
+        name: String,
+        /// Tick as listed, or a range end as `f64`'s `Display` writes it.
+        raw: String,
+    },
+    /// A range over `target` that yields no values.
+    Range {
+        /// Parameter or action tick the range varies.
+        target: FactorTarget,
+        /// Reason the range yields no values.
+        source: RangeError,
+    },
     /// A range with no step over `F32` parameter `id`, in a design that lists levels.
-    MissingStep { id: String },
+    MissingStep {
+        /// Id of the parameter.
+        id: String,
+    },
     /// A range end or step for a whole-number `target` that is not a whole number.
-    NotWhole { target: FactorTarget, value: f64 },
+    NotWhole {
+        /// Parameter or action tick the range varies.
+        target: FactorTarget,
+        /// Range end or step as given.
+        value: f64,
+    },
     /// `all` over a numeric `target`.
-    AllOverNumber { target: FactorTarget },
+    AllOverNumber {
+        /// Parameter or action tick `all` was given for.
+        target: FactorTarget,
+    },
     /// A range over `Bool` or `Choice` parameter `id`.
-    RangeOverOptions { id: String },
+    RangeOverOptions {
+        /// Id of the parameter.
+        id: String,
+    },
     /// An empty list of values for `target`.
-    NoLevels { target: FactorTarget },
+    NoLevels {
+        /// Parameter or action tick with no values.
+        target: FactorTarget,
+    },
 }
 
 impl fmt::Display for FactorError {
@@ -879,7 +962,7 @@ mod tests {
         );
     }
 
-    /// The regression. A list read its spaces as part of each value, while a range and a tick ignored them.
+    /// A listed value drops its surrounding spaces, as a range and a tick do.
     #[test]
     fn spaces_around_a_listed_value_are_ignored() {
         assert_eq!(

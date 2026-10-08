@@ -1,12 +1,13 @@
-//! Holds the code the first-model pages show to the finished files under `src/`.
+//! Checks the code the first-model pages show against the finished files under `src/`.
 //!
 //! Every fenced block titled with a path under `src/` is checked line by line: each line, with its annotation marker
-//! (`// (1)!`) removed, has to appear as a line of the file the title names. Blocks titled `src/lib.rs` name the
-//! template's file, which this crate does not hold, and are left out. A page that grows a function shows a first
-//! version first, and [`FIRST_VERSIONS`] lists the lines of those.
+//! (`// (1)!`) removed, has to appear as a line of the file named in the title. Blocks titled `src/lib.rs` refer to
+//! the template's file, which this crate does not hold, and are left out. A page that grows a function shows a first
+//! version first, and [`FIRST_VERSIONS`] lists the lines of each first version.
 //!
-//! The template's `src/lib.rs` sets the crate attributes this crate's `src/lib.rs` sets, each under the same comment.
-//! A reader's crate is a copy of the template, and the code the pages show needs them there too.
+//! The template's `src/lib.rs` sets the same crate attributes as this crate's `src/lib.rs`, each under the same
+//! comment. A reader's crate is a copy of the template, and the code that the pages show needs those attributes there
+//! too.
 
 use std::path::{Path, PathBuf};
 
@@ -58,7 +59,7 @@ const FIRST_VERSIONS: [(&str, &str); 22] = [
 
 /// One fenced block titled with a path under `src/`.
 struct Snippet {
-    /// Path the title names, relative to the crate root.
+    /// Path named in the title, relative to the crate root.
     path: String,
     /// One-based line number of the block's first line of code on its page.
     first_line: usize,
@@ -85,7 +86,7 @@ fn strip_annotation(line: &str) -> &str {
     if is_marker { line[..start].trim_end() } else { line }
 }
 
-/// Returns every fenced block on `page` whose title names a file under `src/`, `src/lib.rs` aside.
+/// Returns every fenced block on `page` titled with a path under `src/`, other than `src/lib.rs`.
 fn snippets(page: &str) -> Vec<Snippet> {
     let mut found = Vec::new();
     let mut lines = page.lines().enumerate();

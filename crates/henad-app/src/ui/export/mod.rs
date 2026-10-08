@@ -13,7 +13,7 @@ use crate::icons::material_design_icons::{
 use crate::state::AppState;
 use crate::ui::files::SaveTarget;
 
-/// A stat recording.
+/// Recording of the stats the sim publishes, from the tick Record is pressed at until it stops.
 pub enum Recording {
     Off,
     Running {
@@ -47,7 +47,8 @@ impl Recording {
     /// running.
     ///
     /// # Errors
-    /// If the row it writes out does not match the layout fixed by the first row.
+    ///
+    /// Returns an error when the row it writes out does not match the layout the first row fixed.
     pub fn push(&mut self, tick: u64, stats: &[StatEntry]) -> Result<(), StatsWriteError> {
         let Self::Running { writer, held, .. } = self else {
             return Ok(());
@@ -68,10 +69,11 @@ impl Recording {
 
     /// Writes out the held row and finishes a running recording, which ends at `to_tick`.
     ///
-    /// Anything but a running recording comes back unchanged.
+    /// Anything but a running recording is returned unchanged.
     ///
     /// # Errors
-    /// If the held row does not match the layout fixed by the first row, or the final flush fails.
+    ///
+    /// Returns an error when the held row does not match the layout the first row fixed, or the final flush fails.
     pub fn stop(self, to_tick: u64) -> Result<Self, StatsWriteError> {
         match self {
             Self::Running {
@@ -116,7 +118,7 @@ fn plural(count: u64) -> &'static str {
     if count == 1 { "" } else { "s" }
 }
 
-/// The chart history, written out with the same columns the headless runner writes.
+/// Draws the Statistics section. Save stats writes the chart history with the columns the headless runner writes.
 fn stats_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
     ui.strong("Statistics");
 
@@ -252,7 +254,7 @@ fn details_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
     }
 }
 
-/// `henad-<model>-<export_type>-<tick>.<ext>`, so files from several runs sort together.
+/// Returns the file name `henad-<model>-<export_type>-<tick>.<ext>`, so that files from several runs sort together.
 fn file_name(app: &AppState, export_type: &str, ext: &str) -> String {
     let model = app.loaded_entry().map_or("model", |entry| entry.id());
     let tick = app.snapshot.as_ref().map_or(0, |snap| snap.tick);

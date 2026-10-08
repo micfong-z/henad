@@ -10,7 +10,7 @@ use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_models::boids::BoidsModel;
 
-/// `(x, y, vx, vy)`
+/// Boids as `(x, y, vx, vy)` tuples.
 type Agents = &'static [(f32, f32, f32, f32)];
 
 /// 8 boids with exact binary representations.
@@ -84,10 +84,10 @@ fn scenario(name: &str) -> Agents {
         .unwrap_or_else(|| panic!("fixture declares unknown scenario `{key}`"))
 }
 
-/// Where the reference fixtures live.
+/// Returns the directory of the reference fixtures for `model`.
 ///
 /// `HENAD_FIXTURE_DIR` points the gate at a directory holding one engine's candidates, so a
-/// failure names that engine and no tracked fixture is written or removed to find out.
+/// failure identifies that engine and no tracked fixture is written or removed to find out.
 fn fixture_dir(model: &str) -> std::path::PathBuf {
     match std::env::var_os("HENAD_FIXTURE_DIR") {
         Some(root) => std::path::PathBuf::from(root).join(model),
@@ -97,7 +97,7 @@ fn fixture_dir(model: &str) -> std::path::PathBuf {
 
 /// One tick, as `boids_fixture.md` declares for both scenarios.
 ///
-/// Henad holds `f32` where the others hold `f64`, and the model is chaotic enough that a second
+/// Henad holds `f32` where the other engines hold `f64`, and the model is chaotic enough that a second
 /// tick would put the two flocks past any useful tolerance.
 const DECLARED_STEPS: u32 = 1;
 
@@ -139,7 +139,7 @@ fn run(agents: &[(f32, f32, f32, f32)], steps: u32) -> Vec<(f32, f32, f32, f32)>
         .collect()
 }
 
-/// `f32` and `f64` are not bitwise identical, so we need a tolerance for the comparison.
+/// Tolerance of the comparison, since Henad holds `f32` where the references hold `f64`.
 const TOLERANCE: f32 = 1e-5;
 
 struct Fixture {
@@ -174,7 +174,7 @@ fn parse_fixture(text: &str) -> Fixture {
     Fixture { header, agents }
 }
 
-/// Henad's agents against every reference within tolerance.
+/// Checks Henad's agents against every reference, within tolerance.
 #[test]
 fn matches_every_reference_fixture() {
     let dir = fixture_dir("boids");

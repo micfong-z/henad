@@ -33,23 +33,23 @@ A set that passes prints which checks each model skipped, and why.
 `cargo test` hides that list for a passing test, and `cargo test -- --nocapture` shows it.
 
 `check_model_set` returns the same report without asserting anything, and `check_model` checks one entry.
-Henad's example models take the report, to check each model's skipped checks as well:
+Henad's example models use the report to check each model's skipped checks as well:
 
 ```rust
 --8<-- "crates/henad-models/src/tests/registry.rs:kit"
 ```
 
-`assert_skips_only_what_it_declares`, beside the test, asserts that a model skips only the checks its backend, its declared replay or a missing device rules out.
+`assert_skips_only_what_it_declares`, beside the test, asserts that a model skips only the checks that its backend, its declared replay or a missing device rules out.
 
 ## A device for the GPU checks
 
-`headless_test_device` acquires a GPU device without a window, or returns `None` on a machine without one.
+`headless_test_device` acquires a GPU device without a window, or returns `None` on a machine without a GPU.
 The GPU checks are then skipped and listed, and the CPU checks still run.
 
-`TestDeviceRequest::baseline()` asks for the limits a browser offers by default, and the template's test asks for it.
-A model that binds more storage buffers than the baseline allows takes `TestDeviceRequest::raised(models.gpu_needs())`, with the needs of the set's GPU models, and a browser at the baseline refuses to build it.
+`TestDeviceRequest::baseline()` requests the limits that a browser offers by default, and the template's test uses it.
+A model that binds more storage buffers than the baseline allows is tested with `TestDeviceRequest::raised(models.gpu_needs())`, which requests the needs of the set's GPU models, and a browser at the baseline rejects it.
 Such a model also exempts `DefaultsFit`, which checks against the baseline on any device, as [Settings and exemptions](#settings-and-exemptions) shows.
-`features` adds wgpu features to either request, and a test names them through `henad::gpu::wgpu`, with no `wgpu` dependency of its own:
+`features` adds wgpu features to either request, and a test uses the `henad::gpu::wgpu` re-export for them, without its own `wgpu` dependency:
 
 ```rust
 use henad::gpu::wgpu;
@@ -60,12 +60,12 @@ let Some(device) = headless_test_device(&request) else { return };
 ```
 
 A missing feature returns `None`, as a missing device does, and returns it even under `HENAD_REQUIRE_GPU`.
-A test that asks for an optional feature checks for `None` itself.
-An adapter below the baseline gives no device for either request.
+A test that requests an optional feature checks for `None` itself.
+`headless_test_device` returns `None` for either request on an adapter below the baseline.
 
-Each test takes a device of its own, as the template's test does.
-Clones of a device share one record of its errors, and a check takes an error it finds there as its own.
-An error another test leaves on a shared device is then dropped, or reported as the failure of a check it has nothing to do with.
+Each test acquires its own device, as the template's test does.
+Clones of a device share one record of its errors, and a check treats any error it finds there as its own.
+An error that another test leaves on a shared device is then dropped, or reported as the failure of a check it has nothing to do with.
 
 `HENAD_REQUIRE_GPU=1` turns a missing device into a failure, and fails every check a missing device would skip.
 Set it wherever a GPU must be there.
@@ -74,15 +74,15 @@ Set it wherever a GPU must be there.
 
 | Check | Pins |
 |---|---|
-| `ModelId`, `ParamIds`, `StatLabels`, `ActionIds` | The id meets the grammar, no parameter, stat or action id is declared twice, and the command line can name every parameter and action id |
+| `ModelId`, `ParamIds`, `StatLabels`, `ActionIds` | The id meets the grammar, no parameter, stat or action id is declared twice, and the command line can refer to every parameter and action id |
 | `Palette` | A declared palette has colours |
 | `Metadata` | The backend, the structure, the topology hint and the device demand agree |
 | `DefaultSetup` | The declared defaults pass `RunSetup::from_parts`, as the app's Build checks them |
 | `DefaultsFit` | A GPU model's defaults fit a stock WebGPU device, checked without building |
-| `ApplyModes` | A live parameter is accepted and a reload one is refused, exactly as declared |
+| `ApplyModes` | A live parameter is accepted and a reload parameter is rejected, exactly as declared |
 | `Views` | The factory returns the declared backend, and its grid, point or edge views match the topology hint |
 | `ParallelJobs` | Only a CPU model reports how many jobs a step splits into |
-| `Actions` | Every declared action is accepted and an index past the last is refused, on a GPU model at its declared defaults |
+| `Actions` | Every declared action is accepted and an index past the last is rejected, on a GPU model at its declared defaults |
 | `StatCount` | `stats` returns a value for every entry of `STATS` |
 | `ThreadCount` | A CPU model's stats and exported state are the same at 1 and 7 threads |
 | `SameSeed`, `SeedSensitivity` | Two runs on one seed agree, and two seeds differ in some stat or in the exported state |
@@ -102,10 +102,10 @@ A model that declares `REPLAYS_EXACTLY = false` skips `SameSeed`, `SeedSensitivi
 ## Settings and exemptions
 
 `CheckSettings` holds what the checks share.
-`ticks` sets how many ticks a check steps, `thread_counts` the two pool widths `ThreadCount` compares, and `set_text` sets a parameter in every check that builds the model, as `--set` reads it.
-An override of a parameter the model does not declare, or a value the parameter refuses, fails every check that builds the model, on a machine without a device as well.
+`ticks` sets how many ticks a check steps, `thread_counts` sets the two pool widths that `ThreadCount` compares, and `set_text` sets a parameter in every check that builds the model, as `--set` reads it.
+An override of a parameter the model does not declare, or a value that the parameter rejects, fails every check that builds the model, on a machine without a device as well.
 
-A check the model cannot meet for an honest reason takes an exemption, recorded in the model's report:
+A check that the model cannot meet for an honest reason gets an exemption, recorded in the model's report:
 
 ```rust
 --8<-- "crates/henad-explore/src/tests/kit.rs:exempt"
@@ -113,15 +113,16 @@ A check the model cannot meet for an honest reason takes an exemption, recorded 
 
 A model whose defaults need a device raised past the baseline fails `DefaultsFit`, and exempts it with its reason.
 An exemption of a check that does not apply to the model fails that check.
-The report of a set names every model the settings name and the set lacks, and a renamed model or parameter cannot leave a stale setting behind.
+The report of a set lists every model that the settings refer to and that is missing from the set, and a renamed model or parameter cannot leave a stale setting behind.
 
-`check_model` returns the report instead of panicking, and its caller installs the panic hook first, through `henad::install_panic_hook`, or a kernel panic's failure names no `file:line`.
+`check_model` returns the report instead of panicking, and its caller installs the panic hook first with `henad::install_panic_hook`.
+Otherwise the failure from a kernel panic shows no `file:line`.
 
 ## Where the GPU checks run
 
 The GPU checks run wherever `headless_test_device` finds a device: on your own machine, and on CI that installs a driver.
 A runner on GitHub has no GPU.
-The template's workflow installs lavapipe, a Vulkan driver that runs on the CPU, through `scripts/install-lavapipe.sh`, and sets `HENAD_REQUIRE_GPU=1`.
+The template's workflow installs lavapipe, a Vulkan driver that runs on the CPU, with `scripts/install-lavapipe.sh`, and sets `HENAD_REQUIRE_GPU=1`.
 
 Lavapipe catches zero readbacks and a wrong step count, and has no watchdog.
 `FullSubmission` guards against the OS watchdog, which fires only on real hardware.
@@ -135,11 +136,12 @@ It has no oracle for what the model should compute, and the tests that check the
 
 - **A pattern drawn by hand.** The Game of Life tutorial checks a blinker against its known next states.
 - **A closed form or an invariant.** [Checking the rule itself](determinism.md#checking-the-rule-itself) lists the kinds Henad's example models use.
-- **A busier thread-count test.** `ThreadCount` runs a small configuration. A model that draws random numbers in several places can carry a [thread-count test](determinism.md#the-thread-count-test) of its own at a size where every path runs.
+- **A busier thread-count test.** `ThreadCount` runs a small configuration.
+  A model that draws random numbers in several places can carry its own [thread-count test](determinism.md#the-thread-count-test) at a size where every path runs.
 - **A comparison with another engine**, from a [written procedure](determinism.md#consistency-fixtures).
-- **A GPU port against its CPU model.** A port that seeds itself through its CPU model's `init` starts on the same state at tick 0, and a test can compare the two backends while the model has no randomness of its own.
+- **A GPU port against its CPU model.** A port that seeds itself through its CPU model's `init` starts on the same state at tick 0, and a test can compare the two backends as long as the model itself has no randomness.
 
 ## Next
 
-- [Determinism and testing](determinism.md) covers the contract the kit's determinism checks hold a model to.
+- [Determinism and testing](determinism.md) covers the contract that the kit's determinism checks hold a model to.
 - [Model sets](model-sets.md) covers the set the test reads.

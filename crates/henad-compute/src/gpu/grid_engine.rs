@@ -1,6 +1,4 @@
-//! Generic engine turning any [`GpuGridModel`] into a runnable [`GpuSimState`].
-//!
-//! Compare with [`crate::cpu::grid_engine`].
+//! The engine that runs a [`GpuGridModel`] as a [`GpuSimState`], the counterpart of [`crate::cpu::grid_engine`].
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -44,8 +42,7 @@ impl ActionPass {
     }
 }
 
-/// GPU-resident state for a [`GpuGridModel`]. Owned exclusively by the GPU sim thread once
-/// spawned.
+/// GPU-resident state for a [`GpuGridModel`], with every buffer, pipeline and bind group its model declares.
 pub struct GpuGridState<M: GpuGridModel> {
     width: u32,
     height: u32,
@@ -71,10 +68,10 @@ pub struct GpuGridState<M: GpuGridModel> {
     readback: CounterReadback,
 
     actions: Vec<ActionPass>,
-    /// Advanced per press, so pressing twice draws twice.
+    /// Seed of the next action press, advanced per press so that pressing twice draws twice.
     action_seed: u32,
-    /// Kept for the action uniforms, which are rewritten per press. Never edited, since a GPU grid
-    /// model declares every parameter reload-only.
+    /// Parameter values, kept to rewrite the action uniforms on each press. Never edited, since a GPU grid model
+    /// declares every parameter reload-only.
     params: Vec<ParamValue>,
 
     /// `true` when the `a` side of every buffer holds the current (latest) state.
@@ -95,6 +92,11 @@ impl<M: GpuGridModel> std::fmt::Debug for GpuGridState<M> {
 }
 
 impl<M: GpuGridModel> GpuGridState<M> {
+    /// Builds the state on `ctx`, seeded with the model's default seed.
+    ///
+    /// # Panics
+    ///
+    /// Panics as [`Self::new_seeded`] does.
     pub fn new(ctx: &GpuContext, params: &[ParamValue]) -> Self {
         Self::new_seeded(ctx, params, None)
     }
@@ -116,7 +118,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
     }
 
     /// Storage buffers each generated pass binds. Read by both [`Self::demand`] and
-    /// [`Self::max_storage_bindings`], so the device a host asks for and the shortfall the UI
+    /// [`Self::max_storage_bindings`], so the device that a host requests and the shortfall that the UI
     /// reports cannot disagree.
     fn declared_passes() -> Vec<(String, u32)> {
         let mut passes = vec![
@@ -133,7 +135,8 @@ impl<M: GpuGridModel> GpuGridState<M> {
         passes
     }
 
-    /// Independent of params, so a host can ask before it has a device.
+    /// Returns the most storage buffers any declared pass binds. It does not depend on params, so a host can query it
+    /// before it has a device.
     pub fn max_storage_bindings() -> u32 {
         Self::declared_passes()
             .into_iter()
@@ -142,14 +145,12 @@ impl<M: GpuGridModel> GpuGridState<M> {
             .unwrap_or(0)
     }
 
-    /// Similar to [`Self::new`], with `seed` controlling the RNG used.
-    ///
-    /// If `None`, the model's fixed default seed is used.
+    /// Builds the state on `ctx`, seeded with `seed`, or with the model's fixed default seed when it is `None`.
     ///
     /// # Panics
     ///
-    /// If the device cannot hold the model. The backstop, not the diagnostic, since a UI
-    /// asks [`Self::demand`] first. Also if a shader declares another workgroup size than
+    /// Panics if the device cannot hold the model. A host calls [`Self::demand`] first, and this assert is the
+    /// backstop. Also panics if a shader declares a workgroup size other than
     /// [`GpuGridModel::WORKGROUP_SIZE`], or a buffer label is reserved or ends in `_in` or `_out`.
     #[expect(clippy::too_many_lines)]
     pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
@@ -180,9 +181,9 @@ impl<M: GpuGridModel> GpuGridState<M> {
             assert_workgroup_size(M::ID, pass, shader, square);
         }
 
-        // --- Ping-ponged storage buffers, seeded from the model ---
-        // Buffer lengths come from the model, not from the cell count: a bit-packed model holds
-        // many cells per u32, so only it knows how long its buffers are.
+        // Ping-ponged storage buffers, seeded from the model.
+        // Buffer lengths come from the model. A bit-packed model holds many cells per u32, and only the
+        // model knows its buffer lengths.
         let buffer_lens = M::buffer_lens(width, height);
         assert_eq!(
             buffer_lens.len(),
@@ -235,7 +236,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
             })
             .collect();
 
-        // --- Uniforms ---
+        // Uniforms.
         // Display and reduce get their own small buffer rather than depending on the model's
         // layout starting with the dimensions.
         let step_params = M::step_params_bytes(width, height, params);
@@ -265,12 +266,12 @@ impl<M: GpuGridModel> GpuGridState<M> {
 
         let readback = CounterReadback::new(device, &format!("{}_counters", M::ID), M::STATS.len());
 
-        // --- Pipelines ---
+        // Pipelines.
         // Every layout entry and every bind group entry comes from the name its shader gives the
         // binding, so a slot index cannot disagree with the shader that owns it.
-        // Built before the pipelines, so the resolver below can hand one out by index. Each is
-        // rewritten with a fresh seed on every press.
-        // Truncated from the same stream the CPU engines use, since the WGSL generator is 32 bit.
+        // The action uniforms are built before the pipelines, so the resolver below can return an action uniform by
+        // index. Each uniform is rewritten with a fresh seed on every press. The seed is truncated from the
+        // stream the CPU engines use, as the WGSL generator is 32 bit.
         let action_seed = henad_core::action::action_seed(seed) as u32;
         let action_uniforms: Vec<wgpu::Buffer> = M::ACTIONS
             .iter()
@@ -285,7 +286,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
             })
             .collect();
 
-        // An action writes the side that already holds the state. Nothing swaps after one, so
+        // An action writes the side that already holds the state. Nothing swaps after an action, so
         // writing the far side would throw the work away.
         let resolve = |decl: &BindingDecl, a_is_current: bool, action: Option<usize>| -> wgpu::BindingResource<'_> {
             if let Some((label, writes)) = buffer_target(decl) {
@@ -391,13 +392,13 @@ impl<M: GpuGridModel> GpuGridState<M> {
         }
     }
 
-    /// Workgroups covering the step pass's domain, which a packed model measures in words.
+    /// Returns the workgroups covering the step pass's domain, which a packed model measures in words.
     fn step_workgroups(&self) -> (u32, u32) {
         let (x, y) = M::step_dims(self.width, self.height);
         (x.div_ceil(M::WORKGROUP_SIZE), y.div_ceil(M::WORKGROUP_SIZE))
     }
 
-    /// Workgroups for reduce, at one invocation per cell.
+    /// Returns the workgroups of the reduce pass, at one invocation per cell.
     fn cell_workgroups(&self) -> (u32, u32) {
         (
             self.width.div_ceil(M::WORKGROUP_SIZE),
@@ -405,7 +406,8 @@ impl<M: GpuGridModel> GpuGridState<M> {
         )
     }
 
-    /// Same as [`Self::cell_workgroups`] until the grid outgrows the texture cap.
+    /// Returns the workgroups of the display pass, at one invocation per texel. Equals [`Self::cell_workgroups`]
+    /// until the grid outgrows the texture cap.
     fn texel_workgroups(&self) -> (u32, u32) {
         (
             self.tex.0.div_ceil(M::WORKGROUP_SIZE),
@@ -431,7 +433,8 @@ impl<M: GpuGridModel> GpuGridState<M> {
 }
 
 impl<M: GpuGridModel> SimState for GpuGridState<M> {
-    /// Single-step fallback for callers that only have a `SimState`. This is usually not called; the GPU sim thread calls `encode_steps` directly for batched stepping.
+    /// Steps once in its own submission, for a caller that holds only a `SimState`. The GPU runner calls
+    /// `encode_steps` directly and batches the steps.
     fn step(&mut self) {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("gpu_grid_single_step"),
@@ -448,7 +451,7 @@ impl<M: GpuGridModel> SimState for GpuGridState<M> {
         stat_entries(M::STATS, M::stats(self.readback.values()))
     }
 
-    /// Encodes the action into a submission of its own.
+    /// Encodes the action into its own submission.
     ///
     /// The GPU runner calls [`GpuSimState::encode_action`] instead, and submits the action before
     /// its snapshot.
@@ -463,7 +466,7 @@ impl<M: GpuGridModel> SimState for GpuGridState<M> {
         true
     }
 
-    /// Resizing or reseeding live is currently unsupported.
+    /// Rejects every live edit. Its entry declares every parameter reload-only.
     fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
         false
     }
@@ -486,10 +489,9 @@ impl<M: GpuGridModel> SimState for GpuGridState<M> {
 impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
     /// Records `count` step dispatches into `encoder`, one compute pass per step.
     ///
-    /// Each step is a read-after-write hazard on the ping-ponged state buffers, and wgpu only
-    /// inserts barriers *between* passes, not between dispatches within one. So this opens one
-    /// pass per step rather than looping dispatches inside one, which would read stale data.
-    /// Batching happens at the *submission* level instead, one encoder for all `count` passes.
+    /// Each step is a read-after-write hazard on the ping-ponged state buffers, and wgpu inserts
+    /// barriers only between passes. Dispatches looped inside one pass would read stale data.
+    /// Batching happens at the submission level instead, with one encoder for all `count` passes.
     ///
     /// If `timestamps` is `Some`, the first pass's beginning and the last pass's end are stamped
     /// into query indices 0 and 1 so the caller can measure GPU time for the whole batch.
@@ -507,7 +509,7 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
             let is_first = i == 0;
             let is_last = i == count - 1;
             // A `ComputePassTimestampWrites` requires at least one of the two indices to be
-            // `Some`, so only the first and last passes of the batch get one.
+            // `Some`, so only the first and last passes of the batch get timestamp writes.
             let timestamp_writes =
                 timestamps
                     .filter(|_| is_first || is_last)
@@ -601,7 +603,7 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
         self.readback.is_pending()
     }
 
-    /// Grid only, a `GpuGridModel` has no agent layer.
+    /// Returns the display layer alone. A `GpuGridModel` has no agent layer.
     fn view(&self) -> GpuSnapshot {
         GpuSnapshot {
             display: Some(Arc::clone(&self.display)),

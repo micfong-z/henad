@@ -1,11 +1,8 @@
 //! GPU engine machinery, the sibling of [`crate::cpu`], for models whose state lives in GPU
 //! buffers and never round-trips to the CPU.
 //!
-//! Nothing here ever *creates* a `wgpu::Device`. It is injected via [`GpuContext`], cloned from
-//! whoever owns acquisition, which is what stops this crate depending on egui/eframe.
-//!
-//! Concrete models live in `henad-models`, as CPU models do. A model contributes shaders, seed
-//! data and metadata. Every wgpu object is built here.
+//! Nothing here ever *creates* a `wgpu::Device`. A host passes one in through a [`GpuContext`].
+//! A model contributes shaders, seed data and metadata, and every wgpu object is built here.
 
 pub mod agent_engine;
 pub mod capacity;
@@ -33,7 +30,7 @@ pub use sim_thread::{GpuSimState, GpuStats};
 pub use view::agents::GpuAgents;
 pub use view::display::{DisplayTarget, GpuDisplay};
 /// The wgpu release Henad builds on. Its types sit in [`GpuContext`]'s fields and in device requests, and a caller
-/// names them through this path in place of a `wgpu` dependency of its own.
+/// refers to them through this path instead of its own `wgpu` dependency.
 pub use wgpu;
 
 #[cfg(test)]
@@ -47,19 +44,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::fault::{Fault, FaultSink};
 use crate::runtime_info::RuntimeInfo;
 
-/// Steps one command buffer may hold.
+/// Largest number of steps one command buffer holds.
+///
+/// Enough passes in one submission trip the OS GPU watchdog, with no error, and every later readback reads zero.
 pub const MAX_STEPS_PER_SUBMISSION: u32 = 64;
 
-/// Injected GPU handles. Cheap to clone.
+/// GPU handles that a host passes to the engines, with the sink for errors no scope catches.
 ///
-/// `target_format` is part of the context rather than a per-call argument because a model builds
-/// its display render pipeline once, and a pipeline is tied to its colour target format.
+/// A clone is cheap, and shares the fault sink and the record of a lost device.
 #[derive(Debug, Clone)]
 pub struct GpuContext {
+    /// Device every model builds on.
     pub device: wgpu::Device,
+    /// Queue the engine submits its work to.
     pub queue: wgpu::Queue,
+    /// Colour format of the target a display pipeline renders into.
+    ///
+    /// A model builds its display render pipeline once, at construction, and a pipeline is tied to its colour target
+    /// format.
     pub target_format: wgpu::TextureFormat,
-    /// Landing spot for an error nothing else caught. See [`GpuContext::new`].
+    /// Sink for errors that nothing else caught. See [`GpuContext::new`].
     pub faults: FaultSink,
     /// Set once the device is lost.
     lost: Arc<AtomicBool>,
@@ -68,10 +72,11 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    /// Also takes over the device's error handling. Left to wgpu, every error is fatal.
+    /// Creates a context over `device` and `queue`, and takes over the device's error handling. Left to wgpu, every
+    /// error is fatal.
     ///
     /// Errors raised inside a [`fault::catching_on`] go to that scope. Everything else, including
-    /// egui's own rendering on the same device, lands in `faults` for the host to pick up. On the
+    /// egui's own rendering on the same device, is stored in `faults` for the host to pick up. On the
     /// web this is the only route. [`fault::catching_on`] pushes no scopes there.
     ///
     /// A `GPUInternalError` still ends the web build. wgpu converts an error with
@@ -80,12 +85,12 @@ impl GpuContext {
     ///
     /// The context also records the loss of the device. [`Self::is_lost`] reports it.
     ///
-    /// Note that a second `new` on the same device takes the error handler over from the first, and on native targets
-    /// the lost callback too. From then on only the newest context receives the device's unscoped errors, and on
-    /// native targets its loss. In a browser every context on the device records the loss. A clone shares both with
-    /// the context it came from.
+    /// Note that a second `new` on the same device takes over the error handler from the first context, and on native
+    /// targets the lost callback too. From then on only the newest context receives the device's unscoped errors, and
+    /// on native targets its loss. In a browser every context on the device records the loss. A clone shares the fault
+    /// sink and the loss record with the context it came from.
     ///
-    /// The context carries no [`RuntimeInfo`]. A host that hands its context to a sweep attaches one with
+    /// The context carries no [`RuntimeInfo`]. A host that passes its context to a sweep attaches one with
     /// `.with_runtime_info(RuntimeInfo::collect(&adapter, &device))`. Without it the sweep's manifest records no
     /// adapter.
     pub fn new(
@@ -95,9 +100,9 @@ impl GpuContext {
         faults: FaultSink,
     ) -> Self {
         let sink = faults.clone();
-        // wgpu asks for `Send + Sync` here even where nothing can be sent. Under atomics a
+        // wgpu requires `Send + Sync` here even where nothing can be sent. Under atomics a
         // `wgpu::Error` is neither, and the sink holds one. `SendWrapper` panics the moment a
-        // second thread touches it, which on the web is the whole guarantee.
+        // second thread touches it. On the web that check is the whole guarantee.
         #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
         let sink = send_wrapper::SendWrapper::new(sink);
         device.on_uncaptured_error(std::sync::Arc::new(move |error: wgpu::Error| {

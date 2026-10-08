@@ -40,7 +40,7 @@ pub fn add_progress_bar(ui: &mut egui::Ui, bar: egui::ProgressBar, fill: egui::C
     .inner
 }
 
-/// Returns `noun` as written after a count of `count`, as in "1 run" and "2 runs".
+/// Returns `noun`, made plural unless `count` is 1, as in "1 run" and "2 runs".
 pub(crate) fn plural(count: u64, noun: &str) -> String {
     if count == 1 {
         noun.to_owned()
@@ -54,7 +54,7 @@ const KV_GRID_SPACING: [f32; 2] = [16.0, 4.0];
 /// Width in points that a stripe of a [`KvGrid`] reaches past each side of the grid, as egui's own stripes do.
 const KV_STRIPE_OVERHANG: f32 = 2.0;
 
-/// Returns a two-column key/value grid across the full panel width, each column pinned to half of it.
+/// Returns a two-column key/value grid across the full panel width, each column pinned to half the width.
 ///
 /// Left to itself, a `Grid` sizes to its content.
 pub fn kv_grid(ui: &egui::Ui, id: &str) -> KvGrid {
@@ -77,7 +77,7 @@ pub struct KvGrid {
 }
 
 impl KvGrid {
-    /// Shows the grid. `add_rows` draws the rows and ends each through [`KvGridRows::end_row`], never
+    /// Shows the grid. `add_rows` draws the rows and ends each row with [`KvGridRows::end_row`], never
     /// [`egui::Ui::end_row`].
     pub fn show<R>(
         self,

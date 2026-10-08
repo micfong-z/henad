@@ -14,7 +14,7 @@ use crate::ui::results::plot::{config_color, labeled_combo, level_formatter, ref
 use crate::ui::results::store::{ResponseLine, ResponseQuery, ResultsAxis, ResultsStore};
 use crate::ui::show_plot;
 
-/// Most levels an axis can have for its points to be joined into lines.
+/// Maximum number of levels an axis can have for its points to be joined into lines.
 const MAX_JOINED_LEVELS: usize = 32;
 
 /// Width of a whisker's stem and caps, in points.
@@ -79,7 +79,7 @@ struct PlottedLine {
     name: String,
     /// Id the line's points and whiskers share, so the legend hides them together.
     id: Id,
-    /// Mean at each level of the x axis that has one.
+    /// Mean at each level of the x axis that has a mean.
     means: Vec<PlotPoint>,
     /// Ends of each whisker segment, the stem and then the low and high caps of each whisker in turn.
     whiskers: Vec<[PlotPoint; 2]>,
@@ -141,7 +141,7 @@ pub fn response_ui(ui: &mut egui::Ui, store: &ResultsStore, view: &mut ResponseV
     });
 }
 
-/// Returns the lines of `query` over `store` in plot coordinates, with the whiskers `error_bars` asks for.
+/// Returns the lines of `query` over `store` in plot coordinates, with the whiskers that `error_bars` selects.
 fn plotted_lines(store: &ResultsStore, query: &ResponseQuery, error_bars: ErrorBars) -> Vec<PlottedLine> {
     let axes = store.axes();
     let half_width = whisker_half_width(&axes[query.x_axis]);
@@ -159,7 +159,7 @@ fn plotted_lines(store: &ResultsStore, query: &ResponseQuery, error_bars: ErrorB
         .collect()
 }
 
-/// Returns `line`, named `name`, in plot coordinates, with the whiskers `error_bars` asks for and their caps
+/// Returns `line`, named `name`, in plot coordinates, with the whiskers that `error_bars` selects and their caps
 /// `half_width` either side of the stem.
 fn plotted_line(line: &ResponseLine, name: String, error_bars: ErrorBars, half_width: f64) -> PlottedLine {
     let means = line
@@ -259,7 +259,7 @@ impl PlotItem for Whiskers<'_> {
     }
 }
 
-/// Returns the low and high ends of the whisker `error_bars` asks for, or `None` when there is none to draw.
+/// Returns the low and high ends of the whisker that `error_bars` selects, or `None` when there is no whisker to draw.
 fn whisker(summary: ReplicateSummary, error_bars: ErrorBars) -> Option<(f64, f64)> {
     match error_bars {
         ErrorBars::ConfidenceInterval => summary.ci95,
@@ -330,7 +330,7 @@ pub fn output_combo(ui: &mut egui::Ui, id: &str, store: &ResultsStore, output: &
     });
 }
 
-/// Draws a combo for each axis outside `free` that holds it at one level or at any, into `pins`.
+/// Draws a combo for each axis outside `free` that holds it at one level or at any level, into `pins`.
 pub fn pins_row(ui: &mut egui::Ui, id: &str, axes: &[ResultsAxis], pins: &mut [Option<usize>], free: &[Option<usize>]) {
     if axes.iter().enumerate().all(|(index, _)| free.contains(&Some(index))) {
         return;
@@ -352,7 +352,7 @@ pub fn pins_row(ui: &mut egui::Ui, id: &str, axes: &[ResultsAxis], pins: &mut [O
 }
 
 impl ResponseView {
-    /// Brings the settings within the axes and outputs of `store`.
+    /// Clamps the settings to the axes and outputs of `store`.
     fn fit(&mut self, store: &ResultsStore) {
         let axes = store.axes();
         self.x_axis = self.x_axis.min(axes.len() - 1);
@@ -364,8 +364,8 @@ impl ResponseView {
         }
     }
 
-    /// Returns the lines of `query` with the whiskers `error_bars` asks for, computed again when either changes, and at
-    /// most once per [`REFRESH_INTERVAL`] while the store changes.
+    /// Returns the lines of `query` with the whiskers that `error_bars` selects, computed again when `query` or
+    /// `error_bars` changes, and at most once per [`REFRESH_INTERVAL`] while the store changes.
     ///
     /// `ctx` repaints once a pending refresh is due.
     ///

@@ -1,4 +1,4 @@
-//! Sim pacing controls. Speed limit, and snapshot cadence.
+//! The Pacing panel: a CPU model's speed limit and snapshot cadence, a network's layout, and a GPU model's batching.
 
 use crate::sim_runner::SimRunner;
 use crate::state::AppState;
@@ -8,9 +8,8 @@ use henad_compute::runner::MAX_VIEW_BUDGET_MS;
 const LAYOUT_BUDGET_MAX_MS: f32 = 50.0;
 
 pub fn pacing_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    // A GPU model paces itself with the batch-size controller below and has no notion of a TPS cap
-    // or a tick-based snapshot cadence, so the CPU pacing controls are swapped out for the GPU ones
-    // rather than shown alongside them (they would be inert).
+    // A GPU model paces itself by its batch size and ignores the TPS cap and the snapshot cadence. Its controls
+    // replace the CPU controls, which would have no effect on it.
     if app.is_gpu() {
         gpu_batching_controls(ui, app);
     } else {
@@ -92,7 +91,7 @@ fn layout_controls(ui: &mut egui::Ui, app: &mut AppState) {
     }
 }
 
-/// Batching controls, shown in place of the CPU pacing controls for a GPU model.
+/// Draws the batching controls a GPU model shows instead of the CPU pacing controls.
 fn gpu_batching_controls(ui: &mut egui::Ui, app: &mut AppState) {
     use henad_compute::gpu::timing::MAX_BATCH_SIZE;
 
@@ -123,8 +122,8 @@ fn gpu_batching_controls(ui: &mut egui::Ui, app: &mut AppState) {
     }
 
     if app.gpu_adaptive {
-        // Live batch size is the controller's output, not the disabled local slider value. Read
-        // from stats every frame so it visibly tracks GPU cost.
+        // The disabled slider shows the controller's batch size, read from the stats every frame to track the GPU
+        // cost.
         let mut live_batch_size = stats.batch_size;
         ui.add_enabled(
             false,

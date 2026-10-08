@@ -16,9 +16,8 @@ use henad_compute::snapshot::{CpuLayers, EdgeSnapshot, GpuSnapshot, GridSnapshot
 /// A GPU model's cells never reach the CPU, so there is no `ColorImage` to upload. The sim thread
 /// has already rendered the grid into a texture, and all that is left is to sample it.
 ///
-/// The callback carries its own `Arc<GpuDisplay>` rather than looking resources up in egui's
-/// type-keyed `CallbackResources`, which is what makes teardown safe. Switch models mid-frame and
-/// this `Arc` keeps the pipeline and texture alive until the render pass is done with them.
+/// The callback carries its own `Arc<GpuDisplay>` instead of a lookup in egui's type-keyed `CallbackResources`. A
+/// model switch mid-frame then leaves the pipeline and texture alive until the render pass is done with them.
 struct GpuViewportPaint {
     display: Painted<Arc<GpuDisplay>>,
 }
@@ -37,11 +36,11 @@ impl CallbackTrait for GpuViewportPaint {
 }
 
 /// Composites whichever GPU layers the model published into one rect, field first and agents over
-/// the top, same order as the CPU path.
+/// the top, in the order the CPU path draws them.
 ///
 /// Takes `app` because the agent pipeline is built lazily on first use.
 fn paint_gpu_view(ui: &mut egui::Ui, app: &mut AppState, gpu: &GpuSnapshot) {
-    // The field fixes the pixel shape when there is one, as `layer_extent` does for CPU models.
+    // A field, when present, fixes the pixel shape, as `layer_extent` does for CPU models.
     let extent = gpu.display.as_ref().map_or_else(
         || gpu.agents.as_ref().map(|a| (a.world_w, a.world_h)),
         |d| Some((d.width as f32, d.height as f32)),
@@ -71,7 +70,7 @@ fn paint_gpu_view(ui: &mut egui::Ui, app: &mut AppState, gpu: &GpuSnapshot) {
     });
 }
 
-/// Fits `size` inside `available` while preserving aspect ratio.
+/// Returns the largest size with the aspect ratio of `width` by `height` that fits inside `available`.
 fn fit_aspect(available: egui::Vec2, width: f32, height: f32) -> egui::Vec2 {
     let tex_aspect = width / height;
     let panel_aspect = available.x / available.y;
@@ -82,7 +81,7 @@ fn fit_aspect(available: egui::Vec2, width: f32, height: f32) -> egui::Vec2 {
     }
 }
 
-/// Draws the view and records its cost
+/// Draws the viewport and records its cost.
 pub fn viewport_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let render_start = web_time::Instant::now();
 
@@ -112,7 +111,7 @@ pub fn viewport_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     });
     if app.point_render_mode != mode_before {
-        // The snapshot is unchanged, but what we draw from it has changed.
+        // The snapshot is unchanged, but the mode drawing it has changed.
         app.last_rendered_serial = None;
     }
 
@@ -139,10 +138,10 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
         return;
     }
 
-    // GPU path, nothing to convert or upload. Branches on the snapshot variant rather than the
-    // topology hint, since a GPU Game of Life is still `TopologyHint::GRID`.
+    // A GPU snapshot has nothing to convert or upload. The branch reads the snapshot variant, since a GPU Game of Life
+    // is still `TopologyHint::GRID`.
     //
-    // Taken out for the duration because `paint_gpu_view` needs `app` for the agent pipeline.
+    // The snapshot is taken out for the duration. `paint_gpu_view` needs `app` for the agent pipeline.
     if matches!(app.snapshot.as_ref().map(|s| &s.view), Some(SnapshotView::Gpu(_))) {
         let Some(snapshot) = app.snapshot.take() else {
             return;
@@ -154,12 +153,11 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
         return;
     }
 
-    // Keyed on the serial rather than the tick,
-    // since a layout relaxing while the simulation is paused moves positions without advancing the tick.
+    // Keyed on the serial. A layout relaxing while the simulation is paused moves positions without advancing the tick.
     let current_serial = app.snapshot.as_ref().map_or(0, |s| s.serial);
     let needs_update = app.last_rendered_serial != Some(current_serial);
 
-    // Taken out for the duration to avoid borrow conflicts with the rest of `app`.
+    // The snapshot is taken out for the duration, to keep it clear of borrows of the rest of `app`.
     let Some(snapshot) = app.snapshot.take() else {
         return;
     };
@@ -225,9 +223,9 @@ fn draw_view(ui: &mut egui::Ui, app: &mut AppState) {
 
 const UV_FULL: egui::Rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
 
-/// Extent the shared rect is fitted to, and the world size handed to the agent shader.
+/// Returns the extent the shared rect is fitted to. The agent shader takes it as the world size.
 ///
-/// The field wins when there is one, since it is the layer with a fixed pixel shape.
+/// A field takes precedence when present, since it is the layer with a fixed pixel shape.
 fn layer_extent(layers: &CpuLayers) -> Option<(f32, f32)> {
     if let Some(grid) = &layers.grid {
         return Some((grid.width as f32, grid.height as f32));
@@ -244,7 +242,7 @@ fn edges_directed(app: &AppState) -> Option<bool> {
     }
 }
 
-/// The mode selector only applies when there are points to draw.
+/// Returns whether the snapshot has points to draw, the one case the mode selector applies to.
 fn has_points(app: &AppState) -> bool {
     matches!(
         app.snapshot.as_ref().map(|s| &s.view),
@@ -252,14 +250,14 @@ fn has_points(app: &AppState) -> bool {
     )
 }
 
-/// One texel per cell.
+/// Returns the grid's colours at one texel per cell.
 fn expand_grid(grid: &GridSnapshot) -> Vec<egui::Color32> {
     use rayon::prelude::*;
     let colors = grid_colors(grid.palette);
     grid.cells.par_iter().map(|&cell| colors[usize::from(cell)]).collect()
 }
 
-/// One representative cell per texel, for a grid too large to upload whole.
+/// Returns the colour of one representative cell per texel, for a grid too large to upload whole.
 fn sample_grid(grid: &GridSnapshot, tex_w: u32, tex_h: u32) -> Vec<egui::Color32> {
     let width = grid.width as usize;
     let colors = grid_colors(grid.palette);
@@ -276,7 +274,7 @@ fn sample_grid(grid: &GridSnapshot, tex_w: u32, tex_h: u32) -> Vec<egui::Color32
 }
 
 fn upload_grid(ctx: &egui::Context, app: &mut AppState, grid: &GridSnapshot) {
-    // A CPU grid is not exempt from the texture limit, it just reaches it through egui's upload.
+    // A CPU grid meets the texture limit too, through egui's upload.
     let device_max = app.render_ctx.device.limits().max_texture_dimension_2d;
     let (tex_w, tex_h) = display_dims(grid.width, grid.height, device_max);
 
@@ -294,7 +292,7 @@ fn upload_grid(ctx: &egui::Context, app: &mut AppState, grid: &GridSnapshot) {
     }
 }
 
-/// Built on first use, and shared by both backends.
+/// Builds the agent layer on first use. Both backends share it.
 fn ensure_agent_layer(app: &mut AppState) {
     if app.agent_layer.is_none() {
         app.agent_layer = Some(AgentLayer::new(
@@ -325,7 +323,7 @@ fn grid_colors(palette: &[[u8; 4]]) -> [egui::Color32; 256] {
     padded_palette(palette).map(|[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a))
 }
 
-/// 5-stop piecewise linear approximation of the Inferno colormap.
+/// Returns the colour at `t` of a five-stop piecewise linear approximation of the Inferno colour map.
 #[inline]
 fn inferno(t: f32) -> egui::Color32 {
     const STOPS: [[u8; 3]; 5] = [[0, 0, 4], [64, 4, 104], [183, 55, 121], [251, 136, 97], [252, 255, 164]];
@@ -390,7 +388,7 @@ fn render_density_heatmap(
     };
 
     let max_density = app.density_max;
-    // Transparent rather than black where empty, so a field underneath still shows through.
+    // An empty pixel is transparent, so a field underneath still shows through.
     let pixels: Vec<egui::Color32> = density
         .iter()
         .map(|&d| {
@@ -419,7 +417,8 @@ mod tests {
 
     use super::{expand_grid, sample_grid};
 
-    /// A model's cell value can run past its palette. The upload used to panic on the UI thread and end the app.
+    /// A model's cell value can run past its palette. Indexing past its end would panic on the UI thread and end the
+    /// app.
     #[test]
     fn a_cell_past_the_palette_takes_the_first_colour() {
         let grid = GridSnapshot {

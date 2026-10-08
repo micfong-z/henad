@@ -132,8 +132,8 @@ fn a_sampled_design_sweep_writes_the_same_files_at_any_concurrency() {
             OutputTables::read(&output_dir)
         })
         .collect();
-    // The wave's range holds 46 whole ticks. Stratum `s` of the 6 takes tick 5 + s * 46 / 6, and each config appears
-    // once per replicate.
+    // The wave's range holds 46 whole ticks. Stratum `s` of the 6 strata takes tick 5 + s * 46 / 6, and each config
+    // appears once per replicate.
     let mut waves: Vec<u64> = tables[0]
         .run_column("action.wave")
         .iter()
@@ -234,14 +234,14 @@ fn common_random_numbers_share_seeds_across_configs() {
 /// Checks that sampling a run every tick or every tenth tick leaves it on the same trajectory.
 ///
 /// A sample calls `prepare_view` with the state borrowed mutably. Each case steps one model twice, once for each
-/// cadence, and compares the rows at the ticks both sample and the state exported at the end.
+/// cadence, and compares the rows at the ticks both cadences sample and the state exported at the end.
 mod sampling_cadence_does_not_change_the_trajectory {
     use super::{
         Collected, MeasurePlan, ModelEntry, ModelState, SimState, SweepSpec, entry, fixed, lanes, planned, point_rows,
         run_plan, write_edges, write_grid, write_points,
     };
 
-    /// Final tick of every case. It is off the coarser cadence, so the final sample is a sample of its own.
+    /// Final tick of every case. It is not a multiple of the coarser cadence, so the final tick is sampled in addition.
     const STEPS: u64 = 25;
 
     /// Cadences each case compares.

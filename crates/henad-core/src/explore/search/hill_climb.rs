@@ -4,9 +4,10 @@
 //! and the climb moves to the best of them when it strictly beats the incumbent. After `patience` batches without a
 //! move, the climb starts over from a new random batch.
 //!
-//! No two first evaluations share a config. A starting point or a neighbor whose config an earlier candidate has is
-//! drawn again. When no draw finds a new config, the batch re-evaluates that candidate in its place. A re-evaluated
-//! starting point competes for the start like any other, and a re-evaluated neighbor never moves the climb.
+//! No two first evaluations share a config. A starting point or a neighbor is drawn again when an earlier candidate
+//! has the same config. When no draw finds a new config, the batch re-evaluates that candidate in its place.
+//! A re-evaluated starting point competes for the start like any other, and a re-evaluated neighbor never moves the
+//! climb.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,9 +24,9 @@ use crate::explore::search::{
 pub struct HillClimbSettings {
     /// Largest step of a gene toward a neighbor, as a fraction of its range.
     pub mutation_scale: f64,
-    /// Batches without a move after which the climb starts over.
+    /// Number of batches without a move after which the climb starts over.
     pub patience: u64,
-    /// Whether each batch also re-evaluates the incumbent, in place of one neighbor.
+    /// Whether each batch also re-evaluates the incumbent, instead of one neighbor.
     ///
     /// Note that a batch of one candidate holds a neighbor alone.
     pub reevaluate: bool,
@@ -70,11 +71,11 @@ pub struct HillClimb {
     config_candidates: BTreeMap<ConfigKey, u64>,
     /// Candidate the climb moves from, `None` while the next ask draws starting points.
     incumbent: Option<u64>,
-    /// Known candidates the pending start batch re-evaluates in place of a starting point.
+    /// Known candidates the pending start batch re-evaluates instead of a starting point.
     revisited: BTreeSet<u64>,
-    /// Batches since the incumbent last moved.
+    /// Number of batches since the incumbent last moved.
     stalled: u64,
-    /// Climbs begun, the first one and each restart.
+    /// Number of climbs begun, the first one and each restart.
     climbs: u64,
 }
 
@@ -83,7 +84,7 @@ impl HillClimb {
     ///
     /// # Errors
     ///
-    /// Returns [`SearchSpecError`] when [`HillClimbSettings::check`] refuses `settings`.
+    /// Returns [`SearchSpecError`] when [`HillClimbSettings::check`] rejects `settings`.
     pub fn new(
         space: SearchSpace,
         settings: HillClimbSettings,
@@ -108,7 +109,7 @@ impl HillClimb {
 
     /// Returns up to `count` random starting points.
     ///
-    /// A starting point whose draws all give a known config becomes a re-evaluation of the candidate the first draw
+    /// A starting point whose draws all produce a known config becomes a re-evaluation of the candidate the first draw
     /// matched, unless the batch re-evaluates that candidate already or the match is another starting point of the
     /// batch. Note that the batch is never empty. Its first draw meets no other proposal of the batch.
     fn starting_points(&mut self, count: usize) -> Vec<Proposal> {
@@ -142,9 +143,10 @@ impl HillClimb {
         proposals
     }
 
-    /// Returns up to `count` candidates around `incumbent`, a re-evaluation of it first when the settings ask for one.
+    /// Returns up to `count` candidates around `incumbent`, starting with a re-evaluation of `incumbent` when the
+    /// settings enable re-evaluation.
     ///
-    /// A neighbor whose draws all give a known config becomes a re-evaluation of the candidate the first draw
+    /// A neighbor whose draws all produce a known config becomes a re-evaluation of the candidate the first draw
     /// matched, unless the batch re-evaluates that candidate already or the match is another neighbor of the batch.
     fn neighbors(&mut self, incumbent: u64, count: usize) -> Vec<Proposal> {
         let record = self.log.get(incumbent).expect("the incumbent was evaluated");

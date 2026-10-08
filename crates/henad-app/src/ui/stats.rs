@@ -1,4 +1,4 @@
-//! Latest stat values as a table, see [`charts`](crate::ui::charts) for time series.
+//! Latest stat values as a table. The [`charts`](crate::ui::charts) module draws their time series.
 
 use crate::icons::material_design_icons::{MDI_ARROW_TOP_RIGHT_THIN, MDI_CHART_HISTOGRAM, MDI_CIRCLE_SMALL};
 use crate::state::AppState;
@@ -41,7 +41,7 @@ pub fn stats_ui(ui: &mut egui::Ui, app: &AppState) {
     });
 }
 
-/// Formats a whole value without decimals, and any other value with up to three.
+/// Formats a whole value without decimals, and any other value with up to three decimals.
 fn format_scalar(v: f64) -> String {
     if v.fract() == 0.0 {
         format!("{v:.0}")

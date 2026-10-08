@@ -1,4 +1,4 @@
-// Counts the cells holding one. Each workgroup sums into a local counter, then adds it to the global one once.
+// Counts the cells set to 1. Each workgroup sums into a local counter, then adds it to the global counter once.
 
 #import henad::dims::Dims
 
@@ -19,7 +19,7 @@ fn main(
     }
     workgroupBarrier();
 
-    // An `if` in place of an early `return`, since every invocation has to reach both barriers.
+    // The bounds check is an `if` instead of an early `return`, since every invocation has to reach both barriers.
     if (global_id.x < dims.grid.x && global_id.y < dims.grid.y) {
         atomicAdd(&partial, state[global_id.y * dims.grid.x + global_id.x]);
     }

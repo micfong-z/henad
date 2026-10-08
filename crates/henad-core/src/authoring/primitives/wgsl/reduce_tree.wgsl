@@ -5,8 +5,8 @@ var<workgroup> scratch: array<f32, WORKGROUP>;
 
 // Sums `value` across the workgroup, in a fixed pairwise order so the result replays.
 //
-// Every invocation must reach this, since it barriers. Only invocation 0 gets the total. Leaves
-// `scratch` free again, so a lane loop can call it once per lane.
+// Every invocation must reach this, since it barriers, and every invocation gets the total. The call
+// leaves `scratch` free again, so a lane loop can call it once per lane.
 fn block_sum(lid: u32, value: f32) -> f32 {
     scratch[lid] = value;
     workgroupBarrier();

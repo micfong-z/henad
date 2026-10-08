@@ -1,6 +1,5 @@
-//! Generic engine turning any [`NetworkModel`] into a runnable [`SimState`].
-//!
-//! Compare with [`crate::cpu::agent_engine`].
+//! The engine that runs a [`NetworkModel`] as a [`SimState`], and the parameters it prepends to the model's own
+//! parameters.
 
 use henad_core::action::action_seed;
 use henad_core::authoring::model::agent_model::AgentLanes as _;
@@ -17,17 +16,19 @@ use web_time::Instant;
 use crate::cpu::layout::{LayoutScratch, spring_step};
 use crate::cpu::primitives::chunked::advance_tick_seed;
 
-/// Default RNG seed.
+/// State a network model's random number generator (RNG) starts from when a run has no seed.
 pub const NETWORK_INIT_SEED: u64 = 0x3141_5926_5EED_0001;
 
 // Salts that separate the global and layout RNG streams from the node pass stream.
 const GLOBAL_SALT: u64 = 0x53_5897_5EED_0001;
 const LAYOUT_SALT: u64 = 0x93_2384_5EED_0001;
 
-// Indices of the params that the engine prepends to a model's own.
-/// The node count keeps the id `num_agents`, which the benchmark scripts rely on.
+// Indices of the params that the engine prepends to a model's own params.
+/// Index of the node count. Its id stays `num_agents`, which the benchmark scripts look up.
 pub const NUM_NODES: usize = 0;
+/// Index of the world's width.
 pub const WORLD_WIDTH: usize = 1;
+/// Index of the world's height.
 pub const WORLD_HEIGHT: usize = 2;
 
 /// Number of params that the engine prepends.
@@ -38,6 +39,7 @@ fn own_params(params: &[ParamValue]) -> &[ParamValue] {
     &params[NETWORK_PARAM_BASE.min(params.len())..]
 }
 
+/// Returns the full descriptor list: `num_agents`, `world_width` and `world_height`, then the model's own params.
 pub fn network_model_param_descriptors<N: NetworkModel>() -> Vec<ParamDescriptor> {
     let extent = N::DEFAULT_EXTENT;
     let mut descs = vec![
@@ -90,6 +92,7 @@ impl<N: NetworkModel> std::fmt::Debug for NetworkModelState<N> {
 }
 
 impl<N: NetworkModel> NetworkModelState<N> {
+    /// Creates a state from the full parameter list, seeded with [`NETWORK_INIT_SEED`].
     pub fn from_params(params: &[ParamValue]) -> Self {
         Self::from_params_seeded(params, None)
     }
@@ -99,7 +102,10 @@ impl<N: NetworkModel> NetworkModelState<N> {
         Self::build(params, seed, |_nodes, _extent| {})
     }
 
-    /// Creates a state, then passes it to `seed_graph` to set up a specific graph.
+    /// Creates a state as [`Self::from_params_seeded`] does, then passes its nodes to `seed_graph` to set up a specific
+    /// graph.
+    ///
+    /// `seed_graph` runs after the model's `init`, and the rows are repacked after `seed_graph` returns.
     pub fn from_graph(
         params: &[ParamValue],
         seed: Option<u64>,
@@ -152,14 +158,17 @@ impl<N: NetworkModel> NetworkModelState<N> {
         }
     }
 
+    /// Node lanes.
     pub fn lanes(&self) -> &N::Lanes {
         &self.lanes
     }
 
+    /// Graph of the nodes.
     pub fn graph(&self) -> &Network {
         &self.graph
     }
 
+    /// Model's own state outside the lanes and the graph.
     pub fn aux(&self) -> &N::Aux {
         &self.aux
     }
@@ -490,7 +499,7 @@ mod tests {
     }
 
     /// The node views implement `Debug` for a model whose `Params` and `Aux` do not. A derive would bound its impl on
-    /// both and fail to compile here.
+    /// both types and fail to compile here.
     #[test]
     fn the_node_views_implement_debug_for_any_model() {
         fn assert_debug<T: std::fmt::Debug>() {}

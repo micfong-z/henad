@@ -1,8 +1,7 @@
 //! Machine-readable benchmark output, one JSON object per line on stdout.
 //!
-//! The cross-engine harness reads these lines from every engine it drives, so the shape is a
-//! contract rather than a convenience. `benchmarks/protocol.md` states it. The human report in
-//! the crate root writes to the same stream, so exactly one of the two runs.
+//! The cross-engine driver reads these lines from every engine's harness, and `benchmarks/protocol.md` fixes their
+//! shape. The human report in the crate root writes to the same stream, so exactly one of the two runs.
 
 use std::time::Duration;
 
@@ -15,7 +14,7 @@ use henad_explore::probe::ProbeReport;
 use henad_explore::schema::schema_json;
 use serde_json::{Value, json};
 
-/// Emitted once, before any rep.
+/// Prints the `info` line, once before any repetition.
 pub fn info(model: &str, variant: &str, threads: usize, parallel_jobs: Option<usize>, adapter: Option<&str>) {
     let line = json!({
         "kind": "info",
@@ -31,7 +30,7 @@ pub fn info(model: &str, variant: &str, threads: usize, parallel_jobs: Option<us
     emit(&line);
 }
 
-/// Host and adapter provenance, the `--info` output in the machine-readable stream.
+/// Prints the `runtime` line, the host and adapter `--info` reports.
 pub fn runtime(runtime: Option<&RuntimeInfo>) {
     let collected;
     let host = if let Some(runtime) = runtime {
@@ -53,7 +52,9 @@ pub fn runtime(runtime: Option<&RuntimeInfo>) {
     emit(&line);
 }
 
-/// One line per timed rep. `heap_bytes` is `None` for a GPU model, whose state lives on the device.
+/// Prints the `rep` line of one timed repetition.
+///
+/// `heap_bytes` is `None` for a GPU model, whose state lives on the device.
 pub fn rep(
     index: u64,
     seed: Option<u64>,
@@ -76,10 +77,9 @@ pub fn rep(
     emit(&line);
 }
 
-/// The machine-readable twin of the human report, plus what the harness needs for provenance.
+/// Prints the `summary` line, the statistics of the human report with the parameters and actions of the run.
 ///
-/// The harness derives its own statistics from the `rep` lines, so these are a convenience and a
-/// cross-check, not the source of truth.
+/// The driver computes its own statistics from the `rep` lines, and reads this line for provenance alone.
 pub fn summary(
     samples: &[Duration],
     steps_per_rep: u64,

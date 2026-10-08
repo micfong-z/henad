@@ -7,7 +7,7 @@ icon: material/memory
 # The CPU backend
 
 `henad-compute/src/cpu/` turns a CPU authoring impl into something runnable.
-It is the sibling of [the GPU backend](gpu-backend.md) rather than a base for it, and the two mirror each other file by file.
+It is the sibling of [the GPU backend](gpu-backend.md) rather than a base for it, and the two backends mirror each other file by file.
 Reading one backend against the other is a quick way to learn both.
 
 ```text
@@ -36,7 +36,7 @@ Each engine implements the whole of `SimState` for its trait.
 A model therefore never implements `SimState` itself, which keeps the runner interface out of the authoring surface.
 
 `GridModelState<M>` owns the `Grid2D<u8>`, the parameter store and the tick counter.
-Its step dispatches on `M::NEIGHBORHOOD` once, outside the row loop, and no per-cell work goes on the choice.
+Its step dispatches on `M::NEIGHBORHOOD` once, outside the row loop, so the choice costs no per-cell work.
 
 `AgentModelState<A>` owns rather more: the lanes, the field, the neighbour index, the deposit lanes, the tally and the seed.
 One tick runs through a fixed sequence.
@@ -52,11 +52,21 @@ One tick runs through a fixed sequence.
 8  advance the tick seed
 ```
 
-Steps 3 and 4 each build their own `StepCtx`, because the deposit pass takes the lanes by shared reference and the step pass by mutable one, and the borrow checker wants the two apart.
-The index is rebuilt before the deposit pass, which leaves both passes looking at the same neighbourhood.
+Steps 3 and 4 each build their own `StepCtx`, because the deposit pass takes the lanes by shared reference and the step pass by mutable reference, and the borrow checker requires the two borrows to be separate.
+The index is rebuilt before the deposit pass, so both passes see the same neighbourhood.
+
+A model picks the cell size of its index.
+Boids sizes its hash cells at a third of the visual range, and the walk then covers about twice the disc it needs.
+With cells of the whole range it covers about three times the disc, and two candidates in three are scanned only to be rejected.
+On one thread the smaller cells took 0.63 of the step time at ten and thirty thousand agents.
+
+The chunked step driver, `run_pass`, is an inherent method of the type that `agent_lanes!` generates, and the `AgentLanes` trait has no such method.
+As an inherent method it takes a closure that can name the concrete borrow types the macro generates, such as `BoidRead` and `BoidChunk`.
 
 Parameter splitting happens in `split_params`, dividing the composed list into the engine's own part, the model's part and the field's part.
 The split is computed from the descriptor lengths, never from a hard-coded offset.
+The world's extent belongs to the engine, which prepends it to the parameters.
+An agent layer and its field layer then cannot disagree about the size of the world.
 
 `NetworkModelState<N>` owns the lanes, the `Network`, the model's `Aux`, the parameter store, and separate seeds for the node pass, the global pass, actions and the layout.
 Its tick is shorter.
@@ -72,8 +82,8 @@ Its tick is shorter.
 ```
 
 Of the two passes, only the global pass can change the graph.
-The node pass gets it by shared reference, and every worker reads it at once.
-Both passes are handed the tick before the increment, while `prepare_view` runs after it and is handed the count of completed ticks.
+The node pass receives the graph by shared reference, and every worker reads it at once.
+Both passes receive the tick before the increment, while `prepare_view` runs after it and receives the count of completed ticks.
 
 `stats` sees the aux by shared reference only.
 `population` counts live nodes, and `heap_bytes` adds whatever `aux_heap_bytes` reports for the aux.
@@ -89,7 +99,7 @@ The repack reclaims the space that relocations left behind and lays the rows out
 `CaField::step_grid` is the hot inner loop behind every grid model, and small changes to its shape show up in every model's step time.
 
 Three row slices are taken per row, wrapped vertically, and sliced to exactly one row wide.
-Each slice being exactly a row, a neighbour access comes out as a single index instead of a `row * stride + x` multiply-add.
+Because each slice is exactly one row, a neighbour access is a single index instead of a `row * stride + x` multiply-add.
 
 The x wrap is peeled off both row loops.
 Only the first and last column actually wrap, so both are handled separately and the interior of the loop runs without a per-cell modulo.
@@ -113,11 +123,16 @@ The odd-looking `last.min(1)` covers a one-column grid, where both wraps land on
 A model indexes the neighbour slice by position, which makes the gather order published API.
 A test drives a probe model whose cells encode their own offsets and asserts the order inside `step_cell`.
 
-The rows are handed out one per closure call, but not one per rayon leaf.
-`rows_per_leaf` puts a floor under how many rows a leaf takes, from `MIN_LEAF_CELLS` and the grid's width, since a 64 by 64 grid split one row at a time hands 48 workers 64 jobs of 64 cells and costs more to distribute than to run.
+The closure receives one row per call, but a rayon leaf can take several rows.
+`rows_per_leaf` sets a minimum number of rows per leaf, computed from `MIN_LEAF_CELLS` and the grid width, since a 64 by 64 grid split one row at a time gives 48 workers 64 jobs of 64 cells and costs more to distribute than to run.
 The floor is a scheduling choice only.
 Each row keeps its own index and its own `chunk_seed`, so the grid a tick produces does not depend on how the rows were grouped.
-Only a floor, too: a grid with rows to spare still splits below it, which is what lets rayon balance a model whose rows differ in cost.
+It is only a floor.
+A grid with rows to spare still splits down to the floor, so rayon can balance a model whose rows differ in cost.
+
+The floor of 8192 cells was measured across both grid models, from 64 by 64 to 4096 by 4096.
+A floor of twice that left a 4096-wide SIR grid 8% slower than no floor at all.
+A row's cost varies with what its cells hold, and coarser leaves stop rayon from balancing that by stealing.
 
 ## `for_each_chunk_mut!` is a macro
 
@@ -135,11 +150,18 @@ pub fn chunk_seed(base: u64, tick: u64, c: usize) -> u64;
 pub fn advance_tick_seed(seed: u64, tick: u64) -> u64;
 ```
 
-`chunk_seed` derives a chunk's generator from the chunk index alone, never from anything a worker mutates, which makes a run independent of the thread count.
+`chunk_seed` derives a chunk's generator from the chunk index alone, never from anything a worker mutates.
+A run is therefore independent of the thread count.
 The `base` itself is advanced once per tick, on the sequential path, by `advance_tick_seed`.
 
 The tick could in principle be folded in through `chunk_seed` alone, but doing so measured 14% slower on SIR with identical content.
 That result has never been explained, and both functions stay until someone explains it.
+
+A chunk is the seeding unit as well as the unit of parallel work, and `AgentModel::CHUNK` is a fixed constant per model.
+Boids sets it to 64.
+At the default of 512 a thousand boids make two chunks, and most of the pool sits idle.
+The smaller chunk ran 3.3 times as fast at a thousand agents and cost 4% at a hundred thousand.
+The boids kernel draws no random numbers, and its chunk size changes no result.
 
 ## The scatter
 
@@ -147,35 +169,40 @@ That result has never been explained, and both functions stay until someone expl
 Its three arms, and what picks between them, are covered in [fields](../authoring/fields.md#the-scatter).
 
 The property that matters inside this crate is the choice of arm, which comes from the worker count and the deposit count.
-All three must therefore produce identical bits.
+All three arms must therefore produce identical bits.
 Any divergence would make a model's results depend on the machine they ran on.
 A test pins each arm explicitly and compares them against a reference written the obvious way, in the dense regime and the sparse one.
 
-`scatter_then` carries a closure applied to every combined cell before it is written, which is how a decaying field avoids a second pass over its grid.
-The result is the same because decay is monotone on non-negative values, so decaying a merged cell and merging decayed ones agree bit for bit.
+`scatter_then` carries a closure applied to every combined cell before it is written.
+This lets a decaying field avoid a second pass over its grid.
+The result is the same because decay is monotone on non-negative values, so decaying a merged cell and merging decayed cells agree bit for bit.
 
 Read the module docs before changing this file.
 The strategy choice rests on measurement (`benches/scatter.rs`), and atomics are not an option under this contention pattern.
+
+The shadow arm touches `workers * n_cells` slots however few deposits arrive, where the banded arm touches each cell once and each deposit twice.
+The crossover sits at one deposit per cell, and it does not move with the worker count.
+`benches/scatter.rs` has the banded arm ahead by 2.3x to 12.3x across every sparse rung and every pool width, and behind at one deposit per cell even on one worker.
 
 ## The graph
 
 `Network` lives in `henad-core/src/network.rs` and keeps the graph in two forms.
 The renderer draws from an edge list, with `src`, `dst` and a colour byte per edge.
 Kernels walk rows of neighbours in compressed sparse row (CSR) layout, where each entry carries a neighbour and the index of its edge in the list.
-An undirected graph keeps both directions in one set of rows, and a directed one keeps an in-row and an out-row per node.
+An undirected graph keeps both directions in one set of rows, and a directed graph keeps an in-row and an out-row per node.
 
 The rows are updated in place as edges come and go.
 Each row has slack after its last entry, so adding an edge writes into that space.
 A full row relocates to the end of the arrays with twice its capacity, and at least four entries, leaving its old space stale.
 Removing an edge swaps the last entry of each endpoint's row into its place and swap-removes it from the edge list, renumbering the edge that moved.
 Retiring a node removes its edges and leaves its whole row stale.
-`spawn` hands out the most recently retired slot first.
+`spawn` reuses the most recently retired slot first.
 
 Stale space is reclaimed by `repack`.
-After each tick the engine asks `should_repack`.
-It holds once stale entries make up more than half of the row storage and number more than four, and the engine then repacks.
+After each tick the engine calls `should_repack`.
+It returns true once stale entries make up more than half of the row storage and number more than four, and the engine then repacks.
 `repack` is a compaction.
-It copies each row as it stands into fresh arrays in node order, gives it a quarter of its length as slack and at least four entries, and keeps the order of entries within every row.
+It copies each row as it stands into fresh arrays in node order, adds slack of a quarter of its length with room for at least four entries, and keeps the order of entries within every row.
 A compaction is cheaper than rebuilding the rows from the edge list.
 
 `rebuild` sorts the edge list into rows from scratch.
@@ -221,7 +248,7 @@ Swing and traction are summed through `reduce_chunks` in chunk order.
 Neither result depends on how rayon splits the work, and nothing is written through atomics.
 Two nodes on the same point are pushed apart along an angle drawn from the layout's seed, the iteration and the node index.
 
-`relax_layout` runs iterations until the time budget is spent, and always at least one.
+`relax_layout` runs at least one iteration, and keeps running iterations until the time budget is spent.
 The budget is 4 ms by default and is set from the app's [Pacing tab](../guide/app.md#pacing-tab).
 [The runner](#the-runner) decides which publishes call it.
 
@@ -230,7 +257,7 @@ The budget is 4 ms by default and is set from the app's [Pacing tab](../guide/ap
 `primitives/components.rs` labels every node with the lowest node index in its component, using min-label propagation with pointer jumping.
 Each round sets every node's label to the smallest of its own and its neighbours' labels.
 Two pointer jumps follow every round that changed a label, each replacing a label with its label's label, to shorten the chains that propagation leaves behind.
-The labelling stops after a round that changes nothing, and returns the number of components and the size of the largest.
+The labelling stops after a round that changes nothing, and returns the number of components and the size of the largest component.
 
 Every pass reads one label buffer and writes the other, in parallel chunks of 4096 nodes and with no atomics.
 A node's new label depends only on the labels of the round before, and the lowest index in a component is the same whatever order the work ran in.
@@ -243,7 +270,7 @@ Team Assembly calls it from `prepare_view`, at most once per publish, and caches
 ## The runner
 
 `SimThread` exists so stepping never blocks rendering.
-It owns the state, steps it, and publishes a `Snapshot` on a fixed cadence into a slot the UI takes from.
+It owns the state, steps it, and publishes a `Snapshot` on a fixed cadence into a slot that the UI reads from.
 The work and the way it is driven are split across two types.
 
 `SimLoop`
@@ -255,21 +282,21 @@ The work and the way it is driven are split across two types.
 
 :   Decides how to wait.
     On native it spawns an OS thread and blocks on the command channel.
-    On the web it runs the loop inline from the host's frame loop and hands the frame back once `PUMP_BUDGET_MS` has been spent, since `wasm32-unknown-unknown` cannot spawn a thread even with atomics.
+    On the web it runs the loop inline from the host's frame loop and returns control to the frame once `PUMP_BUDGET_MS` has been spent, since `wasm32-unknown-unknown` cannot spawn a thread even with atomics.
 
-The native driver pumps inside a `rayon::scope`, so a kernel's parallel passes are injected from a worker rather than from a thread rayon has to park and wake for each one.
-Only the pump moves inside it.
-The waits either side stay outside, since a worker blocked on a command channel is a worker the pool cannot use, and on a one-worker pool it would never come back.
+The native driver pumps inside a `rayon::scope`, so a kernel's parallel passes are injected from a worker rather than from a thread that rayon has to park and wake for each pass.
+Only the pump runs inside the scope.
+The waits before and after the pump stay outside the scope, since a worker blocked on a command channel is unavailable to the pool, and on a one-worker pool it would never resume.
 
 The public API is identical either way, and nothing in `henad-app` needs to know which driver is active.
 rayon still parallelises the kernels in both cases, and no kernel has a sequential twin.
 If you find a `#[cfg(target_arch = "wasm32")]` around a hot loop, someone rebuilt a twin.
 
-Publishing goes through `build_snapshot`, which calls `prepare_view` first and refills the buffers of a snapshot handed back by the UI.
+Each publish runs `build_snapshot`, which calls `prepare_view` first and refills the buffers of a snapshot returned by the UI.
 A publish is then a copy rather than a fresh multi-megabyte allocation.
 Every view is consulted, and a composite model publishes its field and its agents together.
 A network model's edge list travels in an `EdgeSnapshot`, recycled with the rest.
-The list is copied only when the graph's `version` or the list's length differs from the recycled copy.
+The list is copied only when the recycled copy holds a different graph `version` or a different number of edges.
 
 Each snapshot carries a `serial` that counts publishes, and `view_ms`, the time `prepare_view` and the layout took together.
 The viewport uploads its layers again on a new serial instead of a new tick, since a layout relaxing while paused moves nodes without advancing the tick.
@@ -280,7 +307,7 @@ How far the layout gets in one publish depends on wall-clock time.
 Node positions are not a function of the tick, and they are for drawing only.
 `henad-cli` never publishes and never lays a network out.
 
-Whether a publish relaxes is up to the loop.
+The loop decides whether a publish relaxes.
 A publish that follows a tick relaxes the layout.
 A publish while paused relaxes it only if `while_paused` was set, and a paused loop then keeps publishing every `PUBLISH_INTERVAL` instead of going idle.
 An action or a change to the layout settings also publishes, and on a paused network that publish moves no node unless `while_paused` is set.
@@ -288,11 +315,11 @@ An action or a change to the layout settings also publishes, and on a paused net
 `SimCommand::SetLayout` carries `on`, `budget_ms` and `while_paused`.
 The budget is capped at `MAX_VIEW_BUDGET_MS`.
 On the web that cap is `PUMP_BUDGET_MS`, because a publish there runs inside the frame pump.
-A state with no layout returns false from `set_layout`, and the loop then never asks it to relax.
+A state with no layout returns false from `set_layout`, and the loop then never calls `relax_layout` on it.
 
 `SimCommand::Act` runs one of the model's declared actions between ticks and publishes at once.
 The tick has not moved, and nothing else would publish what the action did.
-An action draws from [a stream of its own](../authoring/parameters.md#actions), seeded by `action_seed` and shared with no tick.
+An action draws from [its own stream](../authoring/parameters.md#actions), seeded by `action_seed` and not shared with any tick.
 
 ## Faults
 

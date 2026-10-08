@@ -5,6 +5,8 @@
 This crate turns a model written against [henad-core](https://crates.io/crates/henad-core) into something that runs.
 It holds the CPU engines, which step a model's struct-of-arrays lanes in parallel with rayon, and the GPU engines, which run a model's WGSL compute shaders through wgpu.
 It also holds the sim threads that step a model off the UI thread, and the snapshots they publish.
+A model is registered as an entry that a host can list and build.
+A program builds an entry with checked values into a `Simulation` and steps it.
 
 The [developer documentation](https://micfong-z.github.io/henad/developing/architecture/) describes both backends.
 

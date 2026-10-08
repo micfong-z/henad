@@ -36,7 +36,7 @@ use crate::ui::results::table::TableView;
 use crate::ui::sweep::draft::describe_error;
 use crate::ui::sweep::session::SweepSession;
 
-/// Configs a new store selects for the Series view.
+/// Number of configs that a new store selects for the Series view.
 const DEFAULT_SELECTED_CONFIGS: usize = 5;
 
 /// Status line shown while picked files wait to be read.
@@ -45,7 +45,7 @@ const READING_RESULTS: &str = "Reading results";
 /// View the Results tab shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ResultsView {
-    /// Course of a search, offered for the results of a search alone.
+    /// Progress of a search, offered only for search results.
     Search,
     #[default]
     Series,
@@ -87,7 +87,7 @@ pub enum ResultsRequest {
     LoadSeries,
 }
 
-/// Series read from a folder on a thread of its own.
+/// Series read from a folder on a separate thread.
 #[cfg(not(target_arch = "wasm32"))]
 type SeriesRead = Result<henad_explore::result_set::DirectorySeries, String>;
 
@@ -104,7 +104,7 @@ struct SeriesLoad {
 /// Files picked in a dialog, read on a frame after the one that first shows [`READING_RESULTS`].
 struct PickedFiles {
     files: Vec<DialogFile>,
-    /// Number of the frame that first saw the files, `None` before any frame has.
+    /// Number of the frame that first saw the files, `None` before any frame has seen them.
     first_frame: Option<u64>,
 }
 
@@ -113,7 +113,7 @@ struct PickedFiles {
 pub struct ResultsPanel {
     store: Option<ResultsStore>,
     view: ResultsView,
-    /// Configs the Series view draws, and the runs table can list alone.
+    /// Configs that the Series view draws, and whose runs the runs table can list on their own.
     selected_configs: BTreeSet<u64>,
     /// Run the detail strip shows.
     selected_run: Option<u64>,
@@ -124,8 +124,8 @@ pub struct ResultsPanel {
     search: SearchView,
     /// Files of a sweep held in memory, once it ends.
     files: Option<Arc<SweepFiles>>,
-    /// Number of the files held, counted up each time a sweep hands the panel its files. A save names the files it
-    /// wrote by this number.
+    /// Generation number of the held files, incremented each time a sweep passes the panel its files. A save identifies
+    /// the files it wrote by this number.
     files_generation: u64,
     /// Whether `files` are saved.
     files_saved: bool,
@@ -161,7 +161,7 @@ impl ResultsPanel {
 
     /// Shows `store`, with the first configs selected and every view reset.
     ///
-    /// A folder or series still being read is dropped and never lands in `store`.
+    /// A folder or series still being read is dropped and never reaches `store`.
     fn set_store(&mut self, store: ResultsStore) {
         self.drop_pending_loads();
         self.selected_configs = store.config_ids().take(DEFAULT_SELECTED_CONFIGS).collect();
@@ -186,7 +186,7 @@ impl ResultsPanel {
         self.store = Some(store);
     }
 
-    /// Takes the events of the running sweep that arrived since the last frame, in the order they arrived.
+    /// Applies the events of the running sweep that arrived since the last frame, in the order they arrived.
     ///
     /// The configs of the search batches among `events` join the store together, after the other events.
     pub fn ingest(&mut self, events: impl IntoIterator<Item = SweepEvent>) {
@@ -229,7 +229,7 @@ impl ResultsPanel {
         }
     }
 
-    /// Files of a sweep held in memory, `None` for a sweep written to a folder or one still running.
+    /// Files of a sweep held in memory, `None` for a sweep written to a folder or a sweep still running.
     pub fn files(&self) -> Option<&Arc<SweepFiles>> {
         self.files.as_ref()
     }
@@ -255,8 +255,8 @@ impl ResultsPanel {
         self.table.filter = RunsFilter::Failed;
     }
 
-    /// Selects the first run of search candidate `candidate_id`, which opens the run strip. A candidate the panel
-    /// holds no run of changes nothing.
+    /// Selects the first run of search candidate `candidate_id`, which opens the run strip. A candidate with no
+    /// run in the panel changes nothing.
     pub fn select_candidate(&mut self, candidate_id: u64) {
         let first_run = self
             .store
@@ -268,12 +268,12 @@ impl ResultsPanel {
         }
     }
 
-    /// Number of the files held, for a save to name them by.
+    /// Generation number of the held files, which a save uses to identify them.
     pub fn files_generation(&self) -> u64 {
         self.files_generation
     }
 
-    /// Records that the files of number `generation` are saved. Files the panel no longer holds change nothing.
+    /// Marks the files of generation `generation` as saved. Files the panel no longer holds change nothing.
     pub fn mark_files_saved(&mut self, generation: u64) {
         if generation == self.files_generation {
             self.files_saved = true;
@@ -307,7 +307,7 @@ impl ResultsPanel {
 
     /// Returns the picked files once the current frame, `frame`, comes after the first frame that saw them.
     ///
-    /// The first frame draws [`READING_RESULTS`] before the read holds up the next.
+    /// The first frame draws [`READING_RESULTS`] before the read holds up the next frame.
     fn due_picked_files(&mut self, frame: u64) -> Option<Vec<DialogFile>> {
         let picked = self.picked_files.as_mut()?;
         if *picked.first_frame.get_or_insert(frame) == frame {
@@ -325,7 +325,7 @@ fn resumed_folder(store: &ResultsStore) -> Option<PathBuf> {
     }
 }
 
-/// Takes the result of an Open results dialog.
+/// Handles the result of an Open results dialog.
 pub fn receive_open(app: &mut AppState, result: OpenResult) {
     match result {
         #[cfg(not(target_arch = "wasm32"))]
@@ -345,8 +345,8 @@ pub struct ReadResults {
 }
 
 impl ReadResults {
-    /// Returns the results `set` holds, read from `source`, replaying through `model`, the sweep's model as this app
-    /// finds it.
+    /// Returns the results that `set` holds, read from `source`. `model` is this app's lookup of the sweep's model,
+    /// used for replays.
     ///
     /// Note that the build plans the sweep's spec, unless its manifest records more configs than the store plans. Its
     /// time and memory grow with the configs.
@@ -357,7 +357,7 @@ impl ReadResults {
     }
 }
 
-/// Reads the results in `folder` and builds their store on a thread of its own, and shows them once built.
+/// Reads the results in `folder` and builds their store on a separate thread, and shows them once built.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_folder(app: &mut AppState, folder: PathBuf) {
     let (sender, receiver) = flume::bounded(1);
@@ -407,7 +407,7 @@ fn show_results(app: &mut AppState, read: ReadResults) {
     app.focus_request = Some(Tab::Results);
 }
 
-/// Takes the results and series the tab has read, reads picked files once `ctx` has drawn a frame since they
+/// Collects the results and series that the tab has read, reads picked files once `ctx` has drawn a frame since they
 /// arrived, and reads a resumed folder again once its sweep ends.
 pub fn poll(ctx: &egui::Context, app: &mut AppState) {
     poll_picked_files(ctx, app);
@@ -497,8 +497,8 @@ fn poll_series_load(panel: &mut ResultsPanel) {
     });
 }
 
-/// Returns the status line of a series load that asked for `requested` runs, holds the series of `held`, and found
-/// no rows for `empty`.
+/// Returns the status line of a series load that requested the series of `requested` runs, holds the series of
+/// `held`, and found no rows for `empty`.
 ///
 /// The memory budget accounts for the rest.
 #[cfg(not(target_arch = "wasm32"))]
@@ -555,7 +555,8 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     });
     ui.separator();
-    // At the bottom of the tab. Above the view, the strip's first appearance pushes the rows under the pointer down.
+    // The strip sits at the bottom of the tab. Above the view, its first appearance would push the rows under the
+    // pointer down.
     if let Some(run_id) = *selected_run {
         egui::Panel::bottom("henad_results_run_strip")
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 4)))
@@ -782,7 +783,7 @@ fn resume_sweep(app: &mut AppState) {
     app.results.status = Some(format!("Use the desktop app to resume a {noun}"));
 }
 
-/// Reads the series the drawn configs' runs lack from the folder, on a thread of its own.
+/// Reads the missing series of the drawn configs' runs from the folder, on a separate thread.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_series(app: &mut AppState) {
     let wake = app.repaint_waker();
@@ -936,7 +937,7 @@ mod tests {
         assert_eq!(panel.status, None);
     }
 
-    /// Removes the folder it names once dropped, so a failed test leaves nothing behind.
+    /// Removes the folder it holds once dropped, so a failed test leaves nothing behind.
     struct ScratchFolder(std::path::PathBuf);
 
     impl Drop for ScratchFolder {

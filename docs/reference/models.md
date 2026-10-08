@@ -6,8 +6,8 @@ icon: material/cube-outline
 
 # Example models
 
-Henad has ten example models, in the set `henad::models::example_models()` returns, and its own app and command line offer them.
-A project of your own offers its own models, and can [add some or all of these](../authoring/model-sets.md#the-example-models).
+Henad has ten example models, in the set that `henad::models::example_models()` returns, and its own app and command line offer them.
+Your own project offers its own models, and can [add some or all of the example models](../authoring/model-sets.md#the-example-models).
 Six of them run on the CPU, and four of those six have a GPU port running the same simulation entirely in compute shaders.
 The two network models run on the CPU only.
 
@@ -41,13 +41,13 @@ cargo run -p henad-cli -- boids --params
 ```
 
 Each parameter is `live` or `reload`.
-A live parameter takes effect on the next tick, while a reload one applies only when the model is rebuilt.
-The engine prepends grid width and height to every grid model's list, and agent count, world width and world height to every agent model's.
-A network model gets the same three as an agent model, with `num_agents` as its node count and the world as the area its nodes are placed and drawn in.
+A live parameter takes effect on the next tick, while a reload parameter applies only when the model is rebuilt.
+The engine prepends grid width and height to every grid model's list, and agent count, world width and world height to every agent model's list.
+A network model gets the same three parameters as an agent model, with `num_agents` as its node count and the world as the area in which its nodes are placed and drawn.
 A percentage parameter holds a fraction from 0 to 1, and the app shows it as a percentage.
 
 Most models also declare actions, one-off changes to the state.
-The app draws each action as a button in the [Parameters tab](../guide/app.md#parameters-tab), and `henad-cli --act` runs one at a given tick (see [the command line](cli.md)).
+The app draws each action as a button in the [Parameters tab](../guide/app.md#parameters-tab), and `henad-cli --act` runs an action at a given tick (see [the command line](cli.md)).
 A GPU port declares the same actions as its CPU model, under the same ids.
 
 ### Game of Life
@@ -60,7 +60,7 @@ Conway's Game of Life on a toroidal grid.
 | `grid_height` | u32 | 1024 | 1 to 10000, or 16384 on the GPU |
 | `density` | f32 | 0.3 | 0 to 1 |
 
-The `randomise` action refills the grid at the `density` the model was built with, and `clear` kills every cell.
+The `randomise` action refills the grid at the `density` that the model was built with, and `clear` kills every cell.
 
 ### SIR Epidemic
 
@@ -74,7 +74,7 @@ The classic SIR compartmental model on a 2D grid with a Moore neighbourhood.
 | `recovery_rate` | f32 | 0.05 | 0 to 1 |
 | `initial_infected_pct` | f32 | 0.01 | 0 to 1 |
 
-The `seed_outbreak` action infects each susceptible cell with the probability `initial_infected_pct` had when the model was built.
+The `seed_outbreak` action infects each susceptible cell with the probability that `initial_infected_pct` had when the model was built.
 
 ### Boids Flocking
 
@@ -151,13 +151,13 @@ Turning it on or off keeps every edge and its direction.
 The `rewire` action, the Rewire a link button, moves one edge the same way on demand.
 A rewire keeps the edge count and never joins a pair twice.
 
-The model differs from NetLogo's in these ways.
+The model differs from the NetLogo version in these ways.
 
 - NetLogo builds a spatially clustered network.
   It links a random node to its nearest unlinked node until the edge count is reached.
   `Random` keeps that edge count with no spatial structure, and `Geometric` is the spatial option.
 - A run carries on after the last infected node recovers.
-  NetLogo's stops there.
+  NetLogo's run stops there.
 - Recovery and resistance are decided by a real-valued draw.
   NetLogo draws an integer with `random 100`, and the two agree at whole percentages.
 - `average_node_degree` stops at 20.
@@ -172,8 +172,8 @@ The model differs from NetLogo's in these ways.
 NetLogo's Team Assembly, after Guimerà, Uzzi, Spiro and Amaral (2005).
 Each tick one team of `team_size` members is assembled, and every pair of its members is joined by an edge.
 A member is an incumbent with probability `p` and a newcomer otherwise.
-With probability `q` an incumbent member is drawn uniformly from the previous collaborators of the team so far.
-Otherwise, or when the team has none, it is drawn uniformly from the incumbents outside the team.
+With probability `q` an incumbent member is drawn uniformly from the team's previous collaborators so far.
+Otherwise, or when the team has no previous collaborators, it is drawn uniformly from the incumbents outside the team.
 A node that goes more than `max_downtime` ticks without joining a team retires, and its edges go with it.
 
 | Id | Kind | Default | Range |
@@ -193,12 +193,12 @@ A larger `max_downtime` gives a larger steady-state population.
 Newcomer-Newcomer Links, Newcomer-Incumbent Links, Incumbent-Incumbent Links and Previous Collaborator Links count the edges by type.
 An edge takes its type from its ends when it is made, and becomes a previous collaborator edge when the same pair meets again in a later team.
 Giant Component Share is the fraction of nodes in the largest connected component.
-Mean Component Size is the node count divided by the number of components, with an isolated node counted as a component of its own.
-These two are recomputed when a snapshot is published, and only if the graph has changed since the last one.
+Mean Component Size is the node count divided by the number of components, with an isolated node counted as its own component.
+These two stats are recomputed when a snapshot is published, and only if the graph has changed since the last snapshot.
 
 Team Assembly declares no actions.
 
-The model differs from NetLogo's in these ways.
+The model differs from the NetLogo version in these ways.
 
 - NetLogo's setup is a single team.
   A node count equal to `team_size` gives the same start, as the defaults do.
@@ -206,7 +206,7 @@ The model differs from NetLogo's in these ways.
   NetLogo's slider stops at 100.
 - When a member is to be an incumbent and no node is left outside the team, a newcomer joins instead.
   NetLogo stops with an error there.
-- Newcomers are placed around the team's first incumbent, or around the centre of the world if the team has none.
+- Newcomers are placed around the team's first incumbent, or around the centre of the world if the team has no incumbent.
   NetLogo creates them at the origin and leaves the rest to its layout.
 - The layout runs in the app, outside the model, and positions are for drawing only.
   NetLogo's `go` runs its layout as part of each tick while `layout?` is on.
@@ -215,7 +215,7 @@ The model differs from NetLogo's in these ways.
 
 ## Overriding a parameter
 
-`--set` takes a parameter id and a value, and can be given more than once.
+`--set` accepts a parameter id and a value, and can be given more than once.
 
 ```bash
 cargo run --release -p henad-cli -- ants \

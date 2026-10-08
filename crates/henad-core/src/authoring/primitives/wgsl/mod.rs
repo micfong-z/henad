@@ -1,12 +1,12 @@
-//! The shared WGSL modules a model shader reaches with `#import henad::<module>`, as text.
+//! The shared WGSL modules that a model shader imports with `#import henad::<module>`, as text.
 //!
 //! Three modules pair with Rust: `henad::dispatch` with the engine's linear dispatch, and `henad::rng` and
 //! `henad::space` with most of [`super::rng`] and [`super::space`]. `henad::dims` and `henad::reduce_tree` are shared
-//! modules without a Rust twin. The first holds the uniform the grid engine writes for a display or reduce shader,
-//! and the second the workgroup sum a reduce shader repeats.
+//! modules without a Rust twin. `henad::dims` holds the uniform that the grid engine writes for a display or reduce
+//! shader, and `henad::reduce_tree` holds the workgroup sum that a reduce shader repeats.
 //!
-//! henad-build writes these modules beside a crate's shaders before it composes them. The text here is the one source
-//! every build and every host reads.
+//! henad-build writes these modules beside a crate's shaders before it composes them. This text is the single source
+//! that every build and every host reads.
 
 use crate::explore::fingerprint::Fnv1a64;
 
@@ -15,6 +15,7 @@ use crate::explore::fingerprint::Fnv1a64;
 pub struct SharedModule {
     /// Path a shader imports, as in `henad::rng`.
     pub import_path: &'static str,
+    /// WGSL text of the module.
     pub source: &'static str,
 }
 

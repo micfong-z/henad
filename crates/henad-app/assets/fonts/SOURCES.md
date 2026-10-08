@@ -92,7 +92,7 @@ EOF
 "${fonttools[@]}" ttx -q -t name -o - 'Henad Mono Regular.ttf' | grep Plex
 ```
 
-The procedure gives these files.
+The procedure produces these files.
 
 | File | SHA-256 |
 |---|---|

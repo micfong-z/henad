@@ -1,7 +1,7 @@
-//! Fowler-Noll-Vo (FNV-1a) 64-bit hashes naming a model's declarations, a plan and a run.
+//! Fowler-Noll-Vo (FNV-1a) 64-bit hashes that identify a model's declarations, a plan and a run.
 //!
 //! Unlike [`std::hash::DefaultHasher`], these hashes never change between Rust releases or platforms. A hash in an
-//! output file can be compared with one a later build computes.
+//! output file can be compared with the hash that a later build computes.
 
 use crate::explore::factor::{FactorSpec, FactorTarget, LevelSpec};
 use crate::explore::plan::{Config, ModelSchema, PlannedBlock};
@@ -22,10 +22,12 @@ pub struct Fnv1a64 {
 }
 
 impl Fnv1a64 {
+    /// Returns a hasher with nothing written to it.
     pub const fn new() -> Self {
         Self { state: OFFSET_BASIS }
     }
 
+    /// Writes `bytes` as they are, with no length before them.
     pub const fn write(&mut self, bytes: &[u8]) {
         let mut index = 0;
         while index < bytes.len() {
@@ -35,10 +37,12 @@ impl Fnv1a64 {
         }
     }
 
+    /// Writes `value` as eight little-endian bytes.
     pub const fn write_u64(&mut self, value: u64) {
         self.write(&value.to_le_bytes());
     }
 
+    /// Writes the byte length of `text` as a `u64`, then its bytes.
     pub const fn write_str(&mut self, text: &str) {
         self.write_u64(text.len() as u64);
         self.write(text.as_bytes());
@@ -60,6 +64,7 @@ impl Fnv1a64 {
         self.write_u64(bits);
     }
 
+    /// Returns the hash of everything written so far.
     pub const fn finish(&self) -> u64 {
         self.state
     }
@@ -131,7 +136,7 @@ pub fn schema_hash(schema: &ModelSchema<'_>) -> u64 {
 /// action ticks.
 ///
 /// The hash covers the model's [`schema_hash`], the warm-up and step counts, the stop condition, the sampling cadence,
-/// the reducers and the ids of the actions. The timeout is left out, since a run that ends within it gives the same
+/// the reducers and the ids of the actions. The timeout is left out, since a run that ends within it produces the same
 /// results under any timeout.
 pub fn results_fingerprint(
     schema_hash: u64,
@@ -169,8 +174,8 @@ pub fn results_fingerprint(
     hasher.finish()
 }
 
-/// Returns the key naming the results of the run with parameter values `params`, action ticks `action_ticks` and
-/// seed `seed`.
+/// Returns the key that identifies the results of the run with parameter values `params`, action ticks
+/// `action_ticks` and seed `seed`.
 pub fn run_key(results_fingerprint: u64, params: &[ParamValue], action_ticks: &[u64], seed: u64) -> u64 {
     let mut hasher = Fnv1a64::new();
     hasher.write_str("henad.run.2");
@@ -327,7 +332,7 @@ fn write_factor(hasher: &mut Fnv1a64, factor: &FactorSpec) {
 
 /// Writes the column, bounds and cells of `axis`.
 ///
-/// A bound left out is written as `NaN`, which no bound the check takes can be.
+/// A bound left out is written as `NaN`. No bound the check accepts can be `NaN`.
 fn write_axis(hasher: &mut Fnv1a64, axis: &PatternAxis) {
     hasher.write_str(&axis.column);
     hasher.write_f64(axis.min.unwrap_or(f64::NAN));

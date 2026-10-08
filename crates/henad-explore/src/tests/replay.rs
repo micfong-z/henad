@@ -34,7 +34,7 @@ fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Takes snapshots from `take` until one reports `tick`, or gives up after ten seconds.
+/// Takes snapshots from `take` until a snapshot reports `tick`, or gives up after ten seconds.
 fn snapshot_at(mut take: impl FnMut() -> Option<Snapshot>, tick: u64) -> Option<Snapshot> {
     for _ in 0..1000 {
         if let Some(snap) = take()
@@ -120,7 +120,7 @@ fn a_replay_of_a_planned_run_matches_its_sweep_row() {
         };
         let mut thread = SimThread::new(state, 60.0, None, FaultSink::new());
         thread.set_schedule(replay.schedule.clone());
-        // The live loop runs to each sampled tick in turn, and its snapshots go through the sweep's own sampler.
+        // The live loop runs to each sampled tick in turn, and its snapshots use the sweep's own sampler.
         let mut sampler = Sampler::new(Arc::clone(&measure));
         let mut reached = None;
         for tick in measure.sample_ticks() {
@@ -197,7 +197,7 @@ fn a_gpu_schedule_matches_export_stats() {
     assert_eq!(ticks, [0, total]);
     let expected = samples.pop().map(|(_, entries)| entries).expect("a final sample");
 
-    // In batches of 16, submissions end at ticks 6, 16, 21, 32 and 40, and each action goes in a submission of its own.
+    // In batches of 16, submissions end at ticks 6, 16, 21, 32 and 40, and each action goes in its own submission.
     let settings = GpuBatchSettings {
         adaptive: false,
         batch_size: 16,
@@ -331,8 +331,8 @@ fn a_replayed_gpu_run_from_a_result_set_matches_its_row() {
     }
 }
 
-/// Checks that a [`Simulation`] stepped from a planned run's replay samples the series the run cursor wrote, actions
-/// at tick 0, mid-run and on the last tick included.
+/// Checks that a [`Simulation`] stepped from a planned run's replay samples the series that the run cursor wrote,
+/// including actions at tick 0, mid-run and on the last tick.
 ///
 /// The simulation samples every fifth tick through `run_sampled`, and the sweep's own sampler keeps the ticks the
 /// sweep samples, from the warm-up on.

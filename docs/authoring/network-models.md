@@ -12,7 +12,7 @@ _See [Writing a CPU network model](../guide/first-model/virus-network.md) for a 
 Pick it when your individuals interact along edges that last from one tick to the next.
 You declare the node lanes with `agent_lanes!`, then implement `init`, the passes your model needs and `stats`.
 
-An agent model that reads its neighbours finds them by distance, through a spatial hash rebuilt from the positions every tick.
+An agent model that reads its neighbours finds them by distance, with a spatial hash rebuilt from the positions every tick.
 A network model reads them from its graph, and the graph changes only when the model changes it.
 Nodes still have positions, but those belong to a layout the engine runs for drawing.
 Nothing a tick decides should depend on them, apart from where a new node is placed.
@@ -81,9 +81,9 @@ Node lanes are declared exactly as [agent lanes](agent-models.md#lanes) are, wit
 Each lane holds one entry per slot, retired slots included.
 Lanes named `pos_x` and `pos_y` are required.
 The point view draws them and the layout moves them.
-The `color = <lane>` entry names the lane the renderer reads for indices into `PALETTE`.
+The `color = <lane>` entry specifies the lane that the renderer reads for indices into `PALETTE`.
 
-Virus on a Network declares `state` as `dual`, because each node reads its neighbours' state while it writes its own.
+Virus on a Network declares `state` as `dual`, because each node reads its neighbours' state while it writes its own state.
 Team Assembly declares every lane `plain`.
 Its node pass is empty and its global pass runs on one thread.
 No lane needs a second buffer.
@@ -100,14 +100,14 @@ It keeps an edge list for drawing, and a row of neighbours per node for the kern
 ### Slots
 
 Every node lives in a slot, and its index is the slot's index for as long as it lives.
-`slot_count` counts every slot, `node_count` counts the live nodes, and `contains_node(i)` returns whether slot `i` holds one.
+`slot_count` counts every slot, `node_count` counts the live nodes, and `contains_node(i)` returns whether slot `i` holds a live node.
 
-Spawn and retire nodes through `Nodes::spawn` and `Nodes::retire`.
+Spawn and retire nodes with `Nodes::spawn` and `Nodes::retire`.
 `Nodes::spawn` grows every lane to fit, and `Nodes::retire` also sets the node's position to `NaN`.
 The graph has its own `spawn` and `retire`, but those leave the lanes untouched.
 
 `retire` removes every edge touching the node and frees its slot.
-`spawn` takes the most recently freed slot first, and appends a new one only when no slot is free.
+`spawn` reuses the most recently freed slot first, and appends a new slot only when no slot is free.
 Slots are never compacted, and [retired nodes](#retired-nodes) covers what that means for the lanes.
 
 ### Edges
@@ -121,7 +121,7 @@ Virus on a Network's random graph generator and its rewire check both directions
 `remove_edge(e)` swaps the last edge into index `e`.
 Note that an edge index holds only until the next removal, and retiring a node removes edges too.
 
-`edge_between(a, b)` returns the index of an edge from `a` to `b` if there is one, and `has_edge(a, b)` returns whether there is.
+`edge_between(a, b)` returns the index of an edge from `a` to `b` if there is one, and `has_edge(a, b)` returns whether such an edge exists.
 On an undirected graph an edge either way counts, and the shorter of the two rows is searched.
 On a directed graph the search covers the out-row of `a`.
 Team Assembly calls `edge_between` for each pair in a new team, and recolours the edge a pair already has instead of adding a second one.
@@ -244,7 +244,7 @@ Chunks cover slots, and retired slots count towards them.
 A slot's lane entries outlive its node.
 The Population row of the Performance tab counts the live nodes, while the lanes and the node pass still cover every slot.
 A spawn that reuses a slot keeps whatever the retired node left in its lanes, `NaN` position included.
-A slot appended at the end starts at each lane's initial value instead, the declared one for a `plain` lane and the type's default for a `dual` one.
+A slot appended at the end starts at each lane's initial value instead, the declared initial value for a `plain` lane and the type's default for a `dual` lane.
 The model has to write every lane the new node reads.
 Team Assembly sets `spawn_tick` and `team_tick` on each newcomer, and places it near the first incumbent in its team.
 
@@ -268,7 +268,7 @@ The hook runs as often as snapshots go out, and a tick must never read anything 
 fn stats(lanes: &Self::Lanes, graph: &Network, aux: &Self::Aux) -> Vec<StatValue>;
 ```
 
-`stats` borrows the `Aux` immutably, and a stat that needs a walk of the graph is computed in `prepare_view` and kept in the `Aux` for `stats` to read.
+`stats` borrows the `Aux` immutably, and a stat that needs a graph walk is computed in `prepare_view` and kept in the `Aux` for `stats` to read.
 [Statistics](statistics.md#network-models) works through Team Assembly's connected components, and covers what `stats` returns before the first labelling.
 
 `aux_heap_bytes` reports the heap memory the `Aux` holds, and defaults to 0.
@@ -277,12 +277,12 @@ The engine adds it to the state's heap count, and the Performance tab shows that
 ## Layout
 
 Node positions belong to the engine once the state is built.
-A model places nodes in `init` and when it spawns one, and a spring layout moves them from then on.
+A model places nodes in `init` and when it spawns a node, and a spring layout moves them from then on.
 
 The engine's layout is NetLogo's `layout-spring` with three changes.
 The pull along an edge levels off as the edge stretches.
 It is `spring * S * tanh((d - rest) / S)` with `S` the saturation length, divided by the mean degree of the two ends as in NetLogo.
-Repulsion stops at the cutoff radius, and the nodes within it are found through a spatial hash.
+Repulsion stops at the cutoff radius, and the nodes within it are found with a spatial hash.
 Each node slows down while its force keeps swinging, as in ForceAtlas2.
 The layout keeps every node inside the world and does not wrap at its edges.
 
@@ -296,7 +296,7 @@ Team Assembly sets `length` to 0, `spring` to 0.18 and `saturation` to 5.
 
 The layout runs when a snapshot is published.
 `step` never calls it.
-Each publish runs iterations until the Layout budget is spent, and always at least one.
+Each publish runs iterations until the Layout budget is spent, and always runs at least one iteration.
 It moves nodes on a publish that follows a tick, and on every publish while paused when Layout while paused is on.
 The Pacing tab holds the Layout and Layout while paused checkboxes and the Layout budget slider.
 The app starts with the layout on and a budget of 4 ms.
@@ -316,25 +316,26 @@ Team Assembly reads a position in its global pass to place newcomers near their 
 fn act(action: usize, nodes: &mut Nodes<'_, Self>, extent: Extent, params: &[ParamValue], rng: &mut u64);
 ```
 
-A project names the macros `henad::actions!` and `henad::params!`, where the example models, below the facade, name them through `henad_core`.
+A project uses the macros as `henad::actions!` and `henad::params!`.
+The example models sit below the facade and use `henad_core::actions!` and `henad_core::params!`.
 `act` runs one entry of `ACTIONS` between two ticks.
 It receives the same `Nodes` as the global pass, and can change the graph.
-`params` is the model's own slice of raw values, as `init` receives it, and `rng` is a stream of its own.
-Virus on a Network's Rewire a link action moves one edge through the same `wiring::rewire` that Keep Rewiring calls every tick.
+`params` is the model's own slice of raw values, as `init` receives it, and `rng` is its own stream.
+Virus on a Network's Rewire a link action moves one edge with the same `wiring::rewire` that Keep Rewiring calls every tick.
 [Actions](parameters.md#actions) covers the declaration, the buttons and `--act`.
 
 ## Prepended parameters
 
 The engine prepends the node count, the world width and the world height at indices 0, 1 and 2, from `DEFAULT_NODES`, `MAX_NODES` and `DEFAULT_EXTENT`.
 All three are reload-only.
-The model's own parameters follow, and `init`, `from_params` and `act` each receive that own slice.
+The model's own parameters follow, and `init`, `from_params` and `act` each receive that slice.
 
 The node count keeps the id `num_agents`, and the app labels it Number of Nodes.
 The benchmark scripts look the count up by that id, and `scripts/bench_matrix.py` sweeps a network model over node counts as it sweeps an agent model over agent counts.
 Team Assembly reads the count as its initial population only, and its population afterwards depends on its own parameters.
-`bench_matrix.py` leaves Team Assembly out unless `--models` names it.
+`bench_matrix.py` leaves Team Assembly out unless `--models` lists it.
 
-Team Assembly's own parameters follow the three.
+Team Assembly's own parameters follow the three prepended parameters.
 `max_downtime` sets how many ticks a node can stay idle before it retires.
 
 ```rust
@@ -345,10 +346,10 @@ Team Assembly's own parameters follow the three.
 
 Both models carry `results_do_not_depend_on_the_thread_count` and `results_do_not_depend_on_the_publish_cadence`.
 The first runs at 1 and at 7 threads and compares the two runs bit for bit.
-The second runs the model twice, calling `prepare_view` after every tick in one run and never in the other, and asserts that both end in the same state.
+The second runs the model twice, calling `prepare_view` after every tick in one run and never in the other, and asserts that both runs end in the same state.
 [Determinism and testing](determinism.md#network-models) covers both tests and the RNG streams they rely on.
 
-`NetworkModelState::from_graph` builds a state, runs `init`, and then hands a closure the `Nodes` to set up a particular graph.
+`NetworkModelState::from_graph` builds a state, runs `init`, and then passes the `Nodes` to a closure that sets up a particular graph.
 Virus on a Network's recolour test uses it to make every third node resistant.
 Note that anything `init` records in the `Aux` about the graph can be out of date once the closure has run.
 Team Assembly lists its live nodes on the first tick, after any closure has run, instead of in `init`.
@@ -357,18 +358,18 @@ Team Assembly lists its live nodes on the first tick, after any closure has run,
 
 With the trait implemented, the engine handles all of the following:
 
-- Allocates every lane, grows the lanes as nodes spawn, and swaps the `dual` ones after the node pass.
+- Allocates every lane, grows the lanes as nodes spawn, and swaps the `dual` lanes after the node pass.
 - Builds the graph with every node and no edges, and repacks its rows after `init` and whenever a tick leaves too much stale space.
 - Reads `directed` every tick, and rebuilds the rows when it changes.
 - Seeds the node pass, the global pass, the actions and the layout from separate streams.
 - Splits the node pass into `CHUNK`-sized chunks across rayon, and seeds a generator per chunk per tick.
 - Runs the spring layout on publish, within the budget the Pacing tab sets.
-- Stores the parameters, and rejects any edit to a reload-only one.
+- Stores the parameters, and rejects any edit to a reload-only parameter.
 - Builds the point view, the edge view, the history chart and the snapshots.
 
 ## Next
 
 - [Writing a network model](../guide/first-model/virus-network.md) builds Virus on a Network.
 - [Palettes and views](views.md) covers the edge layer, edge colours and retired nodes.
-- [Determinism and testing](determinism.md#network-models) describes the two tests both shipped network models carry, and when yours needs them.
+- [Determinism and testing](determinism.md#network-models) describes the two tests both shipped network models carry, and when your model needs them.
 - [Agent models](agent-models.md) covers the lanes and `run_pass` in more depth.

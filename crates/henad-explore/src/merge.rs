@@ -1,6 +1,6 @@
 //! Merges of shard directories into one directory, holding the files one sweep of the whole plan would have written.
 //!
-//! The inputs are shards of one plan run with one replicate count, each with a shard index of its own. `runs.csv`
+//! The inputs are shards of one plan run with one replicate count, each with its own shard index. `runs.csv`
 //! and `series.csv` are merged by run id and written together, as a resume replaces them. `summary.csv` is rebuilt,
 //! and the manifest lists the merged directories.
 
@@ -20,7 +20,7 @@ use crate::output::{MANIFEST_FILE, OutputDir, OutputError, RUNS_FILE, SERIES_FIL
 use crate::progress::{Progress, ProgressEvent};
 use crate::sweep::SweepWarning;
 
-/// Most missing run ids a [`SweepWarning::MissingRuns`] lists.
+/// Maximum number of missing run ids a [`SweepWarning::MissingRuns`] lists.
 pub const MAX_LISTED_RUNS: usize = 5;
 
 /// Result of a merge.
@@ -28,8 +28,9 @@ pub const MAX_LISTED_RUNS: usize = 5;
 pub struct MergeReport {
     /// Rows of the merged `runs.csv`, by status.
     pub counts: ResultCounts,
-    /// Runs of the plan that no input holds.
+    /// Number of runs in the plan that no input holds.
     pub missing: u64,
+    /// Directory that the merged results were written to.
     pub output_dir: PathBuf,
 }
 
@@ -46,16 +47,16 @@ struct ShardInput {
 
 /// Merges the shard directories `shard_dirs` into `output_dir`. The output directory must hold no results.
 ///
-/// Rows of a run whose `runs.csv` row is missing, and a partial last record, are left out. A plan run that no input
+/// Series rows of a run with no `runs.csv` row, and a partial last record, are left out. A plan run that no input
 /// holds is reported as a [`ProgressEvent::Warned`] and marks the merged manifest `incomplete`. A resume of the merged
-/// directory runs it. Shards whose sessions ran different engine or model builds are reported as a
-/// [`SweepWarning::BuildChanged`] for each build of another shard that matches none of the builds of the lowest shard
-/// that records any. A merge that fails once its manifest is written marks the manifest `failed` when it can.
+/// directory runs it. Shards whose sessions ran different engine or model builds produce a
+/// [`SweepWarning::BuildChanged`] for each build in another shard that matches no build in the lowest shard
+/// that records builds. A merge that fails once its manifest is written marks the manifest `failed` when it can.
 ///
 /// # Errors
 ///
 /// Returns [`MergeError`] when there are no inputs, an input cannot be read, the inputs hold different plans,
-/// replicate counts, shard counts or columns, two inputs hold one shard, a run's id does not match its config and
+/// replicate counts, shard counts or columns, two inputs hold the same shard, a run's id does not match its config and
 /// replicate, or the merged directory cannot be written.
 pub fn merge(
     shard_dirs: &[PathBuf],
@@ -154,7 +155,7 @@ fn write_tables(
     dir.write_summary()
 }
 
-/// Returns the header lines of `runs.csv` and `series.csv` every input that has them shares.
+/// Returns the header lines of `runs.csv` and `series.csv` that every input with those tables shares.
 fn common_headers(shards: &[ShardInput]) -> Result<(String, String), MergeError> {
     let runs_header = shards
         .iter()
@@ -191,7 +192,7 @@ fn common_headers(shards: &[ShardInput]) -> Result<(String, String), MergeError>
 
 /// Returns the records of every input by run id, and their counts by status.
 ///
-/// A record whose run id is not `config_id * replicates + rep` is refused.
+/// A record whose run id is not `config_id * replicates + rep` is rejected.
 fn merged_records(
     shards: &[ShardInput],
     plan_runs: u64,
@@ -291,11 +292,12 @@ fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
     Ok(())
 }
 
-/// Returns a [`SweepWarning::BuildChanged`] for each engine or model build of a shard that is the same as none of the
-/// builds of the reference shard, the lowest shard that records any for the role.
+/// Returns a [`SweepWarning::BuildChanged`] for each engine or model build of another shard that matches no build of
+/// the reference shard, the lowest shard that records a build for the role.
 ///
-/// The warning names the reference shard's build that [reads as](RecordedBuild::reads_as) the other, or else its
-/// first build. Builds of the other shards that read as one are warned about once.
+/// The warning sets `recorded` to the reference shard's build that is [treated as](RecordedBuild::reads_as) the other
+/// shard's build, or else to the reference shard's first build. Builds of other shards that are treated as the same
+/// build produce one warning.
 fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
     let mut warnings = Vec::new();
     for role in [BuildRole::Engine, BuildRole::Model] {
@@ -331,10 +333,10 @@ fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
 /// Returns the manifest of the merged directory while it is written, based on the manifest of the lowest shard.
 ///
 /// The merge holds the whole plan, lists every session of every shard with the builds it ran, and keeps the
-/// execution and runtime of the lowest shard. A shard's session that records no engine build takes the one its
-/// shard's manifest reads for it. The last session of a shard left `running` or `failed` is credited with the rows
-/// the shard holds beyond those it found, as a resume credits it. The engine block is the build that merges, and the
-/// model replays exactly only when every shard's does.
+/// execution and runtime of the lowest shard. A shard's session that records no engine build receives the build
+/// that its shard's manifest implies. The last session of a shard left `running` or `failed` is credited with the rows
+/// the shard holds beyond those it found, as a resume credits it. The engine block records the build that performs
+/// the merge, and `replays_exactly` is true only when it is true in every shard.
 fn merged_manifest(shards: &[ShardInput], shard_dirs: &[PathBuf]) -> Manifest {
     let mut manifest = shards[0].manifest.clone();
     manifest.status = ManifestStatus::Running;
@@ -371,42 +373,80 @@ fn merged_manifest(shards: &[ShardInput], shard_dirs: &[PathBuf]) -> Manifest {
 pub enum MergeError {
     /// A merge with no input directories.
     NoInputs,
-    /// A manifest that cannot be read, for the reason inside.
+    /// A manifest that cannot be read.
     Manifest(ManifestError),
-    /// A table that cannot be read back, for the reason inside.
+    /// A table that cannot be read back.
     Table(ReadError),
     /// A manifest in `dir` whose shard no plan can have.
-    BadShard { dir: PathBuf },
+    BadShard {
+        /// Path of the input directory.
+        dir: PathBuf,
+    },
     /// Inputs with no `runs.csv` or `series.csv` header between them.
     NoTables,
-    /// Input `dir` holds another plan, model schema or replicate count than input `first`.
-    PlanDiffers { dir: PathBuf, first: PathBuf },
-    /// Input `dir` splits the plan into another number of shards than input `first`.
-    ShardCountDiffers { dir: PathBuf, first: PathBuf },
+    /// Input `dir` holds a different plan, model schema or replicate count than input `first`.
+    PlanDiffers {
+        /// Path of the input directory that differs.
+        dir: PathBuf,
+        /// Path of the input directory with the lowest shard index.
+        first: PathBuf,
+    },
+    /// Input `dir` splits the plan into a different number of shards than input `first`.
+    ShardCountDiffers {
+        /// Path of the input directory that differs.
+        dir: PathBuf,
+        /// Path of the input directory with the lowest shard index.
+        first: PathBuf,
+    },
     /// Inputs `first` and `second` both hold `shard`.
     SameShard {
+        /// Shard both inputs record.
         shard: Shard,
+        /// Path of the input directory given earlier.
         first: PathBuf,
+        /// Path of the input directory given later.
         second: PathBuf,
     },
-    /// `file` of input `dir` has other columns than the other inputs.
-    ColumnsDiffer { dir: PathBuf, file: &'static str },
-    /// Run `run_id` of input `dir`, written as replicate `rep` of config `config_id` under another id than the
-    /// manifest's replicate count gives it.
-    RunIdDiffers {
+    /// `file` of input `dir` has different columns from the other inputs.
+    ColumnsDiffer {
+        /// Path of the input directory that differs.
         dir: PathBuf,
+        /// File name of the table, `runs.csv` or `series.csv`.
+        file: &'static str,
+    },
+    /// Run `run_id` of input `dir`, written as replicate `rep` of config `config_id` under a different id than the
+    /// one that the manifest's replicate count implies.
+    RunIdDiffers {
+        /// Path of the input directory.
+        dir: PathBuf,
+        /// Run id as written in `runs.csv`.
         run_id: u64,
+        /// Config id as written in `runs.csv`.
         config_id: u64,
+        /// Replicate index as written in `runs.csv`, counting from 0.
         rep: u64,
     },
     /// Run `run_id` of input `dir`, outside its shard or past the plan's runs.
-    OutsideShard { dir: PathBuf, run_id: u64 },
+    OutsideShard {
+        /// Path of the input directory.
+        dir: PathBuf,
+        /// Run id as written in `runs.csv`.
+        run_id: u64,
+    },
     /// Run `run_id`, listed twice in `runs.csv` of input `dir`.
-    DuplicateRun { dir: PathBuf, run_id: u64 },
-    /// The merged directory cannot be written, for the reason inside.
+    DuplicateRun {
+        /// Path of the input directory.
+        dir: PathBuf,
+        /// Run id as written in `runs.csv`.
+        run_id: u64,
+    },
+    /// The merged directory cannot be written.
     Output(OutputError),
-    /// Input `dir` holds a search, which runs whole and has no shards.
-    NotASweep { dir: PathBuf },
+    /// Input `dir` holds a search. A search runs whole and has no shards.
+    NotASweep {
+        /// Path of the input directory.
+        dir: PathBuf,
+    },
 }
 
 impl fmt::Display for MergeError {

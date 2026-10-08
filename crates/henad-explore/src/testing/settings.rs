@@ -8,14 +8,14 @@ use henad_core::params::{ParamKind, ParamValue};
 use super::determinism::COARSE_CADENCE;
 use super::{ModelCheck, declared_defaults, error_text};
 
-/// Ticks a run of a determinism check steps by default. Off the seven-tick cadence, so the last sample is one of its
-/// own.
+/// Number of ticks that a run of a determinism check steps by default. The count is not a multiple of the seven-tick
+/// cadence, so the last tick is sampled in addition.
 const DEFAULT_TICKS: u64 = 20;
 
-/// Fewest ticks [`CheckSettings::ticks`] accepts, one past the coarser sampling cadence.
+/// Minimum number of ticks that [`CheckSettings::ticks`] accepts, one past the coarser sampling cadence.
 pub const MIN_TICKS: u64 = COARSE_CADENCE + 1;
 
-/// Small value of each size parameter the engines prepend, taken by every check that builds the model.
+/// Small value of each size parameter that the engines prepend, used by every check that builds the model.
 const SMALL_SIZES: [(&str, u32); 5] = [
     ("grid_width", 128),
     ("grid_height", 128),
@@ -50,11 +50,11 @@ impl Default for CheckSettings {
 }
 
 impl CheckSettings {
-    /// Runs the GPU models' checks on `device`. Without one they are skipped.
+    /// Runs the GPU models' checks on `device`. Without a device, they are skipped.
     ///
-    /// Note that a check takes a fault it finds in the device's sink as its own, and clones of a context share the
-    /// sink. A test that shares `device` with another test can have its faults dropped, or reported by a check. Each
-    /// test takes a device of its own from `headless_test_device`.
+    /// Note that a check attributes every fault it finds in the device's sink to itself, and clones of a context share
+    /// the sink. A test that shares `device` with another test can have its faults dropped, or reported by a check.
+    /// Each test takes its own device from `headless_test_device`.
     pub fn gpu(mut self, device: GpuContext) -> Self {
         self.gpu = Some(device);
         self
@@ -92,9 +92,9 @@ impl CheckSettings {
 
     /// Sets parameter `param_id` of model `model_id` from `text`, as `--set` reads it.
     ///
-    /// The value holds in every check that builds the model, and no check changes it. A parameter the model does not
-    /// declare, or a value the parameter refuses, fails every such check, one that cannot run for want of a device
-    /// included.
+    /// The value holds in every check that builds the model, and no check changes it. A parameter that the model does
+    /// not declare, or a value that the parameter rejects, fails every such check, including a check that cannot run
+    /// for want of a device.
     pub fn set_text(mut self, model_id: &str, param_id: &str, text: &str) -> Self {
         self.texts
             .push((model_id.to_owned(), param_id.to_owned(), text.to_owned()));
@@ -119,7 +119,7 @@ impl CheckSettings {
         self.thread_counts
     }
 
-    /// Returns the reason of the exemption of `check` for model `model_id`, or `None` without one.
+    /// Returns the reason that model `model_id` is exempt from `check`, or `None` when the model is not exempt.
     pub(super) fn exemption(&self, model_id: &str, check: ModelCheck) -> Option<&str> {
         self.exemptions
             .iter()
@@ -127,7 +127,7 @@ impl CheckSettings {
             .map(|(_, _, reason)| reason.as_str())
     }
 
-    /// Returns every model id an override or an exemption names, each once.
+    /// Returns every model id that an override or an exemption specifies, each once.
     pub(super) fn named_models(&self) -> impl Iterator<Item = &str> {
         let mut ids: Vec<&str> = self
             .texts
@@ -147,12 +147,13 @@ impl CheckSettings {
             .any(|(model, param, _)| model == entry.id() && param == param_id)
     }
 
-    /// Returns the values a check that builds `entry` takes: the declared defaults, the sizes made small, then the
+    /// Returns the values that a check building `entry` uses: the declared defaults, the sizes made small, then the
     /// overrides.
     ///
     /// # Errors
     ///
-    /// Returns the failure message for an override naming no parameter of `entry`, or a value its parameter refuses.
+    /// Returns the failure message for an override that refers to no parameter of `entry`, or a value that its
+    /// parameter rejects.
     pub(super) fn check_values(&self, entry: &ModelEntry) -> Result<Vec<ParamValue>, String> {
         let mut values = declared_defaults(entry);
         for (param_id, small) in SMALL_SIZES {

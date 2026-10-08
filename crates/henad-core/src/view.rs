@@ -1,8 +1,14 @@
+//! Views a state passes to the renderer, and the stat values and history the UI charts.
+
 /// A 2D grid for rendering, each cell a `u8` index into the palette.
 pub struct GridView<'a> {
+    /// Width in cells.
     pub width: u32,
+    /// Height in cells.
     pub height: u32,
+    /// Palette index of each cell, row-major.
     pub cells: &'a [u8],
+    /// RGBA colours that the cells index.
     pub palette: &'static [[u8; 4]],
 }
 
@@ -22,12 +28,17 @@ impl std::fmt::Debug for GridView<'_> {
 /// Both layers are stretched to the same rect, so a composite model wants
 /// `world_w = width as f32`. Nothing checks this across the crate boundary.
 pub struct PointView<'a> {
+    /// Position of each agent along x.
     pub pos_x: &'a [f32],
+    /// Position of each agent along y.
     pub pos_y: &'a [f32],
+    /// Width of the world the positions lie in.
     pub world_w: f32,
+    /// Height of the world the positions lie in.
     pub world_h: f32,
     /// One palette index per agent. `None` colours the whole population `palette[0]`.
     pub color: Option<&'a [u8]>,
+    /// RGBA colours that the agents index.
     pub palette: &'static [[u8; 4]],
 }
 
@@ -46,14 +57,17 @@ impl std::fmt::Debug for PointView<'_> {
 
 /// Edges for rendering. Endpoints are indices into the point view's positions.
 pub struct EdgeView<'a> {
+    /// Source node of each edge.
     pub src: &'a [u32],
+    /// Destination node of each edge.
     pub dst: &'a [u32],
     /// One palette index per edge. `None` colours every edge `palette[0]`.
     pub color: Option<&'a [u8]>,
+    /// RGBA colours that the edges index.
     pub palette: &'static [[u8; 4]],
     /// Whether the edges are directed.
     pub directed: bool,
-    /// Used to detect when the edges, their colours or their direction have changed.
+    /// Version of the graph. It moves whenever the edges, their colours or their direction change.
     pub version: u64,
 }
 
@@ -70,15 +84,30 @@ impl std::fmt::Debug for EdgeView<'_> {
     }
 }
 
+/// Value of one stat series at one sample.
 #[derive(Debug, Clone)]
 pub enum StatValue {
+    /// A single number.
     Scalar(f64),
-    Vector2D { x: f64, y: f64 },
-    Histogram { edges: Vec<f64>, counts: Vec<u64> },
+    /// A 2D vector.
+    Vector2D {
+        /// Component along the x axis.
+        x: f64,
+        /// Component along the y axis.
+        y: f64,
+    },
+    /// A histogram.
+    Histogram {
+        /// Bucket boundaries, one more than there are buckets.
+        edges: Vec<f64>,
+        /// Number of values in each bucket. `counts[i]` counts the values in `[edges[i], edges[i + 1])`.
+        counts: Vec<u64>,
+    },
 }
 
 impl StatValue {
-    /// A single representative value, for charting.
+    /// Returns one representative number, for charting: the value itself, a vector's magnitude or a
+    /// histogram's total count.
     pub fn scalar(&self) -> f64 {
         match self {
             Self::Scalar(v) => *v,
@@ -88,20 +117,28 @@ impl StatValue {
     }
 }
 
+/// One sample of a stat series, with the series' label and colour.
 #[derive(Debug, Clone)]
 pub struct StatEntry {
+    /// Label of the series.
     pub label: &'static str,
+    /// Value of this sample.
     pub value: StatValue,
+    /// RGBA colour of the series.
     pub color: [u8; 4],
 }
 
+/// A stat series a model declares.
 #[derive(Debug, Clone)]
 pub struct StatDescriptor {
+    /// Label that identifies the series in the UI, in result columns and in a stop condition.
     pub label: &'static str,
+    /// RGBA colour of the series in the chart.
     pub color: [u8; 4],
 }
 
 impl StatDescriptor {
+    /// Creates a descriptor from a label and a colour.
     pub const fn new(label: &'static str, color: [u8; 4]) -> Self {
         Self { label, color }
     }
@@ -109,8 +146,8 @@ impl StatDescriptor {
 
 /// Pairs a model's declared series with the values it just produced.
 ///
-/// A model declares labels and colours once as a const and returns bare values, so the two cannot
-/// drift. A short `values` leaves the trailing series out rather than mislabelling anything.
+/// A model declares labels and colours once as a const and returns bare values, so the labels and the values
+/// cannot drift apart. A short `values` leaves the trailing series out rather than mislabelling anything.
 pub fn stat_entries(descriptors: &'static [StatDescriptor], values: Vec<StatValue>) -> Vec<StatEntry> {
     descriptors
         .iter()
@@ -125,9 +162,9 @@ pub fn stat_entries(descriptors: &'static [StatDescriptor], values: Vec<StatValu
 
 /// Ring-buffer history of stat values, polled every snapshot.
 ///
-/// The charts read one `f64` per series per frame, so that is what a sample costs. A series a
-/// scalar cannot round-trip keeps its full value alongside, which is what lets an export carry the
-/// same columns the headless runner writes.
+/// The charts read one `f64` per series per frame, so that is what a sample costs. A series that
+/// a scalar cannot round-trip keeps its full value alongside. An export then carries the same columns
+/// that the headless runner writes.
 pub struct StatsHistory {
     /// One column per stat series, each holding `capacity` entries.
     columns: Vec<Vec<f64>>,
@@ -136,9 +173,9 @@ pub struct StatsHistory {
     /// Ticks corresponding to each entry in the columns. Same length as each column.
     ticks: Vec<u64>,
     descriptors: Vec<StatDescriptor>,
-    /// Total number of entries written (may exceed capacity).
+    /// Total number of entries written, past the capacity once the history wraps.
     write_count: usize,
-    /// `None` retains every sample, so a whole run can be exported.
+    /// Maximum number of samples kept, `None` to keep every sample so a whole run can be exported.
     capacity: Option<usize>,
 }
 
@@ -156,6 +193,8 @@ impl std::fmt::Debug for StatsHistory {
 }
 
 impl StatsHistory {
+    /// Creates an empty history of `descriptors`, keeping at most `capacity` samples, or every sample
+    /// for `None`.
     pub fn new(descriptors: Vec<StatDescriptor>, capacity: Option<usize>) -> Self {
         let reserve = capacity.unwrap_or(0);
         let columns = vec![Vec::with_capacity(reserve); descriptors.len()];
@@ -171,14 +210,14 @@ impl StatsHistory {
         }
     }
 
-    /// Record one sample, replacing the newest entry if it has the same tick.
+    /// Records one sample, replacing the newest entry if it has the same tick.
     ///
     /// A publish repeats a tick when nothing stepped, as after an action or while a paused layout
     /// relaxes. The replacement keeps one entry per tick, holding the latest stats for it.
     ///
     /// The first sample fixes which series keep a full value, the same way it fixes a CSV column
     /// layout. A series that changes kind later is a model bug, and
-    /// [`crate::export::StatsWriter`] already reports it as one.
+    /// [`crate::export::StatsWriter`] already reports it as a bug.
     pub fn push_entries(&mut self, stats: &[StatEntry], tick: u64) {
         let newest = self.len().checked_sub(1).and_then(|j| self.buf_index(j));
         if let Some(idx) = newest
@@ -198,7 +237,7 @@ impl StatsHistory {
 
         match self.capacity {
             Some(capacity) if self.write_count >= capacity => {
-                // Full, so overwrite the oldest.
+                // The buffer is full, so the oldest entry is overwritten.
                 self.write_at(self.write_count % capacity, stats, tick);
             }
             _ => {
@@ -229,30 +268,32 @@ impl StatsHistory {
         self.ticks[idx] = tick;
     }
 
+    /// Series the history records.
     pub fn descriptors(&self) -> &[StatDescriptor] {
         &self.descriptors
     }
 
-    /// Number of entries actually stored (up to capacity).
+    /// Number of entries stored, at most the capacity.
     pub fn len(&self) -> usize {
         self.capacity.map_or(self.write_count, |cap| self.write_count.min(cap))
     }
 
+    /// Returns whether no sample has been recorded.
     pub fn is_empty(&self) -> bool {
         self.write_count == 0
     }
 
-    /// `None` while the history is retaining everything.
+    /// Maximum number of samples the history keeps, or `None` while it keeps every sample.
     pub fn capacity(&self) -> Option<usize> {
         self.capacity
     }
 
-    /// Total writes (including wrapped).
+    /// Total number of writes, including those that wrapped.
     pub fn write_count(&self) -> usize {
         self.write_count
     }
 
-    /// Buffer slot holding logical index `j`, where 0 is the oldest visible entry.
+    /// Returns the buffer slot holding logical index `j`, where 0 is the oldest visible entry.
     fn buf_index(&self, j: usize) -> Option<usize> {
         if j >= self.len() {
             return None;
@@ -263,7 +304,7 @@ impl StatsHistory {
         }
     }
 
-    /// Value and tick at logical index `j`, where 0 is the oldest visible entry.
+    /// Returns the value of series `col` and its tick at logical index `j`, where 0 is the oldest visible entry.
     pub fn get(&self, col: usize, j: usize) -> Option<(f64, u64)> {
         let idx = self.buf_index(j)?;
         let value = self.columns.get(col)?.get(idx).copied()?;
@@ -271,12 +312,12 @@ impl StatsHistory {
         Some((value, tick))
     }
 
-    /// Tick at logical index `j`, where 0 is the oldest visible entry.
+    /// Returns the tick at logical index `j`, where 0 is the oldest visible entry.
     pub fn tick(&self, j: usize) -> Option<u64> {
         self.ticks.get(self.buf_index(j)?).copied()
     }
 
-    /// The sample at logical index `j`, in the shape [`crate::export::StatsWriter`] takes.
+    /// Returns the sample at logical index `j`, in the shape that [`crate::export::StatsWriter`] accepts.
     pub fn entries(&self, j: usize) -> Option<Vec<StatEntry>> {
         let idx = self.buf_index(j)?;
         let entries = self
@@ -298,6 +339,7 @@ impl StatsHistory {
         Some(entries)
     }
 
+    /// Heap memory held by the history, in bytes.
     pub fn heap_bytes(&self) -> usize {
         let scalars = self.columns.iter().map(|c| c.capacity() * 8).sum::<usize>();
         let full = self
@@ -311,7 +353,7 @@ impl StatsHistory {
         scalars + full + self.ticks.capacity() * 8
     }
 
-    /// Keeps the most recent entries.
+    /// Changes the capacity to `new_capacity`, keeping the most recent entries that fit.
     pub fn resize(&mut self, new_capacity: Option<usize>) {
         let filled = self.len();
         let keep = new_capacity.map_or(filled, |cap| filled.min(cap));
@@ -342,7 +384,7 @@ impl StatsHistory {
     }
 }
 
-/// Heap a stat value owns beyond its own bytes. Only a histogram has any.
+/// Heap memory that a stat value owns beyond its own bytes. Only a histogram owns heap memory.
 fn stat_value_heap(value: &StatValue) -> usize {
     match value {
         StatValue::Scalar(_) | StatValue::Vector2D { .. } => 0,
@@ -393,7 +435,7 @@ mod tests {
     }
 
     /// An action publishes at the tick it was pressed on. Its stats replace that tick's entry
-    /// rather than adding a second one, whether or not a bounded history has wrapped.
+    /// rather than adding a second entry, whether or not a bounded history has wrapped.
     #[test]
     fn a_sample_at_the_newest_tick_replaces_it() {
         for (capacity, ticks) in [(None, 3u32), (Some(2), 2), (Some(2), 5)] {
@@ -425,8 +467,7 @@ mod tests {
         assert_eq!(h.get(0, 999), Some((999.0, 999)));
     }
 
-    /// The regression this exists for: a scalar cannot round-trip a vector, so an export drawn
-    /// from history would lose x and y.
+    /// A scalar cannot round-trip a vector, and an export drawn from history must still carry x and y.
     #[test]
     fn a_vector_series_keeps_its_components() {
         let mut h = history(Some(4), &["v"]);

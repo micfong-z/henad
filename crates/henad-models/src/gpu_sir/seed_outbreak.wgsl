@@ -1,4 +1,4 @@
-// Infects that fraction of the cells still susceptible, one invocation per cell.
+// Infects each susceptible cell with the probability `threshold` encodes, one invocation per cell.
 //
 // Draws from the action's own seed rather than the per-cell `rng` buffer, so a press leaves the
 // run's stream where it was.

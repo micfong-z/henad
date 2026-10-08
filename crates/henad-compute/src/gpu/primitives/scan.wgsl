@@ -27,7 +27,7 @@ fn main(
     let t = lid.x;
     let i = block * WORKGROUP + t;
 
-    // Reads as zero past the end rather than returning early, so every lane hits the barriers.
+    // A lane past the end uses zero rather than returning early, so every lane hits the barriers.
     var value: u32 = 0u;
     if (i < params.n) {
         value = input[i];

@@ -1,7 +1,7 @@
 //! Parameters section of the Sweep tab: a row per parameter, the editor of a row's values, and the menu of a checkbox
 //! or dropdown parameter's options.
 //!
-//! A row's text is the source of truth, in the form `henad-cli --vary` takes. The editor and the menu only write it.
+//! A row's text is the source of truth, in the form `henad-cli --vary` accepts. The editor and the menu only write it.
 
 use egui::containers::menu::{MenuButton, MenuConfig};
 use egui::{Button, Checkbox, DragValue, Id, Label, Layout, Popup, PopupCloseBehavior, RichText, TextEdit, vec2};
@@ -28,10 +28,10 @@ const EDITOR_WIDTH: f32 = 280.0;
 /// Width a row's text field leaves for the button that opens the values editor, in points.
 const EDITOR_BUTTON_WIDTH: f32 = 28.0;
 
-/// Most values a note lists before it skips to the last one.
+/// Maximum number of values that a note lists before it skips to the last one.
 const MAX_NOTE_VALUES: usize = 6;
 
-/// Values a note lists before the ellipsis, once it skips to the last one.
+/// Number of values that a note lists before the ellipsis, once it skips to the last one.
 const NOTE_HEAD_VALUES: usize = 3;
 
 /// Returns the tooltip of a row's values in a sweep, for an integer parameter or tick when `integer` is set, in a
@@ -79,7 +79,7 @@ impl LevelNoun {
 /// Returns the note of a row whose values are `preview`, as in "5 values: 0.1, 0.2, 0.3, 0.4, 0.5".
 ///
 /// Past `MAX_NOTE_VALUES` values the note lists the first few and the last. In a search, listed values are picked
-/// among and a range is searched whole. Elsewhere a design draws from a range.
+/// from and a range is searched whole. Elsewhere a design draws from a range.
 pub fn preview_note(preview: &LevelPreview, noun: LevelNoun, search: bool) -> String {
     match preview {
         LevelPreview::Listed { count, values, last } => {
@@ -107,7 +107,7 @@ pub fn preview_note(preview: &LevelPreview, noun: LevelNoun, search: bool) -> St
     }
 }
 
-/// Returns the hover text of a note that skips values: up to 50 of them, and how many more there are.
+/// Returns the hover text of a note that skips values: up to 50 of them, and a count of the remaining values.
 pub fn preview_tooltip(preview: &LevelPreview) -> Option<String> {
     let LevelPreview::Listed { count, values, .. } = preview else {
         return None;
@@ -227,7 +227,7 @@ struct RowContext<'a> {
     search: bool,
     /// Whether a range with no step is drawn from, as in a sampled design or a search.
     draws_ranges: bool,
-    /// Program whose `--vary` the values editor names, `None` for none.
+    /// Program whose `--vary` option the values editor refers to, `None` when the product has no command-line program.
     cli_command: Option<&'a str>,
 }
 
@@ -246,8 +246,8 @@ struct ParameterRow<'a> {
 
 /// Returns the id of the values text field of parameter `param_id` of model `model_id`.
 ///
-/// Note that egui keeps a text field's cursor and undo history under its id, and each model's draft keeps text of
-/// its own.
+/// Note that egui keeps a text field's cursor and undo history under its id, and each model's draft keeps its own
+/// text.
 fn values_field_id(model_id: &str, param_id: &str) -> Id {
     Id::new(("henad_sweep_values", model_id, param_id))
 }
@@ -482,9 +482,10 @@ pub struct RangeFields {
 }
 
 impl RangeFields {
-    /// Returns the range `text` writes for a parameter of `kind`, or the ends of what it lists.
+    /// Returns the range `text` writes for a parameter of `kind`, or the ends of the values it lists.
     ///
-    /// Text with no numbers gives the parameter's bounds. A range with no step gives a round quarter of it.
+    /// Text with no numbers yields the parameter's bounds. A range with no step gets a quarter of its width as the
+    /// step, rounded to 1, 2 or 5 times a power of ten.
     pub fn of(text: &str, kind: &ParamKind) -> Self {
         let (low, high) = kind_bounds(kind);
         let default_step = |min: f64, max: f64| {
@@ -528,7 +529,7 @@ impl RangeFields {
         }
     }
 
-    /// Returns the range as a parameter of `kind` writes it: `min:max:step`, or `min:max` for one drawn from.
+    /// Returns the range as a parameter of `kind` writes it: `min:max:step`, or `min:max` when `drawn` is set.
     pub fn text(self, kind: &ParamKind, drawn: bool) -> String {
         let (min, max) = (number_text(kind, self.min), number_text(kind, self.max));
         if drawn {
@@ -539,7 +540,7 @@ impl RangeFields {
     }
 }
 
-/// Returns the lowest and highest value of a parameter of `kind`, 0 and 1 for one that is not a number.
+/// Returns the lowest and highest value of a parameter of `kind`, 0 and 1 for a parameter that is not a number.
 fn kind_bounds(kind: &ParamKind) -> (f64, f64) {
     match *kind {
         ParamKind::F32 { min, max, .. } => (f64::from(min), f64::from(max)),
@@ -576,7 +577,7 @@ pub fn segment_text(segment: EditorSegment, text: &str, kind: &ParamKind) -> Str
     }
 }
 
-/// Returns the quick fill that steps across a parameter's whole range, or takes it whole where a range is drawn from.
+/// Returns the quick fill that steps across a parameter's whole range, or uses it whole where a range is drawn from.
 pub fn whole_range_fill(kind: &ParamKind, draws_ranges: bool) -> String {
     if draws_ranges {
         whole_range_text(kind)
@@ -595,7 +596,8 @@ pub fn both_ends_fill(kind: &ParamKind) -> String {
 /// repeats dropped.
 pub fn around_fill(kind: &ParamKind, value: &ParamValue) -> String {
     let center = match *value {
-        // The decimal the value is written as. Widened in binary, 0.3 times 1.5 lands a hair past 0.45.
+        // The centre is the decimal the value is written as. Widened in binary, 0.3 times 1.5 comes out a hair past
+        // 0.45.
         ParamValue::F32(number) => number.to_string().parse().unwrap_or(f64::from(number)),
         ParamValue::U32(number) => f64::from(number),
         ParamValue::Bool(_) | ParamValue::Choice(_) => return format_value(kind, value),
@@ -617,7 +619,7 @@ struct ValuesEditor<'a> {
     panel_value: Option<&'a ParamValue>,
     search: bool,
     draws_ranges: bool,
-    /// Program whose `--vary` the editor names, `None` for none.
+    /// Program whose `--vary` option the editor refers to, `None` when the product has no command-line program.
     cli_command: Option<&'a str>,
     /// Preview of the row's values, the same note the row shows.
     note: Note,
@@ -755,8 +757,8 @@ pub fn option_names(kind: &ParamKind) -> Vec<String> {
     }
 }
 
-/// Returns whether `text` picks each option of a parameter of `kind`. `all` picks every one, and a value that is not
-/// an option picks none.
+/// Returns whether `text` picks each option of a parameter of `kind`. `all` picks every option, and a value that is not
+/// an option picks no option.
 pub fn picked_options(kind: &ParamKind, text: &str) -> Vec<bool> {
     let names = option_names(kind);
     if text.trim() == "all" {
@@ -776,7 +778,7 @@ pub fn picked_options(kind: &ParamKind, text: &str) -> Vec<bool> {
     picked
 }
 
-/// Returns the text of the options `picked` of `names`: `all` for every one, or the names joined by commas.
+/// Returns the text of the options `picked` of `names`: `all` for every option, or the names joined by commas.
 pub fn options_text(names: &[String], picked: &[bool]) -> String {
     if !picked.is_empty() && picked.iter().all(|pick| *pick) {
         return "all".to_owned();
@@ -1015,7 +1017,7 @@ mod tests {
         assert_eq!(bounds_text(&WIDTH), "1 to 16384, integers");
     }
 
-    /// Returns whether `henad-cli --vary` takes `text` as the values of a parameter of `kind` in a factorial design.
+    /// Returns whether `henad-cli --vary` accepts `text` as the values of a parameter of `kind` in a factorial design.
     fn vary_takes(kind: &ParamKind, text: &str) -> bool {
         let descriptor = ParamDescriptor {
             id: "param",

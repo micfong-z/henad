@@ -1,8 +1,8 @@
-//! Holds the GPU pages' shader copies to the shipped shaders they repeat.
+//! Checks the GPU pages' shader copies against the shipped shaders they repeat.
 //!
 //! A shader carries no model id, so each copy equals its original byte for byte. The one exception is the import
-//! path of `gpu_ants/state.wgsl`, which follows the directory name, and the comparison spells it `gpu_foraging` on
-//! the shipped side before it compares.
+//! path of `gpu_ants/state.wgsl`, which follows the directory name. The test rewrites that path to
+//! `gpu_foraging::state` in the shipped shaders before it compares them.
 
 /// Each tutorial copy beside the shipped shader it repeats, named by its path under `src/`.
 const GPU_LIFE: [(&str, &str, &str); 3] = [

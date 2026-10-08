@@ -30,10 +30,10 @@ impl MeasurePlan {
     ///
     /// # Errors
     ///
-    /// Returns [`MeasureError`] when the total tick count overflows, the timeout does not read back from the seconds
-    /// a spec file records, `stats_every` is 0, `series_every` is not a multiple of `stats_every`, the stop condition
-    /// or a `first` reducer compares against a threshold that is not finite, or a `mean@` reducer's window ends
-    /// before it starts.
+    /// Returns [`MeasureError`] when the total tick count overflows, the timeout cannot be read back from the seconds
+    /// that a spec file records, `stats_every` is 0, `series_every` is not a multiple of `stats_every`, the stop
+    /// condition or a `first` reducer compares against a threshold that is not finite, or a `mean@` reducer's window
+    /// ends before it starts.
     pub fn check(run: &RunSettings, measure: &MeasureSettings) -> Result<(), MeasureError> {
         if run.warmup.checked_add(run.steps).is_none() {
             return Err(MeasureError::TooManyTicks {
@@ -77,11 +77,11 @@ impl MeasurePlan {
         Ok(())
     }
 
-    /// Returns the plan for runs of `run` sampled as `measure` asks, over the stat layout `columns`.
+    /// Returns the plan for runs of `run` sampled as `measure` specifies, over the stat layout `columns`.
     ///
     /// # Errors
     ///
-    /// Returns [`MeasureError`] when [`Self::check`] refuses the settings, or a reducer or the stop condition does
+    /// Returns [`MeasureError`] when [`Self::check`] rejects the settings, or a reducer or the stop condition does
     /// not bind to `columns`.
     pub fn new(run: &RunSettings, measure: &MeasureSettings, columns: StatColumns) -> Result<Self, MeasureError> {
         Self::check(run, measure)?;
@@ -104,15 +104,17 @@ impl MeasurePlan {
         })
     }
 
+    /// Number of ticks stepped before the first sample.
     pub fn warmup(&self) -> u64 {
         self.warmup
     }
 
-    /// Tick every run ends on, the warm-up included.
+    /// Tick a run ends on unless it stops sooner, the warm-up included.
     pub fn total(&self) -> u64 {
         self.total
     }
 
+    /// Ticks between two samples, counted from the end of the warm-up.
     pub fn stats_every(&self) -> u64 {
         self.stats_every
     }
@@ -122,14 +124,17 @@ impl MeasurePlan {
         self.series_every
     }
 
+    /// Stat layout every sample is read into.
     pub fn columns(&self) -> &StatColumns {
         &self.columns
     }
 
+    /// Reducers bound to [`Self::columns`].
     pub fn reducers(&self) -> &ReducerPlan {
         &self.reducers
     }
 
+    /// Stop condition bound to [`Self::columns`], if the run has one.
     pub fn stop(&self) -> Option<&StopCondition> {
         self.stop.as_ref()
     }
@@ -163,12 +168,12 @@ impl MeasurePlan {
         std::iter::successors(Some(self.first_sample()), |&tick| self.next_sample(tick))
     }
 
-    /// Number of samples a run that reaches the total takes.
+    /// Number of samples in a run that reaches the total.
     pub fn sample_count(&self) -> u64 {
         count_on_cadence(self.total - self.warmup, self.stats_every)
     }
 
-    /// Rows of the series a run that reaches the total keeps.
+    /// Number of series rows kept by a run that reaches the total.
     pub fn series_row_count(&self) -> u64 {
         if self.series_every == 0 {
             0
@@ -190,20 +195,33 @@ fn count_on_cadence(span: u64, every: u64) -> u64 {
     (span / every).saturating_add(1 + u64::from(!span.is_multiple_of(every)))
 }
 
-/// Settings that cannot measure a run.
+/// Run and sampling settings under which a run cannot be measured.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MeasureError {
     /// A warm-up and step count whose sum overflows a tick.
-    TooManyTicks { warmup: u64, steps: u64 },
-    /// A timeout too long to read back from the seconds a spec file records, as [`Duration::MAX`] is.
-    TimeoutTooLong { timeout: Duration },
+    TooManyTicks {
+        /// Number of ticks stepped before the first sample.
+        warmup: u64,
+        /// Number of ticks stepped after the warm-up.
+        steps: u64,
+    },
+    /// A timeout too long to read back from the seconds that a spec file records, as [`Duration::MAX`] is.
+    TimeoutTooLong {
+        /// Timeout as given.
+        timeout: Duration,
+    },
     /// A `stats_every` of 0.
     ZeroStatsEvery,
     /// A `series_every` that is not a multiple of `stats_every`.
-    SeriesOffCadence { series_every: u64, stats_every: u64 },
-    /// A reducer that is refused or does not bind, for the reason inside.
+    SeriesOffCadence {
+        /// Ticks between two rows of the series, as given.
+        series_every: u64,
+        /// Ticks between two samples, as given.
+        stats_every: u64,
+    },
+    /// A reducer that is rejected or does not bind.
     Reducer(ReducerError),
-    /// A stop condition that is refused or does not bind, for the reason inside.
+    /// A stop condition that is rejected or does not bind.
     Stop(StopError),
 }
 
@@ -265,7 +283,7 @@ impl SeriesBuffer {
         }
     }
 
-    /// Values in each row.
+    /// Number of values in each row.
     pub fn width(&self) -> usize {
         self.width
     }
@@ -275,6 +293,7 @@ impl SeriesBuffer {
         self.ticks.len()
     }
 
+    /// Returns whether the buffer holds no rows.
     pub fn is_empty(&self) -> bool {
         self.ticks.is_empty()
     }
@@ -296,6 +315,7 @@ impl SeriesBuffer {
         self.values.shrink_to_fit();
     }
 
+    /// Tick of each row.
     pub fn ticks(&self) -> &[u64] {
         &self.ticks
     }
@@ -320,6 +340,7 @@ impl SeriesBuffer {
 pub struct NonFiniteSample {
     /// Stat column name, before CSV escaping.
     pub column: String,
+    /// Tick of the sample.
     pub tick: u64,
 }
 
@@ -335,12 +356,13 @@ pub struct Measured {
     /// One value per reducer, `None` for a reducer that saw no finite value, a `first` reducer whose comparison never
     /// held, or a window mean with no sample in its window.
     pub reducers: Vec<Option<f64>>,
+    /// Series rows that the run kept.
     pub series: SeriesBuffer,
-    /// First value that was not finite, when any sample had one.
+    /// First value that was not finite, or `None` when every sampled value was finite.
     pub non_finite: Option<NonFiniteSample>,
 }
 
-/// Folds the samples of one run into reducer values and a series, and checks the stop condition at each.
+/// Folds the samples of one run into reducer values and a series, and checks the stop condition at each sample.
 ///
 /// The series keeps a sample on its `series_every` cadence, and [`Sampler::finish`] adds the last sample when the
 /// cadence missed it. A run that stops therefore ends its series on the sample where the condition held.
@@ -359,6 +381,7 @@ pub struct Sampler {
 }
 
 impl Sampler {
+    /// Returns a sampler for one run of `plan`.
     pub fn new(plan: Arc<MeasurePlan>) -> Self {
         Self {
             reducers: ReducerState::new(&plan.reducers),
@@ -371,13 +394,14 @@ impl Sampler {
         }
     }
 
+    /// Plan the sampler follows.
     pub fn plan(&self) -> &MeasurePlan {
         &self.plan
     }
 
-    /// Takes the sample `stats`, read at `tick`, and returns whether the stop condition holds there.
+    /// Records the sample `stats`, read at `tick`, and returns whether the stop condition holds there.
     ///
-    /// `tick` is one of the plan's sampled ticks, taken in increasing order. A run whose stop condition holds ends
+    /// `tick` is one of the plan's sampled ticks, passed in increasing order. A run whose stop condition holds ends
     /// on `tick`, and takes no later sample.
     ///
     /// # Errors
@@ -583,8 +607,8 @@ mod tests {
         assert!(MeasurePlan::check(&endless, &measure(1, 1)).is_err());
     }
 
-    /// The regression. A reversed window and a timeout past what seconds in an `f64` read back as both planned, and
-    /// the spec a manifest recorded for them did not read back.
+    /// A reversed window, or a timeout that cannot be read back from seconds in an `f64`, is rejected. The manifest's
+    /// copy of such a spec could not be read back.
     #[test]
     fn settings_a_spec_file_cannot_record_are_refused() {
         let reversed = MeasureSettings {
@@ -624,7 +648,7 @@ mod tests {
         assert_eq!(MeasurePlan::check(&long, &MeasureSettings::default()), Ok(()));
     }
 
-    /// The regression. The longest run a check accepts, sampled every tick, overflowed the count of its samples.
+    /// The sample count of the longest run a check accepts, sampled every tick, saturates without overflowing.
     #[test]
     fn the_longest_accepted_run_counts_its_samples_without_overflow() {
         let longest = plan(0, u64::MAX, 1, 1);
@@ -633,8 +657,7 @@ mod tests {
         assert_eq!(plan(0, u64::MAX, 2, 2).series_row_count(), u64::MAX / 2 + 2);
     }
 
-    /// The regression. A threshold built outside the parser could be infinite, and every run stopped at its first
-    /// sample.
+    /// A threshold built outside the parser can be infinite. Every run would then stop at its first sample.
     #[test]
     fn a_comparison_against_a_threshold_that_is_not_finite_is_refused() {
         let infinite = Comparison {

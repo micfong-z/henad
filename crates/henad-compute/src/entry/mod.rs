@@ -1,7 +1,7 @@
 //! Model entries, the type-erased form in which a host offers a model, and the sets that hold them.
 //!
 //! A [`ModelEntry`] holds a model's declarations and the factory that builds it on any device. The `register_*`
-//! functions make one from an authoring trait. They are generic, so the engine a model steps on is monomorphised in
+//! functions make one from an authoring trait. They are generic, so the engine that runs a model is monomorphised in
 //! the crate that calls them. A [`ModelSet`] holds the entries a host offers, each id once.
 #![cfg_attr(
     all(target_arch = "wasm32", target_feature = "atomics"),
@@ -53,7 +53,9 @@ use crate::simulation::RunSetup;
 /// [`SimThread`](crate::cpu::sim_thread::SimThread), and a GPU state encodes many steps into one submission on a
 /// [`GpuSimThread`](crate::gpu::GpuSimThread). A caller picks the runner from the arm without downcasting.
 pub enum ModelState {
+    /// A CPU state, for a [`SimThread`](crate::cpu::sim_thread::SimThread).
     Cpu(Box<dyn SimState>),
+    /// A GPU state, for a [`GpuSimThread`](crate::gpu::GpuSimThread).
     Gpu(Box<dyn GpuSimState>),
 }
 
@@ -70,7 +72,7 @@ impl fmt::Debug for ModelState {
 /// Closure behind a model's factory.
 ///
 /// A CPU model ignores the device. Public for [`ModelEntry::wrap_factory`] alone.
-/// The `Option<u64>` is the seed. `None` falls back to the model's default.
+/// The `Option<u64>` is the seed. `None` falls back to the model's default seed.
 #[doc(hidden)]
 pub trait Factory:
     Fn(&[ParamValue], Option<u64>, Option<&GpuContext>) -> Result<ModelState, Fault> + WasmNotSend + WasmNotSync
@@ -108,7 +110,8 @@ struct EntryParts {
     gpu_needs: Option<GpuNeeds>,
     source: ModelSource,
     factory: Arc<dyn Factory>,
-    /// `None` for a CPU model, which allocates on the host and has no device limit to miss.
+    /// Closure that computes the device demand, `None` for a CPU model. A CPU model allocates on the host and has no
+    /// device limit to miss.
     capacity: Option<Arc<dyn Capacity>>,
 }
 
@@ -132,22 +135,27 @@ impl fmt::Debug for ModelEntry {
 }
 
 impl ModelEntry {
+    /// Stable id that identifies the model in a model set, on the command line and in a spec file.
     pub fn id(&self) -> &str {
         &self.parts.id
     }
 
+    /// Name shown in the UI.
     pub fn name(&self) -> &str {
         &self.parts.name
     }
 
+    /// One-line description shown in the UI.
     pub fn description(&self) -> &str {
         &self.parts.description
     }
 
+    /// Every parameter, in the order a build reads its values.
     pub fn param_descriptors(&self) -> &[ParamDescriptor] {
         &self.parts.param_descriptors
     }
 
+    /// Stats the model reports, in the order its state returns them.
     pub fn stat_descriptors(&self) -> &[StatDescriptor] {
         &self.parts.stat_descriptors
     }
@@ -157,6 +165,7 @@ impl ModelEntry {
         &self.parts.action_descriptors
     }
 
+    /// Display layers the model presents.
     pub fn topology_hint(&self) -> TopologyHint {
         self.parts.topology_hint
     }
@@ -207,7 +216,7 @@ impl ModelEntry {
     ///
     /// # Errors
     ///
-    /// Returns a [`Fault`] when the build panics, the device refuses it, or a GPU model is handed no device.
+    /// Returns a [`Fault`] when the build panics, the device rejects it, or a GPU model receives no device.
     pub fn build(
         &self,
         params: &[ParamValue],
@@ -224,7 +233,7 @@ impl ModelEntry {
         self.parts.capacity.as_ref().map(|capacity| capacity(params, limits))
     }
 
-    /// Returns the reasons a device with `limits` cannot build the model at `params`, none when nothing stops it.
+    /// Returns the reasons a device with `limits` cannot build the model at `params`, empty when it can.
     pub fn shortfalls(&self, params: &[ParamValue], limits: &wgpu::Limits) -> Vec<String> {
         self.demand(params, limits)
             .map_or_else(Vec::new, |demand| demand.shortfalls(limits))
@@ -238,14 +247,14 @@ impl ModelEntry {
         Self { parts: Arc::new(parts) }
     }
 
-    /// Returns the entry with `source` in place of its own.
+    /// Returns the entry with its source replaced by `source`.
     fn with_source(mut self, source: ModelSource) -> Self {
         Arc::make_mut(&mut self.parts).source = source;
         self
     }
 }
 
-/// Returns the fault a GPU model raises when it is handed no device.
+/// Returns the fault a GPU model raises when it receives no device.
 fn no_device(id: &str) -> Fault {
     Fault::refused(
         BUILDING,
@@ -370,7 +379,7 @@ pub fn register_gpu_grid_model<M: GpuGridModel>() -> ModelEntry {
                 .collect(),
             stat_descriptors: M::STATS.to_vec(),
             action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
-            // The grid reaches the view as a texture in place of a cell buffer.
+            // The grid reaches the view as a texture instead of a cell buffer.
             topology_hint: TopologyHint::GRID,
             metadata: ModelMetadata {
                 backend: Backend::Gpu,

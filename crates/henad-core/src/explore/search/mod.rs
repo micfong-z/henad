@@ -2,7 +2,7 @@
 //!
 //! A search varies the factors of its space. A candidate is one point of that space, held as a [`Genome`] and decoded
 //! into a config. Evaluating a candidate runs its config for a fixed number of replicates and reports the watched
-//! output columns of each run. A searcher asks for candidates a batch at a time, and is told their evaluations
+//! output columns of each run. A searcher proposes candidates a batch at a time, and is told their evaluations
 //! before its next ask. A re-evaluation runs more replicates of a candidate already evaluated, and its values count
 //! toward that candidate. The budget counts evaluations, re-evaluations included.
 
@@ -34,20 +34,20 @@ use crate::explore::seed::search_seed;
 /// A search method, driven by asking it for candidates and telling it their evaluations.
 ///
 /// Every [`Searcher::ask`] is followed by one [`Searcher::tell`] with the evaluations of the candidates it returned.
-/// A searcher draws only from its seed, so one sequence of asks and tells always gives the same candidates.
+/// A searcher draws only from its seed, so one sequence of asks and tells always produces the same candidates.
 pub trait Searcher {
     /// Returns up to `max` candidates to evaluate next.
     ///
-    /// Note that an ask can return fewer, as at the end of a generation, of the initial samples or of the budget, and
-    /// returns none once the budget is spent.
+    /// Note that an ask can return fewer than `max` candidates, as at the end of a generation, of the initial samples
+    /// or of the budget, and returns no candidates once the budget is spent.
     fn ask(&mut self, max: usize) -> Vec<Candidate>;
 
-    /// Takes the evaluations of the candidates the last ask returned, sorted by candidate id.
+    /// Accepts the evaluations of the candidates that the last ask returned, sorted by candidate id.
     ///
-    /// An evaluation of a candidate the searcher is not waiting for is ignored.
+    /// An evaluation of a candidate that the searcher is not waiting for is ignored.
     fn tell(&mut self, evaluations: &[Evaluation]);
 
-    /// Returns whether the search has asked for its whole budget and been told every evaluation.
+    /// Returns whether the search has issued its whole budget and been told every evaluation.
     fn is_done(&self) -> bool;
 
     /// Returns every candidate scored so far, best first, with the finished generations and the archive.
@@ -78,13 +78,13 @@ pub trait Searcher {
         0
     }
 
-    /// Finished generations of a genetic algorithm, in order, none for any other search.
+    /// Finished generations of a genetic algorithm, in order, empty for any other search.
     fn generations(&self) -> &[GenerationSummary] {
         &[]
     }
 
-    /// Returns the settings a Pattern Space Exploration places outputs with, each axis with its range, or `None`
-    /// while an automatic range waits for the initial samples or for any other search.
+    /// Returns the settings that a Pattern Space Exploration uses to place outputs, each axis with its range, or
+    /// `None` while an automatic range waits for the initial samples or for any other search.
     fn pattern_settings(&self) -> Option<&PatternSpaceSettings> {
         None
     }
@@ -95,11 +95,13 @@ pub trait Searcher {
 pub struct Candidate {
     /// Position of the candidate among every candidate of the search, counting from 0.
     pub id: u64,
+    /// Point of the space the candidate decodes from.
     pub genome: Genome,
     /// Replicate index of the candidate's first run.
     ///
     /// A first evaluation starts at 0. A re-evaluation starts past every replicate its candidate has.
     pub replicate_offset: u64,
+    /// Source of the candidate's genome.
     pub origin: CandidateOrigin,
 }
 
@@ -111,19 +113,31 @@ pub enum CandidateOrigin {
     /// Drawn uniformly from the space when a hill climb starts over.
     Restart,
     /// A step away from hill climb incumbent `parent_id`.
-    Neighbor { parent_id: u64 },
+    Neighbor {
+        /// Id of the incumbent the step starts from.
+        parent_id: u64,
+    },
     /// Candidate `parent_id` with some genes changed.
-    Mutation { parent_id: u64 },
+    Mutation {
+        /// Id of the candidate the genes come from.
+        parent_id: u64,
+    },
     /// Genes taken from two parents, then mutated.
     Crossover {
+        /// Id of the parent that won the first tournament.
         first_parent_id: u64,
+        /// Id of the parent that won the second tournament.
         second_parent_id: u64,
     },
     /// More replicates of candidate `candidate_id`.
-    Reevaluation { candidate_id: u64 },
+    Reevaluation {
+        /// Id of the candidate evaluated again.
+        candidate_id: u64,
+    },
 }
 
 impl CandidateOrigin {
+    /// Returns the origin's name in `evaluations.csv`, as in `crossover`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Random => "random",
@@ -137,7 +151,7 @@ impl CandidateOrigin {
 
     /// Returns the ids of the parents the genome was bred from, the first parent first.
     ///
-    /// A re-evaluation has no parents. [`Self::reevaluated_id`] names the candidate it repeats.
+    /// A re-evaluation has no parents. [`Self::reevaluated_id`] returns the id of the candidate it repeats.
     pub fn parent_ids(self) -> [Option<u64>; 2] {
         match self {
             Self::Random | Self::Restart | Self::Reevaluation { .. } => [None, None],
@@ -161,11 +175,12 @@ impl CandidateOrigin {
 /// Values the runs of a candidate reported.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Evaluation {
+    /// Id of the candidate evaluated.
     pub candidate_id: u64,
     /// Values of the watched columns, one row per replicate in replicate order.
     ///
-    /// A row holds the columns [`SearchSpec::watched_columns`] names, in that order. `None` marks a failed run or a
-    /// value the run never reached.
+    /// A row holds the columns that [`SearchSpec::watched_columns`] lists, in that order. `None` marks a failed run or
+    /// a value the run never reached.
     pub outputs: Vec<Vec<Option<f64>>>,
 }
 
@@ -174,6 +189,7 @@ pub struct Evaluation {
 pub struct Objective {
     /// Output column, a reducer column such as `Infected:max`.
     pub column: String,
+    /// Direction the search prefers.
     pub goal: Goal,
     /// Rule that folds the replicates of a candidate into one value.
     pub aggregate: Aggregate,
@@ -187,7 +203,7 @@ impl Objective {
         self.score_values(evaluation.outputs.iter().map(|row| row.first().copied().flatten()))
     }
 
-    /// Returns the objective over replicate values `values`, [`Goal::worst`] standing in for a failed one.
+    /// Returns the objective over replicate values `values`, with [`Goal::worst`] as the value of a failed replicate.
     fn score_values(&self, values: impl Iterator<Item = Option<f64>>) -> f64 {
         let worst = self.goal.worst();
         let mut values: Vec<f64> = values
@@ -200,12 +216,15 @@ impl Objective {
 /// Direction of an objective.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Goal {
+    /// Lower values are better.
     #[default]
     Minimize,
+    /// Higher values are better.
     Maximize,
 }
 
 impl Goal {
+    /// Returns the goal's name, as in `minimize`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Minimize => "minimize",
@@ -257,6 +276,7 @@ impl FromStr for Goal {
 /// Rule that folds the replicate values of a candidate into one value.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Aggregate {
+    /// Mean of the values.
     Mean,
     /// Middle value, or the mean of the middle two for an even count.
     #[default]
@@ -264,6 +284,7 @@ pub enum Aggregate {
 }
 
 impl Aggregate {
+    /// Returns the aggregate's name, as in `median`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Mean => "mean",
@@ -271,7 +292,7 @@ impl Aggregate {
         }
     }
 
-    /// Returns the mean or median of `values`, or `None` when there are none.
+    /// Returns the mean or median of `values`, or `None` when `values` is empty.
     ///
     /// The median sorts `values` in place.
     pub fn combine(self, values: &mut [f64]) -> Option<f64> {
@@ -309,10 +330,12 @@ impl FromStr for Aggregate {
     }
 }
 
-/// Text that names no goal or aggregate. `expected` lists the names there are.
+/// Text that matches no goal or aggregate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchKeywordError {
+    /// Text as given.
     pub raw: String,
+    /// Names that the keyword accepts.
     pub expected: &'static [&'static str],
 }
 
@@ -329,7 +352,7 @@ impl fmt::Display for SearchKeywordError {
 
 impl std::error::Error for SearchKeywordError {}
 
-/// Standing of a search, for its output tables and views.
+/// State of a search, for its output tables and views.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SearchReport {
     /// Every candidate a random search, hill climb or genetic algorithm has scored, best first.
@@ -348,10 +371,12 @@ impl SearchReport {
         self.ranking.first()
     }
 
+    /// Returns candidate `candidate_id` from the ranking, or `None` for a candidate missing from the ranking.
     pub fn ranking_entry(&self, candidate_id: u64) -> Option<&RankingEntry> {
         self.ranking.iter().find(|entry| entry.candidate_id == candidate_id)
     }
 
+    /// Returns the archive entry of `cell`, or `None` for a cell missing from the archive.
     pub fn archive_entry(&self, cell: PatternCell) -> Option<&ArchiveEntry> {
         self.archive
             .binary_search_by(|entry| entry.cell.cmp(&cell))
@@ -363,14 +388,15 @@ impl SearchReport {
 /// A candidate of a ranking, with its objective over every replicate it has.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RankingEntry {
+    /// Id of the candidate.
     pub candidate_id: u64,
-    /// Objective over every replicate, [`Goal::worst`] standing in for a failed one.
+    /// Objective over every replicate, with [`Goal::worst`] as the value of a failed replicate.
     pub objective: f64,
-    /// Replicates behind the objective, re-evaluations included.
+    /// Number of replicates behind the objective, re-evaluations included.
     pub replicate_count: u64,
-    /// Replicates whose value was missing or not finite.
+    /// Number of replicates whose value was missing or not finite.
     pub failed_count: u64,
-    /// Evaluations of the candidate, the first one and each re-evaluation.
+    /// Number of evaluations of the candidate, the first one and each re-evaluation.
     pub evaluations: u64,
     /// Index of the ask that first returned the candidate, counting from 0.
     pub first_batch: u64,
@@ -381,20 +407,24 @@ pub struct RankingEntry {
 pub struct GenerationSummary {
     /// Index of the generation, counting from 0.
     pub generation: u64,
+    /// Best fitness among the members.
     pub best: f64,
+    /// Median fitness of the members.
     pub median: f64,
+    /// Worst fitness among the members.
     pub worst: f64,
 }
 
-/// A search as written, with its space still in the form a spec gives.
+/// A search as written, with its space still in the form that a spec uses.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchSpec {
+    /// Search method, with its settings.
     pub algorithm: SearchAlgorithm,
-    /// Evaluations the search can ask for, re-evaluations included.
+    /// Maximum number of evaluations, re-evaluations included.
     pub max_evaluations: u64,
-    /// Most candidates one ask returns.
+    /// Maximum number of candidates that one ask returns.
     pub batch_size: usize,
-    /// Output a random search, hill climb or genetic algorithm scores. A Pattern Space Exploration takes none.
+    /// Output a random search, hill climb or genetic algorithm scores. A Pattern Space Exploration has no objective.
     pub objective: Option<Objective>,
     /// Factors the search varies. A range with no step spans every value from its `min` to its `max`.
     pub space: Vec<FactorSpec>,
@@ -403,12 +433,13 @@ pub struct SearchSpec {
 impl SearchSpec {
     /// Checks the budget, the batch size, the objective and the settings of the algorithm.
     ///
-    /// A batch holds at most [`MAX_CONFIGS`] candidates, the configs a sweep's plan holds at most.
+    /// A batch holds at most [`MAX_CONFIGS`] candidates, the same limit as the configs of a sweep's plan.
     ///
     /// # Errors
     ///
-    /// Returns [`SearchSpecError`] for no evaluations, a batch size of 0 or past [`MAX_CONFIGS`], an objective
-    /// missing or given where none is taken, or a setting outside its range.
+    /// Returns [`SearchSpecError`] for no evaluations, a batch size of 0 or past [`MAX_CONFIGS`], a missing objective
+    /// for a random search, hill climb or genetic algorithm, an objective given to a Pattern Space Exploration, or a
+    /// setting outside its range.
     pub fn check(&self) -> Result<(), SearchSpecError> {
         if self.max_evaluations == 0 {
             return Err(SearchSpecError::NoEvaluations);
@@ -452,7 +483,7 @@ impl SearchSpec {
     ///
     /// # Errors
     ///
-    /// Returns [`SearchSpecError`] when [`Self::check`] refuses the spec.
+    /// Returns [`SearchSpecError`] when [`Self::check`] rejects the spec.
     pub fn searcher(&self, space: &SearchSpace, root: u64) -> Result<Box<dyn Searcher + Send>, SearchSpecError> {
         self.check()?;
         let space = space.clone();
@@ -478,17 +509,21 @@ impl SearchSpec {
     }
 }
 
-/// Search method, with the settings it alone takes.
+/// Search method, with the settings specific to that method.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchAlgorithm {
+    /// Random search, run by [`RandomSearch`].
     Random,
+    /// Hill climb with restarts, run by [`HillClimb`].
     HillClimb(HillClimbSettings),
+    /// Genetic algorithm, run by [`GeneticAlgorithm`].
     Genetic(GeneticSettings),
+    /// Pattern Space Exploration, run by [`PatternSpaceExploration`].
     PatternSpaceExploration(PatternSpaceSettings),
 }
 
 impl SearchAlgorithm {
-    /// Returns the name a spec file gives the algorithm.
+    /// Returns the algorithm name used in a spec file.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Random => "random",
@@ -507,15 +542,24 @@ pub enum SearchSpecError {
     /// A batch size of 0.
     NoBatch,
     /// A batch size past [`MAX_CONFIGS`].
-    BatchTooLarge { batch_size: usize },
+    BatchTooLarge {
+        /// Batch size as given.
+        batch_size: usize,
+    },
     /// A random search, hill climb or genetic algorithm with no objective.
-    MissingObjective { algorithm: &'static str },
-    /// An objective given to a Pattern Space Exploration. Pattern Space Exploration scores none.
+    MissingObjective {
+        /// Name of the algorithm in a spec file, as in `hill_climb`.
+        algorithm: &'static str,
+    },
+    /// An objective given to a Pattern Space Exploration. Pattern Space Exploration uses no objective.
     UnusedObjective,
-    /// Setting `key`, set to `value` where it takes `expected`.
+    /// Setting `key` set to `value`, where it accepts `expected`.
     Setting {
+        /// Key of the setting under `[search]` in a spec file, as in `genetic.population`.
         key: &'static str,
+        /// Value of the setting as text, or `none` for a bound left out.
         value: String,
+        /// Values that the setting accepts, in words.
         expected: String,
     },
 }
@@ -583,7 +627,7 @@ impl Proposal {
     }
 }
 
-/// Most genomes drawn for one proposal while each decodes to a config some candidate has.
+/// Maximum number of genomes drawn for one proposal while each decodes to a config that some candidate has.
 const MAX_CONFIG_DRAWS: usize = 16;
 
 /// Result of [`draw_config`].
@@ -591,17 +635,17 @@ const MAX_CONFIG_DRAWS: usize = 16;
 enum ConfigDraw {
     /// A genome whose config no candidate and no proposal has, with its key.
     New(Genome, ConfigKey),
-    /// Every draw gave a known config. The first gave the config of candidate `candidate_id`.
+    /// Every draw produced a known config. The first draw produced the config of candidate `candidate_id`.
     Known { candidate_id: u64 },
-    /// Every draw gave a known config. The first gave the config of a proposal not yet asked for.
+    /// Every draw produced a known config. The first draw produced the config of a proposal not yet requested.
     Proposed,
 }
 
-/// Draws genomes with `draw`, at most [`MAX_CONFIG_DRAWS`] times, until one decodes to a config that no candidate of
-/// `config_candidates` and no key of `proposed` has.
+/// Draws genomes with `draw`, at most [`MAX_CONFIG_DRAWS`] times, until a genome decodes to a config that no
+/// candidate of `config_candidates` and no key of `proposed` has.
 ///
 /// `config_candidates` holds the first candidate of each config, by key, and `proposed` the keys of the proposals
-/// not yet asked for.
+/// not yet requested.
 fn draw_config(
     space: &SearchSpace,
     config_candidates: &BTreeMap<ConfigKey, u64>,
@@ -628,9 +672,9 @@ fn draw_config(
 #[derive(Debug, Clone, PartialEq)]
 struct CandidateTracker {
     max_evaluations: u64,
-    /// Candidates issued so far, and so the id of the next one.
+    /// Number of candidates issued so far, and so the id of the next candidate.
     issued: u64,
-    /// Asks that issued at least one candidate.
+    /// Number of asks that issued at least one candidate.
     batches: u64,
     /// Candidates issued and not yet told, each with the index of its batch.
     pending: BTreeMap<u64, (Candidate, u64)>,
@@ -646,7 +690,7 @@ impl CandidateTracker {
         }
     }
 
-    /// Returns the number of candidates an ask for `max` can issue within the budget.
+    /// Returns the number of candidates that a request for `max` can issue within the budget.
     fn capacity(&self, max: usize) -> usize {
         let remaining = self.max_evaluations.saturating_sub(self.issued);
         usize::try_from(remaining).map_or(max, |remaining| remaining.min(max))
@@ -675,7 +719,7 @@ impl CandidateTracker {
             .collect()
     }
 
-    /// Removes candidate `candidate_id` from the pending ones, and returns it with the index of its batch.
+    /// Removes candidate `candidate_id` from the pending candidates, and returns it with the index of its batch.
     fn settle(&mut self, candidate_id: u64) -> Option<(Candidate, u64)> {
         self.pending.remove(&candidate_id)
     }

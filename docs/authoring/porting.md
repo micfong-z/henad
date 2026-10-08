@@ -21,7 +21,7 @@ Network models have no GPU trait, so a [`NetworkModel`](network-models.md) stays
 ## Reuse the parameter list
 
 Neither GPU trait prepends anything to your parameter list.
-A GPU model spells out its whole descriptor list itself, which leaves a port free to hand back its counterpart's list verbatim.
+A GPU model spells out its whole descriptor list itself, which leaves a port free to return its counterpart's list verbatim.
 
 ```rust
 fn param_descriptors() -> Vec<ParamDescriptor> {
@@ -29,8 +29,8 @@ fn param_descriptors() -> Vec<ParamDescriptor> {
 }
 ```
 
-Both backends then take the same vector in the same order, and moving a slider on one gives you the same simulation on the other.
-Read the engine's own three parameters back out by the names `henad::authoring` gives them, `NUM_AGENTS`, `WORLD_WIDTH` and `WORLD_HEIGHT`, and route the rest through the CPU model's `from_params`.
+Both backends then accept the same vector in the same order, and moving a slider on one gives you the same simulation on the other.
+Read the engine's own three parameters back out by the names that `henad::authoring` defines, `NUM_AGENTS`, `WORLD_WIDTH` and `WORLD_HEIGHT`, and route the rest through the CPU model's `from_params`.
 
 ## Seed through the CPU `init`
 
@@ -68,7 +68,7 @@ The two grid ports repeat it draw for draw, and a test compares their seeded buf
 
 :   Diverges immediately.
     The CPU RNG is `xorshift64` over `u64`, while the GPU RNG is `pcg_hash` over `u32`, because WGSL has no 64-bit integers.
-    The two are counterparts in role but produce different streams.
+    The two generators are counterparts in role but produce different streams.
 
 `gpu_ants`
 
@@ -100,11 +100,11 @@ Two limits shape ports in practice.
 
 - One logical buffer has to fit inside one storage binding.
   The baseline caps that at 128 MiB, and the engine raises it to whatever the adapter reports.
-- Storage bindings per shader stage sit at 8 in the WebGPU baseline, and the engine asks for exactly what the widest model needs rather than for headroom.
-  If a pass needs nine storage buffers, restructure the pass rather than asking for a higher limit.
+- Storage bindings per shader stage sit at 8 in the WebGPU baseline, and the engine requests exactly what the widest model needs rather than headroom.
+  If a pass needs nine storage buffers, restructure the pass rather than requesting a higher limit.
 
 The testing kit's `BaselineBuild` check builds a GPU model on the test's device and asserts at the same time that the capacity check agrees, so an over-reported pass count fails there.
-The example models' test gives it a stock baseline device.
+The example models' test runs it on a stock baseline device.
 
 ## Check it against the counterpart
 

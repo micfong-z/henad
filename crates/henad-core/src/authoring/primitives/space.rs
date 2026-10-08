@@ -15,7 +15,7 @@ pub enum Boundary {
 ///
 /// # Panics
 ///
-/// If `m` is 0.
+/// Panics if `m` is 0.
 ///
 /// # Examples
 ///
@@ -35,8 +35,8 @@ pub fn wrap_index(v: i32, m: i32) -> i32 {
 
 /// Wraps `v` into `0.0..world`.
 ///
-/// This is the position wrap an agent leaving one edge needs to re-enter at the other. A `v` a little below 0.0
-/// whose wrap rounds up to `world` wraps to 0.0, so a position truncated to its cell stays inside the grid.
+/// This is the position wrap that an agent leaving one edge needs to re-enter at the opposite edge. A `v` a little
+/// below 0.0 whose wrap rounds up to `world` wraps to 0.0, so a position truncated to its cell stays inside the grid.
 ///
 /// # Examples
 ///
@@ -55,9 +55,9 @@ pub fn wrap_coord(v: f32, world: f32) -> f32 {
     if wrapped == world { 0.0 } else { wrapped }
 }
 
-/// Flat index of cell `(x, y)` in a grid `w` wide.
+/// Returns the flat index of cell `(x, y)` in a grid `w` wide.
 ///
-/// Row-major, so `y` is the slow axis. Every grid buffer in the engine uses this layout.
+/// The layout is row-major, with `y` as the slow axis. Every grid buffer in the engine uses it.
 ///
 /// # Examples
 ///
@@ -78,11 +78,11 @@ pub fn cell_index(x: u32, y: u32, w: u32) -> u32 {
 /// `dy` is positive southward, matching the display's downward y axis.
 ///
 /// Under [`Boundary::Torus`] the result is always `Some`, since both axes wrap. Under
-/// [`Boundary::Bounded`] a step past any edge gives `None`.
+/// [`Boundary::Bounded`] a step past any edge returns `None`.
 ///
 /// # Panics
 ///
-/// If `w` or `h` is 0 under [`Boundary::Torus`].
+/// Panics if `w` or `h` is 0 under [`Boundary::Torus`].
 ///
 /// # Examples
 ///
@@ -171,8 +171,8 @@ pub fn axis_delta(a: f32, b: f32, world: f32, boundary: Boundary) -> f32 {
 
 /// Returns the squared distance between two points.
 ///
-/// Squared rather than true distance because every caller compares against a squared radius, and a
-/// `sqrt` per agent per neighbour is not worth paying for a comparison.
+/// Every caller compares against a squared radius, and a `sqrt` per agent per neighbour buys nothing
+/// for a comparison.
 ///
 /// # Examples
 ///
@@ -214,7 +214,7 @@ pub const MOORE_COLUMN_MAJOR: [(i32, i32); 8] = [(-1, -1), (-1, 0), (-1, 1), (0,
 /// See also: [`MOORE_ROW_MAJOR`], [`offsets`].
 pub const VON_NEUMANN: [(i32, i32); 4] = [(0, -1), (-1, 0), (1, 0), (0, 1)];
 
-/// Offsets for a neighbourhood kind, in `step_cell` order.
+/// Returns the offsets of a neighbourhood kind, in `step_cell` order.
 ///
 /// # Examples
 ///
@@ -274,10 +274,11 @@ pub fn for_each_neighbor(
     }
 }
 
-/// Heading as one of eight octants, running clockwise from east.
+/// Returns the heading `(vx, vy)` as one of eight octants, running clockwise from east.
 ///
-/// Clockwise because the display's y axis points down. Spans are half-open, and comparisons rather
-/// than `atan2`, too much to pay per agent per tick for something only looked at.
+/// The octants run clockwise because the display's y axis points down. Spans are half-open. The
+/// octant comes from comparisons, as an `atan2` per agent per tick costs too much for a value that is
+/// only drawn.
 ///
 /// # Examples
 ///
@@ -310,7 +311,7 @@ pub fn heading_octant(vx: f32, vy: f32) -> u8 {
 mod tests {
     use super::*;
 
-    /// The regression. A tiny negative position rounded up to `world`, and its cell fell off the grid.
+    /// A tiny negative position must not round up to `world`, or its cell falls off the grid.
     #[test]
     fn a_wrapped_coordinate_never_reaches_the_world_size() {
         for world in [1.0f32, 7.5, 200.0, 4096.0] {
@@ -386,8 +387,8 @@ mod tests {
         }
     }
 
-    /// The interior is where the two boundaries must agree, or a model would change behaviour just
-    /// by declaring its edges differently.
+    /// Away from the edges the two boundaries agree. Otherwise a model would change behaviour just by declaring its
+    /// edges differently.
     #[test]
     fn boundaries_agree_away_from_the_edges() {
         for &(dx, dy) in &MOORE_ROW_MAJOR {
@@ -427,7 +428,7 @@ mod tests {
         }
     }
 
-    /// The whole point of the wrap: nothing is ever further than half a world away.
+    /// Nothing is ever further than half a world away, which is the purpose of the wrap.
     #[test]
     fn a_torus_delta_never_exceeds_half_the_world() {
         let world = 10.0;
@@ -443,8 +444,7 @@ mod tests {
         }
     }
 
-    /// Positions outside the world must land the same as their wrapped equivalents. That is the
-    /// difference from the single-correction form it replaces.
+    /// Positions outside the world must land the same as their wrapped equivalents.
     #[test]
     fn a_torus_delta_handles_positions_outside_the_world() {
         let world = 10.0;
@@ -459,7 +459,7 @@ mod tests {
     }
 
     /// A flipped sign still looks colourful on screen, so the mapping is pinned rather than
-    /// eyeballed. Sampled at octant centres, since the cardinals land on boundaries.
+    /// eyeballed. The test samples octant centres, since the cardinals land on boundaries.
     #[test]
     fn octants_run_clockwise_from_east_with_y_pointing_down() {
         for expected in 0..8u8 {

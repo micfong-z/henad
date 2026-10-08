@@ -1,4 +1,4 @@
-//! CPU lanes, each stepping one run at a time on a thread pool of its own.
+//! CPU lanes, each stepping one run at a time on its own thread pool.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -8,7 +8,7 @@ use henad_core::explore::outcome::RunOutcome;
 
 use super::{BatchEnd, ExecutionError, Executor, Placement, ReorderBuffer, RunRequest, RunSink, SweepControl};
 
-/// Runs `requests` in one lane per pool of `pools`, and commits the outcomes in request order.
+/// Runs `requests` in one lane per pool in `pools`, and commits the outcomes in request order.
 ///
 /// Each lane takes the next request not yet taken, so a slow run never holds up the other lanes. A panic on a lane's
 /// thread or in `sink` aborts the control, and the other lanes stop within a slice. A lane's panic ends the batch
@@ -70,7 +70,7 @@ pub(super) fn run_in_lanes(
             }
         }
         let mut lost_lane = false;
-        // A joined lane hands its panic back here. The scope raises a panic only for a thread it joins itself.
+        // A joined lane returns its panic here. The scope raises a panic only for a thread it joins itself.
         for lane in lanes {
             lost_lane |= lane.join().is_err();
         }

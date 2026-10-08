@@ -1,7 +1,7 @@
-//! How a sim loop gets driven, and the one place the two ways of driving one differ.
+//! Drivers of a sim loop, and the one place the native and browser ways of driving one differ.
 //!
 //! A loop says what work is due and when it next wants calling. A [`Driver`] decides how to wait:
-//! a thread of its own on native, the host's frame loop in a browser.
+//! its own thread on native, the host's frame loop in a browser.
 
 use std::time::Duration;
 
@@ -21,7 +21,7 @@ pub const CAN_SPAWN_THREADS: bool = cfg!(not(target_arch = "wasm32"));
 use crate::snapshot::Snapshot;
 use std::sync::{Arc, Mutex};
 
-/// Wall clock one pump may reasonably spend.
+/// Wall-clock time in milliseconds that one pump may spend.
 ///
 /// The frame driver stops pumping once a frame has spent this much, and a loop that sizes its own
 /// batches aims to fill it. Two different numbers would leave a frame running two batches.
@@ -29,7 +29,7 @@ pub const PUMP_BUDGET_MS: f64 = 6.0;
 
 /// Time between two publishes while a loop runs to a tick.
 ///
-/// Longer than the interval while playing. Each publish copies the whole view.
+/// It is longer than the interval while playing, since each publish copies the whole view.
 pub const RUN_TO_PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Longest time one publish may spend preparing its view, including a network's layout.
@@ -42,36 +42,38 @@ pub const MAX_VIEW_BUDGET_MS: f32 = PUMP_BUDGET_MS as f32;
 #[cfg(not(target_arch = "wasm32"))]
 pub const MAX_VIEW_BUDGET_MS: f32 = f32::INFINITY;
 
-/// What a loop wants after one [`SimLoop::pump`].
+/// Next pump that a loop requests after one [`SimLoop::pump`].
 #[derive(Debug)]
 pub enum Pace {
-    /// Nothing until a command arrives.
+    /// No pump until a command arrives.
     Idle,
-    /// Again, as soon as the driver can.
+    /// Another pump as soon as the driver can.
     Now,
-    /// Again after this long, unless a command arrives first.
+    /// Another pump after this long, unless a command arrives first.
     After(Duration),
 }
 
-/// A simulation loop, minus how it is driven.
+/// A simulation loop, independent of how it is driven.
 ///
 /// `pump` does whatever is due now and says when the next work falls due. Everything about
 /// blocking, waiting and frame budgets belongs to the driver.
 pub trait SimLoop {
+    /// Command a host sends the loop.
     type Command;
 
-    /// True when the loop is finished and the driver should stop.
+    /// Handles one command, and returns whether the loop is finished and the driver should stop.
     fn handle_command(&mut self, cmd: Self::Command) -> bool;
 
+    /// Does whatever is due now, and returns when the loop next wants a pump.
     fn pump(&mut self) -> Pace;
 
     /// Runs once before the first pump.
     fn start(&mut self) {}
 }
 
-/// Where a loop leaves a snapshot for the host to pick up.
+/// Slot where a loop leaves a snapshot for the host to pick up.
 ///
-/// `fresh` is the newest publish waiting to be taken, `spare` a consumed one handed back for its
+/// `fresh` is the newest publish waiting to be taken, `spare` a consumed one returned for its
 /// buffers. A `fresh` nobody took is stale by definition, so it becomes the next spare.
 #[derive(Debug, Default)]
 pub struct SnapshotSlot {
@@ -79,13 +81,14 @@ pub struct SnapshotSlot {
     spare: Option<Snapshot>,
 }
 
-/// Shared between a loop and its host. Never sent anywhere on the web, where one thread holds
-/// both ends.
+/// Snapshot slot shared between a loop and its host. On the web one thread holds both ends, and the slot is never
+/// sent anywhere.
 pub type SharedSlot = Arc<Mutex<SnapshotSlot>>;
 
 impl SnapshotSlot {
-    /// For a loop that publishes its own first snapshot from [`SimLoop::start`], where building
-    /// one here would mean reporting stats nothing has read back yet.
+    /// Returns an empty slot, for a loop that publishes its own first snapshot from [`SimLoop::start`].
+    ///
+    /// Building one here would mean reporting stats nothing has read back yet.
     #[cfg_attr(
         all(target_arch = "wasm32", target_feature = "atomics"),
         expect(
@@ -97,6 +100,7 @@ impl SnapshotSlot {
         Arc::new(Mutex::new(Self::default()))
     }
 
+    /// Returns a slot holding `snapshot` as its first publish.
     #[cfg_attr(
         all(target_arch = "wasm32", target_feature = "atomics"),
         expect(
@@ -112,24 +116,26 @@ impl SnapshotSlot {
     }
 }
 
-/// `None` when nothing new has been published since the last take.
+/// Takes the latest publish, or `None` when nothing new has been published since the last take.
 pub fn take_snapshot(slot: &SharedSlot) -> Option<Snapshot> {
     slot.lock().ok()?.fresh.take()
 }
 
-/// Purely an optimisation. Dropping a snapshot instead only means the next publish allocates.
+/// Stores a taken snapshot as the spare for the next publish to refill.
+///
+/// This is only an optimisation. Dropping a snapshot instead only means the next publish allocates.
 pub fn recycle(slot: &SharedSlot, snapshot: Snapshot) {
     if let Ok(mut slot) = slot.lock() {
         slot.spare = Some(snapshot);
     }
 }
 
-/// Takes the spare buffer, if the host handed one back.
+/// Takes the spare buffer, if the host returned one.
 pub fn claim_spare(slot: &SharedSlot) -> Option<Snapshot> {
     slot.lock().ok()?.spare.take()
 }
 
-/// Hands a freshly built snapshot over.
+/// Passes a freshly built snapshot to the slot.
 pub fn publish(slot: &SharedSlot, snapshot: Snapshot) {
     if let Ok(mut slot) = slot.lock() {
         slot.spare = slot.fresh.replace(snapshot);

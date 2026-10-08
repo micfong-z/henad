@@ -8,16 +8,17 @@ use crate::model::SimState;
 
 /// An action a model declares.
 ///
-/// The Parameters panel draws a button per entry and `henad-cli` names one with `--act`.
+/// The Parameters panel draws a button per entry, and `henad-cli` schedules an action with `--act`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActionDescriptor {
-    /// Stable name, what `--act` matches on.
+    /// Stable name that `--act` matches on.
     pub id: &'static str,
     /// Button label.
     pub label: &'static str,
 }
 
 impl ActionDescriptor {
+    /// Creates a descriptor from its id and its button label.
     pub const fn new(id: &'static str, label: &'static str) -> Self {
         Self { id, label }
     }
@@ -26,16 +27,17 @@ impl ActionDescriptor {
 /// Domain separator for the action stream.
 const ACTION_SALT: u64 = 0x00AC_7104_5EED_0001;
 
-/// Where a state's action stream starts, from the seed the state was built with.
+/// Returns the start of a state's action stream, from the seed the state was built with.
 ///
-/// Kept apart from the tick stream. Otherwise a press draws the numbers the next tick would have.
+/// The action stream is kept apart from the tick stream. Otherwise a press would draw the numbers the next tick
+/// would have.
 pub fn action_seed(seed: Option<u64>) -> u64 {
     mix_seed(seed.unwrap_or(0) ^ ACTION_SALT)
 }
 
 /// Declares a model's actions and their indices in one place.
 ///
-/// The index is the declaration's position, so it is derived rather than written down. Expands at
+/// The index is the declaration's position, so it is derived rather than written down. Invoke it at
 /// module scope, next to the impl that forwards `ACTIONS` to `ACTION_SPECS`.
 ///
 /// ```ignore
@@ -57,15 +59,18 @@ macro_rules! actions {
 /// One `--act` entry, resolved against the model's declared actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scheduled {
+    /// Index of the action in the model's declared actions.
     pub index: usize,
+    /// Id of the action.
     pub id: String,
+    /// Tick the action is due at.
     pub tick: u64,
 }
 
 /// Side of a step on which a run of GPU steps fires the actions due.
 ///
 /// Each rule mirrors one CPU loop. Two runs back to back share the tick where the first stops and the
-/// second starts, and under one rule only one of the two fires it.
+/// second starts, and under one rule only one of the two runs fires it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fire {
     /// Before the step that leaves a tick, as the CPU benchmark loop does. A run leaves the tick it
@@ -76,22 +81,36 @@ pub enum Fire {
     AfterStep,
 }
 
-/// Entries a state refused to run, in the order given.
+/// Entries that a state rejected, in the order given.
 pub type RefusedActions<'a> = Vec<&'a Scheduled>;
 
 /// An `--act` entry that cannot be resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScheduleError {
     /// An entry not of the form `ID@TICK`.
-    BadEntry { raw: String },
-    /// An entry whose tick is not a whole number, for the reason in `source`.
-    BadTick { raw: String, source: ParseIntError },
+    BadEntry {
+        /// Entry as written.
+        raw: String,
+    },
+    /// An entry whose tick is not a whole number.
+    BadTick {
+        /// Entry as written.
+        raw: String,
+        /// Error of the `u64` parser.
+        source: ParseIntError,
+    },
     /// An entry for a model that declares no actions.
-    NoActions { model: String },
-    /// An id `model` does not declare. `known` lists the ids it does.
-    UnknownAction {
-        id: String,
+    NoActions {
+        /// Id of the model.
         model: String,
+    },
+    /// An action id that `model` does not declare.
+    UnknownAction {
+        /// Action id as given.
+        id: String,
+        /// Id of the model.
+        model: String,
+        /// Action ids the model declares.
         known: Vec<&'static str>,
     },
 }
@@ -120,22 +139,21 @@ impl std::error::Error for ScheduleError {
 
 /// Actions to run at set ticks, in the order given.
 ///
-/// Empty unless one was asked for, and every call below leaves immediately when it is, so a loop
-/// with no actions pays a single test per step.
+/// A loop with no actions holds an empty schedule, and [`Self::run_due`] then returns after a single test.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Schedule {
     entries: Vec<Scheduled>,
 }
 
 impl Schedule {
-    /// Resolves each `ID@TICK` against `actions`, the actions of model `model_id`. Order is preserved, so two at
-    /// one tick run as given.
+    /// Resolves each `ID@TICK` against `actions`, the actions of model `model_id`. Order is preserved, so two
+    /// entries at one tick run in the order given.
     ///
-    /// An entry splits at its last `@`, and an id can hold one.
+    /// An entry splits at its last `@`, so an id can contain `@`.
     ///
     /// # Errors
     ///
-    /// Returns [`ScheduleError`] for an entry that does not read as `ID@TICK`, or names no action in `actions`.
+    /// Returns [`ScheduleError`] for an entry that is not of the form `ID@TICK`, or refers to no action in `actions`.
     pub fn parse(raw: &[String], model_id: &str, actions: &[ActionDescriptor]) -> Result<Self, ScheduleError> {
         let mut entries = Vec::with_capacity(raw.len());
         for spec in raw {
@@ -168,25 +186,27 @@ impl Schedule {
         Ok(Self { entries })
     }
 
-    /// Builds a schedule from resolved entries. Two due at one tick run in the order given.
+    /// Builds a schedule from resolved entries. Two entries due at one tick run in the order given.
     pub fn from_entries(entries: Vec<Scheduled>) -> Self {
         Self { entries }
     }
 
+    /// Entries in the order given.
     pub fn entries(&self) -> &[Scheduled] {
         &self.entries
     }
 
+    /// Returns whether no action is scheduled.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// Highest tick anything is due at.
+    /// Highest tick at which any action is due.
     pub fn last_tick(&self) -> Option<u64> {
         self.entries.iter().map(|a| a.tick).max()
     }
 
-    /// Returns the earliest tick after `tick` that anything is due at.
+    /// Returns the earliest tick after `tick` at which any action is due.
     pub fn next_due_after(&self, tick: u64) -> Option<u64> {
         self.entries
             .iter()
@@ -195,12 +215,12 @@ impl Schedule {
             .min()
     }
 
-    /// Actions due exactly at `tick`, in the order given.
+    /// Returns the actions due exactly at `tick`, in the order given.
     pub fn due(&self, tick: u64) -> impl Iterator<Item = &Scheduled> {
         self.entries.iter().filter(move |a| a.tick == tick)
     }
 
-    /// Returns the ticks a run of `count` steps from `start` fires at under `fire`, in increasing
+    /// Returns the ticks at which a run of `count` steps from `start` fires under `fire`, in increasing
     /// order and each once.
     ///
     /// [`Fire::BeforeStep`] covers `start..start + count` and [`Fire::AfterStep`] covers
@@ -221,10 +241,10 @@ impl Schedule {
         ticks
     }
 
-    /// Runs whatever is due at the state's current tick, and returns the entries the state refused.
+    /// Runs the actions due at the state's current tick, and returns the entries that the state rejected.
     ///
     /// A loop calls it either before each step and once at the end, or once at the start and after each step. Either
-    /// way every tick from 0 to the one the run stops on fires once.
+    /// way every tick from 0 to the tick where the run stops fires once.
     #[inline]
     #[must_use = "a refused action is reported only through the returned entries"]
     pub fn run_due(&self, state: &mut dyn SimState) -> RefusedActions<'_> {
@@ -259,7 +279,7 @@ mod tests {
         assert_eq!(ACTION_SPECS[CLEAR].label, "Clear");
     }
 
-    /// Two states built from one seed must agree, and two from different seeds must not.
+    /// Two states built from one seed must agree, and two states built from different seeds must not.
     #[test]
     fn the_action_stream_is_seeded_and_apart_from_the_tick_stream() {
         use crate::action::action_seed;
@@ -294,11 +314,9 @@ mod tests {
             .collect()
     }
 
-    /// Checks that runs placed back to back fire a shared tick once. A run used to fire both of its ends,
-    /// and the tick two runs shared fired twice. A GPU stats export then randomised twice at `--stats-every 1`
-    /// and once at `--stats-every 3`.
+    /// Checks that runs placed back to back fire a shared tick once, however the steps are split.
     ///
-    /// Under the before-step rule the caller fires tick 40, and under the after-step rule tick 0.
+    /// Under the before-step rule the caller fires tick 40, and under the after-step rule it fires tick 0.
     #[test]
     fn back_to_back_runs_fire_each_tick_once() {
         // Two actions at tick 10 fire in one stop. Tick 41 is past the end.
@@ -359,7 +377,7 @@ mod tests {
         );
     }
 
-    /// The regression. An entry split at its first `@`, so an id holding one read the rest of the id as its tick.
+    /// Checks that an entry splits at its last `@`, so an id can contain `@`.
     #[test]
     fn an_id_holding_an_at_sign_resolves() {
         let actions = [ActionDescriptor::new("spawn@centre", "Spawn at centre")];

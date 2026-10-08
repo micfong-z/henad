@@ -40,10 +40,10 @@ use crate::tests::support::{
     planned, provenance, rewrite_manifest, sweep, sweep_options, without_clocks, without_timing,
 };
 
-/// Longest a test waits for a search to end.
+/// Maximum time a test waits for a search to end.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Tables a search writes beside the sweep's three.
+/// Tables a search writes beside the three CSV tables of a sweep.
 const SEARCH_FILES: [&str; 5] = [
     EVALUATIONS_FILE,
     BATCHES_FILE,
@@ -205,7 +205,7 @@ impl SearchTables {
     ///
     /// # Panics
     ///
-    /// Panics when a table the search writes is missing, or a table it does not write is there.
+    /// Panics when a table that the search writes is missing, or a table that it does not write is present.
     fn read(dir: &Path, spec: &SweepSpec) -> Self {
         let written = written_search_files(spec);
         for file in SEARCH_FILES.into_iter().filter(|file| !written.contains(file)) {
@@ -290,7 +290,7 @@ fn every_example_search_spec_parses() {
 fn a_search_writes_the_same_tables_at_any_concurrency() {
     let sir = entry("sir", None);
     let scratch = ScratchDir::new("search-any-concurrency");
-    // A generation of 8 asks for batches of 6 and 2, and the other searches for batches of 6. A PSE cuts its second
+    // A generation of 8 requests batches of 6 and 2, and the other searches request batches of 6. A PSE cuts its second
     // batch at the last of its 10 initial samples.
     for (name, algorithm, batches) in [
         ("genetic", genetic(), 7),
@@ -778,8 +778,8 @@ fn a_watched_column_must_name_a_reducer() {
     assert_eq!(known, ["Infected:max", "Infected:argmax"]);
 }
 
-/// The regression. A batch of 4096 candidates at 2^20 replicates each planned, and its first ask allocated more runs
-/// than a machine holds.
+/// A batch of more than `MAX_RUNS` runs is rejected at planning. Its first ask would allocate more runs than a machine
+/// holds.
 #[test]
 fn a_batch_past_the_run_limit_is_refused() {
     let sir = entry("sir", None);
@@ -847,7 +847,7 @@ fn a_failed_search_records_its_standing_in_the_manifest() {
     }
 }
 
-/// Receives the events of `run` until its last one, and returns them.
+/// Receives the events of `run` until the last event, and returns them.
 fn drain(run: &mut SweepRun) -> Vec<SweepEvent> {
     let deadline = Instant::now() + SEARCH_TIMEOUT;
     let mut events = Vec::new();
@@ -1059,8 +1059,8 @@ impl Progress for HistoryRecorder {
 
 /// Checks the tables of a Pattern Space Exploration named `name` in `set` against `history`, read from them.
 ///
-/// Every evaluation lands in a cell, the manifest and `archive.csv` give the ranges `history` holds, and under an
-/// automatic range only the batch before it was taken goes without cells.
+/// Every evaluation lands in a cell, the manifest and `archive.csv` record the ranges that `history` holds, and
+/// under an automatic range only the batch before it was taken goes without cells.
 fn check_pattern_tables(name: &str, set: &ResultSet, history: &SearchHistory) {
     let settings = history.pattern_settings.as_ref().expect("the axes have their ranges");
     let recorded = set.manifest().search.as_ref().and_then(|search| search.axis_ranges);

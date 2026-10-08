@@ -1,7 +1,6 @@
 // Instanced agent sprites, one quad per agent expanded in clip space from a world-space centre.
 //
-// Positions arrive as two vertex buffers rather than one interleaved one, so the sim's SoA lanes
-// upload with no repacking.
+// Positions arrive as two `f32` attributes, so the sim's structure-of-arrays (SoA) lanes upload with no repacking.
 
 #import world::{HIDDEN, is_placed, to_clip}
 
@@ -22,7 +21,7 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    // -1..1 across the sprite, so the fragment stage can carve a disc out of the quad.
+    // Position within the sprite, from -1 to 1 on each axis, so the fragment stage can carve a disc out of the quad.
     @location(1) offset: vec2<f32>,
 }
 

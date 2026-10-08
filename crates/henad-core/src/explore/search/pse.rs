@@ -4,9 +4,9 @@
 //! candidate to land in it, and counts every candidate that did. After its initial samples, drawn at random, the
 //! search draws two filled cells, takes the one with fewer hits, and mutates its exemplar.
 //!
-//! The initial samples fill batches of their own, and breeding starts once every one of them is told. Without initial
-//! samples, the first candidate is drawn at random, alone in its batch. A later batch asked while the archive is still
-//! empty is drawn at random in full.
+//! The initial samples fill their own batches, and breeding starts once every initial sample is told. Without initial
+//! samples, the first candidate is drawn at random, alone in its batch. A later batch requested while the archive is
+//! still empty is drawn at random in full.
 //!
 //! An axis given no bounds has an automatic range. The search holds every evaluation until the initial samples are
 //! all told, takes the range from their outputs, and then places the held evaluations in candidate order.
@@ -57,7 +57,7 @@ impl PatternAxis {
         }
     }
 
-    /// Returns the lower and upper bounds, or `None` unless both are given.
+    /// Returns the lower and upper bounds, or `None` unless both bounds are given.
     pub fn range(&self) -> Option<(f64, f64)> {
         self.min.zip(self.max)
     }
@@ -71,7 +71,7 @@ impl PatternAxis {
     /// axis without both bounds.
     ///
     /// A value below the lower bound or above the upper bound lands in the edge cell nearer to it, and `NaN` in the
-    /// first cell. Each lies outside the axis.
+    /// first cell. Each such value lies outside the axis.
     pub fn cell_index(&self, value: f64) -> Option<(u32, bool)> {
         let (min, max) = self.range()?;
         if value.is_nan() || value < min {
@@ -96,9 +96,9 @@ impl PatternAxis {
         Some((min + f64::from(index) * width, upper))
     }
 
-    /// Checks the bounds and the cells of the axis, naming each by its key in `keys`.
+    /// Checks the bounds and the cells of the axis, identifying each by its key in `keys`.
     ///
-    /// Both bounds are needed, or neither.
+    /// An axis needs both bounds or no bounds.
     fn check(&self, keys: [&'static str; 3]) -> Result<(), SearchSpecError> {
         let [min_key, max_key, cells_key] = keys;
         let lone_bound = |missing_key: &'static str, given_key: &str| SearchSpecError::Setting {
@@ -124,10 +124,10 @@ impl PatternAxis {
     }
 }
 
-/// Returns the range an automatic axis takes from `values`, the outputs the initial samples place on it.
+/// Returns the range of an automatic axis, computed from `values`, the outputs of the initial samples on that axis.
 ///
 /// The range runs from the smallest finite value to the largest, widened at each end by [`AUTOMATIC_RANGE_MARGIN`]
-/// of its span. A single value `v` is widened to a span of `max(1, |v|)` around it, and no finite value gives the
+/// of its span. A single value `v` is widened to a span of `max(1, |v|)` around it, and no finite value yields the
 /// range 0 to 1.
 pub fn automatic_range(values: impl IntoIterator<Item = f64>) -> (f64, f64) {
     let extremes =
@@ -158,9 +158,11 @@ pub fn automatic_range(values: impl IntoIterator<Item = f64>) -> (f64, f64) {
 /// Settings of a Pattern Space Exploration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PatternSpaceSettings {
+    /// Axis over the first watched column.
     pub x_axis: PatternAxis,
+    /// Axis over the second watched column.
     pub y_axis: PatternAxis,
-    /// Candidates drawn at random before any is bred from the archive.
+    /// Number of candidates drawn at random before any candidate is bred from the archive.
     pub initial_samples: u64,
     /// Largest step of a mutated gene, as a fraction of its range.
     pub mutation_scale: f64,
@@ -185,7 +187,7 @@ impl PatternSpaceSettings {
     /// # Errors
     ///
     /// Returns [`SearchSpecError::Setting`] for an axis with no cells, one bound without the other, a bound that is
-    /// not finite or a maximum not above the minimum, no initial samples beside an automatic range, or a mutation
+    /// not finite or a maximum not above the minimum, no initial samples with an automatic range, or a mutation
     /// scale that is not a positive number.
     pub fn check(&self) -> Result<(), SearchSpecError> {
         self.x_axis
@@ -216,18 +218,19 @@ impl PatternSpaceSettings {
         self.initial_samples.min(max_evaluations)
     }
 
-    /// Returns the number of batches of at most `batch_size` candidates an exploration of `max_evaluations` asks for.
+    /// Returns the number of batches that an exploration of `max_evaluations` evaluations runs, each of at most
+    /// `batch_size` candidates.
     ///
-    /// The initial samples fill batches of their own, and so does the first candidate when there are none.
+    /// The initial samples fill their own batches, and so does the first candidate when there are no initial samples.
     pub fn batch_count(&self, max_evaluations: u64, batch_size: usize) -> u64 {
         let batch = (batch_size as u64).max(1);
         let random_samples = self.initial_samples.max(1).min(max_evaluations);
         random_samples.div_ceil(batch) + (max_evaluations - random_samples).div_ceil(batch)
     }
 
-    /// Returns the settings with each automatic axis given the range [`automatic_range`] takes from `outputs`.
+    /// Returns the settings with each automatic axis given the range that [`automatic_range`] computes from `outputs`.
     ///
-    /// `outputs` holds the x and y output of each initial sample that has both. An axis with bounds keeps them.
+    /// `outputs` holds the x and y output of each initial sample that has both outputs. An axis with bounds keeps them.
     pub fn with_automatic_ranges(&self, outputs: &[(f64, f64)]) -> Self {
         let mut settings = self.clone();
         let axes = [
@@ -263,7 +266,7 @@ impl PatternSpaceSettings {
         Some((axis_value(0)?, axis_value(1)?))
     }
 
-    /// Returns where outputs `x` and `y` land, with no cell while an axis lacks its range.
+    /// Returns the placement of outputs `x` and `y`, with no cell while an axis has no range.
     pub fn locate(&self, x: f64, y: f64) -> PatternPlacement {
         let cell = self.x_axis.cell_index(x).zip(self.y_axis.cell_index(y));
         PatternPlacement {
@@ -274,9 +277,9 @@ impl PatternSpaceSettings {
         }
     }
 
-    /// Returns where the replicates of `evaluation` land, or `None` when an axis has no finite value.
+    /// Returns the placement of the replicates of `evaluation`, or `None` when an axis has no finite value.
     ///
-    /// The outputs are those [`Self::outputs`] returns, and the placement has no cell while an axis lacks its range.
+    /// The outputs are those [`Self::outputs`] returns, and the placement has no cell while an axis has no range.
     pub fn place(&self, evaluation: &Evaluation) -> Option<PatternPlacement> {
         let (x, y) = self.outputs(evaluation)?;
         Some(self.locate(x, y))
@@ -285,17 +288,21 @@ impl PatternSpaceSettings {
 
 /// Cell of the grid, by its index along each axis.
 ///
-/// Cells order by `x_index`, then by `y_index`.
+/// Cells are ordered by `x_index`, then by `y_index`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PatternCell {
+    /// Index of the cell along the x axis.
     pub x_index: u32,
+    /// Index of the cell along the y axis.
     pub y_index: u32,
 }
 
 /// Outputs of an evaluation, and the cell they land in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PatternPlacement {
+    /// Output on the x axis.
     pub x: f64,
+    /// Output on the y axis.
     pub y: f64,
     /// Cell the outputs land in, `None` while an automatic range waits for the initial samples.
     pub cell: Option<PatternCell>,
@@ -306,8 +313,9 @@ pub struct PatternPlacement {
 /// A filled cell of the archive.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArchiveEntry {
+    /// Cell the entry fills.
     pub cell: PatternCell,
-    /// Candidates that landed in the cell.
+    /// Number of candidates that landed in the cell.
     pub hits: u64,
     /// Id of the exemplar, the first candidate to land in the cell.
     pub candidate_id: u64,
@@ -343,7 +351,7 @@ pub struct PatternSpaceExploration {
     archive: BTreeMap<PatternCell, ArchiveRecord>,
     /// Number of initial samples within the budget, the candidates an automatic range is taken from.
     range_samples: u64,
-    /// Initial samples told so far.
+    /// Number of initial samples told so far.
     told_samples: u64,
     /// Evaluations with outputs on both axes told while an automatic range waits, in candidate order.
     held: Vec<HeldEvaluation>,
@@ -354,7 +362,7 @@ impl PatternSpaceExploration {
     ///
     /// # Errors
     ///
-    /// Returns [`SearchSpecError`] when [`PatternSpaceSettings::check`] refuses `settings`.
+    /// Returns [`SearchSpecError`] when [`PatternSpaceSettings::check`] rejects `settings`.
     pub fn new(
         space: SearchSpace,
         settings: PatternSpaceSettings,
@@ -396,7 +404,7 @@ impl PatternSpaceExploration {
     }
 }
 
-/// Returns a child of the exemplar of the rarer of two filled cells, each drawn uniformly from `records`.
+/// Draws two filled cells uniformly from `records`, and returns a child of the exemplar of the cell with fewer hits.
 fn offspring(space: &SearchSpace, rng: &mut DesignRng, mutation_scale: f64, records: &[&ArchiveRecord]) -> Proposal {
     let first = records[rng.index(records.len() as u64) as usize];
     let second = records[rng.index(records.len() as u64) as usize];
@@ -539,8 +547,8 @@ mod tests {
         row
     }
 
-    /// Returns a hash of every candidate `search` asks for, over batches of 16 with 3 replicates of [`noisy`], and of
-    /// its archive at the end.
+    /// Returns a hash of every candidate that `search` returns, over batches of 16 with 3 replicates of [`noisy`],
+    /// and of its archive at the end.
     fn trajectory_hash(search: &mut PatternSpaceExploration) -> u64 {
         let asked = drive(search, 16, 3, noisy);
         let mut bytes = Vec::new();
@@ -587,7 +595,7 @@ mod tests {
 
     #[test]
     fn explicit_bounds_keep_their_trajectory() {
-        // Hashes of the trajectories an exploration with both bounds given takes.
+        // Hashes of the trajectories of an exploration with both bounds set.
         for (seed, expected) in [(3, 0x2b4e_69fa_34f1_1ba3_u64), (11, 0xccf5_0d16_6148_66ed)] {
             let settings = PatternSpaceSettings {
                 initial_samples: 40,

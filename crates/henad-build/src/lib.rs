@@ -3,8 +3,8 @@
 //! [`stamp_commit`] records the commit a crate was built from, a dirty flag and a hash of its sources, for
 //! `henad::build_info!` to read. [`ShaderBuild`] generates the Rust bindings of a crate's WGSL shaders, from its build
 //! script. Each shader is composed with the shared modules it reaches through `#import henad::<module>`, whose text
-//! comes from henad-core's [`SHARED_WGSL_MODULES`]. henad-compute's `include_shaders!` then brings the two generated
-//! files into the crate, as the modules `shader_bindings` and `binding_decls`.
+//! comes from henad-core's [`SHARED_WGSL_MODULES`]. `henad::include_shaders!` then brings the two generated files
+//! into the crate, as the modules `shader_bindings` and `binding_decls`.
 //!
 //! ```no_run
 //! // build.rs
@@ -23,18 +23,19 @@
 //! `shader_bindings::gpu_vote::step`, the `ShaderEntry` variant `GpuVoteStep` and the binding constant
 //! `binding_decls::bindings::GPU_VOTE_STEP`. The constant is the path's components upper-cased and joined by `_`, with
 //! the final `.wgsl` removed, so `my_wgsl/step.wgsl` gives `MY_WGSL_STEP`. Every component of a `.wgsl` file's path is
-//! therefore a Rust identifier and no keyword.
+//! therefore a Rust identifier and not a keyword.
 //!
 //! A file with a `#define_import_path` line is a module other shaders import, and never an entry point. An import
 //! resolves by file path alone. A module's import path mirrors its path below the shader root, or below the directory
-//! of the file that imports it, as `#define_import_path gpu_vote::state` in `gpu_vote/state.wgsl`. The bindings name
-//! an imported module by the import path it resolved through, and a quoted import path by the stem of its file name,
+//! of the file that imports it, as `#define_import_path gpu_vote::state` in `gpu_vote/state.wgsl`. The bindings refer
+//! to an imported module by the import path it resolved through, and to a quoted import by the stem of its file name,
 //! as `#import "std.inc"` gives the module `std`.
 //!
-//! The root `henad` is reserved for the shared modules, in any case. A file named `henad.wgsl` or a directory named
-//! `henad` holding a `.wgsl` file would shadow them, and both are refused. So is a `.wgsl` path whose first component
-//! is a name the generated bindings use at their root: `wgpu`, `bytemuck`, `std`, `core`, `alloc`, `_root`,
-//! `ShaderEntry`, `layout_asserts` or `bytemuck_impls`, and so is an import that names a module after one of them.
+//! The root `henad` is reserved for the shared modules, regardless of case. A file named `henad.wgsl` or a directory
+//! named `henad` holding a `.wgsl` file would shadow them, and both are rejected. So is a `.wgsl` path whose first
+//! component is a name the generated bindings use at their root: `wgpu`, `bytemuck`, `std`, `core`, `alloc`, `_root`,
+//! `ShaderEntry`, `layout_asserts` or `bytemuck_impls`. An import is rejected too when its module path in the bindings
+//! starts with `henad` or one of those names.
 //!
 //! Note that each struct's layout assertion is named after the struct's module path and name in upper snake case.
 //! `gpu_vote::step::TallyParams` and `gpu_vote::step_tally::Params` both give
@@ -45,19 +46,20 @@
 //!
 //! `binding_decls::bindings` holds each entry point's `@group(0)` declarations, in `@binding` order, read from lines
 //! of one form: `@group(0) @binding(N) var<...> name: Type;`. A line holding `@binding` or `@group` in any other form
-//! fails the build. A compile-time assertion holds each list to the length of the layout `wgsl_bindgen` derives. A
-//! module declares no binding, and a line holding `@binding` in one fails the build too.
+//! fails the build. A compile-time assertion checks each list against the length of the layout `wgsl_bindgen`
+//! derives. A module declares no bindings, and a line holding `@binding` in a module fails the build too.
 //!
 //! # Versions
 //!
 //! henad-build pins `wgsl_bindgen` to 0.23.3 and fixes the code it generates. Cargo keeps one release per
-//! semver-compatible range in a lockfile. A build script that runs `wgsl_bindgen` itself therefore takes 0.23.3 as
-//! well. Use the same 0.x of henad and henad-build. `include_shaders!` refuses to compile shaders composed against
-//! other shared WGSL than the henad it links.
+//! semver-compatible range in a lockfile. A build script that runs `wgsl_bindgen` itself therefore uses 0.23.3 as
+//! well. Use the same 0.x of henad and henad-build. `include_shaders!` fails the build when the shaders were composed
+//! against different shared WGSL than the linked henad provides.
 //!
 //! [`SHARED_WGSL_MODULES`]: henad_core::authoring::primitives::wgsl::SHARED_WGSL_MODULES
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 
 mod binding_lines;
 mod output;
@@ -73,12 +75,12 @@ use std::path::{Path, PathBuf};
 /// Stamps the crate whose build script calls it with its commit, a dirty flag and a hash of its sources.
 ///
 /// Sets `HENAD_BUILD_COMMIT`, `HENAD_BUILD_COMMIT_DATE`, `HENAD_BUILD_DIRTY` and `HENAD_BUILD_SOURCE_HASH`, and has
-/// Cargo rerun the script when any of them can change. `henad::build_info!` reads the four.
+/// Cargo rerun the script when any of them can change. `henad::build_info!` reads all four variables.
 ///
 /// The commit comes from the package's `.cargo_vcs_info.json`, as in a registry download, or else from git when git
-/// tracks the crate's `Cargo.toml`. Outside both the commit stays empty and the dirty flag unknown. The source hash is
+/// tracks the crate's `Cargo.toml`. Otherwise the commit stays empty and the dirty flag unknown. The source hash is
 /// computed in every case, and tells two builds apart where no commit can: an uncommitted edit, or a project not
-/// under git. The dirty flag reads unknown in place of clean when git does not track the lockfile, since no commit
+/// under git. The dirty flag is unknown instead of clean when git does not track the lockfile, because no commit
 /// then records it.
 ///
 /// A commit reruns the script once the crate sits in a git repository, even before git tracks the crate. A crate
@@ -86,20 +88,21 @@ use std::path::{Path, PathBuf};
 /// `cargo clean -p <package>` runs.
 ///
 /// Note that the dirty flag and the source hash cover the files under `src`, the manifest and, outside a package, the
-/// nearest `Cargo.lock`. Dotfiles, editor backups and the `.orig` and `.rej` files a merge or a patch leaves stay out
-/// of both. A file a model reads at compile time, through `include_bytes!` or `include_str!`, belongs under `src` for
-/// the stamp to see it. A symlink to a directory is not followed, and a shader [`ShaderBuild`] compiles from a linked
-/// directory, or imports from outside `src`, changes neither. Data a model reads at run time from a path is recorded
-/// by no stamp.
+/// nearest `Cargo.lock`. Dotfiles, editor backups and the `.orig` and `.rej` files that a merge or a patch leaves
+/// behind are excluded. A file a model reads at compile time, through `include_bytes!` or `include_str!`, belongs
+/// under `src` for the stamp to see it. A symlink to a directory is not followed. A shader that [`ShaderBuild`]
+/// compiles from a linked directory, or imports from outside `src`, changes neither the dirty flag nor the source
+/// hash. No stamp records data that a model reads from a path at run time.
 pub fn stamp_commit() {
     stamp::print(stamp::StampScope::Commit);
 }
 
-/// Sets the stamp of [`stamp_commit`] for henad-explore, whose stamp stands for the engine.
+/// Sets the stamp of [`stamp_commit`] for henad-explore, whose stamp represents the engine.
 ///
-/// Git's answer is kept only inside Henad's own tree, where the dirty flag and the source hash cover henad-core,
-/// henad-build, henad-compute and henad-explore with the workspace's lockfile. Also sets `HENAD_BUILD_CRATE_HASH`,
-/// the hash of henad-explore's own `src` and manifest, and `HENAD_BUILD_STAMP_VERSION`, henad-build's own version.
+/// The commit and the dirty flag come from git only inside Henad's own tree, where the dirty flag and the source hash
+/// cover henad-core, henad-build, henad-compute and henad-explore with the workspace's lockfile. Also sets
+/// `HENAD_BUILD_CRATE_HASH`, the hash of henad-explore's own `src` and manifest, and `HENAD_BUILD_STAMP_VERSION`,
+/// henad-build's own version.
 #[doc(hidden)]
 pub fn stamp_engine_commit() {
     stamp::print(stamp::StampScope::Engine);
@@ -107,7 +110,7 @@ pub fn stamp_engine_commit() {
 
 /// Sets the source hash over the crate's own `src` and manifest, and the commit only from a `.cargo_vcs_info.json`.
 ///
-/// Watches no git path and no lockfile. For henad-compute and henad-models.
+/// Watches no git path and no lockfile. henad-compute and henad-models call it.
 #[doc(hidden)]
 pub fn stamp_source_hash() {
     stamp::print(stamp::StampScope::SourceHash);
@@ -119,7 +122,7 @@ pub struct ShaderBuild {
     root: PathBuf,
     /// Entry points, relative to `root` or absolute.
     entries: Vec<PathBuf>,
-    /// Whether the entry points were named one by one, through [`Self::entry_point`].
+    /// Whether the entry points were added one by one through [`Self::entry_point`].
     explicit: bool,
 }
 
@@ -131,12 +134,17 @@ impl ShaderBuild {
     ///
     /// # Errors
     ///
-    /// Returns [`ShaderBuildError`] for a `.wgsl` file whose path below the root holds a component that is not a Rust
-    /// identifier or is a keyword, for an entry point whose `ShaderEntry` variant is no Rust identifier (`self_.wgsl`
-    /// gives `Self`), for two `.wgsl` files whose module paths, `ShaderEntry` variants or binding constants collide,
-    /// for a file named `henad.wgsl` or a directory named `henad` holding a `.wgsl` file at any depth under the root,
-    /// and for a root whose last component is `henad`. Files that are not `.wgsl` are never checked. Each error names
-    /// the files.
+    /// Returns [`ShaderBuildError`] that lists the files. Files that are not `.wgsl` are never checked.
+    ///
+    /// - [`ShaderBuildError::InvalidName`] for a `.wgsl` path below the root with a component that is not a Rust
+    ///   identifier or is a keyword, and for an entry point whose `ShaderEntry` variant is not a Rust identifier
+    ///   (`self_.wgsl` gives `Self`).
+    /// - [`ShaderBuildError::NameCollision`] for two entry points whose module paths, `ShaderEntry` variants or
+    ///   binding constants collide, and for an entry point whose module contains another entry point's module.
+    /// - [`ShaderBuildError::ReservedName`] for a file named `henad.wgsl` or a directory named `henad` holding a
+    ///   `.wgsl` file at any depth under the root, for a `.wgsl` path starting with a name the generated bindings use,
+    ///   and for a root whose last component is `henad`.
+    /// - [`ShaderBuildError::Io`] for a file or directory that cannot be read.
     pub fn discover(shader_root: impl AsRef<Path>) -> Result<Self, ShaderBuildError> {
         let root = shader_root.as_ref().to_path_buf();
         paths::check_root(&root)?;
@@ -170,8 +178,8 @@ impl ShaderBuild {
 
     /// Adds the entry point `path`, relative to the shader root.
     ///
-    /// Note that the path is checked when [`Self::generate`] runs, as a discovered entry point is: it lies under the
-    /// root, and each component of it is a Rust identifier and no keyword.
+    /// Note that the path is checked when [`Self::generate`] runs, in the same way as a discovered entry point: it lies
+    /// under the root, and each of its components is a Rust identifier and not a keyword.
     pub fn entry_point(mut self, path: impl AsRef<Path>) -> Self {
         self.entries.push(path.as_ref().to_path_buf());
         self
@@ -181,27 +189,29 @@ impl ShaderBuild {
     ///
     /// Prints a `cargo:rerun-if-changed` line for the shader root, which Cargo watches recursively, one for each entry
     /// point [`Self::entry_point`] added, and one for each file outside the root that an entry point imports. No line
-    /// names a path under `OUT_DIR`.
+    /// refers to a path under `OUT_DIR`.
     ///
     /// # Errors
     ///
-    /// Returns [`ShaderBuildError`] for each refusal its variants list:
+    /// Returns [`ShaderBuildError`] in these cases:
     ///
     /// - [`ShaderBuildError::Environment`] when `OUT_DIR` is not set, and [`ShaderBuildError::Io`] for a file that
     ///   cannot be read or written.
     /// - [`ShaderBuildError::ReservedName`] for a shader root whose last component is `henad` or a reserved name
-    ///   under the root, and [`ShaderBuildError::ReservedImport`] for a module imported under one.
+    ///   under the root, and [`ShaderBuildError::ReservedImport`] for a module imported under a reserved name.
     /// - [`ShaderBuildError::OutsideRoot`] for an entry point outside the root, and [`ShaderBuildError::InvalidName`]
-    ///   or [`ShaderBuildError::NameCollision`] for an entry point whose path gives no Rust name or another entry's.
+    ///   or [`ShaderBuildError::NameCollision`] for an entry point whose path gives no Rust name or repeats another
+    ///   entry's name.
     /// - [`ShaderBuildError::BindingLine`], [`ShaderBuildError::UnsupportedBinding`],
-    ///   [`ShaderBuildError::ModuleBinding`] and [`ShaderBuildError::BindingGap`] for the bindings the reader refuses.
+    ///   [`ShaderBuildError::ModuleBinding`] and [`ShaderBuildError::BindingGap`] for bindings that the reader rejects.
     /// - [`ShaderBuildError::Compose`] for a shader that does not compose.
     #[expect(clippy::print_stdout, reason = "a build script talks to Cargo through stdout")]
     pub fn generate(self) -> Result<(), ShaderBuildError> {
         let out_dir = std::env::var_os("OUT_DIR").ok_or(ShaderBuildError::Environment { variable: "OUT_DIR" })?;
         let report = self.generate_in(Path::new(&out_dir))?;
         for path in &report.watched {
-            // The single-colon form. The double one needs Cargo 1.77 and would raise every downstream crate's MSRV.
+            // Each line uses the single-colon form. The double-colon form needs Cargo 1.77 and would raise every
+            // downstream crate's MSRV.
             println!("cargo:rerun-if-changed={}", path.display());
         }
         for warning in &report.warnings {
@@ -210,7 +220,7 @@ impl ShaderBuild {
         Ok(())
     }
 
-    /// Writes both files to `out_dir`, and returns the paths Cargo is to watch and the warnings to print.
+    /// Writes both files to `out_dir`, and returns the paths for Cargo to watch and the warnings to print.
     fn generate_in(self, out_dir: &Path) -> Result<Report, ShaderBuildError> {
         let root = std::path::absolute(&self.root).map_err(|source| ShaderBuildError::Io {
             path: self.root.clone(),
@@ -268,7 +278,8 @@ impl ShaderBuild {
     }
 }
 
-/// Paths a finished generation has Cargo watch, the warnings it prints, and whether it ran the `wgsl_bindgen` pass.
+/// Result of a generation: the paths for Cargo to watch, the warnings to print, and whether the `wgsl_bindgen` pass
+/// ran.
 #[derive(Debug)]
 struct Report {
     watched: Vec<PathBuf>,
@@ -292,64 +303,112 @@ fn read(path: &Path) -> Result<String, ShaderBuildError> {
 pub enum ShaderBuildError {
     /// A component of a `.wgsl` file's path below the shader root is not a Rust identifier, or is a keyword.
     ///
-    /// The same error names an entry point whose `ShaderEntry` variant is no Rust identifier, as `self_.wgsl` gives
-    /// `Self`.
-    InvalidName { path: PathBuf, component: String },
-    /// Two shaders give one Rust name, or one shader's module holds another's.
+    /// The same error reports an entry point whose `ShaderEntry` variant is not a Rust identifier, as `self_.wgsl`
+    /// gives `Self`.
+    InvalidName {
+        /// Shader file.
+        path: PathBuf,
+        /// Path component or `ShaderEntry` variant that was rejected, or the whole relative path when one of its
+        /// components is `.`, `..` or not valid Unicode.
+        component: String,
+    },
+    /// Two shaders give the same Rust name, or one shader's module contains another shader's module.
     NameCollision {
+        /// Earlier shader of the two, in entry order.
         first: PathBuf,
+        /// Later shader of the two.
         second: PathBuf,
         /// Kind of the name: `module`, `variant` for a `ShaderEntry` variant, or `constant` for a binding constant.
         kind: &'static str,
+        /// Name the two shaders share.
         name: String,
     },
-    /// A file named `henad.wgsl`, a directory named `henad` holding a `.wgsl` file, or a shader root named `henad`,
-    /// in any case. Or a `.wgsl` path starting with a name the generated bindings use, such as `wgpu` or `_root`.
-    ReservedName { path: PathBuf, name: String },
+    /// A shader path or root that uses a reserved name.
+    ///
+    /// The name `henad` is reserved regardless of case, for the last component of the shader root and for every
+    /// component of a `.wgsl` file's path below it. A name the generated bindings use, such as `wgpu` or `_root`, is
+    /// reserved for the first component of a `.wgsl` path.
+    ReservedName {
+        /// Shader root, or the shader file whose path uses the name.
+        path: PathBuf,
+        /// Reserved name, `henad` in lower case or a name the generated bindings use.
+        name: String,
+    },
     /// A file imported through an import path that makes it the module `name` at the root of the generated
-    /// bindings, where `name` is `henad` in any case or a name the generated bindings use.
+    /// bindings, where `name` is `henad` in any letter case or a name the generated bindings use.
     ///
     /// The bindings name a quoted import after the stem of its file name. `#import "std.inc"` gives the module `std`.
     ReservedImport {
+        /// Imported file.
         path: PathBuf,
+        /// Import path that reached the file, with its quotes when quoted.
         import_path: String,
+        /// First component of the module path the bindings give the file.
         name: String,
     },
     /// An entry point given to [`ShaderBuild::entry_point`] lies outside the shader root.
-    OutsideRoot { path: PathBuf },
-    /// A line holding `@binding` or `@group` in a form the binding parser does not read, for the reason given.
+    OutsideRoot {
+        /// Absolute path of the entry point, as given.
+        path: PathBuf,
+    },
+    /// A line holding `@binding` or `@group` in a form that the binding parser does not accept.
     BindingLine {
+        /// Entry point the line belongs to.
         path: PathBuf,
         /// Line number, counted from 1.
         line: usize,
+        /// Text of the line, trimmed and without its comments.
         text: String,
+        /// Reason the line is rejected, as in "`var<` has no closing `>`".
         reason: &'static str,
     },
     /// A `@group(0)` binding of a kind no Henad pass binds: a sampler, a sampled texture, or an address space other
     /// than `uniform`, `storage, read` and `storage, read_write`.
     UnsupportedBinding {
+        /// Entry point the line belongs to.
         path: PathBuf,
         /// Line number, counted from 1.
         line: usize,
+        /// Text of the line, trimmed and without its comments.
         text: String,
         /// Kind of the binding, as in "a sampled texture or a sampler".
         reason: &'static str,
     },
-    /// A module, a file with a `#define_import_path` line, declares a binding on the line given.
+    /// A file that is not an entry point declares a binding on the given line.
+    ///
+    /// Such a file is a module, with a `#define_import_path` line, or another file a shader imports.
     ModuleBinding {
+        /// Module or imported file.
         path: PathBuf,
         /// Line number, counted from 1.
         line: usize,
+        /// Text of the line, trimmed and without its comments.
         text: String,
     },
     /// The `@group(0)` indices of a shader, sorted, do not run from 0 with no gap or repeat.
-    BindingGap { path: PathBuf, indices: Vec<u32> },
+    BindingGap {
+        /// Entry point the indices belong to.
+        path: PathBuf,
+        /// `@binding` indices of the shader's `@group(0)` lines, sorted.
+        indices: Vec<u32>,
+    },
     /// `wgsl_bindgen` could not compose the shaders or generate their bindings.
-    Compose { message: String },
+    Compose {
+        /// Message of the `wgsl_bindgen` error or panic, or a message that lists the files of an import cycle.
+        message: String,
+    },
     /// A file or directory could not be read or written.
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        /// File or directory the operation failed on.
+        path: PathBuf,
+        /// Error from the operating system.
+        source: std::io::Error,
+    },
     /// Cargo did not set a variable a build script reads.
-    Environment { variable: &'static str },
+    Environment {
+        /// Name of the variable, as in `OUT_DIR`.
+        variable: &'static str,
+    },
 }
 
 impl fmt::Display for ShaderBuildError {

@@ -1,6 +1,6 @@
-//! Options a host opens the app with, what the app opens on, and the reasons it does not start.
+//! Options a host opens the app with, the opening the app starts on, and the reasons it does not start.
 //!
-//! The product is the app a host ships: its name, its build, its icon and links, and the command line it names. The
+//! The product is the app a host ships: its name, its build, its icon and links, and the command line it specifies. The
 //! official app is Henad's own product, the `henad-app` binary over the example models.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -18,21 +18,21 @@ use crate::ui::sweep::draft::error_chain;
 /// Henad's icon, the default of [`AppOptions::icon_png`].
 const HENAD_ICON_PNG: &[u8] = include_bytes!("../assets/icon-256.png");
 
-/// Everything a host decides about the app it opens.
+/// Model set, product details and opening a host starts the app with.
 #[derive(Debug)]
 pub struct AppOptions {
     pub(crate) models: ModelSet,
     pub(crate) product: Product,
     pub(crate) opening: Option<AppOpening>,
-    /// Note the Performance tab shows when the browser's thread pool failed to start, set by `start_web`.
+    /// Note shown in the Performance tab when the browser's thread pool failed to start, set by `start_web`.
     pub(crate) thread_pool_note: Option<String>,
 }
 
 impl AppOptions {
     /// Returns options that open `models` under the name `product`.
     ///
-    /// `product` names the window, and on native targets the folder eframe stores the app's state in, with `-` for
-    /// each character a folder name cannot hold and `henad-app` for a name with nothing left. `host` is the
+    /// `product` is the window title and, on native targets, the folder eframe stores the app's state in, with `-` for
+    /// each character a folder name cannot contain and `henad-app` for a name that ends up empty. `host` is the
     /// build recorded as the host in each sweep's manifest, in the run details and in the About window. The app opens
     /// on the first model of `models` that runs on the device, with Henad's icon, no links, no licence and no command
     /// line.
@@ -72,13 +72,13 @@ impl AppOptions {
         self
     }
 
-    /// Sets the licence the About window names, such as `MIT OR Apache-2.0`.
+    /// Sets the licence shown in the About window, such as `MIT OR Apache-2.0`.
     pub fn license(mut self, license: impl Into<String>) -> Self {
         self.product.license = Some(license.into());
         self
     }
 
-    /// Sets the command line the Copy command writes and the Sweep tab's advice names, as one program name such as
+    /// Sets the command line the Copy command writes and the Sweep tab's advice refers to, as one program name such as
     /// `henad-cli`. Without one the button is hidden.
     ///
     /// Note that the Copy command quotes the name as one shell word. A name with a space, such as `cargo run --`, is
@@ -88,7 +88,7 @@ impl AppOptions {
         self
     }
 
-    /// Sets what the app opens on in place of the first model of the set.
+    /// Sets the opening the app starts on instead of the first model of the set.
     pub fn opening(mut self, opening: AppOpening) -> Self {
         self.opening = Some(opening);
         self
@@ -158,7 +158,7 @@ pub(crate) struct Product {
     pub source_url: Option<String>,
     pub documentation_url: Option<String>,
     pub license: Option<String>,
-    /// Program the Copy command and the Sweep tab's advice name.
+    /// Program that the Copy command and the Sweep tab's advice refer to.
     pub cli_command: Option<String>,
     /// Whether this is Henad's own app, set by the official binary through [`AppOptions::__official`].
     pub official: bool,
@@ -180,26 +180,36 @@ impl std::fmt::Debug for Product {
     }
 }
 
-/// Returns the phrase advice names the command line by, "with henad-cli" for `command` `henad-cli`, or "on the
+/// Returns the phrase that advice uses for the command line, "with henad-cli" for `command` `henad-cli`, or "on the
 /// command line" without a command.
 pub(crate) fn cli_phrase(command: Option<&str>) -> String {
     command.map_or_else(|| "on the command line".to_owned(), |command| format!("with {command}"))
 }
 
-/// What the app opens on, beside its model list.
+/// Results folder, run or setup the app opens on, beside its model list.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum AppOpening {
-    /// A results folder, as `--open DIR` gives it. Native only.
+    /// A results folder, as specified by `--open DIR`. Native only.
     #[cfg(not(target_arch = "wasm32"))]
     Results(PathBuf),
-    /// One recorded run, rebuilt and stepped to `open_at`.
-    Run { replay: Replay, open_at: OpenAt },
-    /// A setup built by the host, rebuilt and stepped to `open_at`.
+    /// One recorded run, `replay`, rebuilt and stepped to `open_at`.
+    Run {
+        /// Recorded run, with its model, values, seed and schedule.
+        replay: Replay,
+        /// Tick the app steps the run to.
+        open_at: OpenAt,
+    },
+    /// A setup the host built, `setup`, rebuilt and stepped to `open_at`.
     ///
-    /// The app builds the entry of its own set under the setup's model id, which has to declare the same schema as
+    /// The app builds the entry from its own set under the setup's model id, which has to declare the same schema as
     /// `setup.entry()`.
-    Setup { setup: RunSetup, open_at: OpenAt },
+    Setup {
+        /// Setup that provides the model id, values, seed and schedule.
+        setup: RunSetup,
+        /// Tick the app steps the model to.
+        open_at: OpenAt,
+    },
 }
 
 /// Reason the options' models cannot serve their opening.
@@ -207,19 +217,19 @@ pub enum AppOpening {
 pub(crate) enum OpeningError {
     /// The set holds no model under the id.
     NotInSet(String),
-    /// A run sets another number of parameters than its model declares.
+    /// A run sets a different number of parameters than its model declares.
     ParamCount {
         model: String,
         given: usize,
         declared: usize,
     },
-    /// The set's model under the setup's id declares another schema than the setup's.
+    /// The set's model under the setup's id declares a different schema than the setup's entry.
     OtherSchema(String),
-    /// The model refuses a value or a scheduled action of the run, for the reason given.
+    /// The model rejects a value or a scheduled action of the run.
     RunRefused { model: String, reason: String },
 }
 
-/// Returns the reason `error` gives, as the [`OpeningError::RunRefused`] message ends with it.
+/// Returns the reason in `error`, in the form that ends an [`OpeningError::RunRefused`] message.
 fn refusal_reason(error: &SetupError) -> String {
     match error {
         SetupError::Param(reason) => error_chain(reason),
@@ -323,7 +333,7 @@ enum WebStartErrorKind {
     /// The page has no canvas under the id.
     MissingCanvas(&'static str),
     Opening(OpeningError),
-    /// eframe's error, written out. eframe throws a JavaScript value, which is no `std::error::Error`.
+    /// eframe's error, written out. eframe throws a JavaScript value, which is not a `std::error::Error`.
     Eframe(String),
 }
 
@@ -383,7 +393,7 @@ mod tests {
     use super::{AppOpening, AppOptions, OpeningError};
     use crate::state::OpenAt;
 
-    /// A host's own model under the id of an example model, with no parameters of its own.
+    /// A host's own model under the id of an example model, declaring no parameters.
     struct OtherSir;
 
     impl GridModel for OtherSir {

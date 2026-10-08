@@ -10,7 +10,7 @@ use crate::explore::factor::{Factor, FactorDomain, FactorLevel, FactorSlot};
 use crate::explore::plan::Config;
 use crate::params::ParamValue;
 
-/// Most configs one plan can have, over all its blocks.
+/// Maximum number of configs in one plan, over all its blocks.
 pub const MAX_CONFIGS: usize = 1 << 24;
 
 /// Rule that combines the factors of a block.
@@ -21,22 +21,32 @@ pub enum DesignKind {
     Factorial,
     /// Levels paired by position, so config `i` takes level `i` of every factor.
     Zip,
-    /// `samples` configs, each factor's value drawn on its own from its whole domain.
-    Random { samples: usize },
+    /// `samples` configs, each factor's value drawn independently from its whole domain.
+    Random {
+        /// Number of configs to draw.
+        samples: usize,
+    },
     /// `samples` configs in a Latin hypercube, each factor's domain split into `samples` strata.
     ///
     /// Every stratum of a continuous factor holds one sample, at a random point inside it. A stratum of a factor
     /// with `m` levels takes the lowest level it covers, and each level is then taken `samples / m` times, rounded
     /// down or up. The levels such a factor takes therefore depend on `samples` alone, and the design seed decides
-    /// only which config takes each one.
-    LatinHypercube { samples: usize },
-    /// One config per row of a comma-separated table, whose header names parameter ids or `action.<name>`.
+    /// only which config takes each level.
+    LatinHypercube {
+        /// Number of configs, and of strata in each factor's domain.
+        samples: usize,
+    },
+    /// One config per row of a comma-separated table, whose header lists parameter ids or `action.<name>`.
     ///
     /// [`crate::explore::design_csv`] reads the table.
-    Table { text: String },
+    Table {
+        /// Text of the table, header included.
+        text: String,
+    },
 }
 
 impl DesignKind {
+    /// Returns the design's name in a spec file, as in `lhs`.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Factorial => "factorial",
@@ -56,6 +66,7 @@ impl DesignKind {
 /// Resolved factors combined under one design.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
+    /// Design that combines the factors into configs.
     pub design: DesignKind,
     /// Factors of the block, or the columns of its table.
     pub factors: Vec<Factor>,
@@ -66,8 +77,11 @@ pub struct Block {
 /// A block whose design cannot combine its factors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesignError {
-    /// A zip over factors with different numbers of levels, given in factor order.
-    UnequalLengths { lengths: Vec<usize> },
+    /// A zip over factors with different numbers of levels.
+    UnequalLengths {
+        /// Number of levels of each factor, in factor order.
+        lengths: Vec<usize>,
+    },
     /// A design whose configs would take the plan past [`MAX_CONFIGS`].
     TooManyConfigs,
     /// A random or Latin hypercube design of 0 samples.
@@ -75,9 +89,15 @@ pub enum DesignError {
     /// A random or Latin hypercube design with no factor to draw.
     NoFactors,
     /// Factor `factor_index` of a factorial or zip design, a range with no listed levels.
-    UnlistedLevels { factor_index: usize },
-    /// Factor `factor_index`, a list of no levels.
-    NoLevels { factor_index: usize },
+    UnlistedLevels {
+        /// Index of the factor in its block, counting from 0.
+        factor_index: usize,
+    },
+    /// Factor `factor_index`, a list with no levels.
+    NoLevels {
+        /// Index of the factor in its block, counting from 0.
+        factor_index: usize,
+    },
 }
 
 impl fmt::Display for DesignError {
@@ -109,7 +129,7 @@ impl std::error::Error for DesignError {}
 
 /// Returns the configs of `block`, each a copy of `base` with one level of every factor written into it.
 ///
-/// A factorial or zip block with no factors gives `base` alone. Note that when two factors write one slot, the later
+/// A factorial or zip block with no factors returns `base` alone. Note that when two factors write one slot, the later
 /// factor's level is the one kept.
 ///
 /// # Errors
@@ -121,7 +141,7 @@ pub fn generate(block: &Block, base: &Config) -> Result<Vec<Config>, DesignError
     generate_within(block, base, MAX_CONFIGS)
 }
 
-/// Returns the configs of `block` as [`generate`] does, refusing more than `limit` of them before any is built.
+/// Returns the configs of `block` as [`generate`] does, rejecting more than `limit` of them before any is built.
 ///
 /// # Errors
 ///
@@ -212,7 +232,7 @@ fn factorial(
 
 fn zip(levels: &[&[FactorLevel]], factors: &[Factor], base: &Config, limit: usize) -> Result<Vec<Config>, DesignError> {
     let lengths: Vec<usize> = levels.iter().map(|levels| levels.len()).collect();
-    // A zip of no factors gives `base` alone.
+    // A zip of no factors yields `base` alone.
     let count = lengths.first().copied().unwrap_or(1);
     if lengths.iter().any(|&length| length != count) {
         return Err(DesignError::UnequalLengths { lengths });
@@ -231,7 +251,7 @@ fn zip(levels: &[&[FactorLevel]], factors: &[Factor], base: &Config, limit: usiz
         .collect())
 }
 
-/// Returns `samples` configs, drawing every factor's value on its own.
+/// Returns `samples` configs, drawing every factor's value independently.
 fn random(factors: &[Factor], base: &Config, samples: usize, rng: &mut DesignRng) -> Vec<Config> {
     (0..samples)
         .map(|_| {
@@ -251,7 +271,7 @@ fn random(factors: &[Factor], base: &Config, samples: usize, rng: &mut DesignRng
         .collect()
 }
 
-/// Returns `samples` configs, where each factor takes its strata in an order of its own.
+/// Returns `samples` configs, where each factor takes its strata in its own order.
 ///
 /// The draws go factor by factor, a permutation of the strata first, then one position within each stratum for a
 /// continuous factor.
@@ -279,9 +299,9 @@ fn latin_hypercube(factors: &[Factor], base: &Config, samples: usize, rng: &mut 
     configs
 }
 
-/// Returns the level of `count` levels that stratum `stratum` of `samples` falls on.
+/// Returns the level, out of `count` levels, that stratum `stratum` of `samples` falls on.
 ///
-/// Each level is the landing place of `samples / count` strata, rounded down or up.
+/// Each level gets `samples / count` strata, rounded down or up.
 fn balanced_level(stratum: usize, samples: usize, count: u128) -> u128 {
     stratum as u128 * count / samples as u128
 }
@@ -583,7 +603,8 @@ mod tests {
         );
     }
 
-    /// The regression. A sampled design indexed into an empty list and panicked, and a listed one gave no configs.
+    /// Every design rejects a factor with no levels. Without the rejection, a sampled design would index into the
+    /// empty list and panic, and a listed design would yield no configs.
     #[test]
     fn a_factor_with_no_levels_is_refused_by_every_design() {
         for design in [

@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::state::AppState;
 
-/// Exported metadata about a run as JSON.
+/// Returns the run details of the loaded model as JSON.
 pub fn run_details(app: &AppState) -> String {
     let entry = app.loaded_entry();
     let host = &app.runtime.host;
@@ -22,7 +22,7 @@ pub fn run_details(app: &AppState) -> String {
         "backend": entry.map(|e| e.metadata().backend.label()),
         "model_source": entry.map(|e| RecordedBuild::from(e.source())),
         "params": entry.map(|e| params_by_id_json(e.param_descriptors(), &app.loaded_values, ChoiceForm::Name)),
-        // Kept from the files of 0.2. `params` holds the loaded model's own values.
+        // A key of the 0.2 format, `true` whenever a model is loaded. `params` holds the loaded model's own values.
         "params_match_running_model": entry.is_some(),
         // Null with a model loaded is the model's default seed.
         "seed": entry.and(app.loaded_seed),

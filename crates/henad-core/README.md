@@ -5,7 +5,7 @@
 This crate holds what a model is written against: the model traits for grids, agent populations and networks on the CPU and the GPU, the primitives their kernels call, the parameter, statistic and action descriptors, and the sweep and search planning that needs no engine.
 It has no dependencies.
 
-The [authoring guide](https://micfong-z.github.io/henad/authoring/) explains each trait, and [Writing your first model](https://micfong-z.github.io/henad/guide/first-model/game-of-life/) builds one step by step.
+The [authoring guide](https://micfong-z.github.io/henad/authoring/) explains each trait, and [Writing your first model](https://micfong-z.github.io/henad/guide/first-model/game-of-life/) builds a model step by step.
 
 ## License
 

@@ -7,7 +7,8 @@
 use crate::fault::{Fault, catching};
 use crate::gpu::GpuContext;
 
-/// One scope per filter. A scope catches only its own, and any of the three can end a build.
+/// One scope per filter. A scope catches only errors of its filter, and an error of any of the three kinds can end a
+/// build.
 #[cfg(not(target_arch = "wasm32"))]
 const FILTERS: [wgpu::ErrorFilter; 3] = [
     wgpu::ErrorFilter::OutOfMemory,
@@ -22,7 +23,7 @@ const FILTERS: [wgpu::ErrorFilter; 3] = [
 ///
 /// # Errors
 ///
-/// If `f` panics, or if the device reported an error while it ran. A panic wins, having stopped
+/// Returns a [`Fault`] if `f` panics, or if the device reported an error while it ran. A panic wins, having stopped
 /// `f` outright.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn catching_on<T>(ctx: &GpuContext, during: &'static str, f: impl FnOnce() -> T) -> Result<T, Fault> {
@@ -46,11 +47,11 @@ pub fn catching_on<T>(ctx: &GpuContext, during: &'static str, f: impl FnOnce() -
     }
 }
 
-/// Runs `f`. This is not scoped as wgpu 30 cannot pop one without aborting the module.
+/// Runs `f` without error scopes. wgpu 30 cannot pop a scope in a browser without aborting the module.
 ///
 /// # Errors
 ///
-/// Never. wasm cannot unwind, and a panic in `f` ends the module.
+/// Returns no error. wasm cannot unwind, and a panic in `f` ends the module.
 #[cfg(target_arch = "wasm32")]
 pub fn catching_on<T>(_ctx: &GpuContext, during: &'static str, f: impl FnOnce() -> T) -> Result<T, Fault> {
     catching(during, f)
@@ -71,7 +72,7 @@ mod tests {
         }));
     }
 
-    /// Issue #31 in one call. Without the scope this ends the process.
+    /// A device error comes back as a fault, as in issue #31. Without the scope this ends the process.
     #[test]
     fn a_device_error_comes_back_as_a_fault() {
         let Some(ctx) = headless_context("henad_fault_test", wgpu::Features::empty()) else {

@@ -20,12 +20,9 @@ const S: u32 = 0u;
 const I: u32 = 1u;
 const R: u32 = 2u;
 
-// Single-round integer hash (Jarzynski/O'Neill "pcg_hash"), not a full 64-bit PCG32 since WGSL has no
-// u64. Storing each cell's hash state in its own ping-ponged buffer (rather than deriving it from
-// a `tick` uniform) is what makes a batch of N steps safe to encode into one command buffer and
-// submit once: any uniform written between passes in the same encoder would only become visible
-// after the whole encoder submits, so every pass would see the same tick. Advancing the state
-// in-buffer sidesteps that entirely.
+// Each cell keeps its `pcg_hash` state in the ping-ponged `rng` buffer, and advances it one round per step.
+// A seed derived from a `tick` uniform would repeat across a batch. A uniform written between the passes of one
+// encoder takes effect only when the encoder submits, and every pass of the batch would read the same tick.
 
 @compute
 @workgroup_size(16, 16)

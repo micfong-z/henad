@@ -12,7 +12,7 @@ In this tutorial we'll build Conway's Game of Life (Life) on the CPU from scratc
 
     This page describes Henad 0.3.
 
-Before starting, set up a project of your own from the template, as [Your own project](../your-project.md) describes.
+Before starting, set up your own project from the template, as [Your own project](../your-project.md) describes.
 Every file on this page goes under that project's `src/`.
 
 ## What we will write
@@ -30,8 +30,8 @@ flowchart LR
 
 `init`, `step_cell` and `stats` are the pieces we need to write ourselves.
 
-The Henad engine handles the rest of the simulation, such as the second grid buffer and the swap between them, splitting rows across cores, wrapping at the edges, handing each row its own random number generator, and the snapshot the UI draws.
-None of those machinery will appear in our code.
+The Henad engine handles the rest of the simulation, such as the second grid buffer and the swap between them, splitting rows across cores, wrapping at the edges, providing each row with its own random number generator, and the snapshot the UI draws.
+None of that machinery will appear in our code.
 
 ## Update rule `step_cell`
 
@@ -60,7 +60,7 @@ fn step_cell(cell: u8, neighbors: &[u8]) -> u8 {
 }
 ```
 
-1. Both surviving cases fit in this match arm, and everything the match does not name falls through to dead.
+1. Both surviving cases fit in this match arm, and everything else falls through to dead.
 
 This function is, in fact, all of the actual model logic.
 We just need a few more pieces to register this model for actual use.
@@ -87,7 +87,7 @@ Notice that the struct is empty, which is the intended shape for a grid model.
 A model in Henad is just const metadata plus pure functions, and the grid data is handled by the engine.
 
 This won't compile yet, because the `impl` block is still empty.
-Cargo compiles only the files `src/lib.rs` reaches, so first declare the module there, next to the template's own:
+Cargo compiles only the files `src/lib.rs` reaches, so first declare the module there, next to the template's own modules:
 
 ``` rust title="src/lib.rs"
 mod life;
@@ -141,7 +141,7 @@ const PALETTE: [[u8; 4]; 2] = [
 ];
 ```
 
-We placed this outside the `impl` block since later on we can `pub` and then reference it from in the [GPU implementation](gpu-game-of-life.md).
+We placed this outside the `impl` block since later on we can `pub` and then reference it from the [GPU implementation](gpu-game-of-life.md).
 Then we point the trait at the array.
 
 ``` rust title="src/life.rs"
@@ -200,7 +200,7 @@ Let's move the function into the impl block and extend its signature:
 
 1. Life reads neither of the new arguments, hence the underscores. We'll cover `params` [below](#parameters), and `rng` is a random number generator private to this row and this tick, which SIR draws from at most once per cell.
 
-Two associated items are required, but we won't implement this in this tutorial.
+Two associated items are required, but we won't implement them in this tutorial.
 
 ``` rust title="src/life.rs"
     type Params = ();
@@ -237,7 +237,7 @@ Two associated items are required, but we won't implement this in this tutorial.
     Reading anything outside its four arguments, or writing anything at all, can introduce undefined behaviour and race conditions.
 
     Notice also that nothing we wrote wraps or bounds-checks a coordinate.
-    The engine automatically hands the correct slice of neighbours, and the grid is toroidal so that every cell has eight neighbours.
+    The engine automatically passes the correct slice of neighbours, and the grid is toroidal so that every cell has eight neighbours.
 
 ### Finishing up
 
@@ -274,7 +274,7 @@ The prelude already holds every name these functions use, so the file compiles.
 
 ## Running it
 
-The model compiles, but the app can only pick models from the set it was handed, so we have to register it.
+The model compiles, but the app can only pick models from the set passed to it, so we have to register it.
 The template's `src/lib.rs` builds that set in `models()`, and the app, the command line and the tests all read it.
 The `mod life;` line is already there, so first we import the function that registers a grid model, if `src/lib.rs` does not import it already,
 
@@ -295,8 +295,8 @@ For context, here is the template's `src/lib.rs` before our three lines join it:
 ```
 
 `register_grid_model` type-erases the model into a `ModelEntry`, and `models()` collects the entries into a `ModelSet`.
-A set refuses a second model with an ID it already holds.
-The name, description, parameters, stat series and topology are all read back off the trait, so an entry carries nothing hand-written that could go wrong.
+A set rejects a second model whose ID it already holds.
+The name, description, parameters, stat series and topology are all read from the trait, so an entry carries nothing hand-written that could go wrong.
 [Model sets](../../authoring/model-sets.md) covers the set in full.
 
 With the entry in place, we can finally run the model.
@@ -384,12 +384,12 @@ parameters for life (Game of Life):
 !!! note "Indexes looking weird?"
 
     You might notice that density sits at index 2 in that list while `DENSITY` reads 0, and both are right.
-    The engine hands `init` and `from_params` the model's _own_ slice, starting after whatever got prepended, so `#!rust extract_f32(params, DENSITY, 0.3)` reads the correct value either way.
+    The engine passes `init` and `from_params` the model's _own_ slice, starting after whatever got prepended, so `#!rust extract_f32(params, DENSITY, 0.3)` reads the correct value either way.
     This also means your indices cannot shift under you.
 
 ## Statistics
 
-The statistics is the last missing piece.
+The statistics are the last missing piece.
 `STATS` declares the series once, and `stats` returns bare numbers in that same order, which keeps labels and colours in one place so that a series cannot end up mislabelled.
 
 ``` rust title="src/life.rs"
@@ -473,7 +473,7 @@ fn a_blinker_rotates_and_comes_back() {
 1. This is the full parameter list, so width and height come first. Density is 0 because `from_cells` never calls `init`.
 2. `from_cells` builds a state from an exact cell buffer rather than from a seed, so a test can start from a pattern you drew by hand.
 
-A pattern touching the edge exercises the wrap instead, and that behaviour belongs in a case of its own.
+A pattern touching the edge exercises the wrap instead, and that behaviour belongs in its own test case.
 
 Registering the model also opted us into the template's test.
 The test runs the [testing kit](../../authoring/testing.md) over every model in `models()`.
@@ -499,7 +499,7 @@ Notice that we only wrote **49** lines for the entire model (excluding imports a
 The reason is everything the engine handled on our behalf:
 
 - Grid allocation, the second buffer, and the pointer swap between them.
-- The parallel split, which hands rows to rayon, natively and on the web alike.
+- The parallel split, which passes rows to rayon, natively and on the web alike.
 - Toroidal wrapping, on both axes.
 - Random number seeding, derived per row and per tick so that results never depend on the thread count.
 - Parameter storage, and rejecting an edit to a reload-only parameter.

@@ -1,5 +1,5 @@
 // Leaf of the stat reduction. One workgroup folds its slice down to one value per lane, and
-// `GpuLaneReduce` owns every level above this.
+// `GpuLaneReduce` owns every level above this leaf.
 
 #import henad::dispatch::WORKGROUP
 #import henad::reduce_tree::block_sum
@@ -32,7 +32,7 @@ fn main(
 
     for (var lane: u32 = 0u; lane < params.lanes; lane = lane + 1u) {
         var value: f32 = 0.0;
-        // One lane is per ant and the other per cell, so each bounds-checks its own domain.
+        // Lane 0 is per ant and lane 1 per cell, so each lane bounds-checks its own domain.
         if (lane == 0u) {
             if (i < params.num_agents) {
                 value = f32((state[i] & HAS_FOOD_BIT) != 0u);

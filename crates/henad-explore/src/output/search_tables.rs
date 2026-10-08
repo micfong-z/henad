@@ -3,8 +3,8 @@
 //! `evaluations.csv` has one row per evaluation and `batches.csv` one row per batch, each written as its batch is
 //! told. A genetic algorithm adds `generations.csv`, one row per finished generation. Once the search ends,
 //! `best.csv` ranks every candidate of a random search, hill climb or genetic algorithm, and `archive.csv` lists the
-//! filled cells of a Pattern Space Exploration (PSE). A config is written in the columns `runs.csv` gives it, one per
-//! parameter and then one per action's tick.
+//! filled cells of a Pattern Space Exploration (PSE). A config is written in the same columns as in `runs.csv`, one
+//! per parameter and then one per action's tick.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -87,6 +87,7 @@ pub struct ConfigColumns {
 }
 
 impl ConfigColumns {
+    /// Returns the columns for the parameters `params` and the actions `actions`.
     pub fn new(params: &[ParamDescriptor], actions: &[ActionSpec]) -> Self {
         let headers = params
             .iter()
@@ -134,14 +135,14 @@ pub struct SearchTablesWriter<W: Write> {
     /// Writer of `generations.csv`, `None` for a search other than a genetic algorithm.
     generations: Option<W>,
     columns: ConfigColumns,
-    /// Whether the search is a PSE. A PSE places candidates in cells and scores none.
+    /// Whether the search is a PSE. A PSE places candidates in cells and does not score them.
     is_pattern_search: bool,
 }
 
 impl<W: Write> SearchTablesWriter<W> {
-    /// Writes the headers of the tables, for the parameters `params` and the actions `actions`, and flushes each.
+    /// Writes the headers of the tables, for the parameters `params` and the actions `actions`, and flushes each table.
     ///
-    /// `is_pattern_search` is set for a PSE. A `generations` writer is given for a genetic algorithm alone. A search
+    /// `is_pattern_search` is set for a PSE. A `generations` writer is passed only for a genetic algorithm. A search
     /// stopped before its first batch is told then leaves each table with its header.
     ///
     /// # Errors
@@ -251,7 +252,7 @@ impl<W: Write> SearchTablesWriter<W> {
         row
     }
 
-    /// Flushes the writers and hands them back, `evaluations.csv`, then `batches.csv`, then `generations.csv`.
+    /// Flushes the writers and returns them in the order `evaluations.csv`, `batches.csv`, `generations.csv`.
     ///
     /// # Errors
     ///
@@ -277,9 +278,9 @@ fn write_generation(dest: &mut impl Write, generation: &GenerationSummary) -> io
     )
 }
 
-/// Writes `best.csv` to `dest`, one row per entry of `ranking` in order, ranked from 1, and hands `dest` back.
+/// Writes `best.csv` to `dest`, one row per entry of `ranking` in order, ranked from 1, and returns `dest`.
 ///
-/// `configs` holds the config of every candidate `ranking` names. A candidate without one is left out.
+/// `configs` holds the config of every candidate that `ranking` lists. A candidate without a config is left out.
 ///
 /// # Errors
 ///
@@ -311,9 +312,9 @@ pub(crate) fn write_ranking<W: Write>(
     Ok(dest)
 }
 
-/// Writes `archive.csv` to `dest`, one row per entry of `archive` in cell order, and hands `dest` back.
+/// Writes `archive.csv` to `dest`, one row per entry of `archive` in cell order, and returns `dest`.
 ///
-/// `settings` gives the bounds of each cell, and `configs` the config of every exemplar `archive` names. An entry
+/// `settings` holds the bounds of each cell, and `configs` the config of every exemplar that `archive` lists. An entry
 /// without a config, or on an axis with no range, is left out.
 ///
 /// # Errors
@@ -363,7 +364,7 @@ pub struct SearchHistory {
     pub generations: Vec<GenerationSummary>,
     /// Filled cells of a PSE's archive, by cell.
     pub archive: BTreeMap<PatternCell, ArchiveEntry>,
-    /// Evaluations of a PSE with an output outside its axis, placed in an edge cell.
+    /// Number of evaluations of a PSE with an output outside its axis, placed in an edge cell.
     pub outside_count: u64,
     /// Settings a PSE places outputs with, each axis with its range. `None` for any other search, or while an
     /// automatic range waits for the initial samples.
@@ -373,21 +374,22 @@ pub struct SearchHistory {
 /// Standing of a search after one batch.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BatchStanding {
+    /// Index of the batch, counting from 0.
     pub batch: u64,
-    /// Evaluations told so far, the batch's included.
+    /// Number of evaluations told so far, including this batch's evaluations.
     pub evaluations: u64,
-    /// Runs of those evaluations.
+    /// Number of runs in those evaluations.
     pub runs: u64,
     /// Best candidate after the batch, `None` for a PSE.
     pub best_candidate_id: Option<u64>,
     /// Objective of the best candidate, `None` for a PSE or an objective that is not finite.
     pub best_objective: Option<f64>,
-    /// Cells a PSE's archive fills after the batch, 0 for any other search.
+    /// Number of cells that a PSE's archive fills after the batch, 0 for any other search.
     pub filled_cells: u64,
 }
 
 impl SearchHistory {
-    /// Adds the batch `update` reports.
+    /// Adds the batch that `update` reports.
     pub fn push(&mut self, update: &SearchUpdate) {
         let best = update.best.as_ref();
         self.batches.push(BatchStanding {
@@ -426,14 +428,14 @@ impl SearchHistory {
     /// the search wrote no such table, and from `search`, the search the tables record.
     ///
     /// A PSE's cells come from `evaluations.csv`, so a search stopped before its end shows the cells it filled. An
-    /// automatic range is taken from the rows of the initial samples, as the search took it, and places the rows
-    /// written before it was fixed. A value written as an empty cell reads as a value that is not finite. A partial
-    /// last line is left out.
+    /// automatic range is taken from the rows of the initial samples, as the search took it, and the rows written
+    /// before the range was fixed are then placed with it. A value written as an empty cell is read as a value that is
+    /// not finite. A partial last line is left out.
     ///
     /// # Errors
     ///
-    /// Returns [`ReadError`] for a table that is not valid CSV, lacks a column the search writes, or holds a field
-    /// the column cannot take.
+    /// Returns [`ReadError`] for a table that is not valid CSV, lacks a column that the search writes, or holds a field
+    /// that the column cannot accept.
     pub fn read(
         batches: Option<&str>,
         generations: Option<&str>,
@@ -488,7 +490,7 @@ impl SearchHistory {
             let table = SearchCsvTable::read(text, EVALUATIONS_FILE)?;
             let candidate_id = table.leading_column("candidate_id")?;
             // The config columns are the model's parameter ids, so every column after them is found by its place.
-            // The last column tells a PSE's table from a scored one.
+            // The last column distinguishes a PSE's table from a scored table.
             if table.header.last().map(String::as_str) == PLACEMENT_COLUMNS.last().copied() {
                 let [failed, x, y, x_index, y_index, outside, new_cell] = table.trailing_columns(PLACEMENT_COLUMNS)?;
                 history.pattern_settings = match search.map(|search| (&search.algorithm, search.max_evaluations)) {
@@ -508,7 +510,7 @@ impl SearchHistory {
                         .zip(table.optional_field(record, y_index)?)
                         .map(|(x_index, y_index)| PatternCell { x_index, y_index });
                     let cell = match (written, &history.pattern_settings) {
-                        // A row written before an automatic range was taken lands with the range taken since.
+                        // A row written before an automatic range was taken is placed with the range taken since.
                         (None, Some(settings)) => {
                             let (x, y) = (table.float(record, x)?, table.float(record, y)?);
                             (x.is_finite() && y.is_finite())
@@ -623,7 +625,7 @@ impl SearchCsvTable {
     }
 
     /// Returns `settings` with each automatic range taken from the rows of the initial samples, as
-    /// [`PatternSpaceSettings::with_automatic_ranges`] takes it, or `None` while the table lacks one of them.
+    /// [`PatternSpaceSettings::with_automatic_ranges`] computes it, or `None` while the table lacks an initial sample.
     ///
     /// `columns` are the positions of `candidate_id`, `x` and `y`. A PSE under a budget of `max_evaluations`
     /// takes its range from the candidates below [`PatternSpaceSettings::range_sample_count`].
@@ -674,7 +676,7 @@ impl SearchCsvTable {
             .ok_or_else(|| self.bad_field(record, column))
     }
 
-    /// Returns the value in a field, `None` for an empty one.
+    /// Returns the value in a field, `None` for an empty field.
     fn optional_field<T: FromStr>(&self, record: usize, column: usize) -> Result<Option<T>, ReadError> {
         if self.rows[record][column].is_empty() {
             Ok(None)
@@ -683,7 +685,7 @@ impl SearchCsvTable {
         }
     }
 
-    /// Returns the float in a field, `NaN` for an empty one.
+    /// Returns the float in a field, `NaN` for an empty field.
     fn float(&self, record: usize, column: usize) -> Result<f64, ReadError> {
         Ok(self.optional_field(record, column)?.unwrap_or(f64::NAN))
     }
@@ -714,9 +716,9 @@ mod tests {
     use crate::result_set::ResultSet;
     use crate::tests::support::{ScratchDir, sweep_options, sweep_with};
 
-    /// Model whose parameters share their ids with the columns `evaluations.csv` writes after a config.
+    /// Model with parameter ids that match the columns `evaluations.csv` writes after a config.
     ///
-    /// Its stats are `x` and `y` scaled to 0 to 200. Each column then holds another value than the parameter it
+    /// Its stats are `x` and `y` scaled to 0 to 200. Each column then holds a different value from the parameter it
     /// shares a name with.
     struct TrailingNames;
 

@@ -5,7 +5,7 @@ use henad_compute::cpu::primitives::scatter::Combine;
 use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 
-/// Below this a trail reads as zero, so it disappears instead of asymptoting.
+/// Pheromone level below which a cell is treated as zero.
 pub const LOW_PHEROMONE: f32 = 1e-14;
 
 /// Display window in decades. Trails fall off geometrically, so a linear ramp shows nothing but a
@@ -13,22 +13,28 @@ pub const LOW_PHEROMONE: f32 = 1e-14;
 const DISPLAY_DECADES: f32 = 3.0;
 const RAMP_STEPS: u8 = 6;
 
-// Site markers. Static for the whole run.
+// Site markers, fixed for the whole run.
+/// Site marker of an open cell.
 pub const EMPTY: u8 = 0;
+/// Site marker of a cell no ant can enter.
 pub const OBSTACLE: u8 = 1;
+/// Site marker of the food source.
 pub const FOOD: u8 = 2;
+/// Site marker of the nest.
 pub const HOME: u8 = 3;
 
 // Layer indices in the field set.
+/// Layer of the trail that leads to food, laid by ants carrying food.
 pub const TO_FOOD: usize = 0;
+/// Layer of the trail that leads to the nest, laid by searching ants.
 pub const TO_HOME: usize = 1;
 
 henad_core::params! {
     const EVAPORATION = f32_param("evaporation", "Evaporation", 0.999, 0.9, 1.0, Some(0.001));
 }
 
-/// Background, two trail ramps, then the site markers. The ramps differ by hue so route home and
-/// route to food stay apart at a glance.
+/// Cell colours: the background, two trail ramps, then the site markers. The ramps differ by hue,
+/// so the two trails stay distinct at a glance.
 pub const CELL_PALETTE: [[u8; 4]; 16] = [
     [0x0E, 0x0E, 0x12, 0xFF], // 0  background
     [0x10, 0x1C, 0x30, 0xFF], // 1  to-home, faintest
@@ -48,11 +54,15 @@ pub const CELL_PALETTE: [[u8; 4]; 16] = [
     [0xF2, 0xE4, 0x5C, 0xFF], // 15 nest
 ];
 
+/// Pheromone layers of [`AntsModel`](crate::ants::AntsModel) as a [`ScalarFieldSpec`], one trail to food and one trail
+/// home, both decaying each tick.
 #[derive(Debug)]
 pub struct PheromoneField;
 
+/// Parameters of [`PheromoneField`].
 #[derive(Debug)]
 pub struct FieldParams {
+    /// Factor that multiplies every cell's pheromone each tick, `evaporation`.
     pub evaporation: f32,
 }
 
@@ -76,16 +86,16 @@ impl ScalarFieldSpec for PheromoneField {
         }
     }
 
-    /// Nest, food source and the two obstacle blobs.
+    /// Marks the nest, the food source and the two obstacle blobs.
     ///
-    /// Placed proportionally so the grid stays a parameter. At 200x200 this matches the reference,
-    /// which hard-codes them.
+    /// The grid size is a parameter, and the sites are placed in proportion to it. At 200 by 200
+    /// they match the reference's hard-coded layout.
     fn build_sites(width: u32, height: u32, sites: &mut [u8]) {
         let (w, h) = (f64::from(width), f64::from(height));
         // The reference's ellipse constant is calibrated to a 200 wide field.
         let size = 0.407 * (200.0 / w);
-        // f64 and this grouping are what the declaration states, and every port follows it. In f32
-        // with the multiply distributed, rounding moved the boundary at some widths.
+        // The declaration states f64 and this grouping, and every port follows it. In f32 with the
+        // multiply distributed, rounding moves the boundary at some widths.
         let blob = |x: f64, y: f64, cx: f64, cy: f64| -> bool {
             let a = ((x - cx) + (y - cy)) * size;
             let b = ((x - cx) - (y - cy)) * size;
@@ -108,7 +118,7 @@ impl ScalarFieldSpec for PheromoneField {
 
     fn decay(v: f32, p: &FieldParams) -> f32 {
         let d = v * p.evaporation;
-        // Without the floor a trail never disappears, it just asymptotes.
+        // Without the floor a trail would shrink forever and never reach zero.
         if d < LOW_PHEROMONE { 0.0 } else { d }
     }
 
@@ -118,7 +128,7 @@ impl ScalarFieldSpec for PheromoneField {
             FOOD => 14,
             HOME => 15,
             _ => {
-                // Stronger route wins the cell, so overlapping trails stay legible.
+                // The stronger trail wins the cell, so overlapping trails stay legible.
                 let (food, home) = (values[TO_FOOD], values[TO_HOME]);
                 let (v, base) = if food > home { (food, 6) } else { (home, 0) };
                 match ramp_step(v) {
@@ -130,19 +140,21 @@ impl ScalarFieldSpec for PheromoneField {
     }
 }
 
+/// Returns the index of the nest's cell, seven eighths of the way across and down the grid.
 pub fn nest_cell(width: u32, height: u32) -> usize {
     let x = (0.875 * width as f32) as u32;
     let y = (0.875 * height as f32) as u32;
     (y * width + x) as usize
 }
 
+/// Returns the index of the food source's cell, one eighth of the way across and down the grid.
 pub fn food_cell(width: u32, height: u32) -> usize {
     let x = (0.125 * width as f32) as u32;
     let y = (0.125 * height as f32) as u32;
     (y * width + x) as usize
 }
 
-/// Log scaled strength in `0..=RAMP_STEPS`, where 0 means not worth drawing.
+/// Returns the log-scaled strength of `v` in `0..=RAMP_STEPS`, where 0 means not worth drawing.
 fn ramp_step(v: f32) -> u8 {
     if v <= LOW_PHEROMONE {
         return 0;
@@ -160,7 +172,7 @@ mod tests {
 
     use super::*;
 
-    /// Proportional placement has to land exactly where the reference hard-codes these.
+    /// Proportional placement has to put the sites exactly where the reference hard-codes them.
     #[test]
     fn sites_match_the_reference_layout_at_200_squared() {
         let mut sites = vec![EMPTY; 200 * 200];

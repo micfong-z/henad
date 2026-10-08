@@ -34,9 +34,9 @@ pub enum StatValue {
 ```
 
 The stats panel shows each variant in full.
-A whole `Scalar` shows without decimals, and a fractional one with up to three.
+A whole `Scalar` shows without decimals, and a fractional `Scalar` shows up to three decimals.
 The history chart plots one number per series, so a `Vector2D` is charted as its magnitude and a `Histogram` as its total count.
-Boids reports average velocity as a `Vector2D`, which reads as a direction in the panel and doubles as a measure of flock coherence on the chart.
+Boids reports average velocity as a `Vector2D`, which shows as a direction in the panel and doubles as a measure of flock coherence on the chart.
 
 ## When it runs
 
@@ -52,7 +52,7 @@ An exported series matches what the app shows.
 
 ## Reducing in parallel
 
-To fold up a whole grid or population, run the reduction in chunks through `reduce_chunks`.
+To fold up a whole grid or population, run the reduction in chunks with `reduce_chunks`.
 
 ```rust
 --8<-- "crates/henad-models/src/game_of_life.rs:count_alive"
@@ -68,14 +68,14 @@ Boids sums three totals in one pass this way, folding them into a struct instead
 ## Tallies
 
 Some quantities cannot be recomputed from the current state at all, because they count things that already happened.
-An `AgentModel` declares a `Tally` for those.
+An `AgentModel` counts such quantities in a `Tally`.
 
 ```rust
 type Tally = u64;
 ```
 
 Each step pass returns one tally per chunk.
-The engine merges them in chunk order, accumulates the merged value across ticks, and hands the total to `stats` alongside the lanes and the field.
+The engine merges them in chunk order, accumulates the merged value across ticks, and passes the total to `stats` alongside the lanes and the field.
 Ants counts deliveries this way, since a delivered item leaves no trace in the population itself.
 
 The default is `()`, meaning there is nothing to count.
@@ -91,15 +91,15 @@ fn stats(lanes: &Self::Lanes, graph: &Network, aux: &Self::Aux) -> Vec<StatValue
 ```
 
 `stats` borrows `aux` immutably and cannot store anything in it.
-A stat that needs a walk of the graph, such as a count of connected components, is computed in `prepare_view` and kept in `aux` for `stats` to read.
-Team Assembly keys its cached components by the graph's version and node count, and labels them again only when either has changed.
+A stat that needs a graph walk, such as a count of connected components, is computed in `prepare_view` and kept in `aux` for `stats` to read.
+Team Assembly keys its cached components by the graph's version and node count, and labels them again only when the version or the node count has changed.
 
 ```rust
 --8<-- "crates/henad-models/src/team_assembly/mod.rs:components"
 ```
 
-`label_components`, at `henad::authoring::label_components`, labels the components in parallel and returns their count and the size of the largest.
-It reads a directed graph as undirected.
+`label_components`, at `henad::authoring::label_components`, labels the components in parallel and returns their count and the size of the largest component.
+It treats a directed graph as undirected.
 
 `stats` can be called before any `prepare_view` has run, and it still has to return a value for every series.
 The testing kit's `StatCount` check calls it on a freshly built state.
@@ -108,7 +108,7 @@ Team Assembly reports both component stats as zero until the first labelling.
 ## On the GPU
 
 On the GPU the state never leaves the device, and a stat comes back through a reduction pass followed by an asynchronous readback.
-`SimState::stats()` reports whatever the last completed readback produced, which is a few milliseconds stale, and it reads all zero until the first readback lands.
+`SimState::stats()` reports whatever the last completed readback produced, which is a few milliseconds stale, and every value is zero until the first readback completes.
 
 === "GPU grid models"
 

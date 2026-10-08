@@ -1,41 +1,45 @@
-//! The display half of a GPU model. A texture the model's compute shader writes, plus the
+//! The display half of a GPU model: a texture the model's compute shader writes, and the
 //! fullscreen-triangle render pipeline that samples it into the viewport.
 //!
-//! Model-agnostic. A GPU model only has to write RGBA pixels into [`DisplayTarget::view`], and
-//! it gets a paintable [`GpuDisplay`] for free.
+//! The display knows nothing of the model. A model writes RGBA pixels into [`DisplayTarget::view`], and
+//! gets a paintable [`GpuDisplay`].
 
 use std::sync::Arc;
 
 use crate::display_scale::display_dims;
 
-/// The render-only half, handed to the UI inside a snapshot. The UI's paint callback holds an
+/// The render-only half, passed to the UI inside a snapshot. The UI's paint callback holds an
 /// `Arc` of this and does nothing but bind and draw, never touching simulation state.
 ///
-/// The `Arc` is what makes teardown safe. An in-flight paint callback keeps the pipeline and
+/// The `Arc` makes teardown safe. An in-flight paint callback keeps the pipeline and
 /// its texture alive even if the sim thread and its state are dropped mid-frame.
 #[derive(Debug)]
 pub struct GpuDisplay {
-    // Cell dimensions of the underlying grid, which the UI fits the aspect ratio to. The
-    // texture behind it may be smaller, see [`crate::display_scale`].
+    /// Width of the underlying grid in cells, which the UI fits the aspect ratio to. The texture behind it can be
+    /// smaller, as [`crate::display_scale`] caps it.
     pub width: u32,
+    /// Height of the underlying grid in cells.
     pub height: u32,
+    /// Pipeline that samples the texture into the viewport.
     pub render_pipeline: wgpu::RenderPipeline,
+    /// Bind group of the texture and its sampler.
     pub render_bind_group: wgpu::BindGroup,
 }
 
 /// A display texture plus the [`GpuDisplay`] that samples it.
 #[derive(Debug)]
 pub struct DisplayTarget {
-    /// Bind this as a `texture_storage_2d<rgba8unorm, write>` in the model's display compute pass.
+    /// Texture view, bound as a `texture_storage_2d<rgba8unorm, write>` in the model's display compute pass.
     pub view: wgpu::TextureView,
     /// Texture dimensions, which the model's display pass dispatches over.
     pub dims: (u32, u32),
+    /// Render half, for the snapshot.
     pub display: Arc<GpuDisplay>,
 }
 
 /// Creates the display texture and the pipeline that samples it into `target_format`.
 ///
-/// `width` and `height` are the *grid*; the texture is capped by [`display_dims`].
+/// `width` and `height` are the grid dimensions in cells. The texture is capped by [`display_dims`].
 #[cfg_attr(
     all(target_arch = "wasm32", target_feature = "atomics"),
     expect(

@@ -291,10 +291,12 @@ impl Network {
         self.occupied.get(i as usize).copied().unwrap_or(false)
     }
 
+    /// Whether the edges are directed.
     pub fn directed(&self) -> bool {
         self.directed
     }
 
+    /// Version of the graph. It goes up whenever the edges, their colours or their direction change.
     pub fn version(&self) -> u64 {
         self.version
     }
@@ -345,6 +347,7 @@ impl Network {
         self.version += 1;
     }
 
+    /// Number of edges.
     pub fn edge_count(&self) -> usize {
         self.src.len()
     }
@@ -375,6 +378,7 @@ impl Network {
     /// Repeated edges are allowed.
     ///
     /// # Panics
+    ///
     /// Panics on debug builds if `a == b`.
     pub fn add_edge(&mut self, a: u32, b: u32, color: u8) -> u32 {
         debug_assert!(a != b, "a self loop has no meaning for either row set");
@@ -521,6 +525,7 @@ impl Network {
         }
     }
 
+    /// Heap memory held by the graph, in bytes.
     pub fn heap_bytes(&self) -> usize {
         self.occupied.capacity()
             + self.free.capacity() * size_of::<u32>()

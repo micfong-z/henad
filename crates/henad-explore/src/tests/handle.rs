@@ -34,7 +34,7 @@ use crate::tests::support::{
     without_clocks, without_timing,
 };
 
-/// Longest a test waits for a sweep to reach a state.
+/// Maximum time a test waits for a sweep to reach a state.
 const PATIENCE: Duration = Duration::from_secs(60);
 
 fn values(raw: &[&str]) -> LevelSpec {
@@ -101,7 +101,7 @@ fn options() -> SweepRunOptions {
     SweepRunOptions::new(provenance())
 }
 
-/// Receives the events of `run` until its last one, and returns them.
+/// Receives the events of `run` until the last event, and returns them.
 ///
 /// # Panics
 ///
@@ -124,7 +124,7 @@ fn drain(run: &mut SweepRun) -> Vec<SweepEvent> {
 ///
 /// # Panics
 ///
-/// Panics when it does not within [`PATIENCE`].
+/// Panics when `holds` does not hold within [`PATIENCE`].
 fn wait_for(run: &SweepRun, condition: &str, holds: impl Fn(&crate::handle::SweepProgress) -> bool) {
     let deadline = Instant::now() + PATIENCE;
     while !holds(&run.progress()) {
@@ -648,7 +648,7 @@ fn a_gpu_sweep_handed_no_device_steps_on_its_own() {
     );
 }
 
-/// GPU SIR under an id the example set does not hold, as a model of a crate downstream registers one.
+/// GPU SIR under an id that the example set does not hold, registered as a downstream crate registers its models.
 struct OutsideGpuSir;
 
 impl GpuGridModel for OutsideGpuSir {
@@ -701,7 +701,7 @@ impl GpuGridModel for OutsideGpuSir {
     }
 }
 
-/// A sweep handed no device builds the entry it was handed on its own device, never one looked up by id.
+/// A sweep passed no device builds the entry that it was passed on its own device, never an entry looked up by id.
 #[test]
 fn a_gpu_model_outside_the_example_set_sweeps_on_its_own_device() {
     if headless_device().is_none() {

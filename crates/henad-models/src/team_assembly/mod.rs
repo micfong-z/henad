@@ -24,23 +24,31 @@ use crate::team_assembly::ring::RetirementRing;
 pub use crate::team_assembly::lanes::{TeamChunk, TeamLanes, TeamRead};
 
 // Node colours, which are also indices into `PALETTE`.
+/// Colour of a node outside the last team.
 pub const IDLE: u8 = 0;
+/// Colour of an incumbent member of the last team.
 pub const INCUMBENT: u8 = 1;
+/// Colour of a newcomer member of the last team.
 pub const NEWCOMER: u8 = 2;
 
 // Link colours, which are also indices into `EDGE_PALETTE`.
+/// Colour of a new link between two newcomers.
 pub const NEWCOMER_NEWCOMER: u8 = 0;
+/// Colour of a new link between a newcomer and an incumbent.
 pub const NEWCOMER_INCUMBENT: u8 = 1;
+/// Colour of a new link between two incumbents.
 pub const INCUMBENT_INCUMBENT: u8 = 2;
 /// Colour of a link between members who had collaborated before this team.
 pub const REPEAT: u8 = 3;
 
+/// Node colours, indexed by [`IDLE`], [`INCUMBENT`] and [`NEWCOMER`].
 pub const PALETTE: [[u8; 4]; 3] = [
     [0x8C, 0x8C, 0x8C, 0xFF], // Idle - gray
     [0xF5, 0xD0, 0x2E, 0xFF], // Incumbent team member - yellow
     [0x00, 0x7A, 0xF5, 0xFF], // Newcomer team member - blue
 ];
 
+/// Link colours, indexed by an edge's colour byte.
 pub const EDGE_PALETTE: [[u8; 4]; 4] = [
     [0x3B, 0x82, 0xF6, 0xC0], // Newcomer-newcomer - blue
     [0x2D, 0xC7, 0x9A, 0xC0], // Newcomer-incumbent - turquoise
@@ -66,6 +74,7 @@ henad_core::params! {
 }
 // --8<-- [end:params]
 
+/// Team Assembly as a [`NetworkModel`].
 #[derive(Debug)]
 pub struct TeamAssembly;
 
@@ -92,7 +101,7 @@ pub struct TeamAux {
     live_listed: bool,
     /// Members of the team being assembled, in the order they were picked.
     team: Vec<u32>,
-    /// Nodes outside the team linked to a member, the collaborator candidates for the next member.
+    /// Nodes outside the team that are linked to a member, the collaborator candidates for the next member.
     candidates: Vec<u32>,
     /// Number of members whose rows are already in `candidates`.
     scanned: usize,
@@ -176,7 +185,7 @@ impl NetworkModel for TeamAssembly {
         });
 
         // --8<-- [start:components]
-        // A spawn leaves the version alone, and a new node with no edges is a component of its own.
+        // A spawn leaves the version alone, and a new node with no edges is its own component.
         let key = (nodes.graph.version(), nodes.graph.node_count());
         let aux = &mut *nodes.aux;
         if aux.components.is_none_or(|(labeled, _)| labeled != key) {
@@ -188,7 +197,7 @@ impl NetworkModel for TeamAssembly {
 
     /// Returns the link counts by colour, the share of nodes in the giant component and the mean component size.
     ///
-    /// The component stats are the ones [`Self::prepare_view`] last computed.
+    /// The component stats are the values that [`Self::prepare_view`] last computed.
     fn stats(_lanes: &TeamLanes, graph: &Network, aux: &TeamAux) -> Vec<StatValue> {
         let links = count_links(graph.edges().2);
         let components = aux
@@ -255,6 +264,7 @@ mod tests {
     /// Returns the default params with some overridden by id.
     ///
     /// # Panics
+    ///
     /// Panics if an id is not declared by the model.
     fn params(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
         let descs = network_model_param_descriptors::<TeamAssembly>();
@@ -374,7 +384,7 @@ mod tests {
         assert_eq!(every.lanes().color, never.lanes().color, "the node colors disagree");
     }
 
-    /// A node spawned with no edges is a component of its own.
+    /// A node spawned with no edges is its own component.
     /// The next publish counts it, although the spawn left the graph's version where it was.
     #[test]
     fn a_node_spawned_with_no_edges_is_counted_at_the_next_publish() {
@@ -422,7 +432,7 @@ mod tests {
     }
 
     /// Each incumbent pick is a previous collaborator with probability `q`,
-    /// plus the chance that a draw from every node outside the team lands on one anyway.
+    /// plus the chance that a draw from every node outside the team lands on a collaborator anyway.
     ///
     /// For each incumbent pick after the first, with `c` collaborators among the `e` nodes outside the team so far,
     /// a collaborator is picked with probability `q + (1 - q) c / e`.

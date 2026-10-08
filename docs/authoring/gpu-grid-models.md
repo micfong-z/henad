@@ -37,7 +37,7 @@ A step reads every buffer's current side and writes every buffer's next side, an
 The engine resolves each binding by the name the shader gives it, as for a [GPU agent model](gpu-agent-models.md#bindings).
 A buffer is bound by its label, with an optional `_in` or `_out` suffix, and the access mode decides which side the name resolves to.
 Four reserved names cover the resources the engine owns for a grid model: `params`, `dims`, `output` and `counters`.
-Each shipped step shader binds a read/write pair per buffer and then the uniform, and SIR's has two pairs.
+Each shipped step shader binds a read/write pair per buffer and then the uniform, and SIR's step shader has two pairs.
 
 ``` wgsl title="crates/henad-models/src/gpu_sir/step.wgsl"
 --8<-- "crates/henad-models/src/gpu_sir/step.wgsl:bindings"
@@ -46,11 +46,11 @@ Each shipped step shader binds a read/write pair per buffer and then the uniform
 ## Buffer length and dispatch domain
 
 The engine does not prescribe how you map cells onto `u32`s.
-You supply two numbers instead: `buffer_lens` for the length of each buffer, and `step_dims` for the invocation count the step needs.
+You supply two numbers instead: `buffer_lens` for the buffer lengths, and `step_dims` for the invocation count the step needs.
 Both default to one `u32` per cell and one invocation per cell, the unpacked arrangement most models want.
 
 A bit-packed model overrides both and works in words.
-GPU Game of Life packs 32 cells into each `u32` and pads rows to whole words, which gives one invocation a whole word to own and stops any two invocations writing the same one.
+GPU Game of Life packs 32 cells into each `u32` and pads rows to whole words, which gives one invocation a whole word to own and stops any two invocations writing the same word.
 Its step then evaluates the rule SWAR-style: the neighbour count stays bit-sliced and is summed by a carry-save adder built from plain XOR and AND, which resolves all 32 cells at once without a loop.
 
 Reduce always dispatches one invocation per *cell*, so a packed model's reduce shader reads the containing word and extracts its own bit.
@@ -74,7 +74,7 @@ Both pairs of dimensions arrive in a shared `Dims` uniform, and they stay equal 
 `Dims` comes from `henad::dims`, in `henad-core/src/authoring/primitives/wgsl/dims.wgsl`, and holds `grid` and `tex`, each a `vec2<u32>`.
 
 The display shader writes RGBA directly, and it therefore carries its own copy of the palette colours in WGSL.
-Only the stats UI reads `PALETTE`, so keeping the two in agreement is your responsibility as the model author.
+Only the stats UI reads `PALETTE`, so keeping the two copies in agreement is your responsibility as the model author.
 
 ## Parameters
 
@@ -99,19 +99,19 @@ See [porting a model to the GPU](porting.md) for the rest of that workflow.
 ## Contracts nothing checks
 
 Shaders are opaque strings as far as Rust is concerned, and none of the contracts below is enforced at compile time.
-Getting one wrong mostly surfaces as a wgpu validation error when the model is first constructed, and knowing the list in advance makes that error much quicker to place.
+Getting a contract wrong mostly surfaces as a wgpu validation error when the model is first constructed, and knowing the list in advance makes that error much quicker to place.
 
 - `STATS.len()` must equal the number of `atomic<u32>` in the reduce shader's `counters` binding.
   A shorter `counters` array validates, and the stats past its end read zero.
-  GPU Game of Life binds one bare `atomic<u32>` there, and GPU SIR an array of three.
+  GPU Game of Life binds one bare `atomic<u32>` there, and GPU SIR binds an array of three.
 - `STATS.len()` must equal the number of values `stats` returns.
-  The engine pairs the two by position and drops the values past the shorter.
+  The engine pairs the two lists by position and drops the entries past the end of the shorter list.
 - `buffer_lens` must return exactly `BUFFERS.len()` lengths, and `seed_buffers` must return exactly that many vectors, each of exactly the declared length.
 
 The testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values than `STATS.len()`.
-The engine reads the `@workgroup_size` of each shader's `main` when it builds the model, and refuses a shader that declares anything but `@workgroup_size(N, N)` for a `WORKGROUP_SIZE` of N.
-It also refuses a buffer label that is reserved or ends in `_in` or `_out`, since a binding of that name resolves to something other than the buffer.
-Sizes and per-pass binding counts are checked before anything is allocated, and a model over the device's limit is refused with a readable message rather than a panic.
+The engine reads the `@workgroup_size` of each shader's `main` when it builds the model, and rejects a shader that declares anything but `@workgroup_size(N, N)` for a `WORKGROUP_SIZE` of N.
+It also rejects a buffer label that is reserved or ends in `_in` or `_out`, since a binding of that name resolves to something other than the buffer.
+Sizes and per-pass binding counts are checked before anything is allocated, and a model over the device's limit is rejected with a readable message rather than a panic.
 Every other construction error reaches the UI as a modal.
 
 ## Next

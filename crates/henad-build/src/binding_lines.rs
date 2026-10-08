@@ -1,8 +1,7 @@
 //! The reader of a shader's `@group(0)` declarations, one line each.
 //!
-//! `wgsl_bindgen` keeps binding names only in doc comments, where the engine cannot read them. Everything the engine
-//! needs, the index, the name, the address space and the access, sits on the declaration line itself. Only a binding's
-//! type needs the imports resolved, and the reader never composes the module.
+//! The reader parses a binding's index, name, address space and access from its declaration line, and never composes
+//! the module.
 
 use std::path::Path;
 
@@ -24,7 +23,7 @@ pub(crate) struct Binding {
 ///
 /// # Errors
 ///
-/// Returns [`ShaderBuildError::BindingLine`] for a line that holds `@binding` or `@group` in another form than
+/// Returns [`ShaderBuildError::BindingLine`] for a line that holds `@binding` or `@group` in any form other than
 /// `@group(G) @binding(N) var<...> name: Type;`, [`ShaderBuildError::UnsupportedBinding`] for a binding kind the
 /// engine does not bind, and [`ShaderBuildError::BindingGap`] when the indices do not run from 0 with no gap or
 /// repeat.
@@ -69,7 +68,7 @@ pub(crate) fn read_bindings(path: &Path, source: &str) -> Result<Vec<Binding>, S
 ///
 /// # Errors
 ///
-/// Returns [`ShaderBuildError::ModuleBinding`] naming that line.
+/// Returns [`ShaderBuildError::ModuleBinding`] for that line.
 pub(crate) fn refuse_bindings(path: &Path, source: &str) -> Result<(), ShaderBuildError> {
     for (number, line) in strip_block_comments(source).lines().enumerate() {
         let code = line.split("//").next().unwrap_or_default().trim();
@@ -84,15 +83,15 @@ pub(crate) fn refuse_bindings(path: &Path, source: &str) -> Result<(), ShaderBui
     Ok(())
 }
 
-/// Reason a line holding `@binding` or `@group` is refused.
+/// Reason a line holding `@binding` or `@group` is rejected.
 enum Refusal {
-    /// The line is not in the one form the reader reads.
+    /// The line is not in the single form that the reader accepts.
     Form(&'static str),
     /// The line declares a binding of a kind no Henad pass binds.
     Kind(&'static str),
 }
 
-/// Returns the declaration on `code`, one line with its comment removed, or `None` for one of another group.
+/// Returns the declaration on `code`, one line with its comment removed, or `None` for a declaration in another group.
 fn read_line(code: &str) -> Result<Option<Binding>, Refusal> {
     let form = Refusal::Form;
     let (group, rest) = attribute(code, "@group(").ok_or(form("the line does not open with `@group(G)`"))?;

@@ -1,8 +1,7 @@
 //! Device limits the GPU models need above the WebGPU baseline.
 //!
-//! Sizes go to the adapter's report, counts to exactly the models' needs, since wgpu's own
-//! advice is to request no more than that. `raise` takes the needs rather than knowing them, since
-//! henad-compute cannot see the models and a host needs them before it has a device.
+//! [`raise`] sets each size limit to the value the adapter reports, and the storage-buffer count to exactly the
+//! models' [`GpuNeeds`].
 
 /// Device capabilities a set of models needs above the WebGPU baseline, known before any device exists.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -29,7 +28,9 @@ impl GpuNeeds {
     }
 }
 
-/// Raises `base` to the models' `needs`, clamped to the adapter's.
+/// Raises `base` to the models' `needs`, clamped to the adapter's limits.
+///
+/// Each size limit is also raised to the value the adapter reports.
 pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits, needs: GpuNeeds) -> wgpu::Limits {
     let storage_buffers = needs.storage_buffers();
     let available = adapter.limits();
@@ -59,11 +60,11 @@ pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits, needs: GpuNeeds) -> w
 mod tests {
     use super::{GpuNeeds, raise};
 
-    /// The default adapter, or `None` when this machine has none.
+    /// Returns the default adapter, or `None` when this machine has no adapter.
     ///
     /// # Panics
     ///
-    /// If `HENAD_REQUIRE_GPU` is set and no adapter is available.
+    /// Panics if `HENAD_REQUIRE_GPU` is set and no adapter is available.
     fn adapter() -> Option<wgpu::Adapter> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
@@ -76,7 +77,7 @@ mod tests {
         adapter.ok()
     }
 
-    /// Over-asking fails `request_device` outright, so this is the safety property.
+    /// Requesting more than the adapter offers fails `request_device` outright, so this is the safety property.
     #[test]
     fn nothing_is_asked_for_past_what_the_adapter_offers() {
         let Some(adapter) = adapter() else {

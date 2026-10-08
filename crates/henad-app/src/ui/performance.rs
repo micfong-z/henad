@@ -4,7 +4,7 @@ use crate::state::AppState;
 use crate::ui::KvGridRows;
 use henad_core::helpers::fmt_bytes;
 
-/// A label with dimmed leading zeros.
+/// Adds a label of `s` with its leading zeros dimmed.
 fn padded_num_label(ui: &mut egui::Ui, s: &str) {
     let (zeros, sig) = split_leading_zeros(s);
 
@@ -30,7 +30,7 @@ fn padded_num_label(ui: &mut egui::Ui, s: &str) {
     ui.label(job);
 }
 
-/// Splits padding from significant digits. An all-zero value keeps its last digit.
+/// Splits the leading zeros from the significant digits. An all-zero value keeps its last digit.
 fn split_leading_zeros(s: &str) -> (&str, &str) {
     let first_sig = s.find(|c: char| c != '0').unwrap_or(s.len() - 1);
     s.split_at(first_sig)
@@ -76,7 +76,7 @@ pub fn performance_ui(ui: &mut egui::Ui, app: &AppState) {
             row(ui, rows, "FPS", "-");
         }
 
-        // 3 integer digits, 1 point, and 1 decimal.
+        // Each time is padded to three integer digits and one decimal.
         let engine_ms = app.snapshot.as_ref().map_or(0.0, |s| s.engine_ms);
         padded_row(ui, rows, "Engine", &format!("{engine_ms:05.1} ms"));
         // Shows the last snapshot's own cost.

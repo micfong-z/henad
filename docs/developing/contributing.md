@@ -20,10 +20,10 @@ For questions or help about Henad, please use [GitHub Discussion](https://github
 ## Making a PR
 
 Go ahead and open a PR if you want to contribute small changes.
-For larger changes, please create an issue first to discuss your ideas to aviod duplicate work!
+For larger changes, please create an issue first to discuss your ideas to avoid duplicate work!
 
 You can test your code with `./check.sh`.
-Its last step builds the web app, which needs the dated nightly that `templates/model-project/scripts/web-toolchain` names, with `rust-src`:
+Its last step builds the web app, which needs the dated nightly that `templates/model-project/scripts/web-toolchain` specifies, with `rust-src`:
 
 ```bash
 rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
@@ -31,10 +31,10 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
 ```
 
 `./check.sh` also runs `cargo deny` when [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) is installed.
-CI runs it on every pull request, together with checks `./check.sh` leaves out, among them a `cargo package` pass when a manifest or `Cargo.lock` changes, a check at the minimum supported Rust version, a check of each feature of the `henad` crate alone, the build of the reference ports, and each published crate's documentation as docs.rs builds it, through `scripts/docs_rs.py`.
-Neither `./check.sh` nor that pass builds a crate from its tarball.
+CI runs it on every pull request, together with checks that `./check.sh` leaves out, among them a `cargo package` pass when a manifest or `Cargo.lock` changes, a check at the minimum supported Rust version, a check of the `henad` crate with each feature on its own, the build of the reference ports, and each published crate's documentation as docs.rs builds it, through `scripts/docs_rs.py`.
+Neither `./check.sh` nor the `cargo package` pass builds a crate from its tarball.
 The release checklist does.
-`.github/workflows/ci.yml` lists them all.
+`.github/workflows/ci.yml` lists every CI check.
 
 ## AI usage
 

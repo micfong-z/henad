@@ -15,14 +15,14 @@ use crate::ui::results::ResultsRequest;
 use crate::ui::results::plot::{format_significant, labeled_combo, refresh_due, text_width};
 use crate::ui::results::store::{ResultsStore, RunsColumn, RunsFilter, RunsSort};
 
-/// Warning a run of a model that does not replay exactly carries, beside Open and on the opened run's line.
+/// Warning shown beside Open and on the opened run's line for a run of a model that does not replay exactly.
 pub const INEXACT_REPLAY: &str =
     "This model does not replay exactly. The opened run might differ from the recorded run.";
 
 /// Height of a row of the table.
 const ROW_HEIGHT: f32 = 18.0;
 
-/// Least width of any column.
+/// Minimum width of any column.
 const MIN_COLUMN_WIDTH: f32 = 48.0;
 
 /// Settings of the Runs view.
@@ -45,7 +45,7 @@ struct RowOrder {
 }
 
 impl RunsFilter {
-    /// Returns the name of the filter, with `configs` the plural the results give their configs.
+    /// Returns the name of the filter, with `configs` as the plural that the results use for their configs.
     fn label(self, configs: &str) -> String {
         match self {
             Self::All => "All runs".to_owned(),
@@ -55,7 +55,7 @@ impl RunsFilter {
     }
 }
 
-/// Returns the name the table gives `status`.
+/// Returns the name that the table uses for `status`.
 pub fn status_label(status: RunStatus) -> &'static str {
     match status {
         RunStatus::Ok => "OK",
@@ -177,7 +177,7 @@ fn columns(store: &ResultsStore) -> Vec<(RunsColumn, String)> {
     columns
 }
 
-/// Returns the text of the header button of the column `title` names, `marker` its sort arrow or empty.
+/// Returns the text of the header button of the column titled `title`, with `marker` as its sort arrow, or empty.
 ///
 /// The arrow leads. A header cut off at the edge of the tab still shows the sort.
 fn header_text(title: &str, marker: &str) -> String {
@@ -188,7 +188,7 @@ fn header_text(title: &str, marker: &str) -> String {
     }
 }
 
-/// Returns the least width of `column`, headed `title`.
+/// Returns the minimum width of `column`, headed `title`.
 ///
 /// The header button fits with either sort arrow, and the Seed column fits a seed of as many digits as
 /// [`u64::MAX`], 20, with the header's padding to spare.
@@ -402,8 +402,8 @@ fn replay_warnings(store: &ResultsStore) -> Vec<(String, Option<&'static str>)> 
     changed.into_iter().chain(unidentified_build(store)).collect()
 }
 
-/// Returns the warning that a build of the store's runs cannot be compared, with a tooltip for the model's, or `None`
-/// when every build can.
+/// Returns the warning that a build of the store's runs cannot be compared, with a tooltip when the model's build
+/// cannot be compared, or `None` when every build can be compared.
 fn unidentified_build(store: &ResultsStore) -> Option<(String, Option<&'static str>)> {
     let (builds, hint) = match store.unidentified_builds.as_slice() {
         [] => return None,
@@ -426,7 +426,7 @@ mod tests {
     use crate::icons::material_design_icons::{MDI_MENU_DOWN, MDI_MENU_UP};
     use crate::ui::results::store::{ResultsStore, RunsColumn, RunsFilter};
 
-    /// The regression. A changed build dropped the warning that the model's build is unidentified, with its hint.
+    /// A changed build keeps the warning that the model's build is unidentified, with its hint.
     #[test]
     fn an_unidentified_build_warns_beside_a_changed_one() {
         let sir = henad_models::example_models()
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(replay_warnings(&store), [unidentified]);
     }
 
-    /// Returns the width `widget` takes untruncated, laid out in a table cell `width` wide.
+    /// Returns the untruncated width of `widget`, laid out in a table cell `width` wide.
     fn intrinsic_width(ui: &mut egui::Ui, width: f32, widget: impl Widget) -> f32 {
         let layout = Layout::left_to_right(Align::Center);
         ui.allocate_ui_with_layout(vec2(width, ROW_HEIGHT), layout, |ui| {

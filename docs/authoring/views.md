@@ -42,10 +42,10 @@ A model publishes up to two of them.
 
 :   Holds `src` and `dst`, an optional colour byte per edge, the edge palette, whether the edges are directed, and a `version`.
     Each endpoint is an index into the `PointView`'s positions.
-    Only a `NetworkModel` publishes one.
+    Only a `NetworkModel` publishes an edge view.
 
 The grid and the points stretch to the same rect.
-The extent is the engine's, and neither layer supplies its own, which rules out an agent layer and a field layer disagreeing about how big the world is.
+The engine owns the extent, and neither layer supplies its own extent, so an agent layer and a field layer cannot disagree about how big the world is.
 Edges carry no coordinates at all.
 The renderer reads both ends of each edge from the agent layer's position buffers.
 An edge follows its nodes wherever the layout moves them.
@@ -56,12 +56,12 @@ The Viewport tab's Edges checkbox shows or hides the edges, and Arrows adds arro
 Edges are drawn only in Sprites mode.
 They also need vertex shaders that can read storage buffers.
 Some GPUs lack that support, and no GPU has it under WebGL2.
-Without it, the Network edges row of the [System tab](../guide/app.md#system-tab) reads Unavailable, and a network model runs with its edges undrawn.
+Without it, the Network edges row of the [System tab](../guide/app.md#system-tab) shows Unavailable, and a network model runs with its edges undrawn.
 The Edges and Arrows checkboxes are hidden there too.
 
 ## Colouring agents
 
-The `agent_lanes!` macro takes a `color = <lane>` line naming the lane the renderer reads for palette indices.
+The `agent_lanes!` macro accepts a `color = <lane>` line that specifies the lane the renderer reads for palette indices.
 
 ```rust
 color = has_food;
@@ -76,7 +76,7 @@ A model that declares no colour lane draws its whole population in `PALETTE[0]`.
 !!! warning "Seed the colour lane in `init`"
 
     The initial snapshot is published before any tick runs.
-    If only the step writes your colour lane, the whole population shows as `PALETTE[0]` until the first tick lands.
+    If only the step writes your colour lane, the whole population shows as `PALETTE[0]` until the first tick completes.
 
 ## Colouring edges
 
@@ -101,7 +101,7 @@ The closure gets the edge list and a mutable slice of the colours, and returns w
 The graph's `version` moves only when it returns `true`.
 A snapshot refills its edge list only when the version or the edge count has changed, and the renderer uploads edges to the GPU on the same test.
 A closure that always returned `true` would copy every edge on every publish.
-Virus on a Network's `recolor` checks the edges before writing any, and writes nothing when none is out of date.
+Virus on a Network's `recolor` checks the edges before writing any colour, and writes nothing when no colour is out of date.
 
 Adding or removing an edge, `set_edge_color`, retiring a node and switching the direction also move the version.
 Note that `spawn` leaves it alone, and a cache keyed on the version misses a new node until an edge reaches it.
@@ -167,18 +167,18 @@ A GPU display shader writes RGBA directly and carries its own copy of the palett
 
 The UI never touches live state.
 The sim thread builds a `Snapshot` on a fixed cadence and leaves it in a slot, and the UI picks up the newest one.
-The buffers are handed back to be refilled, so a publish copies into existing allocations instead of making a fresh multi-megabyte allocation each time.
+The buffers are returned to be refilled, so a publish copies into existing allocations instead of making a fresh multi-megabyte allocation each time.
 
 Building a CPU snapshot starts with `prepare_view`.
 For a network model with the layout on, the engine then runs the layout until the Layout budget set in the [Pacing tab](../guide/app.md#pacing-tab) is spent.
-Only after both does the snapshot copy the layers and call `stats`, and the stats see whatever `prepare_view` just computed.
-The Prepare view row of the Performance tab shows the time the two took together.
+The snapshot copies the layers and calls `stats` only after both steps, and the stats see whatever `prepare_view` just computed.
+The Prepare view row of the Performance tab shows the time both steps took together.
 
 [Network models](network-models.md#layout) covers which publishes move the nodes and what Layout while paused changes.
 `henad-cli` calls `prepare_view` before each stats sample and before an export, and never runs the layout.
 
 A GPU snapshot owns no pixels at all, only handles to what already sits on the GPU.
-Those handles are held through `Arc`, and an in-flight paint callback therefore keeps the texture alive even if the model is torn down mid-frame.
+Those handles are held in an `Arc`, and an in-flight paint callback therefore keeps the texture alive even if the model is torn down mid-frame.
 
 ## Next
 

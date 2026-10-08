@@ -11,30 +11,36 @@ use crate::cpu::primitives::chunked::STATS_CHUNK;
 use crate::cpu::primitives::scatter::{Combine, ScatterGrid};
 use crate::for_each_chunk_mut;
 
-/// The rules a scalar field needs that the mechanics cannot supply.
+/// Rules of a scalar field that only the model can supply.
 pub trait ScalarFieldSpec: Send + Sync + 'static {
-    /// Fields sharing the grid and the scatter scratch.
+    /// Number of `f32` fields, all sharing the grid and the scatter scratch.
     const FIELDS: usize;
+    /// Rule that combines deposits landing in one cell.
     const COMBINE: Combine;
     /// Colours for the quantised display layer.
     const PALETTE: &'static [[u8; 4]];
 
+    /// Hot params, read once per tick and passed to [`Self::decay`].
     type Params: Send + Sync;
 
+    /// Returns the field's own parameter descriptors, listed after the model's own descriptors.
     fn param_descriptors() -> Vec<ParamDescriptor>;
+    /// Reads [`Self::Params`] from the field's slice of the parameter values.
     fn from_params(params: &[ParamValue]) -> Self::Params;
 
-    /// Static terrain, written once at construction.
+    /// Writes the static terrain into `sites`, one marker per cell, once at construction.
     fn build_sites(width: u32, height: u32, sites: &mut [u8]);
 
+    /// Returns one cell's value a tick later. The scatter applies it after the merge.
     fn decay(v: f32, p: &Self::Params) -> f32;
 
-    /// One cell's palette index, from the terrain and every field's current value.
+    /// Writes one cell's palette index into `out`, from its terrain marker and every field's current value.
     fn quantize(site: u8, values: &[f32], out: &mut u8);
 }
 
-/// Per agent deposit lanes. One cell each, and one value per field.
+/// Deposit lanes, with one cell per agent and one value per agent and field.
 pub struct Deposits {
+    /// Cell each agent deposits into.
     pub cell: Vec<u32>,
     /// `values[f][i]` is agent `i`'s deposit into field `f`. An agent that writes one field leaves
     /// the others at the combine's identity, so every lane stays dense.
@@ -52,6 +58,7 @@ impl std::fmt::Debug for Deposits {
 }
 
 impl Deposits {
+    /// Heap memory held by the lanes, in bytes.
     pub fn heap_bytes(&self) -> usize {
         self.cell.capacity() * size_of::<u32>()
             + self
@@ -65,10 +72,10 @@ impl Deposits {
 /// `S::FIELDS` double buffered `f32` grids over one shared scatter scratch.
 pub struct ScalarField<S: ScalarFieldSpec> {
     fields: Vec<Grid2D<f32>>,
-    /// Shared by every field. Same dimensions, same combine, and the calls are sequential.
+    /// Scratch every field shares. The fields have one size and one combine, and scatter one after another.
     scatter: ScatterGrid,
     sites: Vec<u8>,
-    /// `GridView::cells` is `&[u8]` but a field is `f32`, so the layer owns the quantisation.
+    /// Palette index of each cell, written by `prepare_view`. `GridView::cells` is `&[u8]` and a field is `f32`.
     display_cells: Vec<u8>,
     width: u32,
     height: u32,
@@ -88,6 +95,7 @@ impl<S: ScalarFieldSpec> std::fmt::Debug for ScalarField<S> {
 }
 
 impl<S: ScalarFieldSpec> ScalarField<S> {
+    /// Grid of field `i`. Panics if `i` is out of range.
     pub fn field(&self, i: usize) -> &Grid2D<f32> {
         &self.fields[i]
     }
@@ -97,23 +105,27 @@ impl<S: ScalarFieldSpec> ScalarField<S> {
         &mut self.fields[i]
     }
 
+    /// Terrain marker of each cell, from [`ScalarFieldSpec::build_sites`].
     pub fn sites(&self) -> &[u8] {
         &self.sites
     }
 
+    /// Width of the grid in cells.
     pub fn width(&self) -> u32 {
         self.width
     }
 
+    /// Palette index of each cell, as of the last `prepare_view`.
     pub fn display_cells(&self) -> &[u8] {
         &self.display_cells
     }
 
-    /// Overwrite field `i`'s current values, for reproducing a particular run.
+    /// Overwrites field `i`'s current values, for reproducing a particular run, and returns whether `i` is a valid
+    /// field index and `values` matches its length.
     ///
     /// The counterpart of [`crate::cpu::grid_engine::GridModelState::from_cells`] for a field
     /// layer. Deposits and decay make an evolved field impractical to reach by stepping, and a
-    /// hand written one is what pins the advection rule across engines.
+    /// hand-written one pins the advection rule across engines.
     pub fn seed_field(&mut self, i: usize, values: &[f32]) -> bool {
         let Some(grid) = self.fields.get_mut(i) else {
             return false;
@@ -141,8 +153,11 @@ impl<S: ScalarFieldSpec> ScalarField<S> {
 #[derive(Clone, Copy)]
 pub struct ScalarRead<'a> {
     fields: &'a Vec<Grid2D<f32>>,
+    /// Terrain marker of each cell.
     pub sites: &'a [u8],
+    /// Width of the grid in cells.
     pub width: u32,
+    /// Height of the grid in cells.
     pub height: u32,
 }
 
@@ -158,6 +173,7 @@ impl std::fmt::Debug for ScalarRead<'_> {
 }
 
 impl<'a> ScalarRead<'a> {
+    /// Current values of field `i`. Panics if `i` is out of range.
     pub fn field(&self, i: usize) -> &'a [f32] {
         self.fields[i].current()
     }
@@ -212,8 +228,8 @@ impl<S: ScalarFieldSpec> FieldLayer for ScalarField<S> {
         for (f, grid) in self.fields.iter_mut().enumerate() {
             {
                 let (current, next) = grid.current_and_next_mut();
-                // Decay rides the merge, so nothing walks the grid a second time. It lands after
-                // the merge either way, which is what leaves a fresh deposit one step old when read.
+                // Decay runs in the merge pass, so nothing walks the grid a second time. Each cell decays after
+                // its deposits are combined, and a fresh deposit is one step old when read.
                 self.scatter
                     .scatter_then(&deposits.cell, &deposits.values[f], current, next, |v| S::decay(v, p));
             }

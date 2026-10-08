@@ -13,10 +13,10 @@ use crate::ui::results::store::{BandKind, ResultsStore, SeriesBand};
 use crate::ui::sweep::draft::capitalize;
 use crate::ui::{plural, show_plot};
 
-/// Most configs the view draws at once.
+/// Maximum number of configs the view draws at once.
 pub const MAX_DRAWN_CONFIGS: usize = 10;
 
-/// Most configs the Configurations menu lists.
+/// Maximum number of configs the Configurations menu lists.
 const MAX_LISTED_CONFIGS: usize = 2000;
 
 /// Settings of the Series view.
@@ -35,7 +35,7 @@ pub struct SeriesView {
 struct SeriesPlot {
     /// Number of runs, and of runs with their series held, of each drawn config.
     run_counts: Vec<(usize, usize)>,
-    /// Count of runs the store had replaced, from [`ResultsStore::replaced_count`].
+    /// Number of runs the store had replaced, from [`ResultsStore::replaced_count`].
     replaced_runs: u64,
     computed_at: Instant,
     stat: usize,
@@ -137,7 +137,7 @@ pub fn series_ui(
 /// Draws the bands and run lines of `plotted`, with `stat` on the y axis.
 ///
 /// `labels` holds the name of each drawn config, in the order of `plotted.configs`. The legend lists the configs in
-/// that order, one entry each.
+/// that order, one entry per config.
 fn draw_plot(ui: &mut egui::Ui, plotted: &SeriesPlot, labels: &[String], stat: &str) -> PlotResponse<()> {
     let plot = Plot::new("henad_results_series")
         .legend(
@@ -255,7 +255,7 @@ fn configs_menu(ui: &mut egui::Ui, store: &ResultsStore, selected_configs: &mut 
 
 /// Draws the count of runs whose series is held, with Load series where a folder holds the rest.
 ///
-/// Runs that recorded no series count neither way.
+/// Runs that recorded no series are left out of both counts.
 fn held_line(
     ui: &mut egui::Ui,
     store: &ResultsStore,
@@ -288,9 +288,9 @@ fn held_line(
 
 impl SeriesView {
     /// Returns the bands and run lines of `configs`, computed again when the settings change, and at most once per
-    /// [`REFRESH_INTERVAL`] while runs land in `configs` or the store replaces a run.
+    /// [`REFRESH_INTERVAL`] while runs arrive in `configs` or the store replaces a run.
     ///
-    /// Runs landing in other configs leave the drawing alone. `ctx` repaints once a pending refresh is due.
+    /// Runs arriving in other configs leave the drawing alone. `ctx` repaints once a pending refresh is due.
     ///
     /// [`REFRESH_INTERVAL`]: crate::ui::results::plot::REFRESH_INTERVAL
     fn cached_plot(&mut self, ctx: &egui::Context, store: &ResultsStore, configs: Vec<u64>) -> &SeriesPlot {
@@ -398,7 +398,7 @@ fn center_line(band: &SeriesBand) -> Vec<PlotPoint> {
 }
 
 /// Returns `band` with at most [`MAX_PLOT_POINTS`] ticks, each kept tick spanning the lowest low and highest high of
-/// the ticks it stands for.
+/// the ticks it represents.
 ///
 /// Note that the thinned band's centre is the middle sample of each bucket, and [`center_line`] draws the centre.
 fn thin_band(band: SeriesBand) -> SeriesBand {

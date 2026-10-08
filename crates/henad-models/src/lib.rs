@@ -1,8 +1,11 @@
 //! Example models for the Henad engine.
 //!
-//! [`example_models`] returns all ten as a [`ModelSet`], the set the app and the CLI offer.
+//! [`example_models`] returns all ten models as a [`ModelSet`], the set that the app and the CLI offer.
+//! Each module holds one model, and the [model reference](https://micfong-z.github.io/henad/reference/models/) lists
+//! their parameters and actions.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 // Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
 // limit of 128.
 #![recursion_limit = "256"]

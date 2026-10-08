@@ -1,3 +1,8 @@
+//! Boids flocking as an [`AgentModel`] on a torus, with neighbours found through a [`SpatialHash`].
+//!
+//! Each boid steers away from the neighbours inside its protected range, and towards the mean velocity and the mean
+//! position of those inside its visual range. Its speed is then clamped between `min_speed` and `max_speed`.
+
 mod lanes;
 mod step;
 
@@ -14,14 +19,17 @@ use henad_core::view::{StatDescriptor, StatValue};
 
 pub use crate::boids::lanes::{BoidChunk, BoidLanes, BoidRead};
 
+/// Colours of the stat series.
 pub const PALETTE: [[u8; 4]; 3] = [
-    [0xE4, 0x37, 0x48, 0xFF], // Max speed - red
-    [0xFF, 0xC1, 0x07, 0xFF], // Avg speed - yellow
-    [0x00, 0x7A, 0xF5, 0xFF], // Min speed - blue
+    [0xE4, 0x37, 0x48, 0xFF], // Unused - red
+    [0xFF, 0xC1, 0x07, 0xFF], // Average speed - yellow
+    [0x00, 0x7A, 0xF5, 0xFF], // Average velocity - blue
 ];
 
-/// Agent colours by heading octant. Not by speed, which collapses to one colour once the flock
-/// settles at `min_speed`. Cyclic, so a turning flock shifts hue instead of jumping.
+/// Agent colours by heading octant.
+///
+/// Colouring by speed would collapse to one colour once the flock settles at `min_speed`. The palette is cyclic, and a
+/// turning flock shifts hue instead of jumping.
 pub const HEADING_PALETTE: [[u8; 4]; 8] = [
     [0xE4, 0x37, 0x48, 0xFF], // [0, 45)    E -> SE
     [0xF0, 0x7A, 0x28, 0xFF], // [45, 90)   SE -> S
@@ -49,10 +57,11 @@ henad_core::actions! {
     const RANDOMISE_HEADINGS = ActionDescriptor::new("randomise_headings", "Randomise headings");
 }
 
+/// Boids flocking as an [`AgentModel`].
 #[derive(Debug)]
 pub struct BoidsModel;
 
-/// Turns every boid a fresh way without touching its speed, so a settled flock scatters and
+/// Gives every boid a new random heading without changing its speed, so a settled flock scatters and
 /// re-forms rather than restarting.
 fn randomise_headings(lanes: &mut BoidLanes, params: &[ParamValue], rng: &mut u64) {
     let max_speed = extract_f32(params, MAX_SPEED, 15.0);
@@ -68,20 +77,34 @@ fn randomise_headings(lanes: &mut BoidLanes, params: &[ParamValue], rng: &mut u6
     }
 }
 
-/// Squared ranges and half extents precomputed, so the inner loop does no setup per neighbour.
+/// Parameters of [`BoidsModel`], read once per tick.
+///
+/// The squared ranges and half extents are precomputed, so the inner loop does no setup per neighbour.
 #[derive(Debug)]
 pub struct BoidParams {
+    /// Distance within which a boid sees its neighbours.
     pub visual_range: f32,
+    /// Square of `visual_range`.
     pub visual_sq: f32,
+    /// Square of the distance within which a boid steers away from its neighbours.
     pub protected_sq: f32,
+    /// Weight of the steer away from close neighbours.
     pub separation_factor: f32,
+    /// Weight of the steer towards the neighbours' mean velocity.
     pub alignment_factor: f32,
+    /// Weight of the steer towards the neighbours' mean position.
     pub cohesion_factor: f32,
+    /// Highest speed a boid keeps after a step.
     pub max_speed: f32,
+    /// Lowest speed a boid keeps after a step.
     pub min_speed: f32,
+    /// Half the world width.
     pub half_w: f32,
+    /// Half the world height.
     pub half_h: f32,
+    /// World width.
     pub world_w: f32,
+    /// World height.
     pub world_h: f32,
 }
 
@@ -94,9 +117,8 @@ impl AgentModel for BoidsModel {
         StatDescriptor::new("Average Speed", PALETTE[1]),
         StatDescriptor::new("Average Velocity", PALETTE[2]),
     ];
-    /// Smaller than the default, since the kernel draws no random numbers and the population can
-    /// be small. 512 gave a thousand boids two chunks, so most of the pool sat idle. Measured: 64
-    /// is 3.3x at a thousand agents and costs 4% at a hundred thousand.
+    /// Agents per chunk, smaller than the default since the kernel draws no random numbers and the
+    /// population can be small. At 512, a thousand boids make two chunks and most of the pool sits idle.
     const CHUNK: usize = 64;
     const ACTIONS: &'static [ActionDescriptor] = ACTION_SPECS;
     const DEFAULT_AGENTS: u32 = 50_000;
@@ -133,9 +155,8 @@ impl AgentModel for BoidsModel {
         }
     }
 
-    /// A third of the visual range, so the walk covers about twice the disc it needs instead of
-    /// about three times. Measured on one thread: 0.63x the step at ten and thirty thousand
-    /// agents, where a cell of the whole range scans two candidates in three it then rejects.
+    /// Returns a third of the visual range, so the walk covers about twice the disc it needs instead
+    /// of about three times.
     fn index_cell_size(params: &BoidParams) -> f32 {
         params.visual_range / 3.0
     }
@@ -150,7 +171,7 @@ impl AgentModel for BoidsModel {
             let angle = next_float(rng, std::f32::consts::TAU);
             lanes.vel_x[i] = angle.cos() * speed;
             lanes.vel_y[i] = angle.sin() * speed;
-            // The initial snapshot is published before any tick, so seed the lane here too.
+            // The initial snapshot is published before any tick, and the colour lane is seeded here too.
             lanes.color[i] = heading_octant(lanes.vel_x[i], lanes.vel_y[i]);
         }
     }
@@ -197,7 +218,7 @@ mod tests {
 
     type State = AgentModelState<BoidsModel>;
 
-    /// The plain sequential `hypot` form the chunked reduction replaced.
+    /// Returns the sums of speed and velocity in plain sequential `hypot` form.
     fn reference(vel_x: &[f32], vel_y: &[f32]) -> (f64, f64, f64) {
         let (mut speed, mut vx, mut vy) = (0.0, 0.0, 0.0);
         for (&x, &y) in vel_x.iter().zip(vel_y.iter()) {
@@ -208,7 +229,7 @@ mod tests {
         (speed, vx, vy)
     }
 
-    /// Deliberately not a multiple of `STATS_CHUNK`, so the ragged final chunk is covered.
+    /// Returns a stepped flock whose size is not a multiple of `STATS_CHUNK`, so the ragged final chunk is covered.
     fn state_spanning_several_chunks() -> State {
         let n = STATS_CHUNK as u32 * 2 + 37;
         let params = vec![ParamValue::U32(n), ParamValue::F32(4_000.0), ParamValue::F32(4_000.0)];
@@ -319,8 +340,8 @@ mod tests {
         });
         let lanes = state.lanes();
 
-        // Midpoint of the configured band, not an exact compare: the speed goes through
-        // `sin`/`cos`, whose last bit is a libm detail and so varies by platform.
+        // The speed is the midpoint of the configured band, compared within a tolerance. It is computed with
+        // `sin` and `cos`, whose last bit is a libm detail and varies by platform.
         let speed = lanes.vel_x[0].hypot(lanes.vel_y[0]);
         assert!(
             (speed - 5.0).abs() < 1e-4,
@@ -352,8 +373,8 @@ impl VelSums {
     }
 }
 
-/// Totals over every boid, summed chunk by chunk in index order so the result does not depend on
-/// how rayon schedules the work.
+/// Sums the speed and velocity of every boid chunk by chunk in index order, so the result does not depend on how rayon
+/// schedules the work.
 fn velocity_sums(vel_x: &[f32], vel_y: &[f32]) -> VelSums {
     reduce_chunks(
         vel_x.len(),

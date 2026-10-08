@@ -38,11 +38,11 @@ use crate::ui::sweep::session::SessionExecution;
 /// Level id of a config on an axis whose column the config lacks.
 const NO_LEVEL_ID: usize = usize::MAX;
 
-/// Most configs a folder's manifest can record for the app to plan its sweep. The configs of a larger sweep are
-/// listed from `runs.csv` alone.
+/// Maximum number of configs a folder's manifest can record for the app to plan its sweep. The configs of a larger
+/// sweep are listed from `runs.csv` alone.
 const MAX_PLANNED_CONFIGS: u64 = 1 << 20;
 
-/// Place results come from.
+/// Source the results come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResultsSource {
     /// The sweep or search started from the Sweep tab.
@@ -113,12 +113,12 @@ impl ResultsAxis {
             .find(|&level| self.levels[level] == text)
     }
 
-    /// Adds each value of `texts` the axis lacks as a level with an id of its own.
+    /// Adds each value of `texts` that is missing from the axis as a level with its own id.
     ///
     /// A numeric axis places a new level among the numbers, after any old level of the same value, and leaves out a
     /// text that is not a finite number. Any other axis adds new levels at the end. Note that every level above the
-    /// lowest new one moves up, in time that grows with the number of levels it moves. A search over an `f32` range
-    /// draws a value below the highest on nearly every batch.
+    /// lowest new level moves up, in time that grows with the number of levels it moves. A search over an `f32` range
+    /// draws a value below the highest level on nearly every batch.
     fn extend<'a>(&mut self, texts: impl Iterator<Item = &'a str>) {
         let mut seen = BTreeSet::new();
         let new_texts = texts.filter(|&text| self.level(text).is_none() && seen.insert(text));
@@ -184,8 +184,8 @@ struct ConfigEntry {
 /// Levels the configs of one block take on each axis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BlockAxes {
-    /// Id of the level of each axis in the first config of the block that has one, [`NO_LEVEL_ID`] while no config
-    /// has one.
+    /// Level id on each axis from the first config of the block with a level on that axis, [`NO_LEVEL_ID`] while
+    /// no config of the block has a level on it.
     first_level_ids: Vec<usize>,
     /// Whether each axis takes more than one level within the block.
     varies: Vec<bool>,
@@ -199,7 +199,7 @@ impl BlockAxes {
         }
     }
 
-    /// Adds `level_ids`, the id of the level of one more config of the block on each axis.
+    /// Adds `level_ids`, the level ids of one more config of the block, one per axis.
     fn add(&mut self, level_ids: &[usize]) {
         let axes = self.first_level_ids.iter_mut().zip(&mut self.varies);
         for ((first, varies), &level_id) in axes.zip(level_ids) {
@@ -218,9 +218,9 @@ impl BlockAxes {
 /// Series of runs, held while they fit a byte budget.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SeriesCache {
-    /// Bytes the cache holds at most.
+    /// Maximum number of bytes the cache holds.
     budget: usize,
-    /// Bytes the held series take.
+    /// Size in bytes of the held series.
     used: usize,
     runs: BTreeMap<u64, SeriesBuffer>,
 }
@@ -281,14 +281,14 @@ impl SeriesCache {
         self.runs.len()
     }
 
-    /// Bytes the held series take.
+    /// Size in bytes of the held series.
     #[cfg(test)]
     pub fn used_bytes(&self) -> usize {
         self.used
     }
 }
 
-/// Plan the runs of a store replay through.
+/// Plan used to replay the runs of a store.
 #[derive(Debug, Clone)]
 enum ReplayPlan {
     Sweep(Arc<Plan>),
@@ -306,7 +306,7 @@ impl ReplayPlan {
     }
 }
 
-/// Settings and course of the search that produced the results.
+/// Settings and history of the search that produced the results.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchLog {
     pub spec: SearchSpec,
@@ -315,7 +315,7 @@ pub struct SearchLog {
     pub table_error: Option<String>,
 }
 
-/// Returns the bytes `series` takes, counted as a sweep's events count them.
+/// Returns the size of `series` in bytes, counted the same way as a sweep's events.
 fn series_bytes(series: &SeriesBuffer) -> usize {
     series.len() * (series.width() + 1) * size_of::<f64>()
 }
@@ -349,7 +349,7 @@ pub struct ResponseQuery {
     pub x_axis: usize,
     /// Index of the reducer column.
     pub output: usize,
-    /// Axis whose levels each get a line of their own.
+    /// Axis whose levels each get their own line.
     pub group_axis: Option<usize>,
     /// Level each axis is held at, `None` for any level. The x and group axes are free whatever their pin.
     pub pins: Vec<Option<usize>>,
@@ -367,7 +367,7 @@ pub struct ResponsePoint {
 /// Points of one line of a response plot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResponseLine {
-    /// Level of the group axis, `None` without one.
+    /// Level of the group axis, `None` without a group axis.
     pub group_level: Option<usize>,
     /// Points in order of x level.
     pub points: Vec<ResponsePoint>,
@@ -404,9 +404,9 @@ pub struct HeatGrid {
     pub rows: usize,
     /// Value of each cell, not finite for a cell with no value.
     pub values: Vec<f64>,
-    /// Values each cell pools.
+    /// Number of values each cell pools.
     pub counts: Vec<u64>,
-    /// Configs each cell pools.
+    /// Ids of the configs each cell pools.
     pub configs: Vec<Vec<u64>>,
 }
 
@@ -416,7 +416,7 @@ impl HeatGrid {
         row * self.columns + column
     }
 
-    /// Returns the lowest and highest finite value, or `None` when no cell holds one.
+    /// Returns the lowest and highest finite value, or `None` when no cell holds a finite value.
     pub fn range(&self) -> Option<(f64, f64)> {
         let finite = self.values.iter().copied().filter(|value| value.is_finite());
         finite.fold(None, |range, value| match range {
@@ -426,7 +426,7 @@ impl HeatGrid {
     }
 }
 
-/// Runs the runs table lists.
+/// Set of runs that the runs table lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RunsFilter {
     #[default]
@@ -488,11 +488,11 @@ impl SortValue {
     }
 }
 
-/// Returns the roles whose current build, Henad's or the one that registered `entry`, differs from a build a session
-/// of `set` recorded for that role, and then the roles whose builds cannot be compared.
+/// Returns the roles whose current build, Henad's build or the build of the crate that registered `entry`, differs
+/// from a build that a session of `set` recorded for that role, and then the roles whose builds cannot be compared.
 ///
-/// A build that records neither a commit nor a source hash is never the same as another, itself included. A role
-/// lands in the second list when each of its differences is between two builds of one package and version, and one
+/// A build that records neither a commit nor a source hash is never the same as another build, itself included. A role
+/// goes in the second list when each of its differences is between two builds of one package and version, and one
 /// of the two is such a build.
 fn compare_builds(set: &ResultSet, entry: &ModelEntry) -> (Vec<BuildRole>, Vec<BuildRole>) {
     let mut changed = Vec::new();
@@ -535,11 +535,11 @@ pub struct ResultsStore {
     pub model_name: String,
     /// Whether the model declares the parameters, stats and actions the sweep ran with.
     pub schema_matches: bool,
-    /// Roles whose current build differs from a build some session of the sweep recorded, the engine's before the
-    /// model's.
+    /// Roles whose current build differs from a build some session of the sweep recorded, the engine role
+    /// before the model role.
     pub changed_builds: Vec<BuildRole>,
     /// Roles outside `changed_builds` whose current or recorded build records neither a commit nor a source hash, and
-    /// so cannot be compared, the engine's before the model's.
+    /// so cannot be compared, the engine role before the model role.
     pub unidentified_builds: Vec<BuildRole>,
     /// Whether two builds of the model on one seed step through identical states, as the model and the sweep both
     /// declare.
@@ -551,15 +551,15 @@ pub struct ResultsStore {
     pub recorded_execution: Option<SessionExecution>,
     /// Folder that holds the sweep's files, `None` for a sweep held in memory or picked files.
     folder: Option<PathBuf>,
-    /// Plan the runs replay through, or the reason they cannot: this device lacks the model, or the model refuses the
-    /// spec.
+    /// Plan used to replay the runs, or the reason they cannot replay: this device lacks the model, or the model
+    /// rejects the spec.
     plan: Result<ReplayPlan, String>,
     /// Search the results come from, `None` for a sweep.
     search: Option<SearchLog>,
     /// Parameters of the model, empty when this device lacks it.
     descriptors: Vec<ParamDescriptor>,
-    /// Label of each action the sweep fires, by the name its spec gives the action. Empty when this device lacks the
-    /// model.
+    /// Label of each action the sweep fires, by the name that its spec assigns to the action.
+    /// Empty when this device lacks the model.
     action_labels: BTreeMap<String, String>,
     value_columns: Vec<String>,
     stat_columns: Vec<String>,
@@ -576,12 +576,12 @@ pub struct ResultsStore {
     unassigned_runs: BTreeMap<u64, Vec<usize>>,
     /// Number of runs that ended on a fault or a timeout.
     failed_runs: usize,
-    /// Count of runs replaced by a later run of the same id.
+    /// Number of runs replaced by a later run of the same id.
     replaced_runs: u64,
     series: SeriesCache,
-    /// Runs that recorded no series rows, which a load cannot find either.
+    /// Runs that recorded no series rows. A load cannot find rows for them either.
     empty_series_runs: BTreeSet<u64>,
-    /// Count of changes. A view keeps its cache while the count stays the same.
+    /// Revision counter, raised on every change. A view keeps its cache while the revision stays the same.
     revision: u64,
 }
 
@@ -646,7 +646,7 @@ impl ResultsStore {
 
     /// Returns a store of the runs `set` read from `source`, holding at most `series_budget` bytes of series.
     ///
-    /// The runs replay through `model`, the sweep's model as the app finds it. A sweep whose manifest records more than
+    /// The runs replay through `model`, the app's lookup of the sweep's model. A sweep whose manifest records more than
     /// [`MAX_PLANNED_CONFIGS`] configs is never planned. Its configs come from `runs.csv` alone, and its runs do not
     /// replay.
     pub fn from_result_set(
@@ -658,8 +658,8 @@ impl ResultsStore {
         Self::listing_planned_configs(set, source, model, series_budget, MAX_PLANNED_CONFIGS)
     }
 
-    /// Returns the store [`Self::from_result_set`] does, planning a sweep only while its manifest records at most
-    /// `max_planned` configs, and listing the configs `runs.csv` lacks only from a plan of at most that many.
+    /// Returns the store that [`Self::from_result_set`] returns, planning a sweep only while its manifest records at
+    /// most `max_planned` configs, and listing configs missing from `runs.csv` only from a plan of at most that many.
     fn listing_planned_configs(
         set: ResultSet,
         source: ResultsSource,
@@ -711,7 +711,7 @@ impl ResultsStore {
                 .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
                 .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error))),
         };
-        // Configs `runs.csv` lacks are listed from the plan, unless the plan holds too many to list.
+        // Configs missing from `runs.csv` are listed from the plan, unless the plan holds too many to list.
         let mut texts = match (&plan, entry) {
             (Ok(ReplayPlan::Sweep(plan)), Some(entry))
                 if schema_matches && plan.configs().len() as u64 <= max_planned =>
@@ -849,9 +849,10 @@ impl ResultsStore {
         ))
     }
 
-    /// Returns the name the views give value column `column`: a parameter's label, or an action's label and "tick".
+    /// Returns the name that the views use for value column `column`:
+    /// a parameter's label, or an action's label and "tick".
     ///
-    /// An action or a parameter this device's model does not declare goes by the name its column gives it.
+    /// An action or a parameter that this device's model does not declare keeps the name from its column.
     fn column_label(&self, column: usize) -> String {
         let name = &self.value_columns[column];
         if let Some(action) = name.strip_prefix(ACTION_COLUMN_PREFIX) {
@@ -876,7 +877,7 @@ impl ResultsStore {
     /// Adds a finished run, or replaces the run of the same id, holding its series while it fits the budget.
     ///
     /// `series_dropped` says whether the run's series was left out of `outcome` for a budget. An empty series left
-    /// in marks a run that recorded none.
+    /// in marks a run that recorded no series.
     pub fn push_run(&mut self, outcome: RunOutcome, series_dropped: bool) {
         self.insert_run(outcome, series_dropped);
         self.revision += 1;
@@ -916,10 +917,10 @@ impl ResultsStore {
         insert_by_run_id(positions, &self.runs, position);
     }
 
-    /// Adds the configs of the candidates `updates` report, and each batch in order to the search's course.
+    /// Adds the configs of the candidates that `updates` report, and each batch in order to the search history.
     ///
-    /// A batch the course holds already, as a resumed search reports again, adds no second entry. The configs of every
-    /// batch join the configs held in one pass over the axes.
+    /// A batch that the history already holds, as when a resumed search reports it again, adds no second entry. The
+    /// configs of every batch join the configs held in one pass over the axes.
     pub fn push_search_updates<'a>(&mut self, updates: impl IntoIterator<Item = &'a SearchUpdate>) {
         let Some(search) = &mut self.search else {
             return;
@@ -948,7 +949,7 @@ impl ResultsStore {
         self.revision += 1;
     }
 
-    /// Adds the configs `added` beside the configs held, and gives each config its runs.
+    /// Adds the configs `added` beside the configs held, and assigns each config its runs.
     ///
     /// The axes grow in place when [`Self::fits_axes`] finds that the added configs fit them. Otherwise every config
     /// is built again and the axes are found again.
@@ -960,7 +961,7 @@ impl ResultsStore {
         }
     }
 
-    /// Returns whether the configs `added` fit the axes held: every added id comes after every held one, no column
+    /// Returns whether the configs `added` fit the axes held: every added id comes after every held id, no column
     /// that is not an axis takes a second value, and every value on a numeric axis is a finite number.
     ///
     /// A store that holds no config yet fits nothing.
@@ -990,7 +991,7 @@ impl ResultsStore {
                 })
     }
 
-    /// Adds the configs `added`, which fit the axes held, and gives each its runs.
+    /// Adds the configs `added`, which fit the axes held, and assigns each added config its runs.
     ///
     /// Every config and block held keeps its entry. A level keeps its id when levels are added below it.
     fn extend_configs(&mut self, added: BTreeMap<u64, ConfigTexts>) {
@@ -1020,8 +1021,8 @@ impl ResultsStore {
         }
     }
 
-    /// Builds every config again from the configs held and `added`, finds the axes again and gives each config its
-    /// runs.
+    /// Builds every config again from the configs held and `added`, finds the axes again and assigns each config
+    /// its runs.
     fn rebuild_configs(&mut self, added: BTreeMap<u64, ConfigTexts>) {
         let mut texts: BTreeMap<u64, ConfigTexts> = std::mem::take(&mut self.configs)
             .into_iter()
@@ -1065,7 +1066,7 @@ impl ResultsStore {
         self.revision += 1;
     }
 
-    /// Count of changes to the store.
+    /// Revision counter of the store, raised on every change.
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -1084,7 +1085,7 @@ impl ResultsStore {
         self.failed_runs
     }
 
-    /// Count of runs replaced by a later run of the same id, as a resumed sweep replaces a run that timed out.
+    /// Number of runs replaced by a later run of the same id, as a resumed sweep replaces a run that timed out.
     pub fn replaced_count(&self) -> u64 {
         self.replaced_runs
     }
@@ -1114,7 +1115,7 @@ impl ResultsStore {
         &self.reducer_columns
     }
 
-    /// Returns the name the views give reducer column `output`, as in `Infected, max`.
+    /// Returns the name that the views use for reducer column `output`, as in `Infected, max`.
     pub fn output_label(&self, output: usize) -> String {
         output_label(self.reducer_columns.get(output).map_or("", String::as_str))
     }
@@ -1139,12 +1140,12 @@ impl ResultsStore {
         self.axes.get(axis)?.level_of_id(*config.level_ids.get(axis)?)
     }
 
-    /// Returns the word the views give a config, "Candidate" for the results of a search.
+    /// Returns the word that the views use for a config, "Candidate" for the results of a search.
     pub fn config_noun(&self) -> &'static str {
         if self.is_search() { "Candidate" } else { "Config" }
     }
 
-    /// Returns the plural the views give the configs, "candidates" for the results of a search.
+    /// Returns the plural that the views use for the configs, "candidates" for the results of a search.
     pub fn configs_noun(&self) -> &'static str {
         if self.is_search() {
             "candidates"
@@ -1153,7 +1154,7 @@ impl ResultsStore {
         }
     }
 
-    /// Returns a name for config `config_id` that gives its level on every axis.
+    /// Returns a name for config `config_id` that shows its level on every axis.
     pub fn config_label(&self, config_id: u64) -> String {
         let noun = self.config_noun();
         let Some(config) = self.configs.get(&config_id) else {
@@ -1171,7 +1172,7 @@ impl ResultsStore {
         }
     }
 
-    /// Returns the label and value of each column config `config_id` varies, the value as `runs.csv` writes it.
+    /// Returns the label and value of each column that config `config_id` varies, the value as `runs.csv` writes it.
     ///
     /// A search's config lists every parameter and tick the search picks, and a sweep's config its level on every
     /// axis. Returns `None` for a config the store does not hold, as a search candidate before its batch ends.
@@ -1201,7 +1202,7 @@ impl ResultsStore {
         Some(parts.join(", "))
     }
 
-    /// Returns the value column that `target` sets, `None` for a parameter or action the columns lack.
+    /// Returns the value column that `target` sets, `None` for a parameter or action missing from the columns.
     fn target_column(&self, target: &FactorTarget) -> Option<usize> {
         let name = match target {
             FactorTarget::Param(id) => id.clone(),
@@ -1289,7 +1290,7 @@ impl ResultsStore {
         Some(band)
     }
 
-    /// Returns the response `query` asks for, one line per level of its group axis.
+    /// Returns the response that `query` requests, one line per level of its group axis.
     ///
     /// A point pools the runs of every config at its x level that the pins let through, failed runs left out. Only a
     /// block that varies the x axis counts. A block that holds it at one level, as each block of a One at a time
@@ -1340,11 +1341,12 @@ impl ResultsStore {
         lines
     }
 
-    /// Returns the heatmap `query` asks for, or `None` when its axes are the same or out of range.
+    /// Returns the heatmap that `query` requests, or `None` when its axes are the same or out of range.
     ///
     /// A cell pools the runs of every config at its levels that the pins let through, failed runs left out. Only a
-    /// block that varies the x or the y axis counts, and a config whose values an earlier config of the cell repeats
-    /// counts once. A cell with no value, or too few values for its statistic, holds a value that is not finite.
+    /// block that varies the x or the y axis counts, and a config that repeats the values of an earlier config of
+    /// the cell counts once. A cell with no value, or too few values for its statistic, holds a value that is not
+    /// finite.
     pub fn heat_grid(&self, query: &HeatQuery) -> Option<HeatGrid> {
         if query.x_axis == query.y_axis {
             return None;
@@ -1401,7 +1403,7 @@ impl ResultsStore {
         })
     }
 
-    /// Returns the positions of the runs `filter` lets through, in the order `sort` asks for, ties by run id.
+    /// Returns the positions of the runs `filter` lets through, in the order that `sort` requests, ties by run id.
     ///
     /// A missing value sorts last in either direction.
     pub fn row_order(&self, filter: RunsFilter, selected: &BTreeSet<u64>, sort: RunsSort) -> Vec<usize> {
@@ -1429,7 +1431,7 @@ impl ResultsStore {
         order
     }
 
-    /// Returns the value `outcome` sorts by in `column`, `None` when it has none.
+    /// Returns the value `outcome` sorts by in `column`, `None` when `outcome` has no value in `column`.
     fn sort_key(&self, outcome: &RunOutcome, column: RunsColumn) -> Option<SortValue> {
         let run = &outcome.run;
         match column {
@@ -1471,10 +1473,10 @@ impl ResultsStore {
     ///
     /// # Errors
     ///
-    /// Returns [`Self::replay_refusal`], or a message when the store holds no run `run_id` or the plan gives the run
-    /// another config, replicate or seed than its record. A search's run fails when the value columns do not name the
-    /// model's parameters in order. A run of either kind fails when its values do not give the key its record holds,
-    /// unless the model has changed since the run.
+    /// Returns [`Self::replay_refusal`], or a message when the store holds no run `run_id` or the plan assigns the run
+    /// a different config, replicate or seed than its record. A search's run fails when the value columns do not list
+    /// the model's parameters in order. A run of either kind fails when its values do not produce the key that its
+    /// record holds, unless the model has changed since the run.
     pub fn replay(&self, run_id: u64) -> Result<Replay, String> {
         let plan = self.plan.as_ref().map_err(Clone::clone)?;
         let outcome = self
@@ -1493,8 +1495,8 @@ impl ResultsStore {
         }
     }
 
-    /// Returns whether `key`, the key a plan gives `outcome`, matches the key its record holds. Any key matches once
-    /// the model has changed since the run.
+    /// Returns whether `key`, the key that a plan assigns to `outcome`, matches the key its record holds.
+    /// Any key matches once the model has changed since the run.
     ///
     /// The key hashes the model's declarations. After a change to the model no run's key matches, and the runs table
     /// warns that a replay might differ.
@@ -1598,8 +1600,8 @@ impl ResultsStore {
         self.folder.as_deref()
     }
 
-    /// Returns the ids of the runs of the configs `config_ids` whose series is not held, runs that recorded none
-    /// left out.
+    /// Returns the ids of the runs of the configs `config_ids` whose series is not held, leaving out runs that
+    /// recorded no series.
     pub fn runs_without_series(&self, config_ids: &BTreeSet<u64>) -> BTreeSet<u64> {
         config_ids
             .iter()
@@ -1617,7 +1619,7 @@ impl ResultsStore {
         self.revision += 1;
     }
 
-    /// Returns the bytes of series a load can add while the series of `kept_runs` stay held.
+    /// Returns the number of bytes of series that a load can add while the series of `kept_runs` stay held.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn series_room(&self, kept_runs: &BTreeSet<u64>) -> usize {
         let kept_bytes: usize = kept_runs
@@ -1629,7 +1631,7 @@ impl ResultsStore {
     }
 
     /// Holds `series`, series of runs by id, dropping held series of runs outside `kept_runs` to make room, and
-    /// returns the number that fit.
+    /// returns the number of series that fit.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn insert_series(&mut self, series: BTreeMap<u64, SeriesBuffer>, kept_runs: &BTreeSet<u64>) -> usize {
         let needed = series.values().map(series_bytes).sum();
@@ -1645,7 +1647,7 @@ impl ResultsStore {
     }
 }
 
-/// Returns the name the Outputs section gives an output kind, as in `Tick of maximum`.
+/// Returns the name that the Outputs section uses for an output kind, as in `Tick of maximum`.
 pub fn reducer_label(kind: ReducerKind) -> &'static str {
     match kind {
         ReducerKind::Final => "Final value",
@@ -1659,7 +1661,7 @@ pub fn reducer_label(kind: ReducerKind) -> &'static str {
     }
 }
 
-/// Returns the name the views give the output column `name`, as in `Infected, tick of maximum` for
+/// Returns the name that the views use for the output column `name`, as in `Infected, tick of maximum` for
 /// `Infected:argmax`.
 ///
 /// A threshold or a window stays in the name, as in `Infected, first tick <= 10`. A kind that does not parse shows as
@@ -1674,7 +1676,7 @@ pub fn output_label(name: &str) -> String {
     }
 }
 
-/// Returns the name the views give output `kind` of the stat column `column`, as [`output_label`] does for its
+/// Returns the name that the views use for output `kind` of the stat column `column`, as [`output_label`] does for its
 /// written name.
 pub fn column_output_label(column: &str, kind: ReducerKind) -> String {
     match kind {
@@ -1688,7 +1690,7 @@ pub fn column_output_label(column: &str, kind: ReducerKind) -> String {
     }
 }
 
-/// Returns the label `entry` declares for each action of `actions`, by the name the spec gives the action.
+/// Returns the label `entry` declares for each action of `actions`, by the name that the spec assigns to the action.
 fn action_labels(actions: &[ActionSpec], entry: &ModelEntry) -> BTreeMap<String, String> {
     actions
         .iter()
@@ -1705,8 +1707,8 @@ fn action_labels(actions: &[ActionSpec], entry: &ModelEntry) -> BTreeMap<String,
 
 /// Returns the label of the action `id`, declared as `declared_label`, fired under the name `name`.
 ///
-/// An action fired under another name carries it after the label, so two firings of one action stay apart. A name
-/// the Sweep tab numbers, such as `seed_outbreak_2`, adds its number alone, as in "Seed outbreak 2".
+/// An action fired under another name carries that name after the label, so two firings of one action stay apart.
+/// A name that the Sweep tab numbered, such as `seed_outbreak_2`, adds only its number, as in "Seed outbreak 2".
 pub fn action_label(declared_label: &str, id: &str, name: &str) -> String {
     let number = name
         .strip_prefix(id)
@@ -2056,7 +2058,7 @@ mod tests {
         }
     }
 
-    /// Returns the evaluation of candidate `candidate_id`, asked for in batch `batch`, whose genome decodes to
+    /// Returns the evaluation of candidate `candidate_id`, requested in batch `batch`, whose genome decodes to
     /// `config`.
     fn evaluated_candidate(candidate_id: u64, batch: u64, config: Config) -> EvaluatedCandidate {
         EvaluatedCandidate {
@@ -2148,7 +2150,7 @@ mod tests {
     /// Returns a config of `entry` for candidate `candidate_id`, drawn from `state`.
     ///
     /// `gain_resistance_chance` stays at its default, and `initial_outbreak_size` stays there before candidate 2000.
-    /// Candidates from 3000 on come from block 1. A search has one block, and the store takes any.
+    /// Candidates from 3000 on come from block 1. A search has one block, and the store accepts any block.
     fn drawn_config(entry: &ModelEntry, candidate_id: u64, state: &mut u64) -> Config {
         let params = entry
             .param_descriptors()
@@ -2198,7 +2200,7 @@ mod tests {
         }
     }
 
-    /// Returns a copy of each axis of `store`, with the level ids a new axis gives its levels.
+    /// Returns a copy of each axis of `store`, with the level ids that a new axis assigns to its levels.
     fn axis_levels(store: &ResultsStore) -> Vec<ResultsAxis> {
         let axes = store.axes.iter().cloned();
         axes.map(|axis| ResultsAxis::new(axis.column, axis.label, axis.levels, axis.positions, axis.numeric))
@@ -2232,7 +2234,7 @@ mod tests {
             .collect()
     }
 
-    /// Asserts that `store` holds the configs, axes and runs `expected` holds, at `checkpoint`.
+    /// Asserts that `store` holds the configs, axes and runs that `expected` holds, at `checkpoint`.
     fn assert_same_configs(store: &ResultsStore, expected: &ResultsStore, checkpoint: &str) {
         assert_eq!(axis_levels(store), axis_levels(expected), "the axes {checkpoint}");
         for axis in &store.axes {
@@ -2301,7 +2303,7 @@ mod tests {
         (true, levels[..held_levels.len()] != held_levels[..])
     }
 
-    // Shape of the search `told_batches` tells.
+    // Shape of the search that `told_batches` tells.
     const SEARCH_BATCHES: u64 = 300;
     const SEARCH_BATCH_SIZE: u64 = 16;
     const SEARCH_REPLICATES: u64 = 2;
@@ -2336,7 +2338,7 @@ mod tests {
     /// Returns the batches of a search of `entry` over configs [`drawn_config`] draws, [`SEARCH_BATCH_SIZE`]
     /// candidates of [`SEARCH_REPLICATES`] runs each.
     ///
-    /// Replicates land out of order, and a few fail. Candidate 50 is told in batch 200, after candidates of higher
+    /// Replicates arrive out of order, and a few fail. Candidate 50 is told in batch 200, after candidates of higher
     /// ids. Each batch also re-evaluates a candidate told before, which adds no config.
     fn told_batches(entry: &ModelEntry) -> Vec<ToldBatch> {
         const LATE_CANDIDATE: u64 = 50;
@@ -2572,7 +2574,7 @@ mod tests {
         params
     }
 
-    /// Returns the schema of `entry` with `params` in place of the parameters it declares.
+    /// Returns the schema of `entry` with `params` instead of the parameters it declares.
     fn schema_with<'a>(entry: &'a ModelEntry, params: &'a [ParamDescriptor]) -> ModelSchema<'a> {
         ModelSchema {
             params,
@@ -2588,7 +2590,7 @@ mod tests {
         let spec = factorial_spec(factors.clone(), 1);
         let recorded_plan = spec.plan(&schema_with(&sir, &params)).expect("a valid spec");
         let mut store = store(&sir, plan(&sir, factors, 1), usize::MAX);
-        // The run ran with the model as it was, whose declarations give every run another key.
+        // The run used the earlier model, whose declarations give every run a different key.
         store.push_run(outcome(&recorded_plan, 1, RunStatus::Ok, 1.0, &[1.0]), false);
         assert_eq!(
             store.replay(1).err().as_deref(),
@@ -2655,7 +2657,7 @@ mod tests {
         let recorded_plan = plan(&sir, factor(&["0.1", "0.2"]), 1);
         let other_plan = plan(&sir, factor(&["0.1", "0.3"]), 1);
         let mut store = store(&sir, recorded_plan, usize::MAX);
-        // Both runs have the ids and seeds the store's plan gives them. Run 1 ran another infection rate.
+        // Both runs have the ids and seeds that the store's plan assigns to them. Run 1 ran a different infection rate.
         store.push_run(outcome(&other_plan, 0, RunStatus::Ok, 1.0, &[1.0]), false);
         store.push_run(outcome(&other_plan, 1, RunStatus::Ok, 1.0, &[1.0]), false);
         assert!(store.replay(0).is_ok(), "run 0 ran the values of the plan");
@@ -3097,7 +3099,7 @@ mod tests {
         assert_eq!(store.changed_builds, []);
         assert!(store.replays_exactly);
 
-        // The first of two sessions ran another engine, and the second this one.
+        // The first of two sessions ran a different engine, and the second ran this one.
         let path = folder.0.join("manifest.json");
         let mut manifest: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("the manifest is written")).expect("JSON");
@@ -3112,8 +3114,8 @@ mod tests {
         );
         assert_eq!(store.unidentified_builds, []);
 
-        // A model crate whose build script stamps nothing records an unidentified build. The model's build changed
-        // no more than before, and the store cannot tell.
+        // A model crate whose build script stamps nothing records an unidentified build. The store cannot compare
+        // it, so the model is listed as unidentified instead of changed.
         for session in manifest["sessions"].as_array_mut().expect("a list of sessions") {
             let model_source = &mut session["model_source"];
             model_source["commit"] = Value::from("");
@@ -3127,7 +3129,7 @@ mod tests {
     }
 
     /// A sweep whose manifest records more configs than the bound is never planned. It lists the configs `runs.csv`
-    /// holds, and its runs do not replay. A manifest naming a huge design once took gigabytes to open.
+    /// holds, and its runs do not replay. Planning a manifest that records a huge design would take gigabytes.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_folder_plans_its_sweep_only_within_a_bounded_size() {
@@ -3194,7 +3196,7 @@ mod tests {
         assert_eq!(past.config_ids().collect::<Vec<_>>(), [0], "the config runs.csv holds");
         assert_eq!(past.runs().len(), 1);
 
-        // A spec the model refuses. Planned, it gives another reason.
+        // A spec that the model rejects. If the store planned it, the reason would differ.
         let path = folder.0.join("manifest.json");
         let mut manifest: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("the manifest is written")).expect("JSON");

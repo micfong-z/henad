@@ -1,5 +1,4 @@
-//! Test-only modules for the GPU engine, kept out of the module list above so nothing here reads
-//! as part of the engine.
+//! Test-only modules for the GPU engine.
 
 pub mod support;
 

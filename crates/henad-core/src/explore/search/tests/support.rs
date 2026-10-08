@@ -1,4 +1,4 @@
-//! A driver that runs a searcher over pure functions in place of model runs.
+//! A driver that runs a searcher over pure functions instead of model runs.
 
 use crate::authoring::primitives::rng::mix_seed;
 use crate::explore::design_rng::DesignRng;
@@ -7,13 +7,13 @@ use crate::explore::search::genome::SearchSpace;
 use crate::explore::search::{Candidate, Evaluation, Searcher};
 use crate::params::ParamValue;
 
-/// Most asks one drive makes before it gives up on the searcher finishing.
+/// Maximum number of asks that one drive makes before it gives up on the searcher finishing.
 const MAX_ASKS: usize = 100_000;
 
-/// Runs `searcher` until it is done, asking for `batch_size` candidates at a time.
+/// Runs `searcher` until it is done, requesting `batch_size` candidates at a time.
 ///
 /// Each candidate runs `replicates` replicates, and the replicate with index `replicate` reports
-/// `outputs(candidate, replicate)`. Returns every candidate asked for, in order, so candidate `id` sits at index `id`.
+/// `outputs(candidate, replicate)`. Returns every candidate requested, in order, so candidate `id` sits at index `id`.
 ///
 /// # Panics
 ///
@@ -27,7 +27,7 @@ pub fn drive(
     drive_batches(searcher, batch_size, replicates, outputs).concat()
 }
 
-/// Runs `searcher` as [`drive`] does, and returns the candidates of each ask as a batch of its own.
+/// Runs `searcher` as [`drive`] does, and returns the candidates of each ask as a separate batch.
 ///
 /// # Panics
 ///

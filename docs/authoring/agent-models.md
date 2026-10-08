@@ -57,7 +57,7 @@ A doc comment or an attribute on a lane goes on its field, and on both fields of
 Beyond the lanes themselves, the macro generates two view types, named in the declaration.
 `BoidRead` holds the current side of every `dual` lane and is readable by every agent, while `BoidChunk` is the slice of each writable lane that one chunk owns.
 
-The `color = <lane>` entry names the lane the renderer reads for per-agent palette indices.
+The `color = <lane>` entry specifies the lane that the renderer reads for per-agent palette indices.
 Ants points it at `has_food` and avoids carrying a second lane for the purpose.
 
 ## The four associated types
@@ -74,7 +74,7 @@ These four types wire your model into the engine.
 :   Use `SpatialHash` when agents read each other.
     `NoIndex` covers a population that ignores its neighbours.
     Both are at `henad::authoring`, and the authoring prelude holds them.
-    The hash is a flat counting-sort grid rebuilt every tick from agent positions, and all neighbour queries, toroidal wraparound included, go through `query_radius` or `for_each_within`.
+    The hash is a flat counting-sort grid rebuilt every tick from agent positions, and all neighbour queries, toroidal wraparound included, use `query_radius` or `for_each_within`.
     `index_cell_size` is read every tick, so a live parameter edit reaches the index.
 
 `Tally`
@@ -120,7 +120,7 @@ See [writing fast models](performance.md#chunk) for what happens when the value 
 
 ## A second pass
 
-Some models need a pass over their agents before the step proper, and overriding `run_deposit_pass` provides one.
+Some models need a pass over their agents before the step proper, and overriding `run_deposit_pass` adds such a pass.
 
 ```rust
 fn run_deposit_pass(
@@ -139,14 +139,14 @@ Agent count, world width and world height are prepended at indices 0, 1 and 2, f
 All three are reload-only.
 
 The extent belongs to the engine rather than to either layer, and an agent layer can never disagree with its field about how big the world is.
-A model's own parameters follow the prepended three, and its field's parameters follow those.
+A model's own parameters follow the three prepended parameters, and its field's parameters come last.
 Both slice boundaries are computed from descriptor lengths, never from a hard-coded offset.
 
 ## Left to the engine
 
 With the trait implemented, the engine handles all of the following:
 
-- Allocates every lane, and swaps the `dual` ones after the pass.
+- Allocates every lane, and swaps the `dual` lanes after the pass.
 - Splits the population into `CHUNK`-sized chunks across rayon, and seeds a generator per chunk per tick.
 - Rebuilds the neighbour index from positions before every step.
 - Allocates the field's deposit lanes once and reuses them, then runs the scatter and the decay.
@@ -158,5 +158,5 @@ With the trait implemented, the engine handles all of the following:
 
 - [Writing an agent model](../guide/first-model/ants.md) builds one from an empty directory.
 - [Fields](fields.md) explains the grid slot underneath a population.
-- [Determinism and testing](determinism.md) describes the thread-count test every model that draws random numbers should carry.
+- [Determinism and testing](determinism.md) describes the thread-count test that every model drawing random numbers should carry.
 - [GPU agent models](gpu-agent-models.md) covers the same topology written in compute shaders.

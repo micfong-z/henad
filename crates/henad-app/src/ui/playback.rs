@@ -6,7 +6,7 @@ use crate::ui::params::{INVALID_SEED, parse_seed};
 use crate::ui::results::table::INEXACT_REPLAY;
 use crate::ui::{add_progress_bar, mcs};
 
-/// Reason Build gives with no model selected.
+/// Reason shown for the disabled Build button when no model is selected.
 const NO_SELECTED_MODEL: &str = "Select a model in the Model tab";
 
 pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
@@ -49,7 +49,8 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     ui.separator();
 
     ui.horizontal(|ui| {
-        // Past the device's limits wgpu panics on this very thread, so refuse rather than try.
+        // A model past the device's limits would fail its build. Build is disabled instead, with the reason as its
+        // tooltip.
         let build = ui.add_enabled(
             build_disabled_reason.is_none(),
             egui::Button::new(format!("{MDI_RESTART} Build")),
@@ -151,13 +152,13 @@ fn run_refusal(app: &AppState, build_disabled_reason: Option<&str>, current: u64
             "Selected model not loaded. Press {MDI_RESTART}\u{a0}Build first."
         ));
     }
-    // Only a tick behind the current one rebuilds, and only then can the build be refused.
+    // Only a tick behind the current one rebuilds, and only then can the build be rejected.
     build_disabled_reason
         .filter(|_| app.run_to_input < current)
         .map(str::to_owned)
 }
 
-/// Draws the line naming the sweep run the loaded model replays.
+/// Draws the line that identifies the sweep run the loaded model replays.
 fn opened_run_line(ui: &mut egui::Ui, app: &AppState) {
     let Some(run) = &app.opened_run else {
         return;

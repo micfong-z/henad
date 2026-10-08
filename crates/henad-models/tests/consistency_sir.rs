@@ -1,6 +1,6 @@
 //! Self consistency check for SIR.
 //!
-//! See `tests/fixtures/docs/sir_fixture.md` for info on cross-engine consistency checks.
+//! See `tests/fixtures/docs/sir_fixture.md` for the cross-engine consistency checks.
 
 use henad_compute::cpu::grid_engine::GridModelState;
 use henad_core::model::SimState as _;
@@ -9,7 +9,7 @@ use henad_core::view::StatValue;
 use henad_models::sir::SirGridModel;
 
 // Cell encoding. Private to the model, so `encoding_matches_the_models_own_stats` pins these
-// against what the model itself reports rather than trusting the order.
+// constants against what the model itself reports rather than trusting the order.
 const S: u8 = 0;
 const I: u8 = 1;
 const R: u8 = 2;
@@ -26,7 +26,7 @@ const SEED: u64 = 0x5152_0BEE_5EED_0001;
 /// Buckets thinner than this are skipped to avoid false positives from small-number statistics.
 const MIN_TRIALS: u64 = 1_000;
 
-/// Half-width of the acceptance band for an observation, of a binomially distributed random variable.
+/// Half-width of the acceptance band, in standard deviations of a binomial proportion.
 const SIGMAS: f64 = 5.0;
 
 fn params() -> Vec<ParamValue> {
@@ -51,7 +51,7 @@ fn cells(state: &GridModelState<SirGridModel>) -> Vec<u8> {
         .to_vec()
 }
 
-/// Infected neighbours of `(x, y)` in a Moore neighbourhood, wrapping toroidally.
+/// Returns the number of infected neighbours of `(x, y)` in a Moore neighbourhood, wrapping toroidally.
 fn infected_neighbours(grid: &[u8], x: usize, y: usize) -> usize {
     let mut n = 0;
     for dy in [H - 1, 0, 1] {
@@ -69,12 +69,12 @@ fn infected_neighbours(grid: &[u8], x: usize, y: usize) -> usize {
     n
 }
 
-/// Half-width of the acceptance band for an observation, of a binomially distributed random variable.
+/// Returns the half-width of the acceptance band for a binomial proportion `expected` over `trials` trials.
 fn band(expected: f64, trials: u64) -> f64 {
     SIGMAS * (expected * (1.0 - expected) / trials as f64).sqrt()
 }
 
-/// The cell values this file assumes must be the ones the model reports.
+/// The cell values that this file assumes must match the values that the model reports.
 ///
 /// This is a self-consistency check.
 #[test]
@@ -99,7 +99,7 @@ fn encoding_matches_the_models_own_stats() {
     }
 }
 
-/// `P(S -> I | k infected neighbours) = 1 - (1 - beta)^k`, for every `k` with enough samples.
+/// Checks `P(S -> I | k infected neighbours) = 1 - (1 - beta)^k` for every `k` with enough samples.
 ///
 /// This is a self-consistency check.
 #[test]
@@ -146,7 +146,7 @@ fn infection_rate_matches_the_closed_form() {
     assert!(checked >= 8, "only {checked} buckets had enough samples to check");
 }
 
-/// `P(I -> R) = gamma`, independent of the neighbourhood.
+/// Checks `P(I -> R) = gamma`, independent of the neighbourhood.
 ///
 /// This is a self-consistency check.
 #[test]

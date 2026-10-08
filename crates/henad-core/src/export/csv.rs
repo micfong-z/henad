@@ -2,10 +2,10 @@
 
 use std::fmt;
 
-/// Integral values lose the trailing `.0`, everything else keeps full round-trip precision.
+/// Returns `value` as a CSV field, with full round-trip precision and no trailing `.0` on a whole number.
 ///
-/// Non-finite values become empty cells, since `NaN` and `inf` are not valid numbers to most
-/// readers and an empty cell is the conventional missing marker.
+/// A value that is not finite becomes an empty field, the usual mark of a missing value. Most readers do not accept
+/// `NaN` or `inf`.
 pub fn fmt_f64(value: f64) -> String {
     if !value.is_finite() {
         String::new()
@@ -16,10 +16,7 @@ pub fn fmt_f64(value: f64) -> String {
     }
 }
 
-/// Quote a CSV field if it contains a comma, quote, or newline, doubling any inner quotes.
-///
-/// Stat labels are `&'static str` from model source, so this is belt-and-braces. A label with a
-/// comma in it would otherwise silently shift every column right of it.
+/// Returns `field` quoted when it holds a comma, a quote or a line break, with each inner quote doubled.
 pub fn escape_field(field: &str) -> String {
     if field.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", field.replace('"', "\"\""))
@@ -32,9 +29,15 @@ pub fn escape_field(field: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CsvError {
     /// A quoted field opened on `line` is still open at the end of the text.
-    UnterminatedQuote { line: usize },
+    UnterminatedQuote {
+        /// Line the quoted field opens on.
+        line: usize,
+    },
     /// A quote inside an unquoted field, or text after a closing quote.
-    MisplacedQuote { line: usize },
+    MisplacedQuote {
+        /// Line of the misplaced quote or text.
+        line: usize,
+    },
 }
 
 impl fmt::Display for CsvError {
@@ -60,7 +63,7 @@ enum FieldState {
 /// Splits `text` into records of fields, undoing [`escape_field`].
 ///
 /// A record ends at a CRLF or an LF outside quotes, and the final line ending is optional. A
-/// quoted field keeps its commas and line endings, and a doubled quote inside it reads as one.
+/// quoted field keeps its commas and line endings, and a doubled quote inside it is read as one quote.
 /// Note that a blank line is a record holding one empty field.
 ///
 /// # Errors

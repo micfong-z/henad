@@ -352,7 +352,7 @@ fn a_gpu_fault_while_stepping_records_the_same_outcome_at_any_slice_size() {
 /// Checks that sampling a GPU run every tick or every tenth tick leaves it on the same trajectory.
 ///
 /// A sample encodes the stats passes between two batches of steps. Each case runs one model at each cadence and
-/// compares the rows at the ticks both sample. It also rebuilds the run, samples it along the same cadence and
+/// compares the rows at the ticks both cadences sample. It also rebuilds the run, samples it along the same cadence and
 /// compares the view read back at the end. A model that declares it does not replay exactly, as `gpu_boids` does,
 /// has no case.
 mod sampling_cadence_does_not_change_the_trajectory {
@@ -599,8 +599,8 @@ mod sampling_cadence_does_not_change_the_trajectory {
     }
 }
 
-/// Checks that a sweep records the adapter of the context it is handed for a GPU model, and none for a CPU model
-/// handed the same context, which steps on no device.
+/// Checks that a sweep records the adapter of the context that it is passed for a GPU model. A CPU model passed the
+/// same context runs on no device, and the sweep records no adapter for it.
 #[test]
 fn a_sweep_records_the_adapter_of_the_context_it_steps_on() {
     let Some(ctx) = headless_device() else {

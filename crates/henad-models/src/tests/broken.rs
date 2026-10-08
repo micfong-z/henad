@@ -1,4 +1,4 @@
-//! A model with a bug in it, for the tests that check a bug cannot end the process.
+//! Models with a bug in them, for the tests that check a bug cannot end the process.
 
 use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::grid::Grid2D;
@@ -6,7 +6,7 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{StatDescriptor, StatValue};
 
-/// Divides by zero on the way in, standing in for whatever an author actually gets wrong.
+/// Divides by zero in `init`, standing in for any mistake in a model.
 pub struct DividesByZero;
 
 impl GridModel for DividesByZero {

@@ -12,7 +12,7 @@ use crate::ui::kv_grid;
 /// Tagline of the official app.
 const TAGLINE: &str = "A massively parallel agent-based modelling engine.";
 
-/// Henad's logo, drawn in place of the icon in the official app's About window.
+/// Henad's logo, drawn instead of the icon in the official app's About window.
 const LOGO_PNG: &[u8] = include_bytes!("../../assets/henad-logo-transparent-256.png");
 const LOGO_SIZE: f32 = 64.0;
 
@@ -103,7 +103,7 @@ pub fn about_modal(ctx: &Context, app: &mut AppState) {
     }
 }
 
-/// Returns the About window's image, decoded on the first call only. `None` for an icon that is no PNG.
+/// Returns the About window's image, decoded on the first call only. `None` for an icon that is not a PNG.
 fn logo_texture(ctx: &Context, app: &AppState) -> Option<TextureHandle> {
     let png = if app.product.official {
         LOGO_PNG
@@ -195,8 +195,8 @@ fn build_text(commit: &str, dirty: Option<bool>, source_hash: Option<u64>) -> St
     text
 }
 
-/// Returns the Henad a product is built on, as in "Henad 0.3.0 (773a7a5b)", with `core_version`, henad-core's, beside
-/// it when it differs.
+/// Returns the Henad build that a product is built on, as in "Henad 0.3.0 (773a7a5b)", with `core_version`, the
+/// henad-core version, beside it when it differs.
 fn engine_text(engine: &BuildInfo, core_version: &str) -> String {
     let mut text = format!(
         "Henad {} ({})",
@@ -245,7 +245,7 @@ mod tests {
         }
     }
 
-    /// The official app is Henad, and a product built on it names the engine. Each crate that registered models is
+    /// The official app is Henad, and a product built on it shows the engine. Each crate that registered models is
     /// listed once.
     #[test]
     fn a_product_other_than_henad_names_the_engine_it_is_built_on() {
@@ -266,7 +266,7 @@ mod tests {
             info[4].1
         );
 
-        // The flag decides, not the package. This host build is henad-app's own.
+        // Only the official flag marks Henad's app. This host build belongs to henad-app.
         let other = AppOptions::new(
             ModelSet::new(henad_core::build_info!()),
             "Vote",

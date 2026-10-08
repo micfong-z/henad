@@ -1,19 +1,12 @@
-//! The finished code from `docs/guide/first-model/`, compiled and checked against the models it
-//! teaches.
+//! The finished code of the five pages under `docs/guide/first-model/`, one module per page.
 //!
-//! The tutorials are written out by hand rather than included from the shipped models, so that a
-//! page can show a half-finished function and grow it. That leaves the pages free to drift, which
-//! is what these modules are here to stop. Each one is the state a reader reaches at the end of a
-//! page. `tests/parity.rs` steps it beside the model it mirrors and demands the same bits, and
-//! `tests/snippets.rs` holds the code each page shows to it.
+//! Each module holds the state a reader reaches at the end of its page. `tests/parity.rs` steps it beside the
+//! example model it teaches and demands the same bits, `tests/snippets.rs` checks the code each page shows against
+//! it, and `tests/shaders.rs` checks the GPU pages' shader copies against the shipped shaders. A behaviour change in
+//! an example model that a page teaches fails a parity test until the page and its module follow, and a breaking
+//! change to the authoring API stops this crate compiling.
 //!
-//! Change a shipped model and one of two things happens. The parity test fails, and the page needs
-//! the same edit. Or the authoring API moved and this stops compiling, which says the same thing
-//! louder.
-//!
-//! The crate depends on the `henad` facade alone and names every item through it, as a reader's
-//! crate does. The two GPU pages carry their own copies of the shipped shaders, and
-//! `tests/shaders.rs` holds each copy to its original.
+//! The crate depends on the `henad` facade alone and refers to every item by its facade path, as a reader's crate does.
 
 // Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
 // limit of 128.

@@ -20,10 +20,15 @@ use crate::output::runs_csv::ID_COLUMNS;
 /// One complete record of a `runs.csv`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRecord {
+    /// Id the run is written with.
     pub run_id: u64,
+    /// Config the run is a replicate of.
     pub config_id: u64,
+    /// Replicate index of the run within its config.
     pub rep: u64,
+    /// Hash that identifies the run's results.
     pub run_key: u64,
+    /// Status the run ended with.
     pub status: RunStatus,
     /// Text of the record as written, its line ending included.
     pub text: String,
@@ -44,9 +49,9 @@ pub struct RunsCsv {
     pub header: Option<Vec<String>>,
     /// Records after the header, in file order.
     pub records: Vec<RunRecord>,
-    /// Bytes of the file up to the end of its last complete record.
+    /// Number of bytes up to the end of the file's last complete record.
     pub complete_bytes: u64,
-    /// Bytes of the file, 0 for a missing file.
+    /// Size in bytes of the file, 0 for a missing file.
     pub file_bytes: u64,
 }
 
@@ -116,7 +121,7 @@ struct RecordLayout {
 
 impl RecordLayout {
     /// Finds the columns in `header`. The ids come first, and `status` is found from the end, since a parameter can
-    /// share its name.
+    /// also be named `status`.
     fn find(header: &[String], path: &Path) -> Result<Self, ReadError> {
         let first = |column: &'static str| {
             header
@@ -171,9 +176,9 @@ impl RecordLayout {
     }
 }
 
-/// Returns the fields of the one complete record at `record` in `text`, record `record_number` of the file at `path`.
+/// Returns the fields of the complete record that spans `record` in `text`.
 ///
-/// The line of a [`CsvError`] counts from the start of `text`.
+/// `record_number` and `path` name the record in an error. The line of a [`CsvError`] counts from the start of `text`.
 pub(crate) fn parse_one(
     text: &str,
     record: Range<usize>,
@@ -222,7 +227,7 @@ pub(crate) fn record_ends(bytes: &[u8]) -> Vec<usize> {
 /// Position of a scan within a CSV record, in the grammar [`parse_records`] reads.
 ///
 /// Note that a quote inside an unquoted field changes nothing. The record holding it ends at its line feed, and
-/// [`parse_records`] refuses it.
+/// [`parse_records`] rejects it.
 ///
 /// A quote that opens a field and is never closed makes the rest of the text one partial record. [`record_ends`]
 /// finds no end after it, and a reader of complete records leaves that record out without an error.
@@ -254,23 +259,24 @@ impl RecordScan {
 /// Layout of a `series.csv`: its header, and the stretches of complete lines in order of their run ids.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeriesScan {
+    /// Path of the scanned file.
     pub path: PathBuf,
     /// Header line as written with its line ending, `None` for a file with no complete header.
     pub header: Option<String>,
     /// Byte ranges of the longest stretches of complete lines whose run ids never decrease, in file order.
     pub segments: Vec<Range<u64>>,
-    /// Bytes of the file up to the end of its last complete line.
+    /// Number of bytes up to the end of the file's last complete line.
     pub complete_bytes: u64,
-    /// Bytes of the file, 0 for a missing file.
+    /// Size in bytes of the file, 0 for a missing file.
     pub file_bytes: u64,
     /// Offset of the first complete line the scan's rule left out.
     pub first_dropped_offset: Option<u64>,
-    /// Whether a line the rule kept comes after one it left out.
+    /// Whether a line that the rule kept comes after a line that it left out.
     pub kept_after_dropped: bool,
 }
 
 impl SeriesScan {
-    /// Scans the `series.csv` at `path`, marking each complete line `keep` refuses by its run id as left out. A
+    /// Scans the `series.csv` at `path`, marking each complete line that `keep` rejects by its run id as left out. A
     /// missing file has no header and no lines.
     ///
     /// # Errors
@@ -337,7 +343,7 @@ impl SeriesScan {
     }
 }
 
-/// Returns the run id at the start of a series line, or `None` when it has none.
+/// Returns the run id at the start of a series line, or `None` when the line does not start with a run id.
 fn line_run_id(line: &[u8]) -> Option<u64> {
     let comma = line.iter().position(|&byte| byte == b',')?;
     std::str::from_utf8(&line[..comma]).ok()?.parse().ok()
@@ -346,17 +352,19 @@ fn line_run_id(line: &[u8]) -> Option<u64> {
 /// Byte range of a series file to merge, and the index of its input directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeriesSegment {
+    /// Path of the series file.
     pub path: PathBuf,
+    /// Byte range of the segment's lines in the file.
     pub range: Range<u64>,
-    /// Index of the input directory the segment comes from, handed to the renumbering rule.
+    /// Index of the input directory the segment comes from, passed to the renumbering rule.
     pub input_index: usize,
 }
 
-/// Writes `header`, then the lines of `segments` merged in order of the run ids they are written with, to `dest`.
+/// Writes `header`, then the lines of `segments` merged in order of their output run ids, to `dest`.
 ///
 /// `renumber` maps a line's input index and run id to the run id it is written with, or to `None` to leave the line
 /// out. The lines of each segment must come in order of their new run ids. Lines of one run keep their order, and two
-/// segments giving one run id are taken in segment order.
+/// segments with the same run id are taken in segment order.
 ///
 /// # Errors
 ///
@@ -435,29 +443,48 @@ impl SegmentReader {
 #[derive(Debug)]
 pub enum ReadError {
     /// Reading `path` failed.
-    Io { path: PathBuf, source: io::Error },
-    /// Record `record_number` of `path`, counted from 1 for the header, is not valid CSV.
-    Csv {
+    Io {
+        /// Path of the table, or its bare file name for a table read without a path.
         path: PathBuf,
+        /// Error from the reader, of kind `InvalidData` for text that is not UTF-8.
+        source: io::Error,
+    },
+    /// Record `record_number` of `path` is not valid CSV.
+    Csv {
+        /// Path of the table, or its bare file name for a table read without a path.
+        path: PathBuf,
+        /// Number of the record, counting the header as record 1.
         record_number: usize,
+        /// Error from the CSV parser.
         source: CsvError,
     },
     /// A header of `path` without the column `column`.
-    MissingColumn { path: PathBuf, column: &'static str },
+    MissingColumn {
+        /// Path of the table, or its bare file name for a table read without a path.
+        path: PathBuf,
+        /// Name of the missing column.
+        column: &'static str,
+    },
     /// Record `record_number` of `path` with a different number of fields from its header.
     FieldCount {
+        /// Path of the table, or its bare file name for a table read without a path.
         path: PathBuf,
+        /// Number of the record, counting the header as record 1.
         record_number: usize,
-        /// Fields in the record.
+        /// Number of fields in the record.
         found: usize,
-        /// Fields in the header.
+        /// Number of fields in the header.
         expected: usize,
     },
-    /// Field `column` of record `record_number` of `path`, holding `text` the column cannot take.
+    /// Field `column` of record `record_number` of `path`, holding `text` that the column cannot accept.
     BadField {
+        /// Path of the table, or its bare file name for a table read without a path.
         path: PathBuf,
+        /// Number of the record, counting the header as record 1.
         record_number: usize,
+        /// Name of the column holding the field, or `value` for a stat value that a result set reads from `series.csv`.
         column: String,
+        /// Text of the field, or of the whole line where a `series.csv` run id cannot be read.
         text: String,
     },
 }

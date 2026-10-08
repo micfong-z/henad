@@ -32,7 +32,7 @@ fn step_agent(
     let mut count = 0u32;
 
     // The index already computed both deltas to reject anything out of range, so the sums below
-    // take them rather than working them out a second time.
+    // reuse them instead of computing them again.
     let (xi, yi) = (pos_x[i], pos_y[i]);
     hash.for_each_within(xi, yi, params.visual_range, pos_x, pos_y, |j, dx, dy, dist_sq| {
         if j == i as u32 {

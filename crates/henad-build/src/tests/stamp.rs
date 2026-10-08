@@ -59,7 +59,7 @@ fn head(directory: &Path) -> String {
 
 /// Creates a repository in `directory` that keeps its refs as files, whatever the user's default format.
 ///
-/// Packed refs exist only in that format. Git before 2.45 knows no other, and refuses the option.
+/// Packed refs exist only in that format. Git before 2.45 supports no other format, and rejects the option.
 fn init(directory: &Path) {
     let with_format = Command::new("git")
         .args(["-c", "init.defaultBranch=main", "init", "--quiet", "--ref-format=files"])
@@ -103,7 +103,7 @@ fn committed_crate(test: &str) -> Scratch {
     scratch
 }
 
-/// Returns what each of `paths` holds: a file's bytes, or every file below a directory with its bytes.
+/// Returns the contents of each of `paths`: a file's bytes, or every file below a directory with its bytes.
 fn contents(paths: &[PathBuf]) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut found = BTreeMap::new();
     let mut pending = paths.to_vec();
@@ -128,8 +128,8 @@ fn git_paths(stamp: &Stamp) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Commits a change to `README.md` in `directory`, and checks that a path `stamp` watches in the git directory
-/// changed with it and that a new stamp names the new commit.
+/// Commits a change to `README.md` in `directory`, and checks that a path that `stamp` watches in the git directory
+/// changed with it and that a new stamp records the new commit.
 fn assert_a_commit_changes_a_watched_path(stamp: &Stamp, directory: &Path, label: &str) {
     let watched = git_paths(stamp);
     assert!(!watched.is_empty(), "{label}: the stamp watches no git path");
@@ -653,7 +653,8 @@ fn the_engine_stamp_reads_cargo_vcs_info() {
             .expect("a tarball");
         let unpacked = scratch.path().join("unpacked").join(name);
         std::fs::create_dir_all(&unpacked).expect("the directory can be created");
-        // Relative names, run from the scratch directory. Windows' tar reads the colon of `C:` as a remote host.
+        // The names are relative, and tar runs from the scratch directory. Windows' tar reads the colon of `C:` as a
+        // remote host.
         let relative_tarball = tarball
             .strip_prefix(scratch.path())
             .expect("the tarball is in the scratch directory");
@@ -696,7 +697,8 @@ fn the_engine_stamp_reads_cargo_vcs_info() {
         "a package and the checkout it came from hash henad-explore alike"
     );
 
-    // henad-compute's hash goes into every engine build, and henad-models' into the example models' build.
+    // henad-compute's hash goes into every engine build, and henad-models' hash goes into the build of the example
+    // models.
     for name in ["henad-compute", "henad-models"] {
         let packaged = Stamp::of(&unpack(name), StampScope::SourceHash);
         let checkout = Stamp::of(&root.join("crates").join(name), StampScope::SourceHash);

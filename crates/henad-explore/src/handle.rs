@@ -1,8 +1,8 @@
 //! Handles on sweeps and searches that run beside a host's frame loop, with the same API on every target.
 //!
-//! On native a sweep runs on a thread of its own, and a pause holds its runs between two slices of steps. In a
+//! On native a sweep runs on its own thread, and a pause holds its runs between two slices of steps. In a
 //! browser a pumped sweep steps one CPU run at a time from the host's frames. Either way the host reads the sweep's
-//! events from a channel that loses none, and a progress record where the latest write wins.
+//! events from a channel that loses no events, and a progress record where the latest write wins.
 
 use std::fmt;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -30,11 +30,13 @@ use crate::search_run::{SearchPlan, SearchPlanError, SearchUpdate};
 use crate::spec_file::SpecFileError;
 use crate::sweep::{Provenance, SpecSource, SweepEnd, SweepOutline, SweepRecord, SweepWarning};
 
-/// Bytes of series the events of a sweep carry in all, unless the host asks for another budget.
+/// Maximum total size in bytes of the series that the events of a sweep carry, unless the host requests a different
+/// budget.
 #[cfg(not(target_arch = "wasm32"))]
 pub const DEFAULT_SERIES_BUDGET: usize = 256 << 20;
 
-/// Bytes of series the events of a sweep carry in all, unless the host asks for another budget.
+/// Maximum total size in bytes of the series that the events of a sweep carry, unless the host requests a different
+/// budget.
 #[cfg(target_arch = "wasm32")]
 pub const DEFAULT_SERIES_BUDGET: usize = 64 << 20;
 
@@ -44,30 +46,30 @@ pub const DEFAULT_SERIES_BUDGET: usize = 64 << 20;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SweepOutput {
-    /// Memory, handed over in the [`SweepRecord`] once the sweep ends.
+    /// Memory, returned in the [`SweepRecord`] once the sweep ends.
     Memory,
     /// A directory that holds no results, created when missing.
     #[cfg(not(target_arch = "wasm32"))]
     Directory(std::path::PathBuf),
 }
 
-/// Settings of a sweep a [`SweepRun`] runs. None of them change its results.
+/// Settings of a sweep that a [`SweepRun`] runs. None of them change its results.
 ///
 /// [`Self::new`] returns the defaults, and a caller sets the other fields by assignment. A spec file's `[execution]`
-/// settings go in before the caller's own, in the order
+/// settings go in before the caller's settings, in the order
 /// [`SweepOptions::apply_execution`](crate::sweep::SweepOptions::apply_execution) sets them.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct SweepRunOptions {
-    /// Number of runs stepped at once on native. A browser steps one run at a time whatever this asks.
+    /// Number of runs stepped at once on native. A browser steps one run at a time regardless of this setting.
     pub concurrency: Concurrency,
-    /// Bytes of host memory the live runs can hold together, `None` for no limit.
+    /// Host memory budget in bytes for all live runs together, `None` for no limit.
     pub memory_budget: Option<u64>,
-    /// Bytes of GPU memory the live runs of a GPU model can hold together, `None` for the device's largest buffer.
+    /// GPU memory budget in bytes for all live runs of a GPU model together, `None` for the device's largest buffer.
     pub gpu_memory_budget: Option<u64>,
-    /// Whether a resume runs again the runs that ended on a fault.
+    /// Whether a resume reruns the runs that ended on a fault.
     pub retry_failed: bool,
-    /// Bytes of series the [`SweepEvent::RunFinished`] events carry in all.
+    /// Maximum total size in bytes of the series that the [`SweepEvent::RunFinished`] events carry.
     ///
     /// Once a run's series would pass it, that run and every later one arrive without their series. The files keep
     /// every series.
@@ -76,11 +78,11 @@ pub struct SweepRunOptions {
     pub spec_source: SpecSource,
     /// Build of the host, for the manifest.
     pub provenance: Provenance,
-    /// Called after each event, so an idle host comes to collect it. It must not block.
+    /// Called after each event, so that an idle host wakes up to collect it. It must not block.
     pub wake: Option<WakeFn>,
 }
 
-/// Prints whether a wake callback is set, in place of the callback.
+/// Prints whether a wake callback is set, instead of the callback.
 impl std::fmt::Debug for SweepRunOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SweepRunOptions")
@@ -117,10 +119,11 @@ impl SweepRunOptions {
 pub enum SweepEvent {
     /// The sweep is planned and probed, and its runs start.
     Planned(Box<SweepOutline>),
-    /// Something about the sweep that runs, though likely not as meant.
+    /// A warning. The sweep still runs, but likely not as intended.
     Warned(SweepWarning),
-    /// A run was written. Runs arrive in plan order, and a search's in the order it asks for them.
+    /// A run was written. Runs arrive in plan order, and a search's runs in the order that it requests them.
     RunFinished {
+        /// Outcome of the run as written, with an empty series once the series budget is spent.
         outcome: Box<RunOutcome>,
         /// Whether the run's series passed the budget of [`SweepRunOptions::series_budget`] and was left out of
         /// `outcome`.
@@ -130,7 +133,7 @@ pub enum SweepEvent {
     SearchBatchTold(Arc<SearchUpdate>),
     /// The sweep ran to its end or was aborted, as its record says. Nothing follows.
     Finished(Box<SweepRecord>),
-    /// The sweep ended on an error of its own, outside any run, with the error and its causes. Nothing follows.
+    /// The sweep ended on its own error, outside any run, with the error and its causes. Nothing follows.
     Failed(String),
 }
 
@@ -139,35 +142,39 @@ pub enum SweepEvent {
 pub enum SweepPhase {
     /// Planning and probing, before the first run starts.
     Planning,
+    /// Stepping its runs.
     Running,
     /// Held between two slices of steps. Runs in progress keep their state.
     Paused,
     /// Ran to its end or was aborted.
     Ended(SweepEnd),
-    /// Ended on an error of its own, outside any run.
+    /// Ended on its own error, outside any run.
     Failed,
 }
 
 /// Progress of a sweep at the moment it was read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SweepProgress {
+    /// Stage the sweep has reached.
     pub phase: SweepPhase,
-    /// Runs the sweep runs. Until the sweep is planned, every run of its plan.
+    /// Number of runs this sweep executes. Until the sweep is planned, the number of runs in the whole plan, or in a
+    /// search's whole budget.
     pub runs_total: u64,
-    /// Runs a resumed directory held already. The sweep keeps them.
+    /// Number of runs a resumed directory held already. The sweep keeps them.
     pub runs_skipped: u64,
-    /// Runs written so far.
+    /// Number of runs written so far.
     pub runs_done: u64,
-    /// Runs that finished and wait for an earlier run to be written. An abort drops them.
+    /// Number of runs that finished and wait for an earlier run to be written. An abort drops them.
     pub runs_waiting: u64,
-    /// Written runs that ended on a fault or a timeout.
+    /// Number of written runs that ended on a fault or a timeout.
     pub runs_failed: u64,
     /// Time since the sweep started, pauses left out.
     pub elapsed: Duration,
     /// Time left at the pace so far, `None` before the first run is written and once the sweep ends.
     ///
     /// The pace counts the runs that finished and the share of its ticks each run in progress has stepped. A time too
-    /// long for a [`Duration`], as a search with a budget of `u64::MAX` evaluations projects, reads as `None`.
+    /// long for a [`Duration`], such as the projection for a search with a budget of `u64::MAX` evaluations, is
+    /// `None`.
     pub remaining: Option<Duration>,
     /// Runs in progress, in order of their ids.
     pub active_runs: Vec<ActiveRun>,
@@ -176,22 +183,26 @@ pub struct SweepProgress {
 /// A sweep that cannot start.
 #[derive(Debug)]
 pub enum SweepStartError {
-    /// A spec written for the model `spec_model`, handed the entry of `entry_model`.
-    ModelMismatch { spec_model: String, entry_model: String },
-    /// A spec the model refuses, for the reason inside.
+    /// A spec written for the model `spec_model`, given the entry for `entry_model`.
+    ModelMismatch {
+        /// Model id in the spec.
+        spec_model: String,
+        /// Id of the model entry passed to the sweep.
+        entry_model: String,
+    },
+    /// A spec that the model rejects.
     Plan(PlanError),
-    /// A search spec the model refuses, for the reason inside.
+    /// A search spec that the model rejects.
     Search(SearchPlanError),
-    /// A GPU model on a target that cannot step one in a sweep.
+    /// A GPU model on a target that cannot step a GPU model in a sweep.
     GpuNeedsNative,
-    /// An output directory that holds the results of a sweep, or that another sweep, search or merge is writing to,
-    /// for the reason inside.
+    /// An output directory that holds the results of a sweep, or that another sweep, search or merge is writing to.
     Output(OutputError),
-    /// A manifest that cannot be read, for the reason inside.
+    /// A manifest that cannot be read.
     Manifest(ManifestError),
-    /// A manifest whose spec cannot be read back, for the reason inside.
+    /// A manifest whose spec cannot be read back.
     Spec(SpecFileError),
-    /// A directory whose manifest names a shard outside its plan.
+    /// A directory whose manifest specifies a shard outside its plan.
     Shard,
     /// Starting the sweep's thread failed.
     Spawn(std::io::Error),
@@ -252,25 +263,25 @@ pub struct SweepRun {
 }
 
 impl SweepRun {
-    /// Plans `spec` against `entry` and starts the sweep, or the search a `spec` with a search runs, writing its
-    /// files to `output`.
+    /// Plans `spec` against `entry` and starts the sweep, or the search when `spec` has a `[search]` table, writing
+    /// its files to `output`.
     ///
     /// `gpu` is a device the host shares with the sweep, its [`FaultSink`](henad_compute::fault::FaultSink) included.
-    /// Note that the sink holds one fault, and whichever side reads it first takes it. A fault the sweep takes ends
-    /// every live run, whichever side raised it, and one the host takes first leaves the runs going. Handed no device,
-    /// the sweep acquires one on its own thread for a GPU model, sized to the entry's
+    /// Note that the sink holds one fault, and whichever side reads it first takes it. A fault that the sweep takes
+    /// first ends every live run, whichever side raised it, and a fault that the host takes first leaves the runs
+    /// going. When `gpu` is `None`, the sweep acquires a device on its own thread for a GPU model, sized to the entry's
     /// [`gpu_needs`](ModelEntry::gpu_needs), and builds `entry` on it. The manifest records the adapter of a shared
     /// device only when its context carries [`RuntimeInfo`](henad_compute::runtime_info::RuntimeInfo), as
     /// [`GpuContext::with_runtime_info`] attaches it.
     ///
-    /// Planning happens before this returns. The probe build and the runs happen after it, on native on a thread of
-    /// the sweep's own and in a browser in [`Self::update`].
+    /// Planning happens before this returns. The probe build and the runs happen after it, on native on the
+    /// sweep's own thread and in a browser in [`Self::update`].
     ///
     /// # Errors
     ///
-    /// Returns [`SweepStartError`] when `spec` names another model, cannot be planned, or asks a browser for a GPU
-    /// model, when `output` is a directory that holds results, or when the sweep's thread cannot start. A device the
-    /// sweep cannot acquire fails the sweep with a [`SweepEvent::Failed`].
+    /// Returns [`SweepStartError`] when `spec` specifies a different model, cannot be planned, or targets a GPU
+    /// model in a browser, when `output` is a directory that holds results, or when the sweep's thread cannot start.
+    /// A device the sweep cannot acquire fails the sweep with a [`SweepEvent::Failed`].
     pub fn start(
         entry: ModelEntry,
         gpu: Option<GpuContext>,
@@ -309,14 +320,14 @@ impl SweepRun {
     /// Resumes the sweep whose results the directory `dir` holds, running only the runs it lacks.
     ///
     /// The spec, source and shard come from the directory's manifest, and the sweep runs as
-    /// [`crate::sweep::run_spec`] resumes one. Note that the execution settings come from `options` alone. The
-    /// `[execution]` table the manifest records is not applied. `gpu` is the device a GPU model steps on, as in
+    /// [`crate::sweep::run_spec`] resumes a sweep. Note that the execution settings come from `options` alone. The
+    /// `[execution]` table the manifest records is not applied. `gpu` is the device a GPU model runs on, as in
     /// [`Self::start`].
     ///
     /// # Errors
     ///
     /// Returns [`SweepStartError`] when another sweep, search or merge is writing to `dir`, the manifest or its spec
-    /// cannot be read, the spec names another model or cannot be planned, or the sweep's thread cannot start. A
+    /// cannot be read, the spec specifies a different model or cannot be planned, or the sweep's thread cannot start. A
     /// directory whose runs do not fit the plan, or a device the sweep cannot acquire, fails the sweep with a
     /// [`SweepEvent::Failed`].
     #[cfg(not(target_arch = "wasm32"))]
@@ -361,7 +372,7 @@ impl SweepRun {
 
     /// Plan of a search, `None` for a sweep.
     ///
-    /// A search's configs are chosen as it runs. Each arrives in a [`SweepEvent::SearchBatchTold`], and
+    /// A search's configs are chosen as it runs. Each config arrives in a [`SweepEvent::SearchBatchTold`], and
     /// [`SearchPlan::replay`] rebuilds any of its runs.
     pub fn search_plan(&self) -> Option<&Arc<SearchPlan>> {
         self.search_plan.as_ref()
@@ -407,17 +418,17 @@ impl SweepRun {
         self.ended
     }
 
-    /// Steps the sweep within a frame's budget in a browser. On native the sweep's thread runs itself.
+    /// Steps the sweep within a frame's budget in a browser. On native the sweep runs on its own thread.
     #[cfg(target_arch = "wasm32")]
     pub fn update(&mut self, dt: f64) {
         self.driver.update(dt);
     }
 
-    /// Steps the sweep within a frame's budget in a browser. On native the sweep's thread runs itself.
+    /// Steps the sweep within a frame's budget in a browser. On native the sweep runs on its own thread.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn update(&mut self, _dt: f64) {}
 
-    /// Returns the next event, or `None` when none is waiting.
+    /// Returns the next event, or `None` when no event is waiting.
     pub fn try_recv(&mut self) -> Option<SweepEvent> {
         let event = self.events.try_recv().ok()?;
         if matches!(event, SweepEvent::Finished(_) | SweepEvent::Failed(_)) {
@@ -589,17 +600,18 @@ impl Drop for SweepRun {
     }
 }
 
-/// Task a panic outside any run reports as its `during`.
+/// Task that a panic outside any run reports as its `during`.
 #[cfg(not(target_arch = "wasm32"))]
 const RUNNING_SWEEP: &str = "running the sweep";
 
-/// Task a panic while the sweep acquires its device reports as its `during`.
+/// Task that a panic reports as its `during` while the sweep acquires its device.
 #[cfg(not(target_arch = "wasm32"))]
 const ACQUIRING_DEVICE: &str = "acquiring the sweep's GPU device";
 
 /// Sweep to launch, planned.
 ///
-/// A browser runs the whole plan of a CPU model into memory, so the fields that choose otherwise are native only.
+/// A browser runs the whole plan of a CPU model into memory, so the fields that choose a device, an output directory,
+/// a shard or a resume are native only.
 struct SweepLaunch {
     entry: ModelEntry,
     spec: SweepSpec,
@@ -621,8 +633,8 @@ struct SweepLaunch {
 ///
 /// # Errors
 ///
-/// Returns [`SweepStartError`] when the spec names another model, or a browser a GPU model, or the spec cannot be
-/// planned.
+/// Returns [`SweepStartError`] when the spec specifies a different model, targets a GPU model in a browser,
+/// or cannot be planned.
 fn plan_for_start(
     entry: &ModelEntry,
     spec: &SweepSpec,
@@ -709,9 +721,9 @@ fn remaining_time(
 /// Counts and stage of a sweep, written by its channel and read by its handle.
 #[derive(Debug, Default)]
 struct ProgressState {
-    /// Runs the sweep runs, set once the sweep is planned.
+    /// Number of runs this sweep executes, set once the sweep is planned.
     runs_total: Option<u64>,
-    /// Runs a resumed directory held already, set once the sweep is planned.
+    /// Number of runs a resumed directory held already, set once the sweep is planned.
     runs_skipped: u64,
     runs_done: u64,
     runs_failed: u64,
@@ -736,7 +748,7 @@ pub(crate) struct SweepChannel {
     shared_progress: SharedProgress,
     wake: Option<WakeFn>,
     series_budget: usize,
-    /// Bytes of series the events have carried.
+    /// Size in bytes of the series the events have carried.
     series_bytes: usize,
     /// Whether a series has passed the budget. Every later run arrives without its series.
     series_budget_spent: bool,
@@ -779,7 +791,8 @@ impl SweepChannel {
         self.send(SweepEvent::Failed(describe(error)));
     }
 
-    /// Returns `outcome` with its series left out once the series have passed the budget, and whether it was.
+    /// Returns `outcome` with its series left out once the series have passed the budget, and whether the series was
+    /// left out.
     fn apply_series_budget(&mut self, outcome: &RunOutcome) -> (RunOutcome, bool) {
         let series = &outcome.series;
         let bytes = series.len() * (series.width() + 1) * size_of::<f64>();
@@ -805,7 +818,7 @@ impl SweepChannel {
     }
 
     fn send(&self, event: SweepEvent) {
-        // A handle that is gone takes no more events, and the sweep runs on to write its files.
+        // A dropped handle receives no more events, and the sweep runs on to write its files.
         drop(self.sender.send(event));
         if let Some(wake) = &self.wake {
             wake();

@@ -1,7 +1,7 @@
 // Instanced edges, drawn as one line per edge, with both ends read from the agent layer's position lanes.
 // A directed edge can also get a filled arrowhead at its target end.
 //
-// The lanes are bound as storage buffers rather than vertex buffers, since each edge looks up its two nodes by index.
+// The lanes are bound as storage buffers. Each edge looks up its two nodes by index.
 
 #import world::{HIDDEN, is_placed, to_clip}
 
@@ -91,7 +91,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, in: VertexInput) -> VertexO
 @vertex
 fn vs_arrow(@builtin(vertex_index) vertex_index: u32, in: VertexInput) -> VertexOutput {
     let span = span_of(in);
-    // Opaque regardless of the line's alpha, since the head is what shows the direction.
+    // The head is opaque whatever the line's alpha. It shows the direction.
     let color = vec4<f32>(in.color.rgb, 1.0);
     if !span.placed {
         var hidden: VertexOutput;

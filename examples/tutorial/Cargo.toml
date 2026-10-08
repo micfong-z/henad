@@ -11,14 +11,14 @@ homepage.workspace = true
 publish = false
 
 [dependencies]
-# By path alone, as a reader's crate depends on the facade, and through no other Henad crate.
+# By path alone, and on no other Henad crate, as a reader's crate depends on the facade.
 henad = { path = "../../crates/henad" }
 
 [build-dependencies]
 henad-build = { workspace = true }
 
 [dev-dependencies]
-# The parity tests run the example models beside the tutorial's, and the kit checks the tutorial's set.
+# The parity tests run the example models beside the tutorial models, and the kit checks the tutorial set.
 henad = { path = "../../crates/henad", features = ["example-models", "testing"] }
 log = { workspace = true }
 rayon = { workspace = true }

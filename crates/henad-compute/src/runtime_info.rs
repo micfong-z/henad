@@ -1,20 +1,23 @@
-//! Host and adapter facts, gathered once at startup. Shared by the GUI and the headless runner.
+//! Host and adapter facts, gathered once at startup for a host to show and a sweep to record.
 
 /// Host facts, available with or without an adapter.
 #[derive(Debug, Clone)]
 pub struct HostInfo {
-    /// Operating system as Rust names it, and `browser` on wasm32, where Rust names none.
+    /// Operating system name as in `std::env::consts::OS`, and `browser` on wasm32, where that constant is empty.
     pub os: &'static str,
+    /// CPU architecture as in `std::env::consts::ARCH`.
     pub arch: &'static str,
-    /// `None` where the platform cannot report it.
+    /// Number of logical CPUs, `None` where the platform cannot report it.
     pub logical_cpus: Option<usize>,
-    /// Size of rayon's pool, i.e. how wide the CPU models actually step.
+    /// Size of rayon's pool, the number of workers a CPU model runs on.
     pub worker_threads: Option<usize>,
 }
 
 impl HostInfo {
-    /// Call once the thread pool exists. Asking rayon first would build it with rayon's own
-    /// defaults, which in a browser means asking for threads the pool has no way to spawn.
+    /// Collects the host's facts.
+    ///
+    /// Call it once the thread pool exists. Asking rayon first would build the pool with rayon's own
+    /// defaults, and in a browser those request threads that the pool cannot spawn.
     pub fn collect() -> Self {
         Self {
             os: os_name(std::env::consts::OS),
@@ -25,7 +28,8 @@ impl HostInfo {
     }
 }
 
-/// Returns `os`, or `browser` for the empty name wasm32-unknown-unknown gives. Only a browser runs that target here.
+/// Returns `os`, or `browser` for the empty name that wasm32-unknown-unknown reports. Only a browser runs that target
+/// here.
 fn os_name(os: &'static str) -> &'static str {
     if os.is_empty() { "browser" } else { os }
 }
@@ -37,28 +41,33 @@ fn logical_cpus() -> Option<usize> {
         .map(std::num::NonZeroUsize::get)
 }
 
-/// `available_parallelism` is unsupported on wasm. The browser reports the same count itself.
+/// Returns the number of logical CPUs that the browser reports, since `available_parallelism` is unsupported on wasm.
 #[cfg(target_arch = "wasm32")]
 fn logical_cpus() -> Option<usize> {
     let cores = web_sys::window()?.navigator().hardware_concurrency();
     (cores >= 1.0).then_some(cores as usize)
 }
 
+/// Host and adapter facts for one device.
 #[derive(Debug, Clone)]
 pub struct RuntimeInfo {
+    /// Facts about the host.
     pub host: HostInfo,
+    /// Adapter the device came from.
     pub adapter: wgpu::AdapterInfo,
     /// Limits the device was created with, after `gpu::limits::raise`.
     pub granted: wgpu::Limits,
     /// Limits the adapter would have allowed, so a gap is headroom left unclaimed.
     pub available: wgpu::Limits,
-    /// Set when the device granted `TIMESTAMP_QUERY`.
+    /// Whether the device granted `TIMESTAMP_QUERY`.
     pub timestamp_query: bool,
     /// Whether a vertex shader can read a storage buffer. Drawing network edges requires this.
     pub vertex_storage: bool,
 }
 
 impl RuntimeInfo {
+    /// Collects the facts of `adapter`, `device` and the host. Call it once the thread pool exists, as
+    /// [`HostInfo::collect`] says.
     pub fn collect(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Self {
         Self {
             host: HostInfo::collect(),
@@ -73,7 +82,7 @@ impl RuntimeInfo {
         }
     }
 
-    /// Largest display texture asked for here, after Henad's own cap.
+    /// Longest side of a display texture on this device, after Henad's own cap.
     pub fn display_cap(&self) -> u32 {
         crate::display_scale::MAX_DISPLAY_DIM.min(self.granted.max_texture_dimension_2d)
     }
@@ -82,21 +91,23 @@ impl RuntimeInfo {
 /// The adapter's fitness for Henad's workload.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GpuVerdict {
-    /// A real GPU :)
+    /// A discrete GPU.
     Capable,
-    /// Uncertain whether this "GPU" will run Henad well. It might be anything from a low-end
-    /// integrated GPU to something like an M4 Pro.
+    /// Any other GPU, which might be anything from a low-end integrated GPU to something like an M4 Pro.
     Uncertain,
-    /// Not a GPU :(
+    /// A CPU adapter, with no GPU behind it.
     Absent,
 }
 
-/// True for every backend except `Gl`, as WebGL2 has no compute stage.
+/// Returns whether the adapter can run compute shaders. Every backend but `Gl` can, since WebGL2 has no compute stage.
 pub fn supports_compute(info: &wgpu::AdapterInfo) -> bool {
     info.backend != wgpu::Backend::Gl
 }
 
-/// `DeviceType` describes memory topology, not speed, so only `DiscreteGpu` is claimed outright.
+/// Returns the adapter's [`GpuVerdict`].
+///
+/// `DeviceType` describes memory topology and says nothing of speed, so only `DiscreteGpu` counts as
+/// [`GpuVerdict::Capable`].
 pub fn classify_adapter(info: &wgpu::AdapterInfo) -> GpuVerdict {
     if info.device_type == wgpu::DeviceType::Cpu {
         GpuVerdict::Absent
@@ -111,7 +122,7 @@ pub fn classify_adapter(info: &wgpu::AdapterInfo) -> GpuVerdict {
 mod tests {
     use super::{HostInfo, os_name};
 
-    /// wasm32-unknown-unknown gives an empty name, and the System tab read " (wasm32)".
+    /// wasm32-unknown-unknown reports an empty name. Left alone, the System tab reads " (wasm32)".
     #[test]
     fn an_unnamed_os_reads_as_browser() {
         assert_eq!(os_name(""), "browser");

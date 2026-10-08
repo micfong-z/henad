@@ -38,7 +38,7 @@ pub(crate) fn declared_workgroup_size(source: &str) -> Option<[u32; 3]> {
 ///
 /// # Panics
 ///
-/// When the shader declares another size. Otherwise the dispatch covers part of the domain, or runs invocations
+/// Panics when the shader declares another size. Otherwise the dispatch covers part of the domain, or runs invocations
 /// past it, with no error.
 pub(crate) fn assert_workgroup_size(model_id: &str, pass: &str, shader: &str, dispatched: [u32; 3]) {
     if let Some(declared) = declared_workgroup_size(shader) {
@@ -61,8 +61,8 @@ pub(crate) fn assert_workgroup_size(model_id: &str, pass: &str, shader: &str, di
 ///
 /// # Panics
 ///
-/// On a reserved name. A binding of that name binds the engine's own resource. Also on a label ending in `_in` or
-/// `_out`, a suffix the engine strips from a binding name before it looks the label up.
+/// Panics on a reserved name, since a binding of that name binds the engine's own resource. Also panics on a label
+/// ending in `_in` or `_out`, a suffix the engine strips from a binding name before it looks the label up.
 pub(crate) fn assert_buffer_labels<'a>(model_id: &str, labels: impl IntoIterator<Item = &'a str>) {
     for label in labels {
         assert!(

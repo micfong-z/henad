@@ -1,5 +1,5 @@
 //! The testing kit over the five tutorial models, as a reader's crate runs it, and their ids beside the example
-//! models'.
+//! models' ids.
 
 use henad::testing::{CheckSettings, TestDeviceRequest, assert_set_conforms, headless_test_device};
 

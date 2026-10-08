@@ -1,7 +1,7 @@
 //! Checks that step a GPU model on the device, native only.
 //!
-//! Each builds at the declared defaults, the size a host builds first. A watchdog trips on the time one command
-//! buffer runs, and a small model never runs long enough to trip it.
+//! Each check builds the model at the declared defaults, the size a host builds first. A watchdog trips on the time one
+//! command buffer runs, and a small model never runs long enough to trip it.
 
 use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION, StatsPoll, stepping};
@@ -21,7 +21,7 @@ fn build(entry: &ModelEntry, values: &[ParamValue], ctx: &GpuContext) -> Result<
     }
 }
 
-/// Checks [`super::ModelCheck::BaselineBuild`]. The build and the declared demand pin each other: an under-reported
+/// Checks [`super::ModelCheck::BaselineBuild`]. The build and the declared demand pin each other. An under-reported
 /// pass fails the build, and an over-reported one fails the demand.
 pub(super) fn baseline_build(entry: &ModelEntry, settings: &CheckSettings, ctx: &GpuContext) -> Result<(), String> {
     let values = settings.default_values(entry)?;
@@ -41,10 +41,10 @@ pub(super) fn baseline_build(entry: &ModelEntry, settings: &CheckSettings, ctx: 
 /// leaving the tick advanced and every readback zero.
 ///
 /// A model that replays exactly first runs `MAX_STEPS_PER_SUBMISSION` submissions of one step and reads their stats,
-/// then one submission of them all, and compares the two. The single steps run first. A device the full submission
-/// poisons reads zeros from then on, and would read them in both runs. A model that does not replay exactly checks
-/// that the readback landed and, when it declares stats, that some stat is not zero. Either way a device lost on the
-/// way fails the check.
+/// then one submission of them all, and compares the two. The single steps run first. A device that the full submission
+/// poisons reads zeros from then on, and would read them in both runs. A model that does not replay exactly checks that
+/// the readback completed and, when it declares stats, that some stat is not zero. Either way a device lost on the way
+/// fails the check.
 pub(super) fn full_submission(entry: &ModelEntry, settings: &CheckSettings, ctx: &GpuContext) -> Result<(), String> {
     let values = settings.default_values(entry)?;
     let sliced_stats = if entry.metadata().replays_exactly {
@@ -104,8 +104,8 @@ pub(super) fn full_submission(entry: &ModelEntry, settings: &CheckSettings, ctx:
     }
 }
 
-/// Checks [`super::ModelCheck::SampledSlice`]: a slice sampled through the stats passes alone reads back what the
-/// snapshot passes do, display included.
+/// Checks [`super::ModelCheck::SampledSlice`]. A slice sampled with the stats passes alone reads back the same stats
+/// as the snapshot passes. The snapshot passes include the display pass.
 pub(super) fn sampled_slice(entry: &ModelEntry, settings: &CheckSettings, ctx: &GpuContext) -> Result<(), String> {
     let values = settings.default_values(entry)?;
     let mut state = build(entry, &values, ctx)?;

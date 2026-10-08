@@ -1,4 +1,4 @@
-//! Drives a loop on an OS thread of its own, so stepping never blocks rendering.
+//! The native driver, which runs a sim loop on its own OS thread so stepping never blocks rendering.
 
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
@@ -6,6 +6,7 @@ use std::thread::JoinHandle;
 use super::{Pace, SimLoop};
 use crate::fault::{Fault, STEPPING, catching};
 
+/// Handle on a [`SimLoop`] running on its own OS thread, taking commands over a channel.
 pub struct Driver<L: SimLoop> {
     cmd_tx: mpsc::Sender<L::Command>,
     handle: Option<JoinHandle<()>>,
@@ -25,6 +26,8 @@ where
     L: SimLoop + Send + 'static,
     L::Command: Send + 'static,
 {
+    /// Spawns the thread and starts `sim` on it.
+    ///
     /// `on_fault` runs on the sim thread if the loop panics.
     pub fn spawn(sim: L, on_fault: impl FnOnce(Fault) + Send + 'static) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -41,14 +44,17 @@ where
         }
     }
 
+    /// Sends a command to the loop. A loop that has stopped drops it.
     pub fn send(&mut self, cmd: L::Command) {
         drop(self.cmd_tx.send(cmd));
     }
 
-    /// The thread runs itself. Present so a host can call it without knowing which driver it has.
+    /// Does nothing, since the thread runs itself. A host calls it without knowing which driver it holds.
     pub fn update(&mut self, _dt: f64) {}
 
-    /// Sent on drop, and the only way the thread is asked to stop.
+    /// Sends `cmd`, the loop's stop command, and joins the thread.
+    ///
+    /// The runners call it on drop, and it is the only way the thread is asked to stop.
     pub fn shutdown(&mut self, cmd: L::Command) {
         drop(self.cmd_tx.send(cmd));
         if let Some(handle) = self.handle.take() {
@@ -60,7 +66,7 @@ where
 fn run<L: SimLoop + Send>(mut sim: L, cmd_rx: &mpsc::Receiver<L::Command>) {
     sim.start();
     loop {
-        // Pumped from inside the pool. A kernel's parallel passes are otherwise injected from this
+        // The pump runs inside the pool. A kernel's parallel passes are otherwise injected from this
         // thread, which is not a worker, so each one parks the caller and wakes it again. Only the
         // pump moves, since the waits below would hold a worker while nothing is due.
         match rayon::scope(|_| sim.pump()) {

@@ -12,20 +12,20 @@ const CANVAS_ID: &str = "the_canvas_id";
 /// Id of the element that shows the page's loading text, removed once the app has started.
 const LOADING_TEXT_ID: &str = "loading_text";
 
-/// Note the Performance tab shows when the thread pool failed to start.
+/// Note shown in the Performance tab when the thread pool failed to start.
 #[cfg(target_feature = "atomics")]
 const THREAD_POOL_NOTE: &str = "Models run on one thread. The page might lack the Cross-Origin-Opener-Policy and \
                                 Cross-Origin-Embedder-Policy headers, and the browser console has the error.";
 
-/// Note the Performance tab shows in a build without atomics. Such a build has no thread pool.
+/// Note shown in the Performance tab in a build without atomics. Such a build has no thread pool.
 #[cfg(not(target_feature = "atomics"))]
 const THREAD_POOL_NOTE: &str = "Models run on one thread. This build has no thread support.";
 
-/// Starts the worker pool at the width `?threads=` asks for, then builds the options and starts the app on the
+/// Starts the worker pool at the width that `?threads=` requests, then builds the options and starts the app on the
 /// `the_canvas_id` canvas, removing the `loading_text` element.
 ///
 /// A pool that fails to start is logged, and the models then run on one thread, with a note in the Performance tab.
-/// A build without atomics has no pool, and runs the models on one thread with a note of its own.
+/// A build without atomics has no pool, and runs the models on one thread with its own note.
 /// A failure to start the app is returned, for the caller to log, and written into the `loading_text` element where
 /// the page has one.
 ///
@@ -90,7 +90,7 @@ pub async fn start_web(options: impl FnOnce() -> AppOptions) -> Result<(), WebSt
     }
 }
 
-/// Starts the worker pool at the width `?threads=` asks for, and returns whether it started.
+/// Starts the worker pool at the width that `?threads=` requests, and returns whether it started.
 #[cfg(target_feature = "atomics")]
 async fn start_thread_pool(window: &web_sys::Window) -> bool {
     let available = window.navigator().hardware_concurrency() as usize;

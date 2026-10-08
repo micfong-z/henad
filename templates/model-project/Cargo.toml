@@ -25,7 +25,7 @@ required-features = ["cli"]
 henad = "0.3"
 log = "0.4"
 
-# Used by the app alone. A crate that turns `app` off builds neither.
+# The app alone uses these two dependencies. A crate that turns `app` off builds neither dependency.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.11", optional = true }
 
@@ -39,7 +39,7 @@ henad-build = "0.3"
 henad = { version = "0.3", features = ["testing"] }
 
 [lints.rust]
-# The generated shader bindings lift this lint for their own module. `forbid` would refuse that.
+# The generated shader bindings allow this lint in their own module. Under `forbid`, that `allow` is an error.
 unsafe_code = "deny"
 
 # --8<-- [start:profile]

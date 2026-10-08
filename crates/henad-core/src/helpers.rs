@@ -1,6 +1,10 @@
+//! Builders for parameter descriptors and stat entries, parameter value readers, and
+//! [`fmt_bytes`].
+
 use crate::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 use crate::view::{StatEntry, StatValue};
 
+/// Formats a byte count in B, KB, MB or GB, counting in powers of 1024, to one decimal place above B.
 pub fn fmt_bytes(bytes: u64) -> String {
     if bytes >= 1 << 30 {
         format!("{:.1} GB", bytes as f64 / (1u64 << 30) as f64)
@@ -13,8 +17,9 @@ pub fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
-// --- Parameter descriptor builders ---
+// Parameter descriptor builders.
 
+/// Returns a descriptor for a live `f32` parameter, with `step` as its slider step.
 pub fn f32_param(
     id: &'static str,
     label: &'static str,
@@ -37,6 +42,7 @@ pub fn f32_param(
     }
 }
 
+/// Returns a descriptor for a live `u32` parameter.
 pub fn u32_param(id: &'static str, label: &'static str, default: u32, min: u32, max: u32) -> ParamDescriptor {
     ParamDescriptor {
         id,
@@ -47,6 +53,7 @@ pub fn u32_param(id: &'static str, label: &'static str, default: u32, min: u32, 
     }
 }
 
+/// Returns a descriptor for a live switch.
 pub fn bool_param(id: &'static str, label: &'static str, default: bool) -> ParamDescriptor {
     ParamDescriptor {
         id,
@@ -57,14 +64,14 @@ pub fn bool_param(id: &'static str, label: &'static str, default: bool) -> Param
     }
 }
 
-/// Returns a descriptor of a choice among `options`, starting at option `default`.
+/// Returns a descriptor for a choice among `options`, starting at option `default`.
 ///
 /// # Panics
 ///
-/// Panics when two options share a name, a name is empty or has spaces at either end, or a name reads as an unsigned
-/// integer. Text naming a choice is trimmed, then read as an option's name, then as an index. The second of two equal
-/// names would read back as the first, a name with spaces at an end would never be found, and an index written as
-/// text would read as the option of that name.
+/// Panics when two options share a name, a name is empty or has spaces at either end, or a name parses as an unsigned
+/// integer. Text that selects a choice is trimmed, then matched against the option names, then parsed as an index. The
+/// second of two equal names would resolve to the first option, a name with spaces at an end would never match, and a
+/// name that is an unsigned integer would shadow the index it spells.
 pub fn choice_param(
     id: &'static str,
     label: &'static str,
@@ -94,8 +101,9 @@ pub fn choice_param(
     }
 }
 
-// --- Parameter extraction helpers ---
+// Parameter value readers.
 
+/// Returns the `f32` at `index`, or `default` when the index is missing or holds another kind.
 pub fn extract_f32(params: &[ParamValue], index: usize, default: f32) -> f32 {
     match params.get(index) {
         Some(ParamValue::F32(v)) => *v,
@@ -103,6 +111,7 @@ pub fn extract_f32(params: &[ParamValue], index: usize, default: f32) -> f32 {
     }
 }
 
+/// Returns the `u32` at `index`, or `default` when the index is missing or holds another kind.
 pub fn extract_u32(params: &[ParamValue], index: usize, default: u32) -> u32 {
     match params.get(index) {
         Some(ParamValue::U32(v)) => *v,
@@ -110,6 +119,7 @@ pub fn extract_u32(params: &[ParamValue], index: usize, default: u32) -> u32 {
     }
 }
 
+/// Returns the `bool` at `index`, or `default` when the index is missing or holds another kind.
 pub fn extract_bool(params: &[ParamValue], index: usize, default: bool) -> bool {
     match params.get(index) {
         Some(ParamValue::Bool(v)) => *v,
@@ -125,8 +135,9 @@ pub fn extract_choice(params: &[ParamValue], index: usize, default: usize) -> us
     }
 }
 
-// --- Stat entry builder ---
+// Stat entry builders.
 
+/// Returns an entry holding a scalar.
 pub fn stat(label: &'static str, value: f64, color: [u8; 4]) -> StatEntry {
     StatEntry {
         label,
@@ -135,6 +146,7 @@ pub fn stat(label: &'static str, value: f64, color: [u8; 4]) -> StatEntry {
     }
 }
 
+/// Returns an entry holding a 2D vector.
 pub fn stat_vec2(label: &'static str, x: f64, y: f64, color: [u8; 4]) -> StatEntry {
     StatEntry {
         label,
@@ -143,6 +155,7 @@ pub fn stat_vec2(label: &'static str, x: f64, y: f64, color: [u8; 4]) -> StatEnt
     }
 }
 
+/// Returns an entry holding a histogram, in which `counts[i]` counts the values in `[edges[i], edges[i + 1])`.
 pub fn stat_histogram(label: &'static str, edges: Vec<f64>, counts: Vec<u64>, color: [u8; 4]) -> StatEntry {
     StatEntry {
         label,

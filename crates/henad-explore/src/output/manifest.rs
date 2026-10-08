@@ -32,22 +32,33 @@ pub struct Manifest {
     pub format: String,
     /// Always [`FORMAT_VERSION`] for a manifest this build writes.
     pub format_version: u64,
+    /// Kind of exploration the directory holds.
     pub mode: ManifestMode,
+    /// Progress of the sweep.
     pub status: ManifestStatus,
     /// Build of Henad that wrote the manifest last, under the package name `henad`.
     pub engine: RecordedBuild,
+    /// Model the sweep ran.
     pub model: ManifestModel,
     /// Spec the sweep ran, resolved, in the form of a spec file.
     pub spec: Value,
+    /// Spec file the sweep was read from.
     pub spec_source: ManifestSpecSource,
     /// Command line of the host binary.
     pub argv: Vec<String>,
+    /// Configs and runs of the plan.
     pub plan: ManifestPlan,
+    /// Root seed and the rule deriving each run's seed from it.
     pub seeds: ManifestSeeds,
+    /// Names of the stat and reducer columns.
     pub columns: ManifestColumns,
+    /// Share of the plan the directory holds.
     pub shard: ManifestShard,
+    /// Lanes, tracks and budgets the sweep ran with.
     pub execution: ManifestExecution,
+    /// Host and device the sweep ran on.
     pub runtime: ManifestRuntime,
+    /// Start of the first session, and the end of the sweep once it ends.
     pub timestamps: ManifestTimestamps,
     /// One entry per session that wrote runs into the directory.
     pub sessions: Vec<ManifestSession>,
@@ -109,8 +120,9 @@ impl Manifest {
 
     /// Returns the build that `session` records for `role`.
     ///
-    /// A session that records no engine build, as every session of a 0.2 manifest is, reads as the engine build of
-    /// its own `commit` and the version of the manifest's `engine` block. Its model build is `None`.
+    /// For a session that records no engine build, such as every session of a 0.2 manifest, returns the engine build
+    /// of the session's own `commit` and the version of the manifest's `engine` block. Such a session's model build is
+    /// `None`.
     pub fn session_build(&self, session: &ManifestSession, role: BuildRole) -> Option<RecordedBuild> {
         match role {
             BuildRole::Engine => Some(session.engine.clone().unwrap_or_else(|| RecordedBuild {
@@ -133,13 +145,14 @@ impl Manifest {
         }
     }
 
-    /// Returns every distinct build the sessions that wrote runs record for `role`, in session order.
+    /// Returns every distinct build recorded for `role` by the sessions that wrote runs, in session order.
     ///
     /// Builds that [`RecordedBuild::reads_as`] finds alike are listed once, as the first session records them.
     ///
-    /// A session known to have written no run is left out: one that records `ran` as 0 and its host, as every session
-    /// since 0.3 does, unless it is the last session of a manifest left `running` or `failed`. The next resume credits
-    /// that last session with its runs. A 0.2 session could end without its runs credited, and always counts.
+    /// A session known to have written no run is left out. Such a session records `ran` as 0 and records its host, as
+    /// every session since 0.3 does, and is not the last session of a manifest left `running` or `failed`. The next
+    /// resume credits that last session with its runs. A 0.2 session could end without its runs credited, and always
+    /// counts.
     pub fn recorded_builds(&self, role: BuildRole) -> Vec<RecordedBuild> {
         let uncredited = matches!(self.status, ManifestStatus::Running | ManifestStatus::Failed);
         let last = self.sessions.len().saturating_sub(1);
@@ -158,7 +171,7 @@ impl Manifest {
         builds
     }
 
-    /// Writes into each session that records no engine build the build [`Self::session_build`] reads for it.
+    /// For each session that records no engine build, writes the build that [`Self::session_build`] returns for it.
     ///
     /// A resume or a merge calls this before the manifest's `engine` block changes. A 0.2 session then keeps the
     /// version it ran.
@@ -188,13 +201,26 @@ impl Manifest {
 #[derive(Debug)]
 pub enum ManifestError {
     /// Reading `path` failed.
-    Read { path: PathBuf, source: io::Error },
-    /// The file at `path` is not a manifest, for the reason in `source`.
-    Parse { path: PathBuf, source: serde_json::Error },
-    /// A manifest of another kind or version than this build writes.
-    Format {
+    Read {
+        /// Path of the manifest.
         path: PathBuf,
+        /// Error from reading the file, of kind `InvalidData` for text that is not UTF-8.
+        source: io::Error,
+    },
+    /// The file at `path` is not a manifest.
+    Parse {
+        /// Path of the manifest, or its bare file name for a manifest read without a path.
+        path: PathBuf,
+        /// Error from the JSON parser.
+        source: serde_json::Error,
+    },
+    /// A manifest of a format or version that this build does not write.
+    Format {
+        /// Path of the manifest, or its bare file name for a manifest read without a path.
+        path: PathBuf,
+        /// Format name the manifest records.
         format: String,
+        /// Format version the manifest records.
         format_version: u64,
     },
 }
@@ -232,11 +258,14 @@ impl std::error::Error for ManifestError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestMode {
+    /// Sweep over the configs of a plan.
     Sweep,
+    /// Search that picks its own configs.
     Search,
 }
 
 impl ManifestMode {
+    /// Returns the name the manifest writes for the mode.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Sweep => "sweep",
@@ -253,13 +282,16 @@ pub struct ManifestSearch {
     /// Hash of every setting that fixes the search's trajectory, from
     /// [`search_hash`](henad_core::explore::fingerprint::search_hash), as 16 hexadecimal digits.
     pub search_hash: String,
+    /// Number of evaluations that the search can request, re-evaluations included.
     pub max_evaluations: u64,
+    /// Maximum number of candidates in one batch.
     pub batch_size: usize,
     /// Seed the searcher draws from, derived from the root seed.
     pub search_seed: u64,
-    /// Reducer columns each run reports to the searcher, the objective's alone or the x axis's then the y axis's.
+    /// Reducer columns each run reports to the searcher: the objective column alone, or the x axis column then the
+    /// y axis column.
     pub watched_columns: Vec<String>,
-    /// Evaluations told to the searcher so far.
+    /// Number of evaluations told to the searcher so far.
     pub evaluations: u64,
     /// Number of batches those evaluations came in.
     pub batch_count: u64,
@@ -267,7 +299,7 @@ pub struct ManifestSearch {
     pub best_candidate_id: Option<u64>,
     /// Objective of the best candidate, `None` when it has no finite value.
     pub best_objective: Option<f64>,
-    /// Cells of a Pattern Space Exploration's grid that its archive fills, `None` for any other search.
+    /// Number of cells in a Pattern Space Exploration's grid that its archive fills, `None` for any other search.
     pub filled_cells: Option<u64>,
     /// Range of each axis of a Pattern Space Exploration's grid, an automatic range once the initial samples fixed
     /// it. `None` for any other search, or while an automatic range waits for the initial samples.
@@ -278,9 +310,13 @@ pub struct ManifestSearch {
 /// Range of each axis of a Pattern Space Exploration's grid.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ManifestAxisRanges {
+    /// Lower bound of the x axis.
     pub x_min: f64,
+    /// Upper bound of the x axis.
     pub x_max: f64,
+    /// Lower bound of the y axis.
     pub y_min: f64,
+    /// Upper bound of the y axis.
     pub y_max: f64,
 }
 
@@ -307,7 +343,7 @@ pub enum ManifestStatus {
     Complete,
     /// The sweep was stopped before its last run. A resume runs the rest.
     Aborted,
-    /// The sweep ended on an error of its own, outside any run. A resume runs the rest.
+    /// The sweep ended on its own error, outside any run. A resume runs the rest.
     Failed,
     /// Some planned runs are missing, as from shards left out of a merge. A resume runs them.
     Incomplete,
@@ -315,15 +351,18 @@ pub enum ManifestStatus {
 
 /// One build as a manifest records it: Henad's engine, a host binary or the crate that registered a model.
 ///
-/// A 0.2 manifest's `engine` block reads as one, with the fields 0.2 did not write at their defaults.
+/// A 0.2 manifest's `engine` block is read as a `RecordedBuild`, with the fields that 0.2 did not write at their
+/// defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordedBuild {
     /// Package name, under the key `name` that 0.2's engine block uses.
     #[serde(rename = "name")]
     pub package: String,
+    /// Package version.
     pub version: String,
     /// Short commit hash, empty when the build did not know it.
     pub commit: String,
+    /// Date of the commit, empty when the build did not know it.
     pub commit_date: String,
     /// Whether the build's sources differed from its commit, `None` when the build could not tell.
     #[serde(default)]
@@ -331,6 +370,7 @@ pub struct RecordedBuild {
     /// Hash of the build's sources, written as 16 hexadecimal digits as `schema_hash` is.
     #[serde(default, with = "hex_hash")]
     pub source_hash: Option<u64>,
+    /// Whether the build was compiled with debug assertions.
     pub debug_build: bool,
     /// Type path of a model's registered type. `None` for the engine and the host.
     #[serde(default)]
@@ -361,7 +401,7 @@ impl From<&BuildInfo> for RecordedBuild {
 }
 
 impl From<&ModelSource> for RecordedBuild {
-    /// Records the registering crate's build and the type path. A source whose set recorded no build reads as an
+    /// Records the registering crate's build and the type path. A source whose set recorded no build is treated as an
     /// empty package that cannot be identified.
     fn from(source: &ModelSource) -> Self {
         let mut build = source.build().map_or_else(
@@ -420,12 +460,12 @@ impl RecordedBuild {
     /// Returns whether `self` and `other` are the same build.
     ///
     /// The checks run in order. A different package or version is a change, as is a different version or source hash
-    /// of an engine crate both sides record. Then two builds that each record a clean commit compare by commit alone.
-    /// Otherwise the source hashes decide.
+    /// of an engine crate that both sides record. Then two builds that each record a clean commit compare by commit
+    /// alone. Otherwise the source hashes decide.
     ///
     /// A commit counts as clean when the build records `dirty` as `false`. A build whose dirty flag is unknown counts
     /// as clean only when it records no source hash either, as a session of a 0.2 manifest does. Any other build with
-    /// an unknown flag goes to the source hashes.
+    /// an unknown flag is compared by source hash.
     ///
     /// Two builds that both record neither a commit nor a source hash are never the same.
     pub fn same_build(&self, other: &Self) -> bool {
@@ -443,7 +483,7 @@ impl RecordedBuild {
         matches!((self.source_hash, other.source_hash), (Some(left), Some(right)) if left == right)
     }
 
-    /// Returns whether `self` and `other` read as one build in a list: the same build, or two builds that record
+    /// Returns whether a list treats `self` and `other` as one build: the same build, or two builds that record
     /// neither a commit nor a source hash under one package, version, type path and set of engine crates.
     ///
     /// Note that two such builds are still never [the same](Self::same_build). A list shows them once, and a
@@ -522,7 +562,7 @@ impl RecordedBuild {
     }
 }
 
-/// Returns whether a package both maps hold has another value in each.
+/// Returns whether a package that both maps hold has a different value in each map.
 fn differs_in<T: PartialEq>(left: &BTreeMap<String, T>, right: &BTreeMap<String, T>) -> bool {
     left.iter()
         .any(|(package, value)| right.get(package).is_some_and(|other_value| other_value != value))
@@ -538,6 +578,7 @@ pub enum BuildRole {
 }
 
 impl BuildRole {
+    /// Returns the name of the role, `engine` or `model`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Engine => "engine",
@@ -589,7 +630,9 @@ mod hex_hash_map {
 /// Model a sweep ran.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestModel {
+    /// Id of the model.
     pub id: String,
+    /// Display name of the model.
     pub name: String,
     /// `cpu` or `gpu`.
     pub backend: String,
@@ -597,12 +640,12 @@ pub struct ManifestModel {
     pub schema_hash: String,
     /// Parameters, stats and actions, as `--params --json` writes them.
     pub schema: Value,
-    /// Whether two builds of the model on one seed step through identical states. A 0.2 manifest reads as `true`.
+    /// Whether two builds of the model on one seed step through identical states, `true` in a 0.2 manifest.
     #[serde(default = "default_true")]
     pub replays_exactly: bool,
 }
 
-/// Default of [`ManifestModel::replays_exactly`]. Serde takes a default only as a path.
+/// Default of [`ManifestModel::replays_exactly`]. Serde accepts a default only as a function path.
 fn default_true() -> bool {
     true
 }
@@ -621,6 +664,7 @@ pub struct ManifestSpecSource {
 /// Design table a spec reads, as a path and the hash of its contents.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestDesignTable {
+    /// Path as the spec file writes it.
     pub path: String,
     /// FNV-1a hash of the file, as 16 hexadecimal digits.
     pub fnv1a64: String,
@@ -635,42 +679,53 @@ pub struct ManifestPlan {
     pub plan_hash: String,
     /// Hash of every setting that shapes the results of one run, as 16 hexadecimal digits.
     pub results_fingerprint: String,
-    /// Configs of a sweep's plan, `None` for a search, whose budget [`ManifestSearch::max_evaluations`] gives.
+    /// Number of configs in a sweep's plan, `None` for a search, whose budget is [`ManifestSearch::max_evaluations`].
     pub configs: Option<u64>,
+    /// Number of replicates of each config, or of each evaluation of a search.
     pub replicates: u64,
+    /// Number of runs in the whole plan, or in a search's whole budget.
     pub runs: u64,
-    /// Blocks of the plan, none for a search.
+    /// Blocks of the plan, empty for a search.
     pub blocks: Vec<ManifestBlock>,
 }
 
 /// Design and config count of one block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestBlock {
+    /// Name of the design, as a spec file writes it.
     pub design: String,
+    /// Number of configs in the block.
     pub configs: u64,
-    /// Seed of a design that draws its configs, `None` for one that lists them.
+    /// Seed of a design that draws its configs, `None` for a design that lists them.
     pub design_seed: Option<u64>,
 }
 
 /// Root seed and the rule deriving each run's seed from it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestSeeds {
+    /// Root seed of the sweep.
     pub root: u64,
+    /// Name of the seed scheme, `common` or `independent`.
     pub scheme: String,
+    /// Formula deriving a run's seed from the root under the scheme.
     pub formula: String,
 }
 
 /// Names of the stat and reducer columns, before CSV escaping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestColumns {
+    /// Stat columns of `series.csv`, in order.
     pub stats: Vec<String>,
+    /// Reducer columns of `runs.csv`, in order.
     pub reducers: Vec<String>,
 }
 
 /// Share of the plan a directory holds, the runs whose id leaves remainder `index` when divided by `count`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestShard {
+    /// Index of the shard, counted from 0.
     pub index: u64,
+    /// Number of shards the plan is split into.
     pub count: u64,
 }
 
@@ -684,7 +739,7 @@ impl From<Shard> for ManifestShard {
 }
 
 impl ManifestShard {
-    /// Returns the shard the record names, or `None` for a record no shard can have.
+    /// Returns the shard that the record specifies, or `None` when its index and count form no valid shard.
     pub fn to_shard(self) -> Option<Shard> {
         Shard::new(self.index, self.count).ok()
     }
@@ -695,31 +750,40 @@ impl ManifestShard {
 pub struct ManifestExecution {
     /// `cpu` or `gpu`.
     pub backend: String,
-    /// `auto`, or the count of lanes or tracks asked for.
+    /// `auto`, or the count of lanes or tracks requested.
     pub concurrency: String,
+    /// Number of runs stepped at once on the CPU, each in its own lane.
     pub cpu_lanes: usize,
+    /// Number of worker threads in each lane.
     pub threads_per_lane: usize,
+    /// Number of GPU runs alive at once.
     pub gpu_tracks: usize,
-    /// Bytes the live runs were projected to hold together.
+    /// Projected size in bytes of all live runs together.
     pub projected_bytes: u64,
-    /// Bytes of host memory the live runs could hold together, `None` for no limit.
+    /// Host memory budget in bytes for all live runs together, `None` for no limit.
     pub memory_budget: Option<u64>,
-    /// Bytes of device memory the live GPU runs could hold together, `None` for the device's largest buffer.
+    /// Device memory budget in bytes for all live GPU runs together, `None` for the device's largest buffer.
     pub gpu_memory_budget: Option<u64>,
 }
 
 /// Host and device a sweep ran on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRuntime {
+    /// Operating system as Rust names it, and `browser` on wasm32.
     pub os: String,
+    /// CPU architecture as Rust names it.
     pub arch: String,
+    /// Logical CPUs of the host, `None` where the platform cannot report them.
     pub logical_cpus: Option<usize>,
     /// Width of rayon's global pool.
     pub worker_threads: Option<usize>,
     /// Name of the GPU adapter, `None` when the sweep had no device.
     pub adapter: Option<String>,
+    /// Graphics backend of the adapter, `None` when the sweep had no device.
     pub adapter_backend: Option<String>,
+    /// Kind of the adapter, such as `DiscreteGpu`, `None` when the sweep had no device.
     pub adapter_type: Option<String>,
+    /// Driver of the adapter, `None` when the sweep had no device.
     pub driver: Option<String>,
     /// Limits the device was created with.
     pub limits: Option<ManifestLimits>,
@@ -756,17 +820,24 @@ impl ManifestRuntime {
 /// Device limits that bound the size of a GPU run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestLimits {
+    /// Largest buffer in bytes.
     pub max_buffer_size: u64,
+    /// Largest storage buffer binding in bytes.
     pub max_storage_buffer_binding_size: u64,
+    /// Largest side of a 2D texture in texels.
     pub max_texture_dimension_2d: u32,
 }
 
 /// Start and end of a sweep, each in milliseconds since the Unix epoch and as RFC 3339 text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestTimestamps {
+    /// Start in milliseconds since the Unix epoch.
     pub started_unix_ms: u64,
+    /// Start as RFC 3339 text.
     pub started: String,
+    /// End in milliseconds since the Unix epoch, `None` until the sweep ends.
     pub finished_unix_ms: Option<u64>,
+    /// End as RFC 3339 text, `None` until the sweep ends.
     pub finished: Option<String>,
 }
 
@@ -789,12 +860,12 @@ pub struct ManifestSession {
     pub started: String,
     /// Commit of the engine build that ran the session.
     pub commit: String,
-    /// Runs the session found written and kept.
+    /// Number of runs the session found written and kept.
     pub skipped: u64,
-    /// Runs the session wrote.
+    /// Number of runs this session wrote.
     ///
-    /// The next session credits a session that ended before replacing the manifest with the runs the next session
-    /// kept, less those the ended session found and kept.
+    /// When a session ends before it replaces the manifest, the next session credits it with the runs that the next
+    /// session kept, minus the runs that the ended session found and kept.
     pub ran: u64,
     /// Build of Henad that ran the session, `None` in a 0.2 manifest.
     #[serde(default)]
@@ -810,10 +881,13 @@ pub struct ManifestSession {
 /// Counts of the rows of `runs.csv` by status.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResultCounts {
+    /// Number of rows, of every status.
     pub rows: u64,
+    /// Number of runs that ended without a fault, every sampled value finite.
     pub ok: u64,
+    /// Number of runs that ended without a fault, some sampled value not finite.
     pub non_finite: u64,
-    /// Runs that ended on a fault or a timeout.
+    /// Number of runs that ended on a fault or a timeout.
     pub failed: u64,
 }
 
@@ -848,7 +922,7 @@ impl Add for ResultCounts {
     }
 }
 
-/// Returns the system clock in milliseconds since the Unix epoch. A clock set before the epoch reads as 0.
+/// Returns the system clock in milliseconds since the Unix epoch. A clock set before the epoch is treated as 0.
 pub(crate) fn now_unix_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since_epoch| {
         u64::try_from(since_epoch.as_millis()).unwrap_or(u64::MAX)

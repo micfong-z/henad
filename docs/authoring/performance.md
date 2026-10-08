@@ -39,15 +39,15 @@ Boids overrides to 64, since a thousand agents would otherwise be two chunks and
 Ants overrides to 4096, its per-agent kernel being cheap enough that per-chunk overhead dominates.
 
 Neither of those numbers is a rule, and if your model has an unusual per-agent cost you should measure both ends.
-Measure with the population you care about: a value that suits a million agents can leave a thousand running on two cores.
+Measure with the population you care about: a value that suits a million agents can leave a thousand agents running on two cores.
 
 ## Never scan every agent
 
 `henad::authoring::SpatialHash` is a flat counting-sort grid, rebuilt every tick from the agent positions.
-Declaring `type Index = SpatialHash` and querying through `query_radius` is the single biggest lever for getting an agent model to scale, and boids only scaled in the first place once its naive neighbour search was replaced with this hash.
+Declaring `type Index = SpatialHash` and calling `query_radius` is the single biggest lever for getting an agent model to scale, and boids only scaled in the first place once its naive neighbour search was replaced with this hash.
 
-A kernel that needs the offsets to its neighbours, and not just their indices, should take `for_each_within` instead.
-It walks the same cells in the same order and hands each visit the two toroidal deltas and their squared length, which the range test computed anyway.
+A kernel that needs the offsets to its neighbours, and not just their indices, should use `for_each_within` instead.
+It walks the same cells in the same order, and passes the callback the two toroidal deltas and their squared length, which the range test computed anyway.
 Taking a list of indices back and recomputing the deltas from it measured 10% of the boids step.
 
 ```rust
@@ -55,7 +55,7 @@ hash.query_radius(pos_x[i], pos_y[i], radius, pos_x, pos_y, buf);
 ```
 
 The result buffer is caller-provided, and a query therefore does not allocate.
-Boids takes `for_each_within`, which needs no buffer at all.
+Boids uses `for_each_within`, which needs no buffer at all.
 
 Toroidal wraparound is handled inside the query.
 Do not reintroduce an O(n²) neighbour loop, and do not filter the whole population by distance.
@@ -72,7 +72,7 @@ See [parameters](parameters.md#hot-parameters).
 
 ## The scatter write path
 
-Dedicated machinery sits behind one write pattern only, many agents depositing into the same cell, and you reach it through [`ScalarField`](fields.md#the-scatter).
+Dedicated machinery sits behind one write pattern only, many agents depositing into the same cell, and you use it through [`ScalarField`](fields.md#the-scatter).
 
 The cost is real, and which cost you pay depends on the shape of the call.
 With more cells than deposits, which is the usual case for a field sized by the world, the banded arm merges each deposit once and touches each cell once.
@@ -129,7 +129,7 @@ Otherwise two runs at different scales are not comparable.
 
 Two things dominate GPU performance, and the engine owns both of them.
 
-**Batching.** Steps go out many to a submission.
+**Batching.** Each submission carries many steps.
 One dispatch per step would spend its time on submission overhead instead of on the work.
 The runner does the batching, and it sizes the batch adaptively against a wall-clock target to keep the UI responsive.
 

@@ -1,5 +1,5 @@
-//! Candidate backends for `henad_compute::cpu::primitives::scatter`. Atomics, counting sort, and
-//! per-worker shadow grids, all producing `out[c] = combine(base[c], values landing in c)`.
+//! Candidate backends for `henad_compute::cpu::primitives::scatter`: atomics, a counting sort, per-worker
+//! shadow grids and per-worker bands, each producing `out[c] = combine(base[c], values landing in c)`.
 //!
 //! Density is swept by shrinking the grid at a fixed agent count, so every configuration does the
 //! same number of deposits and only the collision rate moves. Thread count comes from explicit
@@ -12,6 +12,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use henad_core::authoring::primitives::rng::xorshift64;
 use rayon::prelude::*;
 
+/// Fixed-point steps per unit of an additive deposit.
+///
 /// There is no atomic float add, and a CAS loop over f32 would depend on arrival order.
 const SUM_SCALE: f32 = 1024.0;
 
@@ -34,7 +36,7 @@ impl Distribution {
     }
 }
 
-/// Generated once and reused across every strategy and sample.
+/// Deposits of one configuration, generated once and reused across every strategy and sample.
 struct Workload {
     cells: Vec<u32>,
     values: Vec<f32>,
@@ -54,7 +56,7 @@ impl Workload {
         let mut values = Vec::with_capacity(n_agents);
         for _ in 0..n_agents {
             let r = next();
-            // Own draw, so band membership stays independent of the cell draw.
+            // A separate draw, so band membership stays independent of the cell draw.
             let in_band = dist == Distribution::Clustered && next() % 10 != 0;
             let cell = if in_band {
                 r as usize % band
@@ -104,7 +106,9 @@ impl AtomicMax {
     }
 }
 
-/// u64 rather than u32 because atomic add wraps rather than saturating.
+/// Fixed-point `fetch_add` into one `u64` per cell.
+///
+/// A `u64` instead of a `u32`, since atomic add wraps instead of saturating.
 struct AtomicSum {
     acc: Vec<AtomicU64>,
 }
@@ -292,7 +296,7 @@ impl BandedMax {
     }
 }
 
-/// Without this the timings could be comparing different operations.
+/// Asserts that every strategy produces the same grid. Without this the timings could compare different operations.
 fn assert_strategies_agree() {
     for dist in [Distribution::Uniform, Distribution::Clustered] {
         let w = Workload::new(50_000, 512, dist, 0x51CA_7737_0BEE_F001);
@@ -499,7 +503,7 @@ fn bench_threads(c: &mut Criterion) {
 
 /// The regime a field layer runs in, which the density sweep above never reaches.
 ///
-/// A model's grid is sized by its world, not by its population, so the ladder both agent models run
+/// A model's grid is sized by its world, not by its population, so the ladder that both agent models run
 /// puts twenty cells behind every agent. Half the deposits are the identity, because an agent
 /// writing one of two layers leaves the other lane dense and zero.
 const CELLS_PER_AGENT: usize = 20;

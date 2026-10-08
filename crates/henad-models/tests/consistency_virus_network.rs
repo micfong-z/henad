@@ -32,6 +32,7 @@ use ParamValue::{Bool, Choice, F32, U32};
 /// Returns the default params with some overridden by id.
 ///
 /// # Panics
+///
 /// Panics if an id is not declared by the model.
 fn params(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
     let descs = network_model_param_descriptors::<VirusNetwork>();
@@ -178,7 +179,7 @@ fn infection_rate_matches_the_closed_form() {
 }
 
 /// A checked node recovers with the recovery chance, and a recovered node becomes resistant with the resistance chance.
-/// The others go back to susceptible.
+/// Every other recovered node goes back to susceptible.
 #[test]
 fn recovery_and_resistance_match_the_parameters() {
     const RECOVERY: f64 = 0.30;
@@ -311,7 +312,7 @@ fn directed_infection_follows_the_edges() {
     assert_eq!(run(false), [INFECTED, INFECTED, INFECTED], "undirected");
 }
 
-/// Returns the unordered pairs in the edge list, after checking that none repeats and none is a loop.
+/// Returns the unordered pairs in the edge list, after checking that no pair repeats and no edge is a loop.
 fn simple_pairs(state: &State) -> HashSet<(u32, u32)> {
     let (src, dst, _) = state.graph().edges();
     let mut pairs = HashSet::new();
@@ -399,7 +400,7 @@ fn a_geometric_network_has_the_declared_mean_degree() {
     assert!((small - 6.0).abs() < 0.3, "mean degree {small} at 200 nodes, wanting 6");
 }
 
-/// A geometric network joins near neighbours, so its edges are far shorter than a random network's.
+/// A geometric network joins near neighbours, so its edges are far shorter than the edges of a random network.
 #[test]
 fn a_geometric_network_joins_near_neighbours() {
     fn mean_length(network: usize) -> f64 {

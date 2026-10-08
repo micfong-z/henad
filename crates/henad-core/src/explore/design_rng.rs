@@ -5,16 +5,17 @@ use crate::authoring::primitives::rng::{mix_seed, next_bits, next_index};
 /// Scale that turns 53 random bits into a fraction in `[0, 1)`.
 const UNIT_SCALE: f64 = 1.0 / (1_u64 << 53) as f64;
 
-/// Generator of the draws of a sampled design or a search, an xorshift64 stream started from one seed.
+/// Random number generator for a sampled design or a search, an xorshift64 stream started from one seed.
 ///
 /// Every draw is built from whole 32-bit words with integer and basic float arithmetic and no library function, so a
-/// seed gives the same draws on every platform.
+/// seed produces the same draws on every platform.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesignRng {
     state: u64,
 }
 
 impl DesignRng {
+    /// Returns a generator whose stream starts from `seed`.
     pub fn new(seed: u64) -> Self {
         Self { state: mix_seed(seed) }
     }

@@ -1,8 +1,8 @@
-// One ant per invocation, mirroring `ants/step.rs`.
+// Steps one ant per invocation, mirroring `ants/step.rs`.
 //
-// The CPU's deposit and advect passes are fused here. Both read the field as it stands before
-// this tick's merge, and an ant only ever touches its own lanes, so one invocation doing both in
-// order is the same computation.
+// The CPU's deposit and advect passes are fused here. Both passes read the field as it stands
+// before this tick's merge, and an ant only ever touches its own lanes, so one invocation doing
+// both in order is the same computation.
 
 #import henad::dispatch::linear_index
 #import henad::rng::{choice3, next_bits, next_float, reservoir_accept}
@@ -21,7 +21,7 @@ struct Params {
 
     momentum: f32,
     random_action: f32,
-    // Searching and carrying, in the uniform to keep a storage binding free.
+    // Colours of a searching and a carrying ant, in the uniform to keep a storage binding free.
     palette: vec2<u32>,
 }
 
@@ -56,13 +56,13 @@ fn in_field(x: i32, y: i32) -> bool {
     return x >= 0 && y >= 0 && x < i32(params.grid_w) && y < i32(params.grid_h);
 }
 
-// This model is bounded, not toroidal like the others.
+// Returns whether (x, y) lies inside the bounded field and off every obstacle.
 fn passable(x: i32, y: i32) -> bool {
     return in_field(x, y) && sites[cell_of(x, y)] != OBSTACLE;
 }
 
-// Mirrors the CPU model's `deposit_value`. Floored at what the cell already holds, which is why
-// `atomicMax` downstream reproduces the reference's plain overwrite.
+// Mirrors the CPU model's `deposit_value`. The result is floored at what the cell already holds,
+// and `atomicMax` downstream then reproduces the reference's plain overwrite.
 fn deposit_value(x: i32, y: i32, reward: f32, base: u32) -> f32 {
     var best = field[base + cell_of(x, y)];
     for (var dx = -1; dx <= 1; dx = dx + 1) {
@@ -104,8 +104,8 @@ fn main(
         reward = params.reward;
     }
 
-    // An ant lays the trail for the trip it just made and follows the one it is making, so
-    // carrying food lays to-food and follows to-home.
+    // An ant lays the trail for the trip it just made and follows the trail for the trip it is
+    // making, so an ant carrying food lays to-food and follows to-home.
     var lay = TO_HOME;
     var follow = TO_FOOD;
     if (has_food) {
@@ -124,8 +124,9 @@ fn main(
     var best = -1.0;
     var bx = x;
     var by = y;
-    // 2 not 1 is the reference's off-by-one, giving the first neighbour visited 2/(k+1) against
-    // 1/(k+1) for the rest, which drifts ants up-left. Kept deliberately, see the gap report.
+    // Starting at 2 reproduces the reference's off-by-one. Among k tied neighbours, the neighbour
+    // visited first is kept with probability 2/(k+1), and every other tied neighbour with 1/(k+1).
+    // The bias drifts the ants up-left.
     var count = 2u;
 
     // The `dx` outer, `dy` inner order is load-bearing. Ties are broken by a reservoir draw, so
@@ -154,7 +155,7 @@ fn main(
     }
 
     if (best == 0.0 && last_step != NO_STEP) {
-        // No pheromone nearby, so probably keep going the way we were.
+        // With no pheromone nearby, the ant keeps its last direction with probability `momentum`.
         if (next_float(&r, 1.0) < params.momentum) {
             let mx = x + i32(last_step / 3u) - 1;
             let my = y + i32(last_step % 3u) - 1;

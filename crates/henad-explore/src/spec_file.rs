@@ -1,7 +1,7 @@
 //! Spec files, the TOML form of a sweep spec.
 //!
-//! Every table refuses a key it does not know. A parameter value is kept as the text `--set` and `--vary` take, so a
-//! spec file and a command line hand [`parse_value`] the same text.
+//! Every table rejects an unknown key. A parameter value is kept as the text that `--set` and `--vary` accept, so a
+//! spec file and a command line pass [`parse_value`] the same text.
 //!
 //! [`parse_value`]: henad_core::explore::value::parse_value
 
@@ -30,7 +30,7 @@ use henad_core::explore::stop::{StopError, StopSpec};
 use crate::exec::Concurrency;
 use crate::sweep::SpecSource;
 
-/// A sweep spec as a TOML file writes it.
+/// A sweep spec as written in a TOML file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpecFile {
@@ -39,10 +39,13 @@ pub struct SpecFile {
     /// Values every config shares, by parameter id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub set: BTreeMap<String, SpecValue>,
+    /// Length and end of each run, the `[run]` table.
     #[serde(default)]
     pub run: RunTable,
+    /// Sampling cadence and reducers, the `[measure]` table.
     #[serde(default)]
     pub measure: MeasureTable,
+    /// Root seed and seed scheme, the `[seeds]` table.
     #[serde(default)]
     pub seeds: SeedsTable,
     /// Actions every run fires, each an `[[action]]` table.
@@ -51,7 +54,7 @@ pub struct SpecFile {
     /// Blocks in order, each a `[[block]]` table.
     #[serde(default, rename = "block", skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<BlockTable>,
-    /// Search that picks the configs in place of blocks.
+    /// Search that picks the configs instead of blocks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<SearchTable>,
     /// Settings that spread the runs over the machine and never change a result.
@@ -63,9 +66,13 @@ pub struct SpecFile {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RunTable {
+    /// Number of ticks stepped after the warm-up.
     pub steps: u64,
+    /// Number of ticks stepped before the first sample.
     pub warmup: u64,
+    /// Number of runs of each config, each with its own seed.
     pub replicates: u64,
+    /// Condition that can end a run before its last tick.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<StopTable>,
     /// Seconds of wall-clock time after which a run is abandoned. On a GPU track, a run's clock counts its share of the
@@ -96,12 +103,12 @@ impl From<&RunSettings> for RunTable {
 }
 
 impl RunTable {
-    /// Returns the run settings the table writes.
+    /// Returns the run settings the table describes.
     ///
     /// # Errors
     ///
     /// Returns [`SpecFileError::Stop`] for a stop condition that cannot be read, and [`SpecFileError::Timeout`] for
-    /// a timeout that is negative or not a number.
+    /// a timeout that is negative, not a number or too long for a [`Duration`].
     fn into_settings(self) -> Result<RunSettings, SpecFileError> {
         let stop = self
             .stop
@@ -130,6 +137,7 @@ impl RunTable {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StopTable {
+    /// Text of the condition, a stat label, a comparator and a threshold.
     pub condition: String,
     /// First tick at which the condition can end a run.
     #[serde(default)]
@@ -142,9 +150,10 @@ pub struct StopTable {
 pub struct ActionTable {
     /// Id of the action the model declares.
     pub id: String,
-    /// Name factors and output columns give the action, the id when left out.
+    /// Name that factors and output columns use for the action, the id when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Tick the action fires at, where no block varies it.
     pub tick: u64,
 }
 
@@ -172,11 +181,14 @@ impl From<ActionTable> for ActionSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct MeasureTable {
+    /// Ticks between two samples, counted from the end of the warm-up.
     pub stats_every: u64,
     /// Ticks between two rows of the series, `stats_every` when left out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub series_every: Option<u64>,
+    /// Whether every column other than a histogram bucket gets the final, min, max and mean reducers.
     pub default_reducers: bool,
+    /// Reducers added after the defaults.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reducers: Vec<ReducerTable>,
 }
@@ -197,7 +209,9 @@ impl Default for MeasureTable {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReducerTable {
+    /// Stat column the reducers read.
     pub column: String,
+    /// Kinds of reducer, as in `max` or `first<=10`.
     pub kinds: Vec<String>,
 }
 
@@ -205,7 +219,9 @@ pub struct ReducerTable {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct SeedsTable {
+    /// Seed from which every run's seed is derived.
     pub root: TomlSeed,
+    /// Rule that derives each run's seed from the root.
     pub scheme: SeedSchemeFile,
 }
 
@@ -260,8 +276,10 @@ impl<'de> Deserialize<'de> for TomlSeed {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SeedSchemeFile {
+    /// Replicate `r` of every config shares one seed.
     #[default]
     Common,
+    /// Every run gets its own seed.
     Independent,
 }
 
@@ -287,9 +305,10 @@ impl From<SeedSchemeFile> for SeedScheme {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BlockTable {
+    /// Design that combines the factors, `factorial` when left out.
     #[serde(default)]
     pub design: DesignKindFile,
-    /// Configs a random or Latin hypercube design draws.
+    /// Number of configs that a random or Latin hypercube design draws.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<usize>,
     /// Seed of a random or Latin hypercube design's draws, derived from the root seed when left out.
@@ -298,12 +317,13 @@ pub struct BlockTable {
     /// Path of a table design's CSV file, relative to the spec file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<PathBuf>,
-    /// Text of a table design's CSV, written in the spec in place of `file`.
+    /// Text of a table design's CSV, written in the spec instead of `file`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table_text: Option<String>,
+    /// Factors of the block. A table design takes its factors from its table, and lists no factors here.
     #[serde(default)]
     pub factors: Vec<FactorTable>,
-    /// Text of the table `file` names, read by [`SpecFile::load`].
+    /// Text of the table that `file` refers to, read by [`SpecFile::load`].
     #[serde(skip)]
     pub file_text: Option<String>,
 }
@@ -311,7 +331,7 @@ pub struct BlockTable {
 /// Design table a spec file reads, as its path and the hash of its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesignTableFile {
-    /// Path as the spec file writes it.
+    /// Path as written in the spec file.
     pub path: PathBuf,
     /// FNV-1a hash of the table's text.
     pub fnv1a64: u64,
@@ -321,11 +341,16 @@ pub struct DesignTableFile {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DesignKindFile {
+    /// Every combination of levels.
     #[default]
     Factorial,
+    /// Levels paired by position.
     Zip,
+    /// `samples` configs, each factor's value drawn independently.
     Random,
+    /// `samples` configs in a Latin hypercube.
     Lhs,
+    /// One config per row of a CSV table, from `file` or `table_text`.
     Table,
 }
 
@@ -351,20 +376,29 @@ pub struct FactorTable {
     /// Name of the action whose tick the factor varies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+    /// Levels listed one by one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<SpecValue>>,
+    /// Levels spread over a range.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<RangeTable>,
+    /// Levels named by a keyword.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub levels: Option<LevelsKeyword>,
 }
 
-/// Every value from `min` to `max` inclusive, `step` apart, as [`LevelSpec::Range`] reads them.
+/// Every value from `min` to `max` inclusive, `step` apart, as [`LevelSpec::Range`] interprets them.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RangeTable {
+    /// Lowest value.
     pub min: f64,
+    /// Highest value.
     pub max: f64,
+    /// Distance between two values.
+    ///
+    /// Without a step, a sampled design or a search draws from the whole range. Any other design steps a whole-number
+    /// factor by 1, and rejects an `F32` parameter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step: Option<f64>,
 }
@@ -410,7 +444,7 @@ impl FactorTable {
 }
 
 impl From<&FactorSpec> for FactorTable {
-    /// Writes each value as [`SpecValue::from_text`] reads it.
+    /// Writes each value as [`SpecValue::from_text`] converts it.
     fn from(factor: &FactorSpec) -> Self {
         let (param, action) = match &factor.target {
             FactorTarget::Param(id) => (Some(id.clone()), None),
@@ -437,25 +471,29 @@ impl From<&FactorSpec> for FactorTable {
 /// A search, the `[search]` table.
 ///
 /// The table of the chosen algorithm, `[search.hill_climb]`, `[search.genetic]` or `[search.pse]`, holds its
-/// settings. A random search takes none, and a left-out table of another algorithm takes its defaults, except for
-/// `[search.pse]`, whose axes are needed.
+/// settings. A random search has no settings. For any other algorithm, a left-out table takes the algorithm's
+/// defaults, except for `[search.pse]`, whose axes are needed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SearchTable {
+    /// Search method.
     pub algorithm: SearchAlgorithmFile,
-    /// Evaluations the search can ask for, re-evaluations included.
+    /// Number of evaluations that the search can request, re-evaluations included.
     pub max_evaluations: u64,
-    /// Most candidates one batch evaluates.
+    /// Maximum number of candidates that one batch evaluates.
     pub batch_size: usize,
-    /// Output a random search, hill climb or genetic algorithm scores.
+    /// Output that a random search, hill climb or genetic algorithm scores.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub objective: Option<ObjectiveTable>,
     /// Factors the search varies, in the form a block's factors take.
     pub space: Vec<FactorTable>,
+    /// Settings of a hill climb, the `[search.hill_climb]` table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hill_climb: Option<HillClimbTable>,
+    /// Settings of a genetic algorithm, the `[search.genetic]` table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genetic: Option<GeneticTable>,
+    /// Settings of a Pattern Space Exploration, the `[search.pse]` table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pse: Option<PatternSpaceTable>,
 }
@@ -464,18 +502,23 @@ pub struct SearchTable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchAlgorithmFile {
+    /// Random search.
     Random,
+    /// Hill climbing.
     HillClimb,
+    /// Genetic algorithm.
     Genetic,
+    /// Pattern Space Exploration.
     Pse,
 }
 
-/// Output a search scores candidates by, as `{ column, goal, aggregate }`.
+/// Output that a search uses to score candidates, as `{ column, goal, aggregate }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectiveTable {
     /// Reducer column, as in `Infected:max`.
     pub column: String,
+    /// Direction of the objective.
     pub goal: GoalFile,
     /// Rule that folds a candidate's replicates into one value, the median when left out.
     #[serde(default)]
@@ -486,7 +529,9 @@ pub struct ObjectiveTable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalFile {
+    /// Lower values score better.
     Minimize,
+    /// Higher values score better.
     Maximize,
 }
 
@@ -494,7 +539,9 @@ pub enum GoalFile {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AggregateFile {
+    /// Mean of the values.
     Mean,
+    /// Middle value, or the mean of the middle two for an even count.
     #[default]
     Median,
 }
@@ -505,7 +552,7 @@ pub enum AggregateFile {
 pub struct HillClimbTable {
     /// Largest step of a gene toward a neighbor, as a fraction of its range.
     pub mutation_scale: f64,
-    /// Batches without a move after which the climb starts over.
+    /// Number of batches without a move after which the climb starts over.
     pub patience: u64,
     /// Whether each batch also re-evaluates the incumbent.
     pub reevaluate: bool,
@@ -521,9 +568,13 @@ impl Default for HillClimbTable {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct GeneticTable {
+    /// Number of members in each generation.
     pub population: usize,
+    /// Number of best members of a generation carried unchanged into the next.
     pub elite_count: usize,
+    /// Number of members drawn for each tournament, the best of whom becomes a parent.
     pub tournament_size: usize,
+    /// Probability that a child has a second parent.
     pub crossover_rate: f64,
     /// Probability that each gene of a child changes.
     pub mutation_rate: f64,
@@ -545,14 +596,17 @@ impl Default for GeneticTable {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PatternSpaceTable {
+    /// Axis of the first output.
     pub x_axis: PatternAxisTable,
+    /// Axis of the second output.
     pub y_axis: PatternAxisTable,
-    /// Candidates drawn at random before any is bred from the archive.
+    /// Number of candidates drawn at random before any candidate is bred from the archive.
     #[serde(default = "default_initial_samples")]
     pub initial_samples: u64,
     /// Largest step of a mutated gene, as a fraction of its range.
     #[serde(default = "default_pattern_mutation_scale")]
     pub mutation_scale: f64,
+    /// Rule that folds a candidate's replicates into one value per axis, the median when left out.
     #[serde(default)]
     pub aggregate: AggregateFile,
 }
@@ -735,12 +789,12 @@ impl From<AggregateFile> for Aggregate {
 }
 
 impl SearchTable {
-    /// Returns the search spec the table writes.
+    /// Returns the search spec the table describes.
     ///
     /// # Errors
     ///
-    /// Returns [`SpecFileError`] for a factor without exactly one target or one form of levels, a settings table of
-    /// another algorithm than the chosen one, or a Pattern Space Exploration with no `[search.pse]` table. The
+    /// Returns [`SpecFileError`] for a factor without exactly one target or one form of levels, a settings table for
+    /// an algorithm other than the chosen one, or a Pattern Space Exploration with no `[search.pse]` table. The
     /// settings themselves are checked when the search is planned.
     fn into_spec(self) -> Result<SearchSpec, SpecFileError> {
         let refuse = |reason| Err(SpecFileError::Search { reason });
@@ -829,10 +883,10 @@ pub struct ExecutionTable {
     /// `"auto"`, or a number of CPU lanes or GPU tracks.
     #[serde(with = "concurrent_field")]
     pub concurrent: Concurrency,
-    /// Bytes of host memory the live runs can hold together.
+    /// Host memory budget in bytes for all live runs together.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<u64>,
-    /// Bytes of device memory the live GPU runs can hold together.
+    /// Device memory budget in bytes for all live GPU runs together.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_memory: Option<u64>,
 }
@@ -897,19 +951,23 @@ mod concurrent_field {
     }
 }
 
-/// A parameter value as a spec file writes it.
+/// A parameter value as written in a spec file.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpecValue {
+    /// Integer, as in `3`.
     Integer(i64),
+    /// Float, as in `0.1`.
     Float(f64),
+    /// `true` or `false`.
     Bool(bool),
+    /// String, as in a choice's option name.
     Text(String),
 }
 
 impl SpecValue {
-    /// Returns the value as text in the form `--set` takes.
+    /// Returns the value as text in the form that `--set` accepts.
     ///
-    /// A float takes its shortest round-trip form, as in `0.1`.
+    /// A float is written in its shortest round-trip form, as in `0.1`.
     pub fn to_text(&self) -> String {
         match self {
             Self::Integer(number) => number.to_string(),
@@ -921,8 +979,8 @@ impl SpecValue {
 
     /// Returns `text` as the value [`Self::to_text`] writes back as `text`.
     ///
-    /// Text that reads as an integer, a finite float or a bool, and is written back unchanged, becomes one.
-    /// Anything else stays text.
+    /// Text that parses as an integer, a finite float or a bool, and is written back unchanged, becomes that kind of
+    /// value. Anything else stays text.
     pub fn from_text(text: &str) -> Self {
         if let Ok(number) = text.parse::<i64>()
             && number.to_string() == text
@@ -994,35 +1052,76 @@ impl<'de> Deserialize<'de> for SpecValue {
 #[derive(Debug)]
 pub enum SpecFileError {
     /// Reading the file at `path` failed.
-    Read { path: PathBuf, source: io::Error },
+    Read {
+        /// Path of the spec file, or of a design table that it refers to, joined to the spec file's directory.
+        path: PathBuf,
+        /// Error from reading the file, of kind `InvalidData` for text that is not UTF-8.
+        source: io::Error,
+    },
     /// Table path `path` of block `block`, absolute or holding a component other than a name, such as `..`.
-    TablePath { block: usize, path: PathBuf },
-    /// Text that is not a spec file, for the reason in `source`.
-    Parse { source: Box<toml::de::Error> },
-    /// JSON that is not a spec file, for the reason in `source`.
-    Json { source: serde_json::Error },
+    TablePath {
+        /// Index of the block, counting from 0.
+        block: usize,
+        /// Table path as written in the block's `file` key.
+        path: PathBuf,
+    },
+    /// Text that is not a spec file.
+    Parse {
+        /// Error from the TOML parser.
+        source: Box<toml::de::Error>,
+    },
+    /// JSON that is not a spec file.
+    Json {
+        /// Error from the JSON deserializer.
+        source: serde_json::Error,
+    },
     /// A factor of block `block` with none or both of `param` and `action`.
-    FactorTarget { block: usize },
+    FactorTarget {
+        /// Index of the block, counting from 0.
+        block: usize,
+    },
     /// Factor of block `block` on the parameter or action `target_name`, with none or several of `values`, `range`
     /// and `levels`.
-    FactorLevels { block: usize, target_name: String },
-    /// Block `block`, whose keys do not fit its design for the reason in `reason`.
-    Design { block: usize, reason: &'static str },
+    FactorLevels {
+        /// Index of the block, counting from 0.
+        block: usize,
+        /// Parameter id or action name the factor targets.
+        target_name: String,
+    },
+    /// Block `block`, whose keys do not fit its design.
+    Design {
+        /// Index of the block, counting from 0.
+        block: usize,
+        /// Message that identifies the key at fault, such as `samples applies to a random or lhs design`.
+        reason: &'static str,
+    },
     /// A reducer kind that cannot be read.
     Reducer(ReducerError),
     /// A stop condition that cannot be read.
     Stop(StopError),
-    /// A timeout that is negative or not a number.
-    Timeout { seconds: f64 },
-    /// A `[search]` table whose keys do not fit its algorithm or the rest of the spec, for the reason in `reason`.
-    Search { reason: &'static str },
+    /// A timeout of `seconds` that is negative, not a number or too long for a [`Duration`].
+    Timeout {
+        /// Value of `timeout_s` in seconds, as written in the spec.
+        seconds: f64,
+    },
+    /// A `[search]` table whose keys do not fit its algorithm or the rest of the spec.
+    Search {
+        /// Message that identifies the key at fault, such as `[search.pse] applies to a pse search`.
+        reason: &'static str,
+    },
     /// A factor of the search space with none or both of `param` and `action`.
     SearchFactorTarget,
     /// A factor of the search space on the parameter or action `target_name`, with none or several of `values`,
     /// `range` and `levels`.
-    SearchFactorLevels { target_name: String },
-    /// A spec that cannot be written as TOML, for the reason in `source`.
-    Write { source: toml::ser::Error },
+    SearchFactorLevels {
+        /// Parameter id or action name the factor targets.
+        target_name: String,
+    },
+    /// A spec that cannot be written as TOML.
+    Write {
+        /// Error from the TOML serializer.
+        source: toml::ser::Error,
+    },
 }
 
 impl fmt::Display for SpecFileError {
@@ -1083,10 +1182,11 @@ impl std::error::Error for SpecFileError {
 /// A spec file read whole: the spec, the text it was read from, and its execution settings.
 #[derive(Debug, Clone)]
 pub struct LoadedSpec {
+    /// Sweep spec the file describes.
     pub spec: SweepSpec,
     /// Path, text and design tables of the file, as a manifest records them.
     pub spec_source: SpecSource,
-    /// The file's `[execution]` table, which [`SweepOptions::apply_execution`] applies.
+    /// The file's `[execution]` table, for [`SweepOptions::apply_execution`] to apply.
     ///
     /// [`SweepOptions::apply_execution`]: crate::sweep::SweepOptions::apply_execution
     pub execution: ExecutionTable,
@@ -1104,12 +1204,12 @@ impl LoadedSpec {
         Self::from_file(file, spec_source)
     }
 
-    /// Reads spec text that names no table file.
+    /// Reads spec text that refers to no table file.
     ///
     /// # Errors
     ///
-    /// Returns the errors of [`SpecFile::parse`] and [`SpecFile::into_spec`]. A block that names a table `file` is
-    /// refused, since no file is read. A table design given inline as `table_text` is read.
+    /// Returns the errors of [`SpecFile::parse`] and [`SpecFile::into_spec`]. A block that refers to a table `file` is
+    /// rejected, since no file is read. A table design given inline as `table_text` is read.
     pub fn parse(text: &str) -> Result<Self, SpecFileError> {
         let file = SpecFile::parse(text)?;
         let spec_source = SpecSource {
@@ -1144,7 +1244,7 @@ impl LoadedSpec {
 }
 
 impl SpecFile {
-    /// Reads the spec file at `path`, and the design tables its blocks name, and returns it with its text as
+    /// Reads the spec file at `path`, and the design tables that its blocks refer to, and returns it with its text as
     /// written.
     ///
     /// A table's path is relative to the directory of `path` and cannot leave it. Only a table design's `file` is read.
@@ -1164,7 +1264,8 @@ impl SpecFile {
         let mut file = Self::parse(&text)?;
         let directory = path.parent().unwrap_or_else(|| Path::new(""));
         for (index, block) in file.blocks.iter_mut().enumerate() {
-            // Any other design refuses a file in `into_spec`. Read here, a missing file would be reported in its place.
+            // Any other design rejects a file in `into_spec`. If the file were read here, a missing file would be
+            // reported instead of that error.
             let Some(table) = block.file.as_ref().filter(|_| block.design == DesignKindFile::Table) else {
                 continue;
             };
@@ -1199,7 +1300,7 @@ impl SpecFile {
     ///
     /// # Errors
     ///
-    /// Returns [`SpecFileError::Parse`] for text that is not TOML, or a key or value no table takes.
+    /// Returns [`SpecFileError::Parse`] for text that is not TOML, or a key or value that no table accepts.
     pub fn parse(text: &str) -> Result<Self, SpecFileError> {
         toml::from_str(text).map_err(|source| SpecFileError::Parse {
             source: Box::new(source),
@@ -1210,7 +1311,7 @@ impl SpecFile {
     ///
     /// # Errors
     ///
-    /// Returns [`SpecFileError::Json`] for a value no table takes.
+    /// Returns [`SpecFileError::Json`] for a value that no table accepts.
     pub fn from_json(value: &serde_json::Value) -> Result<Self, SpecFileError> {
         Self::deserialize(value).map_err(|source| SpecFileError::Json { source })
     }
@@ -1219,18 +1320,18 @@ impl SpecFile {
     ///
     /// # Errors
     ///
-    /// Returns the serializer's error. Every field of a spec file has a TOML form, so none is expected.
+    /// Returns the serializer's error. Every field of a spec file has a TOML form, so no error is expected.
     pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
         toml::to_string(self)
     }
 
-    /// Returns the sweep spec the file writes, leaving its execution settings behind.
+    /// Returns the sweep spec the file describes, leaving its execution settings behind.
     ///
     /// # Errors
     ///
     /// Returns [`SpecFileError`] for a factor without exactly one target or one form of levels, block keys that do
     /// not fit the design, a table that was never read, a reducer kind, stop condition or timeout that cannot be
-    /// read, or a `[search]` table beside blocks or with settings of another algorithm. Everything else is checked
+    /// read, or a `[search]` table beside blocks or with settings of a different algorithm. Everything else is checked
     /// when the spec is planned.
     pub fn into_spec(self) -> Result<SweepSpec, SpecFileError> {
         let mut reducers = Vec::new();
@@ -1328,7 +1429,7 @@ impl BlockTable {
 }
 
 impl From<&SweepSpec> for SpecFile {
-    /// Writes each value as [`SpecValue::from_text`] reads it, and each consecutive group of reducers over one
+    /// Writes each value as [`SpecValue::from_text`] converts it, and each consecutive group of reducers over one
     /// column as one entry.
     fn from(spec: &SweepSpec) -> Self {
         let mut reducers: Vec<ReducerTable> = Vec::new();
@@ -1629,7 +1730,7 @@ e = 1e-3
             }
             let (file, _) = SpecFile::load(&path).expect("an example spec parses");
             let spec = file.into_spec().expect("an example spec is a sweep spec");
-            // A search plans through its own test, every_example_search_spec_parses.
+            // A search is planned in its own test, every_example_search_spec_parses.
             if spec.search.is_some() {
                 continue;
             }
@@ -1686,7 +1787,7 @@ e = 1e-3
     }
 
     /// Checks that every spec the plan accepts reads back from the file its manifest records, and that the plan
-    /// refuses the two that cannot.
+    /// rejects the two that cannot.
     #[test]
     fn a_spec_that_plans_reads_back_from_its_file() {
         let models = henad_models::example_models();

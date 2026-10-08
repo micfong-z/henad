@@ -13,9 +13,14 @@ use henad_compute::runtime_info::RuntimeInfo;
 pub enum DeviceError {
     /// No adapter suits the request.
     NoAdapter(wgpu::RequestAdapterError),
-    /// Adapter `adapter` offers less than the WebGPU baseline in limit `limit`, as a GL adapter can.
-    BelowBaseline { adapter: String, limit: &'static str },
-    /// The adapter refused to create a device.
+    /// Adapter `adapter` offers less than the WebGPU baseline in limit `limit`, as a GL adapter sometimes does.
+    BelowBaseline {
+        /// Name of the adapter, as its driver reports it.
+        adapter: String,
+        /// Name of the first `wgpu::Limits` field the adapter falls short in, such as `max_buffer_size`.
+        limit: &'static str,
+    },
+    /// The adapter rejected the request to create a device.
     NoDevice(wgpu::RequestDeviceError),
 }
 
@@ -44,11 +49,11 @@ impl std::error::Error for DeviceError {
 /// Acquires a headless device for `needs`, with its adapter's [`RuntimeInfo`] attached to the context.
 ///
 /// This is the device eframe acquires for henad-app, minus any window or surface. `henad-compute` never creates a
-/// device, so a non-GUI runner must.
+/// device, so a non-GUI runner must create the device itself.
 ///
 /// The device is requested at the WebGPU baseline on every backend, raised to `needs` by
 /// [`henad_compute::gpu::limits::raise`]. Note that an adapter below the baseline, as a GL adapter can be, gets no
-/// device here. henad-app takes a lower base for a GL adapter, draws with it and runs no GPU model on it.
+/// device here. henad-app uses a lower baseline for a GL adapter, draws with it and runs no GPU model on it.
 ///
 /// # Errors
 ///
@@ -81,19 +86,19 @@ pub fn acquire_headless(needs: GpuNeeds) -> Result<GpuContext, DeviceError> {
     }))
     .map_err(DeviceError::NoDevice)?;
     let runtime = RuntimeInfo::collect(&adapter, &device);
-    // No surface exists, so `target_format` is arbitrary: the models' display texture is an
-    // offscreen Rgba8Unorm target, never a swapchain, and a headless run never reads it back.
+    // No surface exists, so `target_format` is arbitrary. The models' display texture is an offscreen `Rgba8Unorm`
+    // target, and a headless run never reads it back.
     Ok(GpuContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, FaultSink::new()).with_runtime_info(runtime))
 }
 
-/// Returns the limits to request from an adapter offering `available`, `raise` applied to the WebGPU baseline.
+/// Returns the limits to request from an adapter offering `available`, with `raise` applied to the WebGPU baseline.
 ///
 /// The adapter is checked against the baseline before the raise. The raise clamps the storage buffer count to the
-/// adapter's.
+/// adapter's count.
 ///
 /// # Errors
 ///
-/// Returns the name of the first limit of the baseline that `available` falls short of.
+/// Returns the name of the first baseline limit that `available` falls short of.
 pub(crate) fn device_limits(
     available: &wgpu::Limits,
     raise: impl FnOnce(&wgpu::Limits) -> wgpu::Limits,
@@ -105,8 +110,8 @@ pub(crate) fn device_limits(
     }
 }
 
-/// Returns the name of the first limit of `required` that `available` falls short of, or `None` when it offers them
-/// all.
+/// Returns the name of the first `required` limit that `available` falls short of, or `None` when it meets every
+/// limit.
 fn short_limit(required: &wgpu::Limits, available: &wgpu::Limits) -> Option<&'static str> {
     let mut short = None;
     required.check_limits_with_fail_fn(available, true, |name, _, _| short = Some(name));
@@ -124,7 +129,7 @@ mod tests {
         assert!(short_limit(&baseline, &wgpu::Limits::downlevel_webgl2_defaults()).is_some());
     }
 
-    /// An adapter one storage buffer short of the baseline is refused. The raise clamps the count to the adapter's 7,
+    /// An adapter one storage buffer short of the baseline is rejected. The raise clamps the count to the adapter's 7,
     /// and a check of the raised limits would pass it.
     #[test]
     fn an_adapter_short_of_storage_buffers_falls_short_of_the_baseline() {

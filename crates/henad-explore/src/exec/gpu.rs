@@ -1,13 +1,14 @@
 //! GPU tracks, each holding one live GPU run, and the interleaver that steps several of them on one device.
 //!
 //! The interleaver runs on the calling thread, since wgpu's error scopes belong to one thread. It visits the live
-//! tracks in turn, and each visit collects a landed sample and submits the next command buffer of one track. A
-//! command buffer holds the steps of one track only, at most [`GpuTrackDepth::steps_per_submission`] of them.
+//! tracks in turn, and each visit collects a completed sample and submits the next command buffer of one track. A
+//! command buffer holds the steps of one track only, at most [`GpuTrackDepth::steps_per_submission`] of them. The
+//! steps of several tracks in one buffer could pass that bound together and trip the operating system's GPU watchdog.
 //!
 //! A track records its work in the order a blocking run takes it: at each tick the actions due there, then the stats
 //! passes of the sample due there, then the steps to the next tick anything is due at. A sample reads back while the
 //! track records the steps after it, and those steps are thrown away with the state when the sample stops the run.
-//! The stats passes of the next sample wait until the readback lands, as [`stepping::submit_slice`] requires.
+//! The stats passes of the next sample wait until the readback completes, as [`stepping::submit_slice`] requires.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -31,19 +32,19 @@ use crate::cursor::{OutcomeParts, RunEnd, RunFailure, failed_build_outcome, mill
 
 /// Runs `requests` on the GPU tracks of `executor`, and commits the outcomes to `sink` in request order.
 ///
-/// A run is built once a track is free and the device demand of the live runs and its own fits the GPU memory
-/// budget. A run that fits beside no other run runs alone. A build that runs out of device memory while other runs
-/// are live is queued again, and waits for a live run to end. The track count drops by one.
+/// A run is built once a track is free and the combined device demand of the live runs and the new run fits the GPU
+/// memory budget. A run that fits beside no other run runs alone. A build that runs out of device memory while other
+/// runs are live is queued again, and waits for a live run to end. The track count drops by one.
 ///
 /// A fault while a track records its work ends that track alone. A fault the device reports outside every track's
 /// error scopes ends every live track. A lost device, or a failed wait on it, ends the batch as
 /// [`BatchEnd::DeviceLost`], and a run that failed on the GPU is then left without an outcome.
 ///
-/// The wall time of each round is split evenly between the live runs. A run's timeout reads its share.
+/// The wall time of each round is split evenly between the live runs. A run's timeout counts only its share.
 ///
 /// # Errors
 ///
-/// Returns [`ExecutionError::Sink`] when `sink` refuses a run.
+/// Returns [`ExecutionError::Sink`] when `sink` rejects a run.
 pub(super) fn run_on_tracks(
     executor: &Executor<'_>,
     ctx: &GpuContext,
@@ -69,9 +70,9 @@ struct Interleaver<'x> {
     /// Indexes of the requests not built yet, in the order they are built.
     unbuilt_requests: VecDeque<usize>,
     tracks: Vec<GpuTrack>,
-    /// Most tracks alive at once.
+    /// Maximum number of tracks alive at once.
     track_cap: usize,
-    /// Bytes of device memory the live runs can hold together. A run larger than the budget runs alone.
+    /// Device memory budget in bytes for all live runs together. A run larger than the budget runs alone.
     gpu_memory_budget: u64,
     /// Whether admission waits for a live track to end, set when a build runs out of device memory.
     admission_held: bool,
@@ -84,7 +85,7 @@ struct Interleaver<'x> {
     reorder: ReorderBuffer<RunOutcome>,
 }
 
-/// A run that ended this round, with its outcome not yet handed out.
+/// A run that ended this round, with its outcome not yet passed on.
 struct EndedRun {
     /// Index of the run's request in its batch.
     request_index: usize,
@@ -119,7 +120,7 @@ impl<'x> Interleaver<'x> {
 
     /// Builds the runs that fit, visits every live track once and commits the runs that finished.
     ///
-    /// Returns the end of the batch once it has one. A round in which no track moved waits for the device to finish
+    /// Returns the end of the batch once the batch ends. A round in which no track moved waits for the device to finish
     /// its oldest command buffer.
     fn round(&mut self, sink: &mut dyn RunSink) -> Result<Option<BatchEnd>, ExecutionError> {
         let mut moved = self.admit();
@@ -289,10 +290,10 @@ impl<'x> Interleaver<'x> {
         }
     }
 
-    /// Removes the tracks that ended this round, and hands their outcomes and those of the failed builds to `sink`
+    /// Removes the tracks that ended this round, and passes their outcomes and those of the failed builds to `sink`
     /// and the reorder buffer.
     ///
-    /// A removed track releases admission held after an out-of-memory build. Returns `false`, handing out nothing,
+    /// A removed track releases admission held after an out-of-memory build. Returns `false`, passing on nothing,
     /// when a run failed on the GPU and the device turns out to be lost.
     fn hand_out_finished(&mut self, sink: &mut dyn RunSink) -> bool {
         let mut ended = std::mem::take(&mut self.failed_builds);
@@ -343,24 +344,24 @@ struct GpuTrack {
     run_key: u64,
     state: Box<dyn GpuSimState>,
     schedule: Schedule,
-    /// Bytes of device memory the run holds.
+    /// Size in bytes of the device memory the run holds.
     demand_bytes: u64,
     sampler: Sampler,
     /// Tick the recorded steps reach.
     tick: u64,
     /// Whether the actions due at `tick` are recorded.
     actions_recorded: bool,
-    /// Next sampled tick whose stats passes are not recorded yet, `None` once the last one is.
+    /// Next sampled tick whose stats passes are not recorded yet, `None` once the last sample's passes are recorded.
     next_sample: Option<u64>,
     /// Tick of the sample whose readback is in flight.
     readback_tick: Option<u64>,
-    /// Tick of the latest sample to land, 0 before the first.
+    /// Tick of the latest completed sample, 0 before the first.
     landed_tick: u64,
     /// Population at the latest sample.
     population: u64,
-    /// Tick and note of each action the model refused, in the order they were due.
+    /// Tick and note of each action the model rejected, in the order they were due.
     refusals: Vec<(u64, String)>,
-    /// Done flag of each slice command buffer of the track the device might still hold, oldest first.
+    /// Done flags of the track's slice command buffers that the device might still hold, oldest first.
     done_flags: VecDeque<Arc<AtomicBool>>,
     build_ms: f64,
     /// Sum of the run's shares of the rounds it was live in, the pauses of its batch left out.
@@ -370,7 +371,7 @@ struct GpuTrack {
     /// Fault that no error scope traced to one track, raised while the run was live. It fails the run even at a sample
     /// that stops it.
     untraced_failure: Option<RunFailure>,
-    /// End of the run, set once it has one.
+    /// End of the run, set once the run ends.
     end: Option<RunEnd>,
     watch: Option<RunWatch>,
 }
@@ -384,9 +385,9 @@ struct BuildFailure {
 
 /// State of a track's sample after one visit.
 enum SampleCheck {
-    /// No sample landed.
+    /// No sample completed.
     Pending,
-    /// A sample landed and the run goes on.
+    /// A sample completed and the run goes on.
     Landed,
     /// The run ended.
     Ended(RunEnd),
@@ -452,11 +453,11 @@ impl GpuTrack {
         })
     }
 
-    /// Collects the sample reading back once it lands.
+    /// Collects the sample reading back once it completes.
     ///
-    /// A track whose recording failed ends once the sample before its fault has landed. A sample that stops the
-    /// run, or is its last, ends it as a blocking run would have, and a fault an error scope traced to the steps past
-    /// it is dropped.
+    /// A track whose recording failed ends once the sample before its fault has completed. A sample that stops the
+    /// run, or is its last, ends it as a blocking run would have, and a fault that an error scope traced to the steps
+    /// past it is dropped.
     fn check_sample(&mut self, ctx: &GpuContext) -> SampleCheck {
         let Some(tick) = self.readback_tick else {
             return self.failure.take().map_or(SampleCheck::Pending, |failure| {
@@ -464,6 +465,7 @@ impl GpuTrack {
             });
         };
         let state = &mut self.state;
+        // A blocking poll would drain the whole device and stall every track.
         let sample = match catching(STEPPING, || state.poll_stats_readback(&ctx.device, false)) {
             Ok(StatsPoll::Pending) => return SampleCheck::Pending,
             Ok(StatsPoll::Failed) => {
@@ -549,6 +551,7 @@ impl GpuTrack {
             let sampled = boundary == sample_tick && !actions_due && self.readback_tick.is_none();
             ((boundary - self.tick) as u32, sampled)
         };
+        // The check sits outside the error scope. Inside it, a panic would pass for a failed run.
         debug_assert!(
             !sampled || !self.state.stats_readback_pending(),
             "run {} recorded a sample while an earlier one reads back, and its copy would be skipped",
@@ -593,8 +596,8 @@ impl GpuTrack {
 
     /// Returns the run with its outcome for `end`. `timeout` is the limit a timed-out run's note quotes.
     ///
-    /// The run ends at the tick of its latest sample to land. An action refused past that tick was recorded after the
-    /// run's end, and is left out.
+    /// The run ends at the tick of its latest completed sample. An action that the model rejected past that tick was
+    /// recorded after the run's end, and is left out.
     fn finish(self, end: RunEnd, timeout: Option<Duration>) -> EndedRun {
         let end = match (end, self.untraced_failure) {
             (RunEnd::Failed(failure), _) | (_, Some(failure)) => RunEnd::Failed(failure),
@@ -624,7 +627,7 @@ impl GpuTrack {
     }
 }
 
-/// Returns the GPU state of `state`, refusing a CPU model.
+/// Returns the GPU state of `state`, rejecting a CPU model.
 fn gpu_state(state: ModelState) -> Result<Box<dyn GpuSimState>, Fault> {
     match state {
         ModelState::Gpu(state) => Ok(state),

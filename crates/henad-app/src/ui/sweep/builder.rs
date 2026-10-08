@@ -1,7 +1,7 @@
 //! Form of the Sweep tab while no sweep is running: one collapsible section per group of settings.
 //!
-//! Every row lays out through one [`FormLayout`], so the sections share a label column. A row that can show a note
-//! reserves the note's line before any note comes, so nothing moves when an issue comes or goes.
+//! Every row is laid out by one [`FormLayout`], so the sections share a label column. A row that can show a note
+//! reserves the note's line before any note comes. Nothing then moves when an issue comes or goes.
 
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -42,14 +42,14 @@ use crate::ui::sweep::plan::{
 use crate::ui::sweep::search::{algorithm_label, search_labels, search_section};
 use crate::ui::sweep::{CheckSummary, DraftCheck, SweepRequest};
 
-/// Most samples the Samples field takes.
+/// Maximum number of samples that the Samples field accepts.
 const MAX_SAMPLES: usize = 1 << 20;
 
-/// Seconds a run is given once Timeout is ticked, until the user sets another number.
+/// Time limit in seconds for each run once Timeout is ticked, until the user sets another number.
 const DEFAULT_TIMEOUT_SECONDS: f64 = 600.0;
 
-/// Most seconds the Seconds per run field takes, the largest `f64` below 2 to the power 64.
-/// [`Duration::try_from_secs_f64`] refuses 2 to the power 64 itself.
+/// Maximum value of the Seconds per run field, in seconds. It is the largest `f64` below 2 to the power 64.
+/// [`Duration::try_from_secs_f64`] rejects 2 to the power 64 itself.
 ///
 /// [`Duration::try_from_secs_f64`]: std::time::Duration::try_from_secs_f64
 const MAX_TIMEOUT_SECONDS: f64 = (u64::MAX - 2047) as f64;
@@ -93,9 +93,9 @@ pub struct FormInput<'a> {
     pub summary: &'a CheckSummary,
     pub sections: &'a SectionSummaries,
     pub plan: &'a PlanSummary,
-    /// Results the Results tab holds of the draft's model, `None` when it holds none.
+    /// Results that the Results tab holds for the draft's model, `None` when it holds no results.
     pub results: Option<&'a ResultsStore>,
-    /// Program the tab's advice names, `None` for none.
+    /// Program that the tab's advice refers to, `None` when the product has no command-line program.
     pub cli_command: Option<&'a str>,
 }
 
@@ -114,7 +114,7 @@ pub struct SectionSummaries {
 }
 
 impl SectionSummaries {
-    /// Returns the summaries of the draft `check` holds, a draft of `schema`'s model, with the totals of `summary`.
+    /// Returns the summaries of the draft in `check`, a draft for `schema`'s model, with the totals from `summary`.
     pub(super) fn new(check: &DraftCheck, schema: &ModelSchema<'_>, summary: &CheckSummary) -> Self {
         let draft = &check.draft;
         Self {
@@ -300,8 +300,8 @@ fn execution_summary(draft: &SweepDraft) -> String {
 /// Returns each label the form's rows can show for `draft`, paired with the width a checkbox or an indent adds before
 /// it.
 ///
-/// Labels of collapsed sections count too, so opening one moves no column. A design's own rows count only under that
-/// design.
+/// Labels of collapsed sections count too, so opening a section moves no column. A design's own rows count only
+/// under that design.
 fn form_labels(ui: &egui::Ui, draft: &SweepDraft, schema: &ModelSchema<'_>) -> Vec<(&'static str, f32)> {
     let indent = checkbox_indent(ui);
     let mut labels: Vec<(&'static str, f32)> = Vec::new();
@@ -321,7 +321,7 @@ fn form_labels(ui: &egui::Ui, draft: &SweepDraft, schema: &ModelSchema<'_>) -> V
     if !draft.actions.is_empty() {
         labels.extend([("Action", 0.0), ("Tick", 0.0)]);
     }
-    // The rows under a checkbox or an output count while hidden too, so ticking one moves no column.
+    // The rows under a checkbox or an output count while hidden too, so ticking a checkbox moves no column.
     labels.extend([
         ("Replicates", 0.0),
         ("Root seed", 0.0),
@@ -417,8 +417,8 @@ pub fn form_ui(
                     // The row sits in a nested section that is still opening.
                     ui.ctx().request_repaint();
                 } else if outcome.settled {
-                    // A reveal of a row the section does not draw, such as the design seed of a design that has none,
-                    // shows the section instead.
+                    // A reveal of a row the section does not draw, such as the design seed of a design that uses no
+                    // seed, shows the section instead.
                     if !rows.revealed {
                         outcome.header.scroll_to_me(Some(Align::Min));
                     }
@@ -464,25 +464,25 @@ pub fn form_ui(
     }
     form.typing = rows.typing;
     form.focus_field = rows.focus_field;
-    // A reveal of a section this form does not hold, such as Actions for a model with none, has nothing to open.
+    // A reveal of a section this form does not hold, such as Actions for a model without actions, has nothing to open.
     if settled || target.is_some_and(|reveal| !drawn.contains(&reveal.section)) {
         form.reveal = None;
     }
 }
 
-/// Draws a label and the widget it names on one form row, both with the tooltip `tooltip`.
+/// Draws a label and the widget it labels on one form row, both with the tooltip `tooltip`.
 pub(super) fn labeled(ui: &mut egui::Ui, layout: &FormLayout, label: &str, tooltip: &str, widget: impl egui::Widget) {
     let (label, widget) = layout.row(ui, label, |ui| ui.add(widget));
     let label = label.on_hover_text(tooltip);
     widget.on_hover_text(tooltip).labelled_by(label.id);
 }
 
-/// Returns the note of the first issue of `site` in `summary`, or `fallback` when it has none.
+/// Returns the note of the first issue of `site` in `summary`, or `fallback` when `site` has no issue.
 fn site_note(summary: &CheckSummary, site: DraftSite, fallback: Note) -> Note {
     Note::issue_or(summary.issues_at(site), fallback)
 }
 
-/// Returns the name the Sweep tab gives `design`.
+/// Returns the name that the Sweep tab uses for `design`.
 pub fn design_label(design: DraftDesign) -> &'static str {
     match design {
         DraftDesign::EveryCombination => "Every combination",
@@ -509,7 +509,7 @@ fn design_tooltip(design: DraftDesign) -> &'static str {
     }
 }
 
-/// Returns the line under the Design field that says what `design` runs.
+/// Returns the line under the Design field that describes `design`.
 pub fn design_description(design: DraftDesign) -> &'static str {
     match design {
         DraftDesign::EveryCombination => "Runs every combination of the listed values.",
@@ -523,9 +523,9 @@ pub fn design_description(design: DraftDesign) -> &'static str {
     }
 }
 
-/// Returns how the design of `draft` makes its `configs` configurations from the values of its rows.
+/// Returns the formula that the design of `draft` uses to make its `configs` configurations from its row values.
 ///
-/// `param_previews` and `tick_previews` are the values of the parameter and action rows. The text reads as in
+/// `param_previews` and `tick_previews` are the values of the parameter and action rows. The text looks like
 /// "Infection Rate (5) × Recovery Rate (3) = 15 configurations" or "5 + 3 = 8 configurations".
 pub fn design_formula(
     draft: &SweepDraft,
@@ -813,17 +813,17 @@ fn actions_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
 #[derive(Debug, Clone, Copy)]
 struct TickContext {
     search: bool,
-    /// Whether the draft runs a design table. No tick varies under one.
+    /// Whether the draft runs a design table. No tick varies under a design table.
     runs_table: bool,
     /// Whether a range with no step is drawn from, as in a sampled design or a search.
     draws_ranges: bool,
 }
 
-/// Hover of an action's disabled tick controls while the design table sets its tick.
+/// Hover text of an action's disabled tick controls while the design table sets its tick.
 const TABLE_TICK_HOVER: &str = "Tick set by design table";
 
-/// Returns the hover of the Vary tick checkbox, disabled under a design table, for an action whose tick comes from
-/// `source`.
+/// Returns the hover text of the Vary tick checkbox, disabled under a design table, for an action whose tick comes
+/// from `source`.
 fn table_tick_hover(source: TickSource) -> &'static str {
     match source {
         TickSource::Table => TABLE_TICK_HOVER,
@@ -833,8 +833,8 @@ fn table_tick_hover(source: TickSource) -> &'static str {
 
 /// Draws the Tick row of action row `position`: its tick, or while varied its ticks and their note.
 ///
-/// `source` is where the action's tick comes from in each run, as [`SweepDraft::tick_source`] gives it. Returns the
-/// field holding the tick or the ticks, and whether the ticks vary.
+/// `source` specifies where the action's tick comes from in each run, as [`SweepDraft::tick_source`] returns it.
+/// Returns the field holding the tick or the ticks, and whether the ticks vary.
 fn tick_row(
     ui: &mut egui::Ui,
     rows: &mut FormRows,
@@ -950,7 +950,7 @@ struct SeedField {
     site: DraftSite,
 }
 
-/// Returns the note of a seed field: its issue, without the field's name the field's label already shows.
+/// Returns the note of a seed field: its issue, without the field name that the field's label already shows.
 fn seed_note(summary: &CheckSummary, field: SeedField) -> Note {
     match site_note(summary, field.site, Note::Empty) {
         Note::Issue(kind, message) => {
@@ -1251,8 +1251,8 @@ pub fn samples_feedback(steps: u64, stats_every: u64) -> String {
     }
 }
 
-/// Returns the feedback of the Series every field for a series every `series_every` ticks that takes `bytes` once
-/// counted, and a warning from half the limit while the results stay `in_memory`.
+/// Returns the feedback of the Series every field for a series every `series_every` ticks that takes up `bytes`
+/// once counted, and a warning from half the limit while the results stay `in_memory`.
 pub fn series_feedback(series_every: u64, bytes: Option<u64>, in_memory: bool) -> Note {
     if series_every == 0 {
         return Note::Weak("No series".to_owned());
@@ -1270,8 +1270,8 @@ pub fn series_feedback(series_every: u64, bytes: Option<u64>, in_memory: bool) -
     Note::Weak(format!("About {} of series", fmt_bytes(bytes)))
 }
 
-/// Returns the note of an output row: the column `runs.csv` gives it among the stat columns `columns`, as in "Written
-/// as Susceptible:argmax".
+/// Returns the note of an output row: the column that `runs.csv` uses for it among the stat columns `columns`, as in
+/// "Written as Susceptible:argmax".
 pub fn output_note(reducer: &ReducerSpec, columns: Option<&StatColumns>) -> String {
     format!("Written as {}", written_name(reducer, columns))
 }
@@ -1288,7 +1288,7 @@ fn reader_label(site: DraftSite) -> &'static str {
 /// Draws the Sample every and Series every rows, each with its feedback.
 fn sampling_rows(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft, summary: &CheckSummary) {
     let layout = rows.layout;
-    // Each Sampling issue names the field that causes it.
+    // Each Sampling issue refers to the field that causes it.
     let sampling_issue = summary.issues_at(DraftSite::Sampling).next().cloned();
     let (sample_note, series_note) = match &sampling_issue {
         Some(issue) if draft.stats_every == 0 => (
@@ -1439,7 +1439,7 @@ fn outputs_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
     }
 }
 
-/// Draws the combo box of output row `position`'s kind `width` wide. A window picked anew spans every tick up to
+/// Draws the kind combo box of output row `position`, `width` points wide. A newly picked window spans every tick up to
 /// `last_tick`.
 fn kind_combo(
     ui: &mut egui::Ui,
@@ -1558,7 +1558,8 @@ fn budget_row(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraft) {
     });
 }
 
-/// Returns the memory budgets as the Memory budget row shows them, as in "4 GB, GPU 2 GB", or `None` for neither.
+/// Returns the memory budgets as the Memory budget row shows them, as in "4 GB, GPU 2 GB", or `None` when neither
+/// budget is set.
 pub fn budget_text(memory_budget: Option<u64>, gpu_memory_budget: Option<u64>) -> Option<String> {
     match (memory_budget, gpu_memory_budget) {
         (None, None) => None,
@@ -1748,10 +1749,10 @@ fn folder_row(
 
 /// Returns `issue` as a line of the tab's problem lists, led by the row or the section it belongs to.
 ///
-/// A message that starts with that name already, such as "Root seed: ...", is left as it is.
+/// A message that already starts with that name, such as "Root seed: ...", is left unchanged.
 pub(super) fn banner_line(issue: &DraftIssue, draft: &SweepDraft, schema: &ModelSchema<'_>) -> String {
     let site_name = match issue.site {
-        // These issues name the field they belong to.
+        // The messages of these issues already mention the field they belong to.
         DraftSite::Sweep
         | DraftSite::Search
         | DraftSite::Parameters
@@ -1829,7 +1830,7 @@ mod tests {
             .collect()
     }
 
-    /// Returns the section summaries of the draft that `edit` makes of a new SIR draft.
+    /// Returns the section summaries of a new SIR draft after `edit` changes it.
     fn summaries_of(edit: impl FnOnce(&mut SweepDraft)) -> SectionSummaries {
         let entry = sir();
         let schema = entry.schema();
@@ -1841,7 +1842,7 @@ mod tests {
         SectionSummaries::new(check, &schema, &summary)
     }
 
-    /// Returns the formula under the Design field of the draft that `edit` makes of a new SIR draft.
+    /// Returns the formula under the Design field of a new SIR draft after `edit` changes it.
     fn formula_of(edit: impl FnOnce(&mut SweepDraft)) -> String {
         let entry = sir();
         let schema = entry.schema();
@@ -2207,12 +2208,12 @@ mod tests {
         draw_form(entry, draft, None).draft
     }
 
-    /// Control of a drawn form, found by the row label beside it or by a name of its own.
+    /// Control of a drawn form, found by the row label beside it or by its own name.
     #[derive(Debug, Clone, Copy)]
     enum FormControl<'a> {
         /// Control labelled by the row label, as the Tick field is.
         Row(&'a str),
-        /// Control that goes by its own name, as the Vary tick checkbox does.
+        /// Control found by its own name, such as the Vary tick checkbox.
         Named(&'a str),
     }
 
@@ -2221,7 +2222,7 @@ mod tests {
         ///
         /// # Panics
         ///
-        /// Panics unless exactly one control matches, and for [`Self::Row`] exactly one row goes by the label.
+        /// Panics unless exactly one control matches, and for [`Self::Row`] exactly one row has the label.
         fn find(self, nodes: &[(accesskit::NodeId, accesskit::Node)]) -> &accesskit::Node {
             let controls: Vec<&accesskit::Node> = match self {
                 Self::Row(label) => {
@@ -2255,13 +2256,13 @@ mod tests {
         texts: Vec<(String, f32)>,
         /// Accessibility nodes of the last frame.
         nodes: Vec<(accesskit::NodeId, accesskit::Node)>,
-        /// Texts the last frame shows that the frame before the pointer came to rest on the hovered control did not.
+        /// Texts shown in the last frame but not in the frame before the pointer came to rest on the hovered control.
         /// Empty when no control is hovered.
         tooltip: Vec<String>,
     }
 
     impl DrawnForm {
-        /// Returns whether `control` takes input.
+        /// Returns whether `control` accepts input.
         ///
         /// # Panics
         ///
@@ -2452,7 +2453,7 @@ mod tests {
         };
         let tick = FormControl::Row("Tick");
         let vary_tick = FormControl::Named("Vary tick");
-        // Returns whether `control` takes input in the form of `draft`, and the tooltip it shows.
+        // Returns whether `control` accepts input in the form of `draft`, and the tooltip it shows.
         let hover = |draft: &SweepDraft, control: FormControl<'_>| {
             let form = draw_form(&entry, draft.clone(), Some(control));
             (form.enabled(control), form.tooltip)

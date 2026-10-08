@@ -8,12 +8,12 @@ use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 
 use crate::schema::f32_json;
 
-/// Form a choice parameter's value takes in [`params_by_id_json`].
+/// Form that a choice parameter's value takes in [`params_by_id_json`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChoiceForm {
     /// The option's index, as the CLI's benchmark summary writes it.
     Index,
-    /// The option's name, or its index when the descriptor names no option there.
+    /// The option's name, or its index when the descriptor has no option at that index.
     Name,
 }
 

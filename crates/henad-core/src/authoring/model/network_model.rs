@@ -48,8 +48,11 @@ impl SpringParams {
 /// Nodes should be added and removed through [`Self::spawn`] and [`Self::retire`],
 /// which keep the lanes and the graph the same length.
 pub struct Nodes<'a, N: NetworkModel + ?Sized> {
+    /// Node lanes, one slot per node, retired ones included.
     pub lanes: &'a mut N::Lanes,
+    /// Graph joining the nodes.
     pub graph: &'a mut Network,
+    /// Model's own state.
     pub aux: &'a mut N::Aux,
 }
 // --8<-- [end:nodes]
@@ -88,8 +91,11 @@ impl<N: NetworkModel + ?Sized> Nodes<'_, N> {
 // --8<-- [start:node_ctx]
 /// The graph, hot parameters and extent, shared by every node kernel.
 pub struct NodeCtx<'a, N: NetworkModel + ?Sized> {
+    /// Graph joining the nodes.
     pub graph: &'a Network,
+    /// Hot parameters of this tick.
     pub params: &'a N::Params,
+    /// World size.
     pub extent: Extent,
 }
 // --8<-- [end:node_ctx]
@@ -105,8 +111,11 @@ impl<N: NetworkModel + ?Sized> std::fmt::Debug for NodeCtx<'_, N> {
 
 /// A population of nodes joined by edges.
 pub trait NetworkModel: Send + Sync + 'static {
+    /// Name shown in the UI.
     const NAME: &'static str;
+    /// Stable id that identifies the model in a model set, on the command line and in a spec file.
     const ID: &'static str;
+    /// One-line description shown in the UI.
     const DESCRIPTION: &'static str;
     /// Node colours, indexed by the colour lane.
     const PALETTE: &'static [[u8; 4]];
@@ -120,17 +129,20 @@ pub trait NetworkModel: Send + Sync + 'static {
     /// Number of nodes per chunk in the node pass. Each chunk gets its own RNG stream.
     const CHUNK: usize = 512;
 
+    /// Default of `num_agents`, the node count.
     const DEFAULT_NODES: u32;
+    /// Upper bound of `num_agents`.
     const MAX_NODES: u32 = 10_000_000;
     /// World the layout spreads nodes over. It is used for drawing only.
     const DEFAULT_EXTENT: Extent;
+    /// Constants of the spring layout.
     const LAYOUT: SpringParams = SpringParams::DEFAULT;
 
     /// Node lanes, declared with `agent_lanes!`.
     type Lanes: AgentLanes;
     /// Hot parameters, extracted once per tick.
     type Params: Send + Sync;
-    /// Model state kept outside the lanes and the graph, or `()` if there is none.
+    /// Model state kept outside the lanes and the graph, or `()` for a model without such state.
     type Aux: Default + Send + 'static;
 
     /// Returns the model's own parameters, which follow the engine's `num_agents`, `world_width` and `world_height`.
@@ -138,7 +150,7 @@ pub trait NetworkModel: Send + Sync + 'static {
     /// Extracts the hot parameters for one tick from this model's own slice of the params.
     fn from_params(params: &[ParamValue], extent: Extent) -> Self::Params;
 
-    /// Returns whether edges are directed. Called every tick.
+    /// Returns whether edges are directed. The engine reads it every tick.
     fn directed(_params: &Self::Params) -> bool {
         false
     }
@@ -170,12 +182,12 @@ pub trait NetworkModel: Send + Sync + 'static {
 
     /// Prepares state for drawing.
     ///
-    /// Called before each snapshot rather than every tick.
+    /// The engine calls it before each snapshot.
     fn prepare_view(_nodes: &mut Nodes<'_, Self>, _tick: u64) {}
 
     /// Returns the current statistics, in [`Self::STATS`] order.
     ///
-    /// A stat that needs a walk of the graph should be computed in [`Self::prepare_view`] and kept in `aux`.
+    /// A stat that needs to traverse the graph should be computed in [`Self::prepare_view`] and kept in `aux`.
     fn stats(lanes: &Self::Lanes, graph: &Network, aux: &Self::Aux) -> Vec<StatValue>;
 
     /// Returns the heap memory held by `aux`, in bytes.

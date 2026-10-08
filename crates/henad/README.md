@@ -2,7 +2,7 @@
 
 [Henad](https://github.com/micfong-z/henad) is a parallel agent-based modelling engine, built to run millions of agents at interactive speeds on one machine.
 
-This crate is the one a program depends on.
+This is the crate that a program depends on.
 It re-exports the engine, the sweeps and the model authoring API under one module tree, with the example models, the app and the command line behind features.
 
 | Feature | Adds |
@@ -12,7 +12,7 @@ It re-exports the engine, the sweeps and the model authoring API under one modul
 | `cli` | The command line as a library, at `henad::cli`, on native targets |
 | `testing` | The checks a model's tests run against its entry, at `henad::testing` |
 
-No feature is on by default, and none changes a result.
+No feature is on by default, and no feature changes a result.
 
 ## A complete program
 
@@ -22,8 +22,8 @@ The program below builds an example model, runs it, reads its statistics, edits 
 // Cargo.toml: henad = { version = "0.3", features = ["example-models", "app"] }
 // Copy the template's profile block, `[profile.dev] opt-level = 1`, `[profile.dev.package."*"] opt-level = 2` and
 // `[profile.release] opt-level = 2`. Without it a debug build runs the example kernels at opt-level 0, and a release
-// build at 3 where Henad measures at 2. A crate that registers models of its own also calls
-// `henad_build::stamp_commit()` from build.rs, with henad-build under [build-dependencies]. This one registers none.
+// build at 3 where Henad measures at 2. A crate that registers its own models also calls `henad_build::stamp_commit()`
+// from build.rs, with henad-build under [build-dependencies]. This example registers no models.
 
 use std::io::Write;
 use std::ops::ControlFlow;
@@ -34,7 +34,7 @@ use henad::prelude::*;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     henad::install_panic_hook();
     let models = henad::models::example_models();
-    // A sweep refuses a folder that already holds results. Each run of the program starts from an empty one.
+    // A sweep rejects a folder that already holds results. Each run of the program starts from an empty folder.
     let folder = std::env::temp_dir().join("sir-rates");
     if folder.exists() {
         std::fs::remove_dir_all(&folder)?;
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Runs SIR from `models`, sweeps it into `folder` and rebuilds one run of the sweep, writes what it finds to `out`,
-/// and returns the replay of the rebuilt run.
+/// and returns the rebuilt run's replay.
 fn study(models: &ModelSet, folder: &Path, out: &mut impl Write) -> Result<Replay, Box<dyn std::error::Error>> {
     let sir = models.get("sir").ok_or("the example set lacks SIR")?;
 
@@ -130,7 +130,7 @@ fn study(models: &ModelSet, folder: &Path, out: &mut impl Write) -> Result<Repla
 }
 ```
 
-The [user guide](https://micfong-z.github.io/henad/) covers the app, sweeps and writing models of your own.
+The [user guide](https://micfong-z.github.io/henad/) covers the app, sweeps and writing your own models.
 
 ## License
 

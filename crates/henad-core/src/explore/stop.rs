@@ -12,11 +12,17 @@ use crate::view::StatDescriptor;
 /// Test between a value and a threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Comparator {
+    /// Less than, written `<`.
     Less,
+    /// Less than or equal to, written `<=`.
     LessOrEqual,
+    /// Greater than, written `>`.
     Greater,
+    /// Greater than or equal to, written `>=`.
     GreaterOrEqual,
+    /// Equal to, written `==`.
     Equal,
+    /// Not equal to, written `!=`.
     NotEqual,
 }
 
@@ -31,6 +37,7 @@ impl Comparator {
         Self::NotEqual,
     ];
 
+    /// Returns the comparator's symbol, as in `<=`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Less => "<",
@@ -42,7 +49,7 @@ impl Comparator {
         }
     }
 
-    /// Returns whether `value` compares to `threshold` as the comparator asks, by IEEE 754 rules.
+    /// Returns whether `value` compares to `threshold` as the comparator specifies, by IEEE 754 rules.
     pub fn compare(self, value: f64, threshold: f64) -> bool {
         match self {
             Self::Less => value < threshold,
@@ -58,17 +65,19 @@ impl Comparator {
 /// A comparator and its threshold, as in `<=10`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Comparison {
+    /// Test between a value and [`Self::threshold`].
     pub comparator: Comparator,
+    /// Value a sample is compared with.
     pub threshold: f64,
 }
 
 impl Comparison {
-    /// Returns whether `value` passes the comparison. A NaN value never does, under any comparator.
+    /// Returns whether `value` passes the comparison. A NaN value never passes, under any comparator.
     pub fn holds(self, value: f64) -> bool {
         !value.is_nan() && self.comparator.compare(value, self.threshold)
     }
 
-    /// Checks that the threshold is finite, as text read through [`FromStr`] always is.
+    /// Checks that the threshold is finite, as a threshold parsed with [`FromStr`] always is.
     ///
     /// # Errors
     ///
@@ -94,7 +103,7 @@ impl fmt::Display for Comparison {
 impl FromStr for Comparison {
     type Err = ComparisonError;
 
-    /// Reads a comparator followed by a finite threshold, with optional spaces around either.
+    /// Reads a comparator followed by a finite threshold, with optional spaces around the comparator and the threshold.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let text = raw.trim();
         let (comparator, threshold) = Comparator::PARSE_ORDER
@@ -115,13 +124,19 @@ impl FromStr for Comparison {
     }
 }
 
-/// Text that does not read as a [`Comparison`], or a threshold that is not finite.
+/// Text that cannot be parsed as a [`Comparison`], or a threshold that is not finite.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComparisonError {
-    /// Text, trimmed, that does not start with a comparator.
-    MissingComparator { raw: String },
+    /// Text that does not start with a comparator.
+    MissingComparator {
+        /// Text as written, after trimming.
+        raw: String,
+    },
     /// A threshold that is not a finite number.
-    BadThreshold { raw: String },
+    BadThreshold {
+        /// Threshold as written, after trimming, or as `f64`'s `Display` writes it.
+        raw: String,
+    },
 }
 
 impl fmt::Display for ComparisonError {
@@ -138,11 +153,12 @@ impl fmt::Display for ComparisonError {
 
 impl std::error::Error for ComparisonError {}
 
-/// A stop condition as written, naming its column by text.
+/// A stop condition as written, with its column given as text.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StopSpec {
     /// Stat column name, or a bare vector or histogram label for its magnitude or total.
     pub column: String,
+    /// Test that the column's value has to pass to end the run.
     pub comparison: Comparison,
     /// First tick at which the condition can end a run.
     pub min_tick: u64,
@@ -152,8 +168,9 @@ impl StopSpec {
     /// Reads `condition`, such as `Infected <= 0`, to be checked from `min_tick` on.
     ///
     /// The comparator is the last run of `<`, `>`, `=` and `!` characters, and the column is the text before it,
-    /// trimmed. A column name can then hold spaces and comparator characters, as in `Agents (k=3) <= 0.5`. A
-    /// threshold holds no comparator character, so a condition [`StopSpec`] writes reads back as the same spec.
+    /// trimmed. A column name can then hold spaces and comparator characters, as in `Agents (k=3) <= 0.5`.
+    /// A threshold holds no comparator character, so a condition written by [`StopSpec`] is parsed back into the same
+    /// spec.
     ///
     /// # Errors
     ///
@@ -201,7 +218,7 @@ impl StopSpec {
     ///
     /// # Errors
     ///
-    /// Returns [`StopError::UnknownColumn`] for a column no label starts.
+    /// Returns [`StopError::UnknownColumn`] for a column that does not start with a stat label.
     pub fn check_label(&self, stats: &[StatDescriptor]) -> Result<(), StopError> {
         if names_a_stat(&self.column, stats) {
             Ok(())
@@ -226,13 +243,29 @@ impl fmt::Display for StopSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopError {
     /// A condition with nothing before its comparator.
-    MissingColumn { raw: String },
-    /// A condition whose comparison cannot be read, for the reason in `source`.
-    Comparison { raw: String, source: ComparisonError },
-    /// A condition built with a threshold that is infinite or NaN. `raw` is the condition as text.
-    NonFiniteThreshold { raw: String },
-    /// A column no stat series gives. `known` lists the columns or labels there are.
-    UnknownColumn { column: String, known: Vec<String> },
+    MissingColumn {
+        /// Condition as written.
+        raw: String,
+    },
+    /// A condition whose comparison cannot be read.
+    Comparison {
+        /// Condition as written.
+        raw: String,
+        /// Reason the comparison cannot be read.
+        source: ComparisonError,
+    },
+    /// A condition built with a threshold that is infinite or NaN.
+    NonFiniteThreshold {
+        /// Condition as [`StopSpec`]'s `Display` writes it.
+        raw: String,
+    },
+    /// A column that no stat series produces.
+    UnknownColumn {
+        /// Column as written in the condition.
+        column: String,
+        /// Stat labels the model declares, or the column names once a build provides them.
+        known: Vec<String>,
+    },
 }
 
 impl fmt::Display for StopError {
@@ -281,7 +314,7 @@ impl StopCondition {
     ///
     /// # Errors
     ///
-    /// Returns [`StopError::UnknownColumn`] for a column [`StatColumns::resolve`] cannot find.
+    /// Returns [`StopError::UnknownColumn`] for a column that [`StatColumns::resolve`] cannot find.
     pub fn bind(spec: &StopSpec, columns: &StatColumns) -> Result<Self, StopError> {
         let column = columns.resolve(&spec.column).ok_or_else(|| StopError::UnknownColumn {
             column: spec.column.clone(),
@@ -343,8 +376,8 @@ mod tests {
         assert_eq!(tight.to_string(), "Infected <= 0");
     }
 
-    /// The regression. A label holding a comparator character split inside the label, so a spec recorded with a
-    /// stop condition on it never read back.
+    /// A condition on a label holding a comparator character splits at the comparator after the label. Otherwise a
+    /// spec recorded with a stop condition on that label could not be read back.
     #[test]
     fn a_label_holding_comparator_characters_reads_back() {
         for label in ["Agents (k=3)", "R>1 cells", "a<b", "Not!", "x >= y"] {
@@ -426,7 +459,7 @@ mod tests {
         );
     }
 
-    /// The fragment an error quotes is trimmed, and a missing comparator is named as missing.
+    /// The fragment an error quotes is trimmed, and a missing comparator is reported as missing.
     #[test]
     fn a_missing_comparator_quotes_the_trimmed_text() {
         assert_eq!(
@@ -437,8 +470,8 @@ mod tests {
         assert_eq!(error.to_string(), "missing comparator, expected <, <=, >, >=, == or !=");
     }
 
-    /// The regression. A comparison built outside [`std::str::FromStr`] could hold an infinite threshold. It held
-    /// at the first sample, and its spec written back as text did not read.
+    /// A comparison built outside [`std::str::FromStr`] can hold an infinite threshold. Unchecked, it would hold at
+    /// the first sample, and its spec written back as text could not be parsed.
     #[test]
     fn a_threshold_that_is_not_finite_is_refused() {
         for threshold in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {

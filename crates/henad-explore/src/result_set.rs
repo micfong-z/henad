@@ -1,9 +1,9 @@
 //! Results of a sweep or search read back from its files, for a host to show and replay.
 //!
 //! A result set reads `manifest.json` and `runs.csv`, and `series.csv` and a search's tables when there are any.
-//! `summary.csv` is left unread. The runs rebuild it. Only complete records are read, so a directory a stopped sweep
-//! left behind opens with the runs it wrote. Series are held run by run in file order while they fit a byte budget.
-//! From the first run past it, runs are held without their series.
+//! `summary.csv` is left unread. The runs rebuild it. Only complete records are read, so a directory that a stopped
+//! sweep left behind opens with the runs it wrote. Series are held run by run in file order while they fit a byte
+//! budget. From the first run past it, runs are held without their series.
 
 use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,7 +42,7 @@ use crate::sweep::hex;
 pub struct ResultSet {
     manifest: Manifest,
     spec: SweepSpec,
-    /// Directory the files were read from, `None` for files handed over as bytes.
+    /// Directory the files were read from, `None` for files passed as bytes.
     dir: Option<PathBuf>,
     /// Names of the parameter and action columns of `runs.csv`, in order.
     value_columns: Vec<String>,
@@ -51,7 +51,7 @@ pub struct ResultSet {
     runs: Vec<RunRow>,
     /// Position in `runs` of each run, by run id.
     positions: BTreeMap<u64, usize>,
-    /// Bytes the held series take.
+    /// Size in bytes of the held series.
     series_bytes: usize,
     /// Text of each search table read, by file name. Empty for a sweep.
     search_tables: BTreeMap<&'static str, String>,
@@ -71,7 +71,7 @@ const SEARCH_FILES: [&str; 5] = [
 pub struct RunRow {
     /// The run's row, with its series when [`Self::series_held`] is set.
     ///
-    /// A timing written as an empty cell reads as a value that is not finite.
+    /// A timing written as an empty cell is read as a value that is not finite.
     pub outcome: RunOutcome,
     /// Index of the block the run's config comes from.
     pub block: usize,
@@ -79,7 +79,7 @@ pub struct RunRow {
     pub values: Vec<String>,
     /// Whether `outcome` holds the run's whole series.
     ///
-    /// A run past the series budget, or read without a `series.csv`, holds none.
+    /// A run past the series budget, or read without a `series.csv`, holds no series.
     pub series_held: bool,
 }
 
@@ -116,8 +116,8 @@ impl ResultSet {
         for file in SEARCH_FILES {
             let path = dir.join(file);
             match std::fs::read(&path) {
-                // A table without a complete header line is one a stopped search had only begun, and reads as none,
-                // as `from_files` reads it.
+                // A stopped search can leave a table without a complete header line. That table is skipped, as
+                // `from_files` skips it.
                 Ok(bytes) if !bytes.contains(&b'\n') => {}
                 Ok(bytes) => {
                     set.search_tables
@@ -143,7 +143,7 @@ impl ResultSet {
     /// Reads the files `files` of one output directory, each as its name and bytes, holding at most `series_budget`
     /// bytes of series.
     ///
-    /// A file is known by its contents, so a browser's renamed download such as `runs (1).csv` still reads. The one
+    /// A file is known by its contents, so a browser's renamed download such as `runs (1).csv` is still read. The one
     /// JSON file is the manifest, and a CSV file is `runs.csv`, `series.csv` or a search table by its header. The
     /// manifest and `runs.csv` are needed, `series.csv` and the search tables are read when present, and every other
     /// file is left unread.
@@ -222,7 +222,7 @@ impl ResultSet {
     ///
     /// # Errors
     ///
-    /// Returns [`ResultSetError::Table`] when `series` cannot be read, its header does not name the manifest's stat
+    /// Returns [`ResultSetError::Table`] when `series` cannot be read, its header does not list the manifest's stat
     /// columns, or a row is not one the sweep writes.
     fn read_series(
         &mut self,
@@ -283,14 +283,15 @@ impl ResultSet {
         }
     }
 
+    /// Manifest as `manifest.json` holds it.
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
     }
 
-    /// Returns every distinct build the manifest's sessions that wrote runs record for `role`, in session order, as
-    /// [`Manifest::recorded_builds`] lists them.
+    /// Returns every distinct build recorded for `role` by the manifest's sessions that wrote runs, in session order,
+    /// as [`Manifest::recorded_builds`] lists them.
     ///
-    /// A session of a 0.2 manifest records no builds, and reads as the engine build of its own commit and the
+    /// A session of a 0.2 manifest records no builds, and is treated as the engine build of its own commit and the
     /// manifest's engine version, with no model build.
     pub fn recorded_builds(&self, role: BuildRole) -> Vec<RecordedBuild> {
         self.manifest.recorded_builds(role)
@@ -301,7 +302,7 @@ impl ResultSet {
         &self.spec
     }
 
-    /// Directory the files were read from, `None` for files handed over as bytes.
+    /// Directory the files were read from, `None` for files passed as bytes.
     pub fn dir(&self) -> Option<&Path> {
         self.dir.as_deref()
     }
@@ -330,6 +331,7 @@ impl ResultSet {
         &self.runs
     }
 
+    /// Returns run `run_id`, or `None` when `runs.csv` holds no such run.
     pub fn run(&self, run_id: u64) -> Option<&RunRow> {
         self.runs.get(*self.positions.get(&run_id)?)
     }
@@ -358,7 +360,7 @@ impl ResultSet {
     ///
     /// # Errors
     ///
-    /// Returns [`PlanError`] when the model refuses the spec.
+    /// Returns [`PlanError`] when the model rejects the spec.
     pub fn plan(&self, schema: ModelSchema<'_>) -> Result<Plan, PlanError> {
         self.spec.plan(&schema)
     }
@@ -370,8 +372,8 @@ impl ResultSet {
     ///
     /// # Errors
     ///
-    /// Returns [`ResultReplayError`] when the model refuses the spec, `runs.csv` holds no run `run_id`, or the plan
-    /// gives the run another config, replicate, seed or run key than its row. The run key covers the config's
+    /// Returns [`ResultReplayError`] when the model rejects the spec, `runs.csv` holds no run `run_id`, or the plan
+    /// assigns the run a different config, replicate, seed or run key than its row. The run key covers the config's
     /// parameter values and action ticks. It also hashes the model's declarations, so it is compared only while
     /// [`Self::schema_matches`] holds for `schema`.
     pub fn replay(&self, schema: ModelSchema<'_>, run_id: u64) -> Result<Replay, ResultReplayError> {
@@ -428,18 +430,19 @@ impl ResultSet {
         Ok(plan.replay(&run, &config))
     }
 
-    /// Returns whether `key`, the key a plan through `schema` gives `recorded`, matches the key its row holds. Any key
-    /// matches once `schema` no longer declares what the sweep ran with.
+    /// Returns whether `key`, the key that planning with `schema` assigns to `recorded`, matches the key its row
+    /// holds. Any key matches while [`Self::schema_matches`] fails for `schema`.
     fn key_matches(&self, schema: ModelSchema<'_>, key: u64, recorded: &RunRow) -> bool {
         !self.schema_matches(schema) || key == recorded.outcome.run_key
     }
 
-    /// Returns whether the results are a search's.
+    /// Returns whether the results come from a search.
     pub fn is_search(&self) -> bool {
         self.manifest.mode == ManifestMode::Search
     }
 
-    /// Returns the text of the search table `file`, such as `evaluations.csv`, or `None` when the results hold none.
+    /// Returns the text of the search table `file`, such as `evaluations.csv`, or `None` when the results hold no such
+    /// table.
     pub fn search_table(&self, file: &str) -> Option<&str> {
         self.search_tables.get(file).map(String::as_str)
     }
@@ -469,7 +472,7 @@ impl ResultSet {
     /// # Errors
     ///
     /// Returns [`ResultSetError::Missing`] for a set read from bytes, and [`ResultSetError::Table`] when `series.csv`
-    /// cannot be read or its header does not name the stat columns.
+    /// cannot be read or its header does not list the stat columns.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_run_series(
         &self,
@@ -502,7 +505,7 @@ pub struct DirectorySeries {
     pub series: BTreeMap<u64, SeriesBuffer>,
     /// Runs left out once the series passed the budget.
     ///
-    /// A run asked for and found in neither map has no rows in `series.csv`.
+    /// A run that was requested and found in neither map has no rows in `series.csv`.
     pub dropped_runs: BTreeSet<u64>,
 }
 
@@ -514,7 +517,7 @@ pub struct DirectorySeries {
 ///
 /// # Errors
 ///
-/// Returns [`ResultSetError::Table`] when `series.csv` cannot be read, its header does not name `stat_columns`, or it
+/// Returns [`ResultSetError::Table`] when `series.csv` cannot be read, its header does not list `stat_columns`, or it
 /// holds a row that is not as wide as the header.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_directory_series(
@@ -577,8 +580,8 @@ pub fn read_directory_series(
     Ok(read)
 }
 
-/// Returns the table of an output directory the picked file `name` holds, from its `bytes`, or `None` for any other
-/// file.
+/// Returns the output directory table that the picked file `name` holds, judged from its `bytes`, or `None` for any
+/// other file.
 fn picked_table(name: &str, bytes: &[u8]) -> Option<&'static str> {
     let extension = Path::new(name)
         .extension()
@@ -608,7 +611,7 @@ fn picked_table(name: &str, bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// Checks that `line`, the header line of the `series.csv` at `path`, names the id columns and then `stat_columns`.
+/// Checks that `line`, the header line of the `series.csv` at `path`, lists the id columns and then `stat_columns`.
 fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Result<(), ResultSetError> {
     let table_error = ResultSetError::Table;
     let text = String::from_utf8_lossy(line);
@@ -644,9 +647,9 @@ fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Res
     Ok(())
 }
 
-/// Reads the next complete line of `lines` into `line`, and returns whether there was one.
+/// Reads the next complete line of `lines` into `line`, and returns whether there was a complete line.
 ///
-/// A last line without a line feed is partial, and reads as none.
+/// A last line without a line feed is partial, and is treated as absent.
 fn read_line(lines: &mut impl BufRead, line: &mut Vec<u8>, path: &Path) -> Result<bool, ResultSetError> {
     line.clear();
     let read = lines.read_until(b'\n', line).map_err(|source| {
@@ -774,7 +777,7 @@ struct RunsColumnPositions {
 
 impl RunsColumnPositions {
     /// Finds the columns in `header`. The ids come first in their own order, and `status` is found from the end,
-    /// since a parameter can share its name.
+    /// since a parameter can also be named `status`.
     fn find(header: &[String], path: &Path) -> Result<Self, ReadError> {
         let missing = |column: &'static str| ReadError::MissingColumn {
             path: path.to_owned(),
@@ -864,19 +867,25 @@ impl RunsColumnPositions {
 /// Results that cannot be read.
 #[derive(Debug)]
 pub enum ResultSetError {
-    /// The directory or the files handed over lack `file`.
-    Missing { file: &'static str },
-    /// Two of the files handed over hold `file`.
-    Duplicate { file: &'static str },
-    /// The manifest cannot be read, for the reason inside.
+    /// The directory or the files passed in lack `file`.
+    Missing {
+        /// Name of the missing file, `manifest.json`, `runs.csv` or `series.csv`.
+        file: &'static str,
+    },
+    /// Two of the files passed in hold `file`.
+    Duplicate {
+        /// Name of the result file that both files hold, such as `manifest.json` or `runs.csv`.
+        file: &'static str,
+    },
+    /// The manifest cannot be read.
     Manifest(ManifestError),
-    /// The manifest's spec cannot be read back, for the reason inside.
+    /// The manifest's spec cannot be read back.
     Spec(SpecFileError),
-    /// The search the manifest records has a setting [`SearchSpec::check`] refuses, for the reason inside.
+    /// The search the manifest records has a setting that [`SearchSpec::check`] rejects.
     ///
     /// [`SearchSpec::check`]: henad_core::explore::search::SearchSpec::check
     Search(SearchSpecError),
-    /// A table cannot be read, for the reason inside.
+    /// A table cannot be read.
     Table(ReadError),
 }
 
@@ -908,14 +917,20 @@ impl std::error::Error for ResultSetError {
 /// A run of a result set that cannot be replayed.
 #[derive(Debug)]
 pub enum ResultReplayError {
-    /// The model refuses the recorded spec, for the reason inside.
+    /// The model rejects the recorded spec.
     Plan(PlanError),
-    /// The model refuses the recorded search, for the reason inside.
+    /// The model rejects the recorded search.
     Search(SearchPlanError),
-    /// A run id `runs.csv` does not hold.
-    UnknownRun { run_id: u64 },
-    /// A run whose config, replicate, seed or run key differs between its row and the plan.
-    Mismatch { run_id: u64 },
+    /// Run `run_id`, absent from `runs.csv`.
+    UnknownRun {
+        /// Id of the requested run.
+        run_id: u64,
+    },
+    /// Run `run_id`, whose config, replicate, seed or run key differs between its row and the plan.
+    Mismatch {
+        /// Id of the requested run.
+        run_id: u64,
+    },
 }
 
 impl fmt::Display for ResultReplayError {
@@ -951,7 +966,7 @@ mod tests {
     use crate::progress::NoProgress;
     use crate::tests::support::{ScratchDir, entry, sweep_options, sweep_with};
 
-    /// Returns the value `replay` gives the parameter `id`, whose schema lists `params`.
+    /// Returns the value that `replay` assigns to parameter `id`, whose schema lists `params`.
     fn value_of(replay: &Replay, params: &[ParamDescriptor], id: &str) -> ParamValue {
         let position = params
             .iter()

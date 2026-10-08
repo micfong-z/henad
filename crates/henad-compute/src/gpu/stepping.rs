@@ -1,6 +1,6 @@
 //! GPU stepping for a host that drives a [`GpuSimState`] without a sim thread.
 //!
-//! Native only. A browser cannot block on the GPU.
+//! It is native only, since a browser cannot block on the GPU.
 
 use henad_core::action::{Fire, RefusedActions, Schedule};
 use henad_core::view::StatEntry;
@@ -68,7 +68,7 @@ pub fn submit_slice(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u32, s
 ///
 /// Returns a [`FaultKind::DeviceLost`] fault once the device is lost, the first fault the device raised otherwise,
 /// or a [`FaultKind::Poll`] fault when the wait itself fails. A lost device fails its work as ordinary errors, and
-/// the loss is their cause. It leaves any such error in `ctx.faults`.
+/// the loss is their cause. `wait` then returns the loss and leaves those errors in `ctx.faults`.
 pub fn wait(ctx: &GpuContext) -> Result<(), Fault> {
     ctx.device
         .poll(wgpu::PollType::wait_indefinitely())
@@ -121,7 +121,7 @@ pub fn run_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
     wait(ctx)
 }
 
-/// As [`run_steps`], stopping at each tick the schedule names to encode its actions.
+/// Runs steps as [`run_steps`] does, stopping at each tick that has a scheduled action to encode.
 ///
 /// `fire` picks the side of the step an action fires on, as [`Schedule::fire_ticks`] spells out.
 /// [`Fire::BeforeStep`] leaves the tick the run stops on to the caller, and [`Fire::AfterStep`] leaves
@@ -129,7 +129,7 @@ pub fn run_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
 ///
 /// Every batch of steps and every action is submitted before one wait at the end, and a run of no steps waits for
 /// nothing. Under [`Fire::AfterStep`] that wait covers an action on the tick the run stops on. The entries the state
-/// refused come back in the order they were due.
+/// rejected come back in the order they were due.
 ///
 /// # Errors
 ///
@@ -157,9 +157,9 @@ pub fn run_steps_acting<'s>(
     Ok(refused)
 }
 
-/// Encodes whatever is due at the state's current tick, and returns the entries the state refused.
+/// Encodes the actions due at the state's current tick, and returns the entries the state rejected.
 ///
-/// An action goes in a submission of its own, between two batches of steps, since a uniform
+/// An action goes in its own submission, between two batches of steps, since a uniform
 /// written mid-encoder would not be visible until the whole encoder submitted.
 #[must_use = "a refused action is reported only through the returned entries"]
 pub fn run_due<'s>(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &'s Schedule) -> RefusedActions<'s> {
@@ -179,16 +179,16 @@ pub fn run_due<'s>(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &'s 
 
 /// Returns the stats of the state's current tick, blocking until the GPU reads them back.
 ///
-/// The sample records the stats passes alone, as a sweep track's does, with no display pass. A readback still in
-/// flight is collected first. Otherwise the sample's copy would be skipped, and the stats
-/// returned would be the older sample's. Note that a device error the sample raises while its readback lands is left
-/// for the next [`wait`] to report.
+/// The sample records the stats passes alone, as a sample on a sweep track does, with no display pass. A readback
+/// still in flight is collected first. Otherwise the sample's copy would be skipped, and the function would return
+/// the older sample's stats. Note that a device error the sample raises while its readback completes is
+/// left for the next [`wait`] to report.
 ///
 /// # Errors
 ///
-/// Returns a [`FaultKind::DeviceLost`] fault once the device is lost. A readback that did not land returns the fault
-/// in `ctx.faults`, or a [`FaultKind::Refused`] fault when an error scope holds the device's error. Either way the
-/// stats the state holds are an earlier sample's.
+/// Returns a [`FaultKind::DeviceLost`] fault once the device is lost. A readback that did not complete returns the
+/// fault in `ctx.faults`, or a [`FaultKind::Refused`] fault when an error scope holds the device's error. In both
+/// cases the state still holds the stats of an earlier sample.
 pub fn sample_stats(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Result<Vec<StatEntry>, Fault> {
     if state.stats_readback_pending() {
         state.poll_stats_readback(&ctx.device, true);
@@ -268,7 +268,7 @@ mod tests {
             let wgpu::BindingResource::Buffer(storage) = self.readback.binding() else {
                 panic!("the readback binds a buffer");
             };
-            // The write lands as the encoder's submission starts, ahead of the copy.
+            // The write takes effect as the encoder's submission starts, ahead of the copy.
             self.queue
                 .write_buffer(storage.buffer, 0, bytemuck::bytes_of(&self.tick));
             self.readback.encode_copy(encoder);
@@ -294,8 +294,8 @@ mod tests {
         }
     }
 
-    /// The regression. A sample taken while an earlier readback was in flight skipped its own copy and reported
-    /// the earlier sample's values.
+    /// A sample taken while an earlier readback is in flight must not skip its own copy and report the earlier
+    /// sample's values.
     #[test]
     fn a_sample_behind_an_unfinished_readback_reports_the_current_tick() {
         let Some(ctx) = headless_context("henad_sample_stats_test", wgpu::Features::empty()) else {

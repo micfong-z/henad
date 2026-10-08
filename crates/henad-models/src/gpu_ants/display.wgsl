@@ -5,10 +5,10 @@ struct Params {
     height: u32,
     n_cells: u32,
     _pad: u32,
-    // Under the cell grid on a large world.
+    // Texture size, below the grid size on a large world.
     tex: vec2<u32>,
     _pad2: vec2<u32>,
-    // The CPU field's `CELL_PALETTE`, packed so the colours cannot drift from the CPU model's.
+    // The CPU field's `CELL_PALETTE`, packed so the colours cannot drift from the CPU palette.
     palette: array<vec4<u32>, 4>,
 }
 
@@ -44,7 +44,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // One invocation per texel, which is one cell until the world outgrows the texture cap.
+    // Each invocation paints one texel, which is one cell until the world outgrows the texture cap.
     let x = global_id.x * params.width / params.tex.x;
     let y = global_id.y * params.height / params.tex.y;
 
@@ -59,7 +59,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     } else if (site == HOME) {
         index = 15u;
     } else {
-        // Stronger route wins the cell, so overlapping trails stay legible.
+        // The stronger trail wins the cell, so overlapping trails stay legible.
         let to_food = field[c];
         let to_home = field[params.n_cells + c];
         var v = to_home;

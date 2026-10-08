@@ -1,20 +1,24 @@
-//! The grid slot. Whatever owns cells, updates them once per tick, and draws them.
+//! The grid slot an agent model sits over, and the [`Extent`] of the world.
+//!
+//! A field layer owns cells, updates them once per tick and draws them.
 
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::view::GridView;
 
 /// The world rectangle every display layer stretches to.
 ///
-/// One extent for the whole model, so an agent layer and a field layer cannot disagree about how
-/// big the world is.
+/// The whole model shares one extent. An agent layer and a field layer then cannot disagree about
+/// how big the world is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Extent {
+    /// Width in world units.
     pub w: f32,
+    /// Height in world units.
     pub h: f32,
 }
 
 impl Extent {
-    /// Cell dimensions of a field tiling this extent at one cell per unit.
+    /// Returns the cell dimensions of a field that tiles this extent at one cell per unit.
     pub fn cells(self) -> (u32, u32) {
         (self.w.max(1.0) as u32, self.h.max(1.0) as u32)
     }
@@ -22,13 +26,13 @@ impl Extent {
 
 /// A layer of cells stepped once per tick.
 ///
-/// Implemented by `CaField` (a [`crate::authoring::model::grid_model::GridModel`] gather rule) and by scatter-plus-decay
-/// fields, so an agent model can sit over either.
+/// henad-compute implements it for `CaField`, a [`crate::authoring::model::grid_model::GridModel`] as a layer, and
+/// for `ScalarField`, scatter-plus-decay layers. An agent model sits over either layer, or over [`NoField`].
 pub trait FieldLayer: Send + 'static {
-    /// Must agree with what `grid_view` returns.
+    /// Whether the layer draws a grid. It must agree with [`Self::grid_view`].
     const HAS_GRID: bool = true;
 
-    /// Names of this layer in the Model metadata panel.
+    /// Name of this layer in the Model panel.
     const KIND: &'static str;
 
     /// Hot parameters, rebuilt once per tick.
@@ -37,25 +41,34 @@ pub trait FieldLayer: Send + 'static {
     type Read<'a>
     where
         Self: 'a;
-    /// Per agent deposit lanes the agent passes fill, `()` for a field that takes none.
+    /// Per agent deposit lanes, filled by the agent passes, or `()` for a field without deposit lanes.
     type DepositLanes: Send + 'static;
 
+    /// Returns this layer's own parameters, listed after the model's parameters.
     fn param_descriptors() -> Vec<ParamDescriptor>;
+    /// Extracts the hot parameters for one tick.
+    ///
     /// `params` is this layer's own slice, so its indices are 0 based and do not move when the
     /// model above it gains a parameter.
     fn from_params(params: &[ParamValue]) -> Self::Params;
+    /// Creates the layer over `extent`, from this layer's own slice of the parameters.
     fn new(extent: Extent, params: &[ParamValue]) -> Self;
 
+    /// Returns the field as an agent kernel reads it.
     fn read(&self) -> Self::Read<'_>;
-    /// Lanes sized for `n` agents, reused every tick rather than reallocated.
+    /// Allocates deposit lanes for `n` agents. The engine reuses them every tick.
     fn alloc_deposits(&self, n: usize) -> Self::DepositLanes;
+    /// Advances the layer by one tick, with this tick's deposits.
     fn update(&mut self, deposits: &Self::DepositLanes, p: &Self::Params, tick: u64);
 
-    /// Turns cells into palette indices. Called before a snapshot rather than every tick.
+    /// Turns cells into palette indices. The engine calls it before each snapshot.
     fn prepare_view(&mut self) {}
 
+    /// Returns the cells to draw, or `None` for a layer without a grid.
     fn grid_view(&self) -> Option<GridView<'_>>;
+    /// Number of cells.
     fn cell_count(&self) -> usize;
+    /// Heap memory held by the layer, in bytes.
     fn heap_bytes(&self) -> usize;
 }
 

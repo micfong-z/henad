@@ -1,11 +1,9 @@
 //! GPU ant foraging as `docs/guide/first-model/gpu-ants.md` builds it.
 //!
-//! The id is `gpu_foraging` rather than `gpu_ants`, since the shipped model already holds that one
-//! and the page tells a reader the same thing.
+//! The id is `gpu_foraging`. The example model uses `gpu_ants`, and a set holds each id once.
 //!
-//! The five shaders beside this file are copies of the shipped model's own. A shader carries no id,
-//! so what the page writes is `gpu_ants/*.wgsl` line for line, apart from the import path of
-//! `state.wgsl`, which follows the directory name.
+//! The five shaders beside this file are copies of the example model's shaders, line for line, apart from the
+//! import path of `state.wgsl`, which follows the directory name. No shader refers to a model id.
 
 use henad::authoring::AgentLanes as _;
 use henad::authoring::prelude::*;
@@ -31,11 +29,11 @@ henad::buffers! {
     const SITES = "sites";
 }
 
-// `state` packs what the CPU model keeps in three lanes. Mirrored in `state.wgsl`.
+// Bits of the `state` word that packs the CPU model's three lanes. `state.wgsl` declares the same bits.
 const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
 const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
 
-/// Domain separated from the ant seeding stream, so the two do not start correlated.
+/// Domain separator of the `rng` buffer's seed, so the buffer and the ant seeding stream do not start correlated.
 const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 
 pub struct GpuForagingModel;
@@ -176,7 +174,7 @@ impl GpuAgentModel for GpuForagingModel {
                 palette: packed_cell_palette(),
             })
             .to_vec(),
-            // The guide's model declares no actions, so the engine never asks for one.
+            // The guide's model declares no actions, so the engine never requests an action uniform.
             PassId::Action(_) => Vec::new(),
             PassId::Reduce => bytemuck::bytes_of(&ReduceParams {
                 n: ctx.invocations,
@@ -199,7 +197,7 @@ impl GpuAgentModel for GpuForagingModel {
     }
 }
 
-/// The three per-ant scalars the CPU keeps in separate lanes, as `step.wgsl` reads them.
+/// Packs ant `i`'s three scalars, which the CPU keeps in separate lanes, into the word `step.wgsl` reads.
 fn pack_state(lanes: &AntLanes, i: usize) -> u32 {
     let mut packed = u32::from(lanes.last_step[i]);
     if lanes.has_food[i] != 0 {
@@ -225,7 +223,7 @@ fn packed_ant_color(index: u8) -> u32 {
     u32::from_le_bytes(rgba)
 }
 
-/// Indexed as `palette[i >> 2][i & 3]` in `display.wgsl`.
+/// Returns the cell palette packed four colours to a row, read as `palette[i >> 2][i & 3]` in `display.wgsl`.
 fn packed_cell_palette() -> [[u32; 4]; 4] {
     let mut packed = [[0u32; 4]; 4];
     for (i, rgba) in CELL_PALETTE.iter().enumerate() {

@@ -26,6 +26,7 @@ use ParamValue::{F32, U32};
 /// Returns the default params with some overridden by id.
 ///
 /// # Panics
+///
 /// Panics if an id is not declared by the model.
 fn params(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
     let descs = network_model_param_descriptors::<TeamAssembly>();
@@ -84,7 +85,7 @@ fn links(graph: &Network) -> BTreeMap<(u32, u32), u8> {
     links
 }
 
-/// Returns the tick a node's downtime is counted from, given the tick of its last team.
+/// Returns the tick from which a node's downtime is counted, given the tick of its last team.
 ///
 /// Setup nodes have `team_tick` 0, but NetLogo first counts their downtime on the first tick.
 fn retirement_key(team_tick: u64) -> u64 {
@@ -96,7 +97,7 @@ fn stat_values(state: &mut State) -> Vec<f64> {
     state.stats().iter().map(|entry| entry.value.scalar()).collect()
 }
 
-/// Every team has exactly `team_size` distinct members, each linked to every other.
+/// Every team has exactly `team_size` distinct members, each linked to every other member.
 #[test]
 fn every_team_is_a_clique_of_the_team_size() {
     let mut state = build(&[
@@ -197,7 +198,8 @@ fn a_node_retires_after_exactly_max_downtime_plus_one_idle_ticks() {
     }
 }
 
-/// The ring retires exactly the nodes an O(V) scan of `team_tick` would, while `max_downtime` goes up and down.
+/// The ring retires exactly the nodes that an O(V) scan of `team_tick` would retire, while `max_downtime` goes up
+/// and down.
 #[test]
 fn the_ring_retires_what_the_scan_would() {
     let mut state = build(&[
@@ -373,7 +375,8 @@ fn population_settles_at_team_size_times_max_downtime_plus_one_without_incumbent
     }
 }
 
-/// NetLogo stops with an error when a team needs an incumbent and none is left outside it. A newcomer joins instead.
+/// NetLogo stops with an error when a team needs an incumbent and no incumbent is left outside the team.
+/// A newcomer joins instead.
 #[test]
 fn a_team_larger_than_the_population_is_filled_with_newcomers() {
     let mut state = build(&[
@@ -424,9 +427,10 @@ fn open_clusters(before: &BTreeMap<(u32, u32), u8>, members: &[u32]) -> usize {
     open
 }
 
-/// With `q` certain, a member is a previous collaborator of the team whenever the team has one outside it.
+/// With `q` certain, a member is a previous collaborator of the team whenever the team has a collaborator outside it.
 /// The team then only starts a new cluster once every earlier cluster has no collaborator left outside,
-/// so at most one cluster still has one. With `q` at zero, members are drawn at random and this breaks.
+/// so at most one cluster still has a collaborator outside.
+/// With `q` at zero, members are drawn at random and this breaks.
 #[test]
 fn with_q_certain_a_team_grows_through_previous_collaborators() {
     for q in [1.0, 0.0] {
@@ -494,7 +498,7 @@ fn the_last_team_is_colored_by_incumbency() {
 }
 
 /// A live node sits inside the world at a finite position, and a retired slot sits at `NaN`,
-/// however often slots are retired and handed to newcomers.
+/// however often slots are retired and reused for newcomers.
 #[test]
 fn live_nodes_have_finite_positions_in_the_world() {
     let mut state = build(&[

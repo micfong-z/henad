@@ -1,4 +1,4 @@
-//! The Rust names a shader's path becomes, and the paths refused.
+//! The Rust names that a shader's path becomes, and the rejected paths.
 
 use std::path::PathBuf;
 
@@ -65,7 +65,7 @@ fn two_shaders_with_one_constant_name_are_refused() {
         other => panic!("expected a collision, got {other:?}"),
     }
 
-    // `aB` and `ab` give the variants `AB` and `Ab`, and the one constant `AB`.
+    // `aB` and `ab` give the variants `AB` and `Ab`, and the same constant `AB`.
     let entries = [PathBuf::from("aB.wgsl"), PathBuf::from("ab.wgsl")];
     match crate::paths::check_collisions(&scratch.root(), &entries) {
         Err(ShaderBuildError::NameCollision { kind, name, .. }) => {
@@ -158,7 +158,7 @@ fn a_path_starting_with_a_generated_name_is_refused() {
         }
     }
 
-    // Only the first component is the generated code's.
+    // Only the first component can clash with a name that the generated code uses.
     let scratch = Scratch::new("generated_name_inside");
     scratch.write("gpu_vote/wgpu.wgsl", STEP_SHADER);
     scratch.write("gpu_vote/core/step.wgsl", STEP_SHADER);
@@ -201,7 +201,7 @@ fn a_path_whose_variant_is_no_identifier_is_refused() {
         }
     }
 
-    // A module gets no variant, and keeps the name.
+    // A module gets no variant, and can keep the name `self_`.
     let scratch = Scratch::new("variant_module");
     scratch.write("gpu_vote/step.wgsl", STEP_SHADER);
     scratch.write("self_.wgsl", "#define_import_path self_\n\nconst VOTED: u32 = 1u;\n");

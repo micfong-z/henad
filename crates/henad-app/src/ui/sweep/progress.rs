@@ -1,7 +1,7 @@
 //! Progress of a sweep or search: the text of its progress bar, the grids of its status, its search and its result,
 //! and the runs in progress.
 //!
-//! While a session runs, the Status grid counts its runs and names how they run. Once it ends, the Result grid takes
+//! While a session runs, the Status grid counts its runs and states their layout. Once it ends, the Result grid takes
 //! its place. A search adds a Search grid of its budget and its best candidate either way.
 
 use std::path::Path;
@@ -27,10 +27,10 @@ use crate::ui::sweep::session::{SessionState, SweepSession};
 use crate::ui::sweep::{SweepRequest, format_duration};
 use crate::ui::{add_progress_bar, banner, kv_grid, mcs, plural};
 
-/// Most runs in progress the tab lists one by one.
+/// Maximum number of runs in progress that the tab lists one by one.
 const MAX_ACTIVE_LINES: usize = 8;
 
-/// Shortest time left the progress bar shows, in milliseconds. A shorter estimate says nothing useful.
+/// Minimum remaining time that the progress bar shows, in milliseconds. A shorter estimate says nothing useful.
 const MIN_REMAINING_MS: u128 = 100;
 
 /// Width of the bar of a run in progress, in points.
@@ -42,7 +42,7 @@ const RUN_BAR_HEIGHT: f32 = 10.0;
 /// Salt of the id of the Runs in progress section.
 const ACTIVE_RUNS_ID: &str = "henad_sweep_progress_active";
 
-/// Returns the runs that have finished at `progress`, those waiting on an earlier run included, as the command line
+/// Returns the number of runs finished at `progress`, including runs waiting on an earlier run, as the command line
 /// counts them.
 fn finished_runs(progress: &SweepProgress) -> u64 {
     progress.runs_done + progress.runs_waiting
@@ -89,13 +89,13 @@ pub struct SessionResult {
     pub text: String,
     /// Share of the plan's runs written, from 0 to 1.
     pub fraction: f32,
-    /// Whether the session ended on an error of its own.
+    /// Whether the session ended on an error outside any run.
     pub failed: bool,
 }
 
 impl SessionResult {
-    /// Returns the end of the sweep or search `noun` names, from its `report` or its `failure`, with the time of
-    /// `progress`. That time leaves pauses out.
+    /// Returns the end of a session from its `report` or its `failure`, with the time of `progress`. That time leaves
+    /// pauses out. `noun` is "sweep" or "search".
     pub fn new(noun: &str, report: Option<&SweepReport>, failure: Option<&str>, progress: &SweepProgress) -> Self {
         let noun = capitalize(noun);
         if let Some(failure) = failure {
@@ -143,7 +143,8 @@ impl SessionResult {
     }
 }
 
-/// Returns the text of the Abort modal: the runs an abort of the sweep at `progress` keeps, then each kind it drops.
+/// Returns the text of the Abort modal: the runs an abort of the sweep at `progress` keeps, then each kind of run it
+/// discards.
 pub fn abort_text(progress: &SweepProgress) -> String {
     let (done, waiting) = (progress.runs_done, progress.runs_waiting);
     let active = progress.active_runs.len() as u64;
@@ -163,8 +164,8 @@ pub fn abort_text(progress: &SweepProgress) -> String {
     text
 }
 
-/// Returns the sentence of the Abort modal on whether the sweep or search `noun` names can run the rest later. Only
-/// one writing to a folder can.
+/// Returns the Abort modal's sentence on whether the rest of the `noun` can run later. Only a sweep or search that
+/// writes to a folder can.
 pub fn resume_text(noun: &str, in_folder: bool) -> String {
     if in_folder {
         format!("Press Resume {noun} in the Results tab to run the rest later.")
@@ -224,7 +225,7 @@ impl ProgressRow {
     }
 }
 
-/// Returns the Failed row for `failed` runs. Once there are any, the row lists them in the Results tab.
+/// Returns the Failed row for `failed` runs. When `failed` is above 0, the row lists the runs in the Results tab.
 fn failed_row(failed: u64) -> ProgressRow {
     let mut row = ProgressRow::new("Failed", failed.to_string());
     if failed > 0 {
@@ -239,11 +240,11 @@ fn failed_row(failed: u64) -> ProgressRow {
 pub struct PlannedExecution {
     pub layout: ExecutionLayout,
     pub backend: Backend,
-    /// Bytes the live runs are projected to hold together.
+    /// Projected memory use in bytes of all live runs together.
     pub projected_bytes: u64,
 }
 
-/// Returns the runs `execution` steps at once, as in "4, with 3 threads each" or "2 on the GPU".
+/// Returns the number of runs that `execution` steps at once, as in "4, with 3 threads each" or "2 on the GPU".
 pub fn runs_at_once_text(execution: &PlannedExecution) -> String {
     let layout = &execution.layout;
     match execution.backend {
@@ -298,7 +299,7 @@ pub struct StatusInput<'a> {
     pub state: SessionState,
     /// Execution of the sweep once planned, `None` while it plans.
     pub execution: Option<PlannedExecution>,
-    /// Where the results go, as the Results row reads it.
+    /// Destination of the results, as the Results row reads it.
     pub results: &'a str,
     /// Whether the session resumes a folder, keeping the runs the folder holds.
     pub resumed: bool,
@@ -343,20 +344,20 @@ pub fn status_rows(input: &StatusInput<'_>) -> Vec<ProgressRow> {
     rows
 }
 
-/// Runs an ended session wrote, and how it ended.
+/// Run counts of an ended session, and the state it ended in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ending {
     pub state: SessionState,
-    /// Runs written, the runs a resume kept included.
+    /// Number of runs written, the runs a resume kept included.
     pub written: u64,
-    /// Runs of the whole plan.
+    /// Number of runs in the whole plan.
     pub planned: u64,
     pub failed: u64,
 }
 
 impl Ending {
     /// Returns the end of a session that ended in `state`, read from its `report`, or from `progress` for a session
-    /// that failed with none.
+    /// that failed without a report.
     pub fn new(state: SessionState, report: Option<&SweepReport>, progress: &SweepProgress) -> Self {
         match report {
             Some(report) => Self {
@@ -391,14 +392,14 @@ pub fn result_rows(ending: &Ending, elapsed: Duration, results: &str) -> Vec<Pro
     ]
 }
 
-/// Returns the note under the Result grid of the `noun` that ended as `ending`, `None` for one that finished or
+/// Returns the note under the Result grid of the `noun` that ended as `ending`, `None` for a session that finished or
 /// failed.
 ///
-/// The note says whether and where the runs it did not write can run. Only results in a folder can resume.
+/// The note says whether and where the runs that were not written can run. Only results in a folder can resume.
 pub fn result_note(noun: &str, ending: &Ending, in_folder: bool) -> Option<String> {
     let left = ending.planned.saturating_sub(ending.written);
     match ending.state {
-        // An abort or a lost device can land after the last run is written.
+        // An abort or a lost device can happen after the last run is written.
         SessionState::Aborted | SessionState::Stopped if left == 0 => {
             Some(format!("Every run finished before the {noun} ended."))
         }
@@ -414,18 +415,20 @@ pub fn result_note(noun: &str, ending: &Ending, in_folder: bool) -> Option<Strin
     }
 }
 
-/// Standing of a search, as the Search grid shows it.
+/// State of a search, as the Search grid shows it.
 pub struct SearchStanding<'a> {
     pub search: &'a SearchSpec,
-    /// Update after the last batch the search was told, `None` before the first.
+    /// Update after the last batch the search was told, `None` before the first batch.
     pub update: Option<&'a SearchUpdate>,
-    /// Generations of a genetic algorithm that finished before the last batch, the index of that batch's generation.
+    /// Number of generations of a genetic algorithm finished before the last batch. It equals the index of that
+    /// batch's generation.
     pub generation: u64,
-    /// Label and value of each parameter and tick of the best candidate, empty while the Results tab lacks them.
+    /// Label and value of each parameter and tick of the best candidate, empty while the Results tab does not hold
+    /// them.
     pub best_values: &'a [(String, String)],
 }
 
-/// Returns the rows of the Search grid: the evaluations run of the budget, the generation of a genetic algorithm,
+/// Returns the rows of the Search grid: the evaluations run out of the budget, the generation of a genetic algorithm,
 /// and the best candidate with its values, or the cells a Pattern Space Exploration filled.
 pub fn search_rows(standing: &SearchStanding<'_>) -> Vec<ProgressRow> {
     let search = standing.search;
@@ -434,7 +437,7 @@ pub fn search_rows(standing: &SearchStanding<'_>) -> Vec<ProgressRow> {
         SearchAlgorithm::Genetic(settings) => Some(settings),
         _ => None,
     };
-    // A hill climb or a genetic algorithm can ask for fewer candidates than a batch holds.
+    // A hill climb or a genetic algorithm can request fewer candidates than a batch holds.
     let exact = matches!(
         search.algorithm,
         SearchAlgorithm::Random | SearchAlgorithm::PatternSpaceExploration(_)
@@ -508,8 +511,8 @@ pub fn search_rows(standing: &SearchStanding<'_>) -> Vec<ProgressRow> {
 
 /// Returns the label of run in progress `active`, and its tooltip.
 ///
-/// `values` are the values of its config as the Results tab holds them, `None` while it lacks them. A search names
-/// its configs candidates, and learns a candidate's values once the candidate's batch ends.
+/// `values` are the values of its config as the Results tab holds them, `None` while the Results tab does not hold
+/// them. A search calls its configs candidates, and learns a candidate's values once the candidate's batch ends.
 pub fn active_run_label(active: &ActiveRun, search: bool, values: Option<&str>) -> (String, Option<&'static str>) {
     let noun = if search { "Candidate" } else { "Config" };
     let head = format!("{noun} {} · replicate {}", active.run.config_id, active.run.rep);
@@ -612,7 +615,7 @@ fn search_block(ui: &mut Ui, view: &ProgressView<'_>, request: &mut Option<Sweep
     progress_grid(ui, "henad_sweep_search_grid", &search_rows(&standing), request);
 }
 
-/// Draws `rows` in a two-column grid of id `id`, each value labelled by its row's label.
+/// Draws `rows` in a two-column grid with id `id`, each value labelled by its row's label.
 fn progress_grid(ui: &mut Ui, id: &str, rows: &[ProgressRow], request: &mut Option<SweepRequest>) {
     kv_grid(ui, id).show(ui, |ui, grid_rows| {
         for row in rows {

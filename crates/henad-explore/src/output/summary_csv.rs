@@ -26,19 +26,26 @@ pub enum SummaryError {
     /// Text that is not valid CSV.
     Csv(CsvError),
     /// A header without the column `column`.
-    MissingColumn { column: &'static str },
-    /// Record `record_number`, counted from 1 for the header, with a different number of fields from the header.
+    MissingColumn {
+        /// Name of the missing column.
+        column: &'static str,
+    },
+    /// Record `record_number`, with a different number of fields from the header.
     FieldCount {
+        /// Number of the record, counting the header as record 1.
         record_number: usize,
-        /// Fields in the record.
+        /// Number of fields in the record.
         found: usize,
-        /// Fields in the header.
+        /// Number of fields in the header.
         expected: usize,
     },
-    /// Field `column` of record `record_number`, holding `text` the column cannot take.
+    /// Field `column` of record `record_number`, holding `text` that the column cannot accept.
     BadField {
+        /// Number of the record, counting the header as record 1.
         record_number: usize,
+        /// Name of the column holding the field.
         column: String,
+        /// Text of the field after CSV unescaping.
         text: String,
     },
     /// Reading `runs.csv` failed, or it is not UTF-8.
@@ -98,16 +105,16 @@ impl From<io::Error> for SummaryError {
 struct RunsLayout {
     config_id: usize,
     block: usize,
-    /// Parameter and action columns, the ones between `run_key` and `status`.
+    /// Parameter and action columns, between `run_key` and `status`.
     values: Range<usize>,
     status: usize,
     ticks: usize,
-    /// Reducer columns, the ones between `steps_per_s` and `note`.
+    /// Reducer columns, between `steps_per_s` and `note`.
     reducers: Range<usize>,
 }
 
 impl RunsLayout {
-    /// Finds the columns in `header`. Each column after the parameters is looked for after the one before it, and
+    /// Finds the columns in `header`. Each column after the parameters is searched for after the column before it, and
     /// from the end of the header, so the ranges between them never run backwards.
     fn read(header: &[String]) -> Result<Self, SummaryError> {
         let find_first = |column: &'static str| {
@@ -145,7 +152,7 @@ struct RecordReader<R> {
     source: R,
     /// Text of the record being read.
     text: Vec<u8>,
-    /// Line feeds read so far.
+    /// Number of line feeds read so far.
     line_feeds: usize,
 }
 
@@ -196,7 +203,7 @@ impl<R: BufRead> RecordReader<R> {
     }
 }
 
-/// Reads `runs`, a `runs.csv`, writes the summary of every config in it to `dest`, and hands `dest` back.
+/// Reads `runs`, a `runs.csv`, writes the summary of every config in it to `dest`, and returns `dest`.
 ///
 /// The runs are read one record at a time. Configs are written in id order. Note that the statistics depend on the
 /// order of the runs in `runs`, down to the last bit.
@@ -213,7 +220,7 @@ pub(crate) fn write_summary<R: BufRead, W: Write>(runs: R, mut dest: W) -> Resul
     let reducer_names = &header[layout.reducers.clone()];
 
     let mut accumulator = SummaryAccumulator::new(reducer_names.len());
-    // Block and value cells of each config, escaped and joined, as its first run gives them.
+    // Block and value cells of each config, escaped and joined, as its first run records them.
     let mut configs: BTreeMap<u64, String> = BTreeMap::new();
     let mut reducers = Vec::with_capacity(reducer_names.len());
     let mut record_number = 1;

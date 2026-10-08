@@ -1,3 +1,6 @@
+//! The counting-sort [`SpatialHash`] that agents use to find their neighbours, and the [`HashGrid`]
+//! cell geometry both backends share.
+
 use crate::authoring::model::field::Extent;
 use crate::authoring::primitives::space::{Boundary, axis_delta};
 
@@ -5,25 +8,33 @@ use crate::authoring::primitives::space::{Boundary, axis_delta};
 /// mirrors it into its step uniform so its query walks the same grid as the CPU sort.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HashGrid {
+    /// Cells along x.
     pub grid_w: u32,
+    /// Cells along y.
     pub grid_h: u32,
+    /// World width one cell spans.
     pub cell_w: f32,
+    /// World height one cell spans.
     pub cell_h: f32,
 }
 
-/// Cells one index may hold, on either backend.
+/// Maximum number of cells one index can hold, on either backend.
 ///
-/// The grid is `(world / cell_size)^2`, and both are model parameters, so a small cell on a large
-/// world asks for a grid nobody can hold. A coarser cell only makes a query scan candidates it
-/// then rejects, where an unbounded one asks for gigabytes.
+/// The grid is `(world / cell_size)^2`, and the world size and the cell size are both model parameters, so a small
+/// cell on a large world requests a grid that no machine can hold. A coarser cell only makes a query scan candidates
+/// that it then rejects, whereas an unbounded grid requests gigabytes.
 pub const MAX_INDEX_CELLS: u64 = 1 << 22;
 
 impl HashGrid {
-    /// Fits whole cells to the world. A query walks in cell index space, so cells all have to span
-    /// the same distance or the wrap seam gets under-covered.
+    /// Returns the geometry that fits whole cells to the world.
     ///
-    /// The one place the geometry is decided. [`SpatialHash`] and its GPU counterpart both build
-    /// from here, so neither can walk a grid the other did not sort.
+    /// A query walks in cell index space, so cells all have to span the same distance or the wrap seam gets
+    /// under-covered.
+    ///
+    /// A grid that would hold more than [`MAX_INDEX_CELLS`] cells is coarsened by one factor on both
+    /// axes, and a `cell_size` that is not positive counts as 1. This is the one place the geometry is
+    /// decided. [`SpatialHash`] and its GPU counterpart both build from here, so neither backend can walk a
+    /// grid that the other backend did not sort.
     pub fn new(extent: Extent, cell_size: f32) -> Self {
         let cell_size = if cell_size > 0.0 { cell_size } else { 1.0 };
         let mut grid_w = (extent.w / cell_size).floor().max(1.0) as u32;
@@ -45,6 +56,7 @@ impl HashGrid {
         }
     }
 
+    /// Number of cells, `grid_w * grid_h`.
     pub fn num_cells(&self) -> u32 {
         self.grid_w * self.grid_h
     }
@@ -52,9 +64,9 @@ impl HashGrid {
 
 /// Flat counting-sort grid over agent positions, rebuilt every tick.
 pub struct SpatialHash {
-    /// Requested cell size, only kept to detect changes
+    /// Requested cell size, kept only to detect changes.
     cell_size: f32,
-    // Actual cell extents, which tile the world exactly
+    // Actual cell extents, which tile the world exactly.
     cell_w: f32,
     cell_h: f32,
     cell_w_inv: f32,
@@ -63,11 +75,11 @@ pub struct SpatialHash {
     grid_h: u32,
     world_w: f32,
     world_h: f32,
-    /// Cell flat-index for each agent
+    /// Flat cell index of each agent.
     agent_cells: Vec<u32>,
-    /// Agents sorted by cell index
+    /// Agents sorted by cell index.
     sorted_agents: Vec<u32>,
-    /// Start index of each cell in `sorted_agents`
+    /// Start index of each cell in `sorted_agents`.
     cell_start: Vec<u32>,
 }
 
@@ -86,9 +98,10 @@ impl std::fmt::Debug for SpatialHash {
 }
 
 impl SpatialHash {
+    /// Creates an empty hash over a `world_w` by `world_h` world, with cells about `cell_size` wide.
     pub fn new(cell_size: f32, world_w: f32, world_h: f32) -> Self {
-        // Through `HashGrid`, which fits whole cells to the world and caps how many there are.
-        // Sharing it is what keeps this sort and the GPU one walking the same grid.
+        // `HashGrid` fits whole cells to the world and caps how many there are. Sharing it keeps this
+        // sort and the GPU sort walking the same grid.
         let grid = HashGrid::new(Extent { w: world_w, h: world_h }, cell_size);
         let (grid_w, grid_h) = (grid.grid_w, grid.grid_h);
         let (cell_w, cell_h) = (grid.cell_w, grid.cell_h);
@@ -110,7 +123,9 @@ impl SpatialHash {
         }
     }
 
-    /// Wraps, so a position outside the world still lands in a cell.
+    /// Returns the flat index of the cell holding `(x, y)`.
+    ///
+    /// The position wraps, so a position outside the world still falls in a cell.
     #[inline]
     pub fn cell_index(&self, x: f32, y: f32) -> u32 {
         let cx = ((x * self.cell_w_inv).floor() as i32).rem_euclid(self.grid_w as i32) as u32;
@@ -118,6 +133,7 @@ impl SpatialHash {
         cy * self.grid_w + cx
     }
 
+    /// Sorts the agents at `pos_x` and `pos_y` into their cells.
     pub fn build(&mut self, pos_x: &[f32], pos_y: &[f32]) {
         self.build_where(pos_x, pos_y, |_| true);
     }
@@ -138,7 +154,7 @@ impl SpatialHash {
         self.sorted_agents.resize(num_agents as usize, 0);
         self.cell_start.resize((num_cells + 1) as usize, 0);
 
-        // Assign agents to cells and count agents per cell
+        // Assigns each agent to its cell and counts the agents per cell.
         for i in 0..num_agents {
             let cell = if include(i as usize) {
                 self.cell_index(pos_x[i as usize], pos_y[i as usize])
@@ -151,12 +167,12 @@ impl SpatialHash {
             }
         }
 
-        // Prefix sum to get start index of each cell
+        // A prefix sum gives the start index of each cell.
         for i in 1..=num_cells {
             self.cell_start[i as usize] += self.cell_start[i as usize - 1];
         }
 
-        // Sort agents by cell index using counting sort
+        // Sorts the agents by cell index with a counting sort.
         let mut write_pos = self.cell_start.clone();
         for i in 0..num_agents {
             let cell = self.agent_cells[i as usize];
@@ -169,6 +185,9 @@ impl SpatialHash {
         }
     }
 
+    /// Fills `result` with every agent within `r` of `(x, y)`, clearing it first.
+    ///
+    /// Distances wrap at the world's edges, as for [`Self::for_each_within`].
     pub fn query_radius(&self, x: f32, y: f32, r: f32, pos_x: &[f32], pos_y: &[f32], result: &mut Vec<u32>) {
         result.clear();
         self.for_each_within(x, y, r, pos_x, pos_y, |agent_idx, _dx, _dy, _d2| {
@@ -176,11 +195,11 @@ impl SpatialHash {
         });
     }
 
-    /// Visits every agent within `r` of `(x, y)`, handing the callback its index, the toroidal
+    /// Visits every agent within `r` of `(x, y)`, passing the callback its index, the toroidal
     /// deltas to it and their squared length.
     ///
-    /// The deltas come out of the range test either way. A kernel that wants them takes this and
-    /// computes each one once, where a list of indices makes it recompute them all.
+    /// The deltas come out of the range test either way. A kernel that needs them uses this method
+    /// and computes each delta once, whereas a list of indices makes it recompute them all.
     pub fn for_each_within<F: FnMut(u32, f32, f32, f32)>(
         &self,
         x: f32,
@@ -231,12 +250,12 @@ impl SpatialHash {
         (self.cell_size - cell_size).abs() <= f32::EPSILON
     }
 
-    /// Returns whether this hash was built for a world of that size.
+    /// Returns whether this hash was built for a `world_w` by `world_h` world.
     pub fn world_is(&self, world_w: f32, world_h: f32) -> bool {
         (self.world_w - world_w).abs() <= f32::EPSILON && (self.world_h - world_h).abs() <= f32::EPSILON
     }
 
-    /// Cells along each axis. Fitted to the world, not derived from `cell_size` directly.
+    /// Cells along each axis, fitted to the world from the requested cell size.
     pub fn grid_dims(&self) -> (u32, u32) {
         (self.grid_w, self.grid_h)
     }
@@ -246,12 +265,13 @@ impl SpatialHash {
         (self.cell_w, self.cell_h)
     }
 
-    /// `(cell_start, sorted_agents)`, where cell `c` owns
+    /// Returns `(cell_start, sorted_agents)`, where cell `c` owns
     /// `sorted_agents[cell_start[c]..cell_start[c + 1]]`.
     pub fn buckets(&self) -> (&[u32], &[u32]) {
         (&self.cell_start, &self.sorted_agents)
     }
 
+    /// Rebuilds the hash for `new_cell_size` and sorts the agents again, if the cell size changed.
     pub fn rebuild_with_cell_size(&mut self, new_cell_size: f32, pos_x: &[f32], pos_y: &[f32]) {
         if (new_cell_size - self.cell_size).abs() > f32::EPSILON {
             *self = Self::new(new_cell_size, self.world_w, self.world_h);
@@ -259,6 +279,7 @@ impl SpatialHash {
         }
     }
 
+    /// Heap memory held by the hash, in bytes.
     pub fn heap_bytes(&self) -> usize {
         self.agent_cells.capacity() * 4 + self.sorted_agents.capacity() * 4 + self.cell_start.capacity() * 4
     }
@@ -269,7 +290,7 @@ mod tests {
     use super::*;
     use crate::authoring::primitives::rng::xorshift64;
 
-    /// A cell size the UI admits would otherwise ask for a grid of hundreds of millions of cells.
+    /// A cell size the UI admits would otherwise request a grid of hundreds of millions of cells.
     #[test]
     fn the_index_grid_is_capped() {
         let extent = Extent {
@@ -309,7 +330,7 @@ mod tests {
 
     #[test]
     fn build_and_query_finds_all_close_agents() {
-        // 3 agents near (0,0), 1 agent far away
+        // Three agents near (0, 0), and one far away.
         let pos_x = vec![0.0, 1.0, -2.0, 50.0];
         let pos_y = vec![0.0, 2.0, -1.0, 50.0];
         let mut sh = SpatialHash::new(10.0, 100.0, 100.0);
@@ -324,7 +345,7 @@ mod tests {
 
     #[test]
     fn toroidal_query_finds_wrapped_agent() {
-        // World is 100x100, agent at (99,99) should be near (1,1) due to wrapping
+        // The world is 100 by 100, and the wrap puts an agent at (99, 99) near (1, 1).
         let pos_x = vec![1.0, 99.0];
         let pos_y = vec![1.0, 99.0];
         let mut sh = SpatialHash::new(10.0, 100.0, 100.0);
@@ -345,7 +366,7 @@ mod tests {
 
     #[test]
     fn matches_brute_force_with_non_divisor_cell_size() {
-        // 47 divides neither world axis, so the hash has to pick its own cell extents
+        // 47 divides neither world axis, so the hash has to pick its own cell extents.
         let (world_w, world_h, r) = (1_000.0_f32, 730.0_f32, 47.0_f32);
         let mut seed = 0x1234_5678_9ABC_DEF0_u64;
         let mut unit = || {
@@ -383,7 +404,7 @@ mod tests {
 
     #[test]
     fn query_wider_than_grid_returns_each_agent_once() {
-        // Radius 100 into a 300 wide world leaves 3 cells per axis, so the walk spans the grid
+        // A radius of 100 in a world 300 wide leaves 3 cells per axis, so the walk spans the grid.
         let pos_x = vec![0.0, 60.0, 150.0];
         let pos_y = vec![0.0, 0.0, 0.0];
         let mut sh = SpatialHash::new(100.0, 300.0, 300.0);
@@ -398,7 +419,7 @@ mod tests {
 
     #[test]
     fn single_cell_grid_returns_each_agent_once() {
-        // Radius past half the world collapses the grid to one cell
+        // A radius past half the world collapses the grid to one cell.
         let pos_x = vec![10.0, 20.0, 60.0];
         let pos_y = vec![10.0, 20.0, 60.0];
         let mut sh = SpatialHash::new(200.0, 100.0, 100.0);

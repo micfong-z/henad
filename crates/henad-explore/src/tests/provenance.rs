@@ -31,7 +31,7 @@ fn life_spec(replicates: u64) -> SweepSpec {
     spec
 }
 
-/// Returns Game of Life as a crate whose build is `build` registers it.
+/// Returns Game of Life registered by a crate whose build is `build`.
 fn registered_by(build: BuildInfo) -> ModelEntry {
     let mut set = ModelSet::new(build);
     set.insert(register_grid_model::<GameOfLifeModel>())
@@ -51,7 +51,7 @@ fn under_engine(engine: RecordedBuild) -> Provenance {
 }
 
 /// Sweeps `first` under `first_provenance` with one replicate, then resumes it with `second` under
-/// `second_provenance` with two, and returns the resume's warnings and the manifest it leaves.
+/// `second_provenance` with two replicates, and returns the resume's warnings and the manifest it leaves.
 fn resume_warnings(
     (first, first_provenance): (&ModelEntry, Provenance),
     (second, second_provenance): (&ModelEntry, Provenance),

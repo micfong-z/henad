@@ -1,18 +1,20 @@
 //! Folds a linear invocation domain onto wgpu's 2D workgroup grid.
 //!
-//! Past 65535 workgroups on one axis a dispatch has to be a rectangle, so kernels take `groups_x`
+//! Past 65535 workgroups on one axis a dispatch has to be a rectangle, so kernels receive `groups_x`
 //! and recover their flat index as `(wid.y * groups_x + wid.x) * WORKGROUP + lid.x`.
 
 /// Workgroup width shared by every linear kernel, taken from the WGSL that declares it so the two
 /// cannot drift.
 pub const WORKGROUP: u32 = crate::shader_bindings::henad::dispatch::WORKGROUP;
 
-/// Hardcoded rather than read from the adapter, so the fold cannot vary by machine.
+/// Largest number of workgroups on one axis.
+///
+/// The adapter's limit is never read. Otherwise the fold could vary by machine.
 const MAX_GROUPS_PER_DIM: u32 = 65_535;
 
-/// Workgroup rectangle covering `invocations`, as `(groups_x, groups_y)`.
+/// Returns the workgroup rectangle covering `invocations`, as `(groups_x, groups_y)`.
 ///
-/// Can overshoot. Kernels bounds-check the tail anyway.
+/// The rectangle can overshoot, and kernels bounds-check the tail.
 pub fn linear_dispatch(invocations: u32) -> (u32, u32) {
     let groups = invocations.div_ceil(WORKGROUP).max(1);
     let groups_x = groups.min(MAX_GROUPS_PER_DIM);
@@ -49,7 +51,7 @@ mod tests {
         assert_eq!(linear_dispatch(50_000), (196, 1));
     }
 
-    /// The 100M target is past one row of workgroups, which is why this exists.
+    /// The 100M target is past one row of workgroups.
     #[test]
     fn the_target_population_needs_a_second_dimension() {
         let (_, y) = linear_dispatch(100_000_000);

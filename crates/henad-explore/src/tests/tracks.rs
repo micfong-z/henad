@@ -52,33 +52,33 @@ enum FaultInjection {
 struct Misbehavior {
     /// Fault injected at the tick.
     fault: Option<(FaultInjection, u64)>,
-    /// Polls each readback reports as pending after it landed.
+    /// Number of polls that report each readback as pending after it has completed.
     readback_delay: u32,
-    /// Whether every action is refused.
+    /// Whether every action is rejected.
     refuses_actions: bool,
 }
 
-/// Counts over every state an entry from [`instrument`] built.
+/// Counts over every state that an entry from [`instrument`] built.
 #[derive(Debug, Default)]
 struct StateCounts {
-    /// States alive now.
+    /// Number of states alive now.
     live: AtomicUsize,
-    /// Most states alive at once.
+    /// Maximum number of states alive at once.
     most_live: AtomicUsize,
-    /// Highest tick any state recorded steps to.
+    /// Highest tick that any state recorded steps to.
     highest_tick: AtomicU64,
-    /// Actions the states refused.
+    /// Number of actions that the states rejected.
     refused_actions: AtomicUsize,
-    /// Tick each state had recorded steps to when it was dropped.
+    /// Tick that each state had recorded steps to when it was dropped.
     final_ticks: Mutex<Vec<u64>>,
 }
 
-/// GPU state that forwards to the state of a real model, and misbehaves as its [`Misbehavior`] asks.
+/// GPU state that forwards to the state of a real model, and misbehaves as its [`Misbehavior`] specifies.
 struct HarnessState {
     state: Box<dyn GpuSimState>,
     misbehavior: Misbehavior,
     device: wgpu::Device,
-    /// Polls the readback in flight still reports as pending.
+    /// Number of polls that still report the readback in flight as pending.
     polls_left: u32,
     /// Tick of the sample whose readback is in flight.
     readback_tick: u64,
@@ -188,7 +188,7 @@ impl GpuSimState for HarnessState {
     }
 }
 
-/// Raises a validation error on `device` by asking it for a buffer larger than it allows.
+/// Raises a validation error on `device` by requesting a buffer larger than it allows.
 fn raise_validation_error(device: &wgpu::Device) {
     drop(device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("henad_test_oversized"),
@@ -198,8 +198,8 @@ fn raise_validation_error(device: &wgpu::Device) {
     }));
 }
 
-/// Returns `model` with every state it builds held in a [`HarnessState`], set up as `misbehavior` asks for the
-/// state's params and counted in `counts`.
+/// Returns `model` with every state it builds held in a [`HarnessState`], set up with the [`Misbehavior`] that
+/// `misbehavior` returns for the state's params, and counted in `counts`.
 fn instrument(
     model: ModelEntry,
     ctx: &GpuContext,
@@ -358,8 +358,8 @@ fn interleaved_gpu_runs_match_sequential_ones() {
     }
 }
 
-/// Returns the parts of `tables` the engine fixes, whatever values the model computes: every field of `runs.csv` up
-/// to the population, and the run and tick of every row of `series.csv`.
+/// Returns the parts of `tables` that the engine fixes, whatever values the model computes: every field of `runs.csv`
+/// up to the population, and the run and tick of every row of `series.csv`.
 fn engine_owned(tables: &OutputTables) -> (Vec<Vec<String>>, Vec<(String, String)>) {
     let population = tables.runs[0]
         .iter()
@@ -417,7 +417,7 @@ fn interleaved_gpu_boids_runs_commit_in_plan_order() {
     assert_eq!(engine_owned(&one), engine_owned(&four));
 }
 
-/// Returns the rows a blocking run of `run` samples, stepping to each sampled tick and waiting on its stats.
+/// Returns the rows that a blocking run of `run` samples, stepping to each sampled tick and waiting on its stats.
 fn blocking_rows(
     model: &ModelEntry,
     ctx: &GpuContext,
@@ -617,7 +617,7 @@ fn an_out_of_memory_build_waits_for_a_track_to_finish() {
     let (plan, measure) = planned(&model, Some(&ctx), &spec);
     let sequential = outcomes(&executor(&model, &ctx, &measure, ONE_TRACK), &plan);
 
-    // Each build attempt records whether it was refused and how many states had been dropped before it.
+    // Each build attempt records whether it was rejected and how many states had been dropped before it.
     let attempts = Arc::new(Mutex::new(Vec::<(bool, usize)>::new()));
     let (build_counts, build_attempts) = (Arc::clone(&counts), Arc::clone(&attempts));
     let refusing_entry = model.clone().wrap_factory(|create| {

@@ -1,3 +1,6 @@
+//! The engine that runs an [`AgentModel`] as a [`SimState`], and the parameters it prepends to the model's own
+//! parameters.
+
 use henad_core::action::action_seed;
 use henad_core::authoring::model::agent_model::{
     AgentLanes as _, AgentModel, ChunkTally as _, NeighborIndex as _, StepCtx,
@@ -8,7 +11,7 @@ use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamStore, ParamValue};
 use henad_core::view::{GridView, PointView, StatEntry, stat_entries};
 
-/// Default RNG seed.
+/// State an agent model's random number generator (RNG) starts from when a run has no seed.
 pub const AGENT_INIT_SEED: u64 = 0xA175_F01A_6ED5_0001;
 
 /// Returns the state an agent model's RNG starts from: `seed` mixed, or [`AGENT_INIT_SEED`] when it is `None`.
@@ -30,7 +33,7 @@ pub struct AgentModelState<A: AgentModel> {
     extent: Extent,
     tally: A::Tally,
     seed: u64,
-    /// The action stream, apart from the one the ticks draw from.
+    /// RNG stream for actions, separate from the stream the ticks draw from.
     action_seed: u64,
     tick: u64,
 }
@@ -47,11 +50,12 @@ impl<A: AgentModel> std::fmt::Debug for AgentModelState<A> {
 }
 
 impl<A: AgentModel> AgentModelState<A> {
+    /// Builds a state from the full parameter list, with its RNG starting from [`AGENT_INIT_SEED`].
     pub fn from_params(params: &[ParamValue]) -> Self {
         Self::from_params_seeded(params, None)
     }
 
-    /// Build a state whose RNG starts from `seed`, or [`AGENT_INIT_SEED`] when it is `None`.
+    /// Builds a state whose RNG starts from `seed`, or [`AGENT_INIT_SEED`] when it is `None`.
     pub fn from_params_seeded(params: &[ParamValue], seed: Option<u64>) -> Self {
         let n = extract_u32(params, NUM_AGENTS, 10_000) as usize;
         let extent = Extent {
@@ -87,16 +91,16 @@ impl<A: AgentModel> AgentModelState<A> {
         }
     }
 
-    /// Build a state whose agents come from `seed_lanes`, for reproducing a particular run.
+    /// Builds a state whose agents come from `seed_lanes`, for reproducing a particular run.
     pub fn from_agents(params: &[ParamValue], seed_lanes: impl FnOnce(&mut A::Lanes, Extent)) -> Self {
         Self::from_agents_and_field(params, None, seed_lanes, |_field, _extent| {})
     }
 
-    /// As [`Self::from_agents`], with the field layer seeded too and the RNG stream chosen.
+    /// Builds a state as [`Self::from_agents`] does, with the field layer seeded too and the RNG stream chosen.
     ///
     /// A model whose agents read a field needs both halves fixed before its kernel means anything.
-    /// `seed_field` takes the concrete field type, so it reaches whatever that layer offers. The
-    /// seed is what lets a test show a scenario reaches the same answer from any stream.
+    /// `seed_field` receives the concrete field type, so it reaches whatever that layer offers. With
+    /// `seed` a test can show a scenario reaches the same answer from any stream.
     pub fn from_agents_and_field(
         params: &[ParamValue],
         seed: Option<u64>,
@@ -114,7 +118,7 @@ impl<A: AgentModel> AgentModelState<A> {
         let mut seed = agent_init_rng(seed);
         let (own, field_params) = split_params::<A>(params);
 
-        // Init is still needed to ensure that seed is advanced to the right value for the first step.
+        // Init still runs, to advance the seed to the value the first step starts from.
         A::init(&mut lanes, extent, own, &mut seed);
 
         seed_lanes(&mut lanes, extent);
@@ -142,47 +146,51 @@ impl<A: AgentModel> AgentModelState<A> {
         }
     }
 
+    /// Agent lanes.
     pub fn lanes(&self) -> &A::Lanes {
         &self.lanes
     }
 
+    /// Field layer under the agents.
     pub fn field(&self) -> &A::Field {
         &self.field
     }
 
+    /// Tally merged over every tick so far.
     pub fn tally(&self) -> &A::Tally {
         &self.tally
     }
 }
 
-// The full descriptor list, with population and world extent prepended.
-//
-// The extent is the engine's, not either layer's, so an agent layer and a field layer cannot
-// disagree about how big the world is.
-// Indices of the params the engine prepends before a model's own. A GPU port reads them too,
+// Indices of the params the engine prepends before a model's own params. A GPU port reads them too,
 // since it composes the same list.
+/// Index of the population.
 pub const NUM_AGENTS: usize = 0;
+/// Index of the world's width.
 pub const WORLD_WIDTH: usize = 1;
+/// Index of the world's height.
 pub const WORLD_HEIGHT: usize = 2;
 
-/// How many the engine prepends, and so where a model's own params start.
+/// Number of params the engine prepends, and the index of a model's first own param.
 pub const AGENT_PARAM_BASE: usize = 3;
 
-/// Splits a composed list into `(the model's own, its field layer's)`.
+/// Splits a composed parameter list into the model's own parameters and its field layer's parameters.
 ///
-/// Computed from the descriptor lists rather than hard-coded, so a model or a field layer gaining a
-/// parameter cannot shift the other's indices.
+/// The split comes from the descriptor lists. Adding a parameter to the model or to the field layer cannot shift the
+/// indices of the other list.
 pub fn split_params<A: AgentModel>(params: &[ParamValue]) -> (&[ParamValue], &[ParamValue]) {
     split_at_own(params, A::param_descriptors().len())
 }
 
-/// Splits a composed list as [`split_params`] does, given the number of the model's own params.
+/// Splits a composed list as [`split_params`] does, given the model's own param count.
 fn split_at_own(params: &[ParamValue], own: usize) -> (&[ParamValue], &[ParamValue]) {
     let start = AGENT_PARAM_BASE.min(params.len());
     let mid = (start + own).min(params.len());
     (&params[start..mid], &params[mid..])
 }
 
+/// Returns the full descriptor list: `num_agents`, `world_width` and `world_height`, then the model's own params,
+/// then its field layer's params.
 pub fn agent_model_param_descriptors<A: AgentModel>() -> Vec<ParamDescriptor> {
     let extent = A::DEFAULT_EXTENT;
     let mut descs = vec![
@@ -267,7 +275,7 @@ impl<A: AgentModel> SimState for AgentModelState<A> {
         if index >= A::ACTIONS.len() {
             return false;
         }
-        // Destructured, so the params borrow and the lane borrows are of different fields.
+        // The state is destructured, so the params borrow and the lane borrows cover different fields.
         let Self {
             lanes,
             field,

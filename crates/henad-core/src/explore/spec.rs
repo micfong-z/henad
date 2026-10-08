@@ -19,16 +19,19 @@ pub const ACTION_COLUMN_PREFIX: &str = "action.";
 pub struct SweepSpec {
     /// Id of the model to run.
     pub model: String,
-    /// Values every config shares, as `(id, value)` pairs in the form `--set` takes.
+    /// Values every config shares, as `(id, value)` pairs in the form that `--set` accepts.
     pub fixed: Vec<(String, String)>,
+    /// Length and end of each run, and the number of runs per config.
     pub run: RunSettings,
+    /// Ticks each run samples, and the values it keeps from them.
     pub measure: MeasureSettings,
+    /// Seeds of the runs.
     pub seeds: SeedSettings,
-    /// Actions every run fires, in the order two at one tick fire.
+    /// Actions every run fires. Actions due at the same tick fire in list order.
     pub actions: Vec<ActionSpec>,
     /// Blocks whose configs the sweep runs, in order. An empty list runs the fixed values alone.
     pub blocks: Vec<BlockSpec>,
-    /// Search that picks the configs to run in place of blocks, `None` for a sweep.
+    /// Search that picks the configs to run instead of blocks, `None` for a sweep.
     ///
     /// Each candidate of a search runs [`RunSettings::replicates`] times, over the fixed values and actions above.
     pub search: Option<SearchSpec>,
@@ -55,7 +58,7 @@ impl SweepSpec {
 pub struct ActionSpec {
     /// Id of the action the model declares.
     pub id: String,
-    /// Name factors and output columns give the action, unique within a spec.
+    /// Name that factors and output columns use for the action, unique within a spec.
     pub name: String,
     /// Tick the action fires at, where no block varies it.
     ///
@@ -64,7 +67,7 @@ pub struct ActionSpec {
 }
 
 impl ActionSpec {
-    /// Returns action `id` at `tick`, named by its id.
+    /// Returns action `id` at `tick`, with `id` as its name.
     pub fn new(id: impl Into<String>, tick: u64) -> Self {
         let id = id.into();
         Self {
@@ -83,10 +86,11 @@ impl ActionSpec {
 /// Factors combined under one design, as written.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BlockSpec {
+    /// Design that combines the factors into configs.
     pub design: DesignKind,
-    /// Factors of the block. A table design takes its factors from its table, and has none here.
+    /// Factors of the block. A table design gets its factors from its table, and this list stays empty.
     pub factors: Vec<FactorSpec>,
-    /// Seed of a sampled design's draws, [`design_seed`] of the root and the block when `None`.
+    /// Seed of a sampled design's draws, or `None` to derive it with [`design_seed`] from the root seed and the block.
     ///
     /// [`design_seed`]: crate::explore::seed::design_seed
     pub design_seed: Option<u64>,
@@ -95,11 +99,11 @@ pub struct BlockSpec {
 /// Length and end of each run, and the number of runs per config.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunSettings {
-    /// Ticks stepped after the warm-up.
+    /// Number of ticks stepped after the warm-up.
     pub steps: u64,
-    /// Ticks stepped before the first sample.
+    /// Number of ticks stepped before the first sample.
     pub warmup: u64,
-    /// Runs of each config, each with its own seed.
+    /// Number of runs per config, each with its own seed.
     pub replicates: u64,
     /// Condition that ends a run at the first sample where it holds.
     pub stop: Option<StopSpec>,
@@ -153,6 +157,8 @@ impl Default for MeasureSettings {
 /// Root seed, and the scheme that derives each run's seed from it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SeedSettings {
+    /// Seed each run's seed is derived from.
     pub root: u64,
+    /// Scheme that derives each run's seed from [`Self::root`].
     pub scheme: SeedScheme,
 }

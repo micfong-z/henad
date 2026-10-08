@@ -1,10 +1,8 @@
 // Counts alive cells entirely on the GPU, so `SimState::stats()` never has to read the grid back
-// to the CPU. Dispatched at the display cadence (~16ms), not every step.
+// to the CPU. The pass runs only when the stats are sampled.
 //
-// Two-level reduction: every invocation adds its cell into a workgroup-local atomic, then one
-// invocation per workgroup does a single atomicAdd into the global counters. That is 1 global atomic
-// per 256 cells instead of 1 per cell, which is the difference between a negligible pass and a
-// contended one at the grid sizes this engine targets.
+// The reduction has two levels. Every invocation adds its cell into a workgroup-local atomic, then
+// one invocation per workgroup adds that total into the global counter, once per 256 cells.
 
 #import henad::dims::Dims
 
@@ -25,15 +23,14 @@ fn main(
     }
     workgroupBarrier();
 
-    // Guarded with an `if` rather than an early `return`: the barriers below must be reached by
-    // every invocation in the workgroup, and a partial grid tile would otherwise diverge.
+    // The bounds check wraps the work in an `if`. Every invocation in the workgroup has to reach
+    // both barriers, and an early `return` in a partial grid tile would skip them.
     let width = dims.grid.x;
     let height = dims.grid.y;
     if (global_id.x < width && global_id.y < height) {
-        // One invocation per cell, reading the containing word and extracting this cell's bit.
-        // Deliberately not a per-word countOneBits, which would need this pass to dispatch over
-        // words, and the padding bits in a row's last word would then have to be masked off.
-        // This runs at the display cadence, so the simpler form is worth more than the speed.
+        // Each invocation reads the word holding its cell and extracts the cell's bit. A per-word
+        // countOneBits would have to dispatch over words and mask off the padding bits of each
+        // row's last word, and this pass runs only when the stats are sampled.
         let words_per_row = (width + 31u) / 32u;
         let word = state[global_id.y * words_per_row + (global_id.x / 32u)];
         if (((word >> (global_id.x % 32u)) & 1u) == 1u) {

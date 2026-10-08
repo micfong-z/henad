@@ -14,10 +14,10 @@ Nothing is published without a human running the command or pressing the button.
 
 Eight crates publish: henad-core, henad-build, henad-compute, henad-models, henad-explore, henad-cli, henad-app and henad.
 All eight share the version in `[workspace.package]`, and every release moves them together.
-Each requires its siblings at that version with a caret, as in `henad-core = "0.3.0"`, and `scripts/check_packaging.sh` holds every requirement equal to the workspace version.
+Each requires its siblings at that version with a caret, as in `henad-core = "0.3.0"`, and `scripts/check_packaging.sh` checks that every requirement equals the workspace version.
 A crate then never resolves against a sibling older than itself.
 
-A downstream crate requires `henad` and `henad-build` as `"0.3"`, and takes a patch release through `cargo update -p henad`.
+A downstream crate requires `henad` and `henad-build` as `"0.3"`, and picks up a patch release with `cargo update -p henad`.
 The tutorial crate, `examples/tutorial`, sets `publish = false` and never publishes.
 
 ## The release checklist
@@ -51,20 +51,20 @@ Copy the checklist into an issue titled "Release 0.x.y" for each release, and ti
 ```
 
 The two packaging passes build every crate from its tarball, against the other crates' tarballs, before anything is uploaded.
-`cargo package` verifies default features alone, and the facade has none, so the second pass builds its gated items.
-Each pass takes a fresh `CARGO_TARGET_DIR`, and so do the publish dry run and every publish.
+`cargo package` verifies default features alone, and the facade has no default features, so the second pass builds its gated items.
+Each pass uses a fresh `CARGO_TARGET_DIR`, and so do the publish dry run and every publish.
 Cargo extracts its overlay of unpublished crates under `~/.cargo/registry/src/`, at a path set by the target directory, and keeps an earlier run's extraction of the same version.
 A verify in the usual target directory can then build the new crates against an old henad-core.
 
 The `downstream` job copies the template outside the checkout, points it at the packaged crates, and runs what a user of the template runs: the strict lint, the tests with a GPU required, the web build and its checks, a rebuild after a model edit, and a sweep with a resume.
 It runs on demand only, and the checklist starts it.
 The same dispatch runs the `msrv`, `features` and `docs` jobs, and a push to `master` skips them.
-To run its steps by hand, run each step's script from `.github/workflows/ci.yml` with `RUNNER_TEMP` set to a directory outside any git work tree and `CARGO_TERM_COLOR=never`, as the job sets.
+To run its steps by hand, run each step's script from `.github/workflows/ci.yml` with `RUNNER_TEMP` set to a directory outside any git work tree and `CARGO_TERM_COLOR=never`, as the job does.
 Two of its steps grep cargo's log, and a colour code splits the words they match.
 
 `cargo semver-checks` cannot see WGSL.
-The shared modules under `crates/henad-core/src/` are an interface of their own, and the diff review applies the rule of [stability](#stability) to them.
-Nor does it see `#[doc(hidden)]` items, and the hidden items one Henad crate calls in another are a contract of the same kind.
+The shared modules under `crates/henad-core/src/` form a separate interface, and the diff review applies the [stability](#stability) rules to them.
+`cargo semver-checks` does not see `#[doc(hidden)]` items either, and the hidden items that one Henad crate calls in another form a contract of the same kind.
 
 ## Cutting a release
 
@@ -73,11 +73,11 @@ Nor does it see `#[doc(hidden)]` items, and the hidden items one Henad crate cal
    Set the tag in the `fetch` region of `templates/model-project/README.md` as well.
    A breaking release also sets its major and minor in the `// Cargo.toml:` line that opens both `crates/henad/README.md` and `crates/henad/examples/complete.rs`, in the `!!! info "Henad 0.x"` admonitions, and in the dependency snippets typed into `docs/guide/library.md`, `docs/authoring/testing.md` and `docs/reference/cli.md`.
    `git grep -nE 'Henad 0\.[0-9]+|version = "0\.[0-9]+"' -- docs crates/henad ':!docs/developing/agent-record'` lists the lines to check.
-   `scripts/check_packaging.sh` holds the workspace requirements to the version, and the template's three and the README's line to its major and minor.
+   `scripts/check_packaging.sh` checks that the workspace requirements match the version, and that the template's three requirements and the README's dependency line match its major and minor.
    Set `version` in the root `pyproject.toml`, the documentation site's project, and run `uv lock`.
 
 2. **Regenerate the licence page.**
-   The page lists every crate with its version, and the `lint` job fails on a stale one.
+   The page lists every crate with its version, and the `lint` job fails on a stale page.
 
     ```bash
     cargo about generate about.hbs -o docs/license.html
@@ -106,7 +106,7 @@ Nor does it see `#[doc(hidden)]` items, and the hidden items one Henad crate cal
 6. **Commit the bump and push it.**
 
 7. **Run the [checklist](#the-release-checklist) on that commit.**
-   CI does not run on tags, so a draft release is no evidence the tree builds.
+   CI does not run on tags, so a draft release does not show that the tree builds.
 
 8. **Tag and push the tag.**
 
@@ -125,7 +125,7 @@ Nor does it see `#[doc(hidden)]` items, and the hidden items one Henad crate cal
 ## Publishing to crates.io
 
 The crates publish in dependency order.
-crates.io allows five new crates in a burst and then one every ten minutes, and the first release creates eight:
+crates.io allows five new crates in a burst and then one every ten minutes, and the first release creates eight crates:
 
 ```bash
 CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --workspace --dry-run --locked
@@ -140,10 +140,10 @@ CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --locked -p henad
 
 Each command verifies in a fresh target directory, as the packaging passes do.
 henad-models comes before the two hosts, whose optional dependency on it has to resolve.
-A rate limit hit part way leaves the earlier crates published, and the run resumes with `-p` for the rest.
+A rate limit hit part way leaves the earlier crates published, and the run resumes with `-p` for the remaining crates.
 `cargo publish --workspace` skips the tutorial crate.
 
-A later release adds versions to existing crates, and crates.io allows thirty of those in a burst:
+A later release adds versions to existing crates, and crates.io allows thirty new versions in a burst:
 
 ```bash
 CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --workspace --locked
@@ -172,14 +172,14 @@ Three ways it stops rather than announcing something wrong:
 - **The tag and the manifest disagree.**
   `v0.3.0` against a workspace still at `0.2.0` fails before anything is created.
 - **The changelog has no section for the version.**
-  The error names the versions the file does have.
+  The error lists the versions that the file does have.
 - **The section carries no date.**
   `## [0.3.0]` with no date is a section still being written, not a release.
-  `## [Unreleased]` fails earlier, as no section for the version.
+  `## [Unreleased]` fails at the previous check, since the file then has no section for the version.
 
 A tag with a pre-release suffix, `v0.3.0-rc.1`, is marked as a pre-release on GitHub.
 A candidate tag needs the workspace, every requirement and a dated section at the candidate's version.
-A candidate tag is no rehearsal of a release.
+A candidate tag is not a rehearsal of a release.
 
 ## What it does not do
 
@@ -195,48 +195,48 @@ Without the `--config` it would build at Cargo's default of 3.
 
 The site and the web app deploy from `master`, never from a tag.
 The docs workflow publishes the site on every push to `master`.
-The web app is a Vercel project whose production deploys from `master`, with the install and build commands in `vercel.json`: the dated nightly and Trunk at the releases `templates/model-project/scripts/` names, then `./scripts/build_web.sh build --release`.
-The guide includes its code from the template, the tutorial crate and the facade's example, and between releases it can show calls the published crates lack.
+The web app is a Vercel project whose production deploys from `master`, with the install and build commands in `vercel.json`: the dated nightly and Trunk at the releases pinned in `templates/model-project/scripts/`, then `./scripts/build_web.sh build --release`.
+The guide includes its code from the template, the tutorial crate and the facade's example, and between releases it can show calls that the published crates lack.
 Every page that includes template or tutorial code states the Henad version it describes.
 
 ## Stability
 
-A **breaking release** goes from 0.x to 0.(x+1), and only there may an item break.
+A **breaking release** goes from 0.x to 0.(x+1), and an item can break only in a breaking release.
 A **patch release** goes from 0.x.y to 0.x.(y+1) and stays compatible, as Cargo's rule for 0.x versions requires.
 
 - Every breaking release may break the API.
   Keep a Changelog 1.1, the format CHANGELOG.md follows, has no "Breaking" heading.
   Each break goes under Changed or Removed with a leading "Breaking:" and a migration note.
-- A replacement ships at least one breaking release before the item it replaces goes, with `#[deprecated(since, note)]` in between.
-- Items under `#[doc(hidden)]` sit outside the documented surface, and serve Henad's own crates alone.
+- A replacement ships at least one breaking release before the item that it replaces is removed, with `#[deprecated(since, note)]` in between.
+- Items under `#[doc(hidden)]` sit outside the documented surface, and serve only Henad's own crates.
   Among them are `__shader_support`, `__macro_support`, the `build_info!` constructor, `__COMPUTE_BUILD`, the hidden version consts, the `__indices!` and `__buffer_flags!` macros, henad-build's `stamp_engine_commit` and `stamp_source_hash`, `ModelEntry::wrap_factory` with its `Factory` trait, and `AppOptions::__official`.
-  henad-compute calls the graph maintenance of henad-core's `Network` (`spawn`, `retire`, `set_directed`, `should_repack`, `repack` and `rebuild`) and the two hidden constructors of `ModelSource`, `__from_type_path` and `__with_build`.
-  Under caret requirements Henad's crates can meet at different patch releases.
-  Within one 0.x no crate therefore removes or changes a hidden item another Henad crate of that 0.x uses, a `HENAD_BUILD_*` variable name, or the shape of henad-build's generated code.
+  henad-compute calls the graph maintenance methods of henad-core's `Network` (`spawn`, `retire`, `set_directed`, `should_repack`, `repack` and `rebuild`) and the two hidden constructors of `ModelSource`, `__from_type_path` and `__with_build`.
+  Under caret requirements, Henad's crates can resolve to different patch releases in one build.
+  Within one 0.x no crate therefore removes or changes a hidden item that another Henad crate of that 0.x uses, a `HENAD_BUILD_*` variable name, or the shape of henad-build's generated code.
   `wrap_factory` and `Factory` stay fully exempt, since only Henad's tests call them.
-- The shared WGSL has an interface of its own.
-  A change to a shared module's import path, item names, function signatures, struct layouts or `WORKGROUP`, or to a hand-written Rust mirror of one, ships only in a breaking release.
+- The shared WGSL has its own interface.
+  A change to a shared module's import path, item names, function signatures, struct layouts or `WORKGROUP`, or to a hand-written Rust mirror of a shared module, ships only in a breaking release.
   A fix to a function body can ship in a patch release, and changes `SHARED_WGSL_FNV1A64` with it.
-- The major versions of the re-exported `wgpu` and `bytemuck` are part of Henad's API, and a new major of either is a breaking release.
+- The major versions of the re-exported `wgpu` and `bytemuck` are part of Henad's API, and a new major version of either crate is a breaking release.
   So are the majors of the crates whose types appear in a public signature: `toml` and `serde_json` in `SpecFileError`, `LoadedSpec::to_toml` and the `Value` fields of `Manifest`, `rayon` in `ExecutionError::Pool`, `log` in `init_web_logger`, and, for henad-app on wasm32, `wasm-bindgen-rayon`.
 - Types whose fields authors fill by struct literal gain fields in a breaking release only: `BufferSpec`, `PassSpec`, `BindingDecl`, `SpringParams`, `Extent`, `LaneSpec`, `GpuGridAction`, `GpuAgentAction`, `ReduceSpec` and `DisplaySpec`.
-  The enums authors pick or match on, `Domain`, `Boundary`, `NeighborhoodKind` and `PassId`, gain variants in a breaking release only.
+  The enums that authors pick or match on, `Domain`, `Boundary`, `NeighborhoodKind` and `PassId`, gain variants in a breaking release only.
 - `ParamDescriptor`, `StatDescriptor`, `StatEntry` and `ActionDescriptor` keep public `&'static` fields in 0.3.
   A later breaking release makes them private and owned, with `ModelMetadata` and the details of `Structure`.
   Model code builds the descriptors through helpers and `const fn new`, and no model file changes with them.
   The spec types (`SweepSpec`, `BlockSpec`, `RunSettings`, `MeasureSettings`, `SeedSettings`, `ActionSpec`, `FactorSpec` and the rest) stay exhaustive in 0.3, since hosts and tests build them by literal.
-- henad-models' items are the example models' own, and may change in any breaking release.
+- henad-models' items belong to the example models, and may change in any breaking release.
 - `ParamValue` converts from `f32`, `u32` and `bool` alone.
   Another `From` impl would break the unsuffixed literals callers pass.
 - A struct with public fields gains a field, and an enum gains a variant, in a breaking release only.
-  That covers the enums the engine produces and hosts match on, such as `ProgressEvent`, `SweepEvent`, `SweepWarning`, `RunStatus`, `StopReason` and `ModelState`, and the output structs such as `SweepRecord`, `SweepReport`, `ResultCounts` and `Manifest`.
+  That covers the enums that the engine produces and hosts match on, such as `ProgressEvent`, `SweepEvent`, `SweepWarning`, `RunStatus`, `StopReason` and `ModelState`, and the output structs such as `SweepRecord`, `SweepReport`, `ResultCounts` and `Manifest`.
 - `#[non_exhaustive]` marks the types built through `new`: `SweepOptions`, `SweepRunOptions`, `BenchmarkSettings`, `TestDeviceRequest` and `SimulationViews`.
   It also marks the types that are lists by nature: the error enums `SetupError`, `ExportError`, `ModelSetError`, `ModelLookupError` and `ShaderBuildError`, `AppOpening`, `OpenAt`, `ModelCheck` and `SkipReason`.
   `ExploreError` and `SweepOutput` carry it as well, since their variants differ between targets.
   `FaultKind` carries it too, and gains a variant when the engine learns to report a new kind of fault.
   So do the benchmark's `BenchmarkEvent`, `BenchmarkReport` and `RepetitionReport`.
-- The output of `henad-cli --list`, `--params` and `--params --json`, the benchmark's `--json` lines, the spec TOML, `manifest.json` and the CSV tables are a contract of their own, changed only with a note in the CHANGELOG.
+- The output of `henad-cli --list`, `--params` and `--params --json`, the benchmark's `--json` lines, the spec TOML, `manifest.json` and the CSV tables form a separate contract, changed only with a note in the CHANGELOG.
   A new optional field is additive.
 
 Versions move in lockstep with caret requirements.
-One version per release keeps every combination a user can resolve one that Henad has built and tested together, and a model library is compatible with one Henad 0.x at a time.
+With one version per release, every combination that a user can resolve is one that Henad has built and tested together, and a model library is compatible with one Henad 0.x at a time.

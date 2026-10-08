@@ -5,23 +5,17 @@
 //! check never panics on a model's behalf. A model's panic, a device error and a broken contract each come back as a
 //! [`CheckFailure`].
 //!
-//! The checks fall into four groups. The declarations are read without a build. The checks built at the defaults
-//! build the model once each and compare what the state does with what the entry declares. The determinism checks
-//! run the model twice and compare the runs. The GPU checks step a GPU model on the device that
-//! [`CheckSettings::gpu`] gives. Without one they are skipped, apart from the failures [`check_model`] lists.
-//!
 //! Each check that builds the model sets `grid_width`, `grid_height`, `num_agents`, `world_width` and
-//! `world_height` to small values within their bounds, and never above their defaults. A model whose defaults hold
-//! ten million agents then needs no settings. [`ModelCheck::ThreadCount`] sets the size the work splits at, and the
-//! GPU checks build at the declared defaults, the size a host builds first. [`CheckSettings::set_text`] overrides any
-//! of these.
+//! `world_height` small, within their bounds and never above their defaults. [`ModelCheck::ThreadCount`] sets the
+//! size the work splits at, and the GPU checks and a GPU model's [`ModelCheck::Actions`] build at the declared
+//! defaults. [`CheckSettings::set_text`] overrides any of these.
 //!
-//! The GPU checks and `headless_test_device` are native only. A report built on wasm32 lists the GPU checks as
-//! skipped, unless an override the model refuses fails them.
+//! A GPU model is built on the device passed to [`CheckSettings::gpu`]. Without a device, or on wasm32, every check
+//! that builds it is skipped, apart from the failures [`check_model`] lists. The GPU checks and
+//! `headless_test_device` are native only.
 //!
-//! Note that [`assert_set_conforms`] installs the panic hook before its first check. A caller of [`check_model`] or
-//! [`check_model_set`] calls [`henad_compute::fault::install_panic_hook`] first. Without it the failure of a kernel
-//! panic names no `file:line`.
+//! Note that a caller of [`check_model`] or [`check_model_set`] installs the panic hook first, through
+//! [`henad_compute::fault::install_panic_hook`]. Without it the failure of a kernel panic has no `file:line`.
 
 mod built;
 mod declared;
@@ -56,12 +50,12 @@ pub enum ModelCheck {
     // Declarations, with no build.
     /// The id meets the grammar of model ids.
     ModelId,
-    /// Parameter ids are unique, and none repeats an id the engine prepends. Each is named on the command line and in
+    /// Parameter ids are unique, and none repeats an id the engine prepends. Each is used on the command line and in
     /// a design table, so it is not empty, holds no whitespace and no `=`, and does not start with `action.`.
     ParamIds,
     /// Stat labels are unique.
     StatLabels,
-    /// Action ids are unique. Each is named on the command line and in a design table, so it is not empty, and holds
+    /// Action ids are unique. Each is used on the command line and in a design table, so it is not empty, and holds
     /// no whitespace and no `=`.
     ActionIds,
     /// A declared palette has colours.
@@ -79,7 +73,7 @@ pub enum ModelCheck {
     Views,
     /// Only a CPU model reports `parallel_jobs`, and never zero jobs.
     ParallelJobs,
-    /// Every declared action is accepted, and the index after them refused.
+    /// Every declared action is accepted, and the index after the last action is rejected.
     Actions,
     /// Every declared stat gets a value. A model that returns more values than it declares passes, since the engine
     /// drops the extra values before the check sees them.
@@ -96,10 +90,10 @@ pub enum ModelCheck {
     // GPU, given a device.
     /// The model builds on the device at its declared defaults, and its declared demand fits the device.
     BaselineBuild,
-    /// One submission of `MAX_STEPS_PER_SUBMISSION` steps executes every step. A model that replays exactly reads
-    /// back what single steps do, and any other model that declares stats reads back some stat that is not zero.
+    /// One submission of `MAX_STEPS_PER_SUBMISSION` steps executes every step. A model that replays exactly reads back
+    /// the same stats as single steps, and any other model that declares stats reads back some stat that is not zero.
     FullSubmission,
-    /// A sampled slice reads back what a snapshot does.
+    /// A sampled slice reads back the same stats as a snapshot.
     SampledSlice,
 }
 
@@ -168,15 +162,15 @@ impl fmt::Display for ModelCheck {
 
 /// Checks every contract of `entry` that `settings` allows, and reports every failure.
 ///
-/// An exemption of a check that does not apply to the model fails that check. An override the model refuses fails
-/// every check that builds the model, one skipped for want of a device included. With `HENAD_REQUIRE_GPU` set, a
-/// check that needs a device the settings do not give fails as well.
+/// An exemption of a check that does not apply to the model fails that check. An override that the model rejects fails
+/// every check that builds the model, including a check skipped for want of a device. With `HENAD_REQUIRE_GPU` set,
+/// a check that needs a device that the settings do not provide fails as well.
 #[must_use]
 pub fn check_model(entry: &ModelEntry, settings: &CheckSettings) -> ModelReport {
     check_model_requiring(entry, settings, device::gpu_required())
 }
 
-/// Checks `entry` as [`check_model`] does, with `gpu_required` in place of reading `HENAD_REQUIRE_GPU`.
+/// Checks `entry` as [`check_model`] does, with `gpu_required` instead of reading `HENAD_REQUIRE_GPU`.
 pub(crate) fn check_model_requiring(entry: &ModelEntry, settings: &CheckSettings, gpu_required: bool) -> ModelReport {
     let mut report = ModelReport::new(entry.id());
     let backend = entry.metadata().backend;
@@ -208,7 +202,8 @@ pub(crate) fn check_model_requiring(entry: &ModelEntry, settings: &CheckSettings
 
 /// Checks every model of `models`, in the set's order.
 ///
-/// The report also names every model id that an override or an exemption of `settings` names and the set lacks.
+/// The report also lists every model id that an override or an exemption in `settings` specifies and that is
+/// missing from the set.
 #[must_use]
 pub fn check_model_set(models: &ModelSet, settings: &CheckSettings) -> SetReport {
     let reports = models.iter().map(|entry| check_model(entry, settings)).collect();
@@ -227,7 +222,8 @@ pub fn check_model_set(models: &ModelSet, settings: &CheckSettings) -> SetReport
 ///
 /// # Panics
 ///
-/// Panics with every failure of every model, and every model id the settings name and the set lacks, listed together.
+/// Panics with every failure of every model, and every model id that the settings specify and that is missing from
+/// the set, listed together.
 pub fn assert_set_conforms(models: &ModelSet, settings: &CheckSettings) {
     install_panic_hook();
     let report = check_model_set(models, settings);
@@ -241,7 +237,7 @@ pub fn assert_set_conforms(models: &ModelSet, settings: &CheckSettings) {
 /// Seed of every build a check makes, and the first seed [`ModelCheck::SeedSensitivity`] compares.
 const SEED: u64 = 1;
 
-/// Phase named by a fault that a check raises.
+/// Phase recorded in a fault that a check raises.
 const CHECKING: &str = "checking the model";
 
 /// Outcome of a check that ran to its end.
@@ -287,9 +283,9 @@ fn skip_reason(
 /// Returns the failure of `check`, skipped for `reason`, or `None` when the skip stands.
 ///
 /// An exemption of a check that does not apply fails that check. A check that builds the model and cannot run here
-/// fails on `refused_override`, the message of an override the model refuses, as it fails where it runs. Otherwise a
-/// stale override of a GPU model passes on a machine without a device. A check skipped for want of a device fails
-/// when `gpu_required` is set.
+/// fails on `refused_override`, the message of an override that the model rejects, as it fails where it runs.
+/// Otherwise a stale override of a GPU model passes on a machine without a device. A check skipped for want of a
+/// device fails when `gpu_required` is set.
 fn skipped_failure(
     check: ModelCheck,
     reason: &SkipReason,
@@ -359,8 +355,8 @@ fn device(gpu: Option<&GpuContext>) -> Result<&GpuContext, String> {
 /// Runs `body` inside the fault scopes, on `gpu` for a GPU model.
 ///
 /// A panic or a device error out of `body` comes back as the check's failure. On a GPU the check then waits for the
-/// device, and a fault its work left in the sink is the check's failure too. No fault outlives the check that raised
-/// it.
+/// device, and a fault that its work left in the sink is the check's failure too. No fault outlives the check that
+/// raised it.
 fn guarded<T>(gpu: Option<&GpuContext>, body: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     let Some(ctx) = gpu else {
         return catching(CHECKING, body).map_err(|fault| fault_text(&fault))?;
@@ -383,7 +379,7 @@ fn fault_text(fault: &Fault) -> String {
 
 /// Returns `error` and each of its causes, joined by colons.
 ///
-/// The chain ends at a [`Fault`], whose own text already names its cause.
+/// The chain ends at a [`Fault`], whose own text already includes its cause.
 fn error_text(error: &(dyn Error + 'static)) -> String {
     let mut text = error.to_string();
     let mut current = error;

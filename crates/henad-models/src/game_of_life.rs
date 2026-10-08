@@ -1,3 +1,5 @@
+//! Conway's Game of Life as a [`GridModel`] on a torus.
+
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::grid_model::GridModel;
@@ -22,15 +24,15 @@ henad_core::actions! {
 }
 // --8<-- [end:actions]
 
-/// Cell colours, shared with the GPU Game of Life's stat colour.
+/// Cell colours, dead then alive, shared with [`GpuGameOfLife`](crate::gpu_game_of_life::GpuGameOfLife).
 ///
-/// `pub` so the GPU variant can reuse the same literal rather than duplicating it. Its display
-/// shader still bakes the same RGB values into WGSL constants of its own.
+/// Note that the GPU display shader holds its own copy of these colours as WGSL constants.
 pub const PALETTE: [[u8; 4]; 2] = [
     [0x15, 0x15, 0x15, 0xFF], // Dead - dark gray
     [0x00, 0xE6, 0x76, 0xFF], // Alive - green
 ];
 
+/// Conway's Game of Life as a [`GridModel`].
 #[derive(Debug)]
 pub struct GameOfLifeModel;
 
@@ -110,32 +112,32 @@ mod tests {
         let p = ();
         let mut rng = 1u64;
 
-        // Dead with 3 alive neighbors → alive
+        // A dead cell with three live neighbours comes alive.
         assert_eq!(
             GameOfLifeModel::step_cell(DEAD, &[1, 1, 1, 0, 0, 0, 0, 0], &p, &mut rng),
             ALIVE
         );
-        // Dead with 2 alive neighbors → dead
+        // A dead cell with two live neighbours stays dead.
         assert_eq!(
             GameOfLifeModel::step_cell(DEAD, &[1, 1, 0, 0, 0, 0, 0, 0], &p, &mut rng),
             DEAD
         );
-        // Alive with 2 neighbors → alive
+        // A live cell with two live neighbours survives.
         assert_eq!(
             GameOfLifeModel::step_cell(ALIVE, &[1, 1, 0, 0, 0, 0, 0, 0], &p, &mut rng),
             ALIVE
         );
-        // Alive with 3 neighbors → alive
+        // A live cell with three live neighbours survives.
         assert_eq!(
             GameOfLifeModel::step_cell(ALIVE, &[1, 1, 1, 0, 0, 0, 0, 0], &p, &mut rng),
             ALIVE
         );
-        // Alive with 1 neighbor → dead (underpopulation)
+        // A live cell with one live neighbour dies of underpopulation.
         assert_eq!(
             GameOfLifeModel::step_cell(ALIVE, &[1, 0, 0, 0, 0, 0, 0, 0], &p, &mut rng),
             DEAD
         );
-        // Alive with 4 neighbors → dead (overpopulation)
+        // A live cell with four live neighbours dies of overpopulation.
         assert_eq!(
             GameOfLifeModel::step_cell(ALIVE, &[1, 1, 1, 1, 0, 0, 0, 0], &p, &mut rng),
             DEAD

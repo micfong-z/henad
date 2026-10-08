@@ -1,7 +1,7 @@
 //! Multi-level float sum over an agent population, for stats an `atomic<u32>` cannot hold.
 //!
-//! The model supplies the leaf, this owns the levels above it and the readback. Fixed pairwise
-//! order throughout, so the sum is reproducible.
+//! The model supplies the leaf shader, and [`GpuLaneReduce`] owns the levels above it and the readback. Every level
+//! pairs in a fixed order, so the sum is reproducible.
 
 use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
 use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
@@ -14,11 +14,13 @@ struct Level {
     bind: wgpu::BindGroup,
 }
 
+/// Float sums of `lanes` lanes over a population, folded level by level from the partials a model's leaf shader
+/// writes.
 #[derive(Debug)]
 pub struct GpuLaneReduce {
     lanes: usize,
-    /// The leaf shader must dispatch exactly this, since the group index it writes is
-    /// `wid.y * groups_x + wid.x`.
+    /// Workgroup rectangle of the leaf shader over the agents. The leaf shader must dispatch exactly this, since the
+    /// group index it writes is `wid.y * groups_x + wid.x`.
     agent_groups: (u32, u32),
     /// The leaf shader's output: one group of `lanes` floats per agent workgroup.
     partials: wgpu::Buffer,
@@ -36,7 +38,7 @@ fn leaf_blocks(num_agents: u32) -> u32 {
     groups_x * groups_y
 }
 
-/// Groups left after each level, starting from the blocks the leaf dispatches. Always at least
+/// Returns the number of groups left after each level, starting from the blocks the leaf dispatches. Always at least
 /// one, so the result reaches the readback buffer even when the whole population fits one
 /// workgroup.
 fn level_sizes(leaf_blocks: u32) -> Vec<u32> {
@@ -52,6 +54,7 @@ fn level_sizes(leaf_blocks: u32) -> Vec<u32> {
 }
 
 impl GpuLaneReduce {
+    /// Builds the levels and the readback for `lanes` lanes over `num_agents` agents.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, lanes: usize, num_agents: u32) -> Self {
         let agent_groups = linear_dispatch(num_agents);
         let sizes = level_sizes(leaf_blocks(num_agents));
@@ -81,7 +84,7 @@ impl GpuLaneReduce {
             .map(|(i, &n)| {
                 // One workgroup folds WORKGROUP groups into one, so the domain is the group
                 // count. Dispatching `n` instead lets surplus workgroups clamp-write over the
-                // output, which reads as a plausible but short sum rather than a crash.
+                // output, and the result is a plausible but short sum with no error.
                 let groups = linear_dispatch(n);
                 let params = uniform_buffer(
                     device,
@@ -131,7 +134,8 @@ impl GpuLaneReduce {
         }
     }
 
-    /// Bind as `array<f32>` in the leaf shader, written as `partials[group * lanes + lane]`.
+    /// Returns the partials buffer, which the leaf shader binds as `array<f32>` and writes as
+    /// `partials[group * lanes + lane]`.
     pub fn partials_binding(&self) -> wgpu::BindingResource<'_> {
         self.partials.as_entire_binding()
     }
@@ -152,18 +156,21 @@ impl GpuLaneReduce {
             pass.set_bind_group(0, &level.bind, &[]);
             pass.dispatch_workgroups(level.groups.0, level.groups.1, 1);
         }
-        // No clear needed, the last level writes every entry unconditionally.
+        // The last level writes every entry unconditionally, and no clear is needed.
         self.readback.encode_copy(encoder);
     }
 
+    /// Starts the async map of the sums. Call it right after submitting the encoder [`Self::encode`] recorded into.
     pub fn begin_readback(&mut self) {
         self.readback.begin_map();
     }
 
+    /// Returns whether a readback started by [`Self::begin_readback`] has not completed yet.
     pub fn readback_pending(&self) -> bool {
         self.readback.is_pending()
     }
 
+    /// Completes an in-flight readback, waiting when `block` is set, and returns its state after the poll.
     pub fn poll_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
         if block {
             self.readback.poll_blocking(device)
@@ -172,13 +179,14 @@ impl GpuLaneReduce {
         }
     }
 
-    /// One per lane. All zero until the first readback completes.
+    /// Sum of each lane, all zero until the first readback completes.
     pub fn sums(&self) -> Vec<f32> {
         self.readback.values_f32().collect()
     }
 
+    /// Approximate device memory held by the leaf partials and the final sums, in bytes.
     pub fn heap_bytes(&self) -> usize {
-        // The leaf partials dominate, every level above divides by WORKGROUP.
+        // The leaf partials dominate. Every level above divides by WORKGROUP.
         self.levels
             .first()
             .map_or(0, |_| self.lanes * std::mem::size_of::<f32>())
@@ -195,7 +203,7 @@ mod tests {
         compute_pipeline, storage_buffer, storage_entry, uniform_buffer, uniform_entry,
     };
 
-    /// Stands in for a model's leaf shader.
+    /// Test leaf shader, standing in for the leaf shader of a model.
     const LEAF: &str = r"
 struct LeafParams { n: u32, lanes: u32, groups_x: u32, _pad: u32 }
 
@@ -245,7 +253,7 @@ fn main(
         _pad: u32,
     }
 
-    /// Leaf plus tree over two lanes.
+    /// Returns the sums of lanes `a` and `b`, computed by the leaf shader and the tree on the GPU.
     fn sum_lanes(ctx: &GpuContext, a: &[f32], b: &[f32]) -> Vec<f32> {
         let n = a.len() as u32;
         let mut reduce = GpuLaneReduce::new(&ctx.device, &ctx.queue, "test", 2, n);
@@ -351,8 +359,8 @@ fn main(
         assert_eq!(leaf_blocks(256 * 65_535 + 1), 2 * 65_535);
     }
 
-    /// The regression. Partials sized from the population held 65,536 groups where the folded dispatch writes
-    /// 131,070, and the blocks past the buffer were dropped from the sum.
+    /// Partials sized from the population would hold 65,536 groups where the folded dispatch writes 131,070, and
+    /// drop the blocks past the buffer from the sum.
     #[test]
     fn a_built_reduce_holds_a_partial_for_every_dispatched_block() {
         let Some(ctx) = headless_context("gpu_reduce_partials_test", wgpu::Features::empty()) else {
@@ -388,7 +396,7 @@ fn main(
         }
     }
 
-    /// A stride mistake in the group-major layout would otherwise give plausible numbers.
+    /// Each lane sums on its own. A stride mistake in the group-major layout would otherwise give plausible numbers.
     #[test]
     fn lanes_stay_separate() {
         let Some(ctx) = headless_context("gpu_reduce_lane_test", wgpu::Features::empty()) else {

@@ -1,4 +1,4 @@
-//! Runs a plan asks for, and the record of each finished run.
+//! Runs that a plan requests, and the record of each finished run.
 
 use std::fmt;
 use std::str::FromStr;
@@ -11,9 +11,10 @@ pub struct PlannedRun {
     /// Position of the run in the plan.
     ///
     /// In a sweep it is `config_id * replicates + rep`. In a search it is `config_id * replicates` plus the run's
-    /// index within its candidate, and a re-evaluation numbers `rep` on from the replicates of the candidate it
-    /// repeats.
+    /// index within its candidate. A re-evaluation continues the `rep` numbering after the existing replicates of
+    /// the candidate it repeats.
     pub run_id: u64,
+    /// Id of the config the run builds.
     pub config_id: u64,
     /// Replicate index within the config.
     pub rep: u64,
@@ -41,6 +42,7 @@ pub enum RunStatus {
 }
 
 impl RunStatus {
+    /// Returns the status's name in `runs.csv`, as in `timed_out`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "ok",
@@ -80,9 +82,10 @@ impl FromStr for RunStatus {
     }
 }
 
-/// Text that names no [`RunStatus`].
+/// Text that matches no [`RunStatus`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunStatusError {
+    /// Text as given.
     pub raw: String,
 }
 
@@ -108,6 +111,7 @@ pub enum StopReason {
 }
 
 impl StopReason {
+    /// Returns the reason's name in `runs.csv`, as in `condition`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Steps => "steps",
@@ -133,9 +137,10 @@ impl FromStr for StopReason {
     }
 }
 
-/// Text that names no [`StopReason`].
+/// Text that matches no [`StopReason`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StopReasonError {
+    /// Text as given.
     pub raw: String,
 }
 
@@ -150,14 +155,18 @@ impl std::error::Error for StopReasonError {}
 /// Record of one finished run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunOutcome {
+    /// Run the record belongs to.
     pub run: PlannedRun,
-    /// Hash naming the run's results, from [`crate::explore::fingerprint::run_key`].
+    /// Hash that identifies the run's results, from [`crate::explore::fingerprint::run_key`].
     pub run_key: u64,
+    /// State the run ended in.
     pub status: RunStatus,
+    /// Cause of the run's end.
     pub stop_reason: StopReason,
     /// Tick the run ended on.
     ///
-    /// A GPU run that faulted or timed out gives the tick of its latest landed sample, 0 before its first.
+    /// A GPU run that faulted or timed out reports the tick of its latest completed sample, or 0 before any sample
+    /// completes.
     pub ticks: u64,
     /// Population at the run's last sample.
     pub population: u64,
@@ -167,13 +176,14 @@ pub struct RunOutcome {
     pub wall_ms: f64,
     /// One value per reducer, `None` for a reducer that saw no finite value.
     pub reducers: Vec<Option<f64>>,
+    /// Series rows that the run kept.
     pub series: SeriesBuffer,
-    /// Actions the model refused, then the fault message, the timeout or the first value that was not finite.
+    /// Actions the model rejected, then the fault message, the timeout or the first value that was not finite.
     pub note: Option<String>,
 }
 
 impl RunOutcome {
-    /// Steps per second of wall time. Note that a run with no wall time gives a value that is not finite.
+    /// Steps per second of wall time. Note that the value is not finite for a run with no wall time.
     pub fn steps_per_s(&self) -> f64 {
         self.ticks as f64 * 1000.0 / self.wall_ms
     }

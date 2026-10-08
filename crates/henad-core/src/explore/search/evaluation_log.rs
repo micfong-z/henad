@@ -1,4 +1,4 @@
-//! Log of the candidates a search scored, with the objective value of every replicate of each.
+//! Log of the candidates that a search scored, with the objective value of every replicate of each candidate.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,8 +8,8 @@ use crate::explore::search::{Candidate, Evaluation, Goal, Objective, RankingEntr
 
 /// Evaluations a searcher was told, by candidate id, each re-evaluation filed under the candidate it repeats.
 ///
-/// The log keeps its candidates in ranking order as they are told, so the best one and each candidate's standing
-/// read without a sort.
+/// The log keeps its candidates in ranking order as they are told, so the best candidate and each candidate's
+/// standing can be read without a sort.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvaluationLog {
     objective: Objective,
@@ -24,7 +24,7 @@ pub struct CandidateRecord {
     genome: Genome,
     first_batch: u64,
     evaluations: u64,
-    /// Objective value of each replicate in the order told, `None` for a replicate told no value.
+    /// Objective value of each replicate in the order told, `None` for a replicate without a value.
     ///
     /// A failed replicate holds `None` or a value that is not finite.
     values: Vec<Option<f64>>,
@@ -33,6 +33,7 @@ pub struct CandidateRecord {
 }
 
 impl CandidateRecord {
+    /// Genome of the candidate.
     pub fn genome(&self) -> &Genome {
         &self.genome
     }
@@ -60,7 +61,7 @@ impl CandidateRecord {
             .count() as u64
     }
 
-    /// Objective over every replicate, [`Goal::worst`] standing in for a failed one.
+    /// Objective over every replicate, with [`Goal::worst`] as the value of a failed replicate.
     pub fn objective(&self) -> f64 {
         self.objective
     }
@@ -69,7 +70,7 @@ impl CandidateRecord {
 /// Place of a candidate in a ranking, the better objective first and the lower id first among equals.
 #[derive(Debug, Clone, Copy)]
 struct RankingPlace {
-    /// Objective turned so that a lower score is better, with `NaN` as the worst and no negative zero.
+    /// Objective in a form where a lower score is better, with `NaN` as the worst and no negative zero.
     score: f64,
     candidate_id: u64,
 }
@@ -123,14 +124,15 @@ impl EvaluationLog {
         }
     }
 
+    /// Direction of the log's objective.
     pub fn goal(&self) -> Goal {
         self.objective.goal
     }
 
-    /// Files `evaluation` of `candidate`, a candidate the ask with index `batch` returned.
+    /// Files `evaluation` of `candidate`, a candidate that the ask with index `batch` returned.
     ///
     /// Only the first watched column of each replicate is kept, the one the objective scores. A re-evaluation of a
-    /// candidate the log does not hold starts a record of its own.
+    /// candidate the log does not hold starts its own record.
     pub fn record(&mut self, candidate: &Candidate, batch: u64, evaluation: &Evaluation) {
         let candidate_id = candidate.origin.reevaluated_id().unwrap_or(candidate.id);
         let goal = self.objective.goal;
@@ -154,6 +156,7 @@ impl EvaluationLog {
             .insert(RankingPlace::new(goal, record.objective, candidate_id));
     }
 
+    /// Returns the record of candidate `candidate_id`, or `None` for a candidate the log does not hold.
     pub fn get(&self, candidate_id: u64) -> Option<&CandidateRecord> {
         self.records.get(&candidate_id)
     }

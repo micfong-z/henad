@@ -1,6 +1,11 @@
+//! The double-buffered [`Grid2D`] that holds a grid model's cells.
+
 use std::mem;
 
-/// A double-buffered 2D grid with toroidal wrapping.
+/// A double-buffered 2D grid of cells, stored row-major.
+///
+/// A step reads [`Self::current`] and writes [`Self::next_mut`], then [`Self::swap`] makes the next
+/// side current.
 pub struct Grid2D<T: Copy + Default> {
     width: u32,
     height: u32,
@@ -19,6 +24,7 @@ impl<T: Copy + Default> std::fmt::Debug for Grid2D<T> {
 }
 
 impl<T: Copy + Default> Grid2D<T> {
+    /// Creates a `width` by `height` grid with every cell at `T::default()` on both sides.
     pub fn new(width: u32, height: u32) -> Self {
         let len = (width as usize) * (height as usize);
         Self {
@@ -29,45 +35,54 @@ impl<T: Copy + Default> Grid2D<T> {
         }
     }
 
+    /// Width in cells.
     pub fn width(&self) -> u32 {
         self.width
     }
 
+    /// Height in cells.
     pub fn height(&self) -> u32 {
         self.height
     }
 
+    /// Heap memory held by both sides, in bytes.
     pub fn heap_bytes(&self) -> usize {
         (self.current.capacity() + self.next.capacity()) * mem::size_of::<T>()
     }
 
+    /// Number of cells.
     pub fn len(&self) -> usize {
         self.current.len()
     }
 
+    /// Returns whether the grid has no cells.
     pub fn is_empty(&self) -> bool {
         self.current.is_empty()
     }
 
+    /// Cells of the current side.
     pub fn current(&self) -> &[T] {
         &self.current
     }
 
-    /// For initialisation. A step writes through `next_mut`.
+    /// Returns the current side mutably, for initialisation.
+    ///
+    /// A step writes through [`Self::next_mut`].
     pub fn current_mut(&mut self) -> &mut [T] {
         &mut self.current
     }
 
+    /// Returns the next side for a step to write.
     pub fn next_mut(&mut self) -> &mut [T] {
         &mut self.next
     }
 
-    /// Split borrow, so a step can read the current buffer while writing the next.
+    /// Returns the current side to read and the next side to write, as one split borrow.
     pub fn current_and_next_mut(&mut self) -> (&[T], &mut [T]) {
         (&self.current, &mut self.next)
     }
 
-    /// A pointer swap, so no cells are copied.
+    /// Makes the next side current by swapping the two buffers, copying no cells.
     pub fn swap(&mut self) {
         mem::swap(&mut self.current, &mut self.next);
     }

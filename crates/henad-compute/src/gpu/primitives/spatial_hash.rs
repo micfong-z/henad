@@ -1,8 +1,8 @@
-//! GPU twin of [`henad_core::spatial_hash::SpatialHash`], rebuilt every tick. Same layout, so a
-//! kernel walks cell `c` as `sorted[cell_start[c]..cell_start[c + 1]]`.
+//! GPU twin of [`henad_core::spatial_hash::SpatialHash`], rebuilt every tick with the same layout. A kernel walks
+//! cell `c` as `sorted[cell_start[c]..cell_start[c + 1]]`.
 //!
-//! Not stable, unlike the CPU sort. Membership is the same, but a cell's slice comes out in
-//! whatever order the atomics resolve in, so a kernel summing floats over one will not replay.
+//! Note that the sort is not stable, unlike the CPU sort. Membership is the same, but a cell's slice comes out in
+//! whatever order the atomics resolve in, so a kernel summing floats over a slice will not replay.
 
 use henad_core::authoring::model::field::Extent;
 pub use henad_core::spatial_hash::HashGrid;
@@ -12,6 +12,7 @@ use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform
 use crate::gpu::primitives::prefix_scan::PrefixScan;
 use crate::shader_bindings::primitives::hash_count::HashParams;
 
+/// Counting-sort spatial hash of a GPU population, with the tables, scan and pipelines its rebuild uses.
 #[derive(Debug)]
 pub struct GpuSpatialHash {
     grid: HashGrid,
@@ -19,8 +20,8 @@ pub struct GpuSpatialHash {
     /// Workgroup rectangle over the agent domain, shared by the count and scatter passes.
     agent_groups: (u32, u32),
 
-    /// One extra trailing entry, so the scan's last value is the population total and
-    /// `cell_start[c + 1]` stays in bounds for the final cell.
+    /// Number of agents in each cell, with one extra trailing entry so the scan's last value is the population total
+    /// and `cell_start[c + 1]` stays in bounds for the final cell.
     counts: wgpu::Buffer,
     cell_start: wgpu::Buffer,
     cursor: wgpu::Buffer,
@@ -36,6 +37,7 @@ pub struct GpuSpatialHash {
 }
 
 impl GpuSpatialHash {
+    /// Builds the tables and pipelines of a hash over `extent`, with cells of `cell_size`, for `num_agents` agents.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -142,8 +144,8 @@ impl GpuSpatialHash {
 
     /// Binds one side of a model's ping-ponged position lane to the counting pass.
     ///
-    /// `pos` is `array<vec2<f32>>`, one lane not two, to save a storage binding. Build one per
-    /// side up front so stepping never rebuilds a bind group.
+    /// `pos` is a single `array<vec2<f32>>` lane, since two lanes would cost another storage binding. Build one bind
+    /// group per side up front, so stepping never rebuilds a bind group.
     pub fn bind_positions(&self, device: &wgpu::Device, label: &str, pos: &wgpu::Buffer) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
@@ -174,22 +176,22 @@ impl GpuSpatialHash {
         self.grid
     }
 
-    /// Bind as `array<u32>`. Cell `c` owns `cell_start[c]..cell_start[c + 1]` of
+    /// Returns the cell-start table, bound as `array<u32>`. Cell `c` owns `cell_start[c]..cell_start[c + 1]` of
     /// [`Self::sorted_binding`].
     pub fn cell_start_binding(&self) -> wgpu::BindingResource<'_> {
         self.cell_start.as_entire_binding()
     }
 
-    /// Bind as `array<u32>`. Agent ids grouped by cell.
+    /// Returns the agent ids grouped by cell, bound as `array<u32>`.
     pub fn sorted_binding(&self) -> wgpu::BindingResource<'_> {
         self.sorted.as_entire_binding()
     }
 
-    /// Records a full rebuild. Each stage reads what the last one wrote, so each gets its own
-    /// pass, since wgpu only synchronises between passes.
+    /// Records a full rebuild, one pass per stage. Each stage reads what the last one wrote, and wgpu synchronises
+    /// only between passes.
     ///
-    /// `begin_stamp` marks the start of a batch. It has to go here rather than on an empty pass,
-    /// which does not reliably get written and reads back as a zero `start`.
+    /// `begin_stamp` marks the start of a batch. It has to go here rather than on an empty pass. A stamp on an empty
+    /// pass is not reliably written, and reads back as a zero `start`.
     pub fn encode_build(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -232,6 +234,7 @@ impl GpuSpatialHash {
         u64::from(self.grid.num_cells() + 1) * std::mem::size_of::<u32>() as u64
     }
 
+    /// Approximate device memory held by the three tables and the two agent arrays, in bytes.
     pub fn heap_bytes(&self) -> usize {
         let table = (self.grid.num_cells() as usize + 1) * std::mem::size_of::<u32>();
         let agent = self.num_agents as usize * std::mem::size_of::<u32>();
@@ -240,12 +243,14 @@ impl GpuSpatialHash {
     }
 }
 
-/// Readable for debugging and tests.
+/// Raw buffers, for debugging and tests.
 impl GpuSpatialHash {
+    /// Buffer behind [`Self::cell_start_binding`].
     pub fn cell_start_buffer(&self) -> &wgpu::Buffer {
         &self.cell_start
     }
 
+    /// Buffer behind [`Self::sorted_binding`].
     pub fn sorted_buffer(&self) -> &wgpu::Buffer {
         &self.sorted
     }
@@ -291,7 +296,7 @@ mod tests {
         }
     }
 
-    /// Deterministic, so a failure is reproducible.
+    /// Returns `n` deterministic positions in a `w` by `h` world, so a failure is reproducible.
     fn positions(n: usize, w: f32, h: f32) -> (Vec<f32>, Vec<f32>) {
         let mut seed = 0x1234_5678_9ABC_DEF0u64;
         let mut unit = || {
@@ -363,7 +368,8 @@ mod tests {
         )
     }
 
-    /// Compared as sets, since the atomic scatter does not fix the order within a cell.
+    /// Each cell holds the agents the CPU hash puts there, compared as sets since the atomic scatter does not fix the
+    /// order within a cell.
     #[test]
     fn buckets_match_the_cpu_hash() {
         let Some(ctx) = headless_context("gpu_spatial_hash_test", wgpu::Features::empty()) else {

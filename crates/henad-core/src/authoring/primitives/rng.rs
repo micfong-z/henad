@@ -1,6 +1,6 @@
 //! Random draws, and the generator behind them.
 //!
-//! The draws take raw bits so the same function serves both backends, and each but [`next_index`]
+//! The draws take raw bits so the same function serves both backends, and every draw except [`next_index`]
 //! has a WGSL twin. The generators differ. WGSL has no 64-bit integers, and a shader advances with
 //! [`pcg_hash`] over `u32` where a CPU kernel runs [`xorshift64`] over `u64`. [`pcg_hash`] is here
 //! as well, for a GPU port that seeds a state buffer the shader draws from.
@@ -8,7 +8,9 @@
 //! Every draw needs its own [`next_bits`]. Two draws off one word are correlated, and nothing will
 //! say so.
 
-/// Fast xorshift64 PRNG. The state must never be 0.
+/// Returns the xorshift64 successor of `state`.
+///
+/// The state must never be 0. Zero maps to itself.
 #[inline]
 pub fn xorshift64(mut state: u64) -> u64 {
     state ^= state << 13;
@@ -51,8 +53,7 @@ pub fn mix_seed(seed: u64) -> u64 {
 
 /// Advances `rng` and returns 32 fresh random bits.
 ///
-/// The top half of the state rather than the low one, since xorshift64's low bits are the weaker
-/// of the two.
+/// The bits come from the top half of the state. xorshift64's low bits are the weaker half.
 ///
 /// # Examples
 ///
@@ -71,14 +72,13 @@ pub fn next_bits(rng: &mut u64) -> u32 {
     (*rng >> 32) as u32
 }
 
-/// A uniform float in `[0, max)`, as NetLogo's `random-float`.
+/// Returns a uniform float in `[0, max)` drawn from `bits`, as NetLogo's `random-float`.
 ///
-/// Built from the top 24 bits, which is the f32 mantissa width, so every value it can produce is
-/// exact and the range really is half-open. Using all 32 bits would round the largest word up to
-/// exactly `max`, and a closed range breaks any caller comparing against a probability of 1.
+/// The draw uses the top 24 bits, the width of an `f32` mantissa. Every value it can produce is then
+/// exact, and the range is half-open. All 32 bits would round the largest word up to exactly `max`,
+/// and a closed range breaks any caller comparing against a probability of 1.
 ///
-/// The same 24-bit form runs on both backends, so this is held to bit equality rather than a
-/// tolerance.
+/// The WGSL twin uses the same 24-bit form and matches this function bit for bit.
 ///
 /// # Examples
 ///
@@ -155,10 +155,11 @@ pub fn next_index(rng: &mut u64, n: u32) -> u32 {
     (wide >> 32) as u32
 }
 
-/// A Bernoulli trial, true for `threshold` of the 2^32 possible words.
+/// Returns whether `bits` falls below `threshold`, a Bernoulli trial true for `threshold` of the 2^32
+/// possible words.
 ///
-/// Pass `(p * u32::MAX as f32) as u32` for probability `p`. Integer comparison rather than a float
-/// one, so a seeded run cannot drift on a machine that rounds differently.
+/// Pass `(p * u32::MAX as f32) as u32` for probability `p`. The comparison is on integers, so a seeded
+/// run cannot drift on a machine that rounds floats differently.
 ///
 /// # Examples
 ///
@@ -175,7 +176,7 @@ pub fn below(bits: u32, threshold: u32) -> bool {
     bits < threshold
 }
 
-/// One of `-1`, `0` or `+1`.
+/// Returns one of `-1`, `0` or `+1`, drawn from `bits`.
 ///
 /// # Examples
 ///
@@ -195,9 +196,9 @@ pub fn choice3(bits: u32) -> i32 {
 
 /// Accepts the `count`-th of a run of equally good candidates, with probability `1 / count`.
 ///
-/// Reservoir sampling over ties, so once `n` equal candidates have been seen each has been picked
-/// with probability `1 / n`. `count` is the candidate's 1-based position, so the first of a run is
-/// always accepted and a `count` of 0 accepts too.
+/// This is reservoir sampling over ties. Once `n` equal candidates have been seen, each candidate has been
+/// picked with probability `1 / n`. `count` is the candidate's 1-based position, so the first candidate of a
+/// run is always accepted and a `count` of 0 accepts too.
 ///
 /// # Examples
 ///
@@ -207,7 +208,7 @@ pub fn choice3(bits: u32) -> i32 {
 /// // The first candidate of a run always wins, whatever the draw.
 /// assert!(reservoir_accept(0, 1));
 /// assert!(reservoir_accept(u32::MAX, 1));
-/// // The second wins half the time.
+/// // The second candidate wins half the time.
 /// assert!(reservoir_accept(0, 2));
 /// assert!(!reservoir_accept(u32::MAX, 2));
 /// ```
@@ -270,8 +271,7 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    /// The half-open range is the point. A closed one rejects the first of a tie run, which is the
-    /// bug that took the divisor from `u32::MAX` to the 24-bit form.
+    /// The range must stay half-open. A closed range rejects the first candidate of a tie run.
     #[test]
     fn random_float_never_reaches_max() {
         for max in [1.0f32, 0.5, 10.0, 1e-3] {
@@ -295,7 +295,7 @@ mod tests {
         }
     }
 
-    /// A drifting mean would bias every model that draws through this.
+    /// A drifting mean would bias every model that draws through `random_float`.
     #[test]
     fn random_float_averages_near_half_of_max() {
         let mut rng = 0xC0FF_EE00_1234_5678;
@@ -317,7 +317,7 @@ mod tests {
         assert!(seen.iter().all(|&s| s), "not every direction came up: {seen:?}");
     }
 
-    /// The first of a run must always be accepted, or a tie-break silently drops candidates.
+    /// The first candidate of a run must always be accepted, or a tie-break silently drops candidates.
     #[test]
     fn reservoir_accept_always_takes_the_first_of_a_run() {
         let mut rng = 0xABCD_1234_ABCD_1234;

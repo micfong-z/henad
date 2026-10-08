@@ -1,4 +1,4 @@
-//! The app's window on a desktop, and the results folder a command line names.
+//! The app's window on a desktop, and the results folder that a command line specifies.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ use crate::options::{AppError, AppOptions};
 ///
 /// # Panics
 ///
-/// Panics when called off the main thread. winit refuses to start an event loop on any other thread.
+/// Panics when called off the main thread. winit allows an event loop only on the main thread.
 pub fn run_native(options: AppOptions) -> Result<(), AppError> {
     options.check_opening().map_err(AppError::opening)?;
 
@@ -45,14 +45,14 @@ pub fn run_native(options: AppOptions) -> Result<(), AppError> {
     .map_err(AppError::eframe)
 }
 
-/// Folder name eframe stores the app's state under for a product name with nothing left once [`storage_id`] cleans
-/// it.
+/// Folder name for eframe's stored state when the product name is empty after [`storage_id`] cleans it.
 const FALLBACK_STORAGE_ID: &str = "henad-app";
 
-/// Returns the folder name eframe stores the state of product `name` under, `None` when `name` can serve as it is.
+/// Returns the folder name that eframe stores the state of product `name` under, or `None` when `name` is usable
+/// as it is.
 ///
-/// Each character a folder name cannot hold on some platform becomes `-`, and spaces and dots at either end go. A
-/// name with nothing left stores under [`FALLBACK_STORAGE_ID`].
+/// Each character that a folder name cannot contain on some platform becomes `-`, and leading and trailing spaces and
+/// dots are removed. A name that ends up empty uses [`FALLBACK_STORAGE_ID`].
 fn storage_id(name: &str) -> Option<String> {
     let replaced: String = name
         .chars()
@@ -73,7 +73,8 @@ fn storage_id(name: &str) -> Option<String> {
     (id != name).then(|| id.to_owned())
 }
 
-/// Returns the folder `--open DIR` or `--open=DIR` names among `arguments`, the command line without the program.
+/// Returns the folder that `--open DIR` or `--open=DIR` specifies among `arguments`, the command line without the
+/// program.
 ///
 /// An argument starting with `--` is a flag and never the folder after `--open`.
 pub fn results_folder(arguments: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
@@ -121,7 +122,7 @@ mod tests {
         assert_eq!(results_folder(arguments(&[])), None);
     }
 
-    /// The regression. A flag after `--open` used to be taken as the folder.
+    /// `--open --verbose` opens no folder named `--verbose`.
     #[test]
     fn open_never_takes_a_flag_for_its_folder() {
         assert_eq!(
@@ -136,7 +137,7 @@ mod tests {
         );
     }
 
-    /// The regression. An empty name stored the state beside every other app's, and a slash nested folders.
+    /// An empty name would store the state beside every other app's state, and a slash would nest folders.
     #[test]
     fn a_product_name_becomes_a_folder_name() {
         assert_eq!(storage_id("Henad"), None, "the official app keeps its folder");

@@ -1,7 +1,6 @@
 //! Game of Life as `docs/guide/first-model/game-of-life.md` builds it.
 //!
-//! The id is `life` rather than `game_of_life`, since the shipped model already holds that one
-//! and the page tells a reader the same thing.
+//! The id is `life`. The example model uses `game_of_life`, and a set holds each id once.
 
 use henad::authoring::prelude::*;
 

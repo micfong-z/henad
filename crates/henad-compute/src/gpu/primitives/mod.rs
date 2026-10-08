@@ -1,7 +1,5 @@
-//! Building blocks the GPU engines and models share.
-//!
-//! The GPU counterparts of `henad_core`'s data structures live here rather than there, since
-//! `henad-core` never sees a wgpu type.
+//! Building blocks the GPU engines and models share, among them the GPU counterparts of `henad_core`'s data
+//! structures.
 
 pub mod dispatch;
 pub mod pipeline;

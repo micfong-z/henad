@@ -19,18 +19,22 @@ use crate::explore::value::{ValueError, resolve_params};
 use crate::params::{ParamDescriptor, ParamValue};
 use crate::view::StatDescriptor;
 
-/// Most runs one plan can have, every config times its replicates, equal to [`MAX_CONFIGS`].
+/// Maximum number of runs in one plan, every config times its replicates, equal to [`MAX_CONFIGS`].
 ///
-/// Note that the limit bounds a count of runs, not memory. A sweep lists every run it has left before the first one
-/// starts. At the limit those lists take about 2 GB, and more when the configs schedule actions.
+/// Note that the limit bounds the number of runs alone. A sweep lists every run it has left before the first run
+/// starts, and at the limit those lists take about 2 GB, more when the configs schedule actions.
 pub const MAX_RUNS: u64 = 1 << 24;
 
 /// Declarations of a model, as a plan checks a spec against them.
 #[derive(Debug, Clone, Copy)]
 pub struct ModelSchema<'a> {
+    /// Id of the model.
     pub id: &'a str,
+    /// Parameters the model declares.
     pub params: &'a [ParamDescriptor],
+    /// Stats the model declares.
     pub stats: &'a [StatDescriptor],
+    /// Actions the model declares.
     pub actions: &'a [ActionDescriptor],
 }
 
@@ -48,6 +52,7 @@ pub struct Config {
 /// Design and configs of one block of a plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedBlock {
+    /// Design that combined the block's factors.
     pub design: DesignKind,
     /// Ids of the block's configs.
     pub configs: Range<u64>,
@@ -55,14 +60,18 @@ pub struct PlannedBlock {
     pub design_seed: Option<u64>,
 }
 
-/// Something in a plan that runs, though likely not as meant.
+/// Part of a plan that runs, though likely not as intended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanWarning {
     /// Action `name`, due past the run's `last_tick` in `config_count` configs, at `latest_tick` at the latest.
     ActionAfterEnd {
+        /// Name of the action.
         name: String,
+        /// Latest tick the action is due at.
         latest_tick: u64,
+        /// Tick a run ends on unless it stops sooner, the warm-up included.
         last_tick: u64,
+        /// Number of configs whose tick for the action is past `last_tick`.
         config_count: u64,
     },
 }
@@ -115,10 +124,12 @@ impl Shard {
         Ok(Self { index, count })
     }
 
+    /// Remainder the shard's run ids leave when divided by [`Self::count`].
     pub fn index(self) -> u64 {
         self.index
     }
 
+    /// Number of shards the plan is split into.
     pub fn count(self) -> u64 {
         self.count
     }
@@ -128,7 +139,7 @@ impl Shard {
         run_id % self.count == self.index
     }
 
-    /// Returns the number of runs the shard takes of a plan of `plan_runs` runs.
+    /// Returns the number of runs in the shard for a plan of `plan_runs` runs.
     pub fn run_count(self, plan_runs: u64) -> u64 {
         if self.index < plan_runs {
             (plan_runs - 1 - self.index) / self.count + 1
@@ -167,11 +178,19 @@ impl FromStr for Shard {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShardError {
     /// Text not of the form `INDEX/COUNT`.
-    BadText { raw: String },
+    BadText {
+        /// Text as written.
+        raw: String,
+    },
     /// A shard count of 0.
     ZeroCount,
     /// An index not below the count.
-    IndexPastCount { index: u64, count: u64 },
+    IndexPastCount {
+        /// Index of the shard, as given.
+        index: u64,
+        /// Number of shards, as given.
+        count: u64,
+    },
 }
 
 impl fmt::Display for ShardError {
@@ -221,22 +240,27 @@ impl Plan {
         &self.configs
     }
 
+    /// Returns config `config_id`, or `None` past the last config.
     pub fn config(&self, config_id: u64) -> Option<&Config> {
         self.configs.get(usize::try_from(config_id).ok()?)
     }
 
+    /// Every block, in spec order.
     pub fn blocks(&self) -> &[PlannedBlock] {
         &self.blocks
     }
 
+    /// Length and end of each run, and the number of runs per config.
     pub fn run_settings(&self) -> &RunSettings {
         &self.run_settings
     }
 
+    /// Ticks each run samples, and the values it keeps from them.
     pub fn measure_settings(&self) -> &MeasureSettings {
         &self.measure
     }
 
+    /// Root seed and the scheme that derives each run's seed from it.
     pub fn seed_settings(&self) -> SeedSettings {
         self.seeds
     }
@@ -246,10 +270,12 @@ impl Plan {
         &self.actions
     }
 
+    /// Warnings about parts of the plan that run, though likely not as intended.
     pub fn warnings(&self) -> &[PlanWarning] {
         &self.warnings
     }
 
+    /// Number of runs per config.
     pub fn replicates(&self) -> u64 {
         self.run_settings.replicates
     }
@@ -325,7 +351,7 @@ impl Plan {
         })
     }
 
-    /// Returns the key naming the results of `run`, from [`run_key`].
+    /// Returns the key that identifies the results of `run`, from [`run_key`].
     ///
     /// # Panics
     ///
@@ -360,11 +386,11 @@ impl SweepSpec {
     ///
     /// # Errors
     ///
-    /// Returns [`PlanError`] for a spec naming another model, no replicates, settings [`MeasurePlan::check`]
-    /// refuses, a reducer or stop condition over no stat label, an action the model does not declare or a name two
-    /// actions share, a value or factor the model's parameters or the spec's actions refuse, a parameter both fixed
-    /// and varied, a target varied twice in one block, a block its design cannot combine, or more than [`MAX_RUNS`]
-    /// runs.
+    /// Returns [`PlanError`] for a spec that refers to another model, no replicates, settings [`MeasurePlan::check`]
+    /// rejects, a reducer or stop condition over no stat label, an action the model does not declare or a name two
+    /// actions share, a value or factor that the model's parameters or the spec's actions reject, a parameter both
+    /// fixed and varied, a target varied twice in one block, a block whose design cannot combine its factors, or more
+    /// than [`MAX_RUNS`] runs.
     pub fn plan(&self, schema: &ModelSchema<'_>) -> Result<Plan, PlanError> {
         if self.model != schema.id {
             return Err(PlanError::WrongModel {
@@ -547,33 +573,79 @@ fn late_actions(actions: &[ActionSpec], configs: &[Config], last_tick: u64) -> V
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanError {
     /// A spec for model `spec_model`, checked against model `schema_model`.
-    WrongModel { spec_model: String, schema_model: String },
+    WrongModel {
+        /// Model id in the spec.
+        spec_model: String,
+        /// Id of the model the spec was checked against.
+        schema_model: String,
+    },
     /// A replicate count of 0.
     NoReplicates,
-    /// Settings that cannot measure a run, for the reason inside.
+    /// Run and sampling settings under which a run cannot be measured.
     Measure(MeasureError),
-    /// A stop condition over no stat label, for the reason inside.
+    /// A stop condition over no stat label.
     Stop(StopError),
-    /// An action id the model does not declare. `known` lists the ids it does.
-    UnknownAction { id: String, known: Vec<&'static str> },
-    /// A name two actions of the spec share.
-    DuplicateActionName { name: String },
-    /// A fixed value refused for the reason inside.
+    /// An action id the model does not declare.
+    UnknownAction {
+        /// Action id as given.
+        id: String,
+        /// Action ids the model declares.
+        known: Vec<&'static str>,
+    },
+    /// A name that two actions of the spec share.
+    DuplicateActionName {
+        /// Name the actions share.
+        name: String,
+    },
+    /// A fixed value that the model rejects.
     Fixed(ValueError),
-    /// A fixed value for an id no parameter has. `known` lists the ids the parameters do have.
-    UnknownFixed { id: String, known: Vec<&'static str> },
+    /// A fixed value for an id that no parameter has.
+    UnknownFixed {
+        /// Parameter id as given.
+        id: String,
+        /// Parameter ids the model declares.
+        known: Vec<&'static str>,
+    },
     /// Parameter `id`, varied in block `block` and fixed as well.
-    FixedAndVaried { id: String, block: usize },
+    FixedAndVaried {
+        /// Id of the parameter.
+        id: String,
+        /// Index of the block, counting from 0.
+        block: usize,
+    },
     /// A target varied twice in block `block`.
-    VariedTwice { target: FactorTarget, block: usize },
-    /// A factor of block `block`, refused for the reason in `source`.
-    Factor { block: usize, source: FactorError },
-    /// A table design in block `block` that lists factors of its own.
-    TableWithFactors { block: usize },
-    /// The table of block `block`, refused for the reason in `source`.
-    Table { block: usize, source: DesignTableError },
-    /// Block `block`, whose design cannot combine its factors for the reason in `source`.
-    Design { block: usize, source: DesignError },
+    VariedTwice {
+        /// Parameter or action tick varied twice.
+        target: FactorTarget,
+        /// Index of the block, counting from 0.
+        block: usize,
+    },
+    /// A rejected factor of block `block`.
+    Factor {
+        /// Index of the block, counting from 0.
+        block: usize,
+        /// Reason the factor is rejected.
+        source: FactorError,
+    },
+    /// A table design in block `block` that lists its own factors.
+    TableWithFactors {
+        /// Index of the block, counting from 0.
+        block: usize,
+    },
+    /// A rejected design table of block `block`.
+    Table {
+        /// Index of the block, counting from 0.
+        block: usize,
+        /// Reason the table is rejected.
+        source: DesignTableError,
+    },
+    /// Block `block`, whose design cannot combine its factors.
+    Design {
+        /// Index of the block, counting from 0.
+        block: usize,
+        /// Reason the design cannot combine the factors.
+        source: DesignError,
+    },
     /// More runs than [`MAX_RUNS`].
     TooManyRuns,
 }
@@ -1149,8 +1221,7 @@ mod tests {
         ));
     }
 
-    /// The regression. A comparison built without the parser, as a form builds one, planned with an infinite
-    /// threshold.
+    /// A comparison that a form builds without the parser can hold a threshold that is not finite.
     #[test]
     fn a_threshold_that_is_not_finite_is_refused_at_plan_time() {
         let mut spec = SweepSpec::new("sir");

@@ -1,6 +1,6 @@
 //! Small wgpu constructors shared by the engines in this module.
 
-/// A storage buffer binding, read-only or read-write.
+/// Returns the layout entry of a storage buffer at `binding`, read-only or read-write.
 pub fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -14,7 +14,7 @@ pub fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntr
     }
 }
 
-/// A uniform buffer binding.
+/// Returns the layout entry of a uniform buffer at `binding`.
 pub fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -44,7 +44,7 @@ fn dump_source(label: &str, source: &str) {
 #[cfg(target_arch = "wasm32")]
 fn dump_source(_label: &str, _source: &str) {}
 
-/// A compute pipeline over a single bind group layout, with `main` as the entry point.
+/// Builds a compute pipeline over a single bind group layout, with `main` as the entry point.
 pub fn compute_pipeline(
     device: &wgpu::Device,
     label: &str,
@@ -71,7 +71,7 @@ pub fn compute_pipeline(
     })
 }
 
-/// A storage buffer of `len` `u32`-sized elements.
+/// Creates a storage buffer of `len` `u32`-sized elements.
 ///
 /// `len` is floored at one, since wgpu rejects a zero-sized buffer.
 pub fn storage_buffer(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
@@ -83,7 +83,8 @@ pub fn storage_buffer(device: &wgpu::Device, label: &str, len: usize) -> wgpu::B
     })
 }
 
-/// A storage buffer that can also be bound as an instance stream, so the UI can draw it in place.
+/// Creates a storage buffer of `len` `u32`-sized elements that can also be bound as an instance stream, so the UI
+/// can draw it in place.
 pub fn lane_buffer(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
@@ -96,7 +97,7 @@ pub fn lane_buffer(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buff
     })
 }
 
-/// A uniform buffer seeded with `bytes`.
+/// Creates a uniform buffer seeded with `bytes`.
 pub fn uniform_buffer(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, bytes: &[u8]) -> wgpu::Buffer {
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),

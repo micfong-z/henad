@@ -10,9 +10,9 @@ use crate::ants::{AntParams, AntsModel};
 
 // Pass 1, over agents.
 
-/// Largest pheromone in the 3x3 neighbourhood, cut down by distance and lifted by the reward.
+/// Returns the largest pheromone in the 3x3 neighbourhood, cut down by distance and lifted by the reward.
 ///
-/// Floored at what the cell already holds, which is why `max` downstream reproduces the
+/// The result is floored at what the cell already holds, and `max` downstream then reproduces the
 /// reference's plain overwrite. A deposit can never come out below the existing value.
 #[inline]
 fn deposit_value(x: i32, y: i32, reward: f32, field: &[f32], p: &AntParams) -> f32 {
@@ -35,7 +35,7 @@ fn deposit_value(x: i32, y: i32, reward: f32, field: &[f32], p: &AntParams) -> f
 /// Fills the `(cell, to_food, to_home)` deposit lanes.
 ///
 /// An ant deposits into one field, so the other lane gets the `Combine::Max` identity and both
-/// stay dense.
+/// lanes stay dense.
 pub(crate) fn deposit(lanes: &AntLanes, deposits: &mut Deposits, ctx: &StepCtx<'_, AntsModel>) {
     let p = ctx.params;
     let (to_food, to_home) = (ctx.field.field(TO_FOOD), ctx.field.field(TO_HOME));
@@ -83,7 +83,7 @@ fn decode_step(s: u8) -> (i32, i32) {
     (s / 3 - 1, s % 3 - 1)
 }
 
-/// Inside the field and not an obstacle. This model is bounded, not toroidal like the others.
+/// Returns whether `(x, y)` lies inside the bounded field and off every obstacle.
 #[inline]
 fn passable(x: i32, y: i32, sites: &[u8], p: &AntParams) -> bool {
     x >= 0 && y >= 0 && x < p.w && y < p.h && sites[(y * p.w + x) as usize] != OBSTACLE
@@ -98,7 +98,7 @@ struct AntMove {
     delivered: bool,
 }
 
-/// One ant's move, following the reference's `Ant::act`.
+/// Computes one ant's move, following the reference's `Ant::act`.
 ///
 /// The `dx` outer, `dy` inner order is load-bearing. Ties between equal pheromone are broken by a
 /// reservoir draw, so the visit order changes the outcome.
@@ -112,18 +112,18 @@ fn advect_agent(
     rng: &mut u64,
 ) -> AntMove {
     let sites = field.sites;
-    // Ants follow the trip they are not currently making, so carrying food reads the home field.
+    // An ant follows the trail it does not lay, so an ant carrying food reads the to-home field.
     let trail = if has_food != 0 {
         field.field(TO_HOME)
     } else {
         field.field(TO_FOOD)
     };
 
-    // An impossible pheromone, so the first passable neighbour always wins.
+    // No pheromone is negative, so the first passable neighbour always wins.
     let mut best = -1.0f32;
     let (mut bx, mut by) = (x, y);
-    // 2 not 1 is the reference's off-by-one, giving the first neighbour visited 2/(k+1) against
-    // 1/(k+1) for the rest, which drifts ants up-left. Kept deliberately, see the gap report.
+    // Starting at 2 reproduces the reference's off-by-one. Among k tied neighbours, the first neighbour visited
+    // is kept with probability 2/(k+1) and every other tied neighbour with 1/(k+1), and the ants drift up-left.
     let mut count = 2u32;
 
     for &(dx, dy) in &MOORE_COLUMN_MAJOR {
@@ -144,7 +144,7 @@ fn advect_agent(
     }
 
     if best == 0.0 && last_step != NO_STEP {
-        // No pheromone nearby, so probably keep going the way we were.
+        // With no pheromone nearby, the ant keeps its last direction with probability `momentum`.
         if next_float(rng, 1.0) < p.momentum {
             let (dx, dy) = decode_step(last_step);
             let (mx, my) = (x + dx, y + dy);
@@ -167,7 +167,7 @@ fn advect_agent(
         y: by,
         last_step: encode_step(bx - x, by - y),
         has_food,
-        // The deposit pass spent whatever the ant was carrying. Only a site grants more.
+        // The deposit pass spent whatever the ant was carrying. Only a site grants a new reward.
         reward: 0.0,
         delivered: false,
     };
@@ -187,7 +187,7 @@ fn advect_agent(
     out
 }
 
-/// Moves every ant, returning how many delivered food home.
+/// Moves every ant and returns the number of ants that delivered food home.
 pub(crate) fn advect(lanes: &mut AntLanes, ctx: &StepCtx<'_, AntsModel>, seed: u64, tick: u64) -> u64 {
     let p = ctx.params;
     let field = ctx.field;

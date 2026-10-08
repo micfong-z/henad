@@ -1,4 +1,4 @@
-//! Chunk-parallel drivers.
+//! Chunk-parallel drivers, and the seed of each chunk's random number generator.
 
 use std::ops::Range;
 
@@ -10,8 +10,11 @@ pub const STATS_CHUNK: usize = 8192;
 
 /// Runs a body over each chunk of a mutable slice, in parallel.
 ///
-/// A macro rather than a function taking a closure. The extra closure layer a generic driver needs
-/// stops a hot kernel inlining through it, and `#[inline]` does not rescue it.
+/// The body sees the chunk's index, the index of its first item and the chunk itself. One form accepts a `min_leaf`
+/// floor on how many chunks one rayon leaf takes, and another steps three slices together.
+///
+/// Note that this stays a macro. The extra closure layer a generic driver needs stops a hot kernel inlining through
+/// it, and `#[inline]` does not rescue it.
 ///
 /// ```ignore
 /// for_each_chunk_mut!(next, row_width, |y, _base, next_row| { .. });
@@ -19,7 +22,7 @@ pub const STATS_CHUNK: usize = 8192;
 #[macro_export]
 macro_rules! for_each_chunk_mut {
     // A floor on how many chunks one rayon leaf takes. The body still sees one chunk at a time
-    // with its own index, so the floor changes how the work is split and never what it computes.
+    // with its own index, and the result does not depend on the floor.
     ($items:expr, $chunk:expr, min_leaf $min:expr, |$c:ident, $base:ident, $slice:ident| $body:block) => {{
         let chunk = ($chunk).max(1);
         let min_leaf = ($min).max(1);
@@ -76,8 +79,8 @@ fn chunk_range(c: usize, chunk: usize, len: usize) -> Range<usize> {
 
 /// Maps each chunk of `0..len` then folds the results in chunk order.
 ///
-/// Takes a length rather than a slice so a caller can read several lanes per chunk. Folding in
-/// index order is what keeps a float reduction from depending on how rayon schedules the work.
+/// `map` receives each chunk's index range, and can read several lanes per chunk. The fold in chunk order keeps a float
+/// reduction independent of how rayon schedules the work.
 pub fn reduce_chunks<A, M, F>(len: usize, chunk: usize, map: M, fold: F, init: A) -> A
 where
     A: Send,
@@ -97,8 +100,8 @@ where
 
 /// Seed for chunk `c` of tick `tick`.
 ///
-/// Derived from the chunk index rather than from anything a worker mutates, so the stream a given
-/// agent sees does not depend on how rayon schedules the work. `base` comes from [`advance_tick_seed`].
+/// The seed comes from `base`, the tick and the chunk index alone. A seed drawn from anything a worker mutates would
+/// make the stream an agent sees depend on how rayon schedules the work. `base` comes from [`advance_tick_seed`].
 #[inline]
 pub fn chunk_seed(base: u64, tick: u64, c: usize) -> u64 {
     let mixed = base ^ tick.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (c as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -106,10 +109,10 @@ pub fn chunk_seed(base: u64, tick: u64, c: usize) -> u64 {
     xorshift64(mixed | 1)
 }
 
-/// Advances the per tick base handed to [`chunk_seed`].
+/// Advances the per tick base passed to [`chunk_seed`].
 ///
-/// Called once per tick on the sequential path, never by a worker. Folding the tick in here rather
-/// than relying on `chunk_seed` alone is measurably faster, for reasons not tracked down.
+/// The engine calls it once per tick, on the sequential path. Keep this step. Folding the tick in through `chunk_seed`
+/// alone runs slower, for reasons not tracked down.
 #[inline]
 pub fn advance_tick_seed(seed: u64, tick: u64) -> u64 {
     xorshift64(seed ^ tick)

@@ -30,7 +30,7 @@ fn step_node(
     out.timer[k] = timer;
 
     let mut state = read.state[i];
-    // Infection is pulled by the susceptible node rather than pushed by infected ones.
+    // Infection is pulled by the susceptible node rather than pushed by infected neighbours.
     // It reads the state at the start of the tick, so each infected neighbour is one independent chance either way.
     if state == SUSCEPTIBLE {
         for &j in graph.in_neighbors(i as u32) {

@@ -1,8 +1,7 @@
 //! Virus on a Network as `docs/guide/first-model/virus-network.md` builds it.
 //!
-//! The id is `virus` rather than `virus_network`, since the shipped model already holds that one
-//! and the page tells a reader the same thing. The page leaves out the shipped model's geometric
-//! generator, so this declares one parameter fewer.
+//! The id is `virus`. The example model uses `virus_network`, and a set holds each id once. The page leaves out
+//! the example model's geometric generator, so this model declares one parameter fewer.
 
 use henad::agent_lanes;
 use henad::authoring::prelude::*;
@@ -170,7 +169,7 @@ impl NetworkModel for VirusModel {
     }
 }
 
-// --- Setup ---
+// Setup.
 
 /// Draws two distinct nodes uniformly at random.
 fn random_pair(n: u32, rng: &mut u64) -> (u32, u32) {
@@ -209,7 +208,7 @@ fn infect_distinct(state: &mut [u8], count: u32, rng: &mut u64) {
     }
 }
 
-// --- Node pass ---
+// Node pass.
 
 #[inline]
 fn step_node(
@@ -244,7 +243,7 @@ fn step_node(
     out.state[k] = state;
 }
 
-// --- Edges ---
+// Edges.
 
 /// Returns the colour of an edge between nodes in states `a` and `b`.
 fn edge_color(a: u8, b: u8) -> u8 {
@@ -294,7 +293,7 @@ fn rewire(graph: &mut Network, state: &[u8], rng: &mut u64) {
     }
 }
 
-// --- Statistics ---
+// Statistics.
 
 /// Returns the numbers of susceptible, infected and resistant nodes.
 fn count_states(state: &[u8]) -> [u64; 3] {

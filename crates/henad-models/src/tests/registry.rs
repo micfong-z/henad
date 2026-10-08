@@ -1,4 +1,4 @@
-//! The registry tests: each example model's declarations checked against what its state does, through the testing
+//! The registry tests: each example model's declarations checked against what its state does, using the testing
 //! kit, and the guards that hold for the example models alone.
 
 use henad_compute::entry::{ModelState, register_grid_model};
@@ -12,10 +12,10 @@ use henad_compute::entry::ModelEntry;
 use henad_core::metadata::Backend;
 
 // --8<-- [start:kit]
-/// Returns the kit's settings over the example models, on a baseline device when this machine gives one, and whether
-/// it gave one.
+/// Returns the kit's settings over the example models, with a baseline device when this machine has an adapter, and
+/// whether the settings hold a device.
 ///
-/// The device asks for `Limits::default()`, so a GPU model that only fits a raised limit fails to build here. Every
+/// The device requests `Limits::default()`, so a GPU model that only fits a raised limit fails to build here. Every
 /// example model is meant to run on a stock WebGPU device.
 fn kit_settings() -> (CheckSettings, bool) {
     let settings = CheckSettings::default();
@@ -27,7 +27,7 @@ fn kit_settings() -> (CheckSettings, bool) {
     }
 }
 
-/// Checks every example model once, asserting that each passes and skips only what its backend, its declared
+/// Checks every example model once, asserting that each model passes and skips only what its backend, its declared
 /// replay or a missing device rules out.
 #[test]
 fn the_example_models_conform() {
@@ -54,16 +54,18 @@ fn defaults(entry: &ModelEntry) -> Vec<ParamValue> {
         .collect()
 }
 
-/// A model that cannot build from its own defaults has already failed. The tests below treat
-/// a `Fault` as a failure rather than threading it through.
+/// Builds `entry` at `values`, and panics on a fault.
+///
+/// A model that cannot build from its own defaults has already failed, so the tests below treat a fault as a
+/// failure instead of passing it on.
 fn build(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&henad_compute::gpu::GpuContext>) -> ModelState {
     entry
         .build(values, None, gpu)
         .unwrap_or_else(|fault| panic!("{}: {fault}", entry.id()))
 }
 
-/// Asserts that `report` skips only the checks the backend of `entry`, its declared replay or a missing device rule
-/// out, and that a CPU model's step split into more than one job.
+/// Asserts that `report` skips only the checks that the backend of `entry`, its declared replay or a missing device
+/// rule out, and that a CPU model's step split into more than one job.
 fn assert_skips_only_what_it_declares(entry: &ModelEntry, report: &ModelReport, has_device: bool) {
     let skipped: Vec<(ModelCheck, SkipReason)> = report
         .skipped()
@@ -145,7 +147,7 @@ fn a_model_that_panics_while_building_comes_back_as_a_fault() {
     assert!(fault.to_string().contains("divide by zero"), "{fault}");
 }
 
-/// The panic an author is most likely to write lands in `step_cell`, which the engine runs on
+/// The panic that an author is most likely to write is in `step_cell`, which the engine runs on
 /// a rayon worker. Rayon re-raises it on the sim thread without running the panic hook again,
 /// so the location has to survive the hop or the modal loses it for the common case.
 #[test]
@@ -175,8 +177,8 @@ fn a_model_entry_can_be_shared_between_threads() {
     assert_send_and_sync::<ModelEntry>();
 }
 
-/// The device a host requests reads the set's needs, so an entry that declares fewer storage
-/// buffers than its widest pass binds builds on a device too narrow for it.
+/// A host sizes the device it requests from the set's needs. An entry that declares fewer storage
+/// buffers than its widest pass binds would then build on a device too narrow for that pass.
 #[test]
 fn every_gpu_entry_needs_the_bindings_its_widest_pass_binds() {
     let models = crate::example_models();
@@ -193,12 +195,13 @@ fn every_gpu_entry_needs_the_bindings_its_widest_pass_binds() {
     assert_eq!(models.gpu_needs().storage_buffers(), widest_overall);
 }
 
-/// Reported, not built. Otherwise the Build button hands wgpu a bind group it rejects.
+/// A model too large for the device is reported before it is built. Otherwise Build passes wgpu a bind group that
+/// it rejects.
 #[test]
 fn a_model_too_large_for_the_device_is_reported() {
     let models = crate::example_models();
     let entry = models.get("gpu_sir").expect("gpu_sir is an example model");
-    // Baseline limits, so this is issue #9's 6000x6000 case rather than the machine's.
+    // These are the baseline limits, so the case does not depend on this machine.
     let baseline = wgpu::Limits::default();
     let mut params = defaults(entry);
     params[0] = ParamValue::U32(6000);
@@ -287,7 +290,7 @@ fn an_example_entry_inserted_into_another_set_keeps_its_source() {
     );
 }
 
-/// A host without a device can still list a GPU model. Building one then has to come back as a fault, never as a
+/// A host without a device can still list a GPU model. Building it then has to come back as a fault, never as a
 /// panic.
 #[test]
 fn a_gpu_entry_refuses_to_build_without_a_device() {

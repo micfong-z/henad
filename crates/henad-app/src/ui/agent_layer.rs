@@ -1,8 +1,7 @@
 //! Instanced renderer for a model's agent population, drawn over the grid layer.
 //!
-//! Serves both backends. A CPU model uploads into the buffers owned here, a GPU model's already
-//! live on the device so [`AgentLayer::paint_gpu`] binds those instead. Pipeline, uniform and
-//! sprite size are shared, which keeps the two visually comparable.
+//! A CPU model uploads its lanes into buffers the layer owns. A GPU model's lanes already live on the device, and
+//! [`AgentLayer::paint_gpu`] binds them. Both backends share the shader, the uniform and the sprite size.
 //!
 //! Network edges are drawn under the nodes.
 
@@ -22,34 +21,35 @@ const POS_X_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Fl
 const POS_Y_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![1 => Float32];
 const COLOR_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![2 => Unorm8x4];
 
-/// Both position attributes out of one `vec2` lane. Still two `Float32` attributes rather than a
-/// `Float32x2`, so the shader is shared verbatim with the layout above.
+/// Both position attributes, read out of one `vec2` lane. They stay two `Float32` attributes, so one shader serves
+/// this layout and the split one.
 const POS_XY_ATTRS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32, 1 => Float32];
 
-/// Pipeline and uniform binding, fixed for the life of the app. `Arc` because a paint callback
-/// can still be in flight when the model is switched.
+/// Pipelines and uniform binding, fixed for the life of the app.
 ///
-/// One pipeline per vertex layout, since a GPU model holds position as one interleaved lane.
+/// A paint callback holds them through an `Arc`, and can still be in flight when the model is switched. A GPU model
+/// holds position as one interleaved lane, and gets its own pipeline.
 struct AgentPipeline {
     pipeline: wgpu::RenderPipeline,
     interleaved_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
 }
 
-/// Replaced wholesale when the population outgrows them.
+/// Instance buffers of a CPU population, replaced whole when the population outgrows them.
 struct AgentBuffers {
     pos_x: wgpu::Buffer,
     pos_y: wgpu::Buffer,
     color: wgpu::Buffer,
 }
 
-/// Also picks the vertex layout. Held directly rather than through an `Arc<AgentBuffers>` so one
-/// callback serves both backends, and the handles are refcounted so the lanes survive a sim thread
-/// torn down mid-frame.
+/// Position buffers of a draw. The variant picks the vertex layout.
+///
+/// The buffers are held directly, so one callback serves both backends. A wgpu handle is reference-counted, and the
+/// lanes survive a sim thread torn down mid-frame.
 enum PositionSource {
-    /// As a CPU snapshot uploads them.
+    /// Two lanes, as a CPU snapshot uploads them.
     Split { pos_x: wgpu::Buffer, pos_y: wgpu::Buffer },
-    /// As a GPU model stores it.
+    /// One `vec2` lane, as a GPU model stores it.
     Interleaved(wgpu::Buffer),
 }
 
@@ -108,10 +108,11 @@ pub struct AgentLayer {
     uniform: wgpu::Buffer,
     pipeline: Arc<AgentPipeline>,
     buffers: Arc<AgentBuffers>,
-    /// Agents the instance buffers can currently hold.
+    /// Number of agents that the instance buffers can currently hold.
     capacity: usize,
     count: u32,
-    /// Reused so a per-tick upload never allocates. See [`AgentLayer::widen_colors`].
+    /// Packed colours of the last upload, reused so a per-tick upload never allocates. See
+    /// [`AgentLayer::widen_colors`].
     color_scratch: Vec<u32>,
     /// Colour a uniform population was last filled with, so it only widens when that changes.
     uniform_color: Option<u32>,
@@ -201,7 +202,7 @@ impl AgentLayer {
         }
     }
 
-    /// Copies network edges to the GPU, or clears the previous model's edges if there are none.
+    /// Copies network edges to the GPU, or clears the previous model's edges when `edges` is `None`.
     pub fn upload_edges(&mut self, edges: Option<&EdgeSnapshot>) {
         let Some(layer) = &mut self.edges else {
             return;
@@ -212,7 +213,9 @@ impl AgentLayer {
         }
     }
 
-    /// Call only when the snapshot actually advanced.
+    /// Copies the population of `points` to the instance buffers.
+    ///
+    /// The viewport calls it only for a snapshot it has not drawn yet.
     pub fn upload(&mut self, points: &PointSnapshot) {
         let n = points.pos_x.len().min(points.pos_y.len());
         self.count = u32::try_from(n).unwrap_or(u32::MAX);
@@ -235,12 +238,12 @@ impl AgentLayer {
     ///
     /// The lane cannot be bound as-is. WebGPU has no one-byte vertex format and wants
     /// `array_stride % 4 == 0`, and the storage-buffer alternative needs `VERTEX_STORAGE`, which
-    /// WebGL2 lacks. Only this last hop widens, the snapshot copy stays one byte per agent.
+    /// WebGL2 lacks. Only this last hop widens. The snapshot copy stays one byte per agent.
     fn widen_colors(&mut self, points: &PointSnapshot, n: usize) {
         let lut = palette_lut(points.palette);
 
         if points.color.is_empty() {
-            // Uniform population, so the buffer only changes when the palette or the count does.
+            // A uniform population changes the buffer only when the palette or the count changes.
             let solid = lut[0];
             if self.uniform_color != Some(solid) || self.color_scratch.len() < n {
                 self.color_scratch.clear();
@@ -262,7 +265,8 @@ impl AgentLayer {
         });
     }
 
-    /// Powers of two, so a model with a varying population stops reallocating quickly.
+    /// Grows the instance buffers to hold `n` agents, in powers of two, so a model with a varying population stops
+    /// reallocating quickly.
     #[cfg_attr(
         all(target_arch = "wasm32", target_feature = "atomics"),
         expect(
@@ -288,8 +292,8 @@ impl AgentLayer {
 
     /// Queues the paint callback for `rect`, sizing sprites relative to that rect.
     ///
-    /// The uniform is written here rather than in `CallbackTrait::prepare`, which only sees the
-    /// whole window. Writes queued while building UI land before egui submits, so this is safe.
+    /// The uniform is written here. `CallbackTrait::prepare` sees only the whole window. Writes queued while building
+    /// UI are applied before egui submits.
     pub fn paint(&self, ui: &egui::Ui, rect: egui::Rect, world_w: f32, world_h: f32, edges: EdgeStyle) {
         self.paint_lanes(
             ui,
@@ -320,10 +324,9 @@ impl AgentLayer {
         );
     }
 
-    /// The population as an offscreen draw, sized to a `target` of that many pixels.
+    /// Returns the population as an offscreen draw, sized to a `target` of that many pixels.
     ///
-    /// An exported image sizes sprites in its own pixels rather than in the panel's points, so it
-    /// does not change with the panel.
+    /// An exported image sizes sprites in its own pixels. It then does not change with the panel.
     pub fn offscreen_draw(
         &self,
         target: egui::Vec2,
@@ -460,7 +463,7 @@ pub fn padded_palette(palette: &[[u8; 4]]) -> [[u8; 4]; 256] {
     std::array::from_fn(|index| palette.get(index).copied().unwrap_or(fallback))
 }
 
-/// `(split, interleaved)`. They differ only in how the position attributes are fetched.
+/// Returns the `(split, interleaved)` pipelines. They differ only in how the position attributes are fetched.
 fn build_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,

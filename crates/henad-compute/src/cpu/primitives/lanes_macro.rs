@@ -1,4 +1,4 @@
-//! `agent_lanes!`, which writes a model's `SoA` storage and its chunked step driver.
+//! The `agent_lanes!` macro. It declares a model's struct-of-arrays storage and the chunked driver that steps it.
 
 /// Declares a model's agent lanes.
 ///
@@ -29,7 +29,10 @@
 /// ```
 ///
 /// Lanes named `pos_x` and `pos_y` are required, since the engine builds the neighbour index and
-/// the point view from them.
+/// the point view from them. An optional `color = lane;` line specifies the `u8` lane that colours each point.
+///
+/// `read` is the type name for the generated view of every `dual` lane's current side, and `chunk` is the type name
+/// for the generated set of slices that one chunk of agents writes.
 ///
 /// A lane's doc comment and attributes go on its field of the lanes struct, and on both fields of
 /// a `dual` lane. The fields of the read view and the chunk carry generated docs.
@@ -38,7 +41,7 @@
 /// the read view prints no field. A `#[derive(Debug)]` on the declaration conflicts with that impl.
 #[macro_export]
 macro_rules! agent_lanes {
-    // Each lane is read as its attributes, then its keyword. A single pattern listing every lane cannot tell
+    // Each lane is parsed as its attributes, then its keyword. A single pattern listing every lane cannot tell
     // which repetition an attribute starts.
     (
         @dual $head:tt [$($dual:tt)*]
@@ -129,8 +132,9 @@ macro_rules! agent_lanes {
             /// Runs `kernel(global_index, local_index, read, chunk, rng)` over every agent,
             /// merging the returned tally in chunk order.
             ///
-            /// Chunked and seeded here so a kernel never sees the parallelism. The seed comes from
-            /// the chunk index, so which agent sees which stream does not depend on scheduling.
+            /// The pass splits the agents into chunks of `chunk_size` and seeds each chunk's `rng` from `seed`, `tick`
+            /// and the chunk index. A kernel never sees the parallelism, and the stream an agent sees does not depend
+            /// on scheduling.
             pub fn run_pass<K, T>(&mut self, chunk_size: usize, seed: u64, tick: u64, kernel: K) -> T
             where
                 K: ::core::ops::Fn(usize, usize, $read<'_>, &mut $chunk<'_>, &mut u64) -> T
@@ -146,8 +150,8 @@ macro_rules! agent_lanes {
                     _lifetime: ::std::marker::PhantomData,
                 };
 
-                // One view per chunk, zipped here rather than through a nested rayon zip. The Vec
-                // holds one entry per chunk, not per agent.
+                // Each chunk's view is collected here, instead of a nested rayon zip over the lanes. The
+                // Vec holds one entry per chunk.
                 $(let mut $dnext = $dnext.chunks_mut(chunk_size);)*
                 $(let mut $pname = $pname.chunks_mut(chunk_size);)*
                 let mut views: ::std::vec::Vec<$chunk<'_>> = ::std::iter::from_fn(|| {

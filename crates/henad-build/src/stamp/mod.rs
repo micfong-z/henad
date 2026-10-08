@@ -1,12 +1,12 @@
 //! Build stamps: the commit a crate was built from, the commit's date, a dirty flag and a hash of the crate's sources.
 //!
 //! A stamp reads `.cargo_vcs_info.json` in a package that holds one, as every registry download does. Otherwise it
-//! asks git, and only when git tracks the crate's own `Cargo.toml`. Outside both it records no commit, and the source
-//! hash alone identifies the build.
+//! queries git, and only when git tracks the crate's own `Cargo.toml`. When neither source applies, the stamp records
+//! no commit, and the source hash alone identifies the build.
 //!
 //! The source hash is a Fowler-Noll-Vo (FNV-1a) hash over the files under `src`, the manifest and, outside a package,
-//! the nearest `Cargo.lock`. Dotfiles, editor backups, the `.orig` and `.rej` files a merge or a patch leaves, and
-//! symlinks to a directory or to nothing stay out of it, and out of the dirty flag.
+//! the nearest `Cargo.lock`. Dotfiles, editor backups, the `.orig` and `.rej` files that a merge or a patch leaves
+//! behind, and symlinks to a directory or to nothing are left out of the hash and the dirty flag.
 
 mod files;
 mod git;
@@ -30,7 +30,7 @@ const ENGINE_PREFIX: &str = "crates/henad-explore/";
 pub(crate) enum StampScope {
     /// A host or model crate, through [`crate::stamp_commit`].
     Commit,
-    /// henad-explore, whose stamp stands for the engine.
+    /// henad-explore, whose stamp represents the engine.
     Engine,
     /// henad-compute or henad-models: the crate's own `src` and manifest, and a commit only from a package.
     SourceHash,
@@ -39,14 +39,14 @@ pub(crate) enum StampScope {
 /// Values one stamp sets, and the paths Cargo watches for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Stamp {
-    /// Short commit hash, empty when the stamp could not learn it.
+    /// Short commit hash, empty when the stamp could not determine it.
     pub(crate) commit: String,
     pub(crate) commit_date: String,
     pub(crate) dirty: Option<bool>,
     pub(crate) source_hash: Option<u64>,
     /// Hash of the crate's own `src` and manifest. Set for [`StampScope::Engine`] alone.
     pub(crate) crate_hash: Option<u64>,
-    /// Paths whose change reruns the build script, each one that exists.
+    /// Existing paths whose change reruns the build script.
     pub(crate) watched: Vec<PathBuf>,
 }
 
@@ -64,8 +64,8 @@ impl Stamp {
                     return Self::from_git(repository, &[own]);
                 }
                 let mut stamp = Self::untracked(&own, None, true);
-                // A repository that holds the crate and does not track its manifest yet. A commit reruns the
-                // script, the first one included.
+                // The crate sits in a repository that does not track its manifest yet. A commit reruns the script,
+                // including the first commit.
                 if !own.is_package()
                     && let Some(enclosing) = Repository::enclosing(crate_dir)
                 {
@@ -106,7 +106,7 @@ impl Stamp {
 
     /// Returns the stamp of `packages` under git.
     ///
-    /// The dirty flag reads unknown in place of clean when git does not track the nearest `Cargo.lock`, since no commit
+    /// The dirty flag is unknown instead of clean when git does not track the nearest `Cargo.lock`, because no commit
     /// then records the lockfile. The source hash covers it, and tells two such builds apart.
     fn from_git(repository: &Repository, packages: &[CrateFiles]) -> Self {
         let mut sources = Vec::new();
@@ -146,9 +146,10 @@ impl Stamp {
     }
 
     /// Returns the stamp of a crate whose commit stays unknown, hashed over its own files and, with `lockfile`, the
-    /// nearest `Cargo.lock` when the crate is no package.
+    /// nearest `Cargo.lock` when the crate is not a package.
     ///
-    /// `repository`, when given, lists the crate's files as git sees them, and watches none of its paths.
+    /// `repository`, when given, lists the crate's files as git sees them. The stamp watches none of the repository's
+    /// paths.
     fn untracked(own: &CrateFiles, repository: Option<&Repository>, lockfile: bool) -> Self {
         let mut sources = own.sources(repository);
         let mut watched = own.watched();
@@ -169,10 +170,10 @@ impl Stamp {
         }
     }
 
-    /// Returns the lines a build script prints to hand the stamp to Cargo.
+    /// Returns the lines a build script prints to pass the stamp to Cargo.
     ///
-    /// Each line takes the single-colon form. The double one needs Cargo 1.77 and would raise every downstream crate's
-    /// MSRV.
+    /// Each line uses the single-colon form. The double-colon form needs Cargo 1.77 and would raise every downstream
+    /// crate's MSRV.
     pub(crate) fn cargo_lines(&self, scope: StampScope) -> Vec<String> {
         let hex = |hash: Option<u64>| hash.map(|hash| format!("{hash:016x}")).unwrap_or_default();
         let dirty = self.dirty.map(|dirty| dirty.to_string()).unwrap_or_default();

@@ -13,7 +13,7 @@ A grid fine enough to answer them puts most of its runs far from the answer, and
 A **search** chooses its configs as it goes.
 It runs a batch of configs, reads their results, and picks the next batch from the results so far.
 Henad has four search methods.
-A search runs from a spec file with a `[search]` table, on the same runs and seeds as a sweep, and writes the files of a sweep plus a few of its own.
+A search runs from a spec file with a `[search]` table, on the same runs and seeds as a sweep, and writes a sweep's files plus a few search tables.
 The app runs the same searches from its [Sweep tab](app.md#search-mode), and plots them in its [Results tab](app.md#search).
 
 Before we start, read the [parameter sweeps guide](sweeps.md) up to the end of [spec files](sweeps.md#spec-files).
@@ -22,7 +22,7 @@ A search uses the spec file's tables, replicates, seeds and reducers as a sweep 
 ## Sweep or search
 
 A sweep suits a question about the whole space.
-It gives a plot of an output against a parameter, a heatmap over two, or the design a sensitivity analysis needs.
+It gives a plot of an output against a parameter, a heatmap over two parameters, or the design a sensitivity analysis needs.
 Its design spreads the configs, and every part of the space gets its share.
 
 A search suits a question about a small part of the space.
@@ -84,7 +84,7 @@ wrote 1920 runs to sir-genetic in 0.3s: 1920 ok, 0 non-finite, 0 failed
 A **candidate** is one config the search chose.
 An **evaluation** runs a candidate once for each replicate, here four times.
 Candidate 442 won: over its runs, the median tick of the epidemic's peak is 165.
-It has eight runs where the spec asks for four, for the reason given under [noise](#noise).
+It has eight runs where the spec requests four, for the reason given under [noise](#noise).
 
 `--dry-run` prints the plan and stops, as it does for a sweep.
 
@@ -97,8 +97,8 @@ We will go through the spec a part at a time.
 ```
 
 The top of the file is a sweep spec with no blocks.
-`[set]` fixes a small grid, and `[run]` sets the length of each run and `replicates`, the runs of one evaluation.
-A search reads its outputs from the reducers, and `[measure]` asks for the two this one needs, the peak and its tick.
+`[set]` fixes a small grid, and `[run]` sets the length of each run and `replicates`, the number of runs in one evaluation.
+A search reads its outputs from the reducers, and `[measure]` requests the two reducers that this search needs, the peak and its tick.
 `series_every = 0` writes no rows to `series.csv`, since the search reads only the reducers.
 The `root` of `[seeds]` seeds the runs and the search.
 The `[[action]]` table adds a second outbreak, and the search moves its tick.
@@ -107,24 +107,24 @@ The `[[action]]` table adds a second outbreak, and the search moves its tick.
 --8<-- "crates/henad-explore/specs/sir_search_genetic.toml:search"
 ```
 
-`[search]` takes the place of the blocks, and a spec with both is refused.
-`algorithm` names the method.
+`[search]` replaces the blocks, and a spec with both is rejected.
+`algorithm` specifies the method.
 `max_evaluations` is the budget, and `batch_size` the most candidates run at once.
-`objective` names the output that scores a candidate, as [objectives](#objectives) describes.
+`objective` specifies the output that scores a candidate, as [objectives](#objectives) describes.
 `space` lists the factors the search varies.
 
 ``` toml
 --8<-- "crates/henad-explore/specs/sir_search_genetic.toml:genetic"
 ```
 
-Each method but random search has a table of its own for its settings: `[search.hill_climb]`, `[search.genetic]` or `[search.pse]`.
+Each method except random search has its own settings table: `[search.hill_climb]`, `[search.genetic]` or `[search.pse]`.
 A setting you leave out takes its default, and a table you leave out takes every default.
 Pattern Space Exploration needs its table, for the two axes.
-A table of another method is refused, and so is a key the table does not know.
+A table for another method is rejected, and so is a key that the table does not recognise.
 
 ## The search space
 
-`space` takes factors as a [block](sweeps.md#blocks) does, each a parameter with `param` or the tick of an action with `action`.
+`space` accepts factors as a [block](sweeps.md#blocks) does, each a parameter with `param` or the tick of an action with `action`.
 A parameter the space leaves out keeps its `[set]` value or its default.
 A parameter cannot be fixed in `[set]` and searched at once, and a factor can appear only once.
 
@@ -155,7 +155,7 @@ A spec gives the same candidates on every machine.
 `column`
 : The output that scores a candidate, a reducer column of `runs.csv` such as `Infected:max`.
   With the default reducers, every stat has its `:final`, `:min`, `:max` and `:mean` columns, and `[measure]` can add others.
-  A column no reducer writes is refused before the first run, and the error lists the columns there are.
+  A column that no reducer writes is rejected before the first run, and the error lists the available columns.
 
 `goal`
 : `maximize` or `minimize`.
@@ -170,31 +170,31 @@ With the mean, one failed replicate makes a candidate the worst of the search.
 With the median, a candidate keeps a score while fewer than half its replicates fail.
 A config that always crashes the model scores the worst value, and the search carries on past it.
 
-Pattern Space Exploration takes no objective and refuses one.
-Its two axes name the outputs it reads, as [its section](#pattern-space-exploration) shows.
+Pattern Space Exploration has no objective, and rejects a spec that sets `objective`.
+Its two axes specify the outputs it reads, as [its section](#pattern-space-exploration) shows.
 
 ## Replicates and seeds
 
 Each evaluation runs its candidate `replicates` times.
-The runs take their seeds from the seed scheme of `[seeds]`, as a sweep's do, with the candidate in place of the config.
+The runs take their seeds from the seed scheme of `[seeds]`, as in a sweep, with the candidate instead of the config.
 Under common random numbers, the default, replicate `r` of every candidate starts from the same seed.
 Two candidates then meet the same randomness, and a difference between them owes less to luck.
 
-The genetic algorithm, and hill climbing when asked, can **re-evaluate** a candidate, running it again for more replicates.
+The genetic algorithm, and hill climbing with `reevaluate` set, can **re-evaluate** a candidate, running it again for more replicates.
 A re-evaluation carries on from the candidate's last replicate index.
 With four replicates, the first evaluation runs replicates 0 to 3 and a re-evaluation runs 4 to 7, on four new seeds.
 The candidate's value then rests on all eight runs.
-Under `scheme = "independent"`, a re-evaluation takes the seeds its candidate has at those replicate indices.
+Under `scheme = "independent"`, a re-evaluation uses the seeds that its candidate has at those replicate indices.
 
 ## Budgets and batches
 
 `max_evaluations` is the budget of the search.
 Each evaluation costs `replicates` runs, and a re-evaluation costs as much as a first evaluation.
-The plan prints the runs the budget comes to, 1920 for the 480 evaluations of 4 replicates above.
-The search ends once the budget is spent, and has no other stop.
+The plan prints the number of runs in the budget, 1920 for the 480 evaluations of 4 replicates above.
+The search ends once the budget is spent, and has no other stop condition.
 
 A search runs in batches.
-It asks its method for up to `batch_size` candidates, runs the batch on the lanes or tracks a sweep would use, several runs at once, and tells the method the results before it asks again.
+It requests up to `batch_size` candidates from its method, runs the batch on the lanes or tracks that a sweep would use, several runs at once, and tells the method the results before it requests more.
 A larger batch keeps more cores busy.
 A smaller one lets the method react sooner.
 
@@ -212,7 +212,7 @@ The web app searches CPU models only.
 Random search, `algorithm = "random"`, draws every candidate uniformly from the space, as a `random` block draws its configs, and ranks the candidates by the objective.
 It has no settings.
 
-Random search is the baseline for the other three.
+Random search is the baseline for the other three methods.
 When another method does no better at the same budget, suspect an objective too noisy or too flat to climb.
 It also suits a first look at a space of many factors, before a method that narrows in.
 
@@ -225,7 +225,7 @@ The climb moves to the best neighbour when it beats the incumbent outright.
 After `patience` batches in a row without a move, the climb starts over from a new batch of random candidates.
 
 No two new candidates share a config.
-A random candidate or a neighbour whose config repeats an earlier one is drawn again, up to 16 times.
+A random candidate or a neighbour that repeats an earlier candidate's config is drawn again, up to 16 times.
 When every draw repeats, the batch re-evaluates the earlier candidate in its place.
 A re-evaluated random candidate competes for the start like the others, and a re-evaluated neighbour never moves the climb.
 Over a few integers or options, a climb that has tried every nearby config stalls this way and starts over.
@@ -234,23 +234,23 @@ Over a few integers or options, a climb that has tried every nearby config stall
 |---|---|---|
 | `mutation_scale` | 0.1 | Longest step of a factor from the incumbent to a neighbour, as a share of its range |
 | `patience` | 5 | Batches without a move before the climb starts over |
-| `reevaluate` | `false` | Re-evaluate the incumbent in every batch, in place of one neighbour |
+| `reevaluate` | `false` | Re-evaluate the incumbent in every batch, instead of one neighbour |
 
 Hill climbing suits an output that changes smoothly with the parameters.
 It closes in on the top of the nearest hill quickly, and the restarts give it a chance at other hills.
-`best.csv` ranks the candidates of every climb, and the best can come from an earlier climb.
+`best.csv` ranks the candidates of every climb, and the best candidate can come from an earlier climb.
 
 A noisy output misleads it.
 A neighbour with lucky replicates can beat the incumbent and take its place.
 With `reevaluate = true`, each batch runs the incumbent again with fresh replicates, and the value of a lucky incumbent falls back as its replicates pile up.
-The incumbent takes one place in the batch, and a batch of one holds a neighbour alone.
+The incumbent takes one place in the batch, and a batch of size 1 holds only a neighbour.
 
 ## Genetic algorithm
 
 The genetic algorithm, `algorithm = "genetic"`, evolves a **population** of candidates, one generation at a time.
 Generation 0 is `population` random candidates.
-Each later generation starts by re-evaluating the best members of the last.
-It keeps the `elite_count` best members of the last generation unchanged, and fills the rest of the population with children.
+Each later generation starts by re-evaluating the best members of the previous generation.
+It keeps the `elite_count` best members of the previous generation unchanged, and fills the rest of the population with children.
 
 A child needs a parent.
 A **tournament** draws `tournament_size` members at random and takes the best of them as the parent.
@@ -275,7 +275,7 @@ In the example, each generation after the first holds 8 re-evaluations and 30 ch
 ### Noise
 
 The value of a candidate over a few replicates is partly luck, and the best of many candidates is often among the luckiest.
-Each generation first re-evaluates the best `reevaluate_fraction` of the one before, with fresh replicates.
+Each generation first re-evaluates the best `reevaluate_fraction` of the previous generation, with fresh replicates.
 A member's **fitness** is its objective over every replicate it has, re-evaluations included.
 A member that stays near the top keeps gathering runs, and its value settles.
 The elites are chosen once the re-evaluations are in, and a leader that was lucky loses its place.
@@ -288,17 +288,17 @@ Candidate 409 led at 155 over eight runs, and fell to 130 over twelve.
 Candidate 442 scored 107.5 on its first four runs and 165 on its next four, and won.
 The best so far can drop from one batch to the next, and `batches.csv` shows it falling from 130 to 125 at batch 17.
 
-A child can repeat the config of an earlier candidate, for example when it takes every factor from one parent and none mutates.
+A child can repeat the config of an earlier candidate, for example when it takes every factor from one parent and no factor mutates.
 Under common random numbers, a copy would repeat the earlier candidate's first runs exactly, and its lucky first value with them.
 The search mutates such a child again, up to 16 times, and no two new candidates share a config.
 When every draw repeats, the generation re-evaluates the earlier candidate with fresh replicates, and that candidate joins the generation in the child's place.
-Over a few integers or options, the search runs out of new configs this way and re-evaluates the ones it has.
+Over a few integers or options, the search runs out of new configs this way and re-evaluates the candidates it has.
 
 ## Pattern Space Exploration
 
 Pattern Space Exploration (PSE), `algorithm = "pse"`, looks for variety.
 It covers two outputs with a grid of cells, and tries to land candidates in as many cells as it can.
-The filled cells map the pairs of the two outputs the model can produce, each with a config that produces it.
+The filled cells map the pairs of the two outputs that the model can produce, each with a config that produces it.
 
 Here is a PSE of SIR over the peak and the tick of the peak.
 Henad's repository keeps it at `crates/henad-explore/specs/sir_search_pse.toml`.
@@ -325,7 +325,7 @@ Above its `[search]` table, the spec reads like the genetic one, with 400 steps,
 --8<-- "crates/henad-explore/specs/sir_search_pse.toml:pse"
 ```
 
-`x_axis` and `y_axis` each name a reducer column, and cut the range from `min` to `max` into `cells` cells of equal width.
+`x_axis` and `y_axis` each specify a reducer column, and cut the range from `min` to `max` into `cells` cells of equal width.
 Here the peak runs across 32 cells of 128 infected, and its tick up 20 cells of 2.5 ticks.
 A value outside an axis lands in the edge cell nearer to it, and its evaluation is marked `outside`.
 Many marked evaluations mean an axis is too narrow for the model.
@@ -336,9 +336,9 @@ The search holds its evaluations until the first `initial_samples` of them are t
 Each automatic axis then spans the smallest to the largest value those evaluations gave, widened by 5% of that span at each end.
 A single value `v` gets a span of 1 around it, or of `|v|` when that is wider.
 The range stays fixed for the rest of the search, and the evaluations held so far land in their cells.
-Until then the archive is empty, each batch holds initial samples alone, and `evaluations.csv` gives each evaluation its values but no cell.
-An axis takes both bounds or neither, and an automatic range needs at least one initial sample.
-The manifest records the range of each axis as `axis_ranges`, and `archive.csv` gives the bounds of every cell.
+Until then the archive is empty, each batch holds initial samples alone, and `evaluations.csv` lists the values of each evaluation but no cell.
+An axis sets both bounds or no bounds, and an automatic range needs at least one initial sample.
+The manifest records the range of each axis as `axis_ranges`, and `archive.csv` lists the bounds of every cell.
 `aggregate` folds the replicates into one value per axis, and leaves failed replicates out.
 An evaluation with no value left on an axis lands in no cell.
 
@@ -346,7 +346,7 @@ The **archive** keeps every filled cell with its **exemplar**, the first candida
 It also counts the cell's **hits**, every candidate that landed there.
 The first `initial_samples` candidates are drawn at random, and a batch that reaches the last of them stops there.
 Once every one of them is told, each later candidate comes from the archive.
-The search draws two filled cells at random, keeps the one with fewer hits, and mutates its exemplar, moving every factor by up to `mutation_scale`.
+The search draws two filled cells at random, keeps the cell with fewer hits, and mutates its exemplar, moving every factor by up to `mutation_scale`.
 The exemplars of rarely hit cells become parents more often, and the search spreads outward from the edges of the archive.
 With `initial_samples = 0`, the first candidate is drawn at random, alone in its batch.
 Until a candidate lands in a cell, the archive has nothing to breed from, and each later batch is drawn at random in full.
@@ -354,12 +354,12 @@ Until a candidate lands in a cell, the archive has nothing to breed from, and ea
 | Key | Default | Effect |
 |---|---|---|
 | `x_axis`, `y_axis` | | Each `{ column, min, max, cells }`, or `{ column, cells }` for an automatic range. Both needed |
-| `initial_samples` | 64 | Candidates drawn at random before any is bred from the archive |
+| `initial_samples` | 64 | Candidates drawn at random before any candidate is bred from the archive |
 | `mutation_scale` | 0.1 | Longest step of a factor from its exemplar, as a share of its range |
 | `aggregate` | `median` | Rule that folds the replicates into one value per axis |
 
 The example fills 298 of its 640 cells.
-The same 1200 evaluations drawn at random, with `initial_samples = 1200`, fill 167.
+The same 1200 evaluations drawn at random, with `initial_samples = 1200`, fill 167 cells.
 Most of the extra cells hold late peaks, after tick 25.
 Few configs peak that late, and random draws seldom find them.
 A cell that stays empty might lie beyond the model's reach, such as a peak before tick 5.
@@ -367,7 +367,7 @@ A cell that stays empty might lie beyond the model's reach, such as a peak befor
 
 ## The output directory
 
-A search writes the files of a sweep and adds its own:
+A search writes the files of a sweep and adds its own tables:
 
 ```text
 sir-genetic/
@@ -384,11 +384,11 @@ sir-genetic/
 `runs.csv`, `series.csv` and `summary.csv`
 : As in a sweep, with the candidate's id as `config_id`.
   Run `i` of candidate `c` has the run id `c * replicates + i`, and its `rep` counts on from the candidate's first replicate index.
-  A re-evaluation is a candidate of its own here, with its own row in `summary.csv`.
+  A re-evaluation is its own candidate here, with its own row in `summary.csv`.
 
 `evaluations.csv`
 : One row per evaluation, with the candidate, its batch, the origin of its genome, its first replicate index, its config and its value.
-  A re-evaluation names the candidate it repeats, and gives that candidate's value over every replicate it has.
+  A re-evaluation refers to the candidate that it repeats, and lists that candidate's value over every replicate it has.
 
 `batches.csv`
 : One row per batch, with the evaluations and runs so far, and the best candidate after the batch or the cells filled so far.
@@ -405,7 +405,7 @@ sir-genetic/
 `manifest.json`
 : As in a sweep, with the mode `search` and a `search` section holding the budget, the search seed and the standing at the end.
 
-The `origin` column of `evaluations.csv` names the source of a candidate's genome:
+The `origin` column of `evaluations.csv` shows the source of a candidate's genome:
 
 | Origin | Candidate |
 |---|---|
@@ -472,28 +472,28 @@ cargo run --release --locked -p henad-cli -- --spec sir_search_genetic.toml --ou
 ```
 
 A method picks its candidates from its seed and from the results it is told, and a resume replays it from the start.
-Each batch asks for the same candidates as before.
-A run that `runs.csv` holds is read back in place of running again, and the runs after the last one written run as usual.
+The method returns the same candidates for each batch as before.
+A run that `runs.csv` holds is read back instead of running again, and the runs after the last one written run as usual.
 The finished directory is the same as that of a search that ran without a break, apart from the timing columns.
 
 A resume tells the method every run as it was recorded, failed and timed-out runs included, and never runs one of them again.
 A run that came out differently would change the candidates of every batch after it.
-`--retry-failed` is refused for a search.
+`--retry-failed` is rejected for a search.
 
-A resume also refuses a directory whose search differs in anything that sets its course: the model and its fixed values, the runs and their outputs, the seeds, the method and its settings, the budget, the batch size, the replicate count, the objective and the space.
+A resume also rejects a directory whose search differs in anything that sets its course: the model and its fixed values, the runs and their outputs, the seeds, the method and its settings, the budget, the batch size, the replicate count, the objective and the space.
 The timeout and the execution settings can change.
-To search beyond the budget, start a new search, for example over a space narrowed around the best candidates of the first.
+To search beyond the budget, start a new search, for example over a space narrowed around the best candidates of the first search.
 
 Each batch depends on the batches before it, and a search cannot run as shards.
-`--shard` is refused.
+`--shard` is rejected.
 In the desktop app, open the directory in the [Results tab](app.md#opening-results) and press <span class="ui" markdown>:material-play: Resume search</span>.
 
 ## Searching in the app
 
 The app's <span class="ui" markdown>:material-flask-outline: Sweep</span> tab runs a search in its **Search** mode.
 Tick the parameters to search over, pick the **Method**, the **Objective** and the **Evaluations**, and press <span class="ui" markdown>:material-play: Start</span>.
-Every setting on this page has a field there, and the [app tour](app.md#search-mode) names each one.
-<span class="ui" markdown>:material-tray-arrow-down: Save spec</span> writes the search as a spec file for `henad-cli`, and <span class="ui" markdown>:material-tray-arrow-up: Load spec</span> reads one back.
+Every setting on this page has a field there, and the [app tour](app.md#search-mode) describes each one.
+<span class="ui" markdown>:material-tray-arrow-down: Save spec</span> writes the search as a spec file for `henad-cli`, and <span class="ui" markdown>:material-tray-arrow-up: Load spec</span> reads a spec file back.
 
 While the search runs, the [Search view](app.md#search) of the <span class="ui" markdown>:material-chart-box-outline: Results</span> tab plots its course.
 A click on a cell of a PSE grid selects the first run of the cell's exemplar, ready to open in the viewport.

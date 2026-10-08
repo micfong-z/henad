@@ -40,11 +40,11 @@ pub fn separator_width(style: &egui::Style) -> f32 {
 /// Contents of the header while the tab builds a sweep.
 pub struct BuilderHeader<'a> {
     pub model_name: &'a str,
-    /// Line reporting the last save or load, `None` for none.
+    /// Line reporting the last save or load, `None` when there is nothing to report.
     pub notification: Option<&'a str>,
-    /// Whether the model is one a browser cannot sweep.
+    /// Whether the model cannot be swept in a browser, as for a GPU model.
     pub gpu_refused: bool,
-    /// Program the advice names, `None` for none.
+    /// Program that the advice refers to, `None` when the product has no command-line program.
     pub cli_command: Option<&'a str>,
     /// Whether the Plan panel fits beside the form, and its toggle shows.
     pub plan_fits: bool,
@@ -119,7 +119,7 @@ pub struct SessionHeader<'a> {
     pub noun: &'static str,
     pub model_name: &'a str,
     pub notification: Option<&'a str>,
-    /// Whether the session resumes a folder, and has no draft of its own.
+    /// Whether the session resumes a folder. Such a session has no draft.
     pub resumed: bool,
     pub plan_fits: bool,
 }
@@ -204,7 +204,7 @@ fn mode_switch(ui: &mut egui::Ui, mode: &mut DraftMode) -> bool {
     segmented(ui, mode, &choices, |_| Ok(()))
 }
 
-/// Spec menu of the header, and the reasons either item is disabled.
+/// Spec menu of the header, and the reason each item is disabled.
 struct SpecMenu {
     noun: &'static str,
     save_refusal: Option<String>,

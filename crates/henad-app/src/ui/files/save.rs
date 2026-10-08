@@ -1,7 +1,7 @@
-//! Saves that hand bytes to a save dialog, or to the browser's downloads.
+//! Save dialogs that write bytes to a file, or pass them to the browser's downloads.
 //!
-//! A browser offers no save dialog that reports what the user chose. The app hands each file straight to the
-//! browser's downloads, which saves it or asks where to, as the browser is set up.
+//! A browser offers no save dialog that reports what the user chose. The app passes each file straight to the
+//! browser's downloads, which saves it or asks where to save, depending on browser settings.
 
 use std::sync::Arc;
 
@@ -27,9 +27,10 @@ pub fn spawn_save(
 
 /// Saves the four files of a sweep, `files`, together, sharing their bytes with the caller.
 ///
-/// Native asks for a folder and writes every file into it, refusing a folder that holds a file of the same name. A
-/// browser downloads the files one after another. Returns immediately. The outcome arrives on `sender`, and `ctx`
-/// repaints to show it.
+/// On native the user picks a folder, and every file is written into it. A folder that holds a file of the same name
+/// is rejected. A browser downloads the files one after another.
+///
+/// Returns immediately. The outcome arrives on `sender`, and `ctx` repaints to show it.
 pub fn spawn_save_files(
     target: SaveTarget,
     files: Arc<SweepFiles>,
@@ -73,9 +74,9 @@ async fn save_files(files: &[(&str, &[u8])]) -> SaveResult {
     write_into(folder.path(), files)
 }
 
-/// Writes every file of `files` into `folder`, refusing a folder that holds an entry of the same name.
+/// Writes every file of `files` into `folder`, rejecting a folder that holds an entry of the same name.
 ///
-/// A link counts as an entry, a link to nothing included. Otherwise the write would follow the link out of `folder`.
+/// A link counts as an entry, a dangling link included. Otherwise the write would follow the link out of `folder`.
 #[cfg(not(target_arch = "wasm32"))]
 fn write_into(folder: &std::path::Path, files: &[(&str, &[u8])]) -> SaveResult {
     if let Some((name, _)) = files
@@ -113,11 +114,11 @@ async fn save_files(files: &[(&str, &[u8])]) -> SaveResult {
 #[cfg(target_arch = "wasm32")]
 const DOWNLOAD_URL_LIFETIME_MS: i32 = 60_000;
 
-/// Hands `bytes` to the browser's downloads under the file name `name`.
+/// Passes `bytes` to the browser's downloads under the file name `name`.
 ///
 /// # Errors
 ///
-/// Returns the browser's error, written out, when the page has no document or refuses the download.
+/// Returns the browser's error, written out, when the page has no document or rejects the download.
 #[cfg(target_arch = "wasm32")]
 fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     use eframe::wasm_bindgen::JsCast as _;
@@ -129,7 +130,7 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let document = window.document().ok_or_else(|| "the page has no document".to_owned())?;
     let body = document.body().ok_or_else(|| "the page has no body".to_owned())?;
 
-    // A copy out of the wasm memory. A threaded build shares that memory between workers, and a blob refuses a view
+    // A copy out of the wasm memory. A threaded build shares that memory between workers, and a blob rejects a view
     // of shared memory.
     let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
     let options = web_sys::BlobPropertyBag::new();

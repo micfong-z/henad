@@ -23,10 +23,11 @@ gpu/
 ```
 
 Nothing in this directory creates a `wgpu::Device`.
-The device is injected through `GpuContext`, cloned from whoever owns acquisition, which keeps the crate free of any dependency on egui or eframe.
+The device is injected through `GpuContext`, as a clone of the context that the acquiring code holds.
+This keeps the crate free of any dependency on egui or eframe.
 Models live in the crate that registers them, henad-models for the example models and a project's own crate for the rest.
 They contribute shaders, seed data and metadata, and every wgpu object is built here.
-A GPU entry builds on whatever device the host hands it, and the host learns from `ModelSet::gpu_needs` what to ask for before it has one.
+A GPU entry builds on whatever device the host provides, and the host learns from `ModelSet::gpu_needs` what to request before it has a device.
 
 ## The engines
 
@@ -34,7 +35,7 @@ A GPU entry builds on whatever device the host hands it, and the host learns fro
 Each derives every buffer, layout, pipeline and bind group from what its model declares, and each implements both `SimState` and `GpuSimState`.
 
 `GpuSimState` is the extra interface a GPU model needs on top of `SimState`, and `GpuSimThread` drives the state through it.
-A host names it `henad::runner::GpuSimState`.
+A host refers to it as `henad::runner::GpuSimState`.
 
 | Method | Role |
 |---|---|
@@ -44,11 +45,17 @@ A host names it `henad::runner::GpuSimState`.
 | `encode_stats_passes` | Records the reduce passes alone, for a sample that draws nothing |
 | `begin_stats_readback` | Starts the async readback, right after the submission |
 | `poll_stats_readback` | Completes a pending readback, and waits for it when `block` is set |
-| `stats_readback_pending` | Whether a readback has started and not landed |
+| `stats_readback_pending` | Whether a readback has started and not completed |
 | `view` | The layers the UI draws, cloned into every snapshot |
 
 Ping-ponged buffers are handled through a parity index plus two pre-built bind groups per side, flipped per tick, so no bind group is rebuilt while stepping.
-A buffer written in place gets one side, and `sides()` hands back that same buffer twice.
+A buffer written in place gets one side, and `sides()` returns that same buffer twice.
+
+The engines bind a pass's buffers by the names its shader declares.
+henad-build reads each entry point's `@group(0)` declarations from the shader's own lines, in `binding_lines.rs`.
+`wgsl_bindgen` keeps binding names only in doc comments, where the engine cannot read them.
+The index, the name, the address space and the access all sit on the declaration line, and only a binding's type would need the imports resolved.
+The reader therefore never composes the module, and the build rejects a binding written across several lines.
 
 ## The primitives
 
@@ -58,11 +65,11 @@ The files here are the GPU counterparts of the data structures in `henad-core`.
 
 :   The twin of `SpatialHash`, rebuilt every tick with the same layout, so a kernel walks cell `c` as `sorted[cell_start[c]..cell_start[c + 1]]`.
     Unlike the CPU sort it is **not stable**.
-    Membership matches, but a cell's slice comes out in whatever order the atomics resolve, and a kernel summing floats over one will not replay.
+    Membership matches, but a cell's slice comes out in whatever order the atomics resolve, and a kernel that sums floats over a cell's slice will not replay.
 
 `prefix_scan.rs`
 
-:   A multi-level exclusive prefix sum, standing in for the counting sort's serial running total.
+:   A multi-level exclusive prefix sum, replacing the counting sort's serial running total.
     Each workgroup scans `WORKGROUP` elements, the level above scans their totals, and the results are added back down the chain.
 
 `reduce.rs`
@@ -75,13 +82,17 @@ The files here are the GPU counterparts of the data structures in `henad-core`.
 
 :   Async readback of a handful of `u32` counters.
     Blocking on `map_async` right after submission would stall the sim thread at the display cadence and cap throughput at roughly one in-flight batch per frame.
-    The map instead starts right after submission and completes on some later loop iteration, which leaves a reported stat a few milliseconds stale, the same staleness the display already accepts.
+    The map instead starts right after submission and completes on some later loop iteration.
+    A reported stat is then a few milliseconds stale, the same staleness the display already accepts.
+    The float sums of `reduce.rs` travel through the same readback, reinterpreted as `f32` bits.
+    The staging path moves only 4-byte words, and one path serves both element types.
 
 `dispatch.rs`
 
 :   Folds a linear invocation domain onto wgpu's 2D workgroup grid.
     Past 65535 workgroups on one axis a dispatch has to be a rectangle, so kernels take `groups_x` and recover their flat index through `linear_index`.
-    `WORKGROUP` is read from the WGSL declaring it, and the group limit is hardcoded instead of read from the adapter, which keeps the fold identical on every machine.
+    `WORKGROUP` is read from the WGSL declaring it, and the group limit is hardcoded instead of read from the adapter.
+    This keeps the fold identical on every machine.
 
 ## Batching
 
@@ -99,9 +110,14 @@ Adaptive mode keeps an EMA of `time_per_step` and picks a size so that `batch_si
 It runs off wall-clock time rather than GPU timestamps, and `TimestampQuery` stays diagnostic-only.
 `MAX_BATCH_SIZE` bounds the output, because by the time a slowdown needs reacting to, an oversized batch is already committed.
 
-Submissions go on the same queue egui renders on, using handles cloned from egui's render state.
-wgpu serialises submissions to a queue and treats each as atomic from the GPU's point of view, so egui's render pass samples either the fully-written previous display texture or the fully-written next one.
+Submissions go on the same queue that egui renders on, using handles cloned from egui's render state.
+wgpu serialises submissions to a queue and treats each submission as atomic from the GPU's point of view, so egui's render pass samples either the fully-written previous display texture or the fully-written next one.
 A torn frame cannot occur.
+The cost is up to one frame of staleness, which a sim stepping far faster than the refresh rate never shows.
+
+`GpuSimThread` takes the same `SimCommand` stream as `SimThread`, and accepts the commands that have no GPU analogue, such as a target rate, without acting on them.
+A host can then hold one enum over the two runners instead of special-casing the GPU.
+The numbers with no CPU counterpart, the GPU time per step and the batch size, travel apart from the snapshot in `GpuStats`.
 
 ## Limits
 
@@ -113,7 +129,7 @@ The baseline caps a storage binding at 128 MiB and a texture side at 8192, where
 The size a run can reach is a property of the hardware, and a fixed baseline would only get in the way.
 
 **Binding counts come from the models.**
-`max_storage_buffers_per_shader_stage` sits at 8 in the baseline, and `raise` asks for precisely the number the host's model set needs.
+`max_storage_buffers_per_shader_stage` sits at 8 in the baseline, and `raise` requests exactly the number the host's model set needs.
 Each GPU entry declares its `GpuNeeds`, read from its own pass list, action passes included, and `ModelSet::gpu_needs` merges them.
 For the example models that comes to 8, from `gpu_ants`'s step pass.
 wgpu's own advice is to request only what you need, and a constant would end up either short of a future model or carrying dead headroom.
@@ -136,8 +152,8 @@ This layer covers only sizes and binding counts.
 Everything else the device rejects falls to the scopes below.
 
 **Error scopes, around the build.**
-Left alone, wgpu's default handler panics on any error no scope claims, and a bad uniform layout or an allocation the device has no memory for then ends the process.
-`gpu::fault::catching_on` wraps model construction in scopes for all three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the floor under every path no scope covers, egui's own rendering included.
+Left alone, wgpu's default handler panics on any error that no scope claims, and a bad uniform layout or an allocation the device has no memory for then ends the process.
+`gpu::fault::catching_on` wraps model construction in scopes for all three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the floor under every path that no scope covers, egui's own rendering included.
 
 Error scopes are **thread-local**, and a scope pushed on the UI thread never sees what a sim thread does.
 The uncaptured-error sink covers that asymmetry.
@@ -153,7 +169,11 @@ The notes record why the current shape is load-bearing.
 
 **A timestamp stamped on an empty compute pass is never written.**
 The symptom is a `start` of 0 and an absurd elapsed time, an absolute GPU tick around 4e14 ns.
-`agent_engine.rs` now puts the opening stamp on the index rebuild's counting pass when there is an index, and on the first declared pass when there is not.
+`agent_engine.rs` puts the opening stamp on the index rebuild's counting pass when there is an index, and on the first declared pass when there is not.
+
+**A per-step seed in a uniform repeats across a batch.**
+A uniform written between the passes of one encoder takes effect only when the encoder is submitted, and every pass of the batch reads the last value written.
+`gpu_sir` keeps a `pcg_hash` state per cell in its ping-ponged `rng` buffer and advances it one round per step, and `gpu_ants` keeps a state per ant.
 
 **One oversized submission silently returns zeros.**
 Enough passes in a single command buffer trips the OS GPU watchdog, which raises no error and no panic and leaves every later readback reading zero.
@@ -163,7 +183,7 @@ The problem first surfaced as a flaky test.
 **Two clocks that must be reset together.**
 `sim_thread.rs` gates its stats refresh on `last_stats_publish` but divides by `tps_timer`.
 Resetting one without the other reports a whole batch over a near-zero window as a plausible-looking TPS.
-Go through `reset_tps_window`.
+Reset both clocks with `reset_tps_window`.
 
 **The display texture is a sampled view, never a mirror.**
 One texel per cell would cap the grid at `max_texture_dimension_2d` and cost four bytes per cell, which at 16384² comes to 1.07 GB of RGBA for something drawn into a panel a thousand pixels wide.

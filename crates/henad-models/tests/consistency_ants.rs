@@ -24,7 +24,7 @@ const REWARD: f32 = 1.0;
 const MOMENTUM: f32 = 0.8;
 const RANDOM_ACTION: f32 = 0.1;
 
-/// Well below the 0.999 default so decay is visible within a short run.
+/// Evaporation factor, well below the 0.999 default so decay is visible within a short run.
 const EVAPORATION: f32 = 0.99;
 
 const TICKS: usize = 40;
@@ -147,18 +147,18 @@ fn deliveries_never_decrease() {
     }
 }
 
-// --- The cross-engine gate ---------------------------------------------------------------------
+// The cross-engine gate.
 //
 // See `tests/fixtures/docs/ants_fixture.md`. Randomness in this model lives entirely inside
 // `advect_agent`: a tie between two neighbours draws, and the momentum and random-action branches
 // draw. The scenario below sets both probabilities to zero and seeds a field whose 3x3
 // neighbourhoods hold no two equal values, so no draw can change the outcome and the run is the
-// same under any generator. That is what makes another engine's answer comparable at all.
+// same under any generator. Another engine's answer is comparable only because of this.
 
 // Small enough to write out in full, large enough for both obstacle blobs and both sites.
 const GATE_W: u32 = 32;
 const GATE_H: u32 = 32;
-/// Four, because five is already too many.
+/// Number of ticks the gate runs. Five is already too many.
 ///
 /// Deposits put decayed copies of the same value into different cells, and by the fifth tick two
 /// of them are exactly equal in a neighbourhood an ant is standing in. That tie draws, at one
@@ -166,10 +166,9 @@ const GATE_H: u32 = 32;
 /// Four ticks is tie free in both `f32` and `f64`.
 const GATE_TICKS: u32 = 4;
 
-/// Enough seeds that a tie cannot hide behind luck.
+/// Number of seeds, enough that a tie cannot hide behind luck.
 ///
-/// The first version of this test used six, and a one-in-four tie survived it with probability
-/// 0.75^6, about 18%. It did survive, and the scenario shipped broken.
+/// A one-in-four tie survives six seeds with probability 0.75^6, about 18%, and 64 seeds with about 1e-8.
 const GATE_SEEDS: u64 = 64;
 
 /// Twelve ants: the four corners, a top edge, both sites, two cells beside an obstacle, one ant
@@ -192,7 +191,7 @@ const GATE_AGENTS: [(f32, f32, u8, u8, f32); 12] = [
     (15.0, 16.0, 2, 1, 1.0),    // last step (-1, 1)
 ];
 
-/// The seeded field, stated as a formula so every engine builds the same one without a data file.
+/// The seeded field, stated as a formula so every engine builds the same field without a data file.
 ///
 /// Two neighbours collide only when `7dx + 13dy` (or `11dx + 5dy`) is a multiple of the modulus.
 /// Across a 3x3 window those sums stay well inside one period, so the only collision is with the
@@ -218,7 +217,7 @@ fn gate_params() -> Vec<ParamValue> {
     ]
 }
 
-/// Agent rows and both pheromone layers after `ticks`, which is exactly what a fixture holds.
+/// Agent rows and both pheromone layers after the gate's ticks, as a fixture holds them.
 type GateResult = (Vec<(f32, f32, u8, u8, f32)>, Vec<f32>, Vec<f32>);
 
 fn gate_run(seed: Option<u64>, ticks: u32) -> GateResult {
@@ -251,8 +250,8 @@ fn gate_run(seed: Option<u64>, ticks: u32) -> GateResult {
     (agents, to_food, to_home)
 }
 
-/// The property the whole gate rests on. Ties are the only place advection draws, so a field with
-/// no ties makes the run reproducible in an engine whose generator is nothing like Henad's.
+/// The whole gate rests on this property. Ties are the only place advection draws, so a field with
+/// no ties makes the run reproducible in another engine, whatever generator that engine uses.
 #[test]
 fn the_seeded_field_has_no_ties_in_any_neighbourhood() {
     for layer in [TO_FOOD, TO_HOME] {
@@ -280,7 +279,8 @@ fn the_seeded_field_has_no_ties_in_any_neighbourhood() {
     }
 }
 
-/// What another engine has to be able to reproduce: the same answer from a different generator.
+/// Checks that every seed gives the same answer for the gate scenario. Another engine's generator has to give that
+/// answer too.
 #[test]
 fn the_gate_scenario_does_not_depend_on_the_random_stream() {
     let reference = gate_run(Some(1), GATE_TICKS);
@@ -293,10 +293,10 @@ fn the_gate_scenario_does_not_depend_on_the_random_stream() {
     }
 }
 
-/// The tick after the gate does draw, which is why the count is what it is.
+/// Checks that the tick after the gate draws. The gate stops before that tick to avoid the draw.
 ///
-/// Pins the reason rather than the number. If a change to the deposit rule moves the first tie,
-/// this fails and the gate's tick count has to be rechosen rather than silently left too high.
+/// The test pins the reason instead of the number. If a change to the deposit rule moves the first
+/// tie, this fails and the gate's tick count has to be chosen again instead of silently left too high.
 #[test]
 fn the_tick_after_the_gate_is_where_ties_begin() {
     let reference = gate_run(Some(1), GATE_TICKS + 1);
@@ -337,7 +337,7 @@ fn the_gate_scenario_moves_ants_and_changes_the_field() {
     }
 }
 
-/// Parse a fixture: `# key: value` header lines, an agent block, then one block per layer.
+/// Parses a fixture: `# key: value` header lines, an agent block, then one block per layer.
 fn parse_gate_fixture(text: &str) -> (HashMap<String, String>, GateResult) {
     let mut header = HashMap::new();
     let mut agents = Vec::new();
@@ -380,7 +380,7 @@ fn parse_gate_fixture(text: &str) -> (HashMap<String, String>, GateResult) {
     (header, (agents, to_food, to_home))
 }
 
-/// Relative, because Henad holds the field in `f32` and most engines hold it in `f64`.
+/// Relative tolerance of the gate, since Henad holds the field in `f32` and most engines hold it in `f64`.
 const GATE_TOLERANCE: f32 = 1e-6;
 
 fn close(got: f32, want: f32) -> bool {
@@ -388,10 +388,10 @@ fn close(got: f32, want: f32) -> bool {
     (got - want).abs() <= GATE_TOLERANCE * scale
 }
 
-/// Where the reference fixtures live.
+/// Returns the directory of the reference fixtures for `model`.
 ///
 /// `HENAD_FIXTURE_DIR` points the gate at a directory holding one engine's candidates, so a
-/// failure names that engine and no tracked fixture is written or removed to find out.
+/// failure identifies that engine and no tracked fixture is written or removed to find out.
 fn fixture_dir(model: &str) -> std::path::PathBuf {
     match std::env::var_os("HENAD_FIXTURE_DIR") {
         Some(root) => std::path::PathBuf::from(root).join(model),
@@ -399,7 +399,7 @@ fn fixture_dir(model: &str) -> std::path::PathBuf {
     }
 }
 
-/// Henad against every engine that has committed a fixture.
+/// Checks Henad against every engine that has committed a fixture.
 #[test]
 fn matches_every_reference_fixture() {
     let dir = fixture_dir("ants");

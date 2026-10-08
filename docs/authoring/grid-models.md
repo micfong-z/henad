@@ -45,8 +45,8 @@ fn step_cell(cell: u8, neighbors: &[u8], params: &Self::Params, rng: &mut u64) -
 ```
 
 `step_cell` receives its neighbours already gathered, in the order your declared `NEIGHBORHOOD` fixes.
-Keep the function pure apart from the `rng` it is handed.
-The engine steps rows in parallel and makes no guarantee about which row lands on which core.
+Keep the function pure apart from the `rng` it receives.
+The engine steps rows in parallel and makes no guarantee about which row runs on which core.
 
 Neighbours arrive row-major, with `dy` on the outer axis and `dx` on the inner.
 This ordering is published API, and a test asserts it against the tables in [authoring primitives](../reference/primitives.md).
@@ -73,7 +73,7 @@ The grid is a torus on both axes, and the engine wraps every coordinate before y
 ## Hot parameters
 
 Your rule reads a `&Self::Params`.
-Handing it the raw value slice would put a `ParamValue` match inside a loop that runs once per cell, millions of times a tick, and `from_params` avoids that by running once at the start of a tick.
+Passing it the raw value slice would put a `ParamValue` match inside a loop that runs once per cell, millions of times a tick, and `from_params` avoids that by running once at the start of a tick.
 Every cell of that tick then shares the result.
 
 ```rust
@@ -88,8 +88,8 @@ Anything a rule would otherwise recompute per cell also belongs here, such as a 
 The engine prepends grid width and height at indices 0 and 1, and no grid model declares them itself.
 Its own parameters start at index 2, and the indices `params!` generates are already relative to the model's own slice.
 
-`init` and `from_params` are both handed that own slice.
-The engine can then gain a parameter of its own without shifting anything a model reads.
+`init` and `from_params` both receive that slice.
+The engine can then add an engine parameter without shifting anything that a model reads.
 
 ## The initial state
 
@@ -98,7 +98,7 @@ fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64);
 ```
 
 `init` runs once, sequentially, on the current side of a freshly allocated grid.
-The `rng` argument is a plain `u64` xorshift state, advanced through the [random primitives](../reference/primitives.md#random).
+The `rng` argument is a plain `u64` xorshift state, advanced by the [random primitives](../reference/primitives.md#random).
 
 A GPU port of the model calls this same function to seed its buffers, which keeps tick 0 bit-identical between the two backends.
 See [porting a model to the GPU](porting.md).
@@ -111,7 +111,7 @@ With the trait implemented, the engine covers the rest:
 - Splits the step by row across rayon, on native and on the web alike.
 - Wraps both axes, peeling the x wrap off the row loop so the interior runs without a modulo.
 - Seeds an RNG per row per tick from the row index, never from anything a worker mutates.
-- Stores the parameters, and rejects any edit to a reload-only one.
+- Stores the parameters, and rejects any edit to a reload-only parameter.
 - Builds the grid view, the display texture, the history chart and the snapshots.
 
 ## Next

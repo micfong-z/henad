@@ -1,8 +1,4 @@
-//! Time-series stat output. One row per sampled tick, one column per stat series.
-//!
-//! Generic over the writer, because the two callers want different things from it. The headless
-//! runner streams into a file and keeps memory flat however long a run gets. The app builds the
-//! whole file in memory and hands it to a save dialog, which on the web is the only option there is.
+//! Stat series written as comma-separated values (CSV), one row per sampled tick.
 //!
 //! The column layout is fixed from the *first* sample and reused for every later row, so the
 //! header and every row always agree. A model whose `stats()` shape changes mid-run is a
@@ -17,6 +13,7 @@ use crate::view::{StatEntry, StatValue};
 /// A stat series could not be written.
 #[derive(Debug)]
 pub enum StatsWriteError {
+    /// Error of the underlying writer.
     Io(io::Error),
     /// A series changed shape after the first sample fixed the column layout.
     Shape(String),
@@ -107,7 +104,7 @@ pub struct StatColumns {
 }
 
 impl StatColumns {
-    /// Derive the column layout from one sample.
+    /// Derives the column layout from the sample `stats`.
     pub fn plan(stats: &[StatEntry]) -> Self {
         let mut columns = Vec::new();
         for (series, entry) in stats.iter().enumerate() {
@@ -133,9 +130,9 @@ impl StatColumns {
                     push(Some("magnitude"), Part::VecMagnitude);
                 }
                 StatValue::Histogram { edges, counts } => {
-                    // Label each bucket by its own range so the columns stay meaningful without the
-                    // reader needing the edge list. `edges` is bucket boundaries, so a bucket has a
-                    // lower and upper edge. Fall back to the index if the edges don't line up.
+                    // Each bucket is named by its own range, and the columns can be read without the edge list.
+                    // `edges` holds the boundaries, a lower and an upper edge per bucket. A bucket whose
+                    // edges are missing is named by its index.
                     for bucket in 0..counts.len() {
                         let range = match (edges.get(bucket), edges.get(bucket + 1)) {
                             (Some(lo), Some(hi)) => format!("[{}, {})", fmt_f64(*lo), fmt_f64(*hi)),
@@ -150,15 +147,17 @@ impl StatColumns {
         Self { columns }
     }
 
+    /// Number of columns.
     pub fn len(&self) -> usize {
         self.columns.len()
     }
 
+    /// Returns whether the layout has no columns.
     pub fn is_empty(&self) -> bool {
         self.columns.is_empty()
     }
 
-    /// Name of column `i` before CSV escaping.
+    /// Returns the name of column `i`, before CSV escaping.
     ///
     /// # Panics
     ///
@@ -167,7 +166,7 @@ impl StatColumns {
         &self.columns[i].name
     }
 
-    /// Header of column `i`, escaped for CSV.
+    /// Returns the header of column `i`, escaped for CSV.
     ///
     /// # Panics
     ///
@@ -188,7 +187,7 @@ impl StatColumns {
     /// Returns the index of the column called `name`.
     ///
     /// A bare vector or histogram label resolves to its magnitude or total column, the value
-    /// [`StatValue::scalar`] gives. An exact column name wins over a bare label.
+    /// [`StatValue::scalar`] returns. An exact column name wins over a bare label.
     pub fn resolve(&self, name: &str) -> Option<usize> {
         self.columns.iter().position(|column| column.name == name).or_else(|| {
             self.columns.iter().position(|column| {
@@ -213,19 +212,19 @@ impl StatColumns {
 
 /// Streams a stat time series to a writer as CSV.
 ///
-/// Construct, [`push`](Self::push) once per sampled tick, then [`finish`](Self::finish). The
-/// header is written on the first `push`, since the column set comes from the sample shape rather
-/// than being declared up front. `StatDescriptor` carries a label and colour but not whether the
-/// value is a scalar, a vector, or a histogram.
+/// Call [`push`](Self::push) once per sampled tick, then [`finish`](Self::finish). The first `push`
+/// writes the header, with the columns of its sample. A [`StatDescriptor`](crate::view::StatDescriptor)
+/// does not say whether its value is a scalar, a vector or a histogram.
 #[derive(Debug)]
 pub struct StatsWriter<W: Write> {
     out: W,
-    /// `None` until the first `push` fixes the layout.
+    /// Column layout, `None` until the first `push` fixes it.
     columns: Option<StatColumns>,
     rows: u64,
 }
 
 impl<W: Write> StatsWriter<W> {
+    /// Returns a writer over `out` that has written nothing.
     pub fn new(out: W) -> Self {
         Self {
             out,
@@ -234,10 +233,14 @@ impl<W: Write> StatsWriter<W> {
         }
     }
 
-    /// Record one sample. The first call fixes the column layout and emits the header.
+    /// Writes the row of the sample `stats`, taken at `tick`.
+    ///
+    /// The first call fixes the column layout and writes the header.
     ///
     /// # Errors
-    /// If writing fails, or if `stats` does not match the layout fixed by the first sample.
+    ///
+    /// Returns [`StatsWriteError::Io`] when a write fails, and [`StatsWriteError::Shape`] when `stats` does not fit
+    /// the layout the first sample fixed.
     pub fn push(&mut self, tick: u64, stats: &[StatEntry]) -> Result<(), StatsWriteError> {
         if self.columns.is_none() {
             let columns = StatColumns::plan(stats);
@@ -260,35 +263,36 @@ impl<W: Write> StatsWriter<W> {
         Ok(())
     }
 
-    /// Flush the underlying writer.
+    /// Flushes the writer and returns the number of rows written.
     ///
-    /// A `BufWriter` dropped without flushing swallows write errors silently, and a truncated data
-    /// file that reports success is worse than a loud failure.
+    /// Note that a `BufWriter` dropped without a flush discards its write errors.
     ///
     /// # Errors
-    /// If the final flush fails.
+    ///
+    /// Returns [`StatsWriteError::Io`] when the flush fails.
     pub fn finish(self) -> Result<u64, StatsWriteError> {
         Ok(self.into_inner()?.1)
     }
 
-    /// Flush and hand back the writer, with the row count. For a caller holding the destination
-    /// itself rather than a file, as an in-memory buffer on its way to a save dialog is.
+    /// Flushes the writer and returns it with the number of rows written.
     ///
     /// # Errors
-    /// If the final flush fails.
+    ///
+    /// Returns [`StatsWriteError::Io`] when the flush fails.
     pub fn into_inner(mut self) -> Result<(W, u64), StatsWriteError> {
         self.out.flush()?;
         Ok((self.out, self.rows))
     }
 
-    /// Rows written so far, not counting the header.
+    /// Number of rows written so far, not counting the header.
     pub fn rows(&self) -> u64 {
         self.rows
     }
 }
 
-/// Pull one column's scalar out of a stat value. `None` if the value no longer has that part,
-/// which means the series changed shape since the layout was fixed.
+/// Returns the scalar that `part` extracts from `value`, or `None` when `value` has no such part.
+///
+/// A `None` means the series changed shape after the layout was fixed.
 fn part_value(value: &StatValue, part: Part) -> Option<f64> {
     match (value, part) {
         (StatValue::Scalar(v), Part::Scalar) => Some(*v),
@@ -331,7 +335,7 @@ mod tests {
         }
     }
 
-    /// Run samples through a writer and return the CSV text.
+    /// Runs samples through a writer and returns the CSV text.
     fn render(samples: &[(u64, Vec<StatEntry>)]) -> String {
         let mut buf = Vec::new();
         let mut writer = StatsWriter::new(&mut buf);
@@ -390,7 +394,7 @@ mod tests {
     #[test]
     fn fractional_values_keep_precision() {
         let csv = render(&[(0, vec![scalar("A", 0.1 + 0.2)])]);
-        // Round-trip precision, not a truncated 0.3.
+        // The sum keeps its round-trip digits past 0.3.
         assert!(csv.contains("0.30000000000000004"), "got {csv}");
     }
 
@@ -524,7 +528,7 @@ mod tests {
         assert_eq!(shadowed.resolve("V"), Some(3));
     }
 
-    /// The two paths a stat series reaches a file by must produce the same file.
+    /// The two paths by which a stat series reaches a file must produce the same file.
     ///
     /// The app writes through a [`StatsWriter`] while recording, and replays
     /// [`crate::view::StatsHistory`] otherwise. Both claim the column layout the headless runner

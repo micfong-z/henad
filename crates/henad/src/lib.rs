@@ -4,6 +4,7 @@
     doc = "Henad, a parallel agent-based modelling engine."
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 #![deny(ambiguous_glob_reexports)]
 
 pub use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelSetError, ModelSetIter, ModelState};
@@ -18,12 +19,12 @@ pub use henad_explore::ENGINE_BUILD;
 pub use henad_compute::{agent_lanes, for_each_chunk_mut, include_shaders};
 pub use henad_core::{actions, buffers, build_info};
 
-// The facade's own macro. A `use` of henad-core's would bring its `params` module along, and docs.rs would show that
-// module at `henad::params` in place of the facade's.
+// This macro forwards to `henad_core::params!`. Re-exporting that macro with `use` would also bring in the
+// `henad_core::params` module, and docs.rs would show it at `henad::params` instead of the facade module.
 /// Declares a model's parameters and their indices in one place.
 ///
-/// The index is the declaration's position, so it is derived rather than written down. Expands at module scope, next
-/// to the impl that forwards `param_descriptors` to `descriptors`.
+/// Each constant holds its declaration's position, and `descriptors()` returns the descriptors in that order. The
+/// macro expands at module scope, next to the impl that forwards `param_descriptors` to `descriptors`.
 ///
 /// ```
 /// use henad::authoring::prelude::*;
@@ -43,25 +44,25 @@ macro_rules! params {
     };
 }
 
-/// Items the exported macros name through `$crate`, so a caller needs none of them in scope.
+/// Items that the exported macros refer to through `$crate`, so a caller needs none of them in scope.
 #[doc(hidden)]
 pub mod __macro_support {
     pub use henad_core::params;
 }
 
-/// Parameter descriptors and values, and the text form `--set` reads.
+/// Parameter descriptors and values, and the text form that `--set` accepts.
 pub mod params {
     pub use henad_core::explore::value::{ValueError, ValueKind, format_value};
     pub use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 }
 
-/// Statistic descriptors and values, and the CSV writer of a stat series.
+/// Statistic descriptors and values, and the CSV writer for stat series.
 pub mod stats {
     pub use henad_core::export::{StatColumns, StatsWriteError, StatsWriter};
     pub use henad_core::view::{StatDescriptor, StatEntry, StatValue};
 }
 
-/// Views a CPU model's state hands a host to draw.
+/// Views of a CPU model's state for a host to draw.
 pub mod views {
     pub use henad_core::view::{EdgeView, GridView, PointView};
 }
@@ -82,7 +83,7 @@ pub mod gpu {
     pub use henad_explore::device::{DeviceError, acquire_headless};
 }
 
-/// Paced runners that step a model off the host's thread, and the snapshots they publish.
+/// Paced runners that step a model while a host draws it, and the snapshots they publish.
 pub mod runner {
     pub use henad_compute::cpu::sim_thread::{SimCommand, SimThread, WakeFn};
     pub use henad_compute::fault::FaultSink;
@@ -105,7 +106,7 @@ pub mod engine {
 
 /// Sweeps, searches, result folders and replay.
 ///
-/// The planning modules keep their names, and a type inside one of them has its path there, as in
+/// The planning modules keep their names, and a type inside one of them keeps its path there, as in
 /// [`spec::BlockSpec`](explore::spec::BlockSpec).
 pub mod explore {
     pub use henad_core::explore::replay::Replay;
@@ -197,12 +198,12 @@ pub mod authoring {
 
     pub use bytemuck;
 
-    /// Primitives a kernel calls, each module named as its WGSL twin is imported.
+    /// Primitives that a kernel calls, each module named after its WGSL twin's import path.
     pub mod primitives {
         pub use henad_core::authoring::primitives::{rng, space, wgsl};
     }
 
-    /// Names a model's source file imports whole.
+    /// Items a model's source file imports whole.
     pub mod prelude {
         pub use henad_core::action::ActionDescriptor;
         pub use henad_core::authoring::model::agent_model::{AgentModel, NoIndex, StepCtx};
@@ -243,7 +244,7 @@ pub mod authoring {
 
 /// The ten example models and the set that registers them.
 ///
-/// Each model sits in a module of its own, as in [`models::ants::AntsModel`].
+/// Each model sits in its own module, as in [`models::ants::AntsModel`].
 #[cfg(feature = "example-models")]
 #[cfg_attr(docsrs, doc(cfg(feature = "example-models")))]
 pub mod models {
@@ -256,8 +257,8 @@ pub mod models {
 /// The app, opened over a host's own model set.
 ///
 /// A native program opens it with `run_native`. A browser build on `wasm32-unknown-unknown` starts it with
-/// `start_web`, sets up logging with `init_web_logger`, and gets a `WebStartError` when the start fails. Those three
-/// exist on wasm32 alone, and their documentation is on the
+/// `start_web`, sets up logging with `init_web_logger`, and receives a `WebStartError` when the start fails. Those
+/// three items exist only on wasm32, and their documentation is on the
 /// [wasm32 page of this module](https://docs.rs/henad/latest/wasm32-unknown-unknown/henad/app/index.html).
 #[cfg(feature = "app")]
 #[cfg_attr(docsrs, doc(cfg(feature = "app")))]
@@ -282,7 +283,7 @@ pub mod cli {
 #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub use henad_explore::testing;
 
-/// Names a program that builds, runs and sweeps models imports whole.
+/// Items that a program imports whole to build, run and sweep models.
 pub mod prelude {
     pub use henad_compute::entry::ModelSet;
     pub use henad_compute::simulation::{RunSetup, Simulation, StatSample};
@@ -316,7 +317,7 @@ mod tests {
         lines.take_while(|line| line.trim_end() != "```").collect()
     }
 
-    /// Returns the example without the snippet markers that the guide includes its regions by.
+    /// Returns the example without the snippet marker lines that delimit the guide's regions.
     fn example_program(example: &str) -> String {
         example
             .split_inclusive('\n')

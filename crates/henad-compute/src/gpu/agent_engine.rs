@@ -1,6 +1,4 @@
-//! Generic engine turning any [`GpuAgentModel`] into a runnable [`GpuSimState`].
-//!
-//! Compare with [`crate::gpu::grid_engine`], and with [`crate::cpu::agent_engine`].
+//! The engine that runs a [`GpuAgentModel`] as a [`GpuSimState`], the counterpart of [`crate::cpu::agent_engine`].
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -26,7 +24,7 @@ use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target}
 use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
 use crate::snapshot::GpuSnapshot;
 
-/// A thing that exists once, or once per ping-ponged side.
+/// A resource that exists once, or once per ping-ponged side.
 struct Sides<T> {
     a: T,
     b: Option<T>,
@@ -48,7 +46,7 @@ struct BufferSides {
 }
 
 impl BufferSides {
-    /// `(current, next)`. The same buffer twice when this one is written in place.
+    /// Returns `(current, next)`, the same buffer twice when this one is written in place.
     fn sides(&self, a_is_current: bool) -> (&wgpu::Buffer, &wgpu::Buffer) {
         match &self.b {
             None => (&self.a, &self.a),
@@ -63,7 +61,7 @@ struct EncodedPass {
     pipeline: wgpu::ComputePipeline,
     binds: Sides<wgpu::BindGroup>,
     groups: (u32, u32),
-    /// Kept so an action can reseed it before a press. Unread by every other pass.
+    /// Uniform of the pass, kept so an action can reseed it before a press. Unused for a pass that is not an action.
     uniform: wgpu::Buffer,
 }
 
@@ -84,8 +82,9 @@ impl EncodedPass {
     }
 }
 
-/// A `ComputePassTimestampWrites` needs at least one index set, so a pass in the middle of a batch
-/// gets `None` rather than a struct with two `None`s.
+/// Returns the timestamp writes of a pass, `None` for a pass that neither opens nor closes a batch.
+///
+/// A `ComputePassTimestampWrites` needs at least one index set.
 fn stamps(
     query_set: Option<&wgpu::QuerySet>,
     opening: bool,
@@ -100,8 +99,7 @@ fn stamps(
         })
 }
 
-/// GPU-resident state for a [`GpuAgentModel`]. Owned exclusively by the GPU sim thread once
-/// spawned.
+/// GPU-resident state for a [`GpuAgentModel`], with every buffer, pass and bind group its model declares.
 pub struct GpuAgentState<M: GpuAgentModel> {
     geom: Geometry,
     tick: u64,
@@ -112,7 +110,7 @@ pub struct GpuAgentState<M: GpuAgentModel> {
     buffers: Vec<BufferSides>,
     /// `true` when the `a` side of every double buffered buffer holds the current state.
     current_is_a: bool,
-    /// Set when some buffer asked to be double buffered. Nothing flips otherwise.
+    /// Set when some buffer requests double buffering. Nothing flips otherwise.
     ping_pong: bool,
 
     /// Spatial hash, if the model declares one.
@@ -127,9 +125,9 @@ pub struct GpuAgentState<M: GpuAgentModel> {
     counters: Option<CounterReadback>,
 
     actions: Vec<EncodedPass>,
-    /// Advanced per press, so pressing twice draws twice.
+    /// Seed of the next action press, advanced per press so that pressing twice draws twice.
     action_seed: u32,
-    /// Kept for the action uniforms, which are rewritten per press.
+    /// Parameter values, kept to rewrite the action uniforms on each press.
     params: Vec<ParamValue>,
 
     agents: Sides<Arc<GpuAgents>>,
@@ -147,11 +145,16 @@ impl<M: GpuAgentModel> std::fmt::Debug for GpuAgentState<M> {
 }
 
 impl<M: GpuAgentModel> GpuAgentState<M> {
+    /// Builds the state on `ctx`, seeded with the model's default seed.
+    ///
+    /// # Panics
+    ///
+    /// Panics as [`Self::new_seeded`] does.
     pub fn new(ctx: &GpuContext, params: &[ParamValue]) -> Self {
         Self::new_seeded(ctx, params, None)
     }
 
-    /// Geometry for `params`, without touching a device. `limits` only fixes the display cap.
+    /// Returns the geometry for `params`, without touching a device. `limits` sets only the display cap.
     pub fn geometry_for(params: &[ParamValue], limits: &wgpu::Limits) -> Geometry {
         let (num_agents, extent) = M::dims(params);
         let num_agents = num_agents.max(1);
@@ -192,7 +195,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
     }
 
     /// Storage buffers each declared pass binds. Read by both [`Self::demand`] and
-    /// [`Self::max_storage_bindings`], so the device a host asks for and the shortfall the UI
+    /// [`Self::max_storage_bindings`], so the device that a host requests and the shortfall that the UI
     /// reports cannot disagree.
     fn declared_passes() -> Vec<(String, u32)> {
         let mut passes: Vec<(String, u32)> = M::STEP_PASSES
@@ -212,7 +215,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         passes
     }
 
-    /// Independent of params, so a host can ask before it has a device.
+    /// Returns the most storage buffers any declared pass binds. It does not depend on params, so a host can query it
+    /// before it has a device.
     pub fn max_storage_bindings() -> u32 {
         Self::declared_passes()
             .into_iter()
@@ -221,13 +225,13 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             .unwrap_or(0)
     }
 
-    /// `None` uses the model's own default seed.
+    /// Builds the state on `ctx`, seeded with `seed`, or with the model's own default seed when it is `None`.
     ///
     /// # Panics
     ///
-    /// If the device cannot hold the model. The backstop, not the diagnostic, since a UI
-    /// asks [`Self::demand`] first. Also if a shader declares another workgroup size than its pass
-    /// dispatches, or a buffer label is reserved or ends in `_in` or `_out`.
+    /// Panics if the device cannot hold the model. A host calls [`Self::demand`] first, and this assert is the
+    /// backstop. Also panics if a shader declares a workgroup size other than the one its pass dispatches, or a
+    /// buffer label is reserved or ends in `_in` or `_out`.
     #[expect(clippy::too_many_lines, reason = "one linear construction of every wgpu object")]
     #[cfg_attr(
         all(target_arch = "wasm32", target_feature = "atomics"),
@@ -267,12 +271,12 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         let (num_agents, extent) = (geom.num_agents, geom.extent);
         let (width, height) = (geom.width, geom.height);
 
-        // The hash fits its own grid to the cell size, which may not be the field's.
+        // The hash fits its own grid to the index cell size. That size can differ from the field's cell size.
         let index =
             M::INDEX.then(|| GpuSpatialHash::new(device, queue, M::ID, extent, M::index_cell_size(params), num_agents));
         geom.index = index.as_ref().map(GpuSpatialHash::grid);
 
-        // --- Buffers ---
+        // Buffers.
         let lens = M::buffer_lens(&geom);
         assert_eq!(
             lens.len(),
@@ -302,7 +306,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
                 };
                 BufferSides {
                     a: make_buffer("a"),
-                    // Only the current side is seeded, so the other is written by the first step.
+                    // Only the current side is seeded, so the other side is written by the first step.
                     b: spec.double_buffered.then(|| make_buffer("b")),
                 }
             })
@@ -343,7 +347,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             (M::COUNTERS > 0).then(|| CounterReadback::new(device, &format!("{}_counters", M::ID), M::COUNTERS));
 
         let display_spec = M::DISPLAY;
-        // The display pass binds the view, the snapshot carries the handle.
+        // The display pass binds the view, and the snapshot carries the handle.
         let (display_view, display_handle) = match display_spec
             .as_ref()
             .map(|_| build_display_target(device, ctx.target_format, width, height))
@@ -377,7 +381,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             })
             .collect();
 
-        // One invocation per texel, as the grid engine's display does.
+        // One invocation per texel, as the grid engine's display pass does.
         let display = display_spec.as_ref().zip(display_handle).map(|(spec, handle)| {
             let (tex_w, tex_h) = geom.display;
             let groups = (tex_w.div_ceil(spec.workgroup), tex_h.div_ceil(spec.workgroup));
@@ -462,7 +466,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         }
     }
 
-    /// Steps in submission-sized batches, as the real runner does.
+    /// Submits `steps` steps, at most [`MAX_STEPS_PER_SUBMISSION`] per command buffer, as the runner does. Nothing
+    /// waits on the GPU.
     pub fn run_batched(&mut self, steps: u32) {
         let mut remaining = steps;
         while remaining > 0 {
@@ -488,7 +493,11 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         self.poll_stats_readback(&device, true);
     }
 
-    /// The current side of buffer `index`, as raw words. Blocks on the GPU.
+    /// Returns the current side of buffer `index` as raw words, blocking on the GPU.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the readback fails.
     pub fn read_buffer(&self, index: usize) -> Vec<u32> {
         let (buffer, _) = self.buffers[index].sides(self.current_is_a);
         let size = buffer.size();
@@ -519,6 +528,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         out
     }
 
+    /// Geometry the state was built at.
     pub fn geometry(&self) -> &Geometry {
         &self.geom
     }
@@ -551,8 +561,10 @@ impl PassBuilder<'_> {
         self.pass::<M>(id, label, shader, bindings, linear_dispatch(invocations), invocations)
     }
 
-    /// `groups.0` is the fold width `henad::dispatch::linear_index` expects, so it goes in the
-    /// uniform as `groups_x`.
+    /// Builds a pass over `groups` workgroups.
+    ///
+    /// `groups.0` is the fold width that `henad::dispatch::linear_index` expects, and goes in the uniform as
+    /// `groups_x`.
     fn pass<M: GpuAgentModel>(
         &self,
         id: PassId,
@@ -565,7 +577,7 @@ impl PassBuilder<'_> {
         self.pass_in_place::<M>(id, label, shader, bindings, groups, invocations, false, 0)
     }
 
-    /// As [`Self::pass`], with `in_place` binding writes to the side that already holds the state.
+    /// Builds a pass as [`Self::pass`] does, with `in_place` binding writes to the side that already holds the state.
     ///
     /// Nothing swaps after an action, so writing the far side would throw the work away.
     #[expect(
@@ -642,7 +654,7 @@ impl PassBuilder<'_> {
         }
     }
 
-    /// The resource a shader's binding names, which is the whole of the correspondence.
+    /// Returns the resource that a shader binding's name refers to. The name alone links the binding to its resource.
     ///
     /// Panics rather than returning an error, since a name that resolves to nothing is a shader
     /// and model that disagree, and no run can be correct after that.
@@ -674,7 +686,8 @@ impl PassBuilder<'_> {
 }
 
 impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
-    /// Fallback for callers holding only a `SimState`. The sim thread batches instead.
+    /// Steps once in its own submission, for a caller that holds only a `SimState`. The GPU runner batches
+    /// instead.
     fn step(&mut self) {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("gpu_agent_single_step"),
@@ -692,7 +705,7 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
         stat_entries(M::STATS, M::stats(&self.reduce.sums(), counters, &self.geom))
     }
 
-    /// Encodes the action into a submission of its own.
+    /// Encodes the action into its own submission.
     ///
     /// The GPU runner calls [`GpuSimState::encode_action`] instead, and submits the action before
     /// its snapshot.
@@ -707,7 +720,7 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
         true
     }
 
-    /// Resizing or reseeding live is currently unsupported.
+    /// Rejects every live edit. Its entry declares every parameter reload-only.
     fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
         false
     }
@@ -734,7 +747,7 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
 }
 
 impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
-    /// One compute pass per declared pass per step, all recorded into one encoder.
+    /// Records one compute pass per declared pass per step, all into one encoder.
     ///
     /// A pass is the synchronization boundary wgpu inserts barriers at, so a step's passes
     /// cannot be collapsed into dispatches inside one pass. The later ones would read stale

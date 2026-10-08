@@ -1,8 +1,8 @@
 //! The command line of Henad, a headless benchmark and sweep runner, as a library.
 //!
 //! [`run`] parses a command line, runs it over the models a [`CliOptions`] holds, and returns the exit code. The
-//! official `henad-cli` binary is three lines over it with the example models. A project with models of its own
-//! builds the same command line over its own [`ModelSet`].
+//! official `henad-cli` binary is three lines over it with the example models. A project with its own models builds
+//! the same command line over its own [`ModelSet`].
 //!
 //! ```no_run
 //! use std::process::ExitCode;
@@ -20,10 +20,10 @@
 //! A benchmark builds a model from the set and steps its `SimState` in a bare loop, with no rendering, no `SimThread`
 //! and no pacing, so a measurement times nothing but `state.step()`.
 //!
-//! Both CPU and GPU models run. GPU support needs a `wgpu::Device`, which `henad-compute` never creates itself, so
-//! [`run`] acquires one headlessly (see [`acquire_headless`]) for the set's needs, and builds a GPU model on the
-//! resulting [`GpuContext`]. Without a device `--list` leaves the GPU models out, and naming one is refused. The
-//! benchmark is [`henad_explore::benchmark::run_benchmark`], and the two exports step a [`Simulation`].
+//! Both CPU and GPU models run. For a set that holds a GPU model, [`run`] acquires a device through
+//! [`acquire_headless`], sized to the set's needs, and builds GPU models on the resulting [`GpuContext`]. Without a
+//! device `--list` leaves the GPU models out, and a GPU model id on the command line is rejected. The benchmark is
+//! [`henad_explore::benchmark::run_benchmark`], and the two exports step a [`Simulation`].
 //!
 //! ```text
 //! henad-cli --list
@@ -38,14 +38,15 @@
 //! henad-cli --merge shard-0 shard-1 --out sir-sweep
 //! ```
 //!
-//! Two export paths, deliberately separate: `--export` writes the *final state* (the grid or point
-//! cloud at the end of the run), `--export-stats` writes the *time series* (one row per sampled
-//! tick). Both formats live in `henad_core::export`, which the app writes through too.
+//! `--export` writes the *final state*, the grid or point cloud at the end of the run. `--export-stats` writes the
+//! *time series*, one row per sampled tick. Both formats live in `henad_core::export`, and the app writes through the
+//! same module.
 //!
 //! `--out`, `--spec` or `--dry-run` runs a sweep instead, many runs over a grid of parameter values written to a
-//! directory, and `--merge` joins the directories of a sweep's shards.
+//! directory, and `--merge` joins a sweep's shard directories.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 #![expect(
     clippy::print_stdout,
     clippy::print_stderr,
@@ -84,15 +85,16 @@ use numfmt::{Formatter, Scales};
 mod explore;
 mod json_report;
 
-/// Everything a host decides about the command line it runs.
+/// Options for the command line that a host runs: the models, the host's build, the command name and the help text's
+/// opening line.
 #[derive(Debug, Clone)]
 pub struct CliOptions {
     models: ModelSet,
     /// Build of the host, recorded in every sweep's manifest.
     host: BuildInfo,
-    /// Name `--version`, the help text and the usage lines give the command.
+    /// Command name that `--version`, the help text and the usage lines show.
     command_name: String,
-    /// Line the help text opens with, or `None` for henad-cli's own description.
+    /// Line that the help text opens with, or `None` for henad-cli's own description.
     about: Option<String>,
 }
 
@@ -100,7 +102,7 @@ impl CliOptions {
     /// Returns options that run `models` and record `host` as the build that ran each sweep.
     ///
     /// The command name defaults to the package name `host` records, and `--version` prints its version. The help
-    /// text opens with henad-cli's own description until [`Self::about`] sets another.
+    /// text opens with henad-cli's own description until [`Self::about`] replaces it.
     pub fn new(models: ModelSet, host: BuildInfo) -> Self {
         Self {
             command_name: host.package().to_owned(),
@@ -110,29 +112,30 @@ impl CliOptions {
         }
     }
 
-    /// Sets the name `--version`, the help text and the usage lines give the command.
+    /// Sets the command name that `--version`, the help text and the usage lines show.
     ///
-    /// The usage lines take this name in place of the program name the command line starts with.
+    /// The usage lines use this name instead of the program name that the command line starts with.
     pub fn command_name(mut self, name: impl Into<String>) -> Self {
         self.command_name = name.into();
         self
     }
 
-    /// Sets the line the help text opens with.
+    /// Sets the line that the help text opens with.
     pub fn about(mut self, text: impl Into<String>) -> Self {
         self.about = Some(text.into());
         self
     }
 }
 
-/// Exit code of a sweep that ran to its end with a run not `ok`, or of a merge that lacks a run or holds one not
-/// `ok`.
+/// Exit code of a sweep that ran to its end with a run that is not `ok`, or of a merge that is missing a run or holds a
+/// run that is not `ok`.
 pub const SOME_RUNS_NOT_OK: u8 = 3;
 
 /// Parses `arguments`, the program name first, runs them over the options' models, and returns the exit code.
 ///
-/// The code is 0 on success, [`SOME_RUNS_NOT_OK`] for a sweep or merge with a run missing or not `ok`, and 2 for a
-/// command line that does not parse. Any other error prints to stderr as `Error:` and its causes, and returns 1.
+/// The code is 0 on success, [`SOME_RUNS_NOT_OK`] for a sweep or merge with a missing run or a run that is not `ok`,
+/// and 2 for a command line that does not parse. Any other error prints to stderr as `Error:` and its causes, and
+/// returns 1.
 ///
 /// Note that this owns the process. It installs the panic hook, and `--threads` sizes rayon's global pool. A process
 /// can size that pool only once.
@@ -191,7 +194,7 @@ fn parse_args(
         .multiple(true)
         .conflicts_with_all(["list", "export", "export_stats", "global_warmup"])
 ))]
-// The flags a spec file needs one of. Each puts the spec to a use.
+// A spec file needs one of these flags. Each flag puts the spec to a use.
 #[command(group(ArgGroup::new("spec_use").args(["out", "dry_run", "params"]).multiple(true)))]
 struct Args {
     /// Model id to run (see `--list`). Optional with `--spec`.
@@ -270,11 +273,11 @@ struct Args {
     explore: ExploreArgs,
 }
 
-/// Work one command line asks for.
+/// Work that one command line requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     List,
-    /// `--merge`. Joins the directories of a sweep's shards, with no model and no device.
+    /// `--merge`. Joins a sweep's shard directories, with no model and no device.
     Merge,
     /// `--info` with no model and no sweep. Prints the runtime and exits.
     InfoOnly,
@@ -286,7 +289,7 @@ enum Mode {
 }
 
 impl Mode {
-    /// Returns the mode of `args`, taking the first that applies in the order the variants are declared.
+    /// Returns the mode of `args`, using the first variant that applies in declaration order.
     fn of(args: &Args) -> Self {
         if args.list {
             Self::List
@@ -318,7 +321,7 @@ impl Mode {
 fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsString]) -> Result<u8> {
     let mode = Mode::of(args);
 
-    // Before anything builds a state. Rayon's global pool is set once per process, and
+    // The pool is sized before anything builds a state. Rayon's global pool is set once per process, and
     // `HostInfo::worker_threads` reads back whatever it ends up with.
     if args.threads > 0 {
         rayon::ThreadPoolBuilder::new()
@@ -330,9 +333,8 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         return explore::merge_shards(args);
     }
 
-    // Best-effort headless GPU: acquire a device so GPU models can be listed and run. If none is
-    // available (e.g. CI with no GPU), list and run the CPU models alone rather than failing.
-    // A set without GPU models asks for a device only under `--info`, to report its adapter.
+    // A device lets the GPU models be listed and run. Without a device, as on CI with no GPU, only the CPU models are
+    // listed and run. A set without GPU models requests a device only under `--info`, to report its adapter.
     let gpu_models = has_gpu_models(models);
     let gpu_ctx = if gpu_models || args.info {
         match acquire_headless(models.gpu_needs()) {
@@ -448,8 +450,8 @@ fn run_single(
         );
     }
 
-    // Ahead of the factory. An over-sized run is then refused by name instead of by whichever
-    // binding the device happened to reject first.
+    // The limits are checked ahead of the factory. An oversized run is then rejected with an error that lists its
+    // shortfalls, instead of failing at whichever binding the device happened to reject first.
     if let Some(ctx) = gpu_ctx {
         let shortfalls = entry.shortfalls(&params, &ctx.device.limits());
         if !shortfalls.is_empty() {
@@ -468,7 +470,7 @@ fn run_single(
     }
 }
 
-/// Benchmark provenance. Goes to stdout with the results, not the progress log.
+/// Prints the host and adapter for `--info` to stdout, ahead of any results.
 ///
 /// `gpu_models` says whether the set holds a GPU model. A missing adapter disables every GPU model.
 fn print_runtime_info(runtime: Option<&RuntimeInfo>, gpu_models: bool) {
@@ -526,12 +528,10 @@ fn print_models<'a>(entries: impl Iterator<Item = &'a ModelEntry>) {
     }
 }
 
-/// Returns one model's parameter descriptors: the ids `--set` accepts, with kinds, defaults and
+/// Returns the text `--params` prints, one line per parameter with the id `--set` accepts, its kind, default and
 /// bounds.
 ///
-/// Emitted as `key=value` fields rather than a formatted table so `scripts/bench_matrix.py` can
-/// read a model's axes (does it have `grid_width`? `num_agents`? at what default?) instead of
-/// hard-coding per-model knowledge or probing with throwaway runs.
+/// Each line holds `key=value` fields. `scripts/bench_matrix.py` parses them to find a model's axes and defaults.
 fn params_text(entry: &ModelEntry) -> String {
     let mut text = format!("parameters for {} ({}):\n", entry.id(), entry.name());
     for (index, desc) in entry.param_descriptors().iter().enumerate() {
@@ -545,7 +545,7 @@ fn params_text(entry: &ModelEntry) -> String {
                 format!("kind=choice default={default} options={}", options.join("|"))
             }
         };
-        // Values are always fractions, whatever the panel shows, so this only describes how to read one.
+        // Values are always fractions, whatever the panel shows, so `format` only describes how to read a value.
         let format = match desc.format {
             ParamFormat::Plain => "",
             ParamFormat::Percent => " format=percent",
@@ -557,7 +557,7 @@ fn params_text(entry: &ModelEntry) -> String {
     text
 }
 
-/// Runs the benchmark of `setup`, printing each repetition as it finishes and the result once all have.
+/// Runs the benchmark for `setup`, printing each repetition as it finishes and the result at the end.
 ///
 /// With `--json` the lines follow `benchmarks/protocol.md`: the `info` line before any repetition, a `rep` line as
 /// each one finishes, then the `summary`. The human report goes to stdout and the progress log to stderr.
@@ -616,7 +616,7 @@ fn benchmark(setup: RunSetup, args: &Args, gpu_ctx: Option<&GpuContext>, adapter
             BenchmarkEvent::RepetitionFinished(repetition) => {
                 eprintln!("{:>8.3?}", repetition.elapsed);
                 let (population, after) = (repetition.population_after_warmup, repetition.population_after_steps);
-                // A population that fluctuates at steady state moves by about its square root, which is not worth a note.
+                // A population at steady state moves by about its square root. A move that small is not worth a note.
                 let noise = (3.0 * (population as f64).sqrt()) as u64;
                 if backend == Backend::Cpu && after.abs_diff(population) > (population / 10).max(noise) {
                     eprintln!(
@@ -672,9 +672,9 @@ fn benchmark(setup: RunSetup, args: &Args, gpu_ctx: Option<&GpuContext>, adapter
     Ok(())
 }
 
-/// Median of an already sorted slice, averaging the middle two on an even count.
+/// Returns the median of an already sorted slice, averaging the middle two on an even count.
 ///
-/// The driver's `statistics.median` does the same, and a lone middle sample disagreed with it.
+/// The driver's `statistics.median` computes the same value.
 fn median_of(sorted: &[Duration]) -> Duration {
     match sorted.len() {
         0 => Duration::ZERO,
@@ -683,13 +683,11 @@ fn median_of(sorted: &[Duration]) -> Duration {
     }
 }
 
-/// Turn the raw per-rep timings into the reported benchmark result.
+/// Prints the benchmark result computed from the repetition timings.
 ///
-/// - `samples`: one wall-clock [`Duration`] per rep, each covering `steps_per_rep` steps. Never
-///   empty (`--reps` is at least 1).
-/// - `steps_per_rep`: how many `step()` calls each sample covers.
-/// - `population`: agent count sampled after warmup (see [`benchmark`]).
-/// - `grid_dims`: `(width, height)` for grid models, read from the live state; `None` otherwise.
+/// `samples` holds one wall-clock time per repetition, each covering `steps_per_rep` steps, and is never empty.
+/// `population` is the population sampled after warm-up (see [`benchmark`]), and `grid_dims` is the width and height of
+/// a grid model.
 fn print_report(
     samples: &[Duration],
     steps_per_rep: u64,
@@ -743,7 +741,7 @@ fn print_report(
 
 /// Runs `setup` once for `--warmup` plus `--steps` ticks and writes the final state to `path`.
 ///
-/// Each action fires once, the ones due on the tick the run ends on included.
+/// Each action fires once, including actions due on the tick that the run ends on.
 fn export_final(setup: &RunSetup, args: &Args, path: &Path) -> Result<()> {
     let entry = setup.entry();
     if entry.gpu_needs().is_some() {
@@ -769,10 +767,9 @@ fn export_final(setup: &RunSetup, args: &Args, path: &Path) -> Result<()> {
 
 /// Runs `setup` once and writes the per-tick stat series to `path` as CSV.
 ///
-/// Unlike [`benchmark`] this is not a timed path: sampling stats every tick is itself significant work (a full
-/// reduction over the grid for a `GridModel`, and a blocking readback for a GPU model), so numbers from a run with
-/// `--export-stats` are not comparable to a benchmark run. Reps are ignored, since a time series is one trajectory
-/// and N reps would be N different trajectories in one file.
+/// Unlike [`benchmark`], this path is untimed. Each sample is significant work, a full reduction over the grid for a
+/// `GridModel` and a blocking readback for a GPU model, so a run's time does not measure the cost of its steps.
+/// `--reps` is ignored. A time series is one trajectory, and N repetitions would put N trajectories in one file.
 fn export_stats(setup: &RunSetup, args: &Args, path: &Path, gpu_ctx: Option<&GpuContext>) -> Result<()> {
     if args.stats_every == 0 {
         bail!("--stats-every must be at least 1");
@@ -801,9 +798,9 @@ fn export_stats(setup: &RunSetup, args: &Args, path: &Path, gpu_ctx: Option<&Gpu
 }
 
 /// Steps `simulation` to `total` and writes a sample at its current tick, every `every` ticks and at `total`, then
-/// returns the rows written.
+/// returns the number of rows written.
 ///
-/// The final tick always lands in the file even off a sampling boundary. The end state of a run is the one value a
+/// The final tick is always written, even off a sampling boundary. The end state of a run is the one value a
 /// reader is most likely to want.
 fn write_series<W: std::io::Write + Send>(
     simulation: &mut Simulation,
@@ -829,7 +826,7 @@ fn test_provenance() -> Provenance {
     Provenance::new(henad_core::build_info!(), Vec::new())
 }
 
-/// Converts an error from resolving `--set` into the one the command line reports, naming the flag.
+/// Converts an error from resolving `--set` into a command-line error with `--set ID` as its context.
 fn set_error(error: ValueError) -> anyhow::Error {
     match error {
         ValueError::Param { id, source } => anyhow::Error::new(*source).context(format!("--set {id}")),
@@ -837,9 +834,9 @@ fn set_error(error: ValueError) -> anyhow::Error {
     }
 }
 
-/// Checks that `--set` reads as `ID=VALUE`, and returns it unchanged.
+/// Checks that `--set` has the form `ID=VALUE`, and returns it unchanged.
 ///
-/// The model checks the id and the value once it is known. A malformed flag is then a refused command line.
+/// The model checks the id and the value once it is known. The parser then rejects a malformed flag.
 fn check_set(raw: &str) -> Result<String, String> {
     if raw.contains('=') {
         Ok(raw.to_owned())
@@ -848,7 +845,7 @@ fn check_set(raw: &str) -> Result<String, String> {
     }
 }
 
-/// Checks that `--act` reads as `ID@TICK` with a tick in `u64`, and returns it unchanged.
+/// Checks that `--act` has the form `ID@TICK` with a `u64` tick, and returns it unchanged.
 ///
 /// The model checks the id once it is known.
 fn check_act(raw: &str) -> Result<String, String> {
@@ -927,7 +924,7 @@ mod tests {
 
     /// Checks that every `:final` reducer of the one run in `dir` equals the value of its column in `last_row`.
     ///
-    /// `header` names the columns of `last_row`, as a stats export writes them.
+    /// `header` holds the column names of `last_row`, as a stats export writes them.
     fn assert_final_reducers(dir: &ScratchDir, header: &str, last_row: &str) {
         let runs = parse_records(&dir.read("runs.csv")).expect("runs.csv is CSV");
         assert_eq!(runs.len(), 2, "a header and one run");
@@ -944,7 +941,7 @@ mod tests {
 
     /// Checks that a sweep of one run writes the series `--export-stats` writes for the run's seed.
     ///
-    /// 31 steps sampled every 3 ticks end off the sampling boundary, so the final tick is a row of its own.
+    /// 31 steps sampled every 3 ticks end off the sampling boundary, so the final tick gets its own row.
     #[test]
     fn a_single_point_sweep_matches_export_stats() {
         let entry = cpu_entry("sir");
@@ -981,7 +978,7 @@ mod tests {
         assert_final_reducers(&dir, exported[0], exported[exported.len() - 1]);
     }
 
-    /// Checks that a sweep fires each `--act` as `--export-stats` fires it, the tick the run ends on included.
+    /// Checks that a sweep fires each `--act` as `--export-stats` fires it, including on the tick that the run ends on.
     #[test]
     fn a_sweep_fires_its_actions_as_export_stats_does() {
         let entry = cpu_entry("sir");
@@ -1039,7 +1036,7 @@ mod tests {
         records
     }
 
-    /// Checks that two shards of a sampled sweep, merged, hold the files of the sweep run in one go.
+    /// Checks that two merged shards of a sampled sweep hold the same files as the sweep run in one go.
     ///
     /// The sweep samples a parameter and an action's tick, and stops a run once nobody is infected. Some runs stop
     /// before their last tick, so their series end early.
@@ -1162,8 +1159,8 @@ mod tests {
         );
     }
 
-    /// Checks that the usage lines name the command as the options do, whatever the program name, and that the help
-    /// text opens with the host's line, or with henad-cli's description by default.
+    /// Checks that the usage lines show the command name that the options set, whatever the program name, and that
+    /// the help text opens with the host's line, or with henad-cli's description by default.
     #[test]
     fn the_options_name_and_describe_the_command() {
         let render = |about: Option<&str>, arguments: &[&str]| {
@@ -1184,7 +1181,7 @@ mod tests {
         assert_eq!(render(None, &["other-name", "--version"]), "my-models 1.2.3\n");
     }
 
-    /// Checks that a set holding CPU models alone asks for no device.
+    /// Checks that a set holding only CPU models requests no device.
     #[test]
     fn a_cpu_only_set_has_no_gpu_models() {
         let mut cpu_only = ModelSet::new(henad_core::build_info!());
@@ -1279,13 +1276,13 @@ parameters for virus_network (Virus on a Network):
         lines
     }
 
-    /// Checks that every command line the docs and scripts pass keeps the mode it had before sweeps.
+    /// Checks that every command line in the docs and scripts keeps the mode it had before sweeps.
     ///
     /// The script lines are written the way `scripts/compare_bench.py`, `bench_matrix.py`, `compare_sir.py` and
     /// `compare_network.py` build them. A documented sweep line enters explore mode, and a merge line merge mode.
     #[test]
     fn existing_invocations_keep_their_mode() {
-        // Read at run time. The page sits outside the package, and a crate built from its tarball skips the test.
+        // The page is read at run time. It sits outside the package, and a crate built from its tarball skips the test.
         let reference = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/cli.md");
         let Ok(reference) = std::fs::read_to_string(&reference) else {
             eprintln!("note: skipped, {} is absent", reference.display());
@@ -1339,7 +1336,7 @@ parameters for virus_network (Virus on a Network):
     /// Team Assembly's component stats are computed there.
     ///
     /// With `p` at zero every tick adds a separate clique of four newcomers, and nothing retires yet.
-    /// Rows land at tick 0, at tick 2 on the sampling boundary, and at the final tick 3 off it.
+    /// Rows are written at tick 0, at tick 2 on the sampling boundary, and at the final tick 3 off it.
     #[test]
     fn exported_stats_are_prepared_like_a_publish() {
         let entry = example_models()
@@ -1423,11 +1420,10 @@ parameters for virus_network (Virus on a Network):
         text.lines().skip(1).map(str::to_owned).collect()
     }
 
-    /// Checks that a GPU action on a sampling boundary fires once. It used to fire at the end of one run of
-    /// steps and again at the start of the next, so the series changed with `--stats-every`.
+    /// Checks that a GPU action on a sampling boundary fires once, whatever `--stats-every` is.
     ///
     /// `randomise` draws a fresh board on every press. At `--stats-every 1` tick 2 is a boundary, and a
-    /// second press there changed every later row. At `--stats-every 3` it is inside a run.
+    /// second press there would change every later row. At `--stats-every 3` it is inside a run.
     #[test]
     fn a_gpu_action_fires_once_whatever_the_sampling_interval() {
         let Some(life) = SmallGpuGrid::new("gpu_game_of_life") else {

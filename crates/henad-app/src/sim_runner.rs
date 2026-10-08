@@ -1,8 +1,4 @@
-//! A thin enum over "whichever sim thread backend is driving the selected model".
-//!
-//! The CPU [`SimThread`] and the GPU [`GpuSimThread`] stay separate concrete types, since one steps
-//! a `SimState` per loop iteration and the other encodes N steps into one submission. Their
-//! *handles* share a shape, so the app can hold this enum and stay backend-agnostic.
+//! The sim thread driving the loaded model, the CPU [`SimThread`] or the GPU [`GpuSimThread`], behind one handle.
 
 use henad_compute::cpu::sim_thread::{SimCommand, SimThread};
 use henad_compute::gpu::GpuStats;
@@ -15,9 +11,10 @@ pub enum SimRunner {
 }
 
 impl SimRunner {
-    /// Send a command that both backends understand. The GPU backend ignores the CPU pacing
-    /// commands (`SetTargetTps`, `SetUncapped`, `SetTicksPerSnapshot`) and paces itself with the
-    /// adaptive batch-size controller instead.
+    /// Sends a command to the sim thread.
+    ///
+    /// The GPU backend ignores the pacing and layout commands (`SetTargetTps`, `SetUncapped`, `SetTicksPerSnapshot`
+    /// and `SetLayout`), and paces itself by its batch size.
     pub fn send(&mut self, cmd: SimCommand) {
         match self {
             Self::Cpu(t) => t.send(cmd),
@@ -53,7 +50,7 @@ impl SimRunner {
         }
     }
 
-    /// Hands a consumed snapshot back for its buffers. A GPU snapshot owns no cell data, so there
+    /// Takes back a consumed snapshot so its buffers can be reused. A GPU snapshot owns no cell data, so there
     /// is nothing to reuse.
     pub fn recycle(&mut self, snap: Snapshot) {
         match self {
@@ -62,8 +59,9 @@ impl SimRunner {
         }
     }
 
-    /// `Some` only for a GPU-backed model, which is how the app decides whether to show the
-    /// GPU-only batching controls.
+    /// Returns the GPU timing and batch size, `None` for a CPU model.
+    ///
+    /// The Pacing panel shows the batching controls instead of the CPU ones while this is `Some`.
     pub fn gpu_stats(&self) -> Option<GpuStats> {
         match self {
             Self::Cpu(_) => None,
@@ -78,7 +76,7 @@ impl SimRunner {
         }
     }
 
-    /// Advances the simulation where the runner has no thread of its own. A no-op where it has.
+    /// Advances the simulation where the runner has no dedicated thread, and does nothing where it has one.
     pub fn update(&mut self, dt: f64) {
         match self {
             Self::Cpu(t) => t.update(dt),

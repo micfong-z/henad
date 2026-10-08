@@ -40,12 +40,12 @@ pub enum SessionState {
     Aborted,
     /// Ended by the loss of the GPU device.
     Stopped,
-    /// Ended on an error of its own, outside any run.
+    /// Ended by an error outside any run.
     Failed,
 }
 
 impl SessionState {
-    /// Returns whether the session is still to send its last event.
+    /// Returns whether the session has yet to send its last event.
     pub fn is_running(self) -> bool {
         matches!(self, Self::Planning | Self::Running | Self::Paused)
     }
@@ -71,10 +71,10 @@ pub struct SweepSession {
     pub failure: Option<String>,
     /// Update of a search after the last batch it was told, `None` for a sweep or before the first batch.
     pub latest_search_update: Option<Arc<SearchUpdate>>,
-    /// Generations of a genetic algorithm that finished before the last batch it was told, the index of the
-    /// generation that batch belongs to.
+    /// Number of generations of a genetic algorithm finished before the last batch it was told. It equals the
+    /// index of the generation that batch belongs to.
     pub latest_generation: u64,
-    /// Generations of a genetic algorithm that finished with the batches told so far.
+    /// Number of generations of a genetic algorithm finished with the batches told so far.
     finished_generations: u64,
     /// Size and layout of the sweep once planned, `None` while it plans.
     pub outline: Option<Box<SweepOutline>>,
@@ -84,20 +84,20 @@ pub struct SweepSession {
     pub execution: SessionExecution,
 }
 
-/// Settings of a sweep that decide how many runs step at once. None of them change its results.
+/// Settings of a sweep that set the number of runs stepped at once. None of them change its results.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SessionExecution {
-    /// Number of runs stepped at once.
+    /// Number of runs stepped at once, or automatic.
     pub concurrency: Concurrency,
-    /// Bytes of host memory the live runs can hold together, `None` for no limit.
+    /// Host memory budget in bytes for all live runs together, `None` for no limit.
     pub memory_budget: Option<u64>,
-    /// Bytes of GPU memory the live runs can hold together, `None` for the device's largest buffer.
+    /// GPU memory budget in bytes for all live runs together, `None` for the device's largest buffer.
     pub gpu_memory_budget: Option<u64>,
 }
 
 impl SessionExecution {
-    /// Returns the memory budgets a manifest's execution table, `recorded`, holds, with automatic concurrency in place
-    /// of the concurrency the table records.
+    /// Returns the memory budgets held by `recorded`, a manifest's execution table, with automatic concurrency
+    /// instead of the recorded concurrency.
     pub fn recorded(recorded: &ManifestExecution) -> Self {
         Self {
             concurrency: Concurrency::Auto,
@@ -106,8 +106,8 @@ impl SessionExecution {
         }
     }
 
-    /// Returns the line naming the memory budgets a resume of the `noun` that recorded them will run with, `None`
-    /// without a budget.
+    /// Returns the line that lists the recorded memory budgets a resume of the `noun` will use, `None` without a
+    /// budget.
     pub fn resume_text(&self, noun: &str) -> Option<String> {
         let budgets = budget_text(self.memory_budget, self.gpu_memory_budget)?;
         Some(format!(
@@ -117,10 +117,10 @@ impl SessionExecution {
 }
 
 impl SweepSession {
-    /// Starts a sweep of `spec` on the model `spec` names, and pauses the live simulation.
+    /// Starts a sweep of `spec` on the model that `spec` refers to, and pauses the live simulation.
     ///
-    /// The results go to `output_dir`, or stay in memory when it is `None`. A GPU model steps on a device of the
-    /// sweep's own. Planning happens before this returns, and the runs after it.
+    /// The results go to `output_dir`, or stay in memory when it is `None`. A GPU model runs on the sweep's
+    /// own device. Planning happens before this returns, and the runs after it.
     ///
     /// # Errors
     ///
@@ -164,7 +164,7 @@ impl SweepSession {
     }
 
     /// Resumes the sweep whose results `folder` holds, a sweep of the model `model_id`, with the concurrency and
-    /// budgets of `execution`, and pauses the live simulation. A GPU model steps on a device of the sweep's own.
+    /// budgets of `execution`, and pauses the live simulation. A GPU model runs on the sweep's own device.
     ///
     /// # Errors
     ///
@@ -220,7 +220,7 @@ impl SweepSession {
         }
     }
 
-    /// Steps the sweep within the frame's budget in a browser, and hands every waiting event to `results` at once.
+    /// Steps the sweep within the frame's budget in a browser, and passes every waiting event to `results` at once.
     pub fn update(&mut self, dt: f64, results: &mut ResultsPanel) {
         self.run.update(dt);
         let mut events = Vec::new();
@@ -269,12 +269,12 @@ impl SweepSession {
         }
     }
 
-    /// Returns whether the session resumes a folder, and has no draft of its own.
+    /// Returns whether the session resumes a folder. Such a session has no draft.
     pub fn is_resumed(&self) -> bool {
         self.kept.is_none()
     }
 
-    /// Returns whether the sweep is still to send its last event.
+    /// Returns whether the sweep has yet to send its last event.
     pub fn is_running(&self) -> bool {
         !self.run.is_ended()
     }
@@ -321,7 +321,7 @@ mod tests {
     use crate::state::AppState;
     use crate::ui::results::ResultsPanel;
 
-    /// Returns the app over a headless device, or `None` to skip a GPU test on a machine without one.
+    /// Returns the app over a headless device, or `None` to skip a GPU test on a machine without a GPU.
     fn headless_app() -> Option<AppState> {
         AppState::headless(henad_models::example_models(), true)
     }
@@ -418,7 +418,7 @@ mod tests {
         assert_eq!(SessionExecution::default().resume_text("search"), None);
     }
 
-    /// The regression. A resume from the Results tab ran with no budgets.
+    /// A resume from the Results tab runs with the budgets the sweep recorded.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_resume_runs_with_the_budgets_the_sweep_recorded() {

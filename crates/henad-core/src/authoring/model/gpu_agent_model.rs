@@ -1,48 +1,12 @@
 //! Authoring API for agent models whose population lives entirely in GPU buffers.
 //!
-//! This is the GPU sibling of [`crate::authoring::model::agent_model::AgentModel`], and the agent-shaped
-//! counterpart of [`crate::authoring::model::gpu_grid_model::GpuGridModel`]. A model declares its buffers,
-//! its passes and its bindings as plain data, and the engine (`henad_compute::gpu::agent_engine`)
-//! derives every wgpu object, the neighbour index, the ping-pong, the stat reduction and the whole
-//! `SimState`/`GpuSimState` impl from them.
+//! [`GpuAgentModel`] is the GPU sibling of [`AgentModel`]. A model declares its buffers, its passes and
+//! its bindings as plain data, and the engine in henad-compute derives every wgpu object, the neighbour
+//! index, the ping-pong and the stat reduction from them. A step is a list of [`PassSpec`]s run in order.
+//! The [GPU agent models](https://micfong-z.github.io/henad/authoring/gpu-agent-models/) page walks through
+//! the buffers, the passes and the reduction.
 //!
-//! Unlike a grid, an agent step is not one dispatch. Boids rebuilds a neighbour index and runs one
-//! kernel, and ants runs a kernel over agents then one over cells. So a model declares a *list* of
-//! passes rather than a fixed step/display/reduce triple.
-//!
-//! # Bindings
-//!
-//! A pass does not say which resource goes in which slot. Its [`BindingDecl`] slice is generated
-//! from the shader at build time, and the engine resolves each `name` itself, so a slot index
-//! cannot disagree with the shader that owns it. See [`crate::authoring::model::binding`] for the seven
-//! reserved names and how a buffer label resolves.
-//!
-//! # Shader imports
-//!
-//! A pass shader reaches shared WGSL with `#import henad::dispatch::linear_index` and the like,
-//! resolved at build time by henad-build. What the engine compiles is therefore the composed
-//! module, re-emitted by naga, not the file as written. Set `HENAD_DUMP_WGSL` to a directory to
-//! read back what was actually compiled, since a WGSL error names that text rather than the source.
-//!
-//! The reduce leaf is an ordinary shader like any other pass. The workgroup fold it repeats is
-//! `henad::reduce_tree::block_sum`, so a model writes only the per lane value.
-//!
-//! # Contracts
-//!
-//! Shaders are opaque strings to Rust, so nothing below is checked at compile time.
-//! - a binding's declared WGSL type must match what the buffer actually holds, since resolution
-//!   goes by name and every storage slot looks alike. A mismatch mostly surfaces as a wgpu
-//!   validation error at model construction,
-//! - a pass shader must declare `@workgroup_size(256)` and fold with `linear_index`, and a display
-//!   shader must declare `@workgroup_size(N, N)` for its [`DisplaySpec::workgroup`]. The engine
-//!   reads each shader's literal size at construction and panics on a mismatch,
-//! - a buffer label must not be reserved or end in `_in` or `_out`. The engine checks this at
-//!   construction,
-//! - [`GpuAgentModel::buffer_lens`] and [`GpuAgentModel::seed_buffers`] must each return one entry
-//!   per [`GpuAgentModel::BUFFERS`] entry, and a non-empty seed must be exactly `len * 4` bytes,
-//! - [`GpuAgentModel::STATS`] length must equal the number of values [`GpuAgentModel::stats`]
-//!   returns. The engine pairs the two by position and drops the values past the shorter. The
-//!   testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values.
+//! [`AgentModel`]: crate::authoring::model::agent_model::AgentModel
 
 use crate::action::ActionDescriptor;
 use crate::authoring::model::binding::BindingDecl;
@@ -54,17 +18,22 @@ use crate::view::{StatDescriptor, StatValue};
 /// One storage buffer of the model's state.
 #[derive(Debug)]
 pub struct BufferSpec {
+    /// Name that a shader's bindings refer to.
+    ///
+    /// It must not be reserved or end in `_in` or `_out`. The engine panics at construction on such a
+    /// label.
     pub label: &'static str,
-    /// Doubled, for a buffer a pass reads the previous values of while writing this tick's.
+    /// Whether the buffer has a second side, for a pass that reads the previous values while it
+    /// writes this tick's values.
     pub double_buffered: bool,
-    /// Also a vertex stream, so the view can draw it without a copy.
+    /// Whether the buffer is also a vertex stream, for the view to draw without a copy.
     pub drawable: bool,
 }
 
 /// Declares a model's storage buffers and their indices in one place.
 ///
 /// The index is the declaration's position, so it is derived rather than written down. Flags are
-/// named rather than positional, as in `agent_lanes!`, and default off. Expands at module scope,
+/// named rather than positional, as in `agent_lanes!`, and default off. Invoke it at module scope,
 /// next to the impl that forwards `BUFFERS` to `BUFFER_SPECS`.
 ///
 /// ```ignore
@@ -112,14 +81,16 @@ macro_rules! __buffer_flags {
 /// A pass's invocation domain.
 #[derive(Debug, Clone, Copy)]
 pub enum Domain {
+    /// One invocation per agent.
     Agents,
     /// `n` invocations per cell, for a field with `n` layers.
     Cells(u32),
-    /// The larger of the two, for a pass whose lanes span both.
+    /// One invocation per agent or per cell, whichever is more, for a pass whose lanes span agents and cells.
     AgentsOrCells,
 }
 
 impl Domain {
+    /// Returns the number of invocations this domain covers in `geom`.
     pub fn invocations(self, geom: &Geometry) -> u32 {
         let cells = geom.n_cells;
         match self {
@@ -132,9 +103,16 @@ impl Domain {
 
 /// One compute pass of a step, run in declaration order.
 pub struct PassSpec {
+    /// Name of the pass, as the Model panel and GPU labels show it.
     pub label: &'static str,
+    /// WGSL source of the pass.
+    ///
+    /// It must declare `@workgroup_size(256)` and fold its index with `henad::dispatch::linear_index`.
+    /// The engine panics at construction on another size.
     pub shader: &'static str,
+    /// The shader's `@group(0)` declarations, generated from it at build time.
     pub bindings: &'static [BindingDecl],
+    /// Invocation domain of the pass.
     pub domain: Domain,
 }
 
@@ -152,11 +130,15 @@ impl std::fmt::Debug for PassSpec {
 
 /// The pass that turns state into the display texture, for a model that draws a grid layer.
 ///
-/// Dispatched over [`Geometry::display`], one invocation per texel, not per cell.
+/// The engine dispatches it over [`Geometry::display`], one invocation per texel.
 pub struct DisplaySpec {
+    /// WGSL source of the pass.
     pub shader: &'static str,
+    /// The shader's `@group(0)` declarations, generated from it at build time.
     pub bindings: &'static [BindingDecl],
-    /// Must match the `@workgroup_size(N, N)` the shader declares.
+    /// Side `N` of the `@workgroup_size(N, N)` the shader declares.
+    ///
+    /// The engine panics at construction on a shader that declares another size.
     pub workgroup: u32,
 }
 
@@ -176,10 +158,16 @@ impl std::fmt::Debug for DisplaySpec {
 /// The engine owns every level above it, so the leaf only has to write `partials`. Its shader
 /// imports `henad::reduce_tree::block_sum` for the workgroup fold.
 pub struct ReduceSpec {
+    /// WGSL source of the leaf.
+    ///
+    /// It must declare `@workgroup_size(256)`, as a [`PassSpec::shader`] does. The engine panics at
+    /// construction on another size.
     pub shader: &'static str,
+    /// The shader's `@group(0)` declarations, generated from it at build time.
     pub bindings: &'static [BindingDecl],
-    /// Values the leaf sums, one per lane.
+    /// Number of values that the leaf sums, one per lane.
     pub lanes: usize,
+    /// Invocation domain of the leaf.
     pub domain: Domain,
 }
 
@@ -197,80 +185,108 @@ impl std::fmt::Debug for ReduceSpec {
 
 /// A one-off pass the user can trigger.
 ///
-/// Dispatched once over its own domain, writing the model's buffers in place, since nothing
-/// ping-pongs afterwards. Its bindings therefore resolve read and write alike to the side that
-/// holds the state now.
+/// The engine dispatches it once over its own domain, and it writes the model's buffers in place,
+/// since nothing ping-pongs afterwards. Its bindings therefore resolve read and write alike to the
+/// side that holds the state now.
 #[derive(Debug)]
 pub struct GpuAgentAction {
+    /// Id and button label of the action.
     pub desc: ActionDescriptor,
+    /// Pass that the action runs.
     pub pass: PassSpec,
 }
 
-/// The uniform block [`GpuAgentModel::pass_params_bytes`] is being asked for.
+/// Pass for which [`GpuAgentModel::pass_params_bytes`] returns the uniform block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PassId {
+    /// Entry of [`GpuAgentModel::STEP_PASSES`] at this index.
     Step(usize),
+    /// The [`GpuAgentModel::DISPLAY`] pass.
     Display,
+    /// The [`GpuAgentModel::REDUCE`] leaf.
     Reduce,
+    /// Entry of [`GpuAgentModel::ACTIONS`] at this index.
     Action(usize),
 }
 
-/// The world these params describe, resolved once at construction.
+/// World that the parameters describe, resolved once at construction.
 #[derive(Clone, Copy, Debug)]
 pub struct Geometry {
+    /// Population, at least 1.
     pub num_agents: u32,
+    /// World size, at least 1 on each axis.
     pub extent: Extent,
+    /// Width of the cell grid, one cell per world unit.
     pub width: u32,
+    /// Height of the cell grid, one cell per world unit.
     pub height: u32,
+    /// Number of cells, `width * height`.
     pub n_cells: u32,
     /// Display texture size, capped under the cell grid on a large world. A display pass
-    /// dispatches over this and reads the cell at `texel * grid / tex`.
+    /// dispatches over this size and reads the cell at `texel * grid / tex`.
     pub display: (u32, u32),
-    /// Set when the model declares [`GpuAgentModel::INDEX`].
+    /// Cell geometry of the neighbour index, set when the model declares [`GpuAgentModel::INDEX`].
     pub index: Option<HashGrid>,
 }
 
-/// Extra a uniform block needs beyond the geometry. `groups_x` is the fold width
-/// `henad::dispatch::linear_index` expects, so a shader that folds has to carry it.
+/// Values that a pass's uniform block can need, besides the parameters.
 #[derive(Clone, Copy, Debug)]
 pub struct PassCtx<'a> {
+    /// World the parameters describe.
     pub geom: &'a Geometry,
+    /// Number of invocations the pass dispatches.
     pub invocations: u32,
+    /// Fold width that `henad::dispatch::linear_index` expects. A shader that folds carries it in its
+    /// uniform block.
     pub groups_x: u32,
-    /// Fresh on every press of an action, and zero for every other pass.
+    /// Seed of an action pass, fresh on every press, and zero for every other pass.
     pub seed: u32,
 }
 
 /// A population of agents stepped by compute shaders, with its state resident in GPU buffers.
 ///
-/// See the module docs for the bindings and the contracts the shaders must follow.
+/// Each pass binds by name, as the [`binding`](crate::authoring::model::binding) module describes. A
+/// binding resolves by its name alone, and its declared WGSL type must match what the buffer holds.
+///
+/// Rust sees the shaders as opaque strings, so the compiler checks none of the contracts the items
+/// below state.
 pub trait GpuAgentModel: Send + Sync + 'static {
+    /// Name shown in the UI.
     const NAME: &'static str;
+    /// Stable id that identifies the model in a model set, on the command line and in a spec file.
     const ID: &'static str;
+    /// One-line description shown in the UI.
     const DESCRIPTION: &'static str;
 
     /// Stat series for the history chart. Declared once, so [`Self::stats`] returns bare values.
     const STATS: &'static [StatDescriptor];
 
+    /// Storage buffers of the model's state, declared with [`buffers!`](crate::buffers).
     const BUFFERS: &'static [BufferSpec];
-    /// Index into [`Self::BUFFERS`] of the `vec2<f32>` positions the view draws.
+    /// Index into [`Self::BUFFERS`] of the `vec2<f32>` positions that the view draws.
     const POS_BUFFER: usize;
-    /// Index into [`Self::BUFFERS`] of the packed RGBA the view draws.
+    /// Index into [`Self::BUFFERS`] of the packed RGBA that the view draws.
     const COLOR_BUFFER: usize;
 
-    /// Rebuild a neighbour index from the positions before every step. Off for a model whose
-    /// agents never read one another.
+    /// Whether the engine rebuilds a neighbour index from the positions before every step.
+    ///
+    /// Leave it off for a model whose agents never read one another.
     const INDEX: bool = false;
 
-    /// Persistent `u32` counters a kernel accumulates into. Never cleared, unlike the reduction.
+    /// Number of persistent `u32` counters that a kernel accumulates into.
+    ///
+    /// The engine never clears them, unlike the reduction's output.
     const COUNTERS: usize = 0;
 
+    /// Passes of one step, run in declaration order.
     const STEP_PASSES: &'static [PassSpec];
+    /// Display pass, for a model that draws a grid layer under its agents.
     const DISPLAY: Option<DisplaySpec> = None;
 
     /// One-off passes the user can trigger. Each gets a button in the Parameters panel.
     const ACTIONS: &'static [GpuAgentAction] = &[];
 
+    /// Leaf of the stat reduction.
     const REDUCE: ReduceSpec;
 
     /// Whether two builds on one seed step through identical states.
@@ -280,37 +296,46 @@ pub trait GpuAgentModel: Send + Sync + 'static {
     /// recorded row.
     const REPLAYS_EXACTLY: bool = true;
 
-    /// The full descriptor list. Unlike [`crate::authoring::model::agent_model::AgentModel`], nothing is
-    /// prepended. A GPU model spells its list out, so it can mirror the exact parameter order of
-    /// the CPU model it is compared against.
+    /// Returns the full descriptor list.
+    ///
+    /// Unlike [`crate::authoring::model::agent_model::AgentModel`], nothing is prepended. A GPU model
+    /// spells its list out, so it can mirror the exact parameter order of the CPU model it is compared
+    /// against.
     fn param_descriptors() -> Vec<ParamDescriptor>;
 
-    /// Population and world extent for these params. The engine clamps both to at least 1.
+    /// Returns the population and the world extent for these params. The engine clamps the population and each
+    /// axis of the extent to at least 1.
     fn dims(params: &[ParamValue]) -> (u32, Extent);
 
-    /// Length in `u32`-sized elements of each buffer, in [`Self::BUFFERS`] order.
+    /// Returns the length in `u32`-sized elements of each buffer, one per [`Self::BUFFERS`] entry.
     fn buffer_lens(geom: &Geometry) -> Vec<usize>;
 
-    /// Initial contents of each buffer, in [`Self::BUFFERS`] order. An empty vector leaves that
-    /// buffer cleared, which is what a scratch buffer read before it is first written wants.
+    /// Returns the initial contents of each buffer as raw bytes, one vector per [`Self::BUFFERS`] entry.
     ///
-    /// Raw bytes rather than `u32`, because agent lanes are mixed and `henad-core` has no
-    /// bytemuck. Only the current side is seeded, since a double buffered one has its other side
-    /// fully written by the first step.
+    /// A non-empty vector must hold exactly `len * 4` bytes for the length that [`Self::buffer_lens`] returns.
+    /// An empty vector leaves its buffer cleared, for a scratch buffer that is read before its first write.
+    /// Only the current side is seeded, and the first step writes the other side of a double buffered
+    /// buffer in full.
     fn seed_buffers(geom: &Geometry, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u8>>;
 
-    /// Neighbour index cell size, read only when [`Self::INDEX`], and once at construction.
+    /// Returns the neighbour index's cell size for these params.
+    ///
+    /// The engine reads it once at construction, and only when [`Self::INDEX`] is set.
     fn index_cell_size(_params: &[ParamValue]) -> f32 {
         1.0
     }
 
-    /// A pass's uniform block, as raw bytes. Models keep their own `#[repr(C)]` struct and hand
-    /// over `bytemuck::bytes_of(&s).to_vec()`.
+    /// Returns the uniform block of `pass` as raw bytes.
+    ///
+    /// A model fills in the `Params` struct generated from that pass's shader and returns
+    /// `bytemuck::bytes_of(&params).to_vec()`.
     fn pass_params_bytes(pass: PassId, ctx: PassCtx<'_>, params: &[ParamValue]) -> Vec<u8>;
 
-    /// Turn the reduction and the counters into values, in [`Self::STATS`] order.
+    /// Turns the reduction and the counters into values, in [`Self::STATS`] order.
     ///
-    /// Both are all-zero until the first readback completes.
+    /// Both inputs are all-zero until the first readback completes. The engine pairs the values with
+    /// [`Self::STATS`] by position and drops the values past the shorter list. The testing kit's
+    /// `StatCount` check, given a device, catches a result with fewer values.
     fn stats(sums: &[f32], counters: &[u32], geom: &Geometry) -> Vec<StatValue>;
 }
 

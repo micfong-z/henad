@@ -1,7 +1,7 @@
-//! Holds each tutorial's finished code to the model it teaches.
+//! Checks each tutorial's finished code against the model it teaches.
 //!
-//! Bit equality rather than a tolerance. Both sides run the same kernels through the same engine,
-//! so anything less than identical means the page has drifted.
+//! Each comparison demands equal bits, with no tolerance. Both sides run the same kernels through the same
+//! engine, so anything less than identical means the page has drifted.
 
 // Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
 // limit of 128.
@@ -23,7 +23,7 @@ use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 
 const SEED: u64 = 0x5EED_0DE5_0DE5_5EED;
 
-/// Ids, labels, kinds, the live/reload flag and the display format, in declaration order.
+/// Returns the ids, labels, kinds, live or reload flags and display formats, in declaration order.
 ///
 /// Kinds are compared through `Debug`, which carries the default, the range and the slider step.
 fn descriptor_shape(descs: &[ParamDescriptor]) -> Vec<(&str, &str, String, ParamApply, ParamFormat)> {
@@ -33,14 +33,14 @@ fn descriptor_shape(descs: &[ParamDescriptor]) -> Vec<(&str, &str, String, Param
         .collect()
 }
 
-/// Labels and colours of the stat series, in declaration order.
+/// Returns the labels and colours of the stat series, in declaration order.
 fn stat_shape(descs: &[StatDescriptor]) -> Vec<(&str, [u8; 4])> {
     descs.iter().map(|d| (d.label, d.color)).collect()
 }
 
-// --- Game of Life ---
+// Game of Life.
 
-/// Cells and stat values after `steps` ticks, as raw bits.
+/// Returns the cells and stat values after `steps` ticks, as raw bits.
 fn run_grid<M: GridModel>(params: &[ParamValue], steps: usize) -> (Vec<u8>, Vec<u64>) {
     let mut state = GridModelState::<M>::from_params_seeded(params, Some(SEED));
     for _ in 0..steps {
@@ -87,7 +87,7 @@ fn the_game_of_life_tutorial_declares_the_same_parameters() {
     );
 }
 
-// --- Ants ---
+// Ants.
 
 struct AntSnapshot {
     positions: Vec<u32>,
@@ -98,7 +98,7 @@ struct AntSnapshot {
     stats: Vec<u64>,
 }
 
-/// Everything an ant model produces after `steps` ticks, floats as raw bits.
+/// Returns everything an ant model produces after `steps` ticks, floats as raw bits.
 fn run_ants<A, S>(params: &[ParamValue], steps: usize) -> AntSnapshot
 where
     A: AgentModel<Field = ScalarField<S>, Tally = u64>,
@@ -201,7 +201,7 @@ fn the_ants_tutorial_declares_the_same_parameters() {
     );
 }
 
-// --- Virus on a Network ---
+// Virus on a Network.
 
 /// A change made to a running network state before one of its ticks.
 enum Nudge {
@@ -227,7 +227,7 @@ struct NetworkSnapshot {
 
 /// Returns `N`'s full parameter list at its defaults, apart from `overrides`.
 ///
-/// `overrides` names parameters by id. Each side builds its own list, since the taught model declares one
+/// `overrides` identifies parameters by id. Each side builds its own list, since the taught model declares one
 /// parameter fewer.
 fn network_params<N: NetworkModel>(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
     let descs = network_model_param_descriptors::<N>();
@@ -245,9 +245,9 @@ fn network_params<N: NetworkModel>(overrides: &[(&str, ParamValue)]) -> Vec<Para
         .collect()
 }
 
-/// Everything a network model produces after `steps` ticks, floats as raw bits.
+/// Returns everything a network model produces after `steps` ticks, floats as raw bits.
 ///
-/// `nudges` are applied before the tick they name. `timers` reads the one lane that no trait exposes.
+/// Each entry of `nudges` is applied before the tick paired with it. `timers` reads the one lane that no trait exposes.
 fn run_network<N: NetworkModel>(
     overrides: &[(&str, ParamValue)],
     steps: u64,
@@ -303,7 +303,7 @@ fn run_network<N: NetworkModel>(
     }
 }
 
-/// Runs the taught and shipped models side by side and demands the same bits from both.
+/// Runs the taught and shipped models side by side and demands the same bits from both models.
 ///
 /// Returns the shipped model's snapshots at tick 0 and at the end, for the caller's own checks.
 fn assert_virus_parity(
@@ -456,7 +456,7 @@ fn the_virus_tutorial_declares_the_same_parameters_and_actions() {
         (Taught::DEFAULT_EXTENT.w, Taught::DEFAULT_EXTENT.h),
         (Shipped::DEFAULT_EXTENT.w, Shipped::DEFAULT_EXTENT.h)
     );
-    // The page has the reader pick the model by name, next to the shipped one.
+    // The page has the reader pick the model by name, next to the shipped model.
     assert_eq!(
         (Taught::NAME, Taught::DESCRIPTION),
         (Shipped::NAME, Shipped::DESCRIPTION)
@@ -469,9 +469,9 @@ fn the_virus_tutorial_declares_the_same_parameters_and_actions() {
     );
 }
 
-// --- GPU Game of Life ---
+// GPU Game of Life.
 
-/// Params in the order both GPU Life models declare them.
+/// Returns the params in the order both GPU Life models declare them.
 fn gpu_life_params(width: u32, height: u32) -> Vec<ParamValue> {
     vec![ParamValue::U32(width), ParamValue::U32(height), ParamValue::F32(0.3)]
 }
@@ -551,7 +551,7 @@ fn the_gpu_life_tutorial_matches_the_shipped_model() {
     );
 }
 
-// --- GPU ants ---
+// GPU ants.
 
 fn gpu_foraging_params(num_agents: u32) -> Vec<ParamValue> {
     let mut values: Vec<ParamValue> = gpu_ants::GpuAnts::param_descriptors()
@@ -625,9 +625,10 @@ fn the_gpu_foraging_tutorial_seeds_the_same_buffers() {
     assert_eq!(stat_shape(Taught::STATS), stat_shape(Shipped::STATS));
 }
 
-/// Each step pass's label, domain and bindings, then the display pass's and the reduce leaf's, as `Debug` text.
+/// Returns the label, domain and bindings of each step pass, then of the display pass and the reduce leaf, as
+/// `Debug` text.
 ///
-/// The shaders themselves are left out. Their composed text names the module they import from, and
+/// The shaders themselves are left out. Their composed text refers to the module they import from, and
 /// `tests/shaders.rs` compares the files.
 fn pass_shape<M: GpuAgentModel>() -> Vec<String> {
     let mut shape: Vec<String> = M::STEP_PASSES
@@ -670,7 +671,7 @@ fn the_gpu_foraging_tutorial_matches_the_shipped_model() {
         "the taught reduce leaf or stats decoding has drifted"
     );
 
-    // Buffer indices are declaration order, and both declare pos, state, colour, rng, field.
+    // Buffer indices are declaration order, and both models declare pos, state, colour, rng, field.
     for (index, what) in [
         (0, "positions"),
         (1, "packed state"),

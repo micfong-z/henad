@@ -1,4 +1,4 @@
-// Turns every boid a fresh way without touching its speed, one invocation per boid.
+// Gives every boid a new random heading without changing its speed, one invocation per boid.
 
 #import henad::dispatch::linear_index
 #import henad::rng::{pcg_hash, random_float}

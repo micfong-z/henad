@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: How to install Henad's app and command line, and how to start a project of your own.
+description: How to install Henad's app and command line, and how to start your own project.
 icon: material/download-outline
 ---
 
@@ -8,7 +8,7 @@ icon: material/download-outline
 
 You can try Henad with its example models in [the web app](https://henad.micfong.space), with nothing to install.
 To run it on your machine, install the app and the command line from crates.io, or build them from a clone of the repository.
-To write models of your own, start a project from the template instead.
+To write your own models, start a project from the template instead.
 
 Henad runs on any device with a CPU, optionally a GPU, and any operating system that can build [wgpu](https://github.com/gfx-rs/wgpu).
 
@@ -28,7 +28,8 @@ Henad runs on any device with a CPU, optionally a GPU, and any operating system 
     - :material-check: = Downlevel/Best Effort Support  
     - :material-set-square: = Requires the [ANGLE](https://github.com/gfx-rs/wgpu/wiki/Running-on-ANGLE) translation layer (GL ES 3.0 only).
       On macOS/iOS, use the `angle` feature.
-      On Windows, `gles` uses WGL by default; build with `cfg(windows_angle)` to use ANGLE instead.
+      On Windows, `gles` uses WGL by default.
+      Build with `cfg(windows_angle)` to use ANGLE instead.
     - :material-volcano-outline: = Requires the [MoltenVK](https://vulkan.lunarg.com/sdk/home#mac) translation layer  
 
 ## Installing the app and the command line
@@ -51,7 +52,7 @@ git clone https://github.com/micfong-z/henad.git
 cd henad
 ```
 
-rustup installs the toolchain the repository pins on the first build.
+On the first build, rustup installs the toolchain that the repository pins.
 `cargo run --release --bin henad-app` and `cargo run --release -p henad-cli` then run the two binaries, as [Running Henad](running.md) shows.
 
 The web build needs the dated nightly toolchain the repository pins, with the `rust-src` component for wasm threads.
@@ -72,7 +73,7 @@ Use `scripts/build_web.sh` to build the web app.
 
 ## Starting a project
 
-Models of your own live in a project of your own, with its own app, command line, web build, tests and CI, on the published crates.
+Your own models live in your own project, with its own app, command line, web build, tests and CI, on the published crates.
 [Your own project](your-project.md) fetches the template and sets it up, and the [first-model tutorials](first-model/game-of-life.md) add models to it.
 
 A Rust program that runs the example models, sweeps them or opens the app needs no template, and [Using Henad from code](library.md) shows one.

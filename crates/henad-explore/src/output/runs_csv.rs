@@ -1,8 +1,8 @@
 //! Writer of `runs.csv`, one row per run in plan order.
 //!
 //! A row holds the ids, seed and key of a run, the value of every parameter and the tick of every action, the status
-//! and timing of the run, and one value per reducer. The note is the last column. It holds the actions the model
-//! refused, then a fault message, the timeout or the first value that was not finite.
+//! and timing of the run, and one value per reducer. The note is the last column. It holds the actions that the model
+//! rejected, then a fault message, the timeout or the first value that was not finite.
 
 use std::io::{self, Write};
 
@@ -137,7 +137,7 @@ impl<W: Write> RunsWriter<W> {
         self.dest.flush()
     }
 
-    /// Flushes the writer and hands it back.
+    /// Flushes the writer and returns it.
     ///
     /// # Errors
     ///

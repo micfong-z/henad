@@ -4,16 +4,10 @@
 //! model's descriptors when set. [`RunSetup::build`] returns a [`Simulation`], one built model that its caller steps,
 //! and a [`StatSample`] is one sample of the model's stats, read by label.
 //!
-//! Actions fire under [`henad_core::action::Fire::AfterStep`]. Tick 0's fire inside the build, and each later
-//! tick's after the step that reaches it. Every call returns a model's panic, a device error or a lost
-//! device as a [`Fault`], and a simulation that returned one refuses every later call that runs model code.
-//!
-//! On native targets a CPU model's [`Simulation::step`], [`Simulation::run_for`], [`Simulation::run_to`],
-//! [`Simulation::run_sampled`], [`Simulation::stats`], [`Simulation::act`], [`Simulation::views`] and
-//! [`Simulation::relax_layout`] enter the current rayon pool at most once each. `run_for(0)` and a `run_to` at or
-//! behind the current tick step nothing and enter no pool. [`RunSetup::build`] runs the model's `init`
-//! outside the pool and enters it only to fire tick 0's actions. [`Simulation::write_state`] enters it for its view
-//! preparation alone, and [`Simulation::set_param`] runs no parallel pass and enters no pool.
+//! Actions fire under [`henad_core::action::Fire::AfterStep`]. Tick 0's actions fire inside the build, and each
+//! later tick's actions fire after the step that reaches it. Every call returns a model's panic, a device error or a
+//! lost device as a [`Fault`], and a simulation that returned one rejects every later call that runs model code.
+//! [`Simulation`] lists the calls that enter the rayon pool.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -67,7 +61,7 @@ impl RunSetup {
     /// Returns the setup with parameter `id` set to `value`.
     ///
     /// `value` is an `f32`, a `u32`, a `bool`, or a [`ParamValue`] itself, as `ParamValue::Choice(index)` is for a
-    /// choice parameter. A `u32` never stands in for a choice index.
+    /// choice parameter. A `u32` is never accepted as a choice index.
     ///
     /// # Errors
     ///
@@ -80,11 +74,12 @@ impl RunSetup {
         Ok(self)
     }
 
-    /// Returns the setup with parameter `id` read from `text`, as `--set` reads it. A choice reads an option's name.
+    /// Returns the setup with parameter `id` read from `text`, as `--set` reads it. A choice parameter accepts an
+    /// option name.
     ///
     /// # Errors
     ///
-    /// Returns [`SetupError::Param`] for an unknown id, text that does not read as the parameter's kind, or a value
+    /// Returns [`SetupError::Param`] for an unknown id, text that cannot be parsed as the parameter's kind, or a value
     /// out of bounds.
     pub fn set_text(mut self, id: &str, text: &str) -> Result<Self, SetupError> {
         let index = param_index(&self.entry, id)?;
@@ -94,7 +89,7 @@ impl RunSetup {
         Ok(self)
     }
 
-    /// Returns the setup with `seed` in place of the model's default seed.
+    /// Returns the setup with `seed` instead of the model's default seed.
     pub fn with_seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
         self
@@ -123,7 +118,7 @@ impl RunSetup {
     /// # Errors
     ///
     /// Returns [`SetupError::WrongModel`] for a run of another model, and the errors of [`Self::from_parts`] for
-    /// values or actions the entry refuses.
+    /// values or actions the entry rejects.
     pub fn from_replay(entry: &ModelEntry, replay: &Replay) -> Result<Self, SetupError> {
         if replay.model != entry.id() {
             return Err(SetupError::WrongModel {
@@ -137,13 +132,13 @@ impl RunSetup {
     /// Returns a setup holding `values`, `seed` and `schedule`, each checked as [`Self::set`] and [`Self::act_at`]
     /// check them.
     ///
-    /// `values` holds one value per parameter in descriptor order, the engine-prepended ones first, as
+    /// `values` holds one value per parameter, in the order of [`ModelEntry::param_descriptors`], as
     /// [`Self::values`] returns them.
     ///
     /// # Errors
     ///
     /// Returns a [`SetupError`] for a value count other than the entry's parameter count, a value of another kind or
-    /// out of bounds, or a schedule entry naming no action of the entry.
+    /// out of bounds, or a schedule entry for an action that the entry does not declare.
     pub fn from_parts(
         entry: &ModelEntry,
         values: &[ParamValue],
@@ -179,11 +174,12 @@ impl RunSetup {
         })
     }
 
+    /// Entry the setup builds.
     pub fn entry(&self) -> &ModelEntry {
         &self.entry
     }
 
-    /// One value per parameter in descriptor order, the engine-prepended ones first.
+    /// One value per parameter, in the order of [`ModelEntry::param_descriptors`].
     pub fn values(&self) -> &[ParamValue] {
         &self.values
     }
@@ -193,18 +189,20 @@ impl RunSetup {
         self.seed
     }
 
+    /// Actions scheduled for the build, by tick.
     pub fn schedule(&self) -> &Schedule {
         &self.schedule
     }
 
     /// Builds the model, on `gpu` for a GPU entry, then fires the schedule's tick-0 entries.
     ///
-    /// The returned simulation already holds tick 0's actions, and records tick 0 as fired.
+    /// The returned simulation already holds tick 0's actions, and records tick 0 as fired. On native targets a CPU
+    /// model's `init` runs outside the rayon pool, and the build enters the pool only to fire tick 0's actions.
     ///
     /// # Errors
     ///
-    /// Returns a [`Fault`] when the build or a tick-0 action panics, the device refuses either, a GPU entry has no
-    /// device, or a GPU entry is built on wasm32.
+    /// Returns a [`Fault`] when the build or a tick-0 action panics, the device rejects the build or the action, a GPU
+    /// entry has no device, or a GPU entry is built on wasm32.
     pub fn build(&self, gpu: Option<&GpuContext>) -> Result<Simulation, Fault> {
         #[cfg(target_arch = "wasm32")]
         if self.entry.gpu_needs().is_some() {
@@ -263,7 +261,7 @@ fn action_index(entry: &ModelEntry, id: &str) -> Result<usize, SetupError> {
         .ok_or_else(|| SetupError::UnknownAction { id: id.to_owned() })
 }
 
-/// Returns the error for a value the descriptor of parameter `id` refuses.
+/// Returns the error for a value that parameter `id` rejects.
 fn param_error(id: &str, error: ValueError) -> SetupError {
     SetupError::Param(ValueError::Param {
         id: id.to_owned(),
@@ -271,10 +269,10 @@ fn param_error(id: &str, error: ValueError) -> SetupError {
     })
 }
 
-/// Returns the fault for a scheduled action the state refused.
+/// Returns the fault for a scheduled action the state rejected.
 ///
-/// Every engine refuses only an index past its model's actions, and a setup checks each id before it stores an entry.
-/// A refusal is therefore an engine contract violation.
+/// Every engine rejects only an index past its model's actions, and a setup checks each id before it stores an entry.
+/// A rejection is therefore an engine contract violation.
 fn refusal(refused: &RefusedActions<'_>, during: &'static str) -> Result<(), Fault> {
     match refused.first() {
         None => Ok(()),
@@ -323,21 +321,37 @@ fn in_pool<T>(task: impl FnOnce() -> T) -> T {
     task()
 }
 
-/// Reason a setup, a live edit or a live action was refused.
+/// Reason a setup, a live edit or a live action was rejected.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SetupError {
-    /// An unknown parameter id, or a value its descriptor refuses.
+    /// An unknown parameter id, or a value its descriptor rejects.
     Param(ValueError),
-    /// [`RunSetup::from_parts`] was handed a value count other than the entry's parameter count.
-    ParamCount { expected: usize, found: usize },
+    /// [`RunSetup::from_parts`] received `found` values where the entry declares `expected` parameters.
+    ParamCount {
+        /// Number of parameters the entry declares.
+        expected: usize,
+        /// Number of values passed.
+        found: usize,
+    },
     /// An action id the model does not declare.
-    UnknownAction { id: String },
+    UnknownAction {
+        /// Action id as given, by a call or a schedule entry.
+        id: String,
+    },
     /// A live edit of a parameter that applies only on a rebuild.
-    ReloadOnly { id: String },
-    /// A recorded run of model `found`, handed to an entry of model `expected`.
-    WrongModel { expected: String, found: String },
-    /// Model code panicked, or the device refused an action pass, during a live edit or action.
+    ReloadOnly {
+        /// Id of the parameter edited.
+        id: String,
+    },
+    /// A recorded run of model `found`, passed to an entry of model `expected`.
+    WrongModel {
+        /// Id of the entry's model.
+        expected: String,
+        /// Id of the model the run records.
+        found: String,
+    },
+    /// Model code panicked, or the device rejected an action pass, during a live edit or action.
     Fault(Fault),
 }
 
@@ -401,23 +415,25 @@ impl Engine {
 ///
 /// On native targets a CPU simulation runs the model code of each stepping, sampling, view, layout and action call
 /// inside one `rayon::scope` on the current pool, and `pool.install(|| simulation.run_for(n))` picks the pool.
-/// [`Self::set_param`] stays on the calling thread. A GPU simulation runs each call on the calling thread, inside wgpu
-/// error scopes that keep a device error on the call that raised it.
+/// `run_for(0)` and a `run_to` at or behind the current tick step nothing and enter no pool. [`Self::write_state`]
+/// enters it for its view preparation alone, and [`Self::set_param`] runs no parallel pass and stays on the calling
+/// thread. A GPU simulation runs each call on the calling thread, inside wgpu error scopes that keep a device error on
+/// the call that raised it.
 ///
 /// Note that a call made from outside the pool runs as one job on it, and a worker waiting in another host's join
-/// can run that job nested. The other host's join then waits for the whole call. Hosts that step independently each
-/// step inside `install` on a pool of their own.
+/// can run that job nested. The other host's join then waits for the whole call. A host that steps independently
+/// steps inside `install` on its own pool.
 ///
-/// An error no scope catches lands in the context's [`FaultSink`](crate::fault::FaultSink), and whichever holder of
+/// An error no scope catches is stored in the context's [`FaultSink`](crate::fault::FaultSink), and whichever holder of
 /// the context waits next reports it. A lost device fails the next call that waits for the device with
-/// [`FaultKind::DeviceLost`]. Simulations that step at once on several threads each take a device of their own, for
+/// [`FaultKind::DeviceLost`]. Simulations that step at once on several threads each take their own device, for
 /// example from one `henad::gpu::acquire_headless` call per thread. A second [`GpuContext::new`] on one device takes
-/// its error handling over from the first.
+/// over its error handling from the first context.
 ///
 /// A call that returns a [`Fault`] can stop part way through a step or an action, with some of its edits applied.
 /// Every later stepping, sampling, live edit, action, view and layout call then returns a [`FaultKind::Refused`]
-/// fault naming the first one, or [`FaultKind::DeviceLost`] once the device is lost. Rebuild from [`Self::setup`] to
-/// go on.
+/// fault that carries the first fault's message, or [`FaultKind::DeviceLost`] once the device is lost. Rebuild from
+/// [`Self::setup`] to go on.
 ///
 /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
 /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
@@ -428,7 +444,7 @@ pub struct Simulation {
     earlier_fault: Option<String>,
 }
 
-// A host steps a simulation on a thread of its own.
+// A host steps a simulation on its own thread.
 #[cfg(not(target_arch = "wasm32"))]
 const _: fn() = || {
     fn send<T: Send>() {}
@@ -452,10 +468,12 @@ impl Simulation {
         &self.setup
     }
 
+    /// Number of ticks stepped so far.
     pub fn tick(&self) -> u64 {
         self.engine.state().tick()
     }
 
+    /// Size of the population: its cells, its agents or its live nodes.
     pub fn population(&self) -> u64 {
         self.engine.state().population()
     }
@@ -528,10 +546,11 @@ impl Simulation {
     ///
     /// On native targets a CPU model enters the pool once for the whole call, and `on_sample` runs inside it on a
     /// pool worker. It needs `Send`, and it holds that worker while it runs. A GPU model calls it on the calling
-    /// thread. Either way `on_sample` runs outside the fault scopes, and a panic in it unwinds as the caller's own.
+    /// thread. Either way `on_sample` runs outside the fault scopes, and a panic in it unwinds to the caller as an
+    /// ordinary panic.
     ///
     /// Note that a CPU model's whole call can run nested under another host's join on the same pool, as the type's
-    /// docs describe. An `on_sample` that waits on another user of the pool, through a bounded channel for one, can
+    /// docs describe. An `on_sample` that waits on another user of the pool, for example through a bounded channel, can
     /// then deadlock.
     ///
     /// # Errors
@@ -580,7 +599,8 @@ impl Simulation {
         self.record(sampled)
     }
 
-    /// Samples as a sweep track does: `prepare_view` first on the CPU, a blocking stats-only readback on the GPU.
+    /// Returns the stats of the current tick, sampled as a sweep track samples them: `prepare_view` first on the CPU, a
+    /// blocking stats-only readback on the GPU.
     ///
     /// # Errors
     ///
@@ -603,8 +623,8 @@ impl Simulation {
     ///
     /// # Errors
     ///
-    /// Returns [`SetupError::Param`] for an unknown id or a value the descriptor refuses, [`SetupError::ReloadOnly`]
-    /// for a parameter the running model takes only when it is built, and [`SetupError::Fault`] when the model panics
+    /// Returns [`SetupError::Param`] for an unknown id or a value the descriptor rejects, [`SetupError::ReloadOnly`]
+    /// for a parameter that takes effect only when the model is built, and [`SetupError::Fault`] when the model panics
     /// or the device reports an error. Once an earlier call returned a fault, a value the descriptor accepts gets
     /// [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
     ///
@@ -616,7 +636,7 @@ impl Simulation {
         let descriptor = &self.setup.entry.param_descriptors()[index];
         check_value(&descriptor.kind, &value).map_err(|error| param_error(id, error))?;
         self.check_earlier_fault()?;
-        // The state refuses a reload-only index itself, from the descriptors it was built with.
+        // The state rejects a reload-only index itself, from the descriptors it was built with.
         let accepted = match &mut self.engine {
             Engine::Cpu(state) => catching(STEPPING, || state.set_param(index, &value)),
             #[cfg(not(target_arch = "wasm32"))]
@@ -634,7 +654,7 @@ impl Simulation {
     /// # Errors
     ///
     /// Returns [`SetupError::UnknownAction`] for an id the model does not declare, and [`SetupError::Fault`] when the
-    /// model panics or the device refuses the action's pass. Once an earlier call returned a fault, a declared action
+    /// model panics or the device rejects the action's pass. Once an earlier call returned a fault, a declared action
     /// gets [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
     ///
     /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
@@ -661,7 +681,7 @@ impl Simulation {
     }
 
     /// Prepares the views as a publish would, then borrows all three together. A GPU model's views stay on the
-    /// device, and each reads `None`.
+    /// device, and each view is `None`.
     ///
     /// # Errors
     ///
@@ -724,8 +744,8 @@ impl Simulation {
 
     /// Writes the grid, points or edges as `--export` does.
     ///
-    /// Every section the model has is written, so a model with a field under its agents writes both. The views are
-    /// prepared first, as [`Self::views`] prepares them.
+    /// Every section the model has is written, so a model with a field under its agents writes both the grid and the
+    /// points. The views are prepared first, as [`Self::views`] prepares them.
     ///
     /// # Errors
     ///
@@ -789,7 +809,7 @@ impl Simulation {
         ))
     }
 
-    /// Returns `result`, and records its fault for every later call to refuse on.
+    /// Returns `result`, and records its fault for [`Self::check_earlier_fault`] to report on every later call.
     fn record<T>(&mut self, result: Result<T, Fault>) -> Result<T, Fault> {
         if let Err(fault) = &result
             && self.earlier_fault.is_none()
@@ -825,7 +845,7 @@ fn run_sampled_gpu<B>(
     Ok(ControlFlow::Continue(()))
 }
 
-/// Runs `f` inside the fault scopes. Once the device is lost, the loss is returned in place of the errors it caused.
+/// Runs `f` inside the fault scopes. Once the device is lost, the loss is returned instead of the errors it caused.
 #[cfg(not(target_arch = "wasm32"))]
 fn gpu_call<T>(ctx: &GpuContext, during: &'static str, f: impl FnOnce() -> Result<T, Fault>) -> Result<T, Fault> {
     match catching_on(ctx, during, f) {
@@ -919,8 +939,11 @@ fn write_views(state: &dyn SimState, mut writer: &mut dyn Write) -> io::Result<(
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct SimulationViews<'a> {
+    /// Grid of a CPU grid model, or the field layer of a CPU agent model that has one.
     pub grid: Option<GridView<'a>>,
+    /// Agents or nodes of a CPU agent or network model.
     pub points: Option<PointView<'a>>,
+    /// Edges of a CPU network model.
     pub edges: Option<EdgeView<'a>>,
 }
 
@@ -930,7 +953,9 @@ pub struct SimulationViews<'a> {
 pub enum ExportError {
     /// The model is a GPU model.
     GpuState,
+    /// The writer failed.
     Io(io::Error),
+    /// The model faulted while preparing its views, or an earlier call faulted.
     Fault(Fault),
 }
 
@@ -974,6 +999,7 @@ pub struct StatSample {
 }
 
 impl StatSample {
+    /// Tick the sample was taken at.
     pub fn tick(&self) -> u64 {
         self.tick
     }

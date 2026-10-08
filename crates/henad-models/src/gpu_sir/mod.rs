@@ -1,17 +1,11 @@
-//! GPU-accelerated SIR epidemic model
+//! The SIR epidemic as a [`GpuGridModel`], with the rules of [`crate::sir`] and the grid in a storage buffer.
 //!
-//! This is similar to `gpu_game_of_life` but with 3 differences: three cell states instead of
-//! two, a probabilistic transition rule, and therefore a per-cell RNG.
+//! The CPU model draws from one `xorshift64` stream along each row, and WGSL has no 64-bit integers to run it.
+//! Each cell instead keeps a `pcg_hash` state in a second buffer, `rng`, and the step advances it one round beside the
+//! cell. The engine ping-pongs both buffers together, and display and reduce read `state` alone.
 //!
-//! The CPU model consumes a single RNG stream sequentially across a row, which has no GPU
-//! equivalent. Instead each cell owns its own RNG state, stored in a ping-ponged `array<u32>`
-//! buffer alongside the SIR state. Every step, a cell reads its own hash state, advances it
-//! one round, and uses the result for its transition. This makes the GPU stream different from
-//! the CPU stream. See `tests` for further details.
-//!
-//! That RNG buffer is why this model declares two `BUFFERS`: the engine ping-pongs the state and
-//! RNG buffers together, in lockstep. Only the state buffer (index 0) is visible to the display
-//! and reduce shaders.
+//! [`seed_cells`] repeats the draws of the CPU model's `init`, and the two backends agree at tick 0. Their random
+//! streams differ after tick 0.
 
 use henad_compute::cpu::grid_engine::{GRID_INIT_SEED, grid_init_rng};
 use henad_core::action::ActionDescriptor;
@@ -26,12 +20,11 @@ use crate::shader_bindings::gpu_sir::seed_outbreak::Params as ActionParams;
 use crate::shader_bindings::gpu_sir::step::Params as StepParams;
 use crate::sir::PALETTE;
 
-/// A domain-separated seed for the per-cell RNG buffer, so its stream doesn't start correlated
-/// with the state-seeding stream (which reuses `GRID_INIT_SEED` directly).
+/// Domain separator of the `rng` buffer's seed, so the buffer and the cell seeding stream do not start correlated.
 const RNG_INIT_SEED: u64 = GRID_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 
-// The whole list, matching what the CPU engine composes for `SirGridModel`, so this model is a
-// drop-in comparison against it.
+// The list repeats the ids and order the CPU engine composes for `SirGridModel`, so one parameter vector drives
+// either backend.
 henad_core::params! {
     const PARAM_WIDTH = u32_param("grid_width", "Grid Width", DEFAULT_DIM, 1, 16_384);
     const PARAM_HEIGHT = u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384);
@@ -58,8 +51,10 @@ const DEFAULT_INITIAL_INFECTED_PCT: f32 = 0.01;
 // Cell states, taken from the shader that defines them rather than mirrored.
 use crate::shader_bindings::gpu_sir::step::{I as CELL_I, R as CELL_R, S as CELL_S};
 
-/// CPU-seeded initial S/I state, identical to `SirGridModel::init` down to the PRNG, the
-/// traversal order and the threshold, so GPU and CPU start from a bit-identical grid.
+/// Returns the initial cell states, one `u32` per cell, each infected with probability `initial_infected_pct`.
+///
+/// The cells are drawn from `rng` as `SirGridModel::init` draws them. With `rng` from `grid_init_rng`, the grid
+/// matches the CPU model's bit for bit.
 pub fn seed_cells(width: u32, height: u32, initial_infected_pct: f32, mut rng: u64) -> Vec<u32> {
     let threshold = (initial_infected_pct * u32::MAX as f32) as u32;
     let mut cells = vec![0u32; (width as usize) * (height as usize)];
@@ -70,7 +65,7 @@ pub fn seed_cells(width: u32, height: u32, initial_infected_pct: f32, mut rng: u
     cells
 }
 
-/// Initial per-cell RNG state, seeded independently of the S/I state via `RNG_INIT_SEED`.
+/// Returns the initial `pcg_hash` state of every cell, hashed from `seed` and the cell's index.
 fn seed_rng_states(width: u32, height: u32, seed: u64) -> Vec<u32> {
     let seed32 = (seed ^ (seed >> 32)) as u32;
     (0..(width as usize) * (height as usize))
@@ -78,6 +73,7 @@ fn seed_rng_states(width: u32, height: u32, seed: u64) -> Vec<u32> {
         .collect()
 }
 
+/// The SIR epidemic as a [`GpuGridModel`], with a random number state per cell.
 #[derive(Debug)]
 pub struct GpuSir;
 
@@ -206,7 +202,7 @@ mod tests {
         (scalar(&stats[0]), scalar(&stats[1]), scalar(&stats[2]))
     }
 
-    /// Drives display + reduce + readback exactly as the sim thread's one-shot snapshot path does.
+    /// Runs the display, reduce and readback passes as the sim thread's one-shot snapshot does.
     fn refresh_stats(ctx: &GpuContext, state: &mut State) {
         let mut encoder = ctx
             .device
@@ -225,7 +221,7 @@ mod tests {
         ctx.queue.submit(Some(encoder.finish()));
     }
 
-    /// S+I+R must hold exactly at every tick regardless of how the per-cell RNG streams behave.
+    /// The total of S, I and R holds exactly at every tick, whatever the per-cell RNG streams do.
     #[test]
     fn population_conserved_over_many_ticks() {
         let Some(ctx) = headless_context() else {
@@ -270,8 +266,7 @@ mod tests {
         }
     }
 
-    /// With `recovery_rate == 0`, I can never lose a member,
-    /// so with any positive infection rate, I must be monotonically non-decreasing.
+    /// With `recovery_rate == 0`, I can never lose a member, so at any positive infection rate I never decreases.
     #[test]
     fn zero_recovery_rate_keeps_infected_non_decreasing() {
         let Some(ctx) = headless_context() else {

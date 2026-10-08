@@ -10,7 +10,7 @@ use egui::{Color32, Mesh, Rect, Shape, TextStyle};
 use egui_plot::{GridMark, PlotBounds, PlotGeometry, PlotItem, PlotItemBase, PlotPoint, PlotTransform};
 use web_time::Instant;
 
-/// Colours of the configurations a view draws, in order. A config's band and mean line share one.
+/// Colours of the configurations a view draws, in order. A config's band and mean line share one colour.
 pub const CONFIG_COLORS: [Color32; 10] = [
     Color32::from_rgb(0x4e, 0x79, 0xa7),
     Color32::from_rgb(0xf2, 0x8e, 0x2b),
@@ -39,7 +39,7 @@ pub const NO_DATA_COLOR: Color32 = Color32::from_gray(110);
 /// Luminance, out of 255, of a tile fill below which the tile's text is white.
 const WHITE_TEXT_MAX_LUMINANCE: f32 = 140.0;
 
-/// Most points a line keeps once decimated.
+/// Maximum number of points a line keeps once decimated.
 pub const MAX_PLOT_POINTS: usize = 1000;
 
 /// Shortest time between two computations of a view while runs keep arriving.
@@ -47,7 +47,7 @@ pub const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Returns whether a view computed at `computed_at`, from a store that has changed since, is due to compute again.
 ///
-/// Before [`REFRESH_INTERVAL`] has passed, `ctx` repaints once it has.
+/// Before [`REFRESH_INTERVAL`] has passed, `ctx` repaints once the interval ends.
 pub fn refresh_due(ctx: &egui::Context, computed_at: Instant) -> bool {
     match REFRESH_INTERVAL.checked_sub(computed_at.elapsed()) {
         Some(wait) if !wait.is_zero() => {
@@ -82,7 +82,7 @@ pub fn heat_color(value: f64, min: f64, max: f64) -> Color32 {
     blend_color(HEAT_STOPS[lower], HEAT_STOPS[lower + 1], blend)
 }
 
-/// Returns the colour `blend` of the way from `low` to `high`.
+/// Returns the colour at fraction `blend` of the way from `low` to `high`.
 fn blend_color(low: Color32, high: Color32, blend: f32) -> Color32 {
     let channel = |low_channel: u8, high_channel: u8| {
         let (low_channel, high_channel) = (f32::from(low_channel), f32::from(high_channel));
@@ -124,8 +124,8 @@ pub fn decimate(points: &[[f64; 2]], max_points: usize) -> Vec<[f64; 2]> {
     kept
 }
 
-/// Returns the position in `bucket` of the point whose value `beats` every other, the first on a tie. A value that is
-/// not finite never wins over one that is.
+/// Returns the position in `bucket` of the point whose value `beats` every other value, the first on a tie. A value
+/// that is not finite never wins over a finite value.
 fn extreme_position(bucket: &[[f64; 2]], beats: impl Fn(f64, f64) -> bool) -> usize {
     let mut best = 0;
     for (position, point) in bucket.iter().enumerate().skip(1) {
@@ -137,7 +137,7 @@ fn extreme_position(bucket: &[[f64; 2]], beats: impl Fn(f64, f64) -> bool) -> us
     best
 }
 
-/// Returns an axis formatter that names the mark at index `i` by `levels[i]`, and leaves every other mark blank.
+/// Returns an axis formatter that labels the mark at index `i` with `levels[i]`, and leaves every other mark blank.
 pub fn level_formatter(levels: &[String]) -> impl Fn(GridMark, &RangeInclusive<f64>) -> String + '_ {
     move |mark, _| {
         let index = mark.value.round();
@@ -211,7 +211,7 @@ impl<'a, F: Fn(f64) -> Color32> HeatmapTiles<'a, F> {
         self
     }
 
-    /// Number of rows, a last row that is short included.
+    /// Number of rows, including a short last row.
     fn rows(&self) -> usize {
         if self.columns == 0 {
             0
@@ -302,8 +302,8 @@ fn tile_text_color(fill: Color32) -> Color32 {
 /// Draws `label` and a combo box on one row of a wrapping layout, and returns the combo box's response, labeled by
 /// `label`.
 ///
-/// The row wraps before the two when they do not fit the rest of it. A combo box's width is known only once it is
-/// placed, so the layout cannot wrap it on its own.
+/// The row wraps before the label when the label and the combo box do not fit the rest of the row. A combo box's
+/// width is known only once it is placed, so the layout cannot wrap it on its own.
 pub fn labeled_combo(
     ui: &mut egui::Ui,
     label: &str,

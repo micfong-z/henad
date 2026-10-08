@@ -1,22 +1,9 @@
-//! Output directories of a sweep, and the writer that streams each finished run into one.
+//! Output directories of a sweep, and the writer that streams each finished run into a directory.
 //!
 //! A directory holds four files. `runs.csv` has one row per run, `series.csv` the sampled stat rows of every run,
 //! `summary.csv` statistics over the replicates of each config, and `manifest.json` the settings, provenance and
 //! progress of the sweep. Both CSV tables list runs in order of their ids once a sweep ends. A search adds the
 //! tables [`search_tables`] writes.
-//!
-//! A resume that drops, renumbers or reorders rows replaces `runs.csv` and `series.csv` together, and a merge writes
-//! them the same way. Each is written in full beside the original with a `.staged` suffix, then a marker file says
-//! both are complete, then both are renamed into place and the marker is removed. A process that ends between the
-//! marker and its removal leaves the replacement for [`OutputDir::open`] to finish.
-//!
-//! A writer holds the operating system's advisory lock on the file [`LOCK_FILE`] while it writes, and a second writer
-//! is refused. A resume takes the lock before it reads the tables and holds it until its last write. The file stays
-//! in the directory when the writer ends, and the next writer locks it again. The lock goes with the process that
-//! holds it, a killed one included.
-//!
-//! A writer creates afresh each file it replaces. It appends to `runs.csv` and `series.csv`, and cuts them, only after
-//! [`OutputDir::open`] has refused either as a symbolic link.
 
 pub mod details;
 pub mod manifest;
@@ -46,14 +33,23 @@ use crate::output::runs_csv::RunsWriter;
 use crate::output::series_csv::SeriesWriter;
 use crate::output::summary_csv::{SummaryError, write_summary};
 
+/// Name of the table with one row per run.
 pub const RUNS_FILE: &str = "runs.csv";
+/// Name of the table of sampled stat rows.
 pub const SERIES_FILE: &str = "series.csv";
+/// Name of the table of statistics over the replicates of each config.
 pub const SUMMARY_FILE: &str = "summary.csv";
+/// Name of the file holding the settings, provenance and progress of a sweep.
 pub const MANIFEST_FILE: &str = "manifest.json";
+/// Name of a search's table with one row per evaluation.
 pub const EVALUATIONS_FILE: &str = "evaluations.csv";
+/// Name of a search's table with one row per batch.
 pub const BATCHES_FILE: &str = "batches.csv";
+/// Name of the table ranking every candidate of a search that scores an objective.
 pub const BEST_FILE: &str = "best.csv";
+/// Name of the table of cells that a Pattern Space Exploration fills.
 pub const ARCHIVE_FILE: &str = "archive.csv";
+/// Name of a genetic algorithm's table with one row per finished generation.
 pub const GENERATIONS_FILE: &str = "generations.csv";
 
 /// Files a sweep or search writes, any one of which marks a directory as holding results.
@@ -72,7 +68,7 @@ const RESULT_FILES: [&str; 9] = [
 /// File a writer locks while it writes to an output directory.
 pub const LOCK_FILE: &str = ".lock";
 
-/// Suffix of a table written in full to replace the one it names.
+/// Suffix of the file that holds a table's full replacement until it is renamed into place.
 const STAGED_SUFFIX: &str = ".staged";
 
 /// File whose presence says both staged tables are complete.
@@ -85,7 +81,7 @@ fn staged_path(dir: &Path, file: &str) -> PathBuf {
 
 /// Returns the paths of `runs.csv` and `series.csv` in the directory at `path`, as they stand.
 ///
-/// A staged table stands in for its original while a replacement waits to be finished.
+/// A staged table is used instead of its original while a replacement waits to be finished.
 pub(crate) fn table_paths(path: &Path) -> (PathBuf, PathBuf) {
     let complete = path.join(STAGED_MARKER).exists();
     let current = |file: &str| {
@@ -101,7 +97,12 @@ pub(crate) fn table_paths(path: &Path) -> (PathBuf, PathBuf) {
 
 /// A directory that holds, or is about to hold, the results of one sweep, locked against other writers.
 ///
-/// The lock is released when the value is dropped.
+/// The lock is the operating system's advisory lock on the file [`LOCK_FILE`], released when the value is dropped. The
+/// file stays in the directory, and the next writer locks it again. The lock is released when the process that holds it
+/// ends, even when the process is killed.
+///
+/// A writer creates afresh each file it replaces. It appends to `runs.csv` and `series.csv`, and cuts them, only after
+/// [`Self::open`] has checked that neither table is a symbolic link.
 #[derive(Debug)]
 pub struct OutputDir {
     path: PathBuf,
@@ -112,12 +113,12 @@ pub struct OutputDir {
 impl OutputDir {
     /// Checks that the directory at `path` holds no results, without creating it.
     ///
-    /// A symbolic link under the name of a file counts as that file, even one that points nowhere.
+    /// A symbolic link under the name of a file counts as that file, even a link that points nowhere.
     ///
     /// # Errors
     ///
-    /// Returns [`OutputError::HoldsResults`] when the directory holds a file a sweep or a search writes, a staged
-    /// table or the marker of staged tables included.
+    /// Returns [`OutputError::HoldsResults`] when the directory holds a file that a sweep or a search writes,
+    /// including a staged table or the marker of staged tables.
     pub fn check_free(path: &Path) -> Result<(), OutputError> {
         let holds_results = |file: String| {
             Err(OutputError::HoldsResults {
@@ -131,7 +132,7 @@ impl OutputDir {
         {
             return holds_results(file.to_owned());
         }
-        // A staged table can stand in for its original, as `table_paths` reads the directory.
+        // `table_paths` can read a staged table instead of its original, so a staged table counts as results.
         let staged = std::fs::read_dir(path)
             .into_iter()
             .flatten()
@@ -144,12 +145,12 @@ impl OutputDir {
         }
     }
 
-    /// Creates the directory at `path` and its parents, or takes an existing directory that holds no results, and
+    /// Creates the directory at `path` and its parents, or uses an existing directory that holds no results, and
     /// locks it.
     ///
     /// # Errors
     ///
-    /// Returns [`OutputError::HoldsResults`] when the directory holds a file a sweep or a search writes,
+    /// Returns [`OutputError::HoldsResults`] when the directory holds a file that a sweep or a search writes,
     /// [`OutputError::Locked`] when another writer holds its lock, and [`OutputError::Write`] when it cannot be
     /// created.
     pub fn create(path: &Path) -> Result<Self, OutputError> {
@@ -164,13 +165,12 @@ impl OutputDir {
         Ok(dir)
     }
 
-    /// Returns whether the directory at `path` holds a file a sweep or a search writes.
+    /// Returns whether the directory at `path` holds a file that a sweep or a search writes.
     pub fn holds_results(path: &Path) -> bool {
         Self::check_free(path).is_err()
     }
 
-    /// Takes and locks the existing directory at `path`, finishing a replacement of its tables that a process left
-    /// behind.
+    /// Locks the existing directory at `path`, finishing a table replacement that a process left behind.
     ///
     /// # Errors
     ///
@@ -183,7 +183,7 @@ impl OutputDir {
             lock: DirLock::acquire(path)?,
         };
         dir.finish_staged()?;
-        // A resume appends to both tables and cuts them, and either would follow a link.
+        // A resume appends to both tables and cuts them, and both operations would follow a link.
         for file in [RUNS_FILE, SERIES_FILE] {
             let table = path.join(file);
             if std::fs::symlink_metadata(&table).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
@@ -199,7 +199,7 @@ impl OutputDir {
     ///
     /// Returns [`OutputError::Locked`] when another writer holds the lock.
     pub fn check_unlocked(path: &Path) -> Result<(), OutputError> {
-        // A directory or a lock file that is missing is unlocked. The check never creates either.
+        // A directory or a lock file that is missing is unlocked. The check never creates the directory or the file.
         let Ok(file) = File::open(path.join(LOCK_FILE)) else {
             return Ok(());
         };
@@ -209,6 +209,7 @@ impl OutputDir {
         }
     }
 
+    /// Path of the directory.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -261,8 +262,11 @@ impl OutputDir {
         Ok(OutputWriter::new(Arc::clone(plan), runs, series))
     }
 
-    /// Replaces `runs.csv` and `series.csv` with the text `write_runs` and `write_series` write, as the module
-    /// documentation describes.
+    /// Replaces `runs.csv` and `series.csv` with the text that `write_runs` and `write_series` write.
+    ///
+    /// Each table is written in full beside the original with a `.staged` suffix. A marker file then records that both
+    /// tables are complete, both tables are renamed into place, and the marker is removed. A process that ends between
+    /// the marker and its removal leaves the replacement for [`Self::open`] to finish.
     ///
     /// # Errors
     ///
@@ -282,7 +286,7 @@ impl OutputDir {
         self.finish_staged()
     }
 
-    /// Writes the staged table replacing `file` with `write`, and flushes it to the disk.
+    /// Calls `write` to write the staged table that replaces `file`, and flushes the table to the disk.
     fn write_staged(
         &self,
         file: &str,
@@ -364,7 +368,7 @@ impl OutputDir {
         )
     }
 
-    /// Creates the table `file` afresh, removing one that exists, and returns a buffered writer over it.
+    /// Creates the table `file` afresh, removing any existing file of that name, and returns a buffered writer over it.
     ///
     /// # Errors
     ///
@@ -375,7 +379,7 @@ impl OutputDir {
     }
 
     /// Writes `manifest` to `manifest.json`. An earlier manifest is replaced by a single rename, so a reader sees
-    /// one or the other whole.
+    /// either the old or the new manifest whole.
     ///
     /// # Errors
     ///
@@ -450,8 +454,8 @@ fn create_fresh(path: &Path) -> io::Result<File> {
 
 /// Advisory lock a writer holds on [`LOCK_FILE`] of an output directory, released when dropped.
 ///
-/// Note that the file stays in the directory. Were it removed, a writer that had it open could lock the removed file
-/// while another writer locks a new one.
+/// Note that the file stays in the directory. If it were removed, a writer that had it open could lock the removed file
+/// while another writer locks a new lock file.
 #[derive(Debug)]
 struct DirLock {
     /// File the lock is held on.
@@ -461,7 +465,7 @@ struct DirLock {
 impl DirLock {
     /// Locks the directory at `dir`, creating its lock file when missing.
     ///
-    /// Note that a filesystem without file locks, as some network filesystems are, leaves the directory unguarded.
+    /// Note that a filesystem without file locks, such as some network filesystems, leaves the directory unguarded.
     ///
     /// # Errors
     ///
@@ -516,7 +520,7 @@ impl<W: Write> OutputWriter<W> {
         }
     }
 
-    /// Writes the series of `outcome`, then its row, flushing each.
+    /// Writes the series of `outcome`, then its row, and flushes after each write.
     ///
     /// # Errors
     ///
@@ -538,7 +542,7 @@ impl<W: Write> OutputWriter<W> {
         write_both(runs, series, counts, outcome, config)
     }
 
-    /// Writes the series of `outcome`, a run of `config`, then its row, flushing each.
+    /// Writes the series of `outcome`, a run of `config`, then its row, and flushes after each write.
     ///
     /// A search writes its runs this way. Its configs are in no plan.
     ///
@@ -554,7 +558,7 @@ impl<W: Write> OutputWriter<W> {
         self.counts
     }
 
-    /// Flushes both writers, and hands them back as the writers of `runs.csv` and `series.csv`.
+    /// Flushes both writers, and returns them as the writers of `runs.csv` and `series.csv`.
     ///
     /// # Errors
     ///
@@ -566,8 +570,8 @@ impl<W: Write> OutputWriter<W> {
     }
 }
 
-/// Writes the series of `outcome`, a run of `config`, to `series`, then its row to `runs`, flushing each, and counts
-/// the row in `counts`.
+/// Writes the series of `outcome`, a run of `config`, to `series`, then its row to `runs`, flushing after each write,
+/// and counts the row in `counts`.
 fn write_both<W: Write>(
     runs: &mut RunsWriter<W>,
     series: &mut SeriesWriter<W>,
@@ -593,18 +597,39 @@ impl<W: Write> RunSink for OutputWriter<W> {
 #[derive(Debug)]
 pub enum OutputError {
     /// Directory `dir` holds `file` from an earlier sweep or search.
-    HoldsResults { dir: PathBuf, file: String },
+    HoldsResults {
+        /// Path of the output directory.
+        dir: PathBuf,
+        /// Name of the file found, such as `runs.csv` or a staged table.
+        file: String,
+    },
     /// Another sweep, search or merge holds the lock of directory `dir` and writes to it.
-    Locked { dir: PathBuf },
-    /// The table at `path` is a symbolic link. A writer never follows one.
-    Link { path: PathBuf },
+    Locked {
+        /// Path of the output directory.
+        dir: PathBuf,
+    },
+    /// The table at `path` is a symbolic link. A writer never follows a symbolic link.
+    Link {
+        /// Path of `runs.csv` or `series.csv` in the output directory.
+        path: PathBuf,
+    },
     /// Reading `path` failed.
-    Read { path: PathBuf, source: io::Error },
+    Read {
+        /// Path of `runs.csv`, or its file name alone for runs held in memory.
+        path: PathBuf,
+        /// Error from the reader, of kind `InvalidData` for text that is not UTF-8.
+        source: io::Error,
+    },
     /// Creating or writing `path` failed.
-    Write { path: PathBuf, source: io::Error },
-    /// A table that cannot be read back, for the reason inside.
+    Write {
+        /// Path of the file or directory, or the file name alone for results held in memory.
+        path: PathBuf,
+        /// Error from the operating system, or from the writer of results held in memory.
+        source: io::Error,
+    },
+    /// A table that cannot be read back.
     Table(ReadError),
-    /// `runs.csv` cannot be summarized, for the reason inside.
+    /// `runs.csv` cannot be summarized.
     Summary(SummaryError),
     /// Serializing the manifest failed.
     Manifest(serde_json::Error),
@@ -711,7 +736,7 @@ mod tests {
         assert!(matches!(OutputDir::open(path), Err(OutputError::Locked { .. })));
         drop(next);
 
-        // A killed process leaves its lock file behind, and the lock goes with the process.
+        // A killed process leaves its lock file behind, and the lock is released when the process ends.
         fs::write(path.join(LOCK_FILE), "").expect("a stale lock file writes");
         assert!(OutputDir::check_unlocked(path).is_ok());
         drop(OutputDir::open(path).expect("a stale lock file is taken over"));

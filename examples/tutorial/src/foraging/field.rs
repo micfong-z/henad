@@ -65,8 +65,8 @@ impl ScalarFieldSpec for PheromoneField {
         sites.fill(EMPTY);
         let (w, h) = (f64::from(width), f64::from(height));
         let size = 0.407 * (200.0 / w);
-        // f64 and this grouping are what the declaration states, and every port follows it. In f32
-        // with the multiply distributed, rounding moved the boundary at some widths.
+        // The model's declaration states the blob test in f64 with this grouping, and every port follows it.
+        // In f32 with the multiply distributed, rounding moves the boundary at some widths.
         let blob = |x: f64, y: f64, cx: f64, cy: f64| -> bool {
             let a = ((x - cx) + (y - cy)) * size;
             let b = ((x - cx) - (y - cy)) * size;
@@ -82,7 +82,7 @@ impl ScalarFieldSpec for PheromoneField {
             }
         }
 
-        // Placed after the blobs so a site is never buried under an obstacle.
+        // The sites go in after the blobs, so an obstacle never buries a site.
         sites[food_cell(width, height)] = FOOD;
         sites[nest_cell(width, height)] = HOME;
     }
@@ -99,7 +99,7 @@ impl ScalarFieldSpec for PheromoneField {
             FOOD => 14,
             HOME => 15,
             _ => {
-                // Stronger route wins the cell, so overlapping trails stay legible.
+                // The stronger trail wins the cell, so overlapping trails stay legible.
                 let (food, home) = (values[TO_FOOD], values[TO_HOME]);
                 let (v, base) = if food > home { (food, 6) } else { (home, 0) };
                 match ramp_step(v) {
@@ -123,7 +123,7 @@ pub fn food_cell(width: u32, height: u32) -> usize {
     (y * width + x) as usize
 }
 
-/// Log scaled strength in `0..=RAMP_STEPS`, where 0 means not worth drawing.
+/// Returns the log-scaled strength of `v` in `0..=RAMP_STEPS`, where 0 means not worth drawing.
 fn ramp_step(v: f32) -> u8 {
     if v <= LOW_PHEROMONE {
         return 0;

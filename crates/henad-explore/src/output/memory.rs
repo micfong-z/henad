@@ -18,9 +18,13 @@ use crate::output::{
 /// The four files of a sweep, and the tables a search adds.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SweepFiles {
+    /// Bytes of `runs.csv`.
     pub runs: Vec<u8>,
+    /// Bytes of `series.csv`.
     pub series: Vec<u8>,
+    /// Bytes of `summary.csv`.
     pub summary: Vec<u8>,
+    /// Bytes of `manifest.json`.
     pub manifest: Vec<u8>,
     /// Tables a search writes, each with its file name, in the order they are listed. Empty for a sweep.
     pub search_tables: Vec<(&'static str, Vec<u8>)>,

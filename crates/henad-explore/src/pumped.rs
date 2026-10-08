@@ -1,8 +1,8 @@
 //! Sweeps and searches stepped from a host's frames, one CPU run at a time, for a target that cannot spawn a thread.
 //!
 //! A pumped sweep holds its files in memory. Each pump makes one probe build, prepares the sweep, builds a run, or
-//! steps the run in progress by a slice of about half the frame budget. A search also asks for a batch, or tells the
-//! searcher a finished one, in a pump of its own.
+//! steps the run in progress by a slice of about half the frame budget. A search also requests a batch, or tells the
+//! searcher a finished batch, in its own pump.
 
 use std::sync::Arc;
 
@@ -81,7 +81,7 @@ impl SweepSetup {
         }
     }
 
-    /// Plan the probe builds, the plan of a search's fixed values for a search.
+    /// Plan that the probe builds. For a search, the plan of its fixed values.
     fn probed_plan(&self) -> &Plan {
         self.search_plan
             .as_ref()
@@ -123,7 +123,7 @@ struct SearchQueue {
 /// Batch of a search in progress.
 struct PumpedBatch {
     batch: AskedBatch,
-    /// Position among the batch's runs left to run of the next run to build.
+    /// Position of the next run to build among the batch's runs left to run.
     next_position: usize,
     /// Watched values of each run written, in run order.
     values: Vec<Vec<Option<f64>>>,
@@ -152,8 +152,8 @@ impl PumpedSweep {
     /// Returns a sweep of `plan`, the plan of `spec` over `entry`, that reports to `channel`.
     ///
     /// The sweep runs every run of the plan, one at a time, and holds its files in memory. With a `search_plan`, the
-    /// search runs in place of the plan, whose one config its candidates start from. `options.concurrency` is left
-    /// unread.
+    /// search runs instead of the plan, and its candidates start from the plan's one config. `options.concurrency` is
+    /// left unread.
     ///
     /// # Errors
     ///
@@ -363,7 +363,7 @@ impl SearchQueue {
         self.batch.is_some() && !self.runs_next()
     }
 
-    /// Asks for the next batch, builds the next run, steps the run in progress by one slice, writes it once it
+    /// Requests the next batch, builds the next run, steps the run in progress by one slice, writes it once it
     /// finishes, or tells the searcher a finished batch.
     fn pump(&mut self, setup: &SweepSetup, channel: &mut SweepChannel) -> Result<PumpWork, ExploreError> {
         let Some(pumped) = &mut self.batch else {
@@ -427,7 +427,7 @@ impl SearchQueue {
 impl SimLoop for PumpedSweep {
     type Command = SweepCommand;
 
-    /// Applies `command` to the sweep's control. The sweep ends itself, so this never asks the driver to stop.
+    /// Applies `command` to the sweep's control. The sweep ends itself, so this never tells the driver to stop.
     fn handle_command(&mut self, command: SweepCommand) -> bool {
         let control = self.control();
         match command {
@@ -516,7 +516,7 @@ mod tests {
     use crate::tests::broken::DividesByParam;
     use crate::tests::support::{entry, provenance};
 
-    /// Most pumps a test makes before it gives up on the sweep.
+    /// Maximum number of pumps a test makes before it gives up on the sweep.
     const MAX_PUMPS: usize = 10_000;
 
     fn options() -> SweepRunOptions {
@@ -530,7 +530,8 @@ mod tests {
             .collect()
     }
 
-    /// Returns a pumped sweep of `spec` over `entry`, a search when `spec` has one, and the receiver of its events.
+    /// Returns a pumped sweep of `spec` over `entry`, a search when `spec` has a `[search]` table, and the receiver of
+    /// its events.
     fn pumped(entry: ModelEntry, spec: SweepSpec) -> (PumpedSweep, Receiver<SweepEvent>) {
         let schema = entry.schema();
         let (plan, search_plan) = if spec.search.is_some() {
@@ -658,7 +659,7 @@ mod tests {
         assert_eq!(finished_end(&ended), Some(SweepEnd::Complete));
     }
 
-    /// Returns a random search of SIR on an 8 by 8 grid, 2 candidates a batch and `max_evaluations` in all.
+    /// Returns a random search of SIR on an 8 by 8 grid, 2 candidates per batch and `max_evaluations` in all.
     fn small_search(max_evaluations: u64) -> SweepSpec {
         let mut spec = SweepSpec::new("sir");
         spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);

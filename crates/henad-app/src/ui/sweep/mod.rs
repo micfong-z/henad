@@ -57,10 +57,10 @@ const PLAN_PANEL_ID: &str = "henad_sweep_plan";
 /// Width the Plan panel starts at, in points.
 const PLAN_PANEL_WIDTH: f32 = 280.0;
 
-/// Narrowest the Plan panel gets, in points.
+/// Minimum width of the Plan panel, in points.
 const PLAN_PANEL_MIN_WIDTH: f32 = 220.0;
 
-/// Widest the Plan panel gets, as a share of the tab's width.
+/// Maximum width of the Plan panel, as a share of the tab width.
 const PLAN_PANEL_MAX_SHARE: f32 = 0.4;
 
 /// Id under which egui keeps whether the Plan panel is open.
@@ -86,13 +86,13 @@ pub struct SweepPanel {
     confirm_replace: bool,
     /// Build of each model the tab has shown, for the stat columns it samples, by model id.
     column_builds: BTreeMap<String, ColumnsBuild>,
-    /// Program the tab's advice names, `None` for none.
+    /// Program that the tab's advice refers to, `None` when the product has no command-line program.
     pub cli_command: Option<String>,
 }
 
-/// Build of a model at its default values, for the stat columns its sample at tick 0 has.
+/// Build of a model at its default values, for the stat columns of its sample at tick 0.
 enum ColumnsBuild {
-    /// Build running on a thread of its own. The thread sends the columns once sampled.
+    /// Build running on its own thread. The thread sends the columns once sampled.
     #[cfg(not(target_arch = "wasm32"))]
     Running(flume::Receiver<Option<StatColumns>>),
     /// Columns of the build, `None` for a build that failed or a model that cannot build here.
@@ -102,8 +102,8 @@ enum ColumnsBuild {
 impl ColumnsBuild {
     /// Starts a build of `entry`'s model.
     ///
-    /// On native the model builds on a thread of its own, and `wake` runs once the build reports. A GPU model builds
-    /// on a device of its own, as a sweep does, so a fault in the build never reaches the live model. A browser builds
+    /// On native the model builds on its own thread, and `wake` runs once the build reports. A GPU model builds
+    /// on its own device, as a sweep does, so a fault in the build never reaches the live model. A browser builds
     /// a CPU model at once and never builds a GPU model. A GPU sample blocks, and a browser cannot block.
     #[cfg(not(target_arch = "wasm32"))]
     fn start(entry: &ModelEntry, wake: &WakeFn) -> Self {
@@ -150,16 +150,16 @@ struct DraftCheck {
     draft: SweepDraft,
     panel_values: Vec<ParamValue>,
     result: Result<DraftPlan, Vec<DraftIssue>>,
-    /// Values of each parameter, then of each action tick, as [`SweepDraft::level_previews`] gives them.
+    /// Values of each parameter, then of each action tick, as [`SweepDraft::level_previews`] returns them.
     level_previews: LevelPreviews,
-    /// Results the draft's output folder held when the draft was checked, `None` for a folder free to take them.
+    /// Results the draft's output folder held when the draft was checked, `None` for a folder without results.
     folder_results: Option<FolderResults>,
 }
 
 /// Results an output folder holds already.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FolderResults {
-    /// Mode the folder's manifest records, `None` for results with no readable manifest to name it.
+    /// Mode the folder's manifest records, `None` for results without a readable manifest.
     pub mode: Option<ManifestMode>,
     /// Whether the manifest says runs are left for a resume to finish.
     pub resumable: bool,
@@ -183,7 +183,7 @@ impl FolderResults {
         )
     }
 
-    /// Returns the reason Start refuses the folder.
+    /// Returns the reason Start rejects the folder.
     pub fn refusal(self) -> String {
         format!("Folder holds {}", self.phrase())
     }
@@ -197,9 +197,9 @@ struct ManifestHeader {
     status: Option<ManifestStatus>,
 }
 
-/// Returns the results the folder at `path` holds already, `None` for a folder free to take them.
+/// Returns the results the folder at `path` holds already, `None` for a folder without results.
 ///
-/// Any file a sweep or a search writes counts as results, and the manifest names their mode.
+/// Any file a sweep or a search writes counts as results, and the manifest records their mode.
 pub fn folder_results(path: &Path) -> Option<FolderResults> {
     if !OutputDir::holds_results(path) {
         return None;
@@ -216,7 +216,7 @@ pub fn folder_results(path: &Path) -> Option<FolderResults> {
 }
 
 impl SweepPanel {
-    /// Returns the draft of `schema`'s model, a new one the first time.
+    /// Returns the draft of `schema`'s model, creating a new draft on the first call.
     pub fn draft_mut(&mut self, schema: &ModelSchema<'_>) -> &mut SweepDraft {
         self.drafts
             .entry(schema.id.to_owned())
@@ -252,7 +252,7 @@ impl SweepPanel {
         })
     }
 
-    /// Gives the draft of `entry`'s model the stat columns of a build of the model at its default values.
+    /// Sets the stat columns of the draft of `entry`'s model from a build of the model at its default values.
     ///
     /// The first call for a model starts the build, as [`ColumnsBuild::start`] describes. Until the build reports, the
     /// draft cannot start. A build that fails leaves the draft counting every stat as one column.
@@ -275,7 +275,7 @@ impl SweepPanel {
         }
     }
 
-    /// Drops the last check, so the next one reads the output folder again.
+    /// Drops the last check, so the next check reads the output folder again.
     fn clear_check(&mut self) {
         self.last_check = None;
     }
@@ -291,7 +291,7 @@ impl SweepPanel {
         self.clear_check();
     }
 
-    /// Returns whether a sweep is running, paused ones included.
+    /// Returns whether a sweep is running, including a paused sweep.
     pub fn is_running(&self) -> bool {
         self.session.as_ref().is_some_and(SweepSession::is_running)
     }
@@ -413,9 +413,9 @@ impl IssueLine {
 /// Result of a draft's check, as the tab draws it.
 #[derive(Debug, Clone, Default)]
 pub struct CheckSummary {
-    /// Configurations or evaluations, replicates and runs of the plan, `None` while the draft has issues.
+    /// Plan counts of configurations or evaluations, replicates and runs, `None` while the draft has issues.
     pub counts: Option<(u64, u64, u64)>,
-    /// Approximate bytes of the series once counted.
+    /// Approximate size in bytes of the series, once counted.
     pub series_bytes: Option<u64>,
     pub warnings: Vec<String>,
     /// Warning of each action row due past the last tick, by the row's position.
@@ -425,7 +425,7 @@ pub struct CheckSummary {
     pub lines: Vec<IssueLine>,
     pub param_previews: Vec<Option<LevelPreview>>,
     pub tick_previews: Vec<Option<LevelPreview>>,
-    /// Results the output folder holds already, `None` for a folder free to take them.
+    /// Results the output folder holds already, `None` for a folder without results.
     pub folder_results: Option<FolderResults>,
 }
 
@@ -530,7 +530,7 @@ fn action_warnings(draft: &SweepDraft, planned: &DraftPlan) -> Vec<(usize, Strin
         .collect()
 }
 
-/// Steps a sweep within the frame's budget in a browser, and takes every event it has sent.
+/// Steps a sweep within the frame's budget in a browser, and receives every event that it has sent.
 pub fn update(app: &mut AppState, dt: f64) {
     if let Some(session) = &mut app.sweep.session {
         session.update(dt, &mut app.results);
@@ -538,7 +538,7 @@ pub fn update(app: &mut AppState, dt: f64) {
 }
 
 pub fn sweep_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    // Read before any panel takes its share.
+    // The width is read before any panel takes its share.
     let tab_width = ui.available_width();
     app.sweep.form.fit_tab(tab_width);
     let mut request = None;
@@ -550,7 +550,7 @@ pub fn sweep_ui(ui: &mut egui::Ui, app: &mut AppState) {
     if let Some(request) = request {
         let title = app.sweep.tab_title();
         apply(app, request);
-        // The tab bar drew its title before the tab. A pass drawn again shows the new one at once.
+        // The tab bar drew its title before the tab. A pass drawn again shows the new title at once.
         if app.sweep.tab_title() != title {
             ui.ctx().request_discard("Sweep tab title changed");
         }
@@ -801,8 +801,8 @@ fn session_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     }
 }
 
-/// Closes each modal that a session in `state` leaves nothing to answer, and returns whether the abort modal is still
-/// open.
+/// Closes each modal that has nothing left to answer while the session is in `state`, and returns whether the abort
+/// modal is still open.
 ///
 /// The replace modal belongs to the form, and a session takes the form's place. The abort modal closes once the sweep
 /// ends.
@@ -898,7 +898,7 @@ fn apply(app: &mut AppState, request: SweepRequest) {
 
 /// Starts the checked draft of the selected model.
 ///
-/// The draft is checked again first. The output folder might have taken results since the last check.
+/// The draft is checked again first. The output folder might have received results since the last check.
 fn start(app: &mut AppState) {
     let Some(entry) = app.selected_entry().cloned() else {
         return;
@@ -1010,7 +1010,7 @@ fn open_folder_results(app: &mut AppState) {
     }
 }
 
-/// Takes the result of a file dialog the Sweep tab opened for `target`.
+/// Handles the result of a file dialog that the Sweep tab opened for `target`.
 ///
 /// A folder dialog that ends without a folder, while the Folder field is empty, returns the results to memory.
 pub fn receive_open(app: &mut AppState, target: OpenTarget, result: OpenResult) {
@@ -1052,7 +1052,7 @@ fn selected_draft(app: &mut AppState) -> Option<&mut SweepDraft> {
     Some(app.sweep.draft_mut(&entry.schema()))
 }
 
-/// Selects the model a spec file names, and replaces its draft and Parameters tab values with the spec's.
+/// Selects the model of a spec file, and replaces that model's draft and Parameters tab values from the spec.
 fn load_spec(app: &mut AppState, file: &DialogFile) {
     match read_spec(app, file) {
         Ok(()) => app.sweep.status = Some(format!("Loaded {}", file.name)),
@@ -1061,7 +1061,7 @@ fn load_spec(app: &mut AppState, file: &DialogFile) {
 }
 
 fn read_spec(app: &mut AppState, file: &DialogFile) -> Result<(), String> {
-    // A spec loaded from disk reads its design tables beside it. A browser has no path to read them from.
+    // A spec loaded from disk reads its design tables from files beside it. A browser has no path to read them from.
     let spec_file = if let Some(path) = &file.path {
         SpecFile::load(path).map(|(spec_file, _)| spec_file)
     } else {
@@ -1142,7 +1142,7 @@ fn load_table(app: &mut AppState, file: DialogFile) {
 
 /// Returns `duration` rounded down for a progress line.
 ///
-/// It gives "under 1 ms" below a millisecond, milliseconds under a second, seconds under a minute, minutes and
+/// It returns "under 1 ms" below a millisecond, milliseconds under a second, seconds under a minute, minutes and
 /// seconds under ten minutes, minutes under an hour, and hours and minutes past that.
 pub fn format_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();

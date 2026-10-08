@@ -18,7 +18,7 @@ use crate::shader_bindings::tests::parity::{
     OP_WRAP_INDEX, Out, SHADER_STRING, WgpuBindGroup0,
 };
 
-/// Absolute slack allowed on a float result that goes through WGSL's float `%`.
+/// Absolute slack allowed on a float result that uses WGSL's float `%`.
 const TOLERANCE: f32 = 1e-4;
 
 /// Slack for `op`, zero where the two sides are meant to agree bit for bit.
@@ -34,7 +34,7 @@ fn tolerance_for(op: u32) -> f32 {
 struct Check {
     case: Case,
     expected: Out,
-    /// The primitive and its arguments, so a failure names the case that broke.
+    /// The primitive and its arguments, so a failure identifies the case that broke.
     call: String,
 }
 
@@ -62,7 +62,7 @@ fn float(v: f32) -> Out {
     }
 }
 
-/// The WGSL side takes a `u32`, so the two spellings of a boundary meet here.
+/// Returns the WGSL code of `boundary`. The WGSL side accepts a `u32`, and the two spellings of a boundary meet here.
 fn boundary_code(boundary: Boundary) -> u32 {
     match boundary {
         Boundary::Torus => codes::TORUS,
@@ -290,8 +290,8 @@ fn rng_checks(out: &mut Vec<Check>) {
             });
         }
 
-        // 0 is in range because the ants tie-break starts its counter at 2, not 1, and a future
-        // caller could start it anywhere.
+        // 0 is in range because the ants tie-break starts its counter at 2, and another caller could
+        // start it anywhere.
         for count in [0u32, 1, 2, 3, 8, 64] {
             let mut case = blank(OP_RESERVOIR_ACCEPT);
             case.u = [bits, count, 0, 0];

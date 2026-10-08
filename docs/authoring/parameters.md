@@ -8,15 +8,15 @@ icon: material/tune
 
 Every slider in the app and every `--set` override in the CLI reads from a single declaration list on the model.
 You write the id, label, range and default together in one place, and both front ends work from those declarations, leaving no second list to keep in step.
-This page covers the declaration API, when an edit lands live, when it needs a rebuild, the way the indices compose, and the actions a model offers beside its parameters.
+This page covers the declaration API, when an edit applies live, when it needs a rebuild, the way the indices compose, and the actions a model offers beside its parameters.
 
 ```rust
 --8<-- "crates/henad-models/src/boids/mod.rs:params"
 ```
 
 The `params!` macro expands to one `const` per entry, holding an index derived from the entry's position in the declaration, together with a `descriptors()` function that returns the whole list.
-The example models sit below the facade, in henad-models, and name it `henad_core::params!`.
-A project names it `henad::params!`, as the template's `src/vote.rs` does.
+The example models sit below the facade, in henad-models, and use `henad_core::params!`.
+A project uses `henad::params!`, as the template's `src/vote.rs` does.
 Your impl forwards `param_descriptors` to `descriptors`, and reads values back through the generated index constants.
 
 ```rust
@@ -44,7 +44,7 @@ The label is the human-facing name the app shows.
 
 `bool_param` and `choice_param` cover the other two kinds.
 `bool_param` takes an id, a label and a default, and `choice_param` takes an id, a label, the option labels and the index of the default option.
-Virus on a Network declares all four.
+Virus on a Network declares all four kinds.
 
 ```rust
 --8<-- "crates/henad-models/src/virus_network/mod.rs:params"
@@ -53,13 +53,13 @@ Virus on a Network declares all four.
 `NETWORKS` is `&["Random", "Geometric"]`, and `RANDOM` is 0.
 The Parameters tab draws a number as a slider, a bool as a checkbox and a choice as a dropdown.
 Each kind has a matching reader, `extract_f32`, `extract_u32`, `extract_bool` or `extract_choice`.
-All four take the slice, an index and a fallback, and return the fallback when that index is missing or holds another kind.
+All four readers take the slice, an index and a fallback, and return the fallback when that index is missing or holds another kind.
 `extract_choice` returns the index of the chosen option.
 
 `.percent()` sets a parameter's `format` to `ParamFormat::Percent`, for a fraction shown as a percentage.
 The stored value stays a fraction in `0..=1`, and only the Parameters tab scales it.
-Virus Spread Chance holds `0.025` and reads 2.5%.
-`--set` takes the fraction too, and `--params` marks the parameter `format=percent`.
+Virus Spread Chance holds `0.025` and shows as 2.5%.
+`--set` accepts the fraction too, and `--params` marks the parameter `format=percent`.
 
 ## Live against reload
 
@@ -80,7 +80,7 @@ const DENSITY = f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01
 ```
 
 Both front ends read this behaviour from the descriptor, so you declare it in exactly one place.
-`ParamStore::set` rejects an edit to anything declared `OnReload` and returns whether the edit landed.
+`ParamStore::set` rejects an edit to anything declared `OnReload` and returns whether the edit was applied.
 The app reads the same flag and can say so before anything is sent.
 
 Declare `.on_reload()` for any parameter that only `init` reads.
@@ -140,8 +140,8 @@ The split between the slices comes from the descriptor lengths rather than a har
 
 Both GPU traits drop the prefix entirely.
 Nothing is prepended and the model spells its whole list out, letting a GPU port mirror the exact parameter order of the CPU model it is compared against.
-In practice the two GPU agent ports reuse their counterpart's composed list verbatim, through `agent_model_param_descriptors`.
-The two GPU grid ports spell theirs out, with the same ids in the same order.
+In practice the two GPU agent ports reuse their counterpart's composed list verbatim, by calling `agent_model_param_descriptors`.
+The two GPU grid ports spell their lists out, with the same ids in the same order.
 
 ## Reading them
 
@@ -151,14 +151,14 @@ cargo run -p henad-cli -- boids --params
 
 `--params` prints every id, kind, default and range for a model.
 `--set id=value` overrides one value, and the flag can be repeated.
-A bool takes `true` or `false`, and a choice takes an option label or its index.
+A bool accepts `true` or `false`, and a choice accepts an option label or its index.
 `--set network=Geometric` and `--set network=1` pick the same option.
 See [the command line](../reference/cli.md) for the full CLI, and [the models](../reference/models.md) for what every shipped model declares.
 
 ## Actions
 
-An action is a one-off change to the state that the user asks for between ticks, such as Game of Life's Randomise and Clear.
-You declare actions next to the parameters, through the `actions!` macro, which a project names `henad::actions!`.
+An action is a one-off change to the state that the user requests between ticks, such as Game of Life's Randomise and Clear.
+You declare actions next to the parameters, with the `actions!` macro, which a project uses as `henad::actions!`.
 
 ```rust
 --8<-- "crates/henad-models/src/game_of_life.rs:actions"
@@ -215,24 +215,24 @@ When the user presses a button, the engine calls `act` with that entry's index, 
 A live parameter reads its current value there, and a reload parameter reads the value the state was built with.
 Game of Life's Initial Density is a reload parameter, and Randomise refills at the density the model was built with, even after the slider has moved.
 
-`rng` is a stream of its own, apart from the one the ticks draw from.
-The engine seeds it from the state's seed through `action_seed`, and each press carries on where the last one stopped.
+`rng` is its own stream, separate from the stream that the ticks draw from.
+The engine seeds it from the state's seed with `action_seed`, and each press carries on where the last one stopped.
 Pressing twice draws twice, and a press leaves the next tick's draws where they were.
 
 The engine runs an action between two ticks and publishes a snapshot straight after it.
 The result shows even while the simulation is paused.
 The Parameters tab draws one button per action under the parameter widgets, disabled until the selected model is built.
-`henad-cli --act ID@TICK` runs one when the state reaches that tick, and [the command line](../reference/cli.md) covers the flag.
+`henad-cli --act ID@TICK` runs an action when the state reaches that tick, and [the command line](../reference/cli.md) covers the flag.
 
-The testing kit's `Actions` check presses every declared action on a freshly built state, and asserts that the state accepts each one and refuses an index past the last.
+The testing kit's `Actions` check presses every declared action on a freshly built state, and asserts that the state accepts each one and rejects an index past the last.
 Its `ActionIds` check asserts that no two actions of a model share an id, since `--act` could not tell them apart.
-It also refuses an id that is empty or holds whitespace or `=`.
-Neither `--vary action.NAME=LEVELS` nor a design table can name one.
-`ParamIds` refuses the same in a parameter id, and an id that starts with `action.`.
+It also rejects an id that is empty or holds whitespace or `=`.
+Neither `--vary action.NAME=LEVELS` nor a design table can refer to such an id.
+`ParamIds` applies the same rule to a parameter id, and also rejects a parameter id that starts with `action.`.
 
 ## Actions on the GPU
 
-On the GPU an action is a compute pass of its own, dispatched once per press.
+On the GPU an action is its own compute pass, dispatched once per press.
 
 === "GPU grid models"
 
@@ -247,7 +247,7 @@ On the GPU an action is a compute pass of its own, dispatched once per press.
 === "GPU agent models"
 
     A `GpuAgentAction` holds the descriptor and a `PassSpec`, dispatched once over the pass's own domain.
-    The engine asks `pass_params_bytes` for its uniform block with `PassId::Action(i)`, where `i` is the action's index.
+    The engine requests its uniform block from `pass_params_bytes` with `PassId::Action(i)`, where `i` is the action's index.
     `PassCtx::seed` carries the seed.
     Every other pass sees a seed of zero.
 
@@ -260,7 +260,7 @@ Nothing swaps after it, so its write bindings resolve to the side that holds the
 Its bindings count towards the model's storage-buffer demand like those of any other pass.
 
 A GPU action need not reproduce its CPU counterpart.
-GPU Game of Life's Randomise hashes one draw per cell where the CPU model walks a stream, and the two refill the grid differently.
+GPU Game of Life's Randomise hashes one draw per cell where the CPU model walks a stream, and the two actions refill the grid differently.
 
 ## Next
 

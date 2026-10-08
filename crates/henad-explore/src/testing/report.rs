@@ -35,10 +35,12 @@ impl ModelReport {
         self.thread_count_jobs = Some(jobs);
     }
 
+    /// Id of the model checked.
     pub fn model_id(&self) -> &str {
         &self.model_id
     }
 
+    /// Checks that failed, each with its message.
     pub fn failures(&self) -> &[CheckFailure] {
         &self.failures
     }
@@ -119,10 +121,12 @@ pub struct CheckFailure {
 }
 
 impl CheckFailure {
+    /// Check that failed.
     pub fn check(&self) -> ModelCheck {
         self.check
     }
 
+    /// Message saying what the check found.
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -142,10 +146,12 @@ pub struct SkippedCheck {
 }
 
 impl SkippedCheck {
+    /// Check that did not run.
     pub fn check(&self) -> ModelCheck {
         self.check
     }
 
+    /// Reason the check did not run.
     pub fn reason(&self) -> &SkipReason {
         &self.reason
     }
@@ -165,9 +171,9 @@ pub enum SkipReason {
     OtherBackend,
     /// The model declares that its runs do not replay exactly, and the check compares two runs.
     InexactReplay,
-    /// [`super::CheckSettings::exempt`] exempted the model, for the reason given.
+    /// [`super::CheckSettings::exempt`] exempted the model.
     Exempt(String),
-    /// The check needs a GPU device, and the settings give none.
+    /// The check needs a GPU device, and the settings provide no device.
     NoDevice,
     /// The check runs on native targets only. These are the checks that build a GPU model, and
     /// [`super::ModelCheck::ThreadCount`].
@@ -192,7 +198,7 @@ impl fmt::Display for SkipReason {
     }
 }
 
-/// Reports of every model of a set, and the model ids the settings name and the set lacks.
+/// Reports of every model of a set, and the model ids that the settings specify and that are missing from the set.
 #[derive(Debug)]
 pub struct SetReport {
     reports: Vec<ModelReport>,
@@ -212,27 +218,28 @@ impl SetReport {
         &self.reports
     }
 
-    /// Model ids that an override or an exemption names and the set lacks, each once.
+    /// Model ids that an override or an exemption specifies and that are missing from the set, each once.
     pub fn unknown_models(&self) -> &[String] {
         &self.unknown_models
     }
 
-    /// Returns whether every model passed and the settings name no model the set lacks.
+    /// Returns whether every model passed and the settings specify no model missing from the set.
     pub fn passed(&self) -> bool {
         self.unknown_models.is_empty() && self.reports.iter().all(ModelReport::passed)
     }
 
-    /// Asserts that every model passed and the settings name no model the set lacks.
+    /// Asserts that every model passed and the settings specify no model missing from the set.
     ///
     /// # Panics
     ///
-    /// Panics with a summary line, then every model's report and every model id the set lacks.
+    /// Panics with a summary line, then every model's report and every model id missing from the set.
     pub fn assert_passed(&self) {
         assert!(self.passed(), "{self}");
     }
 }
 
-/// Writes a summary line, every model id the settings name and the set lacks, then each model's report.
+/// Writes a summary line, every model id that the settings specify and that is missing from the set, then each
+/// model's report.
 impl fmt::Display for SetReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let failed = self.reports.iter().filter(|report| !report.passed()).count();

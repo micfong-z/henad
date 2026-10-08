@@ -8,61 +8,86 @@ use crate::params::{ParamDescriptor, ParamKind, ParamValue};
 
 /// A parameter value that cannot be read, or does not fit its descriptor.
 ///
-/// The `source` of text that does not read as its kind is the parser's error.
+/// The `source` of text that cannot be parsed as its kind is the parser's error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueError {
+    /// Text that cannot be parsed as an `f32`.
     NotANumber {
+        /// Text as given.
         raw: String,
+        /// Error of the `f32` parser.
         source: ParseFloatError,
     },
+    /// Text that cannot be parsed as a `u32`.
     NotAnInteger {
+        /// Text as given.
         raw: String,
+        /// Error of the `u32` parser.
         source: ParseIntError,
     },
+    /// Text that cannot be parsed as a `bool`.
     NotABool {
+        /// Text as given.
         raw: String,
+        /// Error of the `bool` parser.
         source: ParseBoolError,
     },
     /// A number outside the descriptor's inclusive bounds. A non-finite number is outside every bound.
     OutOfRange {
+        /// Number as text.
         value: String,
+        /// Lower bound as text.
         min: String,
+        /// Upper bound as text.
         max: String,
     },
     /// Neither the index nor the name of an option.
     UnknownOption {
+        /// Text as given, or the index as text.
         raw: String,
+        /// Options of the parameter.
         options: &'static [&'static str],
     },
-    /// An id no descriptor has. `known` lists the ids the descriptors do have.
+    /// An id no descriptor has.
     UnknownParam {
+        /// Id as given.
         id: String,
+        /// Ids the descriptors have.
         known: Vec<&'static str>,
     },
     /// An override with no `=` between the id and the value.
     BadOverride {
+        /// Override as given.
         raw: String,
     },
-    /// A value refused by the descriptor of parameter `id`, for the reason in `source`.
+    /// A value that parameter `id` rejects.
     Param {
+        /// Id of the parameter.
         id: String,
+        /// Reason the descriptor rejects the value.
         source: Box<Self>,
     },
-    /// A value of another kind than its descriptor's, handed to [`check_value`]. `value` is the value found, written
-    /// as text.
+    /// A value passed to [`check_value`] whose kind differs from the descriptor's kind.
     WrongKind {
+        /// Kind that the descriptor accepts.
         expected: ValueKind,
+        /// Kind of the value.
         found: ValueKind,
+        /// Value as text.
         value: String,
     },
 }
 
-/// Kind of a parameter value, as [`ValueError::WrongKind`] names it.
+/// Kind of a parameter value, as [`ValueError::WrongKind`] reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueKind {
+    /// An `f32`.
     F32,
+    /// A `u32`.
     U32,
+    /// A `bool`.
     Bool,
+    /// An index into a choice's options.
     Choice,
 }
 
@@ -116,7 +141,7 @@ impl std::error::Error for ValueError {
     }
 }
 
-/// Split each raw `--set ID=VALUE` string into an `(id, value)` pair.
+/// Splits each `--set ID=VALUE` string into an `(id, value)` pair at its first `=`.
 ///
 /// # Errors
 ///
@@ -132,12 +157,12 @@ pub fn parse_overrides(raw: &[String]) -> Result<Vec<(String, String)>, ValueErr
         .collect()
 }
 
-/// Start from every parameter's default, then apply the overrides by id.
+/// Returns every descriptor's default value, with `overrides` applied in order by id.
 ///
 /// # Errors
 ///
 /// Returns [`ValueError::UnknownParam`] for an id no descriptor has, and [`ValueError::Param`] for a
-/// value its descriptor refuses.
+/// value that its descriptor rejects.
 pub fn resolve_params(
     descriptors: &[ParamDescriptor],
     overrides: &[(String, String)],
@@ -164,18 +189,13 @@ pub fn resolve_params(
     Ok(values)
 }
 
-/// Parse a raw string into a [`ParamValue`] matching the descriptor's kind, and refuse whatever the
-/// descriptor's own range does not allow.
+/// Reads `raw` as a value of `kind`, and checks it with [`check_value`].
 ///
-/// The GUI cannot produce an out-of-range value, since it edits every parameter through a widget
-/// built from this range. `--set` reaches the same parameter with nothing between it and `init`,
-/// where a model sizes its buffers from the number it is given.
-///
-/// A choice reads an option's name first, then an option's index.
+/// For a choice, `raw` is read as an option name first, then as an option index.
 ///
 /// # Errors
 ///
-/// Returns [`ValueError`] when `raw` does not read as the kind, or [`check_value`] refuses it.
+/// Returns [`ValueError`] when `raw` cannot be parsed as the kind, or [`check_value`] rejects it.
 pub fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue, ValueError> {
     let value = match kind {
         ParamKind::F32 { .. } => ParamValue::F32(raw.parse().map_err(|source| ValueError::NotANumber {
@@ -212,7 +232,7 @@ pub fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue, ValueError
 ///
 /// Returns [`ValueError::OutOfRange`] for a number outside the bounds or not finite,
 /// [`ValueError::UnknownOption`] for an index past the options, and [`ValueError::WrongKind`] for a value of another
-/// kind. A `u32` never stands in for a choice index.
+/// kind. A `u32` is never accepted as a choice index.
 pub fn check_value(kind: &ParamKind, value: &ParamValue) -> Result<(), ValueError> {
     let out_of_range = |value: &dyn fmt::Display, min: &dyn fmt::Display, max: &dyn fmt::Display| {
         Err(ValueError::OutOfRange {
@@ -250,7 +270,7 @@ pub fn check_value(kind: &ParamKind, value: &ParamValue) -> Result<(), ValueErro
     }
 }
 
-/// Returns the kind of value `kind` takes.
+/// Returns the kind of value that `kind` accepts.
 fn param_kind(kind: &ParamKind) -> ValueKind {
     match kind {
         ParamKind::F32 { .. } => ValueKind::F32,
@@ -272,7 +292,7 @@ fn value_kind(value: &ParamValue) -> ValueKind {
 
 /// Returns `value` as text that [`parse_value`] reads back unchanged.
 ///
-/// A number takes its shortest round-trip form, and a choice its option name.
+/// A number is written in its shortest round-trip form, and a choice as its option name.
 pub fn format_value(kind: &ParamKind, value: &ParamValue) -> String {
     match (kind, value) {
         (ParamKind::Choice { options, .. }, ParamValue::Choice(index)) => options
@@ -322,7 +342,7 @@ mod tests {
         resolve_params(&descriptors(), &overrides)
     }
 
-    /// Returns the error's message followed by the message of each source, joined by ": ".
+    /// Returns the error's message followed by each source's message, joined by ": ".
     fn message(error: &ValueError) -> String {
         let mut text = error.to_string();
         let mut source = std::error::Error::source(error);
@@ -341,8 +361,8 @@ mod tests {
         assert_eq!(values[2], ParamValue::Choice(0));
     }
 
-    /// The regression. A slider cannot ask for four billion agents, `--set` used to be able to, and
-    /// the number went straight to `init`.
+    /// A slider cannot request four billion agents, and `--set` cannot either. Unchecked, the number would go
+    /// straight to `init`.
     #[test]
     fn a_value_outside_the_descriptor_range_is_refused() {
         let error = resolve("num_agents=4000000000").expect_err("4e9 agents is over the maximum");
@@ -435,8 +455,8 @@ mod tests {
         );
     }
 
-    /// The regression. A name that reads as a number used to be read as an index, so option "0" at index 1 came
-    /// back as option 0.
+    /// A name that looks like a number is matched as a name first. Read as an index, option "0" at index 1 would
+    /// come back as option 0.
     #[test]
     fn a_choice_reads_an_option_name_before_an_index() {
         let kind = ParamKind::Choice {
@@ -469,8 +489,7 @@ mod tests {
         assert_eq!(check_value(&descriptors[2].kind, &ParamValue::Choice(1)), Ok(()));
     }
 
-    /// The regression. An integer for a float parameter read "'1' is not a number", with no hint of the literal that
-    /// fits.
+    /// The message for a value of another kind includes the literal that fits.
     #[test]
     fn a_value_of_another_kind_names_both_kinds() {
         let descriptors = descriptors();

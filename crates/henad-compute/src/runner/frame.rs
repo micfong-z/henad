@@ -1,16 +1,17 @@
-//! Drives a loop from the host's frame loop, which is all a browser offers.
+//! The browser driver, which pumps a sim loop from the host's frame loop.
 //!
-//! `wasm32-unknown-unknown` cannot spawn a thread even with atomics, so the loop runs inline and
-//! the frame has to be handed back. [`PUMP_BUDGET_MS`] is what it may spend before doing so.
+//! `wasm32-unknown-unknown` cannot spawn a thread even with atomics. The loop runs inline, and the driver stops pumping
+//! once a frame has spent [`PUMP_BUDGET_MS`].
 
 use web_time::Instant;
 
 use super::{PUMP_BUDGET_MS, Pace, SimLoop};
 use crate::fault::Fault;
 
+/// Handle on a [`SimLoop`] pumped from the host's frame loop.
 pub struct Driver<L: SimLoop> {
     sim: L,
-    /// Set by [`Pace::After`], so a capped loop is not pumped early.
+    /// Time the next pump is due, set by [`Pace::After`] so a capped loop is not pumped early.
     next_pump_at: Instant,
     finished: bool,
 }
@@ -25,8 +26,10 @@ impl<L: SimLoop> std::fmt::Debug for Driver<L> {
 }
 
 impl<L: SimLoop> Driver<L> {
-    /// `on_fault` is never called. wasm aborts on panic rather than unwinding, so there is nothing
-    /// to hand back. The parameter matches the threaded driver and keeps a `cfg` out of the host.
+    /// Starts `sim` inline.
+    ///
+    /// Note that `on_fault` is never called. wasm aborts on panic rather than unwinding, so there is no
+    /// fault to report. The parameter matches the threaded driver and keeps a `cfg` out of the host.
     pub fn spawn(mut sim: L, on_fault: impl FnOnce(Fault) + 'static) -> Self {
         drop(on_fault);
         sim.start();
@@ -37,6 +40,7 @@ impl<L: SimLoop> Driver<L> {
         }
     }
 
+    /// Handles `cmd` at once, and makes the next pump due.
     pub fn send(&mut self, cmd: L::Command) {
         if self.finished {
             return;
@@ -76,7 +80,7 @@ impl<L: SimLoop> Driver<L> {
         }
     }
 
-    /// No thread to join. The loop is dropped with the driver.
+    /// Sends `cmd`, the loop's stop command. No thread is joined, and the loop is dropped with the driver.
     pub fn shutdown(&mut self, cmd: L::Command) {
         self.send(cmd);
     }
@@ -89,14 +93,14 @@ mod tests {
     use super::Driver;
     use crate::runner::{Pace, SimLoop};
 
-    /// Asks for a second between pumps, like a model capped at a low tick rate.
+    /// Loop that requests a second between pumps, like a model capped at a low tick rate.
     struct Capped {
         pumps: u32,
         commands: u32,
     }
 
     impl SimLoop for Capped {
-        /// True is the shutdown.
+        /// `true` is the shutdown command.
         type Command = bool;
 
         fn handle_command(&mut self, stop: bool) -> bool {
@@ -114,14 +118,14 @@ mod tests {
         Driver::spawn(Capped { pumps: 0, commands: 0 }, |_| {})
     }
 
-    /// The regression. A command used to sit out whatever wait the last pump asked for, so dragging
-    /// the tick rate up on a slow model did nothing for a second.
+    /// A command must not sit out whatever wait the last pump requested. Otherwise dragging the tick
+    /// rate up on a slow model does nothing for a second.
     #[test]
     fn a_command_makes_the_next_pump_due() {
         let mut driver = driver();
         driver.update(0.0);
         assert_eq!(driver.sim.pumps, 1);
-        // Inside the wait the first pump asked for.
+        // Inside the wait the first pump requested.
         driver.update(0.0);
         assert_eq!(driver.sim.pumps, 1);
 

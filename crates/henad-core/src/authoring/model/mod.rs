@@ -1,10 +1,10 @@
 //! The traits a model author implements.
 //!
-//! One per topology, plus [`field`], the grid layer an [`agent_model::AgentModel`] can sit over.
-//! Each is const metadata plus pure functions. The engine that drives them lives in
+//! There is one trait per topology and backend, plus [`field`], the grid layer an [`agent_model::AgentModel`]
+//! can sit over. Each trait is const metadata plus pure functions. The engine that drives them lives in
 //! `henad-compute`.
 //!
-//! Not to be confused with [`crate::model`], which is the interface the *runner* drives.
+//! Note that [`crate::model`] is a different module. It holds the interface the *runner* drives.
 
 pub mod agent_model;
 pub mod binding;

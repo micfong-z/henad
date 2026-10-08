@@ -41,7 +41,8 @@ fn genetic_settings() -> GeneticSettings {
     }
 }
 
-/// Returns a spec for `algorithm` with a budget of `max_evaluations`, and an objective where the algorithm takes one.
+/// Returns a spec for `algorithm` with a budget of `max_evaluations`, and an objective for every algorithm other than
+/// Pattern Space Exploration.
 fn spec(algorithm: SearchAlgorithm, max_evaluations: u64) -> SearchSpec {
     let objective = match algorithm {
         SearchAlgorithm::PatternSpaceExploration(_) => None,
@@ -201,7 +202,7 @@ fn a_search_spec_checks_its_objective_and_settings() {
     let empty = spec(SearchAlgorithm::Random, 0);
     assert_eq!(empty.check(), Err(SearchSpecError::NoEvaluations));
 
-    // The regression. A batch past the plan's config cap passed the check, and the first ask aborted on allocation.
+    // A batch past the plan's config cap is rejected. Otherwise the first ask would abort on allocation.
     let mut widest = spec(SearchAlgorithm::Random, u64::MAX);
     widest.batch_size = MAX_CONFIGS;
     assert_eq!(widest.check(), Ok(()));

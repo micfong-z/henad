@@ -1,8 +1,8 @@
-//! Items the tutorial crate never names, reached through the facade's paths alone.
+//! Items that the tutorial crate never uses, reached through facade paths alone.
 //!
 //! The file defines no model, needs no build script and never builds on a device. The parts that need no model run,
 //! and the parts that need a model's entry compile in [`with_an_entry`], which no test calls. That module also holds
-//! the two snippets `docs/guide/library.md` includes from outside `examples/complete.rs`. [`named_only`] names the
+//! the two snippets `docs/guide/library.md` includes from outside `examples/complete.rs`. [`named_only`] refers to the
 //! items whose paths are the whole check, and runs nothing.
 
 // Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
@@ -79,7 +79,7 @@ fn sharded_options() -> SweepOptions {
     options
 }
 
-/// Returns the reason a setup was refused, naming the parameter text that could not be read.
+/// Returns the reason a setup was rejected, citing the parameter text that could not be read.
 fn refusal(error: &SetupError) -> String {
     match error {
         SetupError::Param(ValueError::NotANumber { raw, .. }) => format!("'{raw}' is not a number"),
@@ -141,13 +141,14 @@ fn the_spatial_index_and_the_components_are_reached() {
     assert_eq!(components.largest, 3, "the path holds three nodes");
 }
 
-/// Items named through their facade paths, with nothing to run. The check is that the module compiles.
+/// Items referred to by their facade paths, with nothing to run. The check is that the module compiles.
 #[expect(dead_code, reason = "the module names items, and no test calls them")]
 mod named_only {
     use henad::gpu::DeviceError;
     use henad::gpu::wgpu::{Adapter, Limits};
 
-    /// Types a public field, variant or return value of a listed item holds, and types a listed signature names.
+    /// Types that a public field, variant or return value of a listed item holds, and types that a listed signature
+    /// refers to.
     type PayloadTypes = (
         henad::gpu::Alloc,
         henad::gpu::PassBindings,
@@ -166,10 +167,11 @@ mod named_only {
         henad::action::RefusedActions<'static>,
     );
 
-    /// Steps one command buffer of a GPU state may hold, for a host that encodes its own.
+    /// Number of steps that one command buffer of a GPU state may hold, for a host that encodes its own command
+    /// buffers.
     const SUBMISSION_STEPS: u32 = henad::runner::MAX_STEPS_PER_SUBMISSION;
 
-    /// Returns the limit a refusal of an adapter below the baseline names.
+    /// Returns the limit that the error reports for an adapter below the baseline.
     fn short_limit(error: &DeviceError) -> Option<&'static str> {
         match error {
             DeviceError::BelowBaseline { limit, .. } => Some(*limit),
@@ -183,7 +185,7 @@ mod named_only {
         henad::gpu::raise_limits(adapter, &Limits::default(), models.gpu_needs())
     }
 
-    /// Calls `sample`, which a native build and a threaded web build can both hand to another thread.
+    /// Calls `sample`, which a native build and a threaded web build can both pass to another thread.
     fn forward<F: FnMut() + henad::WasmNotSend + henad::WasmNotSync>(mut sample: F) {
         sample();
     }
@@ -232,7 +234,7 @@ mod with_an_entry {
         matches!(status, RunStatus::Ok | RunStatus::NonFinite)
     }
 
-    /// Builds GPU SIR from `models` on a headless device of its own, and returns its tick after ten steps.
+    /// Builds GPU SIR from `models` on its own headless device, and returns its tick after ten steps.
     fn gpu_sir(models: &ModelSet) -> Result<u64, Box<dyn std::error::Error>> {
         // --8<-- [start:gpu_build]
         let gpu = henad::gpu::acquire_headless(models.gpu_needs())?;
@@ -246,14 +248,14 @@ mod with_an_entry {
         Ok(simulation.tick())
     }
 
-    /// Steps `simulation` a thousand ticks inside one rayon scope, with room for work of the caller's own between
+    /// Steps `simulation` a thousand ticks inside one rayon scope, with room for the caller's own work between
     /// two ticks.
     fn scoped_steps(simulation: &mut Simulation) -> Result<(), Fault> {
         // --8<-- [start:scoped_steps]
         rayon::scope(|_| -> Result<(), henad::Fault> {
             for _ in 0..1000 {
                 simulation.step()?;
-                // Per-tick work of your own.
+                // Your own per-tick work.
             }
             Ok(())
         })?;

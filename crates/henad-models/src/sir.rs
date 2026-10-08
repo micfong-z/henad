@@ -1,3 +1,8 @@
+//! The SIR (susceptible, infected, recovered) epidemic as a [`GridModel`] on a torus.
+//!
+//! Each infected cell among a susceptible cell's eight neighbours infects it with probability `infection_rate`,
+//! independently of the others. An infected cell recovers with probability `recovery_rate` each tick.
+
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::grid_model::GridModel;
@@ -25,15 +30,18 @@ henad_core::actions! {
     const SEED_OUTBREAK = ActionDescriptor::new("seed_outbreak", "Seed outbreak");
 }
 
+/// Cell colours, indexed by state: susceptible, infected, then recovered.
 pub const PALETTE: [[u8; 4]; 3] = [
     [0x00, 0x7A, 0xF5, 0xFF], // S - blue
     [0xE4, 0x37, 0x48, 0xFF], // I - red
     [0x80, 0x80, 0x80, 0xFF], // R - gray
 ];
 
+/// The SIR epidemic as a [`GridModel`].
 #[derive(Debug)]
 pub struct SirGridModel;
 
+/// Rates of [`SirGridModel`], read once per tick.
 #[derive(Debug)]
 pub struct SirParams {
     infection_rate: f32,
@@ -83,8 +91,8 @@ impl GridModel for SirGridModel {
                 let infected_count = neighbors.iter().filter(|&&n| n == I).count();
                 if infected_count > 0 {
                     let prob_safe = (1.0 - params.infection_rate).powi(infected_count as i32);
-                    // `>=`, so a rate of 1 always infects. The draw is half-open, so a zero draw
-                    // is reachable and `>` would let it escape.
+                    // A rate of 1 always infects under `>=`. The draw is half-open and can be zero,
+                    // and `>` would let a zero draw escape.
                     if next_float(rng, 1.0) >= prob_safe { I } else { S }
                 } else {
                     S
@@ -121,7 +129,7 @@ impl GridModel for SirGridModel {
     // --8<-- [end:stats]
 }
 
-/// Count S/I/R in a single pass over a contiguous slice.
+/// Counts S, I and R in one pass over `cells`.
 fn count_sir_seq(cells: &[u8]) -> (u64, u64, u64) {
     let (mut s, mut i, mut r) = (0u64, 0u64, 0u64);
     for &cell in cells {
@@ -135,7 +143,7 @@ fn count_sir_seq(cells: &[u8]) -> (u64, u64, u64) {
 }
 
 /// Infects each susceptible cell with probability `initial_infected_pct`, so a run that has burnt out can be
-/// restarted without losing the recovered ones.
+/// restarted without losing its recovered cells.
 fn seed_outbreak(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64) {
     let initial_pct = extract_f32(params, INITIAL_INFECTED_PCT, 0.01);
     let threshold = (initial_pct * u32::MAX as f32) as u32;
@@ -190,17 +198,17 @@ mod tests {
             recovery_rate: 0.0,
         };
         let mut rng = 42u64;
-        // S with infected neighbor → always I (rate=1.0)
+        // At a rate of 1, a susceptible cell next to an infected one is always infected.
         assert_eq!(
             SirGridModel::step_cell(S, &[I, S, S, S, S, S, S, S], &params, &mut rng),
             I
         );
-        // I with recovery_rate=0 → always I
+        // At a recovery rate of 0, an infected cell stays infected.
         assert_eq!(
             SirGridModel::step_cell(I, &[S, S, S, S, S, S, S, S], &params, &mut rng),
             I
         );
-        // R → always R
+        // A recovered cell stays recovered.
         assert_eq!(
             SirGridModel::step_cell(R, &[I, I, I, I, I, I, I, I], &params, &mut rng),
             R

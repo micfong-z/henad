@@ -22,8 +22,8 @@ You'll also need a machine with a GPU that wgpu can drive with compute support, 
 
 A [`GpuGridModel`](../../authoring/gpu-grid-models.md) is a trait that describes a grid stepped by compute shaders.
 
-Recall that the CPU trait asked us for one function, `step_cell`.
-This one asks for 3 [WGSL](https://www.w3.org/TR/WGSL/) shaders and a `mod.rs` of declarations declaring some metadata and the initial state.
+Recall that the CPU trait needed one function, `step_cell`.
+This one needs 3 [WGSL](https://www.w3.org/TR/WGSL/) shaders and a `mod.rs` that declares some metadata and the initial state.
 
 ``` mermaid
 flowchart LR
@@ -114,13 +114,13 @@ sb3  (weight 8)   0    0    1    0   ...    0
 
 A count of 8 is `1000` in binary and needs that fourth row, so a complete count would take four words.
 We will keep three and drop `sb3` on purpose, because the rule of Life never needs it.
-Without its top bit a count of 8 reads as `000`, the same as a count of 0, and both of those kill the cell.
+Without its top bit a count of 8 becomes `000`, the same as a count of 0, and both of those kill the cell.
 Every other count keeps its exact value in `sb0` to `sb2`.
 
 Summing one-bit inputs into a bit-sliced count is a job for a carry-save adder, and an adder is nothing but XOR and AND:
 
 ``` { .wgsl .annotate title="src/gpu_life/step.wgsl" }
-// One column of the adder tree: `sum` is the weight-w result, `carry` feeds weight 2w.
+// One column of the adder tree. `sum` is the weight-w result, and `carry` feeds weight 2w.
 struct Adder {
     sum: u32,
     carry: u32,
@@ -182,7 +182,7 @@ fn load_row(row: u32, word: u32, stride: u32, width: u32) -> Row {
 ```
 
 1. Neighbouring words wrap within the row through `% stride`, so a row's first and last words see each other. That is the x half of the torus.
-2. The two `if` patches finish the job. A width that divides by 32 puts the wrap on a word edge, and the shifts above are already right. Any other width leaves a ragged last word, and exactly two bits come out wrong, one at each end of the row. The patches rewrite those two from the true wrap positions, and when nothing was wrong they rewrite the value already there, so there is no branch on raggedness.
+2. The two `if` patches finish the job. A width that divides by 32 puts the wrap on a word edge, and the shifts above are already right. Any other width leaves a ragged last word, and exactly two bits come out wrong, one at each end of the row. The patches rewrite those two bits from the true wrap positions, and when nothing was wrong they rewrite the value already there, so there is no branch on raggedness.
 
 ### The entry point
 
@@ -211,26 +211,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let b = full_add(r_down.west, r_down.cells, r_down.east);
     let c = half_add(r_mid.west, r_mid.east);
 
-    // Weight 1: three sums left, one bit out.
+    // Weight 1 adds the three sums into one bit, with a carry into weight 2.
     let d = full_add(a.sum, b.sum, c.sum);
     let sb0 = d.sum;
 
-    // Weight 2, four terms. The three stage-1 carries, plus d's.
+    // Weight 2 adds four terms, the three stage-1 carries and d.carry.
     let e = full_add(a.carry, b.carry, c.carry);
     let f = half_add(e.sum, d.carry);
     let sb1 = f.sum;
 
-    // Weight 4, two terms. The weight-8 carry is dropped, since only n == 8 sets it, and n == 8
+    // Weight 4 adds two terms, and the weight-8 carry is dropped. Only n == 8 sets it, and n == 8
     // has sb1 == 0, so the rule below already excludes it.
     let sb2 = e.carry ^ f.carry; // (4)!
 
-    // Survive on 2, born on 3. Bit-sliced, 3 is 011 and 2 is 010, so both need sb2 == 0 and
-    // sb1 == 1 and differ only in sb0, which folds into (sb0 | cells).
+    // A cell lives on a count of 3, and on 2 if it is alive already. Bit-sliced, 3 is 011 and 2 is
+    // 010. Both counts need sb2 == 0 and sb1 == 1, and the term (sb0 | cells) covers the bit that differs.
     let alive = ~sb2 & sb1 & (sb0 | r_mid.cells); // (5)!
 
     // Trailing bits of a ragged last word hold no cell, and nothing reads them. load_row's patches
-    // keep real cells off them, and display/reduce are bounded by width. The layout invariant is
-    // still that they stay zero, and there is no `break` to leave them so now.
+    // keep real cells off them, and display and reduce stop at the width. The layout still requires
+    // them to be zero, and the mask below clears them.
     let cells_here = min(width - word * 32u, 32u);
     var mask = 0xFFFFFFFFu;
     if cells_here < 32u {
@@ -287,8 +287,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 ```
 
-1. Shared WGSL ships with henad-core and can be reached with `#import henad::<module>`, resolved at build time. `henad::dims` holds the `Dims` struct every grid model's display and reduce shader reads.
-2. Display and reduce bind `state` and a `Dims` uniform of their own, carrying the grid size and the texture size. Our step uniform never reaches them.
+1. Shared WGSL ships with henad-core and can be reached with `#import henad::<module>`, resolved at build time. `henad::dims` holds the `Dims` struct that every grid model's display and reduce shaders read.
+2. Display and reduce bind `state` and their own `Dims` uniform, carrying the grid size and the texture size. Our step uniform never reaches them.
 3. The shader writes RGBA directly, so it carries its own copy of the two palette colours as WGSL constants. It is recommended to maintain consistency with the CPU palette.
 4. The pass dispatches one invocation per _texel_, never per cell. The texture is capped at 4096 a side, so a big grid is sampled, and `cell_at` reads the cell at `texel * grid / tex`. Nothing special happens if this cap is not reached.
 
@@ -322,15 +322,14 @@ fn main(
     }
     workgroupBarrier();
 
-    // Guarded with an `if` rather than an early `return`: the barriers below must be reached by
-    // every invocation in the workgroup, and a partial grid tile would otherwise diverge.
+    // The bounds check wraps the work in an `if`. Every invocation in the workgroup has to reach
+    // both barriers, and an early `return` in a partial grid tile would skip them.
     let width = dims.grid.x;
     let height = dims.grid.y;
     if (global_id.x < width && global_id.y < height) { // (3)!
-        // One invocation per cell, reading the containing word and extracting this cell's bit.
-        // Deliberately not a per-word countOneBits, which would need this pass to dispatch over
-        // words, and the padding bits in a row's last word would then have to be masked off.
-        // This runs at the display cadence, so the simpler form is worth more than the speed.
+        // Each invocation reads the word holding its cell and extracts the cell's bit. A per-word
+        // countOneBits would have to dispatch over words and mask off the padding bits of each
+        // row's last word, and this pass runs only when the stats are sampled.
         let words_per_row = (width + 31u) / 32u;
         let word = state[global_id.y * words_per_row + (global_id.x / 32u)];
         if (((word >> (global_id.x % 32u)) & 1u) == 1u) {
@@ -347,7 +346,7 @@ fn main(
 
 1. One `u32` counter per series in `STATS`, which we declare in a moment. Life has one series, so this is a single atomic rather than an array.
 2. Workgroup memory, shared by the 256 invocations of one workgroup and nobody else.
-3. The bounds check is an `if` around the work rather than an early `return`. Every invocation in a workgroup has to reach both barriers, including the ones hanging off the grid's ragged edge, and an early return would leave them stranded.
+3. The bounds check is an `if` around the work rather than an early `return`. Every invocation in a workgroup has to reach both barriers, including the invocations hanging off the grid's ragged edge, and an early return would leave them stranded.
 4. Folding locally first means one global atomic per 256 cells instead of one per cell, which keeps the pass negligible at the grid sizes the engine targets.
 
 ## Implementing `GpuGridModel`
@@ -389,7 +388,7 @@ error[E0046]: not all trait items implemented, missing: `NAME`, `ID`, `DESCRIPTI
   = help: implement the missing item: `fn seed_buffers(_: u32, _: u32, _: &[ParamValue], _: Option<u64>) -> Vec<Vec<u32>> { todo!() }`
 ```
 
-17 items is more than the CPU trait asked for, but 12 of them are consts of one line each.
+17 items is more than the CPU trait required, but 12 of them are one-line consts.
 We'll work down the list for the rest of this tutorial.
 
 ### Identity
@@ -404,7 +403,7 @@ impl GpuGridModel for GpuLifeModel {
 }
 ```
 
-1. The example port already holds `gpu_game_of_life`. A model set holds each ID once, and our ID differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
+1. The example port already uses the ID `gpu_game_of_life`. A model set holds each ID once, and our ID differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
 
 ### Colours
 
@@ -445,7 +444,7 @@ Next come the declarations with no CPU counterpart, the buffers the step ping-po
     const REDUCE_BINDINGS: &'static [BindingDecl] = crate::binding_decls::bindings::GPU_LIFE_REDUCE;
 ```
 
-1. One label per ping-ponged buffer. Life needs one, and a shader's binding names refer to it, `state_in` and `state_out` above.
+1. One label per ping-ponged buffer. Life needs one buffer, and a shader's binding names refer to it, `state_in` and `state_out` above.
 2. The WGSL source, embedded as a string at build time.
 3. Each shader's `@group(0)` declarations in `@binding` order, read off the source at build time, so the Rust side cannot disagree with the WGSL about what is bound where.
 
@@ -458,7 +457,7 @@ The template's `build.rs` is already in the project and runs henad-build over th
 
 It finds every `.wgsl` file under `src` itself, so a new shader needs no edit to the build file.
 Our three shaders are already part of it, with nothing to list.
-Each one's path decides its names, so `gpu_life/step.wgsl` becomes `shader_bindings::gpu_life::step` and `GPU_LIFE_STEP`.
+Each shader's path decides its names, so `gpu_life/step.wgsl` becomes `shader_bindings::gpu_life::step` and `GPU_LIFE_STEP`.
 The [shaders page](../../authoring/shaders.md#generated-from-the-wgsl) has the rules a path follows.
 
 `BindingDecl` comes from the prelude.
@@ -466,7 +465,7 @@ The [shaders page](../../authoring/shaders.md#generated-from-the-wgsl) has the r
 ??? tip "A model with a second buffer"
 
     Life keeps everything in one buffer.
-    A model whose cells carry more than a step can recompute declares more, and all of them swap sides together.
+    A model whose cells carry more than a step can recompute declares more buffers, and all of them swap sides together.
     The shipped GPU SIR keeps a per-cell random number generator in a second buffer, and its step shader binds two interleaved pairs before the uniform:
 
     ``` wgsl title="crates/henad-models/src/gpu_sir/step.wgsl"
@@ -512,14 +511,14 @@ Three functions then tell the engine how big everything is:
     }
 ```
 
-1. The grid size, read back out of the parameters. The engine clamps both to at least 1.
+1. The grid size, read back out of the parameters. The engine clamps both dimensions to at least 1.
 2. One length per entry of `BUFFERS`, in `u32` elements. The default is one element per cell, and our packed layout measures in words instead.
 3. The step's dispatch domain, in invocations. The default is one per cell, and we override it to one per word, for the ownership reason above. Display and reduce are unaffected, because they only ever read.
 
 `words_per_row` is the one helper the layout needs:
 
 ``` rust title="src/gpu_life/mod.rs"
-/// Words per padded row. 32 cells to a `u32`, rounded up.
+/// Returns the number of `u32` words in a row of `width` cells, at 32 cells to a word, rounded up.
 pub fn words_per_row(width: u32) -> usize {
     (width as usize).div_ceil(32)
 }
@@ -527,7 +526,7 @@ pub fn words_per_row(width: u32) -> usize {
 
 ### Seeding
 
-On the CPU the engine handed `init` a grid and a generator.
+On the CPU the engine passed `init` a grid and a generator.
 Here we build the initial buffer contents ourselves, on the CPU, and the engine uploads them once at construction.
 For now the density stays hard-coded, as it did on the CPU page:
 
@@ -538,7 +537,7 @@ For now the density stays hard-coded, as it did on the CPU page:
     }
 ```
 
-1. `seed` is `Some` when a caller asks for a particular run, and `None` while the app's Seed field reads Default. `grid_init_rng` mixes a given seed and falls back to `GRID_INIT_SEED` without one, exactly as the CPU engine seeded our `init`, so both backends open on the same grid for the same seed.
+1. `seed` is `Some` when a caller requests a particular run, and `None` while the app's Seed field shows Default. `grid_init_rng` mixes a given seed and falls back to `GRID_INIT_SEED` when no seed is given, exactly as the CPU engine seeded our `init`, so both backends open on the same grid for the same seed.
 2. One vector per entry of `BUFFERS`, each exactly as long as `buffer_lens` said.
 
 The fill itself is the CPU `init` again, storing bits instead of bytes:
@@ -584,13 +583,13 @@ Three items are left: the stat series, the step's uniform and `stats` itself.
 
 1. One series, coloured like a live cell. Its length has to match the number of counters `reduce.wgsl` accumulates, and nothing checks that at compile time.
 2. The step's uniform block as raw bytes. `params` in `step.wgsl` is a `vec2<u32>`, and two `u32`s laid end to end are exactly that.
-3. `counts` holds one entry per series, read back from the reduce pass. It arrives through an asynchronous readback rather than a stall, so a reported stat is a few milliseconds stale, and reads zero until the first readback lands.
+3. `counts` holds one entry per series, read back from the reduce pass. It arrives through an asynchronous readback rather than a stall, so a reported stat is a few milliseconds stale, and reads zero until the first readback completes.
 
 The prelude holds every name these use, `grid_init_rng` included, so the file compiles.
 
 ## Running it
 
-The model compiles, but the app can only pick models from the set it was handed, so we have to register it.
+The model compiles, but the app can only pick models from the set it receives, so we have to register it.
 We register it in `models()` in `src/lib.rs`, as on the [CPU page](game-of-life.md#running-it).
 That page shows the template's `src/lib.rs` whole.
 The `mod gpu_life;` line is already there, so first we import the function that registers a GPU grid model, if `src/lib.rs` does not import it already,
@@ -605,8 +604,8 @@ and add a line to `models()`, next to the `insert` lines already there:
     models.insert(register_gpu_grid_model::<gpu_life::GpuLifeModel>())?;
 ```
 
-The entry needs no device, and builds on whichever device the host hands it.
-On a machine with no usable adapter the app and the CLI leave the GPU models out of their lists, and a GPU model asked for by ID is refused with a message saying it needs a GPU.
+The entry needs no device, and builds on whichever device the host passes it.
+On a machine with no usable adapter the app and the CLI leave the GPU models out of their lists, and a GPU model requested by ID is rejected with a message saying it needs a GPU.
 A GPU entry also carries a capacity check, so a grid too large for this device disables Build with a readable reason instead of crashing the process.
 
 With the entry in place, we can finally run the model.
@@ -670,9 +669,9 @@ Then we read the value where the grid is seeded:
     }
 ```
 
-`f32_param` and `extract_f32` both come from the prelude, next to the two we already use.
+`f32_param` and `extract_f32` both come from the prelude, next to `u32_param` and `extract_u32`.
 
-An operator sees exactly the three we declared, in the order we declared them.
+An operator sees exactly the three parameters we declared, in the order we declared them.
 Here it is for our model:
 
 ``` text title="cargo run --bin my-model-cli -- gpu_life --params"
@@ -713,7 +712,7 @@ mod tests {
         }
     }
 
-    /// Runs display and reduce, then waits for the count to land, as a one-shot snapshot does.
+    /// Runs display and reduce, then waits for the count to arrive, as a one-shot snapshot does.
     fn refresh_stats(ctx: &GpuContext, state: &mut GpuGridState<GpuLifeModel>) { // (1)!
         let mut encoder = ctx
             .device
@@ -800,7 +799,7 @@ Here is everything we wrote on this page, gathered into four files.
     ```
 
 The listings above are stored in the repository at [`examples/tutorial/src/gpu_life/`](https://github.com/micfong-z/henad/tree/master/examples/tutorial/src/gpu_life/).
-The three shaders there are copies of the example port's own, at [`crates/henad-models/src/gpu_game_of_life/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_game_of_life), since a shader carries no model ID and what we wrote is the same file line for line.
+The three shaders there are copies of the example port's shaders, at [`crates/henad-models/src/gpu_game_of_life/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_game_of_life), since a shader carries no model ID and what we wrote is the same file line for line.
 
 The example model is at [`crates/henad-models/src/gpu_game_of_life/mod.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/gpu_game_of_life/mod.rs).
 It runs under its own ID, and its tests pin the adder tree and the ragged wrap.

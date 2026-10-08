@@ -6,8 +6,8 @@ icon: material/format-list-bulleted
 
 # Model sets
 
-A model joins the app and the command line through a **model set**, the `ModelSet` a host is handed.
-The template's `models()` in `src/lib.rs` builds the set of a project, and the app, the command line and the test all read their models from it.
+A model joins the app and the command line through a **model set**, the `ModelSet` that a host receives.
+The template's `models()` in `src/lib.rs` builds a project's set, and the app, the command line and the test all read their models from it.
 
 !!! info "Henad 0.3"
 
@@ -30,13 +30,13 @@ The `register_*` function for a model's trait type-erases the model into a `Mode
 | [`GpuAgentModel`](gpu-agent-models.md) | `register_gpu_agent_model::<M>()` |
 
 All five sit at `henad::authoring`.
-Adding a model to a project is a `mod` line and an `insert` line in `src/lib.rs`, and an import of its `register_*` function when the file lacks it.
+Adding a model to a project is a `mod` line and an `insert` line in `src/lib.rs`, and an import of its `register_*` function when `src/lib.rs` does not import it yet.
 
 You never write any part of an entry by hand.
 The name, parameters, statistics, actions and topology all derive from the trait impl.
 The engines and the kernels compile in the crate that calls `register_*`, at that crate's opt-level, and the template sets its [build profiles](../guide/your-project.md#build-profiles) for them.
 
-To check the entry landed:
+To check that the entry was added:
 
 ```bash
 cargo run --bin my-model-cli -- --list
@@ -46,14 +46,14 @@ cargo run --bin my-model-cli -- <your-id> --params
 ## Ids
 
 A set holds each id once.
-`insert` refuses an id the set already holds, and an id outside the grammar: a lowercase ASCII letter, then lowercase letters, digits and underscores.
-An id names the model on the command line, in a spec file and in every results folder, so keep it once a sweep has used it.
+`insert` rejects an id that the set already holds, and an id outside the grammar: a lowercase ASCII letter, then lowercase letters, digits and underscores.
+An id identifies the model on the command line, in a spec file and in every results folder, so keep it once a sweep has used it.
 
 ## Sources
 
 Every entry records its **source**: the type path of the model, and the build of the crate that registered it.
 `ModelSet::new` takes that build, and `henad::build_info!()` returns the build of the crate it expands in.
-A set records its build on every entry inserted without one, and an entry that already carries a source keeps it.
+A set records its build on every entry inserted without a build, and an entry that already carries a source keeps it.
 
 ```rust
 let mut models = henad::ModelSet::new(henad::build_info!());
@@ -72,24 +72,24 @@ let mut models = henad::ModelSet::new(henad::build_info!());
 models.extend(my_model::models()?)?;
 ```
 
-`extend` checks every id before it adds any, and leaves the set unchanged when two ids clash.
+`extend` checks every id before it adds any entry, and leaves the set unchanged when two ids clash.
 
 ## The example models
 
 With the `example-models` feature on, `henad::models::example_models()` returns the ten [example models](../reference/models.md), with henad-models as their source.
-It registers the six CPU models, then the four GPU models, and inserts each into one set:
+It registers the six CPU models, then the four GPU models, and inserts them all into one set:
 
 ``` rust title="crates/henad-models/src/lib.rs"
 --8<-- "crates/henad-models/src/lib.rs:example_models"
 ```
 
-A project that wants every example model beside its own extends its set with them:
+A project that wants every example model beside its own models extends its set with them:
 
 ```rust
 models.extend(henad::models::example_models())?;
 ```
 
-A project that wants a few takes clones of their entries:
+A project that wants only some example models inserts clones of their entries:
 
 ```rust
 let examples = henad::models::example_models();
@@ -102,13 +102,13 @@ Each clone keeps henad-models as its source.
 
 ## Network entries
 
-`register_network_model` gives the entry the `TopologyHint::NETWORK` hint, for nodes drawn as agents with edges between them and no grid.
+`register_network_model` assigns the entry the `TopologyHint::NETWORK` hint, for nodes drawn as agents with edges between them and no grid.
 The Model tab shows that topology as Network.
 The entry's metadata is a `Structure::Network` carrying the chunk size, the node lanes and the edge palette, and the Model tab lists all three.
 
 ## GPU entries
 
-A GPU entry holds no device, and builds on the one the host passes to `ModelEntry::build`.
+A GPU entry holds no device, and builds on the device that the host passes to `ModelEntry::build`.
 Built with no device, it returns a fault instead of a state.
 On a machine without a device the app and the command line leave the GPU models **out of the list entirely**, instead of listing them and letting them fail on selection.
 
@@ -118,11 +118,11 @@ See [porting a model to the GPU](porting.md#ask-before-you-allocate).
 
 ### Device needs
 
-A WebGPU device offers eight storage buffers per shader stage by default, and a pass can bind more only on a device asked for more.
+A WebGPU device offers eight storage buffers per shader stage by default, and a pass can bind more only on a device requested with a higher limit.
 Each GPU entry declares what its widest pass binds as its `GpuNeeds`, read from its declared passes, action passes included.
-`ModelSet::gpu_needs` merges the needs of every GPU entry, and a host requests its device for them before any model builds.
-The app, the command line and `henad::gpu::acquire_headless` all do.
-A browser at the default limits refuses a model whose defaults need more, and such a model fails the kit's [`DefaultsFit` check](testing.md#the-checks) unless its test exempts it.
+`ModelSet::gpu_needs` merges the needs of every GPU entry, and a host requests a device with those needs before any model builds.
+The app, the command line and `henad::gpu::acquire_headless` all request a device this way.
+A browser at the default limits rejects a model whose defaults exceed those limits, and such a model fails the kit's [`DefaultsFit` check](testing.md#the-checks) unless its test exempts it.
 
 ### Exact replay
 

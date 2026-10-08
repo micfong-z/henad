@@ -1,3 +1,6 @@
+//! The engine that runs a [`GridModel`] as a [`SimState`], and the parameters it prepends to the model's own
+//! parameters.
+
 use henad_core::action::action_seed;
 use henad_core::authoring::model::field::{Extent, FieldLayer as _};
 use henad_core::authoring::model::grid_model::GridModel;
@@ -14,7 +17,7 @@ pub use crate::cpu::field::{GRID_INIT_SEED, grid_init_rng};
 pub struct GridModelState<M: GridModel> {
     field: CaField<M>,
     params: ParamStore,
-    /// The action stream, apart from the one the ticks draw from.
+    /// RNG stream for actions, separate from the stream the ticks draw from.
     action_seed: u64,
     tick: u64,
 }
@@ -30,11 +33,12 @@ impl<M: GridModel> std::fmt::Debug for GridModelState<M> {
 }
 
 impl<M: GridModel> GridModelState<M> {
+    /// Builds a state from the full parameter list, with its RNG starting from [`GRID_INIT_SEED`].
     pub fn from_params(params: &[ParamValue]) -> Self {
         Self::from_params_seeded(params, None)
     }
 
-    /// Build a state whose RNG starts from `seed`, or [`GRID_INIT_SEED`] when it is `None`.
+    /// Builds a state whose RNG starts from `seed`, or [`GRID_INIT_SEED`] when it is `None`.
     pub fn from_params_seeded(params: &[ParamValue], seed: Option<u64>) -> Self {
         let extent = Extent {
             w: extract_u32(params, GRID_WIDTH, 1024) as f32,
@@ -48,7 +52,9 @@ impl<M: GridModel> GridModelState<M> {
         }
     }
 
-    /// `None` unless `cells` is exactly the length `params` implies.
+    /// Builds a state whose grid holds `cells`, with the default seeds.
+    ///
+    /// Returns `None` unless `cells` is exactly the length `params` implies.
     pub fn from_cells(params: &[ParamValue], cells: &[u8]) -> Option<Self> {
         let extent = Extent {
             w: extract_u32(params, GRID_WIDTH, 1024) as f32,
@@ -63,12 +69,13 @@ impl<M: GridModel> GridModelState<M> {
     }
 }
 
-// Grid width and height, prepended to the model's own descriptors.
-// Indices of the params the engine prepends before a model's own.
+// Indices of the params the engine prepends before a model's own params.
+/// Index of the grid's width in cells.
 pub const GRID_WIDTH: usize = 0;
+/// Index of the grid's height in cells.
 pub const GRID_HEIGHT: usize = 1;
 
-/// How many the engine prepends, and so where a model's own params start.
+/// Number of params the engine prepends, and the index of a model's first own param.
 pub const GRID_PARAM_BASE: usize = 2;
 
 /// A grid model's own slice of a composed list.
@@ -76,6 +83,7 @@ fn own_params(params: &[ParamValue]) -> &[ParamValue] {
     &params[GRID_PARAM_BASE.min(params.len())..]
 }
 
+/// Returns the full descriptor list: `grid_width` and `grid_height`, then the model's own params.
 pub fn grid_model_param_descriptors<M: GridModel>() -> Vec<ParamDescriptor> {
     let mut descs = vec![
         u32_param("grid_width", "Grid Width", 1024, 1, 10_000).on_reload(),
@@ -112,7 +120,7 @@ impl<M: GridModel> SimState for GridModelState<M> {
         if index >= M::ACTIONS.len() {
             return false;
         }
-        // Destructured, so the params borrow and the grid borrow are of different fields.
+        // The state is destructured, so the params borrow and the grid borrow cover different fields.
         let Self {
             field,
             params,
@@ -226,7 +234,7 @@ mod tests {
         }
     }
 
-    /// The plain modulo gather the row loops peel their edge columns to avoid.
+    /// The plain modulo gather that the row loops avoid by peeling their edge columns.
     fn reference(cells: &[u8], w: usize, h: usize, moore: bool) -> Vec<u8> {
         let mut out = vec![0u8; cells.len()];
         for y in 0..h {
@@ -327,7 +335,7 @@ mod tests {
     /// then reach the result.
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
-        // A 128-column grid holds 64 rows a job, and 1024 rows split into 16 jobs.
+        // A 128-column grid holds 64 rows per job, and 1024 rows split into 16 jobs.
         let params = vec![ParamValue::U32(128), ParamValue::U32(1024)];
         let run = |threads: usize| -> Vec<u8> {
             let pool = rayon::ThreadPoolBuilder::new()

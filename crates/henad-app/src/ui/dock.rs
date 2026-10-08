@@ -78,7 +78,7 @@ impl Tab {
     }
 }
 
-/// Default layout, and what "Reset layout" restores.
+/// Returns the default layout, as Reset layout restores it.
 pub fn default_dock_state() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Viewport, Tab::Sweep, Tab::Results]);
     let surface = dock.main_surface_mut();
@@ -175,7 +175,7 @@ mod tests {
         }
     }
 
-    /// Tabs that share a leaf in the default layout, the one in front first.
+    /// Tabs that share a leaf in the default layout, with the front tab first.
     const STACKED: [&[Tab]; 3] = [
         &[Tab::Viewport, Tab::Sweep, Tab::Results],
         &[Tab::Charts, Tab::Export],

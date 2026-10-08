@@ -28,10 +28,11 @@ impl ModelSet {
         }
     }
 
-    /// Adds `entry`. An entry whose source records no build yet takes the set's, and any other keeps its own.
+    /// Adds `entry`. An entry whose source records no build yet receives the set's build, and any other entry keeps
+    /// the build it records.
     ///
-    /// Note that an entry registered from a type in a third-party crate takes the set's build as well. Its source's
-    /// type path still names the real crate. A model library therefore exports a set built from its own
+    /// Note that an entry registered from a type in a third-party crate also receives the set's build. Its source's
+    /// type path still refers to the real crate. A model library therefore exports a set built from its own
     /// [`build_info!`](henad_core::build_info), and its entries keep its name and version.
     ///
     /// # Errors
@@ -65,6 +66,7 @@ impl ModelSet {
         Ok(self)
     }
 
+    /// Returns entry `id`, whether or not a host can run it.
     pub fn get(&self, id: &str) -> Option<&ModelEntry> {
         self.entries.iter().find(|entry| entry.id() == id)
     }
@@ -73,8 +75,8 @@ impl ModelSet {
     ///
     /// # Errors
     ///
-    /// Returns [`ModelLookupError::NotInSet`] for an id the set lacks, and [`ModelLookupError::NeedsGpu`] for a GPU
-    /// model when `gpu` is `None`.
+    /// Returns [`ModelLookupError::NotInSet`] for an id missing from the set, and
+    /// [`ModelLookupError::NeedsGpu`] for a GPU model when `gpu` is `None`.
     pub fn lookup(&self, id: &str, gpu: Option<&GpuContext>) -> Result<&ModelEntry, ModelLookupError> {
         if let Some(entry) = self.runnable(gpu).find(|entry| entry.id() == id) {
             return Ok(entry);
@@ -95,19 +97,22 @@ impl ModelSet {
             .filter(move |entry| device || entry.gpu_needs().is_none())
     }
 
+    /// Returns an iterator over the entries, in the set's order.
     pub fn iter(&self) -> ModelSetIter<'_> {
         ModelSetIter(self.entries.iter())
     }
 
+    /// Number of entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Returns whether the set holds no entry.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// Returns the merged needs of every GPU entry. A host requests its device for them before any model builds.
+    /// Returns the merged needs of every GPU entry. A host requests a device that meets them before any model builds.
     pub fn gpu_needs(&self) -> GpuNeeds {
         self.entries
             .iter()
@@ -115,7 +120,7 @@ impl ModelSet {
             .fold(GpuNeeds::default(), GpuNeeds::merge)
     }
 
-    /// Returns an error when the set already holds an entry with the id of `entry`.
+    /// Returns an error when the set already holds an entry with the same id as `entry`.
     fn check_free(&self, entry: &ModelEntry) -> Result<(), ModelSetError> {
         match self.get(entry.id()) {
             Some(existing) => Err(ModelSetError::DuplicateId {
@@ -157,7 +162,7 @@ impl ExactSizeIterator for ModelSetIter<'_> {}
 
 impl FusedIterator for ModelSetIter<'_> {}
 
-/// Returns an error when `id` is outside the grammar of model ids.
+/// Returns an error when `id` is outside the model id grammar.
 fn check_id(id: &str) -> Result<(), ModelSetError> {
     let invalid = |reason| {
         Err(ModelSetError::InvalidId {
@@ -179,20 +184,26 @@ fn check_id(id: &str) -> Result<(), ModelSetError> {
     }
 }
 
-/// Reason a model set refuses an entry.
+/// Reason a model set rejects an entry.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ModelSetError {
     /// The set already holds a model with this id.
     DuplicateId {
+        /// Id the two entries share.
         id: String,
         /// Source of the entry the set holds.
         existing: Box<ModelSource>,
-        /// Source of the entry refused.
+        /// Source of the rejected entry.
         added: Box<ModelSource>,
     },
-    /// The id is outside the grammar of model ids, for the reason given.
-    InvalidId { id: String, reason: &'static str },
+    /// The id is outside the model id grammar.
+    InvalidId {
+        /// Id the entry declares.
+        id: String,
+        /// Clause saying how `id` breaks the grammar, such as "is empty".
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for ModelSetError {
@@ -214,14 +225,20 @@ impl fmt::Display for ModelSetError {
 
 impl std::error::Error for ModelSetError {}
 
-/// Reason a host cannot run a model it asked a set for.
+/// Reason a host cannot run a model that it requested from a set.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ModelLookupError {
     /// The set holds no model with this id.
-    NotInSet { id: String },
-    /// A GPU model, asked for with no compute device.
-    NeedsGpu { id: String },
+    NotInSet {
+        /// Id the host requested.
+        id: String,
+    },
+    /// A GPU model, requested with no compute device.
+    NeedsGpu {
+        /// Id of the GPU model.
+        id: String,
+    },
 }
 
 impl fmt::Display for ModelLookupError {

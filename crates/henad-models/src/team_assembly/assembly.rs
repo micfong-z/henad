@@ -12,7 +12,7 @@ use crate::team_assembly::{
     INCUMBENT_INCUMBENT, NEWCOMER_INCUMBENT, NEWCOMER_NEWCOMER, REPEAT, TeamAssembly, TeamAux, TeamParams,
 };
 
-/// Number of uniform draws from the live nodes before the ones outside the team are listed instead.
+/// Number of uniform draws from the live nodes before the nodes outside the team are listed instead.
 const IDLE_TRIES: u32 = 64;
 
 /// Radius of the polygon a team is placed on, as a fraction of the world's shorter side.
@@ -25,7 +25,7 @@ const PLACE_RADIUS: f32 = 1.75 / 101.0;
 /// NetLogo's setup builds one team of `team_size` nodes, and its members count as incumbents,
 /// so their links are incumbent-incumbent. Here the engine's node count is the initial population,
 /// grouped into teams the same way, and the teams sit on a grid of cells across the world.
-/// A node count equal to `team_size` gives NetLogo's setup.
+/// A node count equal to `team_size` reproduces NetLogo's setup.
 /// Note that with fewer nodes than `team_size`, the first teams take newcomers once the setup nodes are used up.
 pub(super) fn setup(nodes: &mut Nodes<'_, TeamAssembly>, extent: Extent, team_size: u32) {
     let n = nodes.graph.slot_count() as u32;
@@ -60,7 +60,8 @@ pub(super) fn setup(nodes: &mut Nodes<'_, TeamAssembly>, extent: Extent, team_si
 ///
 /// This follows NetLogo's `go`. Each member is a newcomer with probability `1 - p`.
 /// Otherwise it is an incumbent. With probability `q` it is drawn uniformly from the previous collaborators of the team
-/// so far. Otherwise, or when the team has none, it is drawn uniformly from the incumbents outside the team.
+/// so far. Otherwise, or when the team has no previous collaborators, it is drawn uniformly from the incumbents
+/// outside the team.
 pub(super) fn assemble(
     nodes: &mut Nodes<'_, TeamAssembly>,
     params: &TeamParams,
@@ -69,7 +70,7 @@ pub(super) fn assemble(
     tick: u64,
 ) {
     let now = tick + 1;
-    // Listed here rather than in setup, so nodes a `from_graph` seed spawned or retired are counted too.
+    // Listed here rather than in setup, so nodes that a `from_graph` seed spawned or retired are counted too.
     if !nodes.aux.live_listed {
         nodes.aux.live.rebuild(nodes.graph);
         nodes.aux.live_listed = true;
@@ -120,7 +121,7 @@ pub(super) fn assemble(
 }
 // --8<-- [end:assemble]
 
-/// Lists every node outside the team that is linked to a member, and returns whether there are any.
+/// Lists every node outside the team that is linked to a member, and returns whether the list is non-empty.
 ///
 /// The list is built up over the tick. Only the rows of members added since the last call are read,
 /// and nodes that have since joined the team are dropped. A node's `mark` holds the tick it was listed at,
@@ -141,7 +142,7 @@ fn collect_collaborators(nodes: &mut Nodes<'_, TeamAssembly>, team: &[u32], now:
     !aux.candidates.is_empty()
 }
 
-/// Picks a live node outside the team uniformly at random, or returns `None` if there is none.
+/// Picks a live node outside the team uniformly at random, or returns `None` if every live node is in the team.
 ///
 /// Live nodes are drawn uniformly until one is outside the team.
 /// If every draw lands in the team, the nodes outside it are listed and one is drawn from the list.
@@ -166,8 +167,8 @@ fn idle_incumbent(nodes: &mut Nodes<'_, TeamAssembly>, now: u64, rng: &mut u64) 
     (n > 0).then(|| eligible[next_index(rng, n) as usize])
 }
 
-/// Places the team's newcomers on a small polygon around its first incumbent, or around the world's center if it has
-/// none.
+/// Places the team's newcomers on a small polygon around its first incumbent, or around the world's center if the
+/// team has no incumbent.
 ///
 /// NetLogo creates newcomers at the origin and leaves the rest to its layout. Positions are only used for drawing.
 fn place_newcomers(nodes: &mut Nodes<'_, TeamAssembly>, team: &[u32], extent: Extent, now: u64) {
@@ -253,7 +254,7 @@ mod tests {
 
     const NOW: u64 = 5;
 
-    /// Lanes, a graph and model state for `n` live nodes, with `members` already in this tick's team.
+    /// Returns lanes, a graph and model state for `n` live nodes, with `members` already in this tick's team.
     fn world(n: usize, members: &[u32]) -> (TeamLanes, Network, TeamAux) {
         let mut lanes = TeamLanes::alloc(n);
         for &i in members {
@@ -293,7 +294,7 @@ mod tests {
         assert_eq!(nodes.aux.candidates, [x, z]);
     }
 
-    /// Every node outside the team is drawn about equally often, and no member ever is.
+    /// Every node outside the team is drawn about equally often, and no member is ever drawn.
     #[test]
     fn an_idle_incumbent_is_drawn_uniformly_from_outside_the_team() {
         let members = [1, 4, 6];

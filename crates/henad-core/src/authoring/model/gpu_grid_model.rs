@@ -1,87 +1,11 @@
 //! Authoring API for grid models whose state lives entirely in GPU buffers.
 //!
-//! This is the GPU sibling of [`crate::authoring::model::grid_model::GridModel`], and it plays the same role: a
-//! model declares const metadata plus a few pure functions, and the engine
-//! (`henad_compute::gpu::grid_engine`) derives every buffer, layout, pipeline, bind group, and
-//! the whole `SimState`/`GpuSimState` impl from them.
+//! [`GpuGridModel`] is the GPU sibling of [`GridModel`]. A model declares const metadata, three WGSL
+//! passes and a few pure functions, and the engine in henad-compute derives every buffer, pipeline and
+//! bind group from them. The [GPU grid models](https://micfong-z.github.io/henad/authoring/gpu-grid-models/)
+//! page walks through the passes, the bindings and the sampled display texture.
 //!
-//! # Bindings
-//!
-//! The engine resolves each `@group(0)` binding by the name the shader gives it, so a slot index
-//! cannot disagree with the shader that owns it. Each pass's declarations are generated from its
-//! shader at build time, as [`GpuGridModel::STEP_BINDINGS`] and its siblings.
-//!
-//! A buffer is bound by its [`GpuGridModel::BUFFERS`] label, with an optional `_in` or `_out`
-//! suffix. The access mode picks the side. A `read` binding gets the current side, and a
-//! `read_write` one the next side. Four names are reserved for resources the engine owns: `params`
-//! for the step's uniform block, `dims` for the `Dims` uniform below, `output` for the display
-//! texture and `counters` for the reduce totals. [`crate::authoring::model::binding`] lists every
-//! reserved name.
-//!
-//! ```wgsl
-//! // step.wgsl, for BUFFERS = &["state", "rng"]
-//! @group(0) @binding(0) var<storage, read> state_in: array<u32>;
-//! @group(0) @binding(1) var<storage, read_write> state_out: array<u32>;
-//! @group(0) @binding(2) var<storage, read> rng_in: array<u32>;
-//! @group(0) @binding(3) var<storage, read_write> rng_out: array<u32>;
-//! @group(0) @binding(4) var<uniform> params: Params;
-//! ```
-//!
-//! All buffers are ping-ponged together, in lockstep. A step reads every buffer's current side and
-//! writes every buffer's next side. Display and reduce can bind any buffer by label, and the
-//! shipped ones read only the first.
-//!
-//! # Buffer length and dispatch domain
-//!
-//! The engine takes no view on how a model maps cells onto `u32`s. A model declares how long each
-//! buffer is ([`GpuGridModel::buffer_lens`]) and how many invocations its step needs
-//! ([`GpuGridModel::step_dims`]). Both default to one `u32` and one invocation per cell, which is
-//! what an unpacked model wants. A bit-packed model overrides them to work in words instead, say
-//! 32 cells per `u32` with rows padded to whole words, so that a single invocation owns a whole
-//! word and no two invocations ever write the same one.
-//!
-//! Reduce always dispatches one invocation per *cell*, so a packed model's reduce shader reads a
-//! word and extracts its own bit.
-//!
-//! # Display is a sampled view, not a mirror
-//!
-//! The display texture is capped well under the grid (`henad_compute::display_scale`). Display
-//! therefore dispatches one invocation per *texel*, reading the cell at `texel * grid / tex`. The
-//! two pairs of dimensions are equal until the grid outgrows the cap.
-//!
-//! ```wgsl
-//! struct Dims {
-//!     grid: vec2<u32>,
-//!     tex: vec2<u32>,
-//! }
-//!
-//! // display.wgsl
-//! @group(0) @binding(0) var<storage, read> state: array<u32>;
-//! @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
-//! @group(0) @binding(2) var<uniform> dims: Dims;
-//!
-//! // reduce.wgsl, for three stats
-//! @group(0) @binding(0) var<storage, read> state: array<u32>;
-//! @group(0) @binding(1) var<storage, read_write> counters: array<atomic<u32>, 3>;
-//! @group(0) @binding(2) var<uniform> dims: Dims;
-//! ```
-//!
-//! # Contracts
-//!
-//! The shaders are opaque strings to Rust, so nothing here can be verified at compile time. A valid
-//! model has all of the following true.
-//! - [`GpuGridModel::WORKGROUP_SIZE`] must equal the `@workgroup_size(N, N)` every shader declares.
-//!   The engine reads each shader's literal size at construction and panics on a mismatch,
-//! - a buffer label must not be reserved or end in `_in` or `_out`. The engine checks this at
-//!   construction,
-//! - [`GpuGridModel::STATS`] length must equal the reduce shader's `atomic<u32>` array length. A
-//!   shorter array validates, and the stats past its end read zero,
-//! - [`GpuGridModel::STATS`] length must equal the number of values [`GpuGridModel::stats`]
-//!   returns. The engine pairs the two by position and drops the values past the shorter. The
-//!   testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values,
-//! - [`GpuGridModel::buffer_lens`] must return exactly [`GpuGridModel::BUFFERS`]`.len()` lengths, and
-//!   [`GpuGridModel::seed_buffers`] exactly that many vectors, of exactly those lengths. The engine
-//!   asserts both at construction.
+//! [`GridModel`]: crate::authoring::model::grid_model::GridModel
 
 use crate::action::ActionDescriptor;
 use crate::authoring::model::binding::BindingDecl;
@@ -90,12 +14,15 @@ use crate::view::{StatDescriptor, StatValue};
 
 /// A one-off compute pass the user can trigger.
 ///
-/// Dispatched over [`GpuGridModel::step_dims`] like a step, but writing the current side in place,
-/// since nothing ping-pongs afterwards. Its bindings therefore resolve read and write alike to the
-/// side that holds the state now.
+/// The engine dispatches it over [`GpuGridModel::step_dims`] like a step, and it writes the current
+/// side in place, since nothing ping-pongs afterwards. Its bindings therefore resolve read and write
+/// alike to the side that holds the state now.
 pub struct GpuGridAction {
+    /// Id and button label of the action.
     pub desc: ActionDescriptor,
+    /// WGSL source of the pass.
     pub shader: &'static str,
+    /// The shader's `@group(0)` declarations, generated from it at build time.
     pub bindings: &'static [BindingDecl],
 }
 
@@ -112,39 +39,64 @@ impl std::fmt::Debug for GpuGridAction {
 
 /// A grid model stepped by a compute shader, with its state resident in GPU storage buffers.
 ///
-/// See the module docs for the bindings and the contracts the shaders must follow.
+/// All [`Self::BUFFERS`] ping-pong together. A step reads every buffer's current side and writes every
+/// buffer's next side. Each pass binds a buffer by its label, with an optional `_in` or `_out` suffix,
+/// and the access mode picks the side. A `read` binding gets the current side, and a `read_write` binding
+/// gets the next side. The [`binding`](crate::authoring::model::binding) module lists the reserved names.
+///
+/// Rust sees the shaders as opaque strings, so the compiler checks none of the contracts the items
+/// below state.
 pub trait GpuGridModel: Send + Sync + 'static {
+    /// Name shown in the UI.
     const NAME: &'static str;
+    /// Stable id that identifies the model in a model set, on the command line and in a spec file.
     const ID: &'static str;
+    /// One-line description shown in the UI.
     const DESCRIPTION: &'static str;
 
     /// Palette used by the stats UI. The display shader writes RGBA directly, so it has its own
-    /// copy of the colours, and keeping the two in agreement is on the model.
+    /// copy of the colours, and the model must keep both copies in agreement.
     const PALETTE: &'static [[u8; 4]];
 
-    /// Must match the `@workgroup_size(N, N)` declared by every shader, actions included. The engine panics at
-    /// construction on a shader that declares another literal size.
+    /// Side `N` of the `@workgroup_size(N, N)` every shader declares, actions included.
+    ///
+    /// The engine panics at construction on a shader that declares another literal size.
     const WORKGROUP_SIZE: u32 = 16;
 
-    /// Stat series for the history chart. Its length is how many `u32` counters the reduce shader
-    /// accumulates.
+    /// Stat series for the history chart.
+    ///
+    /// Its length must equal the number of `atomic<u32>` in the reduce shader's `counters` binding. A
+    /// shorter array validates, and the stats past its end read zero.
     const STATS: &'static [StatDescriptor];
 
     /// One-off passes the user can trigger. Each gets a button in the Parameters panel.
     const ACTIONS: &'static [GpuGridAction] = &[];
 
-    /// Labels for the buffers ping-ponged per step, which a shader's binding names refer to.
-    /// One label for a plain state buffer, two for a model that also carries per-cell RNG state.
+    /// Labels of the buffers ping-ponged per step. A shader's binding names refer to these labels.
+    ///
+    /// A plain model has one label, and a model that also carries per-cell RNG state has two. A label
+    /// must not be reserved or end in `_in` or `_out`. The engine panics at construction on such a label.
     const BUFFERS: &'static [&'static str];
 
     // Each pass's `@group(0)` declarations, generated from its shader.
+    /// Declarations of the step shader.
     const STEP_BINDINGS: &'static [BindingDecl];
+    /// Declarations of the display shader.
     const DISPLAY_BINDINGS: &'static [BindingDecl];
+    /// Declarations of the reduce shader.
     const REDUCE_BINDINGS: &'static [BindingDecl];
 
     // WGSL source for the compute shaders.
+    /// Step shader, dispatched over [`Self::step_dims`].
     const STEP_SHADER: &'static str;
+    /// Display shader, dispatched once per display texel.
+    ///
+    /// The display texture is capped well under the largest grids, so a texel reads the cell at
+    /// `texel * grid / tex`. The `Dims` uniform of `henad::dims` carries both sizes.
     const DISPLAY_SHADER: &'static str;
+    /// Reduce shader, dispatched once per cell.
+    ///
+    /// A bit-packed model's reduce shader reads a word and extracts its own bit.
     const REDUCE_SHADER: &'static str;
 
     /// Whether two builds on one seed step through identical states.
@@ -154,53 +106,59 @@ pub trait GpuGridModel: Send + Sync + 'static {
     /// recorded row.
     const REPLAYS_EXACTLY: bool = true;
 
-    /// The full descriptor list. Unlike [`crate::authoring::model::grid_model::GridModel`], width and
-    /// height are *not* prepended. A GPU model spells its list out, so it can mirror the exact
-    /// parameter order of the CPU model it is compared against.
+    /// Returns the full descriptor list.
+    ///
+    /// Unlike [`crate::authoring::model::grid_model::GridModel`], width and height are *not* prepended. A
+    /// GPU model spells its list out, so it can mirror the exact parameter order of the CPU model it is
+    /// compared against.
     fn param_descriptors() -> Vec<ParamDescriptor>;
 
-    /// Grid dimensions for these params. The engine clamps both to at least 1.
+    /// Returns the grid dimensions for these params. The engine clamps each dimension to at least 1.
     fn dims(params: &[ParamValue]) -> (u32, u32);
 
-    /// Length in `u32` elements of each ping-ponged buffer, in binding order.
+    /// Returns the length in `u32` elements of each ping-ponged buffer, in [`Self::BUFFERS`] order.
     ///
-    /// Defaults to one element per cell. A bit-packed model overrides this to return its word
+    /// The default is one element per cell. A bit-packed model overrides this to return its word
     /// count, and must override [`Self::step_dims`] to match, so that one invocation owns one word.
+    /// The engine asserts at construction that the result holds one length per buffer.
     fn buffer_lens(width: u32, height: u32) -> Vec<usize> {
         vec![(width as usize) * (height as usize); Self::BUFFERS.len()]
     }
 
-    /// Dispatch domain of the step pass, in invocations.
+    /// Returns the dispatch domain of the step pass, in invocations.
     ///
-    /// Defaults to one invocation per cell. Reduce always dispatches `(width, height)` and display
-    /// one per texel, so neither is affected by this.
+    /// The default is one invocation per cell. Reduce always dispatches `(width, height)`, and display
+    /// dispatches one invocation per texel.
     fn step_dims(width: u32, height: u32) -> (u32, u32) {
         (width, height)
     }
 
-    /// Initial contents of each ping-ponged buffer, CPU-seeded and uploaded once at construction.
+    /// Returns the initial contents of each ping-ponged buffer, uploaded once at construction.
     ///
-    /// Returns [`Self::BUFFERS`]`.len()` vectors, whose lengths match [`Self::buffer_lens`], in
-    /// binding order. Index 0 is the primary state buffer that display and reduce read.
+    /// The result holds one vector per [`Self::BUFFERS`] label, in that order, each with the length that
+    /// [`Self::buffer_lens`] returns. The engine asserts the count and the lengths at construction. Index 0 is the
+    /// primary state buffer that the shipped display and reduce shaders read.
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>>;
 
-    /// The step shader's uniform block, as raw bytes.
+    /// Returns the step shader's uniform block as raw bytes.
     ///
-    /// Bytes rather than a `bytemuck::Pod` bound because `henad-core` has no bytemuck. Models keep
-    /// their own `#[repr(C)]` struct and hand over `bytemuck::bytes_of(&s).to_vec()`. A model
-    /// whose step needs nothing but the dimensions can return the dims themselves.
+    /// A model fills in the `Params` struct generated from its step shader and returns
+    /// `bytemuck::bytes_of(&params).to_vec()`. A model whose step needs nothing but the dimensions can
+    /// return the dimensions themselves.
     fn step_params_bytes(width: u32, height: u32, params: &[ParamValue]) -> Vec<u8>;
 
-    /// An action's uniform block, as raw bytes.
+    /// Returns an action's uniform block as raw bytes.
     ///
-    /// `seed` is fresh on every press, so a shader that draws gets a new stream each time. Defaults
-    /// to the step's block, which is what an action needing nothing but the dimensions wants.
+    /// `seed` is fresh on every press, so a shader that draws gets a new stream each time. The default
+    /// returns the step's block, enough for an action that needs nothing but the dimensions.
     fn action_params_bytes(_action: usize, width: u32, height: u32, params: &[ParamValue], _seed: u32) -> Vec<u8> {
         Self::step_params_bytes(width, height, params)
     }
 
-    /// Turn the counters read back from the reduce shader into values, in [`Self::STATS`] order.
+    /// Turns the counters read back from the reduce shader into values, in [`Self::STATS`] order.
     ///
-    /// `counts` has `STATS.len()` entries, and is all-zero until the first readback completes.
+    /// `counts` has `STATS.len()` entries, and is all-zero until the first readback completes. The
+    /// engine pairs the values with [`Self::STATS`] by position and drops the values past the shorter
+    /// list. The testing kit's `StatCount` check, given a device, catches a result with fewer values.
     fn stats(counts: &[u32]) -> Vec<StatValue>;
 }

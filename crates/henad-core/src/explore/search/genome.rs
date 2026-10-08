@@ -21,6 +21,7 @@ pub struct Genome {
 }
 
 impl Genome {
+    /// Genes in factor order, each from 0 to 1.
     pub fn genes(&self) -> &[f64] {
         &self.genes
     }
@@ -90,7 +91,7 @@ impl SearchSpace {
     ///
     /// # Errors
     ///
-    /// Returns [`SearchSpaceError`] for no factors, a factor [`FactorSpec::resolve_sampled`] refuses, a target varied
+    /// Returns [`SearchSpaceError`] for no factors, a factor [`FactorSpec::resolve_sampled`] rejects, a target varied
     /// twice, or a parameter both fixed and varied.
     pub fn resolve(
         specs: &[FactorSpec],
@@ -137,7 +138,7 @@ impl SearchSpace {
     ///
     /// # Panics
     ///
-    /// Panics when `genome` has a gene count other than the space's.
+    /// Panics when `genome` and the space have different gene counts.
     pub fn mutate(&self, genome: &Genome, rng: &mut DesignRng, rate: f64, scale: f64) -> Genome {
         assert_eq!(
             genome.genes.len(),
@@ -165,7 +166,7 @@ impl SearchSpace {
     ///
     /// # Panics
     ///
-    /// Panics when `genome` has a gene count other than the space's, or a factor's slot is past the end of `base`.
+    /// Panics when `genome` and the space have different gene counts, or a factor's slot is past the end of `base`.
     pub fn decode(&self, genome: &Genome, base: &Config) -> Config {
         assert_eq!(
             genome.genes.len(),
@@ -183,7 +184,7 @@ impl SearchSpace {
     ///
     /// # Panics
     ///
-    /// Panics when `genome` has a gene count other than the space's.
+    /// Panics when `genome` and the space have different gene counts.
     pub fn config_key(&self, genome: &Genome) -> ConfigKey {
         assert_eq!(
             genome.genes.len(),
@@ -218,7 +219,7 @@ fn level(factor: &Factor, gene: f64) -> FactorLevel {
     }
 }
 
-/// Returns a key two levels share when they are equal, with zero and negative zero as one.
+/// Returns a key that two levels share when they are equal, with zero and negative zero as one.
 fn level_identity(level: &FactorLevel) -> (u8, u64) {
     match level {
         FactorLevel::Param(ParamValue::F32(value)) => (0, u64::from(if *value == 0.0 { 0 } else { value.to_bits() })),
@@ -247,13 +248,22 @@ pub enum SearchSpaceError {
     /// A space with no factors.
     NoFactors,
     /// Factor `factor_index`, a list with no levels.
-    NoLevels { factor_index: usize },
-    /// A factor refused for the reason inside.
+    NoLevels {
+        /// Index of the factor in the space, counting from 0.
+        factor_index: usize,
+    },
+    /// A factor that the search space rejects.
     Factor(FactorError),
     /// A target the space varies twice.
-    VariedTwice { target: FactorTarget },
+    VariedTwice {
+        /// Parameter or action tick varied twice.
+        target: FactorTarget,
+    },
     /// Parameter `id`, varied by the search and fixed as well.
-    FixedAndVaried { id: String },
+    FixedAndVaried {
+        /// Id of the parameter.
+        id: String,
+    },
 }
 
 impl fmt::Display for SearchSpaceError {
@@ -511,7 +521,7 @@ mod tests {
 
     #[test]
     fn a_repeated_level_is_kept_once() {
-        // "2" names the third shape by its index.
+        // "2" refers to the third shape by its index.
         let shapes = ["star", "ring", "star", "2", "grid"].map(str::to_owned).to_vec();
         let specs = [FactorSpec::param("shape", LevelSpec::Values(shapes))];
         let space = SearchSpace::resolve(&specs, &params(), &actions(), &[]).expect("listed shapes resolve");

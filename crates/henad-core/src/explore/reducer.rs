@@ -15,18 +15,23 @@ use crate::view::StatDescriptor;
 pub enum ReducerKind {
     /// Last finite sampled value.
     Final,
+    /// Least finite sampled value.
     Min,
+    /// Greatest finite sampled value.
     Max,
+    /// Mean of the finite sampled values.
     Mean,
     /// First sampled tick of the greatest value.
     ArgMax,
     /// First sampled tick of the least value.
     ArgMin,
-    /// First sampled tick whose value passes the comparison, empty when none does.
+    /// First sampled tick whose value passes the comparison, empty when no sample passes.
     FirstCrossing(Comparison),
     /// Mean of the samples from tick `start` to tick `end` inclusive.
     WindowMean {
+        /// First tick of the window.
         start: u64,
+        /// Last tick of the window.
         end: u64,
     },
 }
@@ -87,7 +92,7 @@ impl FromStr for ReducerKind {
     }
 }
 
-/// Returns whether `column` names a series of `stats`, as a label alone or followed by `.` and a component.
+/// Returns whether `column` refers to a series of `stats`, as a label alone or followed by `.` and a component.
 pub(crate) fn names_a_stat(column: &str, stats: &[StatDescriptor]) -> bool {
     stats.iter().any(|stat| {
         column
@@ -96,11 +101,12 @@ pub(crate) fn names_a_stat(column: &str, stats: &[StatDescriptor]) -> bool {
     })
 }
 
-/// A reducer as written, naming its column by text.
+/// A reducer as written, with its column given as text.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReducerSpec {
     /// Stat column name, or a bare vector or histogram label for its magnitude or total.
     pub column: String,
+    /// Fold the reducer applies.
     pub kind: ReducerKind,
 }
 
@@ -108,11 +114,11 @@ impl ReducerSpec {
     /// Checks the column against the stat labels a model declares.
     ///
     /// A column passes when it is a label, or a label followed by `.` and a component. [`ReducerPlan::bind`] checks
-    /// the column again once a build has given the full column list.
+    /// the column again once a build provides the full column list.
     ///
     /// # Errors
     ///
-    /// Returns [`ReducerError::UnknownColumn`] for a column no label starts.
+    /// Returns [`ReducerError::UnknownColumn`] for a column that does not start with a stat label.
     pub fn check_label(&self, stats: &[StatDescriptor]) -> Result<(), ReducerError> {
         if names_a_stat(&self.column, stats) {
             Ok(())
@@ -144,15 +150,34 @@ impl FromStr for ReducerSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReducerError {
     /// A reducer with no `:` between the column and the kind.
-    MissingKind { raw: String },
+    MissingKind {
+        /// Reducer as written.
+        raw: String,
+    },
     /// A kind no reducer has.
-    UnknownKind { raw: String },
-    /// A `first` kind whose comparison cannot be read, for the reason in `source`.
-    Comparison { raw: String, source: ComparisonError },
+    UnknownKind {
+        /// Kind as written.
+        raw: String,
+    },
+    /// A `first` kind whose comparison cannot be read.
+    Comparison {
+        /// Kind as written, or as [`ReducerKind`]'s `Display` writes it.
+        raw: String,
+        /// Reason the comparison is rejected.
+        source: ComparisonError,
+    },
     /// A `mean@` kind whose window is not `START..END`, with `START` at most `END`.
-    BadWindow { raw: String },
-    /// A column no stat series gives. `known` lists the columns or labels there are.
-    UnknownColumn { column: String, known: Vec<String> },
+    BadWindow {
+        /// Kind as written, or as [`ReducerKind`]'s `Display` writes it.
+        raw: String,
+    },
+    /// A column that no stat series produces.
+    UnknownColumn {
+        /// Column as written in the reducer.
+        column: String,
+        /// Stat labels the model declares, or the column names once a build provides them.
+        known: Vec<String>,
+    },
 }
 
 impl fmt::Display for ReducerError {
@@ -251,10 +276,12 @@ impl ReducerPlan {
         }
     }
 
+    /// Number of reducers.
     pub fn len(&self) -> usize {
         self.kinds.len()
     }
 
+    /// Returns whether the plan binds no reducer.
     pub fn is_empty(&self) -> bool {
         self.kinds.is_empty()
     }
@@ -264,11 +291,20 @@ impl ReducerPlan {
         &self.names
     }
 
-    /// Stat column reducer `i` reads.
+    /// Returns the stat column that reducer `i` reads.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `i` is not below [`Self::len`].
     pub fn column(&self, i: usize) -> usize {
         self.columns[i]
     }
 
+    /// Returns the fold that reducer `i` applies.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `i` is not below [`Self::len`].
     pub fn kind(&self, i: usize) -> ReducerKind {
         self.kinds[i]
     }
@@ -281,12 +317,13 @@ pub struct ReducerState {
     values: Vec<f64>,
     /// Tick of the value kept by a [`ReducerKind::ArgMax`] or [`ReducerKind::ArgMin`] reducer.
     ticks: Vec<u64>,
-    /// Finite values folded in so far, the finite values inside the window for a window mean, or 1 once a first
+    /// Number of finite values folded in so far, only those inside the window for a window mean, or 1 once a first
     /// crossing is found.
     counts: Vec<u64>,
 }
 
 impl ReducerState {
+    /// Returns the state of `plan`'s reducers before any sample.
     pub fn new(plan: &ReducerPlan) -> Self {
         Self {
             values: vec![0.0; plan.len()],

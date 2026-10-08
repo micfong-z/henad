@@ -1,7 +1,7 @@
-//! Runs the program of `examples/complete.rs` up to the app, and checks that it prints what `docs/guide/library.md`
+//! Runs the program in `examples/complete.rs` up to the app, and checks that it prints what `docs/guide/library.md`
 //! shows for it.
 //!
-//! The program comes in whole. Its `main` opens a window, and the test calls `study` alone, on a folder of its own.
+//! The program is included whole. Its `main` opens a window, and the test calls `study` alone, on its own folder.
 
 #![expect(clippy::print_stderr, reason = "a skipped comparison says why on stderr")]
 
@@ -21,7 +21,7 @@ fn printed_in_guide(guide: &str) -> Vec<&str> {
     lines.take_while(|line| line.trim() != "```").collect()
 }
 
-/// Returns whether `printed` matches `shown`, a line `...` in `shown` standing for any number of lines.
+/// Returns whether `printed` matches `shown`, where a `...` line in `shown` matches any number of lines.
 fn matches_shown(printed: &[&str], shown: &[&str]) -> bool {
     let Some(gap) = shown.iter().position(|line| *line == "...") else {
         return printed == shown;
@@ -33,7 +33,7 @@ fn matches_shown(printed: &[&str], shown: &[&str]) -> bool {
 #[test]
 fn the_complete_program_prints_what_the_guide_shows() {
     let models = henad::models::example_models();
-    // A folder of this process's own. A test running in another process at the same time never touches it.
+    // The folder belongs to this process. A test running in another process at the same time never touches it.
     let folder = std::env::temp_dir().join(format!("henad-complete-{}", std::process::id()));
     if folder.exists() {
         std::fs::remove_dir_all(&folder).expect("a folder left by an earlier process is removed");
@@ -47,7 +47,8 @@ fn the_complete_program_prints_what_the_guide_shows() {
     let printed = String::from_utf8(out).expect("the program writes UTF-8");
     let printed: Vec<&str> = printed.lines().collect();
 
-    // Read at run time. The guide sits outside the package, and a crate built from its tarball skips the comparison.
+    // The guide is read at run time. It sits outside the package, and a crate built from its tarball skips the
+    // comparison.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/guide/library.md");
     let Ok(guide) = std::fs::read_to_string(&path) else {
         eprintln!("note: skipped the comparison, {} is absent", path.display());

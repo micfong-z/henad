@@ -1,8 +1,8 @@
 //! GPU ants, [`crate::ants`] with its population and pheromone field in GPU buffers.
 //!
-//! Tick 0 is bit identical since seeding goes through [`AntsModel::init`] and
-//! [`PheromoneField::build_sites`]. After that the RNG streams differ, for the reason
-//! [`crate::gpu_sir`] gives. Deposits still combine with `max`, which is order independent, so
+//! Tick 0 is bit identical since seeding uses [`AntsModel::init`] and
+//! [`PheromoneField::build_sites`]. After that the RNG streams differ, as
+//! [`crate::gpu_sir`] describes. Deposits still combine with `max`, which is order independent, so
 //! unlike [`crate::gpu_boids`] a run does replay.
 
 use henad_compute::cpu::agent_engine::{
@@ -29,8 +29,9 @@ use crate::shader_bindings::gpu_ants::reset_colony::Params as ActionParams;
 use crate::shader_bindings::gpu_ants::step::Params as StepParams;
 
 // The param list is [`agent_model_param_descriptors`] for [`AntsModel`] verbatim, so both backends
-// take the same vector. Only the engine's own three are read here, by the names
-// `cpu::agent_engine` gives them. The rest go through the two `from_params`.
+// take the same vector. Only the three engine parameters are read here, under the names
+// that `cpu::agent_engine` assigns them. The other parameters come from `AntsModel::from_params` and
+// `PheromoneField::from_params`.
 
 henad_core::buffers! {
     const POS = "pos" drawable;
@@ -42,13 +43,14 @@ henad_core::buffers! {
     const SITES = "sites";
 }
 
-/// Domain separated from the ant seeding stream, so the two do not start correlated.
+/// Domain separator of the `rng` buffer's seed, so the buffer and the ant seeding stream do not start correlated.
 const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 
-// `state` packs what the CPU model keeps in three lanes. Mirrored in `step.wgsl`.
+// Bits of `state`, which packs what the CPU model keeps in three lanes. `step.wgsl` mirrors them.
 const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
 const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
 
+/// Ant foraging as a [`GpuAgentModel`], seeded through [`AntsModel::init`].
 #[derive(Debug)]
 pub struct GpuAnts;
 
@@ -96,17 +98,17 @@ impl GpuAgentModel for GpuAnts {
             label: "reset_colony",
             shader: crate::shader_bindings::gpu_ants::reset_colony::SHADER_STRING,
             bindings: crate::binding_decls::bindings::GPU_ANTS_RESET_COLONY,
-            // Covers the ants and both field layers, so neither half is left short.
+            // The domain covers the ants and both field layers, so neither half is left short.
             domain: Domain::AgentsOrCells,
         },
     }];
 
-    /// Carrying food, total pheromone. Deliveries is an accumulating counter, not a reduction.
+    /// Two lanes, the ants carrying food and the total pheromone. Deliveries accumulate in a counter instead.
     const REDUCE: ReduceSpec = ReduceSpec {
         shader: crate::shader_bindings::gpu_ants::reduce::SHADER_STRING,
         bindings: crate::binding_decls::bindings::GPU_ANTS_REDUCE,
         lanes: 2,
-        // The two lanes have different domains, so the tree covers the longer one.
+        // The two lanes have different domains, so the tree covers the longer domain.
         domain: Domain::AgentsOrCells,
     };
 
@@ -134,8 +136,7 @@ impl GpuAgentModel for GpuAnts {
         let n = geom.num_agents as usize;
         let n_cells = geom.n_cells as usize;
 
-        // Seeding through the model's own `init` is what keeps tick 0 bit identical. A port would
-        // be free to drift.
+        // Seeding through the model's own `init` keeps tick 0 bit identical with the CPU model.
         let mut lanes = AntLanes::alloc(n);
         let mut rng_state = agent_init_rng(seed);
         AntsModel::init(
@@ -152,11 +153,11 @@ impl GpuAgentModel for GpuAnts {
             .flat_map(|(&x, &y)| [x, y])
             .collect();
         let packed: Vec<u32> = (0..n).map(|i| pack_state(&lanes, i)).collect();
-        // The CPU lane holds palette indices, this one is drawn directly so it holds colours.
+        // The CPU lane holds palette indices. The GPU draws this buffer directly, and it holds colours.
         let colors: Vec<u32> = lanes.has_food.iter().map(|&f| packed_ant_color(f)).collect();
         let rng_seed = seed.map_or(RNG_INIT_SEED, |s| mix_seed(s ^ RNG_INIT_SEED));
 
-        // Through the field spec, so the two backends cannot place the nest differently.
+        // The sites come from the field spec, so the two backends cannot place the nest differently.
         let mut site_bytes = vec![EMPTY; n_cells];
         PheromoneField::build_sites(geom.width, geom.height, &mut site_bytes);
         let site_words: Vec<u32> = site_bytes.iter().map(|&s| u32::from(s)).collect();
@@ -241,7 +242,7 @@ impl GpuAgentModel for GpuAnts {
     }
 }
 
-/// The three per-ant scalars the CPU keeps in separate lanes, as `step.wgsl` reads them.
+/// Packs ant `i`'s last step, food flag and reward flag into one word, as `step.wgsl` reads them.
 fn pack_state(lanes: &AntLanes, i: usize) -> u32 {
     let mut packed = u32::from(lanes.last_step[i]);
     if lanes.has_food[i] != 0 {
@@ -258,13 +259,13 @@ fn seed_rng_states(n: usize, seed: u64) -> Vec<u32> {
     (0..n).map(|i| pcg_hash(seed32 ^ i as u32)).collect()
 }
 
-/// Where `AntsModel::init` puts every ant, in world coordinates.
+/// Returns the position that `AntsModel::init` assigns to every ant, in world coordinates.
 fn nest_position(width: u32, height: u32) -> (f32, f32) {
     let nest = nest_cell(width, height) as u32;
     ((nest % width) as f32, (nest / width) as f32)
 }
 
-/// Packed for the step uniform, from the one palette in `ants` so colours cannot drift.
+/// Packs [`ANT_PALETTE`] for the step uniform, keeping both backends on one palette.
 fn packed_ant_palette() -> [u32; 2] {
     [u32::from_le_bytes(ANT_PALETTE[0]), u32::from_le_bytes(ANT_PALETTE[1])]
 }
@@ -274,7 +275,7 @@ fn packed_ant_color(index: u8) -> u32 {
     u32::from_le_bytes(rgba)
 }
 
-/// Same, for the display uniform. Indexed as `palette[i >> 2][i & 3]`.
+/// Packs [`CELL_PALETTE`] for the display uniform, indexed as `palette[i >> 2][i & 3]`.
 fn packed_cell_palette() -> [[u32; 4]; 4] {
     let mut packed = [[0u32; 4]; 4];
     for (i, rgba) in CELL_PALETTE.iter().enumerate() {
@@ -309,7 +310,7 @@ mod tests {
         values
     }
 
-    /// Current positions, as the two scalar lanes the CPU model keeps.
+    /// Returns the current positions as the two scalar lanes the CPU model keeps.
     fn positions(state: &State) -> (Vec<f32>, Vec<f32>) {
         let floats: Vec<f32> = state.read_buffer(POS).iter().map(|&w| f32::from_bits(w)).collect();
         (
@@ -318,8 +319,9 @@ mod tests {
         )
     }
 
-    /// The CPU model only ever stores `0.0` or the reward param in its reward lane, which is what
-    /// lets the GPU port carry it as one bit of `state` and stay inside eight storage buffers.
+    /// The CPU model only ever stores `0.0` or the reward param in its reward lane.
+    ///
+    /// The GPU port carries the lane as one bit of `state`, and stays inside eight storage buffers.
     #[test]
     fn the_cpu_reward_lane_only_ever_holds_two_values() {
         let values = params(500, 200.0);
@@ -336,8 +338,8 @@ mod tests {
         }
     }
 
-    /// Both backends seed through `AntsModel::init`, by default and from a seed, so any later divergence is the
-    /// step's.
+    /// Both backends seed through `AntsModel::init`, by default and from a seed, so any later divergence comes from
+    /// the step.
     #[test]
     fn the_initial_colony_matches_the_cpu_model() {
         let Some(ctx) = headless_context() else {
@@ -357,7 +359,7 @@ mod tests {
         }
     }
 
-    /// The reference is bounded, not toroidal like the other models.
+    /// The reference's field is bounded, unlike the toroidal worlds of the other models.
     #[test]
     fn ants_stay_inside_the_bounded_field() {
         let Some(ctx) = headless_context() else {
@@ -378,7 +380,7 @@ mod tests {
         }
     }
 
-    /// The momentum and random action fallbacks are the easy ones to forget an obstacle check in.
+    /// An obstacle check is easy to forget in the momentum and random action fallbacks.
     #[test]
     fn ants_never_enter_an_obstacle() {
         let Some(ctx) = headless_context() else {
@@ -399,8 +401,8 @@ mod tests {
         }
     }
 
-    /// The whole point of the model. Nothing below happens if the deposit never lands, if the
-    /// merge never runs, or if the trail is followed in the wrong direction.
+    /// Checks the behaviour the model exists for. Nothing below happens if the deposit never lands, if the merge never
+    /// runs, or if the trail is followed in the wrong direction.
     #[test]
     fn the_colony_lays_a_trail_and_delivers_food() {
         let Some(ctx) = headless_context() else {
@@ -454,8 +456,8 @@ mod tests {
         assert!(reference > 0.0, "the field should hold pheromone after 200 ticks");
     }
 
-    /// Unlike `gpu_boids`, nothing here depends on the order the GPU schedules work: deposits
-    /// combine with `max`, and no ant reads another's lanes. So a run must replay exactly.
+    /// Unlike `gpu_boids`, nothing here depends on the order the GPU schedules work. Deposits
+    /// combine with `max`, and no ant reads another's lanes. A run must therefore replay exactly.
     #[test]
     fn a_run_replays_bit_identically() {
         let Some(ctx) = headless_context() else {
@@ -488,7 +490,7 @@ mod tests {
             return;
         };
 
-        // Not a multiple of the workgroup width, so the ragged tail is covered.
+        // The count is not a multiple of the workgroup width, so the ragged tail is covered.
         let world = 1_000.0f32;
         let mut state = State::new(&ctx, &params(300_037, world));
         state.run_batched(5);
@@ -503,8 +505,8 @@ mod tests {
         }
     }
 
-    /// The field's parameters sit after the model's own in the composed list, and the merge reads
-    /// them from there.
+    /// The field's parameters sit after the model's own parameters in the composed list, and the merge
+    /// reads them from there.
     #[test]
     fn the_merge_pass_reads_the_evaporation_param() {
         let mut values = params(1_000, 200.0);
@@ -531,8 +533,8 @@ mod tests {
         );
     }
 
-    /// The site markers are what the ants navigate between, so a layout mismatch would make the
-    /// two backends different models.
+    /// The ants navigate between the site markers, and a layout mismatch would make the two backends
+    /// different models.
     #[test]
     fn the_site_layout_matches_the_cpu_field() {
         let mut sites = vec![EMPTY; 200 * 200];

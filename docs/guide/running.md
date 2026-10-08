@@ -23,14 +23,14 @@ From a clone of the repository, run:
 cargo run --release --bin henad-app
 ```
 
-In a [project of your own](your-project.md), `cargo run --release` runs the project's app over its own models.
+In [your own project](your-project.md), `cargo run --release` runs the project's app over its own models.
 
 !!! warning "Release mode"
 
     The debug build is slow, and the sim thread will not run at full speed.
     Make sure that `--release` is used to build the release version.
 
-See [app tour](app.md) for an introduction of the UI.
+See the [app tour](app.md) for an introduction to the UI.
 
 ## Web app
 
@@ -53,16 +53,16 @@ Alternatively, to deploy the web app, run:
     CPU models run noticeably slower in the browser.
     Run natively when you want the engine at full speed.
 
-    Nonetheless, GPU model performance are close to native.
+    Nonetheless, GPU model performance is close to native.
 
 Since the thread pool needs `SharedArrayBuffer`, the web build serves cross-origin isolated.
 Hosts deploying Henad need to send `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`.
 
-See [app tour](app.md) for an introduction of the UI.
+See the [app tour](app.md) for an introduction to the UI.
 
 ## CLI
 
-If you do not need to render anything, you can use Henad using CLI.
+If you do not need to render anything, you can use the Henad CLI.
 This is mainly for benchmarking purposes, but it can also be used if you want to run Henad in a headless environment.
 
 Run the following command to see the available flags:
@@ -71,7 +71,7 @@ Run the following command to see the available flags:
 henad-cli --help
 ```
 
-From a clone, write `cargo run --release -p henad-cli --` in place of `henad-cli`, and in a project of your own, `cargo run --release --bin my-model-cli --`.
+From a clone, write `cargo run --release -p henad-cli --` instead of `henad-cli`, and in your own project, `cargo run --release --bin my-model-cli --`.
 
 See [the Henad CLI reference](../reference/cli.md) for more details.
 See [parameter sweeps](sweeps.md) for running a model over many parameter values and seeds at once, and [searching a model](search.md) for letting Henad pick the values.

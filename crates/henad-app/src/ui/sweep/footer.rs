@@ -35,7 +35,7 @@ pub const FOOTER_ID: &str = "henad_sweep_footer";
 /// Space above and below the footer's two rows, in points.
 const FOOTER_MARGIN_Y: i8 = 6;
 
-/// Most problems the disabled Start button lists on hover.
+/// Maximum number of problems that the disabled Start button lists on hover.
 const MAX_START_REASONS: usize = 3;
 
 /// Shortcut that presses Start: Cmd+Enter on a Mac, Ctrl+Enter elsewhere.
@@ -75,9 +75,9 @@ pub struct BuilderFooter<'a> {
     pub summary: &'a CheckSummary,
     /// Reason the last press of Start failed.
     pub start_failure: Option<&'a str>,
-    /// Ticks each run steps, warm-up included.
+    /// Number of ticks each run steps, warm-up included.
     pub steps_per_run: u64,
-    /// Folder the results go to, empty while none is chosen, `None` for results held in memory.
+    /// Folder the results go to, empty while no folder is chosen, `None` for results held in memory.
     pub folder: Option<&'a Path>,
     /// Whether the Results tab holds results in memory that are not saved.
     pub unsaved_results: bool,
@@ -168,8 +168,8 @@ pub fn ready_sentence(mode: DraftMode, (configs, replicates, runs): (u64, u64, u
     )
 }
 
-/// Returns the text of the chip that counts `lines`: "2 problems" while any is invalid, "2 missing" while every one is
-/// missing input, and `None` for none.
+/// Returns the text of the chip that counts `lines`: "2 problems" while any line is invalid, "2 missing" while every
+/// line is missing input, and `None` when `lines` is empty.
 pub fn problems_chip(lines: &[IssueLine]) -> Option<(IssueKind, String)> {
     let mut count = IssueCount::default();
     for line in lines {
@@ -179,7 +179,7 @@ pub fn problems_chip(lines: &[IssueLine]) -> Option<(IssueKind, String)> {
 }
 
 /// Returns the hover text of a disabled Start: up to `MAX_START_REASONS` problems of `lines`, and a count of the
-/// rest.
+/// remaining problems.
 pub fn start_refusal(lines: &[IssueLine]) -> String {
     let mut text = "Fix these first:".to_owned();
     for line in lines.iter().take(MAX_START_REASONS) {
@@ -254,9 +254,9 @@ pub fn builder_footer(ui: &mut egui::Ui, footer: &BuilderFooter<'_>, request: &m
     }
 }
 
-/// Draws the chips that count the warnings and the problems, each opening a list of them, from right to left.
+/// Draws the chips that count the warnings and the problems, each opening a list of its entries, from right to left.
 ///
-/// Returns the reveal of the row of a problem picked in a list.
+/// Returns the reveal for the row of a problem picked from a list.
 fn chips(ui: &mut egui::Ui, footer: &BuilderFooter<'_>, noun: &str) -> Option<Reveal> {
     let mut reveal = None;
     if let Some((kind, count)) = problems_chip(&footer.summary.lines) {
@@ -314,7 +314,7 @@ fn chips(ui: &mut egui::Ui, footer: &BuilderFooter<'_>, noun: &str) -> Option<Re
     reveal
 }
 
-/// Draws where the results go, with a link to the Execution section, or a warning of results not saved.
+/// Draws the destination of the results, with a link to the Execution section, or a warning of results not saved.
 ///
 /// Returns whether the link was clicked.
 fn destination(ui: &mut egui::Ui, footer: &BuilderFooter<'_>) -> bool {
@@ -322,7 +322,7 @@ fn destination(ui: &mut egui::Ui, footer: &BuilderFooter<'_>) -> bool {
         truncated_label(ui, "Last results not saved", Some(ui.visuals().warn_fg_color));
         return false;
     }
-    // The text truncates to the room the link leaves it.
+    // The text truncates to the space that the link leaves free.
     let link_width = text_width(ui, "Change") + ui.spacing().item_spacing.x;
     let text_room = vec2(
         (ui.available_width() - link_width).max(0.0),
@@ -347,7 +347,7 @@ fn destination(ui: &mut egui::Ui, footer: &BuilderFooter<'_>) -> bool {
     ui.link("Change").on_hover_text("Open Execution section").clicked()
 }
 
-/// Adds Save results, only its icon when `compact`, with the tooltip for a search's files when `search`.
+/// Adds the Save results button, icon only when `compact`, with the tooltip for search results when `search` is set.
 fn save_results_button(ui: &mut egui::Ui, compact: bool, search: bool) -> egui::Response {
     let text = if compact {
         MDI_TRAY_ARROW_DOWN.to_owned()
@@ -362,7 +362,7 @@ fn save_results_button(ui: &mut egui::Ui, compact: bool, search: bool) -> egui::
     add_button(ui, true, Button::new(text), "Save results").on_hover_text(tooltip)
 }
 
-/// Adds Show results, filled once the session has ended, and only its icon when `compact`.
+/// Adds the Show results button, filled once the session has ended, icon only when `compact`.
 fn show_results_button(ui: &mut egui::Ui, compact: bool, ended: bool) -> egui::Response {
     let text = if compact {
         MDI_CHART_BOX_OUTLINE.to_owned()
@@ -391,7 +391,7 @@ pub struct SessionFooter<'a> {
     /// Whether the Results tab holds results in memory that are not saved.
     pub unsaved_results: bool,
     pub search_files: bool,
-    /// Whether the session resumes a folder, and has no draft of its own.
+    /// Whether the session resumes a folder. Such a session has no draft.
     pub resumed: bool,
     pub modal_open: bool,
 }
@@ -506,7 +506,7 @@ fn ended_rows(
     }
 }
 
-/// Asks before a start of the sweep or search `noun` names. The start drops the unsaved results held in memory.
+/// Asks before starting a new `noun`. Starting drops the unsaved results held in memory.
 ///
 /// Cancel, Escape and a click beside the modal close it and start nothing.
 pub fn replace_modal(ctx: &egui::Context, noun: &str, open: &mut bool, request: &mut Option<SweepRequest>) {
@@ -545,14 +545,14 @@ pub struct AbortModal<'a> {
     pub noun: &'static str,
     pub progress: &'a SweepProgress,
     pub paused: bool,
-    /// Whether the results go to a folder. An aborted sweep can resume from one.
+    /// Whether the results go to a folder. An aborted sweep can resume from a folder.
     pub in_folder: bool,
 }
 
 /// Asks before aborting the running sweep or search.
 ///
-/// The safe choice comes first and reads as the state it keeps. It, Escape and a click beside the modal close it and
-/// leave the sweep as it is.
+/// The safe choice comes first and is labelled with the state it keeps. That button, Escape and a click beside the
+/// modal close it and leave the sweep as it is.
 pub fn abort_modal(ctx: &egui::Context, modal: &AbortModal<'_>, open: &mut bool, request: &mut Option<SweepRequest>) {
     let mut closed = false;
     let noun = modal.noun;

@@ -1,5 +1,4 @@
-//! Panel state, split from `HenadApp` so `DockArea::show` can borrow the dock and the
-//! `TabViewer` at once.
+//! State of the app's panels. `DockArea::show_inside` borrows it as its `TabViewer` beside the dock.
 
 use std::sync::Arc;
 
@@ -37,17 +36,17 @@ use henad_compute::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
 /// Exponential moving average smoothing factor (0..1, higher = more responsive).
 const EMA_ALPHA: f64 = 0.1;
 
-/// Snapshots the chart history keeps before it starts dropping the oldest.
+/// Default number of snapshots the chart history keeps before it starts dropping the oldest snapshots.
 pub const DEFAULT_HISTORY_LEN: usize = 10_000;
 
 /// Default time in milliseconds that a snapshot can spend on a network's layout.
 const DEFAULT_LAYOUT_BUDGET_MS: f32 = 4.0;
 
-/// Status a save reports until its outcome arrives, followed by what it saves.
+/// Status shown while a save is pending, followed by the file name.
 #[cfg(not(target_arch = "wasm32"))]
 const SAVE_PENDING: &str = "Select location to save";
 
-/// Status a download reports until its outcome arrives, followed by what it downloads.
+/// Status shown while a download is pending, followed by the file name.
 #[cfg(target_arch = "wasm32")]
 const SAVE_PENDING: &str = "Downloading";
 
@@ -70,15 +69,15 @@ impl FrameTimings {
 }
 
 pub struct AppState {
-    /// Kept so a freshly built sim thread can be handed a repaint waker.
+    /// Kept so a freshly built sim thread can be given a repaint waker.
     egui_ctx: egui::Context,
-    /// Every model the host offers, GPU ones included where this machine cannot run them.
+    /// Every model the host offers, including GPU models this machine cannot run.
     pub models: ModelSet,
     /// Name, build, links and command line of the app the host ships.
     pub product: Product,
-    /// Opening the app could not open, shown in the Model panel until a model is selected.
+    /// Opening that the app could not open, shown in the Model panel until a model is selected.
     pub opening_refusal: Option<OpeningRefusal>,
-    /// Id of the model the panels show, `None` when no offered model runs on this machine or the opening was refused.
+    /// Id of the model the panels show, `None` when no offered model runs on this machine or the opening was rejected.
     pub selected_model: Option<String>,
     pub param_values: Vec<ParamValue>,
     /// Id of the model the live simulation was built from.
@@ -118,7 +117,7 @@ pub struct AppState {
     // Edge toggles from the Viewport toolbar, for network models.
     pub show_edges: bool,
     pub edge_arrows: bool,
-    /// Built on first use and kept across model switches, the pipeline is not tied to a model.
+    /// Agent renderer, built on first use and kept across model switches. Its pipeline is tied to no model.
     pub agent_layer: Option<AgentLayer>,
     /// Serial of the snapshot whose data the viewport last copied to the GPU.
     pub last_rendered_serial: Option<u64>,
@@ -131,35 +130,35 @@ pub struct AppState {
     pub layout_budget_ms: f32,
     pub layout_while_paused: bool,
     pub stats_history: Option<StatsHistory>,
-    /// `None` retains every sample, so a whole run can be exported.
+    /// Number of samples the chart history keeps, `None` to keep every sample so a whole run can be exported.
     pub history_capacity: Option<usize>,
-    /// Where the History length slider sits, kept while Unlimited is ticked so unticking restores it.
+    /// Position of the History length slider, kept while Unlimited is ticked so unticking restores it.
     pub history_len: usize,
-    /// Fixed for the life of the process, collected once at startup.
+    /// Host, adapter and device limits, collected once at startup.
     pub runtime: RuntimeInfo,
     /// Device and queue for rendering, present wherever the app runs. The renderer and the live
-    /// simulation report their errors into `faults`. A GPU sweep steps on a device of its own, and
+    /// simulation report their errors into `faults`. A GPU sweep runs on its own device, and
     /// its errors stay with the sweep. `gpu_ctx` below is a different thing, and gates GPU models.
     pub render_ctx: GpuContext,
     /// The fault being shown, cleared when the user dismisses the modal.
     pub fault: Option<ShownFault>,
     pub about_open: bool,
-    /// Note the Performance tab shows when the browser's thread pool failed to start.
+    /// Note shown in the Performance tab when the browser's thread pool failed to start.
     pub thread_pool_note: Option<String>,
-    /// About window's image, set when the window first opens. It holds `None` for an icon that is no PNG.
+    /// About window's image, set when the window first opens. It holds `None` for an icon that is not a PNG.
     pub logo_texture: std::cell::OnceCell<Option<TextureHandle>>,
     pub timings: FrameTimings,
-    /// The injected device/queue, kept so a GPU model can be rebuilt on every Reset / model
-    /// switch. `None` where the adapter cannot run compute shaders, and the GPU models are then hidden.
+    /// Device and queue a live GPU model builds on, `None` where the adapter cannot run compute shaders. The GPU
+    /// models are then hidden.
     pub gpu_ctx: Option<GpuContext>,
     /// A viewport capture waiting on the GPU.
     pub capture: Option<PendingCapture>,
     pub recording: Recording,
     /// The last export's result, shown in the Export tab.
     pub export_status: Option<String>,
-    /// Save outcomes come back off the dialog's own thread or task.
+    /// Channel the save dialogs send their outcomes back on, from their own thread or task.
     saves: (flume::Sender<SaveOutcome>, flume::Receiver<SaveOutcome>),
-    /// Open outcomes come back off the dialog's own thread or task.
+    /// Channel the open dialogs send their outcomes back on, from their own thread or task.
     opens: (flume::Sender<OpenOutcome>, flume::Receiver<OpenOutcome>),
     pub sweep: SweepPanel,
     pub results: ResultsPanel,
@@ -177,7 +176,7 @@ pub struct ShownFault {
     pub model: Option<String>,
 }
 
-/// Opening the app could not open, as the Model panel shows it.
+/// Opening that the app could not open, as shown in the Model panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpeningRefusal {
     /// Line naming what was not opened, as in "Run not opened".
@@ -216,16 +215,17 @@ impl OpenedRun {
 pub enum PointRenderMode {
     #[default]
     Agents,
-    /// Cheaper past roughly a million agents, and readable where sprites would overlap into a mass.
+    /// Density map of the agents. Cheaper past roughly a million agents, and readable where sprites would overlap
+    /// into a mass.
     Density,
 }
 
 impl AppState {
-    /// `render_ctx` always exists, eframe is wgpu-only here. `gpu_ctx` is `None` on an adapter
-    /// without compute. GPU models are then hidden from the Model panel, and rendering is unaffected.
+    /// Returns the state of an app over `models`, with the first model that runs on this machine selected, or
+    /// with nothing selected when no model runs on this machine.
     ///
-    /// The app opens on the first model of `models` that runs on this machine, and with nothing selected when none
-    /// does.
+    /// `gpu_ctx` is `None` on an adapter without compute. GPU models are then hidden from the Model panel, and
+    /// rendering is unaffected.
     pub fn new(
         egui_ctx: egui::Context,
         models: ModelSet,
@@ -305,8 +305,8 @@ impl AppState {
 
     /// Tears down the live simulation and builds the selected model from the fields the next build reads.
     ///
-    /// Does nothing when [`Self::build_setup`] refuses the fields. Build is disabled then, with the reason
-    /// [`setup_message`] gives.
+    /// Does nothing when [`Self::build_setup`] rejects the fields. Build is disabled then, with the reason
+    /// [`setup_message`] returns.
     pub fn reset_simulation(&mut self) {
         let setup = match self.build_setup() {
             Some(Ok(setup)) => Some(setup),
@@ -318,9 +318,8 @@ impl AppState {
         };
         self.settle_opened_run();
         self.stop_recording();
-        // Drop existing sim thread. For a GPU model this also releases its buffers/pipelines, but any paint callback
-        // still in flight this frame holds its own `Arc` to the display, so tearing down mid-frame cannot pull
-        // the texture out from under the renderer.
+        // Dropping the sim thread releases a GPU model's buffers and pipelines. A paint callback still in flight this
+        // frame holds its own `Arc` to the display, and keeps the texture alive.
         self.sim_thread = None;
         drop(self.render_ctx.faults.take());
         self.snapshot = None;
@@ -368,7 +367,7 @@ impl AppState {
     /// Clears the opened run before a build of another model, or sets its `modified` to whether the build's values
     /// differ from the run's.
     ///
-    /// A rebuild from the run's own values clears the mark [`Self::mark_opened_run_modified`] leaves.
+    /// A rebuild from the run's own values clears the mark that [`Self::mark_opened_run_modified`] sets.
     fn settle_opened_run(&mut self) {
         let Some(run) = &mut self.opened_run else {
             return;
@@ -380,7 +379,7 @@ impl AppState {
         run.modified = !run.is_built_by(&self.param_values, self.seed, &self.schedule);
     }
 
-    /// Opens what the host asked the app to open on.
+    /// Opens `opening`, the results, run or setup that the host requested.
     ///
     /// A run or a setup this machine cannot open leaves the app with nothing selected, and the Model panel shows the
     /// reason.
@@ -416,7 +415,7 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// Returns a message when this build or this machine has no model `replay.model`, or the model declares another
+    /// Returns a message when this build or this machine has no model `replay.model`, or the model declares a different
     /// number of parameters. A build that fails goes to the fault modal instead, and leaves no run open.
     pub fn open_run(&mut self, replay: Replay, start: OpenAt) -> Result<(), String> {
         let declared = self
@@ -455,11 +454,11 @@ impl AppState {
     /// Builds the model of the set under `setup`'s model id from the setup's values, seed and schedule, optionally
     /// steps it to a tick, and brings the viewport to the front.
     ///
-    /// The setup's fields go into the ones the next build reads, and a default seed stays the default.
+    /// The setup's fields are stored in the fields the next build reads, and a default seed stays the default.
     ///
     /// # Errors
     ///
-    /// Returns a message when this build or this machine has no model under the setup's id, or that model refuses the
+    /// Returns a message when this build or this machine has no model under the setup's id, or that model rejects the
     /// setup's values. A build that fails goes to the fault modal instead.
     pub fn open_setup(&mut self, setup: &RunSetup, start: OpenAt) -> Result<(), String> {
         let id = setup.entry().id();
@@ -538,7 +537,7 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// If the model's kernels panic, or the GPU refuses to build it, or the model is not compatible with this machine.
+    /// Returns the fault when the build panics, the GPU rejects it, or this machine has no device for a GPU model.
     fn build_runner(&self, setup: &RunSetup, wake: &WakeFn) -> Result<SimRunner, Fault> {
         let entry = setup.entry();
         match entry.build(setup.values(), setup.seed(), self.gpu_ctx.as_ref())? {
@@ -603,7 +602,7 @@ impl AppState {
         self.run_to_target = None;
     }
 
-    /// Offloads the live simulation and hands the fault to the modal. A running sweep carries on.
+    /// Offloads the live simulation and passes the fault to the modal. A running sweep carries on.
     ///
     /// A fault while building belongs to the selected model, and any other to the loaded one. The Model panel stays
     /// usable while a model runs, and the selection can be another model by then.
@@ -697,7 +696,7 @@ impl AppState {
     /// Selects model `id` with its default values and no scheduled actions, or the values, seed and actions the
     /// loaded model runs with when `id` is the loaded model.
     ///
-    /// The model selected already keeps its values. An id the set lacks leaves no values.
+    /// An already selected model keeps its values. An id missing from the set leaves no values.
     pub fn select_model(&mut self, id: &str) {
         if self.selected_model.as_deref() == Some(id) {
             return;
@@ -719,7 +718,8 @@ impl AppState {
         self.schedule = Schedule::default();
     }
 
-    /// Sends a live edit of parameter `index` to the loaded model, and records `value` as one the model runs with.
+    /// Sends a live edit of parameter `index` to the loaded model, and records `value` as a value that the model
+    /// runs with.
     ///
     /// Returns whether the edit was sent. It is sent only while the selection is the loaded model.
     pub fn send_live_param(&mut self, index: usize, value: ParamValue) -> bool {
@@ -782,9 +782,9 @@ impl AppState {
 
     pub fn poll_saves(&mut self) {
         while let Ok(SaveOutcome { target, result }) = self.saves.1.try_recv() {
-            // A download of one file counts as saved. The user asked for it, and the browser asks nothing the app can
-            // read back. The downloads of several files leave them unsaved. A browser can hold back every download
-            // after the first.
+            // A download of one file counts as saved. The user requested it, and the app cannot read back anything
+            // the browser asks the user. The downloads of several files leave them unsaved. A browser can hold back
+            // every download after the first.
             if let SaveTarget::SweepResults(generation) = target
                 && matches!(result, SaveResult::Saved(_) | SaveResult::Downloaded(_))
             {
@@ -800,7 +800,7 @@ impl AppState {
         }
     }
 
-    /// Opens a dialog that picks the files or the folder `target` asks for.
+    /// Opens a dialog that picks the files or the folder that `target` requests.
     ///
     /// Results can be polled via [`Self::poll_opens`].
     pub fn open_file(&self, target: OpenTarget) {
@@ -818,7 +818,7 @@ impl AppState {
         }
     }
 
-    /// Records a snapshot.
+    /// Appends the snapshot's stats to the recording, and stops the recording on a write error.
     pub fn record(&mut self, snapshot: &Snapshot) {
         if let Err(err) = self.recording.push(snapshot.tick, &snapshot.stats) {
             self.export_status = Some(format!("Recording stopped: {err}"));
@@ -835,7 +835,7 @@ impl AppState {
         }
     }
 
-    /// Draw the layers into an offscreen target at their own resolution and start reading it back.
+    /// Draws the layers into an offscreen target at their own resolution and starts reading it back.
     ///
     /// Results can be polled via [`Self::poll_capture`].
     pub fn request_viewport_capture(&mut self, name: String) {
@@ -1050,8 +1050,8 @@ mod tests {
         assert_eq!(app.loaded_seed, Some(7));
     }
 
-    /// The regression. Picking the loaded model again reset the panel to the defaults, and the run details then
-    /// recorded values the model was not built with.
+    /// Picking the loaded model again restores its values. Otherwise the run details would record values the model
+    /// was not built with.
     #[test]
     fn picking_the_loaded_model_again_restores_what_it_runs_with() {
         let Some(mut app) = app_without_compute() else {
@@ -1110,7 +1110,7 @@ mod tests {
         assert_eq!(app.loaded_values[index], edited);
     }
 
-    /// The regression. The modal named the selected model, which can be another model than the one that faulted.
+    /// The modal shows the name of the model that faulted. The selection can be another model by then.
     #[test]
     fn a_fault_names_the_model_it_stopped() {
         let Some(mut app) = app_without_compute() else {

@@ -8,7 +8,7 @@ use super::support::Scratch;
 use crate::binding_lines::{Binding, read_bindings};
 use crate::{ShaderBuild, ShaderBuildError};
 
-/// A shader declaring every kind the reader knows, out of `@binding` order, with comments in the way.
+/// A shader declaring every kind the reader knows, out of `@binding` order, with comments mixed in.
 const EVERY_KIND: &str = "\
 #import henad::dims::Dims
 
@@ -30,8 +30,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 ";
 
-/// Returns the bindings the `WgpuBindGroup0` layout of `shader_bindings` lists, read from its doc lines and types, in
-/// `@binding` order. The layout lists them in declaration order.
+/// Returns the bindings that the `WgpuBindGroup0` layout in `shader_bindings` lists, read from its doc lines and types,
+/// in `@binding` order. The layout lists them in declaration order.
 fn generated_layout(shader_bindings: &str) -> Vec<Binding> {
     let start = shader_bindings
         .find("pub const LAYOUT_DESCRIPTOR")

@@ -74,8 +74,8 @@ pub(super) fn geometric(
     let mut hash = SpatialHash::new(reach, world.w, world.h);
     hash.build(pos_x, pos_y);
 
-    // The hash measures distances across the seam but the world has none, so each candidate is measured again
-    // without wrapping.
+    // The hash measures distances across the wrap seam, but this world has no seam. Each candidate is measured
+    // again without wrapping.
     let pairs = reduce_chunks(
         n,
         PAIR_CHUNK,

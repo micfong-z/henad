@@ -1,7 +1,7 @@
 //! Writer of `series.csv`, the sampled stat rows of every run.
 //!
-//! The rows of one run are contiguous, and runs come in plan order. The stat columns are those `--export-stats`
-//! writes, after a `run_id` column.
+//! The rows of one run are contiguous, and runs come in plan order. The stat columns are the columns that
+//! `--export-stats` writes, after a `run_id` column.
 
 use std::io::{self, Write};
 
@@ -70,7 +70,7 @@ impl<W: Write> SeriesWriter<W> {
         self.dest.flush()
     }
 
-    /// Flushes the writer and hands it back.
+    /// Flushes the writer and returns it.
     ///
     /// # Errors
     ///

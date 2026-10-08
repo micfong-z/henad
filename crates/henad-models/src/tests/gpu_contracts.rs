@@ -1,4 +1,4 @@
-//! GPU models whose declarations disagree with their shaders, refused when the engine builds them.
+//! GPU models whose declarations disagree with their shaders, rejected when the engine builds them.
 
 use henad_compute::fault::{FaultKind, catching};
 use henad_compute::gpu::GpuContext;
@@ -190,7 +190,7 @@ fn build_refusal(build: impl FnOnce()) -> String {
     }
 }
 
-/// Returns the default value of each of `descriptors`.
+/// Returns the default value of each descriptor in `descriptors`.
 fn defaults(descriptors: &[ParamDescriptor]) -> Vec<ParamValue> {
     descriptors
         .iter()
@@ -210,8 +210,8 @@ fn agent_refusal<M: GpuAgentModel>(ctx: &GpuContext) -> String {
     build_refusal(|| drop(GpuAgentState::<M>::new(ctx, &params)))
 }
 
-/// The regression. A shader at 16 by 16 under a `WORKGROUP_SIZE` of 8 validated cleanly, and every pass covered
-/// another domain than the one it was dispatched over.
+/// Without the check, a shader at 16 by 16 under a `WORKGROUP_SIZE` of 8 validates, and every pass covers a domain
+/// different from the one it is dispatched over.
 #[test]
 fn a_workgroup_size_the_shaders_do_not_declare_is_refused() {
     let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
@@ -225,7 +225,8 @@ fn a_workgroup_size_the_shaders_do_not_declare_is_refused() {
     );
 }
 
-/// The regression. A buffer labelled `partials` was never bound, and `state_in` panicked naming another label.
+/// Without the check, a buffer labelled `partials` is never bound, and a buffer labelled `state_in` causes a panic that
+/// refers to a different label.
 #[test]
 fn a_reserved_or_suffixed_label_is_refused() {
     let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {

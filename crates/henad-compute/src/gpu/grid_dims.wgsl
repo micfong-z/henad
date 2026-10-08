@@ -1,5 +1,5 @@
-// Brings `Dims` into this crate's generated bindings, where the grid engine takes the uniform's
-// layout from. The pass is never dispatched.
+// Brings `Dims` into this crate's generated bindings. The grid engine takes the uniform layout from there.
+// The pass is never dispatched.
 
 #import henad::dims::Dims
 
