@@ -9,11 +9,42 @@ icon: material/code-braces
 Both GPU traits hand the engine WGSL as a `&'static str`, because `henad-core` depends on nothing, not even wgpu, and therefore cannot name wgpu types.
 Most of what surrounds that string is generated at build time, and this page covers the generated part.
 
+!!! info "Henad 0.3"
+
+    This page describes Henad 0.3.
+
 ## Generated from the WGSL
 
-A `build.rs` in `henad-compute`, `henad-models` and `henad-app` runs `wgsl_bindgen` over the shaders it lists as entry points, and the output lands behind a `shader_bindings` module.
+A crate's `build.rs` runs henad-build over its shaders, and `henad::include_shaders!()` at the crate root brings the output in as two modules, `shader_bindings` and `binding_decls`.
+henad-build is a build dependency, of the same release as `henad`.
+A project made from the [template](../guide/your-project.md) has both already:
 
-Uniform structs, workgroup sizes and bind group layouts therefore come from the WGSL instead of being retyped in Rust.
+``` rust title="build.rs"
+--8<-- "templates/model-project/build.rs"
+```
+
+`stamp_commit` records the commit the crate was built from, whether its sources differed from that commit, and a hash of its sources, and a sweep's manifest records them beside each model the crate registers.
+A crate without shaders keeps its `build.rs` for the stamp, and drops the `ShaderBuild` line and `henad::include_shaders!()`.
+A file a model reads at compile time, through `include_bytes!` or `include_str!`, belongs under `src`, where the stamp sees it.
+The stamp follows no symlink to a folder, and sees no file outside `src` that a shader imports.
+A change to a shader in either place reaches the bindings and goes unrecorded.
+A model crate keeps its shaders under `src` and passes `"src"` to `discover`.
+
+``` rust title="src/lib.rs"
+henad::include_shaders!();
+```
+
+`ShaderBuild::discover` takes every `.wgsl` file under `src` without a `#define_import_path` line as an entry point, and a new shader joins the bindings the next time the crate builds.
+A symlink to a folder under `src` is followed, and a folder reached twice is read once.
+A shader's path below `src` becomes its names.
+`gpu_sir/step.wgsl` is the module `shader_bindings::gpu_sir::step` and the constant `binding_decls::bindings::GPU_SIR_STEP`, the path's components upper-cased and joined by `_`.
+Each component of a `.wgsl` path is therefore a Rust identifier and no keyword, and a folder named `gpu-sir` fails the build.
+So do two shaders whose names collide, as `gpu/sir_step.wgsl` and `gpu_sir/step.wgsl` both give `GPU_SIR_STEP`.
+Two structs can collide as well.
+Each struct's layout assertion takes its module path and its name in upper snake case, so `TallyParams` in `gpu_vote/step.wgsl` and `Params` in `gpu_vote/step_tally.wgsl` both give `GPU_VOTE_STEP_TALLY_PARAMS_ASSERTS`.
+rustc reports that pair inside the generated file, and renaming one of the structs resolves it.
+
+Uniform structs, workgroup sizes and bind group layouts come from the WGSL instead of being retyped in Rust.
 Your model fills in the generated struct and hands back its bytes, and declares no uniform struct of its own.
 A uniform declared as a bare vector, as GPU Game of Life's step uniform is, has no struct, and the model hands back the values themselves.
 The generated struct always has the shader's layout.
@@ -25,34 +56,59 @@ use crate::shader_bindings::gpu_boids::step::Params as StepParams;
 
 The shader source a model declares comes from the same place, as `SHADER_STRING`.
 
-Generation cannot reach two things: a type no shader in the crate uses, because naga keeps only what an entry point references, and a constant that arrives through an `#import`.
+An imported constant or type reaches the generated bindings exactly when an entry point references it, since naga keeps only what an entry point references.
+A type or a constant no shader in the crate uses has no Rust twin.
+
+The generated bindings define a module named `henad` of their own, for the shared modules below.
+Code inside `include_shaders!` reaches Henad through `$crate`, and a hand-written module that includes the generated files itself names Henad as `::henad`.
+A bare `use henad::...` there is ambiguous between the two, and fails with E0659.
+
+!!! note "Deny unsafe code, never forbid it"
+
+    The generator writes `unsafe impl bytemuck::Pod` and an `unsafe fn from_raw`.
+    `include_shaders!` allows `unsafe_code` for the two generated modules alone, which works under `unsafe_code = "deny"` and fails under `#![forbid(unsafe_code)]`.
 
 ## Shared WGSL
 
-Shared code lives in `henad-compute/src/gpu/shared/` and is reached with `#import`, which is resolved at build time.
+The shared modules ship with henad-core, in `henad-core/src/authoring/primitives/wgsl/`, and a shader reaches them with `#import henad::<module>`, resolved at build time.
 
 ```wgsl
-#import shared::prelude::linear_index
-#import shared::space::{TORUS, axis_delta, heading_octant, wrap_index}
+#import henad::dispatch::linear_index
+#import henad::space::{TORUS, axis_delta, heading_octant, wrap_index}
 ```
 
 | Module | Contents |
 |---|---|
-| `shared::prelude` | `WORKGROUP`, and `linear_index` for folding a linear domain onto the workgroup grid |
-| `shared::space` | The WGSL twins of the [space primitives](../reference/primitives.md#space) |
-| `shared::rng` | The WGSL twins of the [random primitives](../reference/primitives.md#random) |
-| `shared::dims` | The `Dims` struct a grid model's display and reduce shaders read |
-| `shared::reduce_tree` | `block_sum`, the workgroup fold a reduce leaf repeats |
+| `henad::dispatch` | `WORKGROUP`, and `linear_index` for folding a linear domain onto the workgroup grid |
+| `henad::space` | The WGSL twins of the [space primitives](../reference/primitives.md#space) |
+| `henad::rng` | The WGSL twins of the [random primitives](../reference/primitives.md#random) |
+| `henad::dims` | The `Dims` struct a grid model's display and reduce shaders read |
+| `henad::reduce_tree` | `block_sum`, the workgroup fold a reduce leaf repeats |
 
-Most primitives here pair with a Rust function under `henad_core::authoring::primitives`, and a parity test pins each pair of pure functions together.
+Most primitives here pair with a Rust function under `henad::authoring::primitives`, and a parity test pins each pair of pure functions together.
 [Authoring primitives](../reference/primitives.md) is the index.
 It names the WGSL-only primitives and records what is deliberately absent.
 
+A module of your own is a file with a `#define_import_path` line.
+An import resolves by file path alone, so the import path mirrors the file's path below `src`, or below the directory of the shader importing it.
+`#define_import_path gpu_ants::state` sits in `gpu_ants/state.wgsl`, and the same line in `common/state.wgsl` is never found.
+The root `henad` is reserved for the shared modules, in any case.
+A file named `henad.wgsl`, or a folder named `henad` holding a `.wgsl` file, shadows one of them, and fails the build.
+So does a path starting with a name the generated bindings use at their root: `wgpu`, `bytemuck`, `std`, `core`, `alloc`, `_root`, `ShaderEntry`, `layout_asserts` or `bytemuck_impls`.
+The bindings name an imported module by the import path it resolved through, and an import path starting with one of those names fails the build too.
+A module declares no binding, since bindings belong in the entry shader.
+An import can also name a file by its path, in quotes, as `#import "../shared/noise" as noise`.
+The bindings name that module after the stem of the file name, here `noise`, and a stem such as `std` or `henad` fails the build as well.
+A change to such a file reruns the build script and the generator, inside `src` or outside it.
+
 ## Bindings
 
-The `build.rs` in `henad-models` reads the `@group(0)` lines of every shader in its `ENTRY_POINTS` list into a `binding_decls` module, in `@binding` order.
-Every pass of either GPU trait points at one of its constants, named after the shader's path, as `crate::binding_decls::bindings::GPU_SIR_STEP` is for `gpu_sir/step.wgsl`.
-A new shader has to be added to `ENTRY_POINTS` before `shader_bindings` or `binding_decls` knows about it.
+henad-build reads the `@group(0)` lines of every entry point into `binding_decls`, in `@binding` order.
+Every pass of either GPU trait points at one of its constants, as `crate::binding_decls::bindings::GPU_SIR_STEP` is for `gpu_sir/step.wgsl`.
+Each binding sits on one line, as `@group(0) @binding(N) var<...> name: Type;`, and a line holding `@binding` or `@group` in any other form fails the build.
+Group 0 of an entry point holds storage buffers, uniforms and storage textures, and a sampler or a sampled texture fails the build.
+Keep a render shader outside `src`, or name the entry points one by one with `ShaderBuild::new`.
+A compile-time assertion holds each list to the length of the layout naga derives from the composed shader.
 The engine resolves each name itself.
 Otherwise a slot index could disagree with the shader that owns it.
 
@@ -92,7 +148,7 @@ A grid model's shaders dispatch 2D directly and declare a `@workgroup_size(N, N)
 A shader is composed from its imports and re-emitted by naga, so the text the engine compiles is not the file as you wrote it, and a WGSL error names the composed text rather than your source.
 
 ```bash
-HENAD_DUMP_WGSL=/tmp/wgsl cargo run --release -p henad-app
+HENAD_DUMP_WGSL=/tmp/wgsl cargo run --release
 ```
 
 With that variable set, every shader the engine compiles lands in `<dir>/<label>.wgsl`, which lets you read a validation error against the composed source as ordinary text.

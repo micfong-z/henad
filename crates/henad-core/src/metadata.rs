@@ -31,6 +31,7 @@ pub struct LaneSpec {
 }
 
 /// Model's data structure.
+#[derive(Debug, Clone)]
 pub enum Structure {
     Grid {
         neighborhood: NeighborhoodKind,
@@ -66,10 +67,13 @@ pub enum Structure {
 }
 
 /// Model metadata to be displayed in the UI,
+#[derive(Debug, Clone)]
 pub struct ModelMetadata {
     pub backend: Backend,
     /// Colours the display layer or the agent population draws from. `None` for a GPU agent
     /// model, whose shaders write RGBA directly and declare no palette.
     pub palette: Option<&'static [[u8; 4]]>,
     pub structure: Structure,
+    /// Whether two builds on one seed step through identical states. `true` for every CPU model.
+    pub replays_exactly: bool,
 }

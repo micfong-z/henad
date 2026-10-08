@@ -27,11 +27,11 @@
 //! backends therefore start from a **bit-identical** grid and must agree forever after, which is
 //! what `tests::gpu_alive_count_matches_cpu_model` checks.
 
-use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_compute::cpu::grid_engine::grid_init_rng;
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
-use henad_core::authoring::primitives::rng::{mix_seed, xorshift64};
+use henad_core::authoring::primitives::rng::xorshift64;
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -80,6 +80,7 @@ pub fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u
     words
 }
 
+#[derive(Debug)]
 pub struct GpuGameOfLife;
 
 impl GpuGridModel for GpuGameOfLife {
@@ -134,12 +135,7 @@ impl GpuGridModel for GpuGameOfLife {
 
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let density = extract_f32(params, PARAM_DENSITY, DEFAULT_DENSITY);
-        vec![seed_random(
-            width,
-            height,
-            density,
-            seed.map_or(GRID_INIT_SEED, mix_seed),
-        )]
+        vec![seed_random(width, height, density, grid_init_rng(seed))]
     }
 
     /// `step.wgsl` reads nothing but `dims: vec2<u32>`.
@@ -166,19 +162,22 @@ impl GpuGridModel for GpuGameOfLife {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::cpu::grid_engine::GridModelState;
+    use henad_compute::cpu::grid_engine::{GRID_PARAM_BASE, GridModelState};
     use henad_compute::gpu::GpuContext;
     use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::GpuSimState as _;
     use henad_compute::gpu::timing::TimestampQuery;
+    use henad_core::authoring::model::grid_model::GridModel as _;
+    use henad_core::grid::Grid2D;
     use henad_core::model::SimState as _;
+    use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
     use crate::game_of_life::GameOfLifeModel;
 
     type State = GpuGridState<GpuGameOfLife>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        crate::tests::support::headless_context("gpu_gol_test_device", wgpu::Features::empty())
+        headless_test_device(&TestDeviceRequest::baseline())
     }
 
     pub(super) fn params(width: u32, height: u32, density: f32) -> Vec<ParamValue> {
@@ -205,6 +204,30 @@ mod tests {
         ctx.queue.submit(Some(encoder.finish()));
         state.begin_stats_readback();
         state.poll_stats_readback(&ctx.device, true);
+    }
+
+    /// The port repeats `GameOfLifeModel::init` rather than calling it, so every cell is compared.
+    /// The CPU grid is packed into the shaders' layout. A width of 37 leaves padding bits, and
+    /// the seed leaves them zero.
+    #[test]
+    fn the_seeded_grid_matches_the_cpu_init() {
+        let (width, height) = (37u32, 23u32);
+        let p = params(width, height, 0.3);
+        let stride = words_per_row(width);
+        for seed in [None, Some(7)] {
+            let mut grid = Grid2D::new(width, height);
+            GameOfLifeModel::init(&mut grid, &p[GRID_PARAM_BASE..], &mut grid_init_rng(seed));
+            let mut cpu = vec![0u32; stride * height as usize];
+            for (index, &cell) in grid.current().iter().enumerate() {
+                let (x, y) = (index % width as usize, index / width as usize);
+                cpu[y * stride + x / 32] |= u32::from(cell) << (x % 32);
+            }
+            assert_eq!(
+                GpuGameOfLife::seed_buffers(width, height, &p, seed)[0],
+                cpu,
+                "the seeded words differ from the CPU grid for seed {seed:?}"
+            );
+        }
     }
 
     /// End-to-end agreement with the CPU model, which is the real correctness oracle: identical
@@ -298,7 +321,9 @@ mod tests {
     /// Like `headless_context`, but requests `TIMESTAMP_QUERY` explicitly (mirroring what the app
     /// does when the adapter supports it), since the default test device requests no features.
     fn headless_timing_context() -> Option<GpuContext> {
-        crate::tests::support::headless_context("gpu_gol_timing_test_device", wgpu::Features::TIMESTAMP_QUERY)
+        headless_test_device(
+            &TestDeviceRequest::baseline().features(henad_compute::gpu::wgpu::Features::TIMESTAMP_QUERY),
+        )
     }
 
     /// Regression test for "GPU time/step flickers to 0/None during a sustained run": runs many
@@ -444,7 +469,7 @@ mod runner_tests {
 
     use super::GpuGameOfLife;
     use super::tests::{headless_context, params};
-    use crate::registry::{ModelState, model_registry};
+    use henad_compute::entry::ModelState;
     use henad_core::view::StatValue;
 
     /// Spins until the thread publishes a snapshot satisfying `pred`, or the deadline passes.
@@ -539,10 +564,9 @@ mod runner_tests {
         }
     }
 
-    /// With a context, the GPU entry is offered by the registry, its factory yields a
+    /// With a context, a lookup in the example set returns the GPU entry, its factory yields a
     /// `ModelState::Gpu` (so `HenadApp` routes it to the GPU thread rather than the CPU one), and
-    /// the state it builds is drivable. The mirror of
-    /// `registry::tests::registry_without_gpu_context_offers_no_gpu_models`.
+    /// the state it builds is drivable.
     #[test]
     fn registry_with_gpu_context_offers_a_drivable_gpu_model() {
         let Some(ctx) = headless_context() else {
@@ -550,14 +574,13 @@ mod runner_tests {
             return;
         };
 
-        let entries = model_registry(Some(ctx.clone()));
-        let entry = entries
-            .iter()
-            .find(|e| e.id == "gpu_game_of_life")
+        let models = crate::example_models();
+        let entry = models
+            .lookup("gpu_game_of_life", Some(&ctx))
             .expect("a GPU context must make the GPU model selectable");
 
-        // Note there is no context argument here: the registry closure captured its own clone.
-        let built = (entry.create)(&params(32, 32, 0.3), None)
+        let built = entry
+            .build(&params(32, 32, 0.3), None, Some(&ctx))
             .unwrap_or_else(|fault| panic!("the GPU entry's factory failed to build: {fault}"));
         let ModelState::Gpu(mut state) = built else {
             panic!("the GPU entry's factory must yield ModelState::Gpu, not ModelState::Cpu");

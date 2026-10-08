@@ -13,12 +13,13 @@ use henad_core::export::csv::fmt_f64;
 pub const SERIES_ID_COLUMNS: [&str; 2] = ["run_id", "tick"];
 
 /// Writer of `series.csv`.
+#[derive(Debug)]
 pub struct SeriesWriter<W: Write> {
     dest: W,
 }
 
 /// Returns the header line of `series.csv` for the stat layout `columns`, with its line ending.
-pub fn header_line(columns: &StatColumns) -> String {
+pub(crate) fn header_line(columns: &StatColumns) -> String {
     let mut line = SERIES_ID_COLUMNS.join(",");
     for column in 0..columns.len() {
         line.push(',');

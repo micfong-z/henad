@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::time::Duration;
 
-use henad_core::explore::design::{DesignError, DesignKind};
+use henad_core::explore::design::{DesignError, DesignKind, MAX_CONFIGS};
 use henad_core::explore::factor::{
     Factor, FactorDomain, FactorError, FactorLevel, FactorSpec, FactorTarget, LevelSpec, LevelSpecError,
 };
@@ -32,8 +32,10 @@ use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_core::view::{StatEntry, StatValue};
 use henad_explore::exec::Concurrency;
 use henad_explore::search_run::{SearchPlan, SearchPlanError};
-use henad_explore::spec_file::{ExecutionTable, SpecFile};
+use henad_explore::spec_file::{ExecutionTable, LoadedSpec, SpecFile};
+use henad_explore::sweep::SpecSource;
 
+use crate::options::cli_phrase;
 use crate::ui::params::display_value;
 use crate::ui::plural;
 use crate::ui::results::store::{action_label, output_label};
@@ -394,6 +396,8 @@ impl DesignTableDraft {
 pub struct SweepDraft {
     /// Id of the model the draft sweeps.
     pub model_id: String,
+    /// Program the advice on a sweep over the app's limit names, `None` for none.
+    pub cli_command: Option<String>,
     pub mode: DraftMode,
     /// One entry per parameter, in descriptor order. A search varies the ticked ones over its space.
     pub factors: Vec<FactorDraft>,
@@ -643,6 +647,7 @@ impl SweepDraft {
         let seeds = SeedSettings::default();
         Self {
             model_id: schema.id.to_owned(),
+            cli_command: None,
             mode: DraftMode::default(),
             factors: schema
                 .params
@@ -764,7 +769,10 @@ impl SweepDraft {
 
     /// Sets action row `position` to action `action_index` of `schema`, renamed after it.
     pub fn set_action(&mut self, schema: &ModelSchema<'_>, position: usize, action_index: usize) {
-        if position >= self.actions.len() || self.actions[position].action_index == action_index {
+        if position >= self.actions.len()
+            || self.actions[position].action_index == action_index
+            || schema.actions.get(action_index).is_none()
+        {
             return;
         }
         let row = self.actions.remove(position);
@@ -1219,8 +1227,8 @@ impl SweepDraft {
             vec![DraftIssue::new(
                 DraftSite::Sweep,
                 format!(
-                    "{noun} of {runs} runs is over the app's limit of {MAX_DRAFT_RUNS}. Run larger ones with \
-                     henad-cli."
+                    "{noun} of {runs} runs is over the app's limit of {MAX_DRAFT_RUNS}. Run larger ones {}.",
+                    cli_phrase(self.cli_command.as_deref())
                 ),
             )]
         };
@@ -1475,14 +1483,16 @@ impl SweepDraft {
         if !refused.is_empty() {
             return Err(refused);
         }
-        let spec = self.to_spec(schema, panel_values)?;
-        let mut file = SpecFile::from(&spec);
-        file.execution = ExecutionTable {
-            concurrent: self.concurrency,
-            memory: self.memory_budget,
-            gpu_memory: self.gpu_memory_budget,
+        let loaded = LoadedSpec {
+            spec: self.to_spec(schema, panel_values)?,
+            spec_source: SpecSource::default(),
+            execution: ExecutionTable {
+                concurrent: self.concurrency,
+                memory: self.memory_budget,
+                gpu_memory: self.gpu_memory_budget,
+            },
         };
-        let text = file
+        let text = loaded
             .to_toml()
             .map_err(|error| vec![DraftIssue::new(DraftSite::Sweep, describe_error(&error))])?;
         SpecFile::parse(&text)
@@ -1949,6 +1959,7 @@ impl SweepDraft {
             }
             MeasureError::Stop(source) => DraftIssue::new(DraftSite::Stop, describe_error(source)),
             MeasureError::TooManyTicks { .. } => DraftIssue::new(DraftSite::RunLength, describe_error(error)),
+            MeasureError::TimeoutTooLong { .. } => DraftIssue::new(DraftSite::Timeout, describe_error(error)),
         }
     }
 
@@ -2290,6 +2301,9 @@ fn setting_message(error: &SearchSpecError) -> String {
     match error {
         SearchSpecError::NoEvaluations => "Evaluations must be at least 1".to_owned(),
         SearchSpecError::NoBatch => "Batch size must be at least 1".to_owned(),
+        SearchSpecError::BatchTooLarge { batch_size } => {
+            format!("Batch size must be at most {MAX_CONFIGS}, got {batch_size}")
+        }
         SearchSpecError::MissingObjective { .. } => "Objective: Select output".to_owned(),
         SearchSpecError::Setting { key, value, expected } => {
             format!("{} must be {expected}, got {value}", setting_label(key))
@@ -2329,7 +2343,9 @@ fn value_message(error: &ValueError) -> String {
         ValueError::OutOfRange { value, min, max } => format!("{value} is outside the range {min} to {max}"),
         ValueError::UnknownOption { raw, options } => format!("'{raw}' is not one of {}", options.join(", ")),
         ValueError::Param { source, .. } => value_message(source),
-        ValueError::UnknownParam { .. } | ValueError::BadOverride { .. } => describe_error(error),
+        ValueError::UnknownParam { .. } | ValueError::BadOverride { .. } | ValueError::WrongKind { .. } => {
+            describe_error(error)
+        }
     }
 }
 
@@ -2467,6 +2483,11 @@ fn read_value(schema: &ModelSchema<'_>, index: usize, text: &str) -> Result<Para
 
 /// Returns `error` and each of its causes, joined by colons, starting with a capital letter.
 pub fn describe_error(error: &dyn Error) -> String {
+    capitalize(&error_chain(error))
+}
+
+/// Returns `error` and each of its causes, joined by colons.
+pub fn error_chain(error: &dyn Error) -> String {
     let mut text = error.to_string();
     let mut cause = error.source();
     while let Some(source) = cause {
@@ -2474,7 +2495,7 @@ pub fn describe_error(error: &dyn Error) -> String {
         text.push_str(&source.to_string());
         cause = source.source();
     }
-    capitalize(&text)
+    text
 }
 
 /// Returns the words the Sweep tab reads `comparator` as, as in "at most".
@@ -2503,6 +2524,7 @@ mod tests {
     use std::num::NonZeroUsize;
     use std::time::Duration;
 
+    use henad_compute::entry::ModelEntry;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::MeasurePlan;
@@ -2517,9 +2539,8 @@ mod tests {
     use henad_core::params::ParamValue;
     use henad_explore::exec::Concurrency;
     use henad_explore::probe::ProbeReport;
-    use henad_explore::schema::model_schema;
     use henad_explore::spec_file::SpecFile;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::example_models;
 
     use super::{
         COLUMNS_PENDING, DesignTableDraft, DraftAlgorithm, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis,
@@ -2534,22 +2555,16 @@ mod tests {
     const RECOVERY_RATE: usize = 3;
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn boids() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "boids")
-            .expect("boids is registered")
+        example_models().get("boids").cloned().expect("boids is registered")
     }
 
     fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
         entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect()
@@ -2558,14 +2573,14 @@ mod tests {
     /// Returns the stat columns of a build of `entry` at its default values, as a sweep's probe samples them.
     fn sampled_columns(entry: &ModelEntry) -> StatColumns {
         ProbeReport::build(entry, None, &default_values(entry), None)
-            .unwrap_or_else(|error| panic!("{} does not build: {error}", entry.id))
+            .unwrap_or_else(|error| panic!("{} does not build: {error}", entry.id()))
             .columns
     }
 
     /// Returns SIR's defaults on a 32 by 32 grid, with an infection rate of 0.3 and a recovery rate of 0.05.
     fn panel_values(entry: &ModelEntry) -> Vec<ParamValue> {
         let mut values: Vec<ParamValue> = entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();
@@ -2579,7 +2594,7 @@ mod tests {
     /// Returns a draft of SIR that varies both rates and an action's tick, and sets every other field away from its
     /// default.
     fn varied_draft(entry: &ModelEntry, design: DraftDesign) -> SweepDraft {
-        let schema = model_schema(entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.factors[INFECTION_RATE].vary = true;
         draft.factors[INFECTION_RATE].levels_text = "0.1,0.2,0.4".to_owned();
@@ -2628,7 +2643,7 @@ mod tests {
 
     /// Writes `draft` as TOML, reads it back, and returns the draft and panel values it reads as.
     fn round_trip(entry: &ModelEntry, draft: &SweepDraft) -> (SweepDraft, Vec<Option<ParamValue>>) {
-        let schema = model_schema(entry);
+        let schema = entry.schema();
         let text = draft
             .to_toml(&schema, &panel_values(entry))
             .unwrap_or_else(|issues| panic!("the draft writes no spec: {issues:?}"));
@@ -2640,7 +2655,7 @@ mod tests {
     #[test]
     fn a_draft_reads_back_from_its_toml_under_every_design() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         for design in DraftDesign::ALL {
             let mut draft = varied_draft(&entry, design);
             if design == DraftDesign::Table {
@@ -2679,7 +2694,7 @@ mod tests {
     #[test]
     fn vary_each_alone_writes_one_block_per_parameter() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let draft = varied_draft(&entry, DraftDesign::VaryEachAlone);
         let planned = draft
             .check(&schema, &panel_values(&entry))
@@ -2763,7 +2778,7 @@ mod tests {
     #[test]
     fn the_run_count_is_the_plans() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = varied_draft(&entry, DraftDesign::EveryCombination);
         draft.actions[0].vary_tick = false;
         let planned = draft
@@ -2801,7 +2816,7 @@ mod tests {
     #[test]
     fn a_sweep_held_in_memory_is_refused_past_the_series_limit() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.steps = 1 << 24;
         draft.stats_every = 1;
@@ -2870,7 +2885,7 @@ mod tests {
     #[test]
     fn an_issue_lands_on_the_row_it_names() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = panel_values(&entry);
         let sites = |draft: &SweepDraft| -> Vec<DraftSite> {
             draft
@@ -2935,7 +2950,7 @@ mod tests {
     #[test]
     fn a_check_reports_every_row_at_once() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = varied_draft(&entry, DraftDesign::EveryCombination);
         draft.factors[INFECTION_RATE].levels_text = "0.1, 0.x".to_owned();
         draft.factors[RECOVERY_RATE].levels_text = "0.02, 5".to_owned();
@@ -2971,7 +2986,7 @@ mod tests {
     #[test]
     fn input_not_given_yet_is_missing_and_not_invalid() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = panel_values(&entry);
         let issues = |draft: &SweepDraft| draft.check(&schema, &panel_values).expect_err("the draft waits");
         let only = |draft: &SweepDraft| {
@@ -3045,7 +3060,7 @@ mod tests {
     #[test]
     fn a_zip_names_the_length_of_every_list() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = varied_draft(&entry, DraftDesign::Zip);
         draft.factors[RECOVERY_RATE].levels_text = "0.02, 0.05".to_owned();
         let issues = draft
@@ -3083,7 +3098,7 @@ mod tests {
     #[test]
     fn a_new_stop_condition_reads_the_stat_the_draft_watches() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let stop_column = |draft: &mut SweepDraft| {
             draft.add_stop(&schema);
             let column = draft.stop.as_ref().expect("a stop condition").column.clone();
@@ -3133,7 +3148,7 @@ mod tests {
     #[test]
     fn a_row_previews_its_values_as_the_parameters_tab_shows_them() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let initial = schema
             .params
             .iter()
@@ -3155,7 +3170,7 @@ mod tests {
     #[test]
     fn a_search_keeps_the_outputs_it_reads() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.mode = DraftMode::Search;
         draft.search.objective_column = "Infected:max".to_owned();
@@ -3187,7 +3202,7 @@ mod tests {
     #[test]
     fn an_issue_reads_as_the_panel_words_it() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = panel_values(&entry);
         let messages = |levels_text: &str| -> Vec<String> {
             let mut draft = varied_draft(&entry, DraftDesign::EveryCombination);
@@ -3214,7 +3229,7 @@ mod tests {
     #[test]
     fn a_table_design_holds_fixed_every_parameter_its_table_leaves_out() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = varied_draft(&entry, DraftDesign::Table);
         draft.table = Some(DesignTableDraft {
             file_name: "design.csv".to_owned(),
@@ -3239,7 +3254,7 @@ mod tests {
     /// Returns a search of SIR over both rates and an action's tick by `algorithm`, with that method's settings and
     /// the draft's run settings away from their defaults.
     fn search_draft(entry: &ModelEntry, algorithm: DraftAlgorithm) -> SweepDraft {
-        let schema = model_schema(entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.mode = DraftMode::Search;
         draft.factors[INFECTION_RATE].vary = true;
@@ -3316,7 +3331,7 @@ mod tests {
     #[test]
     fn a_search_draft_plans_its_budget_and_space() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let draft = search_draft(&entry, DraftAlgorithm::Genetic);
         let planned = draft
             .check(&schema, &panel_values(&entry))
@@ -3332,7 +3347,7 @@ mod tests {
     #[test]
     fn a_search_reading_an_output_the_runs_do_not_record_is_refused() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = panel_values(&entry);
         let mut draft = search_draft(&entry, DraftAlgorithm::Random);
         draft.search.objective_column = "Recovered:max".to_owned();
@@ -3360,7 +3375,7 @@ mod tests {
     #[test]
     fn a_search_issue_lands_on_the_row_it_names() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = panel_values(&entry);
         let sites = |draft: &SweepDraft| -> Vec<DraftSite> {
             let issues = draft.check(&schema, &panel_values).err().unwrap_or_default();
@@ -3409,7 +3424,7 @@ mod tests {
     #[test]
     fn a_pattern_space_draft_waits_for_the_range_of_each_axis() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut fresh = SweepDraft::new(&schema);
         let axis = &fresh.search.pattern_space.x_axis;
         assert!(axis.is_automatic(), "an axis starts with an automatic range");
@@ -3449,7 +3464,7 @@ mod tests {
     #[test]
     fn an_automatic_range_keeps_the_range_its_fields_held() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = search_draft(&entry, DraftAlgorithm::PatternSpace);
         draft.search.set_automatic_range(GridAxis::X, true);
         assert!(draft.search.pattern_space.x_axis.is_automatic());
@@ -3478,7 +3493,7 @@ mod tests {
     #[test]
     fn blocks_the_panel_cannot_edit_are_refused() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut spec = varied_draft(&entry, DraftDesign::VaryEachAlone)
             .to_spec(&schema, &panel_values(&entry))
             .unwrap_or_else(|issues| panic!("the draft writes no spec: {issues:?}"));
@@ -3517,7 +3532,7 @@ mod tests {
     #[test]
     fn the_output_lists_offer_each_unrecorded_output_of_every_stat() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         let unrecorded = draft.unrecorded_outputs(&schema);
         assert_eq!(
@@ -3553,7 +3568,7 @@ mod tests {
     #[test]
     fn a_boids_pattern_space_search_watches_only_columns_a_reducer_writes() {
         let entry = boids();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let values = default_values(&entry);
         let columns = sampled_columns(&entry);
         let mut draft = SweepDraft::new(&schema);
@@ -3644,7 +3659,7 @@ mod tests {
     #[test]
     fn a_draft_cannot_start_until_its_columns_are_sampled() {
         let entry = boids();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let values = default_values(&entry);
         let mut draft = SweepDraft::new(&schema);
         draft.columns_pending = true;
@@ -3680,7 +3695,7 @@ mod tests {
     #[test]
     fn a_draft_without_columns_accepts_a_part_of_a_stat() {
         let entry = boids();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let values = default_values(&entry);
         let mut draft = boids_pattern_space(&schema);
         assert_eq!(draft.stat_columns, None);
@@ -3717,7 +3732,7 @@ mod tests {
     #[test]
     fn an_output_row_over_a_bare_vector_label_writes_its_magnitude() {
         let entry = boids();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let columns = sampled_columns(&entry);
         let mut draft = SweepDraft::new(&schema);
         let row = ReducerSpec {
@@ -3757,7 +3772,7 @@ mod tests {
     #[test]
     fn save_spec_refuses_what_the_loader_refuses() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = panel_values(&entry);
         let refusal = |draft: &SweepDraft| -> Vec<(DraftSite, String)> {
             draft
@@ -3806,7 +3821,7 @@ mod tests {
     #[test]
     fn a_timeout_that_is_not_a_duration_is_an_issue_of_its_row() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = panel_values(&entry);
         let mut draft = SweepDraft::new(&schema);
         for (seconds, message) in [
@@ -3844,7 +3859,7 @@ mod tests {
     #[test]
     fn a_loaded_memory_budget_is_saved_again() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let text = varied_draft(&entry, DraftDesign::EveryCombination)
             .to_toml(&schema, &panel_values(&entry))
             .unwrap_or_else(|issues| panic!("the draft writes no spec: {issues:?}"));
@@ -3869,7 +3884,7 @@ mod tests {
     #[test]
     fn a_range_drawn_from_is_not_capped_at_the_listed_values() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = panel_values(&entry);
         let mut draft = SweepDraft::new(&schema);
         draft.add_action(&schema, 0, 50);
@@ -3931,7 +3946,7 @@ mod tests {
     #[test]
     fn a_run_of_every_tick_does_not_overflow_the_series_estimate() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.steps = u64::MAX;
         draft.warmup = 0;
@@ -3947,7 +3962,7 @@ mod tests {
     #[test]
     fn a_design_table_sets_the_ticks_it_names() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = varied_draft(&entry, DraftDesign::EveryCombination);
         assert_eq!(draft.tick_source(&draft.actions[0]), TickSource::Varied);
         draft.design = DraftDesign::Table;
@@ -3989,5 +4004,17 @@ mod tests {
                 "{min}..={max} gave {example}"
             );
         }
+    }
+
+    #[test]
+    fn set_action_ignores_an_undeclared_action() {
+        let sir = sir();
+        let schema = sir.schema();
+        let mut draft = SweepDraft::new(&schema);
+        draft.add_action(&schema, 0, 10);
+        draft.add_action(&schema, 0, 20);
+        let rows = draft.actions.clone();
+        draft.set_action(&schema, 0, schema.actions.len());
+        assert_eq!(draft.actions, rows);
     }
 }

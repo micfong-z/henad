@@ -1,8 +1,8 @@
 // Leaf of the stat reduction. One workgroup folds its slice of the population down to one value
 // per lane, and `GpuLaneReduce` owns every level above this.
 
-#import shared::prelude::{WORKGROUP, linear_index}
-#import shared::reduce_tree::block_sum
+#import henad::dispatch::{WORKGROUP, linear_index}
+#import henad::reduce_tree::block_sum
 
 struct Params {
     n: u32,

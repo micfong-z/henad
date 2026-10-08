@@ -78,7 +78,7 @@ impl LevelNoun {
 
 /// Returns the note of a row whose values are `preview`, as in "5 values: 0.1, 0.2, 0.3, 0.4, 0.5".
 ///
-/// Past [`MAX_NOTE_VALUES`] values the note lists the first few and the last. In a search, listed values are picked
+/// Past `MAX_NOTE_VALUES` values the note lists the first few and the last. In a search, listed values are picked
 /// among and a range is searched whole. Elsewhere a design draws from a range.
 pub fn preview_note(preview: &LevelPreview, noun: LevelNoun, search: bool) -> String {
     match preview {
@@ -200,6 +200,7 @@ pub fn parameters_section(
     let context = RowContext {
         search: draft.mode == DraftMode::Search,
         draws_ranges: draft.draws_ranges(),
+        cli_command: input.cli_command,
     };
     for (index, descriptor) in schema.params.iter().enumerate() {
         let Some(factor) = draft.factors.get_mut(index) else {
@@ -222,10 +223,12 @@ pub fn parameters_section(
 
 /// Mode of the draft the rows belong to.
 #[derive(Debug, Clone, Copy)]
-struct RowContext {
+struct RowContext<'a> {
     search: bool,
     /// Whether a range with no step is drawn from, as in a sampled design or a search.
     draws_ranges: bool,
+    /// Program whose `--vary` the values editor names, `None` for none.
+    cli_command: Option<&'a str>,
 }
 
 /// Everything a parameter row shows besides the draft's factor.
@@ -258,7 +261,7 @@ fn values_editor_id(model_id: &str, param_id: &str) -> Id {
 fn parameter_row(
     ui: &mut egui::Ui,
     rows: &mut FormRows,
-    context: RowContext,
+    context: RowContext<'_>,
     row: &ParameterRow<'_>,
     factor: &mut FactorDraft,
 ) {
@@ -324,7 +327,7 @@ fn parameter_row(
 fn ticked(
     ui: &egui::Ui,
     rows: &mut FormRows,
-    context: RowContext,
+    context: RowContext<'_>,
     row: &ParameterRow<'_>,
     factor: &mut FactorDraft,
     label: &egui::Response,
@@ -345,7 +348,7 @@ fn ticked(
 fn values_cell(
     ui: &mut egui::Ui,
     rows: &mut FormRows,
-    context: RowContext,
+    context: RowContext<'_>,
     row: &ParameterRow<'_>,
     factor: &mut FactorDraft,
     label: &egui::Response,
@@ -394,7 +397,7 @@ fn values_cell(
 /// Draws the text field of a varied number's values, `width` wide with the editor's button after it.
 fn values_field(
     ui: &mut egui::Ui,
-    context: RowContext,
+    context: RowContext<'_>,
     row: &ParameterRow<'_>,
     text: &mut String,
     width: f32,
@@ -429,6 +432,7 @@ fn values_field(
                     panel_value: row.panel_value,
                     search: context.search,
                     draws_ranges: context.draws_ranges,
+                    cli_command: context.cli_command,
                     note: row_note(
                         row.issue,
                         row.preview,
@@ -613,6 +617,8 @@ struct ValuesEditor<'a> {
     panel_value: Option<&'a ParamValue>,
     search: bool,
     draws_ranges: bool,
+    /// Program whose `--vary` the editor names, `None` for none.
+    cli_command: Option<&'a str>,
     /// Preview of the row's values, the same note the row shows.
     note: Note,
 }
@@ -684,7 +690,10 @@ fn values_editor(ui: &mut egui::Ui, editor: &ValuesEditor<'_>, text: &mut String
         }
     });
     note_label(ui, &editor.note);
-    ui.weak("Same format as henad-cli --vary");
+    ui.weak(match editor.cli_command {
+        Some(command) => format!("Same format as {command} --vary"),
+        None => "Same format as --vary on the command line".to_owned(),
+    });
 }
 
 /// Draws the Minimum, Maximum and, for a stepped range, Step fields of the editor, writing a change into `text`.

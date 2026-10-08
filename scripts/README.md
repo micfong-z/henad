@@ -10,9 +10,10 @@ Analysis and comparison scripts.
 - `validate_ports.py`: checks each reference implementation against Henad before anything is timed
 - `plot_compare.py`: figures and tables from that CSV, for the benchmarks page
 - `changelog_section.py`: prints one version's `CHANGELOG.md` section, which the release workflow uses as the release body
+- `docs_rs.py`: builds each published crate's documentation as docs.rs builds it, from the crate's `[package.metadata.docs.rs]` table, for the `docs` CI job
 
-`changelog_section.py` is the one script needing no dependencies, since a tag build runs it with a bare
-`python3`. Its tests run in CI as `python3 -m unittest discover -s scripts -p 'test_*.py'`.
+`changelog_section.py` and `docs_rs.py` need no dependencies, and CI runs them with a bare `python3`.
+Their tests run in CI as `python3 -m unittest discover -s scripts -p 'test_*.py'`.
 
 `progress.py` is a helper rather than a script: the live display the sweep draws while it runs, which falls back to one line per run whenever output is redirected.
 

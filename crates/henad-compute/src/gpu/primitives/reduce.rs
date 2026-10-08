@@ -8,11 +8,13 @@ use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::shader_bindings::primitives::reduce::ReduceParams;
 
+#[derive(Debug)]
 struct Level {
     groups: (u32, u32),
     bind: wgpu::BindGroup,
 }
 
+#[derive(Debug)]
 pub struct GpuLaneReduce {
     lanes: usize,
     /// The leaf shader must dispatch exactly this, since the group index it writes is
@@ -25,11 +27,21 @@ pub struct GpuLaneReduce {
     readback: CounterReadback,
 }
 
-/// Groups left after each level. Always at least one, so the result reaches the readback buffer
-/// even when the whole population fits one workgroup.
-fn level_sizes(num_agents: u32) -> Vec<u32> {
+/// Number of blocks the leaf dispatches over `num_agents` agents, one partial each.
+///
+/// Past `MAX_GROUPS_PER_DIM` groups the folded rectangle overshoots the population, and every
+/// block it dispatches writes a partial. A surplus block writes zero.
+fn leaf_blocks(num_agents: u32) -> u32 {
+    let (groups_x, groups_y) = linear_dispatch(num_agents);
+    groups_x * groups_y
+}
+
+/// Groups left after each level, starting from the blocks the leaf dispatches. Always at least
+/// one, so the result reaches the readback buffer even when the whole population fits one
+/// workgroup.
+fn level_sizes(leaf_blocks: u32) -> Vec<u32> {
     let mut sizes = Vec::new();
-    let mut groups = num_agents.div_ceil(WORKGROUP).max(1);
+    let mut groups = leaf_blocks.max(1);
     loop {
         sizes.push(groups);
         if groups == 1 {
@@ -41,8 +53,8 @@ fn level_sizes(num_agents: u32) -> Vec<u32> {
 
 impl GpuLaneReduce {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, lanes: usize, num_agents: u32) -> Self {
-        let sizes = level_sizes(num_agents);
         let agent_groups = linear_dispatch(num_agents);
+        let sizes = level_sizes(leaf_blocks(num_agents));
 
         let partials = storage_buffer(device, &format!("{label}_reduce_partials"), sizes[0] as usize * lanes);
         // The last level writes straight into the readback's storage, so nothing extra is copied.
@@ -176,7 +188,7 @@ impl GpuLaneReduce {
 
 #[cfg(test)]
 mod tests {
-    use super::{GpuLaneReduce, WORKGROUP, level_sizes};
+    use super::{GpuLaneReduce, WORKGROUP, leaf_blocks, level_sizes, linear_dispatch};
     use crate::gpu::GpuContext;
     use crate::gpu::headless_context;
     use crate::gpu::primitives::pipeline::{
@@ -316,10 +328,43 @@ fn main(
     fn levels_bottom_out_at_a_single_group() {
         assert_eq!(level_sizes(0), vec![1]);
         assert_eq!(level_sizes(1), vec![1]);
-        assert_eq!(level_sizes(WORKGROUP), vec![1]);
-        assert_eq!(level_sizes(WORKGROUP + 1), vec![2, 1]);
-        assert_eq!(level_sizes(1_000_000), vec![3907, 16, 1]);
-        assert!(level_sizes(100_000_000).len() <= 4);
+        assert_eq!(level_sizes(2), vec![2, 1]);
+        assert_eq!(level_sizes(WORKGROUP), vec![WORKGROUP, 1]);
+        assert_eq!(level_sizes(WORKGROUP + 1), vec![WORKGROUP + 1, 2, 1]);
+        assert_eq!(level_sizes(3907), vec![3907, 16, 1]);
+        assert!(level_sizes(390_625).len() <= 4);
+    }
+
+    /// The leaf sizes its partials to every block of a folded dispatch, past 65,535 groups as below.
+    #[test]
+    fn partials_cover_every_dispatched_block() {
+        for n in [1, 256 * 65_535, 256 * 65_535 + 1, 4100 * 4100, 100_000_000] {
+            let (x, y) = linear_dispatch(n);
+            assert_eq!(leaf_blocks(n), x * y, "{n} invocations");
+            assert_eq!(level_sizes(leaf_blocks(n))[0], x * y, "{n} invocations");
+            assert!(
+                u64::from(x * y) * u64::from(WORKGROUP) >= u64::from(n),
+                "{n} invocations"
+            );
+        }
+        // One group past a full row folds into two rows of 65,535 groups.
+        assert_eq!(leaf_blocks(256 * 65_535 + 1), 2 * 65_535);
+    }
+
+    /// The regression. Partials sized from the population held 65,536 groups where the folded dispatch writes
+    /// 131,070, and the blocks past the buffer were dropped from the sum.
+    #[test]
+    fn a_built_reduce_holds_a_partial_for_every_dispatched_block() {
+        let Some(ctx) = headless_context("gpu_reduce_partials_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_built_reduce_holds_a_partial_for_every_dispatched_block: no adapter");
+            return;
+        };
+        let lanes = 2;
+        let reduce = GpuLaneReduce::new(&ctx.device, &ctx.queue, "test", lanes, 256 * 65_535 + 1);
+        let (groups_x, groups_y) = reduce.agent_groups();
+        assert_eq!((groups_x, groups_y), (65_535, 2));
+        let partial_bytes = u64::from(groups_x * groups_y) * lanes as u64 * std::mem::size_of::<f32>() as u64;
+        assert_eq!(reduce.partials.size(), partial_bytes);
     }
 
     /// Sizes straddle the workgroup width, including a ragged tail and a multi-level chain.

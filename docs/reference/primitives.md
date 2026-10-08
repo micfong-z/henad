@@ -9,19 +9,21 @@ icon: material/function-variant
 Primitives are the small vocabulary a model kernel calls for world geometry, neighbourhoods and random draws.
 Most of them exist twice, once in Rust for CPU models and once in WGSL for GPU models.
 `offsets`, `for_each_neighbor`, `mix_seed` and `next_index` are Rust only, and `neighbor_count` and `neighbor_offset` are WGSL only.
-The two generators, `xorshift64` and `pcg_hash`, fill the same role under different names.
+The two generators, `xorshift64` and `pcg_hash`, fill the same role under different names, and `pcg_hash` has a Rust twin for seeding a GPU buffer.
 
 ```rust
-use henad_core::authoring::primitives::space::{Boundary, dist_sq, offset_cell};
-use henad_core::authoring::primitives::rng::{next_bits, random_float};
+use henad::authoring::primitives::space::{Boundary, dist_sq, offset_cell};
+use henad::authoring::primitives::rng::{next_bits, random_float};
 ```
 
 ```wgsl
-#import shared::space::{TORUS, dist_sq, offset_cell}
-#import shared::rng::{next_bits, random_float}
+#import henad::space::{TORUS, dist_sq, offset_cell}
+#import henad::rng::{next_bits, random_float}
 ```
 
 Where a primitive exists in both languages, the names match.
+`henad::authoring::prelude` holds every Rust draw, and `Boundary`, `cell_index`, `offset_cell`, `dist_sq` and the three offset tables of the space helpers.
+A model imports the other space helpers from `henad::authoring::primitives::space`.
 Each entry below gives the Rust signature, and calls out the WGSL one wherever it differs.
 
 ## Index
@@ -34,7 +36,7 @@ Each entry below gives the Rust signature, and calls out the WGSL one wherever i
 
 ## Space
 
-`henad_core::authoring::primitives::space` and `shared::space`.
+`henad::authoring::primitives::space` in Rust, and `henad::space` in WGSL.
 
 Positions are `f32` in world units, cells are `u32` indices into a grid `w` by `h`.
 The y axis points down, matching the display, and `dy` therefore runs south.
@@ -278,7 +280,7 @@ fn offsets(kind: NeighborhoodKind) -> &'static [(i32, i32)]
 The table for a `NeighborhoodKind`, in `step_cell` order.
 `Moore` gives [`MOORE_ROW_MAJOR`](#moore_row_major) and `VonNeumann` gives [`VON_NEUMANN`](#von_neumann).
 
-`NeighborhoodKind` comes from `henad_core::topology`.
+`NeighborhoodKind` is at `henad::authoring::NeighborhoodKind`, and the authoring prelude holds it.
 
 Rust only.
 A shader names a table by its id instead, as in [`neighbor_count`](#neighbor_count).
@@ -351,7 +353,7 @@ See also: [`neighbor_count`](#neighbor_count), [`offset_cell`](#offset_cell).
 
 ## Random
 
-`henad_core::authoring::primitives::rng` and `shared::rng`.
+`henad::authoring::primitives::rng` in Rust, and `henad::rng` in WGSL.
 
 A draw takes a raw `u32` word and is pure.
 A `next_*` form advances a generator and then calls the pure form.
@@ -384,7 +386,13 @@ fn pcg_hash(input: u32) -> u32
 ```
 
 The GPU generator, and the WGSL counterpart of [`xorshift64`](#xorshift64).
-A model that seeds a GPU buffer from Rust mirrors this function bit for bit.
+
+```rust
+fn pcg_hash(input: u32) -> u32
+```
+
+The Rust twin, bit-equal to the WGSL one, which a GPU port calls to seed a state buffer the shader then draws from.
+The authoring prelude brings it in.
 
 See also: [`next_bits`](#next_bits).
 
@@ -530,7 +538,7 @@ See also: [`random_float`](#random_float), [`MOORE_COLUMN_MAJOR`](#moore_column_
 ## Parity
 
 Each pair is pinned by a parity test.
-`crates/henad-compute/src/gpu/shared/parity.wgsl` runs one invocation per case and one dispatch for the whole set, switching on an op code, and `crates/henad-compute/src/gpu/tests/parity.rs` drives it and compares.
+`crates/henad-compute/src/gpu/tests/parity.wgsl` runs one invocation per case and one dispatch for the whole set, switching on an op code, and `crates/henad-compute/src/gpu/tests/parity.rs` drives it and compares.
 Op codes come from the generated bindings.
 
 Integer results must match exactly, and so must [`random_float`](#random_float).
@@ -548,13 +556,13 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 
 | Need | Where |
 |---|---|
-| Agents within a radius | `SpatialHash::query_radius`, in `henad_core::spatial_hash`. Takes a caller-provided result buffer, so a query does not allocate |
-| World size | `henad_core::Extent`. The engine prepends world size to every agent model's params |
-| A per-chunk RNG seed | `chunk_seed(base, tick, chunk_index)`, in `henad-compute`'s `cpu/primitives/chunked.rs` |
-| Counting cells | `reduce_chunks`, in the same file |
-| A node's neighbours | `Network::in_neighbors` and `Network::out_neighbors`, in `henad_core::network`. Each returns a slice of node indices without allocating. On an undirected graph the two return the same list |
-| Whether two nodes are joined | `Network::has_edge`, or `Network::edge_between` for the edge's index, in the same file. A lookup walks one node's neighbours, the shorter list on an undirected graph. On a directed graph it looks only for an edge from the first node to the second |
-| Connected components | `label_components`, in `henad-compute`'s `cpu/primitives/components.rs`. Labels every node with the lowest node index in its component, into a caller-provided buffer, and returns the number of components and the size of the largest. On a directed graph it finds weakly connected components |
+| Agents within a radius | `SpatialHash::query_radius`, on `henad::authoring::SpatialHash`. Takes a caller-provided result buffer, so a query does not allocate |
+| World size | `henad::authoring::Extent`. The engine prepends world size to every agent model's params |
+| A per-chunk RNG | The `run_pass` that `agent_lanes!` generates hands the kernel its chunk's generator, seeded from the tick and the chunk's index |
+| Counting cells | `henad::authoring::reduce_chunks` |
+| A node's neighbours | `Network::in_neighbors` and `Network::out_neighbors`, on `henad::authoring::Network`. Each returns a slice of node indices without allocating. On an undirected graph the two return the same list |
+| Whether two nodes are joined | `Network::has_edge`, or `Network::edge_between` for the edge's index. A lookup walks one node's neighbours, the shorter list on an undirected graph. On a directed graph it looks only for an edge from the first node to the second |
+| Connected components | `henad::authoring::label_components`. Labels every node with the lowest node index in its component, into a caller-provided buffer, and returns the number of components and the size of the largest. On a directed graph it finds weakly connected components |
 | Arithmetic, trigonometry, `min`, `max`, `clamp` | Rust and WGSL both provide these already |
 
 ## Not provided
@@ -562,7 +570,7 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 - **Agentsets.** There is no first-class filtered collection of agents, and no ask-style iteration over one. A model filters inside its own kernel, over flat lanes.
 - **Global ordering.** Nothing sorts agents or picks a global maximum across them.
 - **A per-cell list of agents.** Nothing keeps a second copy of where each agent stands. `SpatialHash` is rebuilt from positions each tick and answers the same queries.
-- **A global RNG seed.** A chunk's RNG comes from `chunk_seed(base, tick, chunk_index)`. A run is then independent of the thread count.
+- **A global RNG seed.** A chunk's RNG is seeded from the tick and the chunk's index. A run is then independent of the thread count.
   A network model's global pass is sequential and draws from one stream of its own.
 - **Dynamic populations of agents.** An agent model's agents are neither created nor removed mid-run.
   A network model can add and remove nodes through `Nodes::spawn` and `Nodes::retire`.
@@ -575,8 +583,8 @@ Anything with one call site stays in that model.
 ## Where these live
 
 ```text
-crates/henad-core/src/authoring/primitives/space.rs   <->  crates/henad-compute/src/gpu/shared/space.wgsl
-crates/henad-core/src/authoring/primitives/rng.rs     <->  crates/henad-compute/src/gpu/shared/rng.wgsl
+crates/henad-core/src/authoring/primitives/space.rs   <->  crates/henad-core/src/authoring/primitives/wgsl/space.wgsl
+crates/henad-core/src/authoring/primitives/rng.rs     <->  crates/henad-core/src/authoring/primitives/wgsl/rng.wgsl
 ```
 
 Adding a primitive means adding both sides, an op in `parity.wgsl` and a case builder in the parity driver.

@@ -2,7 +2,7 @@
 //! asked for it.
 //!
 //! `rfd` is async and the app has no executor, so each target drives the future its own way. Native blocks a thread
-//! of its own. In a browser the task runs on the page's event loop.
+//! of its own. In a browser the task runs on the page's event loop, and a save is a download with no dialog.
 
 pub mod open;
 pub mod save;
@@ -24,9 +24,24 @@ pub enum SaveTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveResult {
     /// Saved, under the name inside.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "a browser saves through its downloads")
+    )]
     Saved(String),
+    /// Handed to the browser's downloads as one file, under the name inside. A browser reports nothing further.
+    #[cfg_attr(not(target_arch = "wasm32"), expect(dead_code, reason = "only a browser downloads"))]
+    Downloaded(String),
+    /// Handed to the browser's downloads as several files. A browser reports nothing further, and can hold back every
+    /// download after the first.
+    #[cfg_attr(not(target_arch = "wasm32"), expect(dead_code, reason = "only a browser downloads"))]
+    DownloadsStarted,
     Failed(String),
     /// The dialog was dismissed.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "a browser download has no dialog")
+    )]
     Canceled,
 }
 
@@ -64,6 +79,7 @@ pub struct DialogFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenResult {
     Files(Vec<DialogFile>),
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser picks no folder"))]
     Folder(PathBuf),
     Failed(String),
     /// The dialog was dismissed.

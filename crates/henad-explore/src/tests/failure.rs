@@ -2,10 +2,10 @@
 
 use std::num::NonZeroUsize;
 
+use henad_compute::entry::register_grid_model;
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
 use henad_core::explore::spec::{BlockSpec, SweepSpec};
-use henad_models::registry::register_grid_model;
 
 use crate::exec::Concurrency;
 use crate::output::manifest::{Manifest, ManifestStatus};
@@ -165,7 +165,8 @@ fn a_sweep_that_fails_once_its_manifest_is_written_is_marked_failed() {
         &model,
         None,
         &spec,
-        &sweep_options(scratch.path(), true),
+        scratch.path(),
+        &sweep_options(true),
         &mut Recorder::default(),
     )
     .expect_err("summary.csv cannot be written");

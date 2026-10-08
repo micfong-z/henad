@@ -42,7 +42,8 @@ targets = [
 # If true, metadata will be collected with `--all-features`. Note that this can't
 # be toggled off if true, if you want to conditionally enable `--all-features` it
 # is recommended to pass `--all-features` on the cmd line instead
-all-features = false
+# Henad's checks cover every feature, henad-app's `inspection` among them.
+all-features = true
 # If true, metadata will be collected with `--no-default-features`. The same
 # caveat with `all-features` applies
 no-default-features = false
@@ -70,6 +71,8 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
+    { id = "RUSTSEC-2025-0057", reason = "fxhash, unmaintained, runs at build time only, through the wgsl_bindgen henad-build pins" },
+    { id = "RUSTSEC-2024-0436", reason = "paste, unmaintained, a proc-macro dependency of egui_dock" },
     #"RUSTSEC-0000-0000",
     #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
     #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish

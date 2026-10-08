@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # henad and henad-build move together. Otherwise a lone update of one would fail the build against the other.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      henad:
+        patterns:
+          - henad
+          - henad-build
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

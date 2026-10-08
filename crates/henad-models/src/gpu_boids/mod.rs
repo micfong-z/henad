@@ -4,7 +4,7 @@
 //! neighbour index does not fix the order within a cell, so trajectories are likely different.
 
 use henad_compute::cpu::agent_engine::{
-    AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
+    NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_init_rng, agent_model_param_descriptors, split_params,
 };
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::agent_model::{AgentLanes as _, AgentModel as _};
@@ -12,7 +12,6 @@ use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{
     BufferSpec, Domain, Geometry, GpuAgentAction, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
-use henad_core::authoring::primitives::rng::mix_seed;
 use henad_core::helpers::{extract_f32, extract_u32};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -34,6 +33,7 @@ henad_core::buffers! {
 }
 // --8<-- [end:buffers]
 
+#[derive(Debug)]
 pub struct GpuBoids;
 
 impl GpuAgentModel for GpuBoids {
@@ -46,11 +46,14 @@ impl GpuAgentModel for GpuBoids {
 
     /// All double buffered, since a boid reads its neighbours' current values while writing its
     /// own next ones.
-    const BUFFERS: &'static [BufferSpec] = SPECS;
+    const BUFFERS: &'static [BufferSpec] = BUFFER_SPECS;
     const POS_BUFFER: usize = POS;
     const COLOR_BUFFER: usize = COLOR;
 
     const INDEX: bool = true;
+
+    /// The neighbour index leaves the order of boids within a cell to the GPU.
+    const REPLAYS_EXACTLY: bool = false;
 
     // --8<-- [start:passes]
     const STEP_PASSES: &'static [PassSpec] = &[PassSpec {
@@ -105,7 +108,7 @@ impl GpuAgentModel for GpuBoids {
         // Seeding through the model's own `init` is what keeps tick 0 bit identical. A port
         // would be free to drift.
         let mut lanes = BoidLanes::alloc(n);
-        let mut rng = seed.map_or(AGENT_INIT_SEED, mix_seed);
+        let mut rng = agent_init_rng(seed);
         BoidsModel::init(&mut lanes, geom.extent, split_params::<BoidsModel>(params).0, &mut rng);
 
         // The CPU lane holds palette indices, this one is drawn directly so it holds colours.
@@ -131,7 +134,7 @@ impl GpuAgentModel for GpuBoids {
                 num_agents: ctx.geom.num_agents,
                 groups_x: ctx.groups_x,
                 seed: ctx.seed,
-                stationary: 0.5 * (hot.min_speed + hot.max_speed),
+                stationary: hot.min_speed.midpoint(hot.max_speed),
                 palette: packed_heading_palette(),
             })
             .to_vec();
@@ -215,11 +218,12 @@ mod tests {
     use henad_compute::cpu::agent_engine::AgentModelState;
     use henad_compute::gpu::{GpuAgentState, GpuContext};
     use henad_core::model::SimState as _;
+    use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
     type State = GpuAgentState<GpuBoids>;
 
     fn headless_context() -> Option<GpuContext> {
-        crate::tests::support::headless_context("gpu_boids_test_device", wgpu::Features::empty())
+        headless_test_device(&TestDeviceRequest::baseline())
     }
 
     fn params(num_agents: u32, world: f32) -> Vec<ParamValue> {
@@ -297,7 +301,8 @@ mod tests {
         }
     }
 
-    /// Both backends seed through `BoidsModel::init`, so any later divergence is the step's.
+    /// Both backends seed through `BoidsModel::init`, by default and from a seed, so any later divergence is the
+    /// step's.
     #[test]
     fn initial_flock_matches_the_cpu_model() {
         let Some(ctx) = headless_context() else {
@@ -306,15 +311,17 @@ mod tests {
         };
 
         let values = params(2_000, 800.0);
-        let gpu = State::new(&ctx, &values);
-        let cpu = AgentModelState::<BoidsModel>::from_params(&values);
+        for seed in [None, Some(7)] {
+            let gpu = State::new_seeded(&ctx, &values, seed);
+            let cpu = AgentModelState::<BoidsModel>::from_params_seeded(&values, seed);
 
-        let (pos_x, pos_y, vel_x, vel_y) = lanes(&gpu);
-        let cpu_lanes = cpu.lanes();
-        assert_eq!(pos_x, cpu_lanes.pos_x, "initial x positions must match the CPU model");
-        assert_eq!(pos_y, cpu_lanes.pos_y, "initial y positions must match the CPU model");
-        assert_eq!(vel_x, cpu_lanes.vel_x, "initial x velocities must match the CPU model");
-        assert_eq!(vel_y, cpu_lanes.vel_y, "initial y velocities must match the CPU model");
+            let (pos_x, pos_y, vel_x, vel_y) = lanes(&gpu);
+            let cpu_lanes = cpu.lanes();
+            assert_eq!(pos_x, cpu_lanes.pos_x, "initial x positions differ for seed {seed:?}");
+            assert_eq!(pos_y, cpu_lanes.pos_y, "initial y positions differ for seed {seed:?}");
+            assert_eq!(vel_x, cpu_lanes.vel_x, "initial x velocities differ for seed {seed:?}");
+            assert_eq!(vel_y, cpu_lanes.vel_y, "initial y velocities differ for seed {seed:?}");
+        }
     }
 
     /// Catches a reduction that lost or double counted a workgroup.

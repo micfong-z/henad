@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use henad_compute::entry::{ModelEntry, ModelLookupError};
 use henad_core::explore::factor::FactorTarget;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::RunOutcome;
@@ -25,16 +26,21 @@ use henad_core::explore::spec::{ACTION_COLUMN_PREFIX, ActionSpec};
 use henad_core::explore::summary::{ReplicateSummary, RunningMoments};
 use henad_core::explore::value::{format_value, parse_value};
 use henad_core::params::ParamDescriptor;
+use henad_explore::output::manifest::{BuildRole, RecordedBuild};
 use henad_explore::output::search_tables::SearchHistory;
 use henad_explore::result_set::ResultSet;
-use henad_explore::schema::model_schema;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
-use henad_models::registry::ModelEntry;
 
+use crate::state::lookup_message;
 use crate::ui::sweep::draft::describe_error;
+use crate::ui::sweep::session::SessionExecution;
 
 /// Level id of a config on an axis whose column the config lacks.
 const NO_LEVEL_ID: usize = usize::MAX;
+
+/// Most configs a folder's manifest can record for the app to plan its sweep. The configs of a larger sweep are
+/// listed from `runs.csv` alone.
+const MAX_PLANNED_CONFIGS: u64 = 1 << 20;
 
 /// Place results come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +48,7 @@ pub enum ResultsSource {
     /// The sweep or search started from the Sweep tab.
     Sweep,
     /// A folder a sweep wrote.
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser reads no folder"))]
     Folder(PathBuf),
     /// Files picked one by one, by name.
     Files(Vec<String>),
@@ -252,6 +259,7 @@ impl SeriesCache {
     }
 
     /// Drops held series of runs outside `kept_runs`, highest run id first, until `bytes` more fit the budget.
+    #[cfg(not(target_arch = "wasm32"))]
     fn make_room(&mut self, bytes: usize, kept_runs: &BTreeSet<u64>) {
         let evictable: Vec<u64> = self
             .runs
@@ -273,11 +281,8 @@ impl SeriesCache {
         self.runs.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.runs.is_empty()
-    }
-
     /// Bytes the held series take.
+    #[cfg(test)]
     pub fn used_bytes(&self) -> usize {
         self.used
     }
@@ -483,6 +488,44 @@ impl SortValue {
     }
 }
 
+/// Returns the roles whose current build, Henad's or the one that registered `entry`, differs from a build a session
+/// of `set` recorded for that role, and then the roles whose builds cannot be compared.
+///
+/// A build that records neither a commit nor a source hash is never the same as another, itself included. A role
+/// lands in the second list when each of its differences is between two builds of one package and version, and one
+/// of the two is such a build.
+fn compare_builds(set: &ResultSet, entry: &ModelEntry) -> (Vec<BuildRole>, Vec<BuildRole>) {
+    let mut changed = Vec::new();
+    let mut unidentified = Vec::new();
+    for (role, current) in [
+        (BuildRole::Engine, RecordedBuild::engine()),
+        (BuildRole::Model, RecordedBuild::from(entry.source())),
+    ] {
+        let recorded = set.recorded_builds(role);
+        let mut differing = recorded
+            .iter()
+            .filter(|recorded| !recorded.same_build(&current))
+            .peekable();
+        if differing.peek().is_none() {
+            continue;
+        }
+        if differing.any(|recorded| known_change(recorded, &current)) {
+            changed.push(role);
+        } else {
+            unidentified.push(role);
+        }
+    }
+    (changed, unidentified)
+}
+
+/// Returns whether `recorded` and `current`, two builds that are not the same, are known to differ: in package or
+/// version, or with both identified by a commit or a source hash.
+fn known_change(recorded: &RecordedBuild, current: &RecordedBuild) -> bool {
+    recorded.package != current.package
+        || recorded.version != current.version
+        || (recorded.is_identified() && current.is_identified())
+}
+
 /// Runs, configs and series of one sweep.
 #[derive(Debug)]
 pub struct ResultsStore {
@@ -490,12 +533,22 @@ pub struct ResultsStore {
     pub model_id: String,
     /// Name of the model as the sweep recorded it.
     pub model_name: String,
-    /// Index of the model in the app's registry, `None` when this device lacks it.
-    pub model_index: Option<usize>,
     /// Whether the model declares the parameters, stats and actions the sweep ran with.
     pub schema_matches: bool,
+    /// Roles whose current build differs from a build some session of the sweep recorded, the engine's before the
+    /// model's.
+    pub changed_builds: Vec<BuildRole>,
+    /// Roles outside `changed_builds` whose current or recorded build records neither a commit nor a source hash, and
+    /// so cannot be compared, the engine's before the model's.
+    pub unidentified_builds: Vec<BuildRole>,
+    /// Whether two builds of the model on one seed step through identical states, as the model and the sweep both
+    /// declare.
+    pub replays_exactly: bool,
     /// Whether every run of the sweep is held.
     pub complete: bool,
+    /// Settings a resume runs with: the memory budgets the folder's manifest records, and automatic concurrency.
+    /// `None` for a sweep the app runs.
+    pub recorded_execution: Option<SessionExecution>,
     /// Folder that holds the sweep's files, `None` for a sweep held in memory or picked files.
     folder: Option<PathBuf>,
     /// Plan the runs replay through, or the reason they cannot: this device lacks the model, or the model refuses the
@@ -533,29 +586,25 @@ pub struct ResultsStore {
 }
 
 impl ResultsStore {
-    /// Returns an empty store for the sweep of `plan` over `entry`, the model at `model_index` in the registry, whose
-    /// files go to `folder`.
-    pub fn for_sweep(
-        plan: Arc<Plan>,
-        entry: &ModelEntry,
-        model_index: usize,
-        folder: Option<PathBuf>,
-        series_budget: usize,
-    ) -> Self {
-        let value_columns = plan_value_columns(&plan, &entry.param_descriptors);
-        let texts = plan_texts(&plan, &entry.param_descriptors);
+    /// Returns an empty store for the sweep of `plan` over `entry`, whose files go to `folder`.
+    pub fn for_sweep(plan: Arc<Plan>, entry: &ModelEntry, folder: Option<PathBuf>, series_budget: usize) -> Self {
+        let value_columns = plan_value_columns(&plan, entry.param_descriptors());
+        let texts = plan_texts(&plan, entry.param_descriptors());
         let mut store = Self {
             source: ResultsSource::Sweep,
-            model_id: entry.id.clone(),
-            model_name: entry.name.clone(),
-            model_index: Some(model_index),
+            model_id: entry.id().to_owned(),
+            model_name: entry.name().to_owned(),
             schema_matches: true,
+            changed_builds: Vec::new(),
+            unidentified_builds: Vec::new(),
+            replays_exactly: entry.metadata().replays_exactly,
             complete: false,
+            recorded_execution: None,
             folder,
             action_labels: action_labels(plan.actions(), entry),
             plan: Ok(ReplayPlan::Sweep(plan)),
             search: None,
-            descriptors: entry.param_descriptors.clone(),
+            descriptors: entry.param_descriptors().to_vec(),
             value_columns,
             stat_columns: Vec::new(),
             reducer_columns: Vec::new(),
@@ -575,12 +624,10 @@ impl ResultsStore {
         store
     }
 
-    /// Returns an empty store for the search of `search_plan` over `entry`, the model at `model_index` in the
-    /// registry, whose files go to `folder`.
+    /// Returns an empty store for the search of `search_plan` over `entry`, whose files go to `folder`.
     pub fn for_search(
         search_plan: Arc<SearchPlan>,
         entry: &ModelEntry,
-        model_index: usize,
         folder: Option<PathBuf>,
         series_budget: usize,
     ) -> Self {
@@ -590,7 +637,7 @@ impl ResultsStore {
             history: SearchHistory::default(),
             table_error: None,
         };
-        let mut store = Self::for_sweep(base, entry, model_index, folder, series_budget);
+        let mut store = Self::for_sweep(base, entry, folder, series_budget);
         store.set_configs(BTreeMap::new());
         store.plan = Ok(ReplayPlan::Search(search_plan));
         store.search = Some(search);
@@ -599,18 +646,34 @@ impl ResultsStore {
 
     /// Returns a store of the runs `set` read from `source`, holding at most `series_budget` bytes of series.
     ///
-    /// The runs replay through the model of the same id in `registry`, when there is one.
+    /// The runs replay through `model`, the sweep's model as the app finds it. A sweep whose manifest records more than
+    /// [`MAX_PLANNED_CONFIGS`] configs is never planned. Its configs come from `runs.csv` alone, and its runs do not
+    /// replay.
     pub fn from_result_set(
         set: ResultSet,
         source: ResultsSource,
-        registry: &[ModelEntry],
+        model: Result<&ModelEntry, ModelLookupError>,
         series_budget: usize,
     ) -> Self {
-        let model = &set.manifest().model;
-        let (model_id, model_name) = (model.id.clone(), model.name.clone());
-        let model_index = registry.iter().position(|entry| entry.id == model_id);
-        let entry = model_index.map(|index| &registry[index]);
-        let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry));
+        Self::listing_planned_configs(set, source, model, series_budget, MAX_PLANNED_CONFIGS)
+    }
+
+    /// Returns the store [`Self::from_result_set`] does, planning a sweep only while its manifest records at most
+    /// `max_planned` configs, and listing the configs `runs.csv` lacks only from a plan of at most that many.
+    fn listing_planned_configs(
+        set: ResultSet,
+        source: ResultsSource,
+        model: Result<&ModelEntry, ModelLookupError>,
+        series_budget: usize,
+        max_planned: u64,
+    ) -> Self {
+        let recorded = &set.manifest().model;
+        let (model_id, model_name) = (recorded.id.clone(), recorded.name.clone());
+        let entry = model.as_ref().ok().copied();
+        let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry.schema()));
+        let (changed_builds, unidentified_builds) =
+            entry.map_or_else(Default::default, |entry| compare_builds(&set, entry));
+        let replays_exactly = recorded.replays_exactly && entry.is_none_or(|entry| entry.metadata().replays_exactly);
         let search = set
             .spec()
             .search
@@ -628,31 +691,51 @@ impl ResultsStore {
                     table_error: Some(describe_error(&error)),
                 },
             });
-        let plan = match entry {
-            None => Err(format!("{model_name} is unavailable on this device")),
-            Some(entry) if search.is_some() => SearchPlan::new(set.spec(), &model_schema(entry))
+        let recorded_configs = set.manifest().plan.configs.unwrap_or(0);
+        let plan = match model {
+            Err(error) => Err(lookup_message(&error)),
+            Ok(entry) if search.is_some() => SearchPlan::new(set.spec(), &entry.schema())
                 .map(|search_plan| ReplayPlan::Search(Arc::new(search_plan)))
-                .map_err(|error| format!("{} refuses this search's spec: {}", entry.name, describe_error(&error))),
-            Some(entry) => set
-                .plan(entry)
+                .map_err(|error| {
+                    format!(
+                        "{} refuses this search's spec: {}",
+                        entry.name(),
+                        describe_error(&error)
+                    )
+                }),
+            Ok(_) if recorded_configs > max_planned => Err(format!(
+                "Sweep has {recorded_configs} configurations, too many to replay in the app"
+            )),
+            Ok(entry) => set
+                .plan(entry.schema())
                 .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
-                .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name, describe_error(&error))),
+                .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error))),
         };
+        // Configs `runs.csv` lacks are listed from the plan, unless the plan holds too many to list.
         let mut texts = match (&plan, entry) {
-            (Ok(ReplayPlan::Sweep(plan)), Some(entry)) if schema_matches => plan_texts(plan, &entry.param_descriptors),
+            (Ok(ReplayPlan::Sweep(plan)), Some(entry))
+                if schema_matches && plan.configs().len() as u64 <= max_planned =>
+            {
+                plan_texts(plan, entry.param_descriptors())
+            }
             _ => BTreeMap::new(),
         };
         let mut store = Self {
             source,
             model_id,
             model_name,
-            model_index,
             schema_matches,
+            changed_builds,
+            unidentified_builds,
+            replays_exactly,
             complete: set.is_complete(),
+            recorded_execution: Some(SessionExecution::recorded(&set.manifest().execution)),
             folder: set.dir().map(Path::to_path_buf),
             plan,
             search,
-            descriptors: entry.map(|entry| entry.param_descriptors.clone()).unwrap_or_default(),
+            descriptors: entry
+                .map(|entry| entry.param_descriptors().to_vec())
+                .unwrap_or_default(),
             action_labels: entry.map_or_else(BTreeMap::new, |entry| action_labels(&set.spec().actions, entry)),
             value_columns: set.value_columns().to_vec(),
             stat_columns: set.stat_columns().to_vec(),
@@ -1061,6 +1144,15 @@ impl ResultsStore {
         if self.is_search() { "Candidate" } else { "Config" }
     }
 
+    /// Returns the plural the views give the configs, "candidates" for the results of a search.
+    pub fn configs_noun(&self) -> &'static str {
+        if self.is_search() {
+            "candidates"
+        } else {
+            "configurations"
+        }
+    }
+
     /// Returns a name for config `config_id` that gives its level on every axis.
     pub fn config_label(&self, config_id: u64) -> String {
         let noun = self.config_noun();
@@ -1362,6 +1454,19 @@ impl ResultsStore {
         self.plan.as_ref().err().map(String::as_str)
     }
 
+    /// Returns the reason run `run_id` of a running search cannot replay yet, `None` for any other run.
+    ///
+    /// A search reports a run before the batch that tells its candidate, and the candidate's values arrive with the
+    /// batch.
+    pub fn untold_candidate(&self, run_id: u64) -> Option<String> {
+        if !self.is_search() {
+            return None;
+        }
+        let config_id = self.run(run_id)?.run.config_id;
+        (!self.configs.contains_key(&config_id) && self.unassigned_runs.contains_key(&config_id))
+            .then(|| format!("Candidate {config_id} will be known once its batch ends"))
+    }
+
     /// Returns the replay of run `run_id`.
     ///
     /// # Errors
@@ -1400,6 +1505,9 @@ impl ResultsStore {
     /// Returns the replay of `outcome`, a run of the search of `search_plan`, from the values of its candidate.
     fn search_replay(&self, search_plan: &SearchPlan, outcome: &RunOutcome) -> Result<Replay, String> {
         let run_id = outcome.run.run_id;
+        if let Some(reason) = self.untold_candidate(run_id) {
+            return Err(reason);
+        }
         let mismatch = || format!("Run {run_id} does not match the search it comes from");
         let config = self.configs.get(&outcome.run.config_id).ok_or_else(mismatch)?;
         let param_count = self.descriptors.len();
@@ -1436,21 +1544,22 @@ impl ResultsStore {
         Ok(search_plan.replay(&outcome.run, &config))
     }
 
-    /// Returns a `henad-cli` command that steps run `run_id` to the tick it ended on and writes its stats.
+    /// Returns a command line of `program`, a host's equivalent of `henad-cli`, that steps run `run_id` to the tick it
+    /// ended on and writes its stats.
     ///
     /// The command sets each parameter that differs from the model's default and fires each action due by the end.
     ///
     /// # Errors
     ///
     /// Returns the message of [`Self::replay`] for a run that does not replay.
-    pub fn cli_command(&self, run_id: u64) -> Result<String, String> {
+    pub fn cli_command(&self, program: &str, run_id: u64) -> Result<String, String> {
         let replay = self.replay(run_id)?;
         let (Ok(plan), Some(outcome)) = (&self.plan, self.run(run_id)) else {
             return Err(format!("No run {run_id} in these results"));
         };
         let plan = plan.base();
         let mut words = vec![
-            "henad-cli".to_owned(),
+            shell_word(program),
             shell_word(&replay.model),
             "--seed".to_owned(),
             replay.seed.to_string(),
@@ -1501,6 +1610,7 @@ impl ResultsStore {
     }
 
     /// Records that the runs `run_ids` have no series rows, so [`Self::runs_without_series`] leaves them out.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn record_empty_series(&mut self, run_ids: &BTreeSet<u64>) {
         let known = run_ids.iter().filter(|run_id| self.positions.contains_key(run_id));
         self.empty_series_runs.extend(known);
@@ -1508,6 +1618,7 @@ impl ResultsStore {
     }
 
     /// Returns the bytes of series a load can add while the series of `kept_runs` stay held.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn series_room(&self, kept_runs: &BTreeSet<u64>) -> usize {
         let kept_bytes: usize = kept_runs
             .iter()
@@ -1519,6 +1630,7 @@ impl ResultsStore {
 
     /// Holds `series`, series of runs by id, dropping held series of runs outside `kept_runs` to make room, and
     /// returns the number that fit.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn insert_series(&mut self, series: BTreeMap<u64, SeriesBuffer>, kept_runs: &BTreeSet<u64>) -> usize {
         let needed = series.values().map(series_bytes).sum();
         self.series.make_room(needed, kept_runs);
@@ -1582,7 +1694,7 @@ fn action_labels(actions: &[ActionSpec], entry: &ModelEntry) -> BTreeMap<String,
         .iter()
         .filter_map(|action| {
             let declared = entry
-                .action_descriptors
+                .action_descriptors()
                 .iter()
                 .find(|declared| declared.id == action.id)?;
             let label = action_label(declared.label, &action.id, &action.name);
@@ -1719,6 +1831,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
+    use henad_compute::entry::ModelEntry;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::SeriesBuffer;
@@ -1727,9 +1840,8 @@ mod tests {
     use henad_core::explore::search::{Aggregate, CandidateOrigin, Goal, Objective, SearchAlgorithm, SearchSpec};
     use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
     use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
-    use henad_explore::schema::model_schema;
     use henad_explore::search_run::{EvaluatedCandidate, EvaluationReading, SearchPlan, SearchUpdate};
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::example_models;
 
     use super::{
         BandKind, HeatColor, HeatQuery, ResponseQuery, ResultsAxis, ResultsStore, RunsColumn, RunsFilter, RunsSort,
@@ -1739,10 +1851,7 @@ mod tests {
     const STATS: [&str; 3] = ["Susceptible", "Infected", "Recovered"];
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn values(raw: &[&str]) -> LevelSpec {
@@ -1767,12 +1876,12 @@ mod tests {
     /// Returns the plan of an SIR factorial over `factors` with `replicates` runs per config.
     fn plan(entry: &ModelEntry, factors: Vec<FactorSpec>, replicates: u64) -> Arc<Plan> {
         let spec = factorial_spec(factors, replicates);
-        Arc::new(spec.plan(&model_schema(entry)).expect("a valid spec"))
+        Arc::new(spec.plan(&entry.schema()).expect("a valid spec"))
     }
 
     /// Returns a store for `plan` whose runs record one reducer, `Infected:max`.
     fn store(entry: &ModelEntry, plan: Arc<Plan>, series_budget: usize) -> ResultsStore {
-        let mut store = ResultsStore::for_sweep(plan, entry, 0, None, series_budget);
+        let mut store = ResultsStore::for_sweep(plan, entry, None, series_budget);
         let stats = STATS.map(str::to_owned);
         store.set_columns(&stats, &["Infected:max".to_owned()]);
         store
@@ -1984,7 +2093,7 @@ mod tests {
     #[test]
     fn a_search_candidate_lists_its_searched_values_once_its_batch_ends() {
         let sir = sir();
-        let schema = model_schema(&sir);
+        let schema = sir.schema();
         let mut spec = SweepSpec::new("sir");
         spec.search = Some(random_search(vec![FactorSpec::param(
             "infection_rate",
@@ -1995,11 +2104,11 @@ mod tests {
             },
         )]));
         let search_plan = SearchPlan::new(&spec, &schema).expect("a valid search");
-        let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, 0, None, usize::MAX);
+        let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, None, usize::MAX);
         assert_eq!(store.config_values(0), None, "no batch has ended");
 
         let mut params: Vec<ParamValue> = sir
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();
@@ -2009,12 +2118,23 @@ mod tests {
             params,
             action_ticks: Vec::new(),
         };
+        // The run of a batch arrives before the batch is told.
+        store.push_run(search_outcome(0, 0, 1, RunStatus::Ok), false);
+        let untold = "Candidate 0 will be known once its batch ends";
+        assert_eq!(store.untold_candidate(0).as_deref(), Some(untold));
+        assert_eq!(
+            store.replay(0),
+            Err(untold.to_owned()),
+            "a run of a candidate not told yet"
+        );
         store.push_search_updates([&search_update(0, vec![evaluated_candidate(0, 0, config)])]);
         assert_eq!(
             store.config_values_text(0).as_deref(),
             Some("Infection Rate 0.25"),
             "one candidate varies no axis, and still names what the search picks"
         );
+        assert_eq!(store.untold_candidate(0), None);
+        assert_ne!(store.replay(0), Err(untold.to_owned()));
     }
 
     /// Advances `state` by one xorshift step and returns a draw below `count`.
@@ -2031,7 +2151,7 @@ mod tests {
     /// Candidates from 3000 on come from block 1. A search has one block, and the store takes any.
     fn drawn_config(entry: &ModelEntry, candidate_id: u64, state: &mut u64) -> Config {
         let params = entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| {
                 let fixed = descriptor.id == "gain_resistance_chance"
@@ -2195,9 +2315,9 @@ mod tests {
     /// Returns Virus on a Network and a random search of it over the virus spread chance, which fires the rewire
     /// action.
     fn virus_search() -> (ModelEntry, Arc<SearchPlan>) {
-        let entry = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "virus_network")
+        let entry = example_models()
+            .get("virus_network")
+            .cloned()
             .expect("Virus on a Network is registered");
         let mut spec = SweepSpec::new("virus_network");
         spec.actions = vec![ActionSpec::new("rewire", 0)];
@@ -2209,7 +2329,7 @@ mod tests {
                 step: None,
             },
         )]));
-        let search_plan = SearchPlan::new(&spec, &model_schema(&entry)).expect("a valid search");
+        let search_plan = SearchPlan::new(&spec, &entry.schema()).expect("a valid search");
         (entry, Arc::new(search_plan))
     }
 
@@ -2269,7 +2389,7 @@ mod tests {
         batches: &[ToldBatch],
         reruns: &[RunOutcome],
     ) -> ResultsStore {
-        let mut store = ResultsStore::for_search(Arc::clone(search_plan), entry, 0, None, usize::MAX);
+        let mut store = ResultsStore::for_search(Arc::clone(search_plan), entry, None, usize::MAX);
         for outcome in batches.iter().flat_map(|told| &told.runs).chain(reruns) {
             store.push_run(outcome.clone(), false);
         }
@@ -2284,7 +2404,7 @@ mod tests {
     fn search_batches_extend_the_store_as_one_pass_builds_it() {
         let (entry, search_plan) = virus_search();
         let batches = told_batches(&entry);
-        let mut store = ResultsStore::for_search(Arc::clone(&search_plan), &entry, 0, None, usize::MAX);
+        let mut store = ResultsStore::for_search(Arc::clone(&search_plan), &entry, None, usize::MAX);
         let (mut in_place, mut moved_levels) = (0, 0);
         for (index, told) in batches.iter().enumerate() {
             for outcome in &told.runs {
@@ -2332,7 +2452,7 @@ mod tests {
 
         let (entry, search_plan) = virus_search();
         let batches = told_batches(&entry);
-        let new_store = || ResultsStore::for_search(Arc::clone(&search_plan), &entry, 0, None, usize::MAX);
+        let new_store = || ResultsStore::for_search(Arc::clone(&search_plan), &entry, None, usize::MAX);
         let (mut together, mut one_at_a_time) = (new_store(), new_store());
         let (mut start, mut group_size, mut group_count) = (0, 1, 0);
         let (mut joined_groups, mut in_place, mut moved_levels) = (0, 0, 0);
@@ -2441,7 +2561,7 @@ mod tests {
 
     /// Returns the parameters of `entry` with a default Recovery Rate of 0.1, as an earlier version of SIR declared.
     fn params_before_change(entry: &ModelEntry) -> Vec<ParamDescriptor> {
-        let mut params = entry.param_descriptors.clone();
+        let mut params = entry.param_descriptors().to_vec();
         let recovery = params
             .iter_mut()
             .find(|param| param.id == "recovery_rate")
@@ -2456,7 +2576,7 @@ mod tests {
     fn schema_with<'a>(entry: &'a ModelEntry, params: &'a [ParamDescriptor]) -> ModelSchema<'a> {
         ModelSchema {
             params,
-            ..model_schema(entry)
+            ..entry.schema()
         }
     }
 
@@ -2494,8 +2614,8 @@ mod tests {
         )]));
         let params = params_before_change(&sir);
         let recorded_plan = SearchPlan::new(&spec, &schema_with(&sir, &params)).expect("a valid search");
-        let search_plan = SearchPlan::new(&spec, &model_schema(&sir)).expect("a valid search");
-        let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, 0, None, usize::MAX);
+        let search_plan = SearchPlan::new(&spec, &sir.schema()).expect("a valid search");
+        let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, None, usize::MAX);
         let mut values: Vec<ParamValue> = params.iter().map(|param| param.kind.default_value()).collect();
         values[2] = ParamValue::F32(0.25);
         let config = Config {
@@ -2644,7 +2764,7 @@ mod tests {
         // Configs 0 and 1 vary the infection rate, and configs 2 and 3 the recovery rate. Configs 1 and 2 are the
         // baseline both blocks share.
         spec.blocks = vec![block(&["0.1", "0.3"], &["0.05"]), block(&["0.3"], &["0.05", "0.1"])];
-        let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
+        let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
         let mut store = store(&sir, Arc::clone(&plan), usize::MAX);
         for (run_id, value) in [10.0, 14.0, 20.0, 22.0, 20.0, 22.0, 40.0, 44.0].into_iter().enumerate() {
             store.push_run(outcome(&plan, run_id as u64, RunStatus::Ok, value, &[0.0]), false);
@@ -2828,7 +2948,7 @@ mod tests {
             factors: names.map(|name| FactorSpec::action(name, values(&["0", "5"]))).to_vec(),
             design_seed: None,
         }];
-        let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
+        let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
         let store = store(&sir, plan, usize::MAX);
         let labels: Vec<&str> = store.axes().iter().map(|axis| axis.label.as_str()).collect();
         assert_eq!(
@@ -2884,7 +3004,7 @@ mod tests {
             factors: vec![FactorSpec::param("infection_rate", values(&["0.3", "0.45"]))],
             design_seed: None,
         }];
-        let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
+        let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
         let mut store = store(&sir, Arc::clone(&plan), usize::MAX);
         let mut stopped = outcome(&plan, 1, RunStatus::Ok, 1.0, &[1.0]);
         stopped.ticks = 25;
@@ -2893,14 +3013,17 @@ mod tests {
 
         let seed = plan.run(1).expect("a planned run").seed;
         assert_eq!(
-            store.cli_command(1).expect("the run replays"),
+            store.cli_command("henad-cli", 1).expect("the run replays"),
             format!(
                 "henad-cli sir --seed {seed} --set grid_width=32 --set infection_rate=0.45 --act seed_outbreak@10 \
                  --warmup 5 --steps 20 --stats-every 5 --export-stats run-1.csv"
             ),
             "the default infection rate is left out, and so is the action past the end"
         );
-        assert!(store.cli_command(0).is_err(), "run 0 is not in the results");
+        assert!(
+            store.cli_command("henad-cli", 0).is_err(),
+            "run 0 is not in the results"
+        );
         assert_eq!(shell_word("network=Small world"), "'network=Small world'");
         assert_eq!(shell_word("it's"), r"'it'\''s'");
     }
@@ -2935,19 +3058,206 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn a_run_opened_from_a_folder_replays_to_its_row() {
-        use henad_compute::cpu::sim_thread::SimThread;
-        use henad_compute::fault::FaultSink;
-        use henad_core::explore::stop::StopSpec;
-        use henad_core::export::stats_csv::StatColumns;
+    fn a_replay_warns_on_a_build_from_any_session() {
+        use henad_explore::handle::SweepOutput;
+        use henad_explore::output::manifest::BuildRole;
         use henad_explore::progress::NoProgress;
         use henad_explore::result_set::ResultSet;
-        use henad_explore::sweep::{SweepOptions, run_sweep};
-        use henad_models::registry::ModelState;
+        use henad_explore::sweep::{Provenance, SweepOptions, run_spec};
+        use serde_json::Value;
 
         use crate::ui::results::store::ResultsSource;
 
-        let registry = model_registry(None);
+        let models = example_models();
+        let sir = models.get("sir").expect("SIR is registered");
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = [("grid_width", "8"), ("grid_height", "8")]
+            .map(|(id, value)| (id.to_owned(), value.to_owned()))
+            .to_vec();
+        spec.run.steps = 3;
+        let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-builds-{}", std::process::id())));
+        drop(std::fs::remove_dir_all(&folder.0));
+        let mut options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
+        for replicates in [1, 2] {
+            spec.run.replicates = replicates;
+            let output = SweepOutput::Directory(folder.0.clone());
+            run_spec(sir, None, &spec, output, &options, &mut NoProgress).expect("the sweep runs");
+            options.resume = true;
+        }
+        let open = || {
+            let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
+            ResultsStore::from_result_set(
+                set,
+                ResultsSource::Folder(folder.0.clone()),
+                models.lookup("sir", None),
+                usize::MAX,
+            )
+        };
+        let store = open();
+        assert_eq!(store.changed_builds, []);
+        assert!(store.replays_exactly);
+
+        // The first of two sessions ran another engine, and the second this one.
+        let path = folder.0.join("manifest.json");
+        let mut manifest: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("the manifest is written")).expect("JSON");
+        manifest["sessions"][0]["engine"]["version"] = Value::from("0.1.0");
+        manifest["model"]["replays_exactly"] = Value::from(false);
+        std::fs::write(&path, manifest.to_string()).expect("the manifest can be written");
+        let store = open();
+        assert_eq!(store.changed_builds, [BuildRole::Engine]);
+        assert!(
+            !store.replays_exactly,
+            "the manifest declares the model does not replay exactly"
+        );
+        assert_eq!(store.unidentified_builds, []);
+
+        // A model crate whose build script stamps nothing records an unidentified build. The model's build changed
+        // no more than before, and the store cannot tell.
+        for session in manifest["sessions"].as_array_mut().expect("a list of sessions") {
+            let model_source = &mut session["model_source"];
+            model_source["commit"] = Value::from("");
+            model_source["dirty"] = Value::Null;
+            model_source["source_hash"] = Value::Null;
+        }
+        std::fs::write(&path, manifest.to_string()).expect("the manifest can be written");
+        let store = open();
+        assert_eq!(store.changed_builds, [BuildRole::Engine]);
+        assert_eq!(store.unidentified_builds, [BuildRole::Model]);
+    }
+
+    /// A sweep whose manifest records more configs than the bound is never planned. It lists the configs `runs.csv`
+    /// holds, and its runs do not replay. A manifest naming a huge design once took gigabytes to open.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_folder_plans_its_sweep_only_within_a_bounded_size() {
+        use henad_core::explore::factor::{FactorSpec, LevelSpec};
+        use henad_core::explore::spec::BlockSpec;
+        use henad_explore::handle::SweepOutput;
+        use henad_explore::progress::NoProgress;
+        use henad_explore::result_set::ResultSet;
+        use henad_explore::sweep::{Provenance, SweepOptions, run_spec};
+        use serde_json::Value;
+
+        use super::MAX_PLANNED_CONFIGS;
+        use crate::ui::results::store::ResultsSource;
+
+        let models = example_models();
+        let sir = models.get("sir").expect("SIR is registered");
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = [("grid_width", "8"), ("grid_height", "8")]
+            .map(|(id, value)| (id.to_owned(), value.to_owned()))
+            .to_vec();
+        spec.blocks = vec![BlockSpec {
+            factors: vec![FactorSpec::param(
+                "infection_rate",
+                LevelSpec::Values(["0.1", "0.2", "0.3", "0.4"].map(str::to_owned).to_vec()),
+            )],
+            ..BlockSpec::default()
+        }];
+        spec.run.steps = 3;
+        let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-planned-{}", std::process::id())));
+        drop(std::fs::remove_dir_all(&folder.0));
+        let options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
+        run_spec(
+            sir,
+            None,
+            &spec,
+            SweepOutput::Directory(folder.0.clone()),
+            &options,
+            &mut NoProgress,
+        )
+        .expect("the sweep runs");
+        // A sweep stopped after its first run.
+        let runs_path = folder.0.join("runs.csv");
+        let runs = std::fs::read_to_string(&runs_path).expect("runs.csv is written");
+        let first_run: String = runs.lines().take(2).map(|line| format!("{line}\n")).collect();
+        std::fs::write(&runs_path, first_run).expect("runs.csv can be written");
+
+        let open = |max_planned| {
+            let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
+            let source = ResultsSource::Folder(folder.0.clone());
+            ResultsStore::listing_planned_configs(set, source, models.lookup("sir", None), usize::MAX, max_planned)
+        };
+        let within = open(4);
+        assert_eq!(
+            within.config_ids().count(),
+            4,
+            "a plan within the bound lists every config"
+        );
+        assert!(within.replay(0).is_ok(), "the run replays");
+        let past = open(3);
+        assert_eq!(
+            past.replay_refusal(),
+            Some("Sweep has 4 configurations, too many to replay in the app")
+        );
+        assert_eq!(past.config_ids().collect::<Vec<_>>(), [0], "the config runs.csv holds");
+        assert_eq!(past.runs().len(), 1);
+
+        // A spec the model refuses. Planned, it gives another reason.
+        let path = folder.0.join("manifest.json");
+        let mut manifest: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("the manifest is written")).expect("JSON");
+        manifest["spec"]["block"][0]["factors"][0]["param"] = Value::from("no_such_parameter");
+        manifest["plan"]["configs"] = Value::from(MAX_PLANNED_CONFIGS + 1);
+        std::fs::write(&path, manifest.to_string()).expect("the manifest can be written");
+        assert!(
+            open(MAX_PLANNED_CONFIGS + 1)
+                .replay_refusal()
+                .is_some_and(|refusal| refusal.contains("refuses this sweep's spec")),
+            "a count within the bound plans the spec"
+        );
+        let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
+        let source = ResultsSource::Folder(folder.0.clone());
+        let mut huge = ResultsStore::from_result_set(set, source, models.lookup("sir", None), usize::MAX);
+        let refusal = format!(
+            "Sweep has {} configurations, too many to replay in the app",
+            MAX_PLANNED_CONFIGS + 1
+        );
+        assert_eq!(huge.replay_refusal(), Some(refusal.as_str()), "the plan is never built");
+        assert_eq!(huge.config_ids().collect::<Vec<_>>(), [0]);
+
+        // A browser reads the picked files through the same store.
+        let names = ["manifest.json", "runs.csv"];
+        let files = names
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    std::fs::read(folder.0.join(name)).expect("the file reads"),
+                )
+            })
+            .to_vec();
+        let set = ResultSet::from_files(files, usize::MAX).expect("the files read");
+        let source = ResultsSource::Files(names.map(str::to_owned).to_vec());
+        let picked = ResultsStore::from_result_set(set, source, models.lookup("sir", None), usize::MAX);
+        assert_eq!(picked.replay_refusal(), Some(refusal.as_str()));
+        assert_eq!(picked.config_ids().collect::<Vec<_>>(), [0]);
+
+        // A resume's run of a config the store does not list. A sweep has no candidates to wait for.
+        let mut resumed = huge.runs()[0].clone();
+        resumed.run.run_id = 2;
+        resumed.run.config_id = 2;
+        huge.push_run(resumed, true);
+        assert_eq!(huge.untold_candidate(2), None);
+        assert_eq!(huge.replay(2), Err(refusal));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_run_opened_from_a_folder_replays_to_its_row() {
+        use henad_compute::cpu::sim_thread::SimThread;
+        use henad_compute::entry::ModelState;
+        use henad_compute::fault::FaultSink;
+        use henad_core::explore::stop::StopSpec;
+        use henad_core::export::stats_csv::StatColumns;
+        use henad_explore::handle::SweepOutput;
+        use henad_explore::progress::NoProgress;
+        use henad_explore::result_set::ResultSet;
+        use henad_explore::sweep::{SweepOptions, run_spec};
+
+        use crate::ui::results::store::ResultsSource;
+
+        let models = example_models();
         let mut spec = SweepSpec::new("sir");
         spec.fixed = [("grid_width", "32"), ("grid_height", "32"), ("recovery_rate", "0.1")]
             .map(|(id, value)| (id.to_owned(), value.to_owned()))
@@ -2970,20 +3280,21 @@ mod tests {
         }];
         let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-results-{}", std::process::id())));
         drop(std::fs::remove_dir_all(&folder.0));
-        let options = SweepOptions {
-            output_dir: Some(folder.0.clone()),
-            ..SweepOptions::default()
-        };
-        let sir = registry
-            .iter()
-            .find(|entry| entry.id == "sir")
-            .expect("SIR is registered");
-        let source = henad_explore::sweep::SpecSource::default();
-        let provenance = henad_explore::sweep::Provenance::default();
-        run_sweep(sir, None, None, &spec, &source, &provenance, &options, &mut NoProgress).expect("the sweep runs");
+        let options = SweepOptions::new(henad_explore::sweep::Provenance::new(
+            henad_core::build_info!(),
+            Vec::new(),
+        ));
+        let sir = models.get("sir").expect("SIR is registered");
+        let output = SweepOutput::Directory(folder.0.clone());
+        run_spec(sir, None, &spec, output, &options, &mut NoProgress).expect("the sweep runs");
 
         let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");
-        let store = ResultsStore::from_result_set(set, ResultsSource::Folder(folder.0.clone()), &registry, usize::MAX);
+        let store = ResultsStore::from_result_set(
+            set,
+            ResultsSource::Folder(folder.0.clone()),
+            models.lookup("sir", None),
+            usize::MAX,
+        );
         assert_eq!(store.runs().len(), 8);
         assert!(store.complete && store.schema_matches);
         assert!(
@@ -3011,7 +3322,7 @@ mod tests {
         for outcome in store.runs() {
             let run_id = outcome.run.run_id;
             let replay = store.replay(run_id).expect("the run replays");
-            let Ok(ModelState::Cpu(state)) = (sir.create)(&replay.params, Some(replay.seed)) else {
+            let Ok(ModelState::Cpu(state)) = sir.build(&replay.params, Some(replay.seed), None) else {
                 panic!("SIR builds on the CPU");
             };
             // Open at end steps to the tick the run ended on. A stop condition can end it before the plan's last tick.

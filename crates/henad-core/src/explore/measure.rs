@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::explore::reducer::{ReducerError, ReducerKind, ReducerPlan, ReducerState};
 use crate::explore::spec::{MeasureSettings, RunSettings};
@@ -24,20 +25,26 @@ pub struct MeasurePlan {
 }
 
 impl MeasurePlan {
-    /// Checks the length of `run`, the cadence of `measure` and the threshold of every comparison, before any column
-    /// is known.
+    /// Checks the length and timeout of `run`, the cadence of `measure`, the threshold of every comparison and every
+    /// window, before any column is known.
     ///
     /// # Errors
     ///
-    /// Returns [`MeasureError`] when the total tick count overflows, `stats_every` is 0, `series_every` is not a
-    /// multiple of `stats_every`, or the stop condition or a `first` reducer compares against a threshold that is not
-    /// finite.
+    /// Returns [`MeasureError`] when the total tick count overflows, the timeout does not read back from the seconds
+    /// a spec file records, `stats_every` is 0, `series_every` is not a multiple of `stats_every`, the stop condition
+    /// or a `first` reducer compares against a threshold that is not finite, or a `mean@` reducer's window ends
+    /// before it starts.
     pub fn check(run: &RunSettings, measure: &MeasureSettings) -> Result<(), MeasureError> {
         if run.warmup.checked_add(run.steps).is_none() {
             return Err(MeasureError::TooManyTicks {
                 warmup: run.warmup,
                 steps: run.steps,
             });
+        }
+        if let Some(timeout) = run.timeout
+            && Duration::try_from_secs_f64(timeout.as_secs_f64()).is_err()
+        {
+            return Err(MeasureError::TimeoutTooLong { timeout });
         }
         if measure.stats_every == 0 {
             return Err(MeasureError::ZeroStatsEvery);
@@ -52,13 +59,19 @@ impl MeasurePlan {
             stop.check_threshold().map_err(MeasureError::Stop)?;
         }
         for reducer in &measure.reducers {
-            if let ReducerKind::FirstCrossing(comparison) = reducer.kind {
-                comparison.check().map_err(|source| {
+            match reducer.kind {
+                ReducerKind::FirstCrossing(comparison) => comparison.check().map_err(|source| {
                     MeasureError::Reducer(ReducerError::Comparison {
                         raw: reducer.kind.to_string(),
                         source,
                     })
-                })?;
+                })?,
+                ReducerKind::WindowMean { start, end } if start > end => {
+                    return Err(MeasureError::Reducer(ReducerError::BadWindow {
+                        raw: reducer.kind.to_string(),
+                    }));
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -182,6 +195,8 @@ fn count_on_cadence(span: u64, every: u64) -> u64 {
 pub enum MeasureError {
     /// A warm-up and step count whose sum overflows a tick.
     TooManyTicks { warmup: u64, steps: u64 },
+    /// A timeout too long to read back from the seconds a spec file records, as [`Duration::MAX`] is.
+    TimeoutTooLong { timeout: Duration },
     /// A `stats_every` of 0.
     ZeroStatsEvery,
     /// A `series_every` that is not a multiple of `stats_every`.
@@ -199,6 +214,13 @@ impl fmt::Display for MeasureError {
                 write!(
                     f,
                     "a warm-up of {warmup} ticks plus {steps} steps exceeds the largest tick"
+                )
+            }
+            Self::TimeoutTooLong { timeout } => {
+                write!(
+                    f,
+                    "a timeout of {} seconds is too long to record",
+                    timeout.as_secs_f64()
                 )
             }
             Self::ZeroStatsEvery => write!(f, "stats_every must be at least 1"),
@@ -400,6 +422,7 @@ impl Sampler {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use super::{MeasureError, MeasurePlan, NonFiniteSample, Sampler};
     use crate::explore::reducer::{ReducerError, ReducerKind, ReducerSpec};
@@ -558,6 +581,47 @@ mod tests {
             ..RunSettings::default()
         };
         assert!(MeasurePlan::check(&endless, &measure(1, 1)).is_err());
+    }
+
+    /// The regression. A reversed window and a timeout past what seconds in an `f64` read back as both planned, and
+    /// the spec a manifest recorded for them did not read back.
+    #[test]
+    fn settings_a_spec_file_cannot_record_are_refused() {
+        let reversed = MeasureSettings {
+            reducers: vec![ReducerSpec {
+                column: "Infected".to_owned(),
+                kind: ReducerKind::WindowMean { start: 600, end: 200 },
+            }],
+            ..MeasureSettings::default()
+        };
+        assert_eq!(
+            MeasurePlan::check(&RunSettings::default(), &reversed),
+            Err(MeasureError::Reducer(ReducerError::BadWindow {
+                raw: "mean@600..200".to_owned()
+            }))
+        );
+        let single_tick = MeasureSettings {
+            reducers: vec![ReducerSpec {
+                column: "Infected".to_owned(),
+                kind: ReducerKind::WindowMean { start: 200, end: 200 },
+            }],
+            ..MeasureSettings::default()
+        };
+        assert_eq!(MeasurePlan::check(&RunSettings::default(), &single_tick), Ok(()));
+
+        let endless = RunSettings {
+            timeout: Some(Duration::MAX),
+            ..RunSettings::default()
+        };
+        assert_eq!(
+            MeasurePlan::check(&endless, &MeasureSettings::default()),
+            Err(MeasureError::TimeoutTooLong { timeout: Duration::MAX })
+        );
+        let long = RunSettings {
+            timeout: Some(Duration::from_secs(u64::MAX / 2)),
+            ..RunSettings::default()
+        };
+        assert_eq!(MeasurePlan::check(&long, &MeasureSettings::default()), Ok(()));
     }
 
     /// The regression. The longest run a check accepts, sampled every tick, overflowed the count of its samples.

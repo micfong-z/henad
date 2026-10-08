@@ -1,0 +1,289 @@
+{
+  "format": "henad-explore",
+  "format_version": 1,
+  "mode": "sweep",
+  "status": "complete",
+  "engine": {
+    "name": "henad",
+    "version": "0.2.0",
+    "commit": "773a7a5b",
+    "commit_date": "2026-10-01",
+    "debug_build": false
+  },
+  "model": {
+    "id": "sir",
+    "name": "SIR Epidemic",
+    "backend": "cpu",
+    "schema_hash": "6ff1dc3971fd0a96",
+    "schema": {
+      "actions": [
+        {
+          "id": "seed_outbreak",
+          "index": 0,
+          "label": "Seed outbreak"
+        }
+      ],
+      "backend": "cpu",
+      "model": "sir",
+      "name": "SIR Epidemic",
+      "params": [
+        {
+          "apply": "reload",
+          "default": 1024,
+          "format": "plain",
+          "id": "grid_width",
+          "index": 0,
+          "kind": "u32",
+          "label": "Grid Width",
+          "max": 10000,
+          "min": 1
+        },
+        {
+          "apply": "reload",
+          "default": 1024,
+          "format": "plain",
+          "id": "grid_height",
+          "index": 1,
+          "kind": "u32",
+          "label": "Grid Height",
+          "max": 10000,
+          "min": 1
+        },
+        {
+          "apply": "live",
+          "default": 0.3,
+          "format": "plain",
+          "id": "infection_rate",
+          "index": 2,
+          "kind": "f32",
+          "label": "Infection Rate",
+          "max": 1.0,
+          "min": 0.0,
+          "step": 0.01
+        },
+        {
+          "apply": "live",
+          "default": 0.05,
+          "format": "plain",
+          "id": "recovery_rate",
+          "index": 3,
+          "kind": "f32",
+          "label": "Recovery Rate",
+          "max": 1.0,
+          "min": 0.0,
+          "step": 0.01
+        },
+        {
+          "apply": "reload",
+          "default": 0.01,
+          "format": "percent",
+          "id": "initial_infected_pct",
+          "index": 4,
+          "kind": "f32",
+          "label": "Initial Infected",
+          "max": 1.0,
+          "min": 0.0,
+          "step": 0.001
+        }
+      ],
+      "schema_hash": "6ff1dc3971fd0a96",
+      "schema_version": 1,
+      "seed": {
+        "type": "u64"
+      },
+      "stat_columns": [
+        "Susceptible",
+        "Infected",
+        "Recovered"
+      ],
+      "stats": [
+        {
+          "color": [
+            0,
+            122,
+            245,
+            255
+          ],
+          "label": "Susceptible"
+        },
+        {
+          "color": [
+            228,
+            55,
+            72,
+            255
+          ],
+          "label": "Infected"
+        },
+        {
+          "color": [
+            128,
+            128,
+            128,
+            255
+          ],
+          "label": "Recovered"
+        }
+      ]
+    }
+  },
+  "spec": {
+    "action": [
+      {
+        "id": "seed_outbreak",
+        "tick": 5
+      }
+    ],
+    "block": [
+      {
+        "design": "factorial",
+        "factors": [
+          {
+            "param": "infection_rate",
+            "values": [
+              0.2,
+              0.4
+            ]
+          }
+        ]
+      }
+    ],
+    "measure": {
+      "default_reducers": true,
+      "series_every": 5,
+      "stats_every": 5
+    },
+    "model": "sir",
+    "run": {
+      "replicates": 2,
+      "steps": 20,
+      "warmup": 0
+    },
+    "seeds": {
+      "root": 7,
+      "scheme": "common"
+    },
+    "set": {
+      "grid_height": 16,
+      "grid_width": 16
+    }
+  },
+  "spec_source": {
+    "path": null,
+    "toml": null,
+    "tables": []
+  },
+  "argv": [
+    "target/release/henad-cli",
+    "sir",
+    "--set",
+    "grid_width=16",
+    "--set",
+    "grid_height=16",
+    "--vary",
+    "infection_rate=0.2,0.4",
+    "--act",
+    "seed_outbreak@5",
+    "--reps",
+    "2",
+    "--steps",
+    "20",
+    "--stats-every",
+    "5",
+    "--seed",
+    "7",
+    "--out",
+    "../henad/crates/henad-explore/tests/fixtures/manifest-0.2.0"
+  ],
+  "plan": {
+    "plan_hash": "0dadfc6ab1a4ad68",
+    "results_fingerprint": "4a00256f66e9b49d",
+    "configs": 2,
+    "replicates": 2,
+    "runs": 4,
+    "blocks": [
+      {
+        "design": "factorial",
+        "configs": 2,
+        "design_seed": null
+      }
+    ]
+  },
+  "seeds": {
+    "root": 7,
+    "scheme": "common",
+    "formula": "mix_seed(mix_seed(root ^ SWEEP_SALT) + rep)"
+  },
+  "columns": {
+    "stats": [
+      "Susceptible",
+      "Infected",
+      "Recovered"
+    ],
+    "reducers": [
+      "Susceptible:final",
+      "Susceptible:min",
+      "Susceptible:max",
+      "Susceptible:mean",
+      "Infected:final",
+      "Infected:min",
+      "Infected:max",
+      "Infected:mean",
+      "Recovered:final",
+      "Recovered:min",
+      "Recovered:max",
+      "Recovered:mean"
+    ]
+  },
+  "shard": {
+    "index": 0,
+    "count": 1
+  },
+  "execution": {
+    "backend": "cpu",
+    "concurrency": "auto",
+    "cpu_lanes": 4,
+    "threads_per_lane": 1,
+    "gpu_tracks": 0,
+    "projected_bytes": 2048,
+    "memory_budget": null,
+    "gpu_memory_budget": null
+  },
+  "runtime": {
+    "os": "macos",
+    "arch": "aarch64",
+    "logical_cpus": 14,
+    "worker_threads": 14,
+    "adapter": "Apple M4 Pro",
+    "adapter_backend": "metal",
+    "adapter_type": "IntegratedGpu",
+    "driver": "",
+    "limits": {
+      "max_buffer_size": 4294967295,
+      "max_storage_buffer_binding_size": 4294967292,
+      "max_texture_dimension_2d": 16384
+    }
+  },
+  "timestamps": {
+    "started_unix_ms": 1790898643443,
+    "started": "2026-10-01T23:50:43.443Z",
+    "finished_unix_ms": 1790898643450,
+    "finished": "2026-10-01T23:50:43.450Z"
+  },
+  "sessions": [
+    {
+      "started": "2026-10-01T23:50:43.443Z",
+      "commit": "773a7a5b",
+      "skipped": 0,
+      "ran": 4
+    }
+  ],
+  "results": {
+    "rows": 4,
+    "ok": 4,
+    "non_finite": 0,
+    "failed": 0
+  },
+  "merged_shards": null,
+  "search": null
+}

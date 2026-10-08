@@ -49,6 +49,7 @@ henad_core::actions! {
     const RANDOMISE_HEADINGS = ActionDescriptor::new("randomise_headings", "Randomise headings");
 }
 
+#[derive(Debug)]
 pub struct BoidsModel;
 
 /// Turns every boid a fresh way without touching its speed, so a settled flock scatters and
@@ -56,7 +57,7 @@ pub struct BoidsModel;
 fn randomise_headings(lanes: &mut BoidLanes, params: &[ParamValue], rng: &mut u64) {
     let max_speed = extract_f32(params, MAX_SPEED, 15.0);
     let min_speed = extract_f32(params, MIN_SPEED, 3.0);
-    let stationary = 0.5 * (min_speed + max_speed);
+    let stationary = min_speed.midpoint(max_speed);
     for i in 0..lanes.vel_x.len() {
         let speed = lanes.vel_x[i].hypot(lanes.vel_y[i]);
         let speed = if speed > 0.0 { speed } else { stationary };
@@ -68,6 +69,7 @@ fn randomise_headings(lanes: &mut BoidLanes, params: &[ParamValue], rng: &mut u6
 }
 
 /// Squared ranges and half extents precomputed, so the inner loop does no setup per neighbour.
+#[derive(Debug)]
 pub struct BoidParams {
     pub visual_range: f32,
     pub visual_sq: f32,
@@ -141,7 +143,7 @@ impl AgentModel for BoidsModel {
     fn init(lanes: &mut BoidLanes, extent: Extent, params: &[ParamValue], rng: &mut u64) {
         let max_speed = extract_f32(params, MAX_SPEED, 15.0);
         let min_speed = extract_f32(params, MIN_SPEED, 3.0);
-        let speed = 0.5 * (min_speed + max_speed);
+        let speed = min_speed.midpoint(max_speed);
         for i in 0..lanes.pos_x.len() {
             lanes.pos_x[i] = next_float(rng, extent.w);
             lanes.pos_y[i] = next_float(rng, extent.h);

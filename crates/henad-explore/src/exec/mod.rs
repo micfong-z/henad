@@ -1,8 +1,7 @@
 //! Executors for batches of runs, with each outcome committed to a sink in request order.
 //!
-//! A CPU model runs in lanes. Each lane drives one run at a time on a thread pool of its own, and a single lane
-//! drives its runs on rayon's global pool. A GPU model runs on tracks, several runs sharing the device from the
-//! calling thread.
+//! A CPU model runs in lanes. Each lane drives one run at a time on a thread pool of its own, a single lane included.
+//! A GPU model runs on tracks, several runs sharing the device from the calling thread.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod cpu;
@@ -20,6 +19,7 @@ use std::time::Duration;
 
 use web_time::Instant;
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::{Demand, GpuContext, MAX_STEPS_PER_SUBMISSION};
 use henad_compute::runner::CAN_SPAWN_THREADS;
 use henad_core::action::Schedule;
@@ -28,7 +28,6 @@ use henad_core::explore::outcome::{PlannedRun, RunOutcome};
 use henad_core::explore::plan::Plan;
 use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
-use henad_models::registry::ModelEntry;
 
 use crate::cursor::{CursorState, RunCursor};
 use crate::probe::ProbeReport;
@@ -45,16 +44,16 @@ const SLICE_TARGET_MS: f64 = 20.0;
 /// Most steps one slice can take.
 const MAX_SLICE_STEPS: u64 = 1 << 20;
 
-/// Most GPU tracks [`choose_layout`] picks on its own.
-pub const MAX_AUTO_GPU_TRACKS: usize = 4;
+/// Most GPU tracks `choose_layout` picks on its own.
+pub(crate) const MAX_AUTO_GPU_TRACKS: usize = 4;
 
-/// Population from which [`choose_layout`] gives a GPU run the device to itself.
-pub const LARGE_GPU_POPULATION: u64 = 1 << 20;
+/// Population from which `choose_layout` gives a GPU run the device to itself.
+pub(crate) const LARGE_GPU_POPULATION: u64 = 1 << 20;
 
 /// Number of runs a sweep keeps going at once.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Concurrency {
-    /// Chosen from a probe build by [`choose_layout`].
+    /// Chosen from a probe build by `choose_layout`.
     #[default]
     Auto,
     /// This many CPU lanes, or GPU tracks for a GPU model.
@@ -85,22 +84,22 @@ impl FromStr for Concurrency {
 
 /// Machine resources a sweep can spread its runs over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExecutionBudget {
+pub(crate) struct ExecutionBudget {
     /// Worker threads the runs share.
-    pub workers: usize,
+    pub(crate) workers: usize,
     /// Bytes of host memory the live runs can hold together, `None` for no limit. The lanes are sized from the probed
     /// run, and a probed run larger than the budget leaves one lane.
-    pub memory_budget: Option<u64>,
+    pub(crate) memory_budget: Option<u64>,
     /// Bytes of device memory the live GPU runs can hold together, `None` for no limit. A run larger than the budget
     /// runs alone.
-    pub gpu_memory_budget: Option<u64>,
+    pub(crate) gpu_memory_budget: Option<u64>,
     /// Whether lanes can run on threads of their own.
-    pub can_spawn_threads: bool,
+    pub(crate) can_spawn_threads: bool,
 }
 
 impl ExecutionBudget {
     /// Returns the width of rayon's global pool as the workers, with no memory budget.
-    pub fn detect() -> Self {
+    pub(crate) fn detect() -> Self {
         Self {
             workers: rayon::current_num_threads(),
             memory_budget: None,
@@ -110,12 +109,12 @@ impl ExecutionBudget {
     }
 }
 
-/// Returns the bytes of device memory GPU runs can hold together on `ctx`: `gpu_memory` when given, and otherwise the
+/// Returns the bytes of device memory GPU runs can hold together on `ctx`: `budget` when given, and otherwise the
 /// device's largest buffer.
 ///
 /// Note that wgpu reports no total for the device's memory. The largest buffer stands in for it.
-pub fn gpu_memory_budget(gpu_memory: Option<u64>, ctx: &GpuContext) -> u64 {
-    gpu_memory.unwrap_or_else(|| ctx.device.limits().max_buffer_size)
+pub fn gpu_memory_budget(budget: Option<u64>, ctx: &GpuContext) -> u64 {
+    budget.unwrap_or_else(|| ctx.device.limits().max_buffer_size)
 }
 
 /// Lanes and GPU tracks a sweep runs on.
@@ -154,7 +153,7 @@ impl ExecutionLayout {
 /// A GPU model gets as many tracks as the GPU memory budget holds runs like the probe, up to
 /// [`MAX_AUTO_GPU_TRACKS`], and one track from a population of [`LARGE_GPU_POPULATION`]. [`Concurrency::Fixed`] sets
 /// the track count instead. The tracks are capped by `runs`.
-pub fn choose_layout(
+pub(crate) fn choose_layout(
     concurrency: Concurrency,
     resources: &ExecutionBudget,
     backend: Backend,
@@ -198,7 +197,7 @@ pub fn choose_layout(
             let threads = jobs.div_ceil(JOBS_PER_THREAD).clamp(1, workers);
             (workers / threads, threads)
         }
-        Concurrency::Fixed(lanes) => (lanes.get(), (workers / lanes.get()).max(1)),
+        Concurrency::Fixed(lanes) => (lanes.get(), (workers / lanes).max(1)),
     };
     let lanes_by_memory = match resources.memory_budget {
         Some(budget) if probe.heap_bytes > 0 => usize::try_from(budget / probe.heap_bytes).unwrap_or(usize::MAX),
@@ -277,6 +276,11 @@ impl SweepControl {
     /// Returns whether a run can take its next slice, blocking while the sweep is paused.
     ///
     /// Returns `false` once the sweep is aborted.
+    ///
+    /// # Panics
+    ///
+    /// On wasm32, panics or traps while the sweep is paused on a thread that cannot wait, as a browser's main thread
+    /// cannot. A host there reads [`Self::is_paused`] between slices instead.
     pub fn proceed(&self) -> bool {
         match self.shared.mode.load(Ordering::Acquire) {
             RUNNING => true,
@@ -503,6 +507,7 @@ impl std::error::Error for ExecutionError {
 }
 
 /// Runner of batches of one model, with its lane pools built once.
+#[derive(Debug)]
 pub struct Executor<'a> {
     entry: &'a ModelEntry,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
@@ -514,12 +519,12 @@ pub struct Executor<'a> {
     timeout: Option<Duration>,
     /// Table each run in progress is listed in, `None` when nothing watches the runs.
     active_runs: Option<ActiveRuns>,
-    /// One pool per lane. Empty when a single lane steps on rayon's global pool.
+    /// One pool per lane. Empty for a GPU model, and on a target that cannot spawn threads.
     pools: Vec<rayon::ThreadPool>,
     /// Cap on the bytes of device memory the live GPU runs hold together, `None` for the device's largest buffer. A
     /// run larger than the cap runs alone.
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
-    gpu_memory: Option<u64>,
+    gpu_memory_budget: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
     track_depth: GpuTrackDepth,
 }
@@ -527,8 +532,9 @@ pub struct Executor<'a> {
 impl<'a> Executor<'a> {
     /// Returns an executor for `entry` sampled as `measure` asks, with a pool for each lane of `layout`.
     ///
-    /// A single lane as wide as rayon's global pool uses that pool. Note that a target that cannot spawn threads
-    /// runs a CPU model in a single lane, whatever `layout` asks.
+    /// A single lane gets a pool of its own as well, even one as wide as rayon's global pool. Note that a target that
+    /// cannot spawn threads builds no pool, and runs a CPU model in a single lane on the calling thread, whatever
+    /// `layout` asks.
     ///
     /// # Errors
     ///
@@ -543,25 +549,25 @@ impl<'a> Executor<'a> {
     ) -> Result<Self, ExecutionError> {
         let mut layout = layout;
         let mut pools = Vec::new();
-        match entry.metadata.backend {
+        match entry.metadata().backend {
             Backend::Gpu if gpu.is_none() => return Err(ExecutionError::NoDevice),
             Backend::Gpu => {}
+            Backend::Cpu if !CAN_SPAWN_THREADS => {
+                layout.cpu_lanes = 1;
+                layout.threads_per_lane = rayon::current_num_threads();
+            }
             Backend::Cpu => {
-                let global_width = rayon::current_num_threads();
-                if !CAN_SPAWN_THREADS || (layout.cpu_lanes <= 1 && layout.threads_per_lane == global_width) {
-                    layout.cpu_lanes = 1;
-                    layout.threads_per_lane = global_width;
-                } else {
-                    pools = (0..layout.cpu_lanes.max(1))
-                        .map(|lane| {
-                            rayon::ThreadPoolBuilder::new()
-                                .num_threads(layout.threads_per_lane.max(1))
-                                .thread_name(move |worker| format!("henad-lane-{lane}-{worker}"))
-                                .build()
-                        })
-                        .collect::<Result<_, _>>()
-                        .map_err(ExecutionError::Pool)?;
-                }
+                layout.cpu_lanes = layout.cpu_lanes.max(1);
+                layout.threads_per_lane = layout.threads_per_lane.max(1);
+                pools = (0..layout.cpu_lanes)
+                    .map(|lane| {
+                        rayon::ThreadPoolBuilder::new()
+                            .num_threads(layout.threads_per_lane)
+                            .thread_name(move |worker| format!("henad-lane-{lane}-{worker}"))
+                            .build()
+                    })
+                    .collect::<Result<_, _>>()
+                    .map_err(ExecutionError::Pool)?;
             }
         }
         Ok(Self {
@@ -573,7 +579,7 @@ impl<'a> Executor<'a> {
             timeout: None,
             active_runs: None,
             pools,
-            gpu_memory: None,
+            gpu_memory_budget: None,
             track_depth: GpuTrackDepth::default(),
         })
     }
@@ -592,13 +598,16 @@ impl<'a> Executor<'a> {
         Self { active_runs, ..self }
     }
 
-    /// Returns the executor with a budget of `gpu_memory` bytes of device memory for the live GPU runs, as
+    /// Returns the executor with a budget of `budget` bytes of device memory for the live GPU runs, as
     /// [`gpu_memory_budget`] reads it.
     ///
     /// A run is built once its demand fits the budget beside the demand of the live runs. A run larger than the budget
     /// is built once no other run is live, and runs alone.
-    pub fn with_gpu_memory(self, gpu_memory: Option<u64>) -> Self {
-        Self { gpu_memory, ..self }
+    pub fn with_gpu_memory_budget(self, budget: Option<u64>) -> Self {
+        Self {
+            gpu_memory_budget: budget,
+            ..self
+        }
     }
 
     /// Returns the executor with each GPU track keeping `depth` on the device.
@@ -628,13 +637,14 @@ impl<'a> Executor<'a> {
 
     /// Runs every request and commits each outcome to `sink` in request order.
     ///
-    /// Runs that finish early wait in memory until every earlier request is committed.
+    /// Runs that finish early wait in memory until every earlier request is committed. Note that on wasm32 a pause
+    /// panics on a thread that cannot wait, as [`SweepControl::proceed`] describes.
     ///
     /// # Errors
     ///
     /// Returns [`ExecutionError`] when a lane's thread cannot start or panics outside a run, or `sink` refuses a run.
     pub fn run_batch(&self, requests: &[RunRequest<'_>], sink: &mut dyn RunSink) -> Result<BatchEnd, ExecutionError> {
-        match (self.entry.metadata.backend, self.pools.as_slice()) {
+        match (self.entry.metadata().backend, self.pools.as_slice()) {
             #[cfg(not(target_arch = "wasm32"))]
             (Backend::Gpu, _) => {
                 let ctx = self.gpu.ok_or(ExecutionError::NoDevice)?;
@@ -642,14 +652,14 @@ impl<'a> Executor<'a> {
             }
             // A browser cannot block on the device. Each run's cursor refuses its GPU model.
             #[cfg(target_arch = "wasm32")]
-            (Backend::Gpu, _) => self.run_in_order(requests, sink, Placement::GlobalPool),
-            (Backend::Cpu, []) => self.run_in_order(requests, sink, Placement::GlobalPool),
+            (Backend::Gpu, _) => self.run_in_order(requests, sink, Placement::CallingThread),
+            // A target that cannot spawn threads builds no lane pools.
+            (Backend::Cpu, []) => self.run_in_order(requests, sink, Placement::CallingThread),
             (Backend::Cpu, [pool]) => self.run_in_order(requests, sink, Placement::LanePool(pool)),
             #[cfg(not(target_arch = "wasm32"))]
             (Backend::Cpu, pools) => cpu::run_in_lanes(self, pools, requests, sink),
-            // A browser cannot start a lane's thread, so it builds no lane pools.
             #[cfg(target_arch = "wasm32")]
-            (Backend::Cpu, _) => self.run_in_order(requests, sink, Placement::GlobalPool),
+            (Backend::Cpu, _) => self.run_in_order(requests, sink, Placement::CallingThread),
         }
     }
 
@@ -672,11 +682,11 @@ impl<'a> Executor<'a> {
 
     /// Drives the run of `request` on the threads `placement` names.
     ///
-    /// Entering the pool once per run keeps each parallel pass of the run's kernels starting on a worker. From
+    /// Entering the lane's pool once per run keeps each parallel pass of the run's kernels starting on a worker. From
     /// outside the pool every pass would be injected, parking the calling thread once per pass.
     fn drive_in(&self, placement: Placement<'_>, request: &RunRequest<'_>) -> Option<RunOutcome> {
         match placement {
-            Placement::GlobalPool => run_in_global_pool(|| self.drive(request)),
+            Placement::CallingThread => self.drive(request),
             Placement::LanePool(pool) => run_in_pool(pool, || self.drive(request)),
         }
     }
@@ -725,18 +735,6 @@ impl<'a> Executor<'a> {
     }
 }
 
-/// Runs `task` inside rayon's global pool, so each parallel pass starts on a worker.
-#[cfg(not(target_arch = "wasm32"))]
-fn run_in_global_pool<R: Send>(task: impl FnOnce() -> R + Send) -> R {
-    rayon::scope(|_| task())
-}
-
-/// Runs `task` on the calling thread. In a browser the frame loop pumps from outside the pool, as the live loop does.
-#[cfg(target_arch = "wasm32")]
-fn run_in_global_pool<R>(task: impl FnOnce() -> R) -> R {
-    task()
-}
-
 /// Runs `task` inside `pool`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_in_pool<R: Send>(pool: &rayon::ThreadPool, task: impl FnOnce() -> R + Send) -> R {
@@ -752,8 +750,9 @@ pub(crate) fn run_in_pool<R>(_pool: &rayon::ThreadPool, task: impl FnOnce() -> R
 /// Threads a CPU run is built and stepped on.
 #[derive(Clone, Copy)]
 enum Placement<'p> {
-    /// Rayon's global pool.
-    GlobalPool,
+    /// The thread that runs the batch, on a target that cannot spawn threads. A browser's frame loop pumps from
+    /// outside the pool, as the live loop does.
+    CallingThread,
     /// The pool of one lane.
     LanePool(&'p rayon::ThreadPool),
 }
@@ -843,7 +842,10 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
+    use henad_compute::entry::{ModelEntry, ModelState};
+    use henad_compute::fault::Fault;
     use henad_compute::gpu::Demand;
+    use henad_compute::gpu::GpuContext;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::MeasurePlan;
@@ -852,14 +854,14 @@ mod tests {
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
     use henad_core::export::StatColumns;
     use henad_core::metadata::Backend;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_core::params::ParamValue;
+    use henad_models::example_models;
 
     use super::{
         ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionError, ExecutionLayout, Executor,
         LARGE_GPU_POPULATION, ReorderBuffer, RunRequest, RunSink, SliceSize, SweepControl, choose_layout,
     };
     use crate::probe::ProbeReport;
-    use crate::schema::model_schema;
     use crate::tests::support::{lanes, tracks};
 
     fn probe(parallel_jobs: Option<usize>, population: u64, heap_bytes: u64) -> ProbeReport {
@@ -1153,15 +1155,12 @@ mod tests {
     }
 
     fn entry(id: &str) -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == id)
-            .expect("the model is registered")
+        example_models().get(id).cloned().expect("the model is registered")
     }
 
     /// Returns a plan over `entry` with three grid sizes and `replicates` replicates of `steps` steps each.
     fn plan(entry: &ModelEntry, steps: u64, replicates: u64) -> (Plan, Arc<MeasurePlan>) {
-        let mut spec = SweepSpec::new(entry.id.clone());
+        let mut spec = SweepSpec::new(entry.id().to_owned());
         spec.run.steps = steps;
         spec.run.replicates = replicates;
         spec.measure.stats_every = 3;
@@ -1175,7 +1174,7 @@ mod tests {
             )],
             design_seed: None,
         }];
-        let plan = spec.plan(&model_schema(entry)).expect("a valid spec");
+        let plan = spec.plan(&entry.schema()).expect("a valid spec");
         let probe = ProbeReport::for_plan(entry, None, &plan).expect("the probe builds");
         let measure =
             MeasurePlan::new(plan.run_settings(), plan.measure_settings(), probe.columns).expect("the columns bind");
@@ -1287,15 +1286,14 @@ mod tests {
                 .to_vec(),
             design_seed: None,
         }];
-        let plan = spec.plan(&model_schema(&entry)).expect("a valid spec");
+        let plan = spec.plan(&entry.schema()).expect("a valid spec");
         let probe = ProbeReport::for_plan(&entry, None, &plan).expect("the probe builds");
         let measure = Arc::new(
             MeasurePlan::new(plan.run_settings(), plan.measure_settings(), probe.columns).expect("the columns bind"),
         );
         let control = SweepControl::new();
         let layout = lanes(1, rayon::current_num_threads());
-        let executor =
-            Executor::new(&entry, None, measure, layout, control.clone()).expect("a single lane needs no pool");
+        let executor = Executor::new(&entry, None, measure, layout, control.clone()).expect("the lane's pool builds");
         let mut sink = AbortsAfterFirstRun {
             control,
             committed: 0,
@@ -1315,6 +1313,62 @@ mod tests {
             latency < Duration::from_secs(5),
             "the heavy run stopped {latency:?} after the abort"
         );
+    }
+
+    /// Returns the tick the first run in progress has reached, `None` while none is.
+    fn first_tick(active_runs: &ActiveRuns) -> Option<u64> {
+        active_runs.list().first().map(|run| run.tick)
+    }
+
+    #[test]
+    fn a_paused_single_lane_holds_no_worker_of_the_global_pool() {
+        let entry = entry("game_of_life");
+        let (plan, measure) = plan(&entry, 1_000_000, 1);
+        let control = SweepControl::new();
+        let active_runs = ActiveRuns::new();
+        let layout = lanes(1, rayon::current_num_threads());
+        let executor = Executor::new(&entry, None, measure, layout, control.clone())
+            .expect("the lane's pool builds")
+            .with_active_runs(Some(active_runs.clone()));
+        let pauser = control.clone();
+        let checker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while first_tick(&active_runs).is_none_or(|tick| tick == 0) {
+                if Instant::now() > deadline {
+                    pauser.abort();
+                    return Err("the run never stepped");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            pauser.pause();
+            // The run holds still once it waits on the pause.
+            let mut last = first_tick(&active_runs);
+            loop {
+                std::thread::sleep(Duration::from_millis(200));
+                let now = first_tick(&active_runs);
+                if now == last {
+                    break;
+                }
+                last = now;
+            }
+            let broadcast = std::thread::spawn(|| rayon::broadcast(|_| ()));
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while !broadcast.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let reached_every_worker = broadcast.is_finished();
+            pauser.abort();
+            if reached_every_worker {
+                Ok(())
+            } else {
+                Err("a paused run held a worker of the global pool")
+            }
+        });
+        let end = executor
+            .run_batch(&requests(&plan), &mut KeepingSink::new())
+            .expect("the batch runs");
+        assert_eq!(checker.join().expect("the checking thread finished"), Ok(()));
+        assert_eq!(end, BatchEnd::Aborted);
     }
 
     /// Sink that panics on the first run it sees finish.
@@ -1350,10 +1404,13 @@ mod tests {
         let plain = entry("game_of_life");
         let (plan, measure) = plan(&plain, 20, 2);
         // The build panics past the registry's catch, as a fault in the executor itself would.
-        let panicking = ModelEntry {
-            create: Box::new(|_params, _seed| panic!("the lane cannot build a run")),
-            ..plain
-        };
+        let panicking = plain.wrap_factory(|_| {
+            Arc::new(
+                |_params: &[ParamValue], _seed: Option<u64>, _gpu: Option<&GpuContext>| -> Result<ModelState, Fault> {
+                    panic!("the lane cannot build a run")
+                },
+            )
+        });
         let control = SweepControl::new();
         let executor =
             Executor::new(&panicking, None, measure, lanes(3, 1), control.clone()).expect("the lane pools build");

@@ -7,7 +7,7 @@ use crate::gpu::GpuContext;
 const REQUIRE_GPU: &str = "HENAD_REQUIRE_GPU";
 
 /// Empty counts as unset, so a workflow matrix can blank it out on runners without a GPU.
-fn gpu_required() -> bool {
+pub fn gpu_required() -> bool {
     std::env::var_os(REQUIRE_GPU).is_some_and(|v| !v.is_empty() && v != "0")
 }
 
@@ -38,7 +38,7 @@ pub fn headless_context(label: &str, required_features: wgpu::Features) -> Optio
         label: Some(label),
         required_features,
         // No binding count: henad-compute cannot see the models, and its own tests bind few.
-        required_limits: crate::gpu::limits::raise(&adapter, &wgpu::Limits::default(), 0),
+        required_limits: crate::gpu::limits::raise(&adapter, &wgpu::Limits::default(), crate::gpu::GpuNeeds::default()),
         ..Default::default()
     }));
     if let Err(err) = &device {

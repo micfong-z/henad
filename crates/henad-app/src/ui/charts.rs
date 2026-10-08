@@ -143,7 +143,7 @@ fn histogram_chart(ui: &mut egui::Ui, label: &str, edges: &[f64], counts: &[u64]
             .windows(2)
             .zip(counts.iter())
             .map(|(edge_pair, &count)| {
-                let center = (edge_pair[0] + edge_pair[1]) * 0.5;
+                let center = edge_pair[0].midpoint(edge_pair[1]);
                 let width = edge_pair[1] - edge_pair[0];
                 egui_plot::Bar::new(center, count as f64).width(width)
             })

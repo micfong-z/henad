@@ -41,6 +41,16 @@ pub struct Deposits {
     pub values: Vec<Vec<f32>>,
 }
 
+/// Prints the agent and field counts, not the deposits.
+impl std::fmt::Debug for Deposits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Deposits")
+            .field("len", &self.cell.len())
+            .field("fields", &self.values.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Deposits {
     pub fn heap_bytes(&self) -> usize {
         self.cell.capacity() * size_of::<u32>()
@@ -63,6 +73,18 @@ pub struct ScalarField<S: ScalarFieldSpec> {
     width: u32,
     height: u32,
     _marker: PhantomData<S>,
+}
+
+/// Prints the grid's size and the field count, not the values.
+impl<S: ScalarFieldSpec> std::fmt::Debug for ScalarField<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScalarField")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("fields", &self.fields.len())
+            .field("scatter", &self.scatter)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<S: ScalarFieldSpec> ScalarField<S> {
@@ -122,6 +144,17 @@ pub struct ScalarRead<'a> {
     pub sites: &'a [u8],
     pub width: u32,
     pub height: u32,
+}
+
+/// Prints the grid's size and the field count, not the values.
+impl std::fmt::Debug for ScalarRead<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScalarRead")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("fields", &self.fields.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> ScalarRead<'a> {
@@ -227,5 +260,61 @@ impl<S: ScalarFieldSpec> FieldLayer for ScalarField<S> {
             + self.scatter.heap_bytes()
             + self.sites.capacity()
             + self.display_cells.capacity()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use henad_core::authoring::model::field::{Extent, FieldLayer};
+    use henad_core::params::{ParamDescriptor, ParamValue};
+
+    use super::{ScalarField, ScalarFieldSpec};
+    use crate::cpu::primitives::scatter::Combine;
+
+    /// A field spec that implements no `Debug`.
+    struct OpaqueSpec;
+
+    impl ScalarFieldSpec for OpaqueSpec {
+        const FIELDS: usize = 2;
+        const COMBINE: Combine = Combine::Max;
+        const PALETTE: &'static [[u8; 4]] = &[[0, 0, 0, 255]];
+
+        type Params = ();
+
+        fn param_descriptors() -> Vec<ParamDescriptor> {
+            Vec::new()
+        }
+
+        fn from_params(_params: &[ParamValue]) {}
+
+        fn build_sites(_width: u32, _height: u32, _sites: &mut [u8]) {}
+
+        fn decay(v: f32, (): &()) -> f32 {
+            v
+        }
+
+        fn quantize(_site: u8, _values: &[f32], out: &mut u8) {
+            *out = 0;
+        }
+    }
+
+    /// The field, its read view and its deposits implement `Debug` for a spec that does not, and print their sizes
+    /// alone. A derive would bound the field's impl on the spec and print every value.
+    #[test]
+    fn the_field_prints_its_size_for_any_spec() {
+        let field = <ScalarField<OpaqueSpec> as FieldLayer>::new(Extent { w: 64.0, h: 32.0 }, &[]);
+        let shown = format!("{field:?}");
+        assert!(
+            shown.starts_with("ScalarField { width: 64, height: 32, fields: 2, scatter: ScatterGrid { n_cells: 2048,"),
+            "{shown}"
+        );
+        assert_eq!(
+            format!("{:?}", field.read()),
+            "ScalarRead { width: 64, height: 32, fields: 2, .. }"
+        );
+        assert_eq!(
+            format!("{:?}", field.alloc_deposits(100)),
+            "Deposits { len: 100, fields: 2, .. }"
+        );
     }
 }

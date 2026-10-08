@@ -13,7 +13,7 @@ gpu/
   grid_engine.rs    GpuGridState<M>      GpuGridModel  -> SimState + GpuSimState
   agent_engine.rs   GpuAgentState<M>     GpuAgentModel -> SimState + GpuSimState
   primitives/       spatial_hash, prefix_scan, reduce, readback, dispatch, pipeline
-  shared/           WGSL reached by #import: prelude, space, rng, dims, reduce_tree
+  grid_dims.wgsl    an entry point that brings henad::dims into the generated bindings, for Dims
   view/             display.rs (a texture layer), agents.rs (lane buffers drawn in place)
   limits.rs         what raises the device past the WebGPU baseline
   capacity.rs       whether a model fits, asked before anything is allocated
@@ -24,7 +24,9 @@ gpu/
 
 Nothing in this directory creates a `wgpu::Device`.
 The device is injected through `GpuContext`, cloned from whoever owns acquisition, which keeps the crate free of any dependency on egui or eframe.
-Models still live in `henad-models`, where they contribute shaders, seed data and metadata, and every wgpu object is built here.
+Models live in the crate that registers them, henad-models for the example models and a project's own crate for the rest.
+They contribute shaders, seed data and metadata, and every wgpu object is built here.
+A GPU entry builds on whatever device the host hands it, and the host learns from `ModelSet::gpu_needs` what to ask for before it has one.
 
 ## The engines
 
@@ -32,14 +34,18 @@ Models still live in `henad-models`, where they contribute shaders, seed data an
 Each derives every buffer, layout, pipeline and bind group from what its model declares, and each implements both `SimState` and `GpuSimState`.
 
 `GpuSimState` is the extra interface a GPU model needs on top of `SimState`, and `GpuSimThread` drives the state through it.
+A host names it `henad::runner::GpuSimState`.
 
 | Method | Role |
 |---|---|
 | `encode_steps` | Records `count` steps into an encoder, advancing the tick counter |
 | `encode_action` | Records one declared action's pass, without advancing the tick counter |
 | `encode_snapshot_passes` | Records the display and reduce passes, at snapshot cadence |
+| `encode_stats_passes` | Records the reduce passes alone, for a sample that draws nothing |
 | `begin_stats_readback` | Starts the async readback, right after the submission |
-| `poll_stats_readback` | Completes one without waiting on the GPU |
+| `poll_stats_readback` | Completes a pending readback, and waits for it when `block` is set |
+| `stats_readback_pending` | Whether a readback has started and not landed |
+| `view` | The layers the UI draws, cloned into every snapshot |
 
 Ping-ponged buffers are handled through a parity index plus two pre-built bind groups per side, flipped per tick, so no bind group is rebuilt while stepping.
 A buffer written in place gets one side, and `sides()` hands back that same buffer twice.
@@ -107,12 +113,13 @@ The baseline caps a storage binding at 128 MiB and a texture side at 8192, where
 The size a run can reach is a property of the hardware, and a fixed baseline would only get in the way.
 
 **Binding counts come from the models.**
-`max_storage_buffers_per_shader_stage` sits at 8 in the baseline, and `raise` asks for precisely the number `registry::gpu_storage_bindings_needed()` derives by walking every model's declared passes, action passes included.
-Today that comes to 8, from `gpu_ants`'s step pass.
+`max_storage_buffers_per_shader_stage` sits at 8 in the baseline, and `raise` asks for precisely the number the host's model set needs.
+Each GPU entry declares its `GpuNeeds`, read from its own pass list, action passes included, and `ModelSet::gpu_needs` merges them.
+For the example models that comes to 8, from `gpu_ants`'s step pass.
 wgpu's own advice is to request only what you need, and a constant would end up either short of a future model or carrying dead headroom.
 
-`raise` takes the count as an argument instead of computing it itself.
-`henad-compute` sits below `henad-models` and cannot see the models, and a host needs the number before it has a device.
+`raise` takes the needs as an argument instead of computing them itself.
+`henad-compute` cannot see which models a host offers, and a host needs the number before it has a device.
 
 !!! warning "Metal shares one argument table"
 

@@ -71,7 +71,7 @@ Both pairs of dimensions arrive in a shared `Dims` uniform, and they stay equal 
 --8<-- "crates/henad-models/src/gpu_sir/reduce.wgsl:bindings"
 ```
 
-`Dims` comes from `shared::dims` in `henad-compute/src/gpu/shared/dims.wgsl`, and holds `grid` and `tex`, each a `vec2<u32>`.
+`Dims` comes from `henad::dims`, in `henad-core/src/authoring/primitives/wgsl/dims.wgsl`, and holds `grid` and `tex`, each a `vec2<u32>`.
 
 The display shader writes RGBA directly, and it therefore carries its own copy of the palette colours in WGSL.
 Only the stats UI reads `PALETTE`, so keeping the two in agreement is your responsibility as the model author.
@@ -91,19 +91,26 @@ fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64
 ```
 
 Buffer contents are built on the CPU and uploaded once at construction.
-Both shipped ports call their CPU counterpart's `init` here and nowhere else, which starts both backends from the same data and makes tick 0 come out bit-identical between them.
+Both shipped ports repeat their CPU counterpart's `init` here, draw for draw from the same `grid_init_rng(seed)`, and a test compares each seeded buffer with the CPU grid cell by cell.
+Both backends therefore start from the same data, and tick 0 comes out bit-identical between them.
+A port can instead call the CPU `init` on a `Grid2D` and convert its cells, as the template's `gpu_vote` does, at the cost of a second copy of the grid while it seeds.
 See [porting a model to the GPU](porting.md) for the rest of that workflow.
 
 ## Contracts nothing checks
 
 Shaders are opaque strings as far as Rust is concerned, and none of the contracts below is enforced at compile time.
-Getting one wrong surfaces as a wgpu validation error when the model is first constructed, and knowing the list in advance makes that error much quicker to place.
+Getting one wrong mostly surfaces as a wgpu validation error when the model is first constructed, and knowing the list in advance makes that error much quicker to place.
 
-- `WORKGROUP_SIZE` must equal the `@workgroup_size(N, N)` that all three shaders declare.
-- `STATS.len()` must equal both the number of entries `stats` returns and the number of `atomic<u32>` in the reduce shader's `counters` binding.
+- `STATS.len()` must equal the number of `atomic<u32>` in the reduce shader's `counters` binding.
+  A shorter `counters` array validates, and the stats past its end read zero.
   GPU Game of Life binds one bare `atomic<u32>` there, and GPU SIR an array of three.
+- `STATS.len()` must equal the number of values `stats` returns.
+  The engine pairs the two by position and drops the values past the shorter.
 - `buffer_lens` must return exactly `BUFFERS.len()` lengths, and `seed_buffers` must return exactly that many vectors, each of exactly the declared length.
 
+The testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values than `STATS.len()`.
+The engine reads the `@workgroup_size` of each shader's `main` when it builds the model, and refuses a shader that declares anything but `@workgroup_size(N, N)` for a `WORKGROUP_SIZE` of N.
+It also refuses a buffer label that is reserved or ends in `_in` or `_out`, since a binding of that name resolves to something other than the buffer.
 Sizes and per-pass binding counts are checked before anything is allocated, and a model over the device's limit is refused with a readable message rather than a panic.
 Every other construction error reaches the UI as a modal.
 

@@ -78,11 +78,13 @@ henad_core::actions! {
 }
 // --8<-- [end:actions]
 
+#[derive(Debug)]
 pub struct VirusNetwork;
 
 /// Hot parameters for one tick.
 ///
 /// Chances are probabilities in `0..=1`. NetLogo's sliders give the same numbers as percentages.
+#[derive(Debug)]
 pub struct VirusParams {
     pub(crate) spread_chance: f32,
     pub(crate) check_frequency: u32,
@@ -331,6 +333,15 @@ mod tests {
                 state.prepare_view();
             }
         }
+    }
+
+    #[test]
+    fn the_node_views_implement_debug() {
+        use henad_core::authoring::model::network_model::{NodeCtx, Nodes};
+
+        fn assert_debug<T: std::fmt::Debug>() {}
+        assert_debug::<Nodes<'static, VirusNetwork>>();
+        assert_debug::<NodeCtx<'static, VirusNetwork>>();
     }
 
     /// Chunk seeds come from the chunk index,

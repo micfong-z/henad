@@ -1,0 +1,27 @@
+[package]
+name = "henad-tutorial"
+version.workspace = true
+description = "The finished code of Henad's first-model guide, held to the example models it teaches."
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+# By path alone, as a reader's crate depends on the facade, and through no other Henad crate.
+henad = { path = "../../crates/henad" }
+
+[build-dependencies]
+henad-build = { workspace = true }
+
+[dev-dependencies]
+# The parity tests run the example models beside the tutorial's, and the kit checks the tutorial's set.
+henad = { path = "../../crates/henad", features = ["example-models", "testing"] }
+log = { workspace = true }
+rayon = { workspace = true }
+
+[lints]
+workspace = true

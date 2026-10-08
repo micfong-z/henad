@@ -1923,8 +1923,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "henad"
+version = "0.3.0"
+dependencies = [
+ "bytemuck",
+ "henad-app",
+ "henad-cli",
+ "henad-compute",
+ "henad-core",
+ "henad-explore",
+ "henad-models",
+ "rayon",
+]
+
+[[package]]
 name = "henad-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "eframe",
@@ -1934,13 +1948,15 @@ dependencies = [
  "egui_plot",
  "env_logger",
  "flume",
+ "henad-build",
  "henad-compute",
  "henad-core",
  "henad-explore",
  "henad-models",
  "image",
+ "js-sys",
  "log",
- "pollster 0.4.0",
+ "pollster 1.0.1",
  "rayon",
  "rfd",
  "send_wrapper",
@@ -1951,15 +1967,24 @@ dependencies = [
  "web-sys",
  "web-time",
  "wgpu",
+]
+
+[[package]]
+name = "henad-build"
+version = "0.3.0"
+dependencies = [
+ "heck",
+ "henad-core",
  "wgsl_bindgen",
 ]
 
 [[package]]
 name = "henad-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
+ "henad-build",
  "henad-compute",
  "henad-core",
  "henad-explore",
@@ -1971,34 +1996,35 @@ dependencies = [
 
 [[package]]
 name = "henad-compute"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "criterion",
  "flume",
+ "henad-build",
  "henad-core",
  "log",
- "pollster 0.4.0",
+ "pollster 1.0.1",
  "rayon",
  "send_wrapper",
  "web-sys",
  "web-time",
  "wgpu",
- "wgsl_bindgen",
 ]
 
 [[package]]
 name = "henad-core"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "henad-explore"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
+ "henad-build",
  "henad-compute",
  "henad-core",
  "henad-models",
- "pollster 0.4.0",
+ "pollster 1.0.1",
  "rayon",
  "serde",
  "serde_json",
@@ -2009,17 +2035,27 @@ dependencies = [
 
 [[package]]
 name = "henad-models"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "flume",
+ "henad-build",
  "henad-compute",
  "henad-core",
+ "henad-explore",
  "log",
- "pollster 0.4.0",
  "rayon",
  "wgpu",
- "wgsl_bindgen",
+]
+
+[[package]]
+name = "henad-tutorial"
+version = "0.3.0"
+dependencies = [
+ "henad",
+ "henad-build",
+ "log",
+ "rayon",
 ]
 
 [[package]]
@@ -3757,9 +3793,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
  "lock_api",
 ]

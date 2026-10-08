@@ -13,6 +13,7 @@ use crate::display_scale::display_dims;
 ///
 /// The `Arc` is what makes teardown safe. An in-flight paint callback keeps the pipeline and
 /// its texture alive even if the sim thread and its state are dropped mid-frame.
+#[derive(Debug)]
 pub struct GpuDisplay {
     // Cell dimensions of the underlying grid, which the UI fits the aspect ratio to. The
     // texture behind it may be smaller, see [`crate::display_scale`].
@@ -23,6 +24,7 @@ pub struct GpuDisplay {
 }
 
 /// A display texture plus the [`GpuDisplay`] that samples it.
+#[derive(Debug)]
 pub struct DisplayTarget {
     /// Bind this as a `texture_storage_2d<rgba8unorm, write>` in the model's display compute pass.
     pub view: wgpu::TextureView,
@@ -34,6 +36,13 @@ pub struct DisplayTarget {
 /// Creates the display texture and the pipeline that samples it into `target_format`.
 ///
 /// `width` and `height` are the *grid*; the texture is capped by [`display_dims`].
+#[cfg_attr(
+    all(target_arch = "wasm32", target_feature = "atomics"),
+    expect(
+        clippy::arc_with_non_send_sync,
+        reason = "a display holds wgpu handles, which atomics leave unsendable"
+    )
+)]
 pub fn build_display_target(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,

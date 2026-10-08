@@ -11,6 +11,15 @@ pub struct Driver<L: SimLoop> {
     handle: Option<JoinHandle<()>>,
 }
 
+/// Prints whether the thread is still held, and leaves out the loop's command channel.
+impl<L: SimLoop> std::fmt::Debug for Driver<L> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Driver")
+            .field("thread", &self.handle.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<L> Driver<L>
 where
     L: SimLoop + Send + 'static,

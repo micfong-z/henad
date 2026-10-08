@@ -9,6 +9,7 @@
 
 pub mod agent_engine;
 pub mod capacity;
+mod contracts;
 pub mod fault;
 pub mod grid_engine;
 pub mod limits;
@@ -22,14 +23,18 @@ pub mod view;
 #[cfg(test)]
 mod tests;
 
-pub use agent_engine::{GpuAgentModelDescriptor, GpuAgentState};
+pub use agent_engine::GpuAgentState;
 pub use capacity::Demand;
-pub use grid_engine::{GpuGridModelDescriptor, GpuGridState};
+pub use grid_engine::GpuGridState;
+pub use limits::GpuNeeds;
 pub use primitives::readback::StatsPoll;
 pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 pub use sim_thread::{GpuSimState, GpuStats};
 pub use view::agents::GpuAgents;
 pub use view::display::{DisplayTarget, GpuDisplay};
+/// The wgpu release Henad builds on. Its types sit in [`GpuContext`]'s fields and in device requests, and a caller
+/// names them through this path in place of a `wgpu` dependency of its own.
+pub use wgpu;
 
 #[cfg(test)]
 use tests::support::headless_context;
@@ -40,6 +45,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::fault::{Fault, FaultSink};
+use crate::runtime_info::RuntimeInfo;
 
 /// Steps one command buffer may hold.
 pub const MAX_STEPS_PER_SUBMISSION: u32 = 64;
@@ -48,7 +54,7 @@ pub const MAX_STEPS_PER_SUBMISSION: u32 = 64;
 ///
 /// `target_format` is part of the context rather than a per-call argument because a model builds
 /// its display render pipeline once, and a pipeline is tied to its colour target format.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -57,6 +63,8 @@ pub struct GpuContext {
     pub faults: FaultSink,
     /// Set once the device is lost.
     lost: Arc<AtomicBool>,
+    /// Facts about the host and the adapter, when whoever acquired the device attached them.
+    runtime_info: Option<Arc<RuntimeInfo>>,
 }
 
 impl GpuContext {
@@ -71,6 +79,15 @@ impl GpuContext {
     /// panics there. A model provokes those two, and the handler reports them normally.
     ///
     /// The context also records the loss of the device. [`Self::is_lost`] reports it.
+    ///
+    /// Note that a second `new` on the same device takes the error handler over from the first, and on native targets
+    /// the lost callback too. From then on only the newest context receives the device's unscoped errors, and on
+    /// native targets its loss. In a browser every context on the device records the loss. A clone shares both with
+    /// the context it came from.
+    ///
+    /// The context carries no [`RuntimeInfo`]. A host that hands its context to a sweep attaches one with
+    /// `.with_runtime_info(RuntimeInfo::collect(&adapter, &device))`. Without it the sweep's manifest records no
+    /// adapter.
     pub fn new(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -99,7 +116,21 @@ impl GpuContext {
             target_format,
             faults,
             lost,
+            runtime_info: None,
         }
+    }
+
+    /// Returns the context with `info` attached, as [`Self::runtime_info`] reads it back.
+    pub fn with_runtime_info(self, info: RuntimeInfo) -> Self {
+        Self {
+            runtime_info: Some(Arc::new(info)),
+            ..self
+        }
+    }
+
+    /// Facts about the host and the adapter, `None` when nothing attached them.
+    pub fn runtime_info(&self) -> Option<&RuntimeInfo> {
+        self.runtime_info.as_deref()
     }
 
     /// Returns whether the device is lost. A lost device runs no more work.

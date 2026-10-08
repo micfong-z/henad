@@ -281,7 +281,7 @@ impl EdgeLayer {
             [0.0; 2]
         };
         let uniforms = Uniforms::new(
-            [world.0, world.1],
+            world.into(),
             [tail, 1.0],
             [size.x.max(1.0) * 0.5, size.y.max(1.0) * 0.5],
             arrow,

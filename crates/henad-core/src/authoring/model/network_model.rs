@@ -54,6 +54,14 @@ pub struct Nodes<'a, N: NetworkModel + ?Sized> {
 }
 // --8<-- [end:nodes]
 
+impl<N: NetworkModel + ?Sized> std::fmt::Debug for Nodes<'_, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Nodes")
+            .field("graph", &self.graph)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<N: NetworkModel + ?Sized> Nodes<'_, N> {
     /// Spawns a new node and returns its index, growing every lane to fit.
     ///
@@ -85,6 +93,15 @@ pub struct NodeCtx<'a, N: NetworkModel + ?Sized> {
     pub extent: Extent,
 }
 // --8<-- [end:node_ctx]
+
+impl<N: NetworkModel + ?Sized> std::fmt::Debug for NodeCtx<'_, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeCtx")
+            .field("graph", &self.graph)
+            .field("extent", &self.extent)
+            .finish_non_exhaustive()
+    }
+}
 
 /// A population of nodes joined by edges.
 pub trait NetworkModel: Send + Sync + 'static {

@@ -1,0 +1,11 @@
+available models:
+  sir                SIR Epidemic
+  boids              Boids Flocking
+  game_of_life       Game of Life
+  ants               Ant Foraging
+  virus_network      Virus on a Network
+  team_assembly      Team Assembly
+  gpu_game_of_life   Game of Life (GPU)
+  gpu_sir            SIR Epidemic (GPU)
+  gpu_boids          Boids Flocking (GPU)
+  gpu_ants           Ant Foraging (GPU)

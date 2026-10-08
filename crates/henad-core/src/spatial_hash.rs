@@ -71,6 +71,20 @@ pub struct SpatialHash {
     cell_start: Vec<u32>,
 }
 
+/// Prints the cell geometry and the agent count, not the sorted agents.
+impl std::fmt::Debug for SpatialHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpatialHash")
+            .field("cell_size", &self.cell_size)
+            .field("grid_w", &self.grid_w)
+            .field("grid_h", &self.grid_h)
+            .field("world_w", &self.world_w)
+            .field("world_h", &self.world_h)
+            .field("agent_count", &self.agent_cells.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl SpatialHash {
     pub fn new(cell_size: f32, world_w: f32, world_h: f32) -> Self {
         // Through `HashGrid`, which fits whole cells to the world and caps how many there are.

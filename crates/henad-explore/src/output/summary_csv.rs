@@ -204,7 +204,7 @@ impl<R: BufRead> RecordReader<R> {
 /// # Errors
 ///
 /// Returns [`SummaryError`] when `runs` cannot be read or is not a `runs.csv`, or a write fails.
-pub fn write_summary<R: BufRead, W: Write>(runs: R, mut dest: W) -> Result<W, SummaryError> {
+pub(crate) fn write_summary<R: BufRead, W: Write>(runs: R, mut dest: W) -> Result<W, SummaryError> {
     let mut records = RecordReader::new(runs);
     let Some(header) = records.next_record()? else {
         return Err(SummaryError::MissingColumn { column: "run_id" });

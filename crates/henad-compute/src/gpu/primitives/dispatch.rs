@@ -5,7 +5,7 @@
 
 /// Workgroup width shared by every linear kernel, taken from the WGSL that declares it so the two
 /// cannot drift.
-pub const WORKGROUP: u32 = crate::shader_bindings::shared::prelude::WORKGROUP;
+pub const WORKGROUP: u32 = crate::shader_bindings::henad::dispatch::WORKGROUP;
 
 /// Hardcoded rather than read from the adapter, so the fold cannot vary by machine.
 const MAX_GROUPS_PER_DIM: u32 = 65_535;

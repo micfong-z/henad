@@ -127,6 +127,7 @@ fn optional_cell(value: Option<impl ToString>) -> String {
 }
 
 /// Writer of `evaluations.csv`, `batches.csv` and, for a genetic algorithm, `generations.csv`.
+#[derive(Debug)]
 pub struct SearchTablesWriter<W: Write> {
     evaluations: W,
     batches: W,
@@ -138,13 +139,14 @@ pub struct SearchTablesWriter<W: Write> {
 }
 
 impl<W: Write> SearchTablesWriter<W> {
-    /// Writes the headers of the tables, for the parameters `params` and the actions `actions`.
+    /// Writes the headers of the tables, for the parameters `params` and the actions `actions`, and flushes each.
     ///
-    /// `is_pattern_search` is set for a PSE. A `generations` writer is given for a genetic algorithm alone.
+    /// `is_pattern_search` is set for a PSE. A `generations` writer is given for a genetic algorithm alone. A search
+    /// stopped before its first batch is told then leaves each table with its header.
     ///
     /// # Errors
     ///
-    /// Returns the error of a write.
+    /// Returns the error of a write or a flush.
     pub fn new(
         mut evaluations: W,
         mut batches: W,
@@ -160,9 +162,12 @@ impl<W: Write> SearchTablesWriter<W> {
             (&OBJECTIVE_COLUMNS[..], &OBJECTIVE_BATCH_COLUMNS[..])
         };
         evaluations.write_all(header_line(&EVALUATION_ID_COLUMNS, &columns, reading_columns).as_bytes())?;
+        evaluations.flush()?;
         writeln!(batches, "{}", batch_columns.join(","))?;
+        batches.flush()?;
         if let Some(generations) = &mut generations {
             writeln!(generations, "{}", GENERATION_COLUMNS.join(","))?;
+            generations.flush()?;
         }
         Ok(Self {
             evaluations,
@@ -279,7 +284,7 @@ fn write_generation(dest: &mut impl Write, generation: &GenerationSummary) -> io
 /// # Errors
 ///
 /// Returns the error of a write or the flush.
-pub fn write_ranking<W: Write>(
+pub(crate) fn write_ranking<W: Write>(
     mut dest: W,
     ranking: &[RankingEntry],
     configs: &BTreeMap<u64, Config>,
@@ -314,7 +319,7 @@ pub fn write_ranking<W: Write>(
 /// # Errors
 ///
 /// Returns the error of a write or the flush.
-pub fn write_archive<W: Write>(
+pub(crate) fn write_archive<W: Write>(
     mut dest: W,
     settings: &PatternSpaceSettings,
     archive: &[ArchiveEntry],
@@ -686,6 +691,7 @@ impl SearchCsvTable {
 
 #[cfg(test)]
 mod tests {
+    use henad_compute::entry::register_grid_model;
     use henad_core::authoring::model::grid_model::GridModel;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
@@ -697,15 +703,16 @@ mod tests {
     use henad_core::params::{ParamDescriptor, ParamValue};
     use henad_core::topology::NeighborhoodKind;
     use henad_core::view::{StatDescriptor, StatValue};
-    use henad_models::registry::register_grid_model;
 
-    use super::SearchHistory;
+    use std::fs::File;
+    use std::io::BufWriter;
+
+    use super::{SearchHistory, SearchTablesWriter};
     use crate::output::read::ReadError;
-    use crate::progress::{Progress, ProgressEvent};
+    use crate::output::{BATCHES_FILE, EVALUATIONS_FILE, MANIFEST_FILE, RUNS_FILE};
+    use crate::progress::{NoProgress, Progress, ProgressEvent};
     use crate::result_set::ResultSet;
-    use crate::search_run::run_search;
-    use crate::sweep::{SpecSource, SweepOptions};
-    use crate::tests::support::{ScratchDir, provenance};
+    use crate::tests::support::{ScratchDir, sweep_options, sweep_with};
 
     /// Model whose parameters share their ids with the columns `evaluations.csv` writes after a config.
     ///
@@ -832,23 +839,10 @@ mod tests {
             ),
         ] {
             let output_dir = scratch.path().join(name);
-            let options = SweepOptions {
-                output_dir: Some(output_dir.clone()),
-                ..SweepOptions::default()
-            };
             let mut recorder = HistoryRecorder::default();
             let spec = trailing_names_search(algorithm);
-            run_search(
-                &entry,
-                None,
-                None,
-                &spec,
-                &SpecSource::default(),
-                &provenance(),
-                &options,
-                &mut recorder,
-            )
-            .expect("the search runs");
+            sweep_with(&entry, None, &spec, &output_dir, &sweep_options(false), &mut recorder)
+                .expect("the search runs");
             let history = ResultSet::open_dir(&output_dir, usize::MAX)
                 .expect("the folder reads back")
                 .search_history()
@@ -861,6 +855,58 @@ mod tests {
                 "{name}: only a PSE fills cells"
             );
         }
+    }
+
+    #[test]
+    fn a_search_stopped_during_its_first_batch_reads_back() {
+        let entry = register_grid_model::<TrailingNames>();
+        let scratch = ScratchDir::new("search-first-batch");
+        let output_dir = scratch.path().join("search");
+        let spec = trailing_names_search(SearchAlgorithm::Random);
+        sweep_with(&entry, None, &spec, &output_dir, &sweep_options(false), &mut NoProgress).expect("the search runs");
+        // The process ended during its first batch, with its runs written and the batch not yet told.
+        let create = |file| BufWriter::new(File::create(output_dir.join(file)).expect("a table is created"));
+        let tables = SearchTablesWriter::new(
+            create(EVALUATIONS_FILE),
+            create(BATCHES_FILE),
+            None,
+            entry.param_descriptors(),
+            &[],
+            false,
+        )
+        .expect("the headers write");
+        #[expect(clippy::mem_forget, reason = "a killed process drops nothing")]
+        std::mem::forget(tables);
+        for file in [EVALUATIONS_FILE, BATCHES_FILE] {
+            let text = std::fs::read_to_string(output_dir.join(file)).expect("the table reads");
+            assert!(
+                text.ends_with('\n') && text.lines().count() == 1,
+                "{file} holds its header alone"
+            );
+        }
+        let history = |set: &ResultSet| {
+            set.search_history()
+                .expect("the tables read")
+                .expect("a search has a history")
+        };
+        let set = ResultSet::open_dir(&output_dir, usize::MAX).expect("the folder reads back");
+        assert!(history(&set).batches.is_empty());
+
+        // A process that ended before the headers were flushed left the tables empty.
+        for file in [EVALUATIONS_FILE, BATCHES_FILE] {
+            std::fs::write(output_dir.join(file), "").expect("a table is emptied");
+        }
+        let set = ResultSet::open_dir(&output_dir, usize::MAX).expect("the folder reads back");
+        assert!(history(&set).batches.is_empty());
+        let picked = [MANIFEST_FILE, RUNS_FILE, EVALUATIONS_FILE, BATCHES_FILE]
+            .into_iter()
+            .map(|file| {
+                let bytes = std::fs::read(output_dir.join(file)).expect("the file reads");
+                (file.to_owned(), bytes)
+            })
+            .collect();
+        let set = ResultSet::from_files(picked, usize::MAX).expect("the picked files read");
+        assert!(history(&set).batches.is_empty());
     }
 
     #[test]

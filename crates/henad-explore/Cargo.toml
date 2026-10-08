@@ -1,20 +1,27 @@
 [package]
 name = "henad-explore"
 version.workspace = true
-description = "Henad parameter sweeps and searches."
+description = "Parameter sweeps, searches and result folders for Henad models."
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
-readme.workspace = true
+documentation = "https://docs.rs/henad-explore"
+readme = "README.md"
+keywords = ["agent-based-model", "simulation", "parameter-sweep", "experiment", "optimization"]
+categories = ["simulation", "science"]
+# The tests' reference folders stay in the repository.
+exclude = ["/tests/"]
+
+[features]
+# `henad_explore::testing`, the checks a model's tests run against its entry.
+testing = []
 
 [dependencies]
 henad-core = { workspace = true }
 henad-compute = { workspace = true }
-henad-models = { workspace = true }
 wgpu = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
@@ -25,5 +32,18 @@ web-time = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = { workspace = true }
 
+[build-dependencies]
+henad-build = { workspace = true }
+
+[dev-dependencies]
+# A path alone, so the published package carries no requirement on the example models. The package's own tests
+# name them, and do not build from the package.
+henad-models = { path = "../henad-models" }
+
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+rustdoc-args = ["--cfg", "docsrs"]

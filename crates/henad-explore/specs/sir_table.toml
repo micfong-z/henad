@@ -1,5 +1,5 @@
 # An SIR sweep of the 4 configs listed in sir_design.csv, each run 4 times, 16 runs in all.
-# Run it with `henad-cli --spec crates/henad-explore/specs/sir_table.toml --out sir-table`.
+# Run it with `henad-cli --spec sir_table.toml --out sir-table`.
 
 model = "sir"
 

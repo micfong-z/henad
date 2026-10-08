@@ -16,7 +16,7 @@
 //! Steps go out `batch_size` per batch, split across submissions of at most
 //! [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] steps each. Each step is still its own compute pass,
 //! since wgpu only synchronizes between passes and the ping-pong needs that. The display and
-//! stats-reduction passes run only once [`SNAPSHOT_INTERVAL`] has elapsed, so steps per snapshot
+//! stats-reduction passes run only once `SNAPSHOT_INTERVAL` has elapsed, so steps per snapshot
 //! is emergent and independent of batch size.
 //!
 //! One batch is outstanding at a time. Left unbounded, egui's own submissions queue behind a
@@ -119,6 +119,7 @@ impl Default for GpuStats {
 }
 
 /// GPU-runner-specific commands, on top of the shared [`crate::cpu::sim_thread::SimCommand`].
+#[derive(Debug)]
 pub enum GpuCommand {
     SetBatchSize(u32),
     SetAdaptive(bool),
@@ -234,6 +235,9 @@ struct Loop {
     fired_through: Option<u64>,
     /// Tick a pending [`SimCommand::RunTo`] stops at.
     run_to_target: Option<u64>,
+    /// Whether the last one-shot snapshot went out before its readback landed, with the previous readback's stats.
+    /// Only a browser sets it. A native one-shot snapshot waits for its readback.
+    late_stats: bool,
 }
 
 impl SimLoop for Loop {
@@ -341,6 +345,14 @@ impl SimLoop for Loop {
         if !self.running && self.run_to_target.is_none() {
             return self.collect_late_stats();
         }
+        // The tick of a one-shot snapshot is published again once its stats land, before a step moves past it.
+        // Otherwise the host keeps the previous readback's stats, zeros after a build, as that tick's row.
+        if self.late_stats {
+            let pace = self.collect_late_stats();
+            if self.late_stats {
+                return pace;
+            }
+        }
         if !self.await_previous() {
             return Pace::After(OUTSTANDING_POLL);
         }
@@ -356,6 +368,46 @@ impl SimLoop for Loop {
 }
 
 impl Loop {
+    /// Returns a paused loop over `state` that publishes into `slot`.
+    fn new(
+        ctx: GpuContext,
+        state: Box<dyn GpuSimState>,
+        settings: &GpuBatchSettings,
+        slot: SharedSlot,
+        gpu_stats: Arc<Mutex<GpuStats>>,
+        wake: Option<WakeFn>,
+    ) -> Self {
+        let batch_size = settings.batch_size.max(1);
+        let timestamp_query = TimestampQuery::new(&ctx.device, &ctx.queue);
+        let now = Instant::now();
+        Self {
+            ctx,
+            state,
+            slot,
+            gpu_stats,
+            wake,
+            running: false,
+            adaptive: settings.adaptive,
+            fixed_batch_size: batch_size,
+            target_ms: settings.target_ms,
+            batch_size,
+            ema_time_per_step_ms: None,
+            in_flight: None,
+            step_count: 0,
+            actual_tps: 0.0,
+            gpu_us_per_step: None,
+            tps_timer: now,
+            last_snapshot_publish: now,
+            last_stats_publish: now,
+            serial: 0,
+            timestamp_query,
+            schedule: Schedule::default(),
+            fired_through: None,
+            run_to_target: None,
+            late_stats: false,
+        }
+    }
+
     fn encoder(&self, label: &str) -> wgpu::CommandEncoder {
         self.ctx
             .device
@@ -421,10 +473,9 @@ impl Loop {
 
     /// One registration covers every submission above.
     #[cfg(target_arch = "wasm32")]
-    fn track(&mut self, submission: Option<wgpu::SubmissionIndex>, steps: u32, started_at: Instant) {
+    fn track(&mut self, _submission: Option<wgpu::SubmissionIndex>, steps: u32, started_at: Instant) {
         use std::sync::atomic::{AtomicU64, Ordering};
 
-        drop(submission);
         let elapsed_us = Arc::new(AtomicU64::new(0));
         let signal = Arc::clone(&elapsed_us);
         self.ctx.queue.on_submitted_work_done(move || {
@@ -441,6 +492,7 @@ impl Loop {
     /// Nothing else looks again while paused, and the wake is what brings a frame-driven loop back.
     fn collect_late_stats(&mut self) -> Pace {
         if !self.state.stats_readback_pending() {
+            self.late_stats = false;
             return Pace::Idle;
         }
         self.state.poll_stats_readback(&self.ctx.device, false);
@@ -450,6 +502,7 @@ impl Loop {
             }
             return Pace::After(OUTSTANDING_POLL);
         }
+        self.late_stats = false;
         self.publish_snapshot();
         Pace::Idle
     }
@@ -471,6 +524,7 @@ impl Loop {
         self.ctx.queue.submit(Some(encoder.finish()));
         self.state.begin_stats_readback();
         self.state.poll_stats_readback(&self.ctx.device, true);
+        self.late_stats = self.state.stats_readback_pending();
         self.in_flight = None;
 
         self.last_snapshot_publish = Instant::now();
@@ -663,6 +717,12 @@ pub struct GpuSimThread {
     gpu_stats: Arc<Mutex<GpuStats>>,
 }
 
+impl std::fmt::Debug for GpuSimThread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuSimThread").finish_non_exhaustive()
+    }
+}
+
 impl GpuSimThread {
     /// Starts paused, like [`crate::cpu::sim_thread::SimThread`].
     pub fn new(ctx: GpuContext, state: Box<dyn GpuSimState>, settings: GpuBatchSettings, wake: Option<WakeFn>) -> Self {
@@ -675,35 +735,15 @@ impl GpuSimThread {
         // Left empty. `start` publishes the first one after a blocking readback, and anything
         // built here would report stats the GPU has not produced yet.
         let slot = SnapshotSlot::empty();
-
-        let timestamp_query = TimestampQuery::new(&ctx.device, &ctx.queue);
-        let now = Instant::now();
         let faults = ctx.faults.clone();
-        let sim = Loop {
+        let sim = Loop::new(
             ctx,
             state,
-            slot: SharedSlot::clone(&slot),
-            gpu_stats: Arc::clone(&gpu_stats),
-            wake: wake.clone(),
-            running: false,
-            adaptive: settings.adaptive,
-            fixed_batch_size: batch_size,
-            target_ms: settings.target_ms,
-            batch_size,
-            ema_time_per_step_ms: None,
-            in_flight: None,
-            step_count: 0,
-            actual_tps: 0.0,
-            gpu_us_per_step: None,
-            tps_timer: now,
-            last_snapshot_publish: now,
-            last_stats_publish: now,
-            serial: 0,
-            timestamp_query,
-            schedule: Schedule::default(),
-            fired_through: None,
-            run_to_target: None,
-        };
+            &settings,
+            SharedSlot::clone(&slot),
+            Arc::clone(&gpu_stats),
+            wake.clone(),
+        );
 
         let driver = Driver::spawn(sim, move |fault| {
             faults.set_once(fault);
@@ -785,13 +825,15 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use super::{GpuBatchSettings, GpuSimState, GpuSimThread, StatsPoll};
+    use super::{Command, GpuBatchSettings, GpuSimState, GpuSimThread, GpuStats, Loop, StatsPoll};
+    use crate::cpu::sim_thread::SimCommand;
     use crate::gpu::{GpuContext, headless_context};
+    use crate::runner::{SharedSlot, SimLoop as _, SnapshotSlot};
     use crate::snapshot::{GpuSnapshot, Snapshot};
     use henad_core::action::{Schedule, Scheduled};
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
-    use henad_core::view::StatEntry;
+    use henad_core::view::{StatEntry, StatValue};
 
     /// Population lands on the second poll rather than on the blocking one, which is how a browser
     /// behaves: `poll_blocking` there is an ordinary poll and the map resolves a frame later.
@@ -873,6 +915,122 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(seen, Some(LANDED), "the late readback was never published");
+    }
+
+    /// Counts encoded steps as its tick, and lands each readback on the third poll, as a browser lands it a frame
+    /// late. Its one stat reads 1 once the first readback has landed.
+    struct LateTickStats {
+        tick: u64,
+        polls_left: u32,
+    }
+
+    impl SimState for LateTickStats {
+        fn step(&mut self) {
+            self.tick += 1;
+        }
+        fn tick(&self) -> u64 {
+            self.tick
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            vec![StatEntry {
+                label: "Landed",
+                value: StatValue::Scalar(if self.polls_left == 0 { 1.0 } else { 0.0 }),
+                color: [0; 4],
+            }]
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    impl GpuSimState for LateTickStats {
+        fn encode_steps(&mut self, _encoder: &mut wgpu::CommandEncoder, count: u32, _t: Option<&wgpu::QuerySet>) {
+            self.tick += u64::from(count);
+        }
+        fn encode_snapshot_passes(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
+        fn begin_stats_readback(&mut self) {}
+        fn poll_stats_readback(&mut self, _device: &wgpu::Device, _block: bool) -> StatsPoll {
+            self.polls_left = self.polls_left.saturating_sub(1);
+            if self.polls_left > 0 {
+                StatsPoll::Pending
+            } else {
+                StatsPoll::Landed
+            }
+        }
+        fn stats_readback_pending(&self) -> bool {
+            self.polls_left > 0
+        }
+        fn view(&self) -> GpuSnapshot {
+            GpuSnapshot {
+                display: None,
+                agents: None,
+            }
+        }
+    }
+
+    /// The regression, as the web build shows it. A run-to sent straight after the build stepped past tick 0 before
+    /// its readback landed, and the host kept the build's zeros as the row of tick 0.
+    #[test]
+    fn a_run_to_after_the_build_republishes_tick_zero_first() {
+        let Some(ctx) = headless_context("henad_late_tick_zero_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_run_to_after_the_build_republishes_tick_zero_first: no adapter");
+            return;
+        };
+        let settings = GpuBatchSettings {
+            adaptive: false,
+            batch_size: 100,
+            ..GpuBatchSettings::default()
+        };
+        let slot = SnapshotSlot::empty();
+        let gpu_stats = Arc::new(Mutex::new(GpuStats {
+            gpu_us_per_step: None,
+            batch_size: settings.batch_size,
+            adaptive: settings.adaptive,
+        }));
+        let state = LateTickStats { tick: 0, polls_left: 3 };
+        let mut sim = Loop::new(
+            ctx,
+            Box::new(state),
+            &settings,
+            SharedSlot::clone(&slot),
+            gpu_stats,
+            None,
+        );
+
+        // The host's history replaces the newest row with a publish at its tick.
+        let mut rows: Vec<(u64, f64)> = Vec::new();
+        let record = |rows: &mut Vec<(u64, f64)>| {
+            if let Some(snap) = crate::runner::take_snapshot(&slot) {
+                let landed = snap.stats[0].value.scalar();
+                match rows.last_mut() {
+                    Some(row) if row.0 == snap.tick => row.1 = landed,
+                    _ => rows.push((snap.tick, landed)),
+                }
+            }
+        };
+        sim.start();
+        record(&mut rows);
+        sim.handle_command(Command::Sim(SimCommand::RunTo(10)));
+        for _ in 0..10 {
+            sim.pump();
+            record(&mut rows);
+        }
+        assert_eq!(
+            rows.last().map(|row| row.0),
+            Some(10),
+            "the run reached its target: {rows:?}"
+        );
+        assert_eq!(
+            rows.first(),
+            Some(&(0, 1.0)),
+            "tick 0 kept the stats from before its readback: {rows:?}"
+        );
     }
 
     /// Counts encoded steps as its tick, and records the tick each action is encoded at.

@@ -2,5 +2,6 @@
 //! crate.
 
 pub mod broken;
-pub mod support;
-pub mod tutorial;
+mod gpu_contracts;
+mod registry;
+mod simulation;

@@ -4,12 +4,13 @@ use super::{DialogFile, OpenOutcome, OpenResult, OpenTarget, spawn};
 
 /// Opens a dialog for `target`, and reads the files or takes the folder the user picks.
 ///
-/// Returns immediately. The outcome arrives on `sender`.
-pub fn spawn_open(target: OpenTarget, sender: flume::Sender<OpenOutcome>) {
+/// Returns immediately. The outcome arrives on `sender`, and `ctx` repaints to show it.
+pub fn spawn_open(target: OpenTarget, sender: flume::Sender<OpenOutcome>, ctx: egui::Context) {
     spawn(async move {
         let result = pick(target).await;
         // The receiver is gone once the app is closing, and nothing is left to report to.
         drop(sender.send(OpenOutcome { target, result }));
+        ctx.request_repaint();
     });
 }
 

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>My Model</title>
+    <link data-trunk rel="rust" href="." data-bin="my-model" data-wasm-opt="2"
+        data-wasm-opt-params="--enable-threads --enable-bulk-memory --enable-simd" />
+    <base data-trunk-public-url />
+    <link data-trunk rel="icon" href="assets/icon-256.png">
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; }
+        canvas { width: 100%; height: 100%; display: block; }
+        #loading_text { position: absolute; top: 50%; width: 100%; text-align: center; font-family: sans-serif; }
+    </style>
+</head>
+<body>
+    <canvas id="the_canvas_id"></canvas>
+    <div id="loading_text">Loading…</div>
+    <script>
+        if (!window.crossOriginIsolated) {
+            document.getElementById("loading_text").textContent =
+                "This page needs the Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy headers.";
+        }
+    </script>
+</body>
+</html>

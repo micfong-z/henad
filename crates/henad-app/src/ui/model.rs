@@ -1,50 +1,82 @@
 //! Model selection, and what the selected model declares about itself.
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::capacity::Demand;
-use henad_core::action::Schedule;
 use henad_core::helpers::fmt_bytes;
 use henad_core::metadata::{LaneSpec, Structure};
 use henad_core::params::ParamDescriptor;
 use henad_core::topology::{NeighborhoodKind, TopologyHint};
-use henad_models::registry::ModelEntry;
 
 use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE};
-use crate::state::AppState;
+use crate::state::{AppState, OpeningRefusal};
 use crate::ui::{KvGridRows, kv_grid};
 
+/// Text the Model panel shows when no model of the set runs on this machine.
+const NO_MODEL_RUNS: &str = "No model in this build runs on this device. GPU models need a GPU with compute support.";
+
+/// Text the Model panel shows for a set without models.
+const NO_MODELS: &str = "This build includes no models.";
+
+/// Draws what the app could not open and why, then `next_step`.
+fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str) {
+    ui.colored_label(ui.visuals().warn_fg_color, refusal.lead);
+    ui.label(format!("{}.", refusal.reason));
+    ui.label(next_step);
+}
+
 pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    let model_names: Vec<&str> = app.registry.iter().map(|m| m.name.as_str()).collect();
-    let mut changed_model = false;
+    let offered: Vec<(String, String)> = app
+        .offered_models()
+        .map(|entry| (entry.id().to_owned(), entry.name().to_owned()))
+        .collect();
+    if offered.is_empty() {
+        // The refusal of a hidden GPU model already names the GPU, and an empty set has no GPU to blame.
+        match &app.opening_refusal {
+            Some(refusal) => opening_refusal(ui, refusal, "No model in this build runs on this device."),
+            None if app.models.is_empty() => {
+                ui.label(NO_MODELS);
+            }
+            None => {
+                ui.label(NO_MODEL_RUNS);
+            }
+        }
+        return;
+    }
+    let selected_name = app.selected_entry().map_or("None", ModelEntry::name).to_owned();
+    let mut picked = None;
 
     egui::ComboBox::from_label("Select Model")
-        .selected_text(model_names.get(app.selected_model).copied().unwrap_or("None"))
+        .selected_text(selected_name)
         // As tall as the window allows. The model list outgrows egui's default of 200 points.
         .height(ui.ctx().content_rect().height())
         .show_ui(ui, |ui| {
-            for (i, name) in model_names.iter().enumerate() {
-                if ui.selectable_value(&mut app.selected_model, i, *name).changed() {
-                    changed_model = true;
+            for (id, name) in &offered {
+                let selected = app.selected_model.as_deref() == Some(id.as_str());
+                if ui.selectable_label(selected, name).clicked() && !selected {
+                    picked = Some(id.clone());
                 }
             }
         });
 
-    if changed_model {
-        app.load_default_params();
-        // Entries index the previous model's actions.
-        app.schedule = Schedule::default();
-        app.schedule_action_input = 0;
+    let changed_model = picked.is_some();
+    if let Some(id) = picked {
+        app.select_model(&id);
     }
 
-    let Some(entry) = app.registry.get(app.selected_model) else {
+    let Some(entry) = app.selected_entry() else {
+        if let Some(refusal) = &app.opening_refusal {
+            ui.separator();
+            opening_refusal(ui, refusal, "Select a model to continue.");
+        }
         return;
     };
 
     ui.separator();
-    ui.label(entry.description.as_str());
+    ui.label(entry.description());
     ui.separator();
 
     // Recomputed as the sliders move, so the footprint tracks the panel next door.
-    let demand = entry.demand(&app.param_values);
+    let demand = entry.demand(&app.param_values, &app.runtime.granted);
     let storage_limit = app.runtime.granted.max_storage_buffers_per_shader_stage;
 
     let mut scroll = egui::ScrollArea::vertical();
@@ -57,14 +89,14 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     scroll.show(ui, |ui| {
         section(ui, "Identity");
         kv_grid(ui, "model_identity_grid").show(ui, |ui, rows| {
-            row(ui, rows, "Id", entry.id.as_str());
-            row(ui, rows, "Backend", entry.metadata.backend.label());
-            row(ui, rows, "Topology", topology_label(entry.topology_hint));
+            row(ui, rows, "Id", entry.id());
+            row(ui, rows, "Backend", entry.metadata().backend.label());
+            row(ui, rows, "Topology", topology_label(entry.topology_hint()));
         });
 
         ui.add_space(8.0);
         section(ui, "Structure");
-        kv_grid(ui, "model_structure_grid").show(ui, |ui, rows| structure_rows(ui, rows, &entry.metadata.structure));
+        kv_grid(ui, "model_structure_grid").show(ui, |ui, rows| structure_rows(ui, rows, &entry.metadata().structure));
 
         ui.add_space(8.0);
         section(ui, "Interface");
@@ -75,7 +107,7 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
             ui.add_space(8.0);
             section(ui, "Footprint");
             kv_grid(ui, "model_footprint_grid").show(ui, |ui, rows| {
-                footprint_rows(ui, rows, entry.id.as_str(), demand, storage_limit);
+                footprint_rows(ui, rows, entry.id(), demand, storage_limit);
             });
         }
     });
@@ -214,19 +246,19 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
 }
 
 fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) {
-    let descs: &[ParamDescriptor] = &entry.param_descriptors;
+    let descs: &[ParamDescriptor] = entry.param_descriptors();
     let reload = descs.iter().filter(|desc| !desc.is_live()).count();
     row(ui, rows, "Parameters", count_of(descs.len(), reload, "reload"));
 
     ui.label("Statistics");
     ui.horizontal(|ui| {
-        ui.label(entry.stat_descriptors.len().to_string());
-        swatches(ui, entry.stat_descriptors.iter().map(|stat| stat.color));
+        ui.label(entry.stat_descriptors().len().to_string());
+        swatches(ui, entry.stat_descriptors().iter().map(|stat| stat.color));
     });
     rows.end_row(ui);
 
     ui.label("Palette");
-    match entry.metadata.palette {
+    match entry.metadata().palette {
         Some(palette) => {
             ui.horizontal(|ui| {
                 ui.label(palette.len().to_string());
@@ -242,7 +274,7 @@ fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) 
     }
     rows.end_row(ui);
 
-    if let Structure::Network { edge_palette, .. } = &entry.metadata.structure {
+    if let Structure::Network { edge_palette, .. } = &entry.metadata().structure {
         ui.label("Edge palette");
         ui.horizontal(|ui| {
             ui.label(edge_palette.len().to_string());

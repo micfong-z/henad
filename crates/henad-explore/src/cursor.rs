@@ -2,20 +2,20 @@
 //!
 //! A cursor steps its run a slice at a time, fires the run's actions and samples it at every tick its
 //! [`MeasurePlan`] names. The CPU executors drive their runs through cursors. A GPU run steps on a track of
-//! `exec::gpu` instead, and both end a run through [`run_outcome`].
+//! `exec::gpu` instead, and both end a run through `run_outcome`.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use web_time::Instant;
 
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{BUILDING, Fault, FaultKind, STEPPING, catching};
 use henad_core::action::{RefusedActions, Schedule, Scheduled};
 use henad_core::explore::measure::{MeasurePlan, Sampler};
 use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason};
 use henad_core::export::StatsWriteError;
 use henad_core::model::SimState;
-use henad_models::registry::{ModelEntry, ModelState};
 
 use crate::exec::RunRequest;
 
@@ -44,6 +44,16 @@ pub struct RunCursor {
     run: PlannedRun,
     run_key: u64,
     phase: Phase,
+}
+
+/// Prints the run, and leaves out the live simulation.
+impl std::fmt::Debug for RunCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunCursor")
+            .field("run", &self.run)
+            .field("run_key", &self.run_key)
+            .finish_non_exhaustive()
+    }
 }
 
 enum Phase {
@@ -93,7 +103,8 @@ impl From<Fault> for RunFailure {
         let status = match fault.kind {
             FaultKind::Panic { .. } => RunStatus::Panicked,
             FaultKind::Refused(_) => RunStatus::Refused,
-            FaultKind::Device(_) | FaultKind::Poll(_) => RunStatus::GpuError,
+            // A device error, a failed wait or a lost device.
+            _ => RunStatus::GpuError,
         };
         Self {
             status,
@@ -211,7 +222,13 @@ impl RunCursor {
         timeout: Option<Duration>,
     ) -> Self {
         let started = Instant::now();
-        let built = (entry.create)(request.params, Some(request.run.seed)).and_then(cpu_state);
+        let built = if entry.gpu_needs().is_some() {
+            Err(Fault::refused(BUILDING, GPU_REFUSAL))
+        } else {
+            entry
+                .build(request.params, Some(request.run.seed), None)
+                .and_then(cpu_state)
+        };
         let build_ms = milliseconds(started.elapsed());
         let phase = match built {
             Ok(state) => Phase::Live(Box::new(LiveRun {
@@ -387,6 +404,7 @@ pub(crate) fn milliseconds(duration: Duration) -> f64 {
 mod tests {
     use std::sync::Arc;
 
+    use henad_compute::entry::{ModelEntry, ModelState, register_grid_model};
     use henad_compute::fault::install_panic_hook;
     use henad_core::action::Schedule;
     use henad_core::explore::measure::MeasurePlan;
@@ -395,7 +413,7 @@ mod tests {
     use henad_core::export::StatColumns;
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
-    use henad_models::registry::{ModelEntry, ModelState, model_registry, register_grid_model};
+    use henad_models::example_models;
 
     use super::{CursorState, RunCursor};
     use crate::exec::RunRequest;
@@ -404,22 +422,19 @@ mod tests {
     const SEED: u64 = 11;
 
     fn entry(id: &str) -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == id)
-            .expect("the model is registered")
+        example_models().get(id).cloned().expect("the model is registered")
     }
 
     fn cpu_state(entry: &ModelEntry, params: &[ParamValue]) -> Box<dyn SimState> {
-        match (entry.create)(params, Some(SEED)) {
+        match entry.build(params, Some(SEED), None) {
             Ok(ModelState::Cpu(state)) => state,
-            _ => panic!("{} builds on the CPU", entry.id),
+            _ => panic!("{} builds on the CPU", entry.id()),
         }
     }
 
     fn params(entry: &ModelEntry, width: u32) -> Vec<ParamValue> {
         let mut params: Vec<ParamValue> = entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();

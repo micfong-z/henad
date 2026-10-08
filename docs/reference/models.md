@@ -1,12 +1,13 @@
 ---
-title: Default models
-description: The ten models that ship with Henad, and every parameter each one declares.
+title: Example models
+description: The ten example models, and every parameter each one declares.
 icon: material/cube-outline
 ---
 
-# The models
+# Example models
 
-Ten models ship in the registry.
+Henad has ten example models, in the set `henad::models::example_models()` returns, and its own app and command line offer them.
+A project of your own offers its own models, and can [add some or all of these](../authoring/model-sets.md#the-example-models).
 Six of them run on the CPU, and four of those six have a GPU port running the same simulation entirely in compute shaders.
 The two network models run on the CPU only.
 
@@ -28,7 +29,7 @@ cargo run -p henad-cli -- --list
 | `gpu_ants` | Ant Foraging (GPU) | Agents over a field | GPU |
 
 The four GPU entries appear only when wgpu finds an adapter with compute support.
-Each GPU port seeds itself through its CPU counterpart's `init`, which makes tick 0 bit-identical between the two backends and a comparison between them fair.
+Each GPU port starts from its CPU counterpart's tick 0 bit for bit, which makes a comparison between the two backends fair.
 
 ## Parameters
 
@@ -97,7 +98,7 @@ The `randomise_headings` action points every boid in a random direction without 
 
 ### Ant Foraging
 
-A population over a pheromone field, the one composite model in the registry.
+A population over a pheromone field, the one composite example model.
 Ants deposit into a scalar field that decays each tick, then steer by the values they read back.
 
 | Id | Kind | Default | Range |

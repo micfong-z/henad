@@ -77,6 +77,18 @@ pub struct NetworkModelState<N: NetworkModel> {
     layout: LayoutState,
 }
 
+impl<N: NetworkModel> std::fmt::Debug for NetworkModelState<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NetworkModelState")
+            .field("model", &N::ID)
+            .field("tick", &self.tick)
+            .field("extent", &self.extent)
+            .field("graph", &self.graph)
+            .field("params", &self.params)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<N: NetworkModel> NetworkModelState<N> {
     pub fn from_params(params: &[ParamValue]) -> Self {
         Self::from_params_seeded(params, None)
@@ -422,6 +434,45 @@ mod tests {
         }
     }
 
+    /// Hot parameters that implement no `Debug`.
+    struct OpaqueParams;
+
+    /// Model state that implements no `Debug`.
+    #[derive(Default)]
+    struct OpaqueAux;
+
+    /// A model whose type, `Params` and `Aux` implement no `Debug`.
+    struct Opaque;
+
+    impl NetworkModel for Opaque {
+        const NAME: &'static str = "Opaque";
+        const ID: &'static str = "opaque";
+        const DESCRIPTION: &'static str = "Implements no Debug, for testing the node views";
+        const PALETTE: &'static [[u8; 4]] = &[[0, 0, 0, 255]];
+        const EDGE_PALETTE: &'static [[u8; 4]] = &[[128, 128, 128, 255]];
+        const STATS: &'static [StatDescriptor] = &[];
+        const DEFAULT_NODES: u32 = 4;
+        const DEFAULT_EXTENT: Extent = WORLD;
+
+        type Lanes = RingLanes;
+        type Params = OpaqueParams;
+        type Aux = OpaqueAux;
+
+        fn param_descriptors() -> Vec<ParamDescriptor> {
+            Vec::new()
+        }
+
+        fn from_params(_params: &[ParamValue], _extent: Extent) -> OpaqueParams {
+            OpaqueParams
+        }
+
+        fn init(_nodes: &mut Nodes<'_, Self>, _extent: Extent, _params: &[ParamValue], _rng: &mut u64) {}
+
+        fn stats(_lanes: &Self::Lanes, _graph: &Network, _aux: &OpaqueAux) -> Vec<StatValue> {
+            Vec::new()
+        }
+    }
+
     fn ring(nodes: u32) -> NetworkModelState<Ring> {
         let mut params: Vec<ParamValue> = network_model_param_descriptors::<Ring>()
             .iter()
@@ -438,6 +489,15 @@ mod tests {
         }
     }
 
+    /// The node views implement `Debug` for a model whose `Params` and `Aux` do not. A derive would bound its impl on
+    /// both and fail to compile here.
+    #[test]
+    fn the_node_views_implement_debug_for_any_model() {
+        fn assert_debug<T: std::fmt::Debug>() {}
+        assert_debug::<Nodes<'static, Opaque>>();
+        assert_debug::<NodeCtx<'static, Opaque>>();
+    }
+
     #[test]
     fn the_engine_prepends_the_size_parameters() {
         let descs = network_model_param_descriptors::<Ring>();
@@ -449,6 +509,25 @@ mod tests {
             descs.iter().all(|d| !d.is_live()),
             "size is fixed once a state is built"
         );
+    }
+
+    #[test]
+    fn generated_lanes_print_their_length() {
+        use henad_core::authoring::model::agent_model::AgentLanes as _;
+
+        let mut lanes = RingLanes::alloc(3);
+        assert_eq!(format!("{lanes:?}"), "RingLanes { len: 3, .. }");
+        let read = RingRead {
+            state: &lanes.state,
+            _lifetime: std::marker::PhantomData,
+        };
+        assert_eq!(format!("{read:?}"), "RingRead { .. }");
+        let chunk = RingChunk {
+            state: &mut lanes.next_state,
+            pos_x: &mut lanes.pos_x,
+            pos_y: &mut lanes.pos_y,
+        };
+        assert_eq!(format!("{chunk:?}"), "RingChunk { len: 3, .. }");
     }
 
     #[test]

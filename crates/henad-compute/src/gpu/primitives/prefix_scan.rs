@@ -8,6 +8,7 @@ use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform
 use crate::shader_bindings::primitives::scan::ScanParams;
 
 /// Its bind groups keep the buffers it touches alive.
+#[derive(Debug)]
 struct Level {
     groups: (u32, u32),
     scan_bind: wgpu::BindGroup,
@@ -15,6 +16,7 @@ struct Level {
     add_bind: Option<wgpu::BindGroup>,
 }
 
+#[derive(Debug)]
 pub struct PrefixScan {
     levels: Vec<Level>,
     scan_pipeline: wgpu::ComputePipeline,

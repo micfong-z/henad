@@ -30,6 +30,7 @@ pub type WakeFn = std::sync::Arc<dyn Fn() + Send + Sync>;
 pub type WakeFn = std::sync::Arc<dyn Fn()>;
 
 /// Commands sent from the UI thread to the simulation thread.
+#[derive(Debug)]
 pub enum SimCommand {
     Play,
     Pause,
@@ -375,6 +376,12 @@ impl Loop {
 pub struct SimThread {
     driver: Driver<Loop>,
     slot: SharedSlot,
+}
+
+impl std::fmt::Debug for SimThread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SimThread").finish_non_exhaustive()
+    }
 }
 
 impl SimThread {

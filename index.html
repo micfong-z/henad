@@ -21,7 +21,7 @@
     <link data-trunk rel="copy-file" href="assets/sw.js"/>
     <link data-trunk rel="copy-file" href="assets/manifest.json"/>
     <link data-trunk rel="copy-file" href="assets/icon-1024.png" data-target-path="assets"/>
-    <link data-trunk rel="copy-file" href="assets/icon-256.png" data-target-path="assets"/>
+    <link data-trunk rel="copy-file" href="crates/henad-app/assets/icon-256.png" data-target-path="assets"/>
     <link data-trunk rel="copy-file" href="assets/icon_ios_touch_192.png" data-target-path="assets"/>
     <link data-trunk rel="copy-file" href="assets/maskable_icon_x512.png" data-target-path="assets"/>
 
@@ -121,10 +121,10 @@
 
 <body>
     <!-- The WASM code will resize the canvas dynamically -->
-    <!-- the id is hardcoded in main.rs . so, make sure both match. -->
+    <!-- the id is hardcoded in henad-app's start_web. so, make sure both match. -->
     <canvas id="the_canvas_id"></canvas>
 
-    <!-- the loading spinner will be removed in main.rs -->
+    <!-- the loading spinner will be removed in henad-app's start_web -->
     <div class="centered" id="loading_text">
         <noscript>You need javascript to use this website</noscript>
         <p style="font-size:16px">
@@ -132,6 +132,19 @@
         </p>
         <div class="lds-dual-ring"></div>
     </div>
+
+    <!-- The worker pool shares memory with the page, which a browser allows only on a cross-origin-isolated page.
+         Chrome starts the build without isolation and runs it on one thread. A browser that refuses the shared memory
+         never starts it, and the note below the spinner then says why. -->
+    <script>
+        if (!window.crossOriginIsolated) {
+            const note = document.createElement("p");
+            note.style.fontSize = "16px";
+            note.textContent = "This page lacks the Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy "
+                + "headers. The app might run on one thread, or not start.";
+            document.getElementById("loading_text").appendChild(note);
+        }
+    </script>
 
     <!-- Register the service worker. It caches the app for offline use, network first, so a
          reload always picks up the latest build. -->

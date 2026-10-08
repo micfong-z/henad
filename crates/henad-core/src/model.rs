@@ -1,21 +1,8 @@
-use crate::params::{ParamDescriptor, ParamValue};
-use crate::send_sync::{WasmNotSend, WasmNotSync};
-use crate::topology::TopologyHint;
-use crate::view::{EdgeView, GridView, PointView, StatDescriptor, StatEntry};
+use crate::params::ParamValue;
+use crate::send_sync::WasmNotSend;
+use crate::view::{EdgeView, GridView, PointView, StatEntry};
 
-pub trait Model: WasmNotSend + WasmNotSync + 'static {
-    type State: SimState;
-
-    fn name(&self) -> &'static str;
-    fn id(&self) -> &'static str;
-    fn description(&self) -> &'static str;
-    fn param_descriptors(&self) -> Vec<ParamDescriptor>;
-    fn stat_descriptors(&self) -> Vec<StatDescriptor>;
-    fn topology_hint(&self) -> TopologyHint;
-    fn create_state(&self, params: &[ParamValue]) -> Self::State;
-}
-
-/// Object-safe, so the registry can type-erase every model behind one state.
+/// Object-safe, so a model entry can type-erase every model behind one state.
 pub trait SimState: WasmNotSend + 'static {
     fn step(&mut self);
     fn tick(&self) -> u64;

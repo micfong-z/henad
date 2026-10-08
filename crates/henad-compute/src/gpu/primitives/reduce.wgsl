@@ -3,7 +3,7 @@
 // Group-major (`input[group * lanes + lane]`), so a model's leaf shader writes one contiguous
 // group per workgroup and needs to know nothing about the tree above it.
 
-#import shared::prelude::WORKGROUP
+#import henad::dispatch::WORKGROUP
 
 struct ReduceParams {
     n: u32,

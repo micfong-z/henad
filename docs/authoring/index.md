@@ -26,12 +26,12 @@ If your state is a population whose members interact along edges that last from 
 Then pick the backend, and start on the CPU.
 A CPU model is ordinary Rust, so `dbg!` and a test work on it.
 The GPU version is WGSL plus a declared list of passes, and every GPU model in the repository was written after its CPU counterpart already worked.
-Each one seeds itself through that counterpart's `init`, which keeps the pair comparable.
+Each one starts from that counterpart's tick 0 bit for bit, which keeps the pair comparable.
 [Porting a model to the GPU](porting.md) picks up from there.
 
 !!! note "`SimState` is not a sixth path"
 
-    `Model` and `SimState` belong to the runner, which drives a state through them.
+    `SimState` belongs to the runner, which drives a state through it.
     Implement one of the five traits above and leave `SimState` to the engine.
 
 ## The five declarations
@@ -50,7 +50,8 @@ A network model's `init` also adds the edges.
 
 **A step.** The kernel itself, which stays pure apart from the RNG it is handed.
 
-Every model also declares a `PALETTE`, and [palettes and views](views.md) covers what the renderer does with it.
+Every model but a GPU agent model also declares a `PALETTE`, and [palettes and views](views.md) covers what the renderer does with it.
+A GPU agent model colours its agents from its own colour buffer.
 
 ## Where to start
 
@@ -74,4 +75,4 @@ If you have not written a model before, the three CPU tutorials each build one e
 
 ## Then
 
-Once your model runs, [register it](registering.md) so that it appears in the app and the CLI, check it against the [determinism contract](determinism.md), and read [writing fast models](performance.md) before you scale it up.
+Once your model runs, [register it](model-sets.md) so that it appears in the app and the CLI, [test it](testing.md), check it against the [determinism contract](determinism.md), and read [writing fast models](performance.md) before you scale it up.

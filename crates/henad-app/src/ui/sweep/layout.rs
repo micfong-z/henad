@@ -780,11 +780,6 @@ impl Note {
             .next()
             .map_or(fallback, |issue| Self::Issue(issue.kind, issue.message.clone()))
     }
-
-    /// Returns whether the note reports an issue.
-    pub fn is_issue(&self) -> bool {
-        matches!(self, Self::Issue(..))
-    }
 }
 
 /// Draws `note` on one line `width` wide, reserved even for an empty note so nothing below moves when one comes.

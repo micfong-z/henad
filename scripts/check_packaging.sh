@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Checks the packaging rules that cargo itself never checks. The workspace versions agree, each crate carries the
+# licence texts, no source or build script reads a file outside its crate, and henad-build names the wgsl_bindgen
+# release the workspace pins. The template and the facade's README program require the workspace's major and minor,
+# and the template's release profile equals the root's.
+#
+# The script builds nothing. Only a verified `cargo package` builds a crate from its tarball, and the release
+# checklist and the `downstream` job run it.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+python3 - <<'EOF'
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+errors = []
+
+# Every Henad crate requires its siblings at the workspace version, as a caret requirement.
+root = tomllib.loads(Path("Cargo.toml").read_text())
+version = root["workspace"]["package"]["version"]
+for name, spec in root["workspace"]["dependencies"].items():
+    if not name.startswith("henad"):
+        continue
+    if not isinstance(spec, dict) or spec.get("version") != version:
+        errors.append(f"Cargo.toml: `{name}` needs `version = \"{version}\"` beside its path")
+
+# The crates that publish. examples/tutorial never packages, and its tests read the example models' shaders.
+crates = sorted(path.parent for path in Path("crates").glob("*/Cargo.toml"))
+
+# henad-build folds the wgsl_bindgen release into its stamp, and names the release the workspace pins.
+pin = root["workspace"]["dependencies"]["wgsl_bindgen"]["version"]
+named = re.search(r'const WGSL_BINDGEN_VERSION: &str = "([^"]+)";', Path("crates/henad-build/src/output.rs").read_text())
+if not pin.startswith("=") or not named or named.group(1) != pin[1:]:
+    errors.append(f"crates/henad-build/src/output.rs: `WGSL_BINDGEN_VERSION` needs to equal the exact pin `{pin}`")
+
+# Each package ships both licence texts, as copies of the root's.
+for crate in crates:
+    for licence in ("LICENSE-MIT", "LICENSE-APACHE"):
+        copy = crate / licence
+        if not copy.is_file() or copy.read_bytes() != Path(licence).read_bytes():
+            errors.append(f"{copy}: needs to be a copy of the root {licence}")
+
+# An `include!`, `include_str!` or `include_bytes!` path, or a `#[path]` attribute, resolves inside its own crate.
+include = re.compile(r'(?:include(?:_str|_bytes)?!\(\s*r?#*|#\[path\s*=\s*)"([^"]+)"')
+for crate in crates:
+    for source in crate.rglob("*.rs"):
+        for number, line in enumerate(source.read_text().splitlines(), 1):
+            for path in include.findall(line):
+                target = (source.parent / path).resolve()
+                if not target.is_relative_to(crate.resolve()):
+                    errors.append(f"{source}:{number}: `{path}` is outside {crate}")
+
+# A build script joins no path that climbs out of its crate.
+for crate in crates:
+    script = crate / "build.rs"
+    if not script.is_file():
+        continue
+    for number, line in enumerate(script.read_text().splitlines(), 1):
+        if '"../' in line or '".."' in line:
+            errors.append(f"{script}:{number}: a path that climbs out of {crate}")
+
+# The stamps reach henad-explore's siblings through git, never by climbing out of the crate directory.
+for source in sorted(Path("crates/henad-build/src/stamp").rglob("*.rs")):
+    for number, line in enumerate(source.read_text().splitlines(), 1):
+        if '"../' in line or '".."' in line:
+            errors.append(f"{source}:{number}: a path that climbs out of the stamped crate")
+
+template = tomllib.loads(Path("templates/model-project/Cargo.toml").read_text())
+
+# The template requires the workspace's major and minor, as a user's project does.
+major_minor = ".".join(version.split(".")[:2])
+for table, name in (("dependencies", "henad"), ("build-dependencies", "henad-build"), ("dev-dependencies", "henad")):
+    spec = template.get(table, {}).get(name)
+    required = spec.get("version") if isinstance(spec, dict) else spec
+    if required != major_minor:
+        errors.append(f'templates/model-project/Cargo.toml: `{name}` in `[{table}]` needs to require "{major_minor}"')
+
+# The facade's README program opens with the dependency line a reader copies, as does the example it equals.
+requirement = re.compile(r'^// Cargo\.toml: henad = \{ version = "([^"]*)"', re.MULTILINE)
+for program in (Path("crates/henad/README.md"), Path("crates/henad/examples/complete.rs")):
+    if requirement.findall(program.read_text()) != [major_minor]:
+        errors.append(f'{program}: the `// Cargo.toml: henad = ...` line needs to require "{major_minor}"')
+
+# The template builds its models at the root's release opt-level, so a downstream model runs as fast as an example one.
+root_release = root.get("profile", {}).get("release")
+template_release = template.get("profile", {}).get("release")
+if template_release != root_release:
+    errors.append(
+        f"templates/model-project/Cargo.toml: `[profile.release]` is {template_release}, and needs to equal the root's {root_release}"
+    )
+
+for error in errors:
+    print(error, file=sys.stderr)
+sys.exit(1 if errors else 0)
+EOF

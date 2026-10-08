@@ -15,6 +15,11 @@ When the configs worth running depend on the results, a [search](search.md) pick
 Before we start, make sure you can [run the CLI](running.md#cli).
 Every example here uses SIR, but any model that `--list` prints works the same way.
 
+The commands below run the CLI from a clone of Henad's repository, as `cargo run --release -p henad-cli --`.
+With the CLI installed, write `henad-cli` in place of that.
+A [project of your own](your-project.md) runs its own models through `cargo run --release --bin my-model-cli --`, and SIR is not among them.
+The template's `vote` sweeps the same way, as in `--vary density=0.45:0.55:0.05`, and its `specs/vote.toml` is a spec file to start from.
+
 ## A first sweep
 
 Let's see how the size of an SIR epidemic depends on the infection rate:
@@ -169,11 +174,19 @@ Open the directory in the [Results tab](app.md#opening-results), select the run,
 
 A sweep with many settings is easier to keep in a file.
 A spec file is TOML, and holds every setting that changes a result.
-Henad ships one for SIR:
+Here is one for SIR.
+Henad's repository keeps it at `crates/henad-explore/specs/sir_sweep.toml`.
+
+??? example "`sir_sweep.toml`"
+
+    ``` toml
+    --8<-- "crates/henad-explore/specs/sir_sweep.toml"
+    ```
+
+Save it as `sir_sweep.toml` and run it:
 
 ``` bash
-cargo run --release -p henad-cli -- \
-  --spec crates/henad-explore/specs/sir_sweep.toml --out sir-spec
+cargo run --release -p henad-cli -- --spec sir_sweep.toml --out sir-spec
 ```
 
 The spec names its own model, and the command line leaves it out.
@@ -181,7 +194,7 @@ The spec names its own model, and the command line leaves it out.
 
 We will go through the file one table at a time.
 
-``` toml title="crates/henad-explore/specs/sir_sweep.toml"
+``` toml title="sir_sweep.toml"
 --8<-- "crates/henad-explore/specs/sir_sweep.toml:model"
 ```
 
@@ -312,7 +325,8 @@ cargo run --release -p henad-cli -- sir \
 
 A condition is a stat column, a comparator and a number.
 The column is written as a reducer names it, and can hold spaces, as in `'Giant Component Share >= 0.5'` for Team Assembly.
-The comparator is one of `<`, `<=`, `>`, `>=`, `==` and `!=`.
+The comparator is one of `<`, `<=`, `>`, `>=`, `==` and `!=`, read from the last run of those characters in the condition.
+A label holding `<`, `>`, `=` or `!` therefore works too.
 A NaN never meets a condition.
 
 The condition is checked at each sample, and `--stats-every` sets how soon after the event a run stops.
@@ -396,7 +410,7 @@ The refusal goes in the run's `note` column, and the run stays `ok`.
 A design can come from somewhere else: another tool's sampler, a table of cases from a paper, or the points of an earlier sweep worth a closer look.
 A design table holds one config per row:
 
-```text title="crates/henad-explore/specs/sir_design.csv"
+```text title="sir_design.csv"
 --8<-- "crates/henad-explore/specs/sir_design.csv"
 ```
 
@@ -411,13 +425,22 @@ The table is then the sweep's only block, and row `i` is config `i` of the sweep
 There an `action.NAME` column names an action `--act` adds, by its id.
 A spec file names its table in a block:
 
-``` toml title="crates/henad-explore/specs/sir_table.toml"
+``` toml title="sir_table.toml"
 --8<-- "crates/henad-explore/specs/sir_table.toml:table"
 ```
 
+Save the table as `sir_design.csv`, and the whole spec below as `sir_table.toml` beside it.
+
+??? example "`sir_table.toml`"
+
+    ``` toml
+    --8<-- "crates/henad-explore/specs/sir_table.toml"
+    ```
+
+Then run it:
+
 ``` bash
-cargo run --release -p henad-cli -- \
-  --spec crates/henad-explore/specs/sir_table.toml --out sir-table
+cargo run --release -p henad-cli -- --spec sir_table.toml --out sir-table
 ```
 
 `file` is relative to the spec file, and cannot be absolute or hold `..`.
@@ -493,7 +516,7 @@ sir-sweep/
 : One row per config, with the mean, standard deviation, count and 95% confidence interval of every reducer over the replicates.
 
 `manifest.json`
-: Record of the sweep: the model and its schema, the resolved settings, the command line, the seed formula, the build and the machine.
+: Record of the sweep: the model and its schema, the resolved settings, the command line, the seed formula, the builds that ran it and the machine.
 
 The [CLI reference](../reference/cli.md#output-directory) lists every column.
 
@@ -517,6 +540,7 @@ All three CSV files come out the same byte for byte at any `--concurrent`, apart
 
     `gpu_boids` is the one model whose runs differ between two sweeps with the same settings.
     Its neighbour index leaves the order of the boids within a cell open, and the order changes from run to run.
+    Its manifest records `replays_exactly` as `false`, and the app's Results tab notes beside a run that the opened run might differ from its row.
 
 ### CPU lanes
 
@@ -577,7 +601,7 @@ A sweep can stop part way through: the process is killed, the machine restarts, 
 Run the same command again with `--resume`, and the sweep carries on where it stopped:
 
 ``` bash
-cargo run --release -p henad-cli -- sir \
+cargo run --release --locked -p henad-cli -- sir \
   --vary infection_rate=0.1:0.5:0.1 --reps 5 --steps 500 --out sir-sweep --resume
 ```
 
@@ -590,7 +614,11 @@ The plan counts the runs the directory holds and the runs left:
 A resume first checks that the directory holds the same sweep.
 The model and its declarations, the configs, the steps, the sampling, the stop condition and reducers, the actions, the seeds and the shard all have to match, and a resume of anything else is refused.
 Only the replicate count and the timeout can change.
-A different build of Henad gets a warning, and the manifest's `sessions` lists every process that wrote runs, with its commit.
+The manifest's `sessions` lists every process that wrote runs, with three builds each: Henad's, the binary's and that of the crate that registered the model.
+A build records its commit, whether the sources differed from the commit, and a hash of the sources.
+A resume warns when Henad's build or the model's differs from one a session recorded, and goes ahead.
+An uncommitted edit to a kernel counts as a different build, since its source hash changes.
+The [CLI reference](../reference/cli.md#builds) gives the fields and the rule that compares two builds.
 
 The resume then repairs what a cut-off write left behind.
 A partial last line of `runs.csv` is dropped, and so are the rows of `series.csv` whose run never reached `runs.csv`.
@@ -600,6 +628,8 @@ A run that timed out runs again.
 
 When the resume ends, the three CSV files are the same as those of a sweep that ran without a break, byte for byte apart from the timing columns.
 `--resume` on a directory with no results starts a fresh sweep, and a script can pass it every time.
+A resume of a directory that another sweep is still writing to is refused.
+A sweep leaves a file named `.lock` in its directory, killed or not, and the next resume locks it again, so it needs no clearing.
 With `--dry-run`, a resume prints its counts and changes nothing.
 In the desktop app, open the directory in the [Results tab](app.md#opening-results) and press <span class="ui" markdown>:material-play: Resume sweep</span>.
 
@@ -609,7 +639,7 @@ Five replicates can turn out too few, with confidence intervals too wide to tell
 Resume with a higher `--reps`, and only the new replicates run:
 
 ``` bash
-cargo run --release -p henad-cli -- sir \
+cargo run --release --locked -p henad-cli -- sir \
   --vary infection_rate=0.1:0.5:0.1 --reps 8 --steps 500 --out sir-sweep --resume
 ```
 
@@ -625,20 +655,24 @@ A sweep too large for one machine can be split into shards, each run on a machin
 `--shard I/N` runs only the runs whose `run_id` leaves remainder `I` when divided by `N`, and writes them to a directory of its own:
 
 ``` bash
-cargo run --release -p henad-cli -- \
-  --spec crates/henad-explore/specs/sir_sweep.toml --shard 0/4 --out shard-0
+cargo run --release --locked -p henad-cli -- --spec sir_sweep.toml --shard 0/4 --out shard-0
 ```
 
 Taking every `N`th run spreads the configs, heavy and light alike, evenly over the shards.
 Once every shard has finished, `--merge` joins them:
 
 ``` bash
-cargo run --release -p henad-cli -- --merge shard-0 shard-1 shard-2 shard-3 --out sir-sweep
+cargo run --release --locked -p henad-cli -- --merge shard-0 shard-1 shard-2 shard-3 --out sir-merged
 ```
 
 `--merge` checks that the directories hold different shards of one plan, all at one replicate count.
 It interleaves `runs.csv` and `series.csv` back into run order, rebuilds `summary.csv`, and lists the merged directories in the manifest under `merged_shards`.
 The merged CSV files are the same as those of the sweep run in one piece, apart from the timing columns.
+A merge warns when the shards ran different builds of Henad or of the model.
+
+Build every shard, and every later resume, from one commit with `--locked`.
+Cargo then builds from the committed `Cargo.lock` and refuses to change it.
+A lockfile updated on one machine changes the source hash of the build there, and the merge or resume warns that the build changed.
 
 A merge with a shard missing still writes what it has.
 It warns about the missing runs, marks the manifest `incomplete` and exits with status 3.
@@ -651,7 +685,7 @@ To add replicates, merge the shards first, then resume the merged directory.
 ### A Slurm array job
 
 On a cluster that runs [Slurm](https://slurm.schedmd.com), an array job runs one shard per task.
-Build the CLI once with `cargo build --release -p henad-cli`, then submit this script with `sbatch` from the repository root:
+Build the CLI once with `cargo build --release --locked -p henad-cli`, then submit this script with `sbatch` from the repository root, with `sir_sweep.toml` saved there:
 
 ``` bash title="sweep.sbatch"
 #!/bin/bash
@@ -660,7 +694,7 @@ Build the CLI once with `cargo build --release -p henad-cli`, then submit this s
 #SBATCH --cpus-per-task=16
 #SBATCH --time=02:00:00
 
-target/release/henad-cli --spec crates/henad-explore/specs/sir_sweep.toml \
+target/release/henad-cli --spec sir_sweep.toml \
   --shard "$SLURM_ARRAY_TASK_ID/8" --threads "$SLURM_CPUS_PER_TASK" \
   --out "sir-sweep/shard-$SLURM_ARRAY_TASK_ID" --resume
 ```

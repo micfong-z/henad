@@ -161,6 +161,21 @@ impl PlanSummary {
         let mut results = results_row(session.output_dir.as_deref());
         results.section = None;
         rows.push(results);
+        let execution = &session.execution;
+        rows.push(PlanRow::new(
+            "Concurrent runs",
+            concurrency_text(execution.concurrency),
+            None,
+        ));
+        let budgets = [
+            ("Memory budget", execution.memory_budget),
+            ("GPU memory budget", execution.gpu_memory_budget),
+        ];
+        rows.extend(budgets.into_iter().filter_map(|(label, bytes)| {
+            let mut row = PlanRow::new(label, fmt_bytes(bytes?), None);
+            row.tooltip = Some(format!("Recorded by the {}", session.noun()));
+            Some(row)
+        }));
         Self {
             rows,
             runs: Some(runs),
@@ -678,24 +693,21 @@ mod tests {
     use std::time::Duration;
 
     use henad_compute::cpu::sim_thread::WakeFn;
+    use henad_compute::entry::ModelEntry;
     use henad_core::params::ParamValue;
-    use henad_explore::schema::model_schema;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::example_models;
 
     use super::{NOT_COUNTED, PlanSummary, budget_rows, either_text, samples_text, steps_text};
     use crate::ui::sweep::draft::{DesignTableDraft, DraftAlgorithm, DraftDesign, DraftMode, GridAxis, SweepDraft};
     use crate::ui::sweep::{CheckSummary, SweepPanel};
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
         entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect()
@@ -704,22 +716,22 @@ mod tests {
     /// Returns the plan of the draft that `edit` makes of a new SIR draft.
     fn plan_of(edit: impl FnOnce(&mut crate::ui::sweep::draft::SweepDraft, &[&str])) -> PlanSummary {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = default_values(&entry);
         let ids: Vec<&str> = schema.params.iter().map(|descriptor| descriptor.id).collect();
         let mut panel = SweepPanel::default();
         edit(panel.draft_mut(&schema), &ids);
         let check = panel.cached_check(&schema, &panel_values);
         let summary = CheckSummary::new(check, &entry, &schema);
-        PlanSummary::for_draft(check, &schema, &entry.name, &summary)
+        PlanSummary::for_draft(check, &schema, entry.name(), &summary)
     }
 
     /// Returns the plan of the draft `panel` holds for `entry`'s model, checked against the model's defaults.
     fn plan_of_panel(panel: &mut SweepPanel, entry: &ModelEntry) -> PlanSummary {
-        let schema = model_schema(entry);
+        let schema = entry.schema();
         let check = panel.cached_check(&schema, &default_values(entry));
         let summary = CheckSummary::new(check, entry, &schema);
-        PlanSummary::for_draft(check, &schema, &entry.name, &summary)
+        PlanSummary::for_draft(check, &schema, entry.name(), &summary)
     }
 
     fn value<'a>(plan: &'a PlanSummary, label: &str) -> &'a str {
@@ -739,7 +751,7 @@ mod tests {
     fn the_plan_lists_each_action_on_its_own_line_and_numbers_a_repeat() {
         let plan = plan_of(|draft, _| {
             let entry = sir();
-            let schema = model_schema(&entry);
+            let schema = entry.schema();
             draft.add_action(&schema, 0, 0);
             draft.add_action(&schema, 0, 100);
             draft.actions[1].vary_tick = true;
@@ -874,7 +886,7 @@ mod tests {
     fn actions_row(edit: impl FnOnce(&mut crate::ui::sweep::draft::SweepDraft)) -> String {
         let plan = plan_of(|draft, _| {
             let entry = sir();
-            draft.add_action(&model_schema(&entry), 0, 50);
+            draft.add_action(&entry.schema(), 0, 50);
             edit(draft);
         });
         value(&plan, "Actions").to_owned()
@@ -907,7 +919,7 @@ mod tests {
     fn a_range_searched_past_the_listed_values_reads_as_words() {
         let plan = plan_of(|draft, _| {
             let entry = sir();
-            draft.add_action(&model_schema(&entry), 0, 50);
+            draft.add_action(&entry.schema(), 0, 50);
             draft.actions[0].vary_tick = true;
             draft.actions[0].ticks_text = "0:2000000".to_owned();
             draft.mode = DraftMode::Search;
@@ -949,10 +961,7 @@ mod tests {
 
     #[test]
     fn the_outputs_per_run_count_each_part_of_a_vector_stat() {
-        let entry = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "boids")
-            .expect("boids is registered");
+        let entry = example_models().get("boids").cloned().expect("boids is registered");
         let mut panel = SweepPanel::default();
         assert_eq!(
             value(&plan_of_panel(&mut panel, &entry), "Outputs per run"),
@@ -977,7 +986,7 @@ mod tests {
 
     #[test]
     fn the_plan_lists_each_loaded_budget() {
-        let mut draft = SweepDraft::new(&model_schema(&sir()));
+        let mut draft = SweepDraft::new(&sir().schema());
         assert!(budget_rows(&draft).is_empty(), "a draft without budgets lists none");
         draft.memory_budget = Some(4 << 30);
         draft.gpu_memory_budget = Some(2 << 30);

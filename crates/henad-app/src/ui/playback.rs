@@ -1,9 +1,13 @@
 use crate::icons::material_design_icons::{
-    MDI_FAST_FORWARD, MDI_FLASK_OUTLINE, MDI_PAUSE, MDI_PLAY, MDI_RESTART, MDI_SKIP_NEXT, MDI_TRAY_REMOVE,
+    MDI_ALERT, MDI_FAST_FORWARD, MDI_FLASK_OUTLINE, MDI_PAUSE, MDI_PLAY, MDI_RESTART, MDI_SKIP_NEXT, MDI_TRAY_REMOVE,
 };
-use crate::state::AppState;
+use crate::state::{AppState, setup_message};
 use crate::ui::params::{INVALID_SEED, parse_seed};
+use crate::ui::results::table::INEXACT_REPLAY;
 use crate::ui::{add_progress_bar, mcs};
+
+/// Reason Build gives with no model selected.
+const NO_SELECTED_MODEL: &str = "Select a model in the Model tab";
 
 pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let has_thread = app.sim_thread.is_some();
@@ -73,10 +77,16 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
 /// Returns the reason the selection cannot be built, or `None` when it can.
 fn build_refusal(app: &AppState, shortfalls: &[String]) -> Option<String> {
+    if app.selected_entry().is_none() {
+        return Some(NO_SELECTED_MODEL.to_owned());
+    }
     if !shortfalls.is_empty() {
         return Some(format!("Too large for this device: {}", shortfalls.join("; ")));
     }
-    parse_seed(&app.seed_text).is_err().then(|| INVALID_SEED.to_owned())
+    if parse_seed(&app.seed_text).is_err() {
+        return Some(INVALID_SEED.to_owned());
+    }
+    app.build_setup()?.err().map(|error| setup_message(&error))
 }
 
 /// Draws the Run to tick row, or the progress of a pending run to a tick with its Cancel button.
@@ -159,4 +169,80 @@ fn opened_run_line(ui: &mut egui::Ui, app: &AppState) {
             "Seed {}. Scheduled actions run on the recorded ticks.",
             run.replay.seed
         ));
+    if let Some(warning) = opened_run_warning(app) {
+        ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {warning}"));
+    }
+}
+
+/// Returns the warning the opened run's line carries, `None` without an opened run or for a model that replays
+/// exactly.
+///
+/// The Results tab shows it beside Open, and a run a host opens never passes through that tab.
+fn opened_run_warning(app: &AppState) -> Option<&'static str> {
+    app.opened_run.as_ref()?;
+    let entry = app.loaded_entry()?;
+    (!entry.metadata().replays_exactly).then_some(INEXACT_REPLAY)
+}
+
+#[cfg(test)]
+mod tests {
+    use henad_compute::entry::ModelSet;
+    use henad_core::metadata::Backend;
+
+    use henad_core::action::Schedule;
+    use henad_core::explore::replay::Replay;
+
+    use super::{NO_SELECTED_MODEL, build_refusal, opened_run_warning};
+    use crate::options::AppOpening;
+    use crate::state::{AppState, OpenAt};
+    use crate::ui::results::table::INEXACT_REPLAY;
+
+    #[test]
+    fn build_is_refused_with_no_model_selected() {
+        let mut models = ModelSet::new(henad_core::build_info!());
+        for entry in &henad_models::example_models() {
+            if entry.metadata().backend == Backend::Gpu {
+                models.insert(entry.clone()).expect("example ids are unique");
+            }
+        }
+        let Some(app) = AppState::headless(models, false) else {
+            return;
+        };
+        assert_eq!(build_refusal(&app, &[]).as_deref(), Some(NO_SELECTED_MODEL));
+    }
+
+    /// A host's opening never passes through the Results tab, where the warning sits beside Open.
+    #[test]
+    fn an_opened_run_of_a_model_that_does_not_replay_exactly_carries_the_warning() {
+        let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+            return;
+        };
+        let replay = |model: &str| {
+            let entry = app.models.get(model).expect("an example model");
+            Replay {
+                model: model.to_owned(),
+                params: entry.setup().values().to_vec(),
+                seed: 1,
+                schedule: Schedule::default(),
+                ticks: 5,
+                label: "Sweep run 5: config 1, replicate 1".to_owned(),
+            }
+        };
+        let boids = replay("boids");
+        let gpu_boids = replay("gpu_boids");
+
+        app.open(AppOpening::Run {
+            replay: boids,
+            open_at: OpenAt::Start,
+        });
+        assert!(app.opened_run.is_some());
+        assert_eq!(opened_run_warning(&app), None);
+
+        app.open(AppOpening::Run {
+            replay: gpu_boids,
+            open_at: OpenAt::Start,
+        });
+        assert!(app.opened_run.is_some(), "the GPU run opened");
+        assert_eq!(opened_run_warning(&app), Some(INEXACT_REPLAY));
+    }
 }

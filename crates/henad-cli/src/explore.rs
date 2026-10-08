@@ -7,15 +7,14 @@
 
 use std::fs;
 use std::io::{self, IsTerminal as _};
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
-use henad_compute::runtime_info::RuntimeInfo;
 use henad_core::action::ScheduleError;
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, FactorTarget, LevelSpec};
@@ -32,20 +31,19 @@ use henad_core::explore::spec::{
 use henad_core::explore::stop::StopSpec;
 use henad_core::explore::value::parse_overrides;
 use henad_explore::exec::{Concurrency, ExecutionLayout};
+use henad_explore::handle::SweepOutput;
 use henad_explore::merge::{MergeReport, merge};
 use henad_explore::output::manifest::ResultCounts;
 use henad_explore::progress::{Progress, ProgressEvent, ProgressUpdate};
 use henad_explore::schema::backend_name;
-use henad_explore::search_run::{SearchOutline, SearchUpdate, run_search};
-use henad_explore::spec_file::{DesignTableFile, ExecutionTable, SpecFile};
-use henad_explore::sweep::{Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, run_sweep};
-use henad_models::registry::ModelEntry;
+use henad_explore::search_run::{SearchOutline, SearchUpdate};
+use henad_explore::spec_file::{DesignTableFile, LoadedSpec};
+use henad_explore::sweep::{
+    Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, SweepWarning, plan_spec, run_spec,
+};
 
-use crate::Args;
 use crate::json_report;
-
-/// Exit status of a sweep that ran to its end with some run not `ok`, or of a merge that lacks some run.
-pub const SOME_RUNS_NOT_OK: u8 = 3;
+use crate::{Args, SOME_RUNS_NOT_OK};
 
 /// Rows of `series.csv` above which the plan carries a warning.
 pub const SERIES_ROWS_WARNING: u64 = 10_000_000;
@@ -70,6 +68,7 @@ pub struct ExploreArgs {
     #[arg(
         long,
         value_name = "FILE",
+        requires = "spec_use",
         conflicts_with_all = [
             "set", "act", "steps", "warmup", "reps", "seed", "stats_every",
             "vary", "zip", "sample", "design_seed", "design", "independent_seeds", "series_every",
@@ -82,7 +81,7 @@ pub struct ExploreArgs {
     /// The step of an integer range defaults to 1. With `--sample`, a range without a step covers every value from
     /// min to max. `action.NAME=TICKS` varies the tick of an action `--act` adds. Repeatable. Every combination runs
     /// unless `--zip` or `--sample` is given.
-    #[arg(long, value_name = "ID=LEVELS", requires = "explore")]
+    #[arg(long, value_name = "ID=LEVELS", value_parser = check_vary, requires = "explore")]
     pub vary: Vec<String>,
 
     /// Pair the levels of every `--vary` by position instead of running every combination.
@@ -120,13 +119,13 @@ pub struct ExploreArgs {
 
     /// End a run at the first sample where a condition holds, e.g. `'Infected <= 0'`. The comparator is one of
     /// `<`, `<=`, `>`, `>=`, `==` and `!=`.
-    #[arg(long, value_name = "CONDITION", requires = "explore")]
+    #[arg(long, value_name = "CONDITION", value_parser = check_stop, requires = "explore")]
     pub stop: Option<String>,
 
     /// Add a reducer over a stat column, e.g. `Infected:max`. Kinds are final, min, max, mean, argmax, argmin,
     /// `first<=10` for the first tick where a comparison holds, and `mean@200..600` for the mean from tick 200 to
     /// tick 600. Repeatable.
-    #[arg(long, value_name = "COLUMN:KIND", requires = "explore")]
+    #[arg(long, value_name = "COLUMN:KIND", value_parser = check_reduce, requires = "explore")]
     pub reduce: Vec<String>,
 
     /// Drop the final, min, max and mean reducers every stat column gets by default.
@@ -138,15 +137,17 @@ pub struct ExploreArgs {
     #[arg(long, value_name = "SECONDS", value_parser = parse_timeout, requires = "explore")]
     pub timeout: Option<Duration>,
 
-    /// Number of concurrent runs, or `auto` [default: auto].
+    /// Number of concurrent runs, or `auto`. Defaults to the spec's `[execution]` value, else `auto`.
     #[arg(long, value_name = "N|auto", requires = "explore")]
     pub concurrent: Option<Concurrency>,
 
-    /// Combined memory limit in bytes for concurrent runs.
+    /// Combined memory limit in bytes for concurrent runs. Defaults to the spec's `[execution]` value, else no
+    /// limit.
     #[arg(long, value_name = "BYTES", requires = "explore")]
     pub memory: Option<u64>,
 
-    /// Combined GPU memory limit in bytes for concurrent GPU runs. Defaults to the device's largest buffer size.
+    /// Combined GPU memory limit in bytes for concurrent GPU runs. Defaults to the spec's `[execution]` value, else
+    /// the device's largest buffer size.
     #[arg(long, value_name = "BYTES", requires = "explore")]
     pub gpu_memory: Option<u64>,
 
@@ -191,35 +192,6 @@ impl ExploreArgs {
     }
 }
 
-/// A spec file read from disk.
-#[derive(Debug, Clone)]
-pub struct LoadedSpec {
-    path: PathBuf,
-    text: String,
-    file: SpecFile,
-}
-
-impl LoadedSpec {
-    /// Reads the spec file at `path`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the file cannot be read or is not a spec file.
-    pub fn load(path: &Path) -> Result<Self> {
-        let (file, text) = SpecFile::load(path)?;
-        Ok(Self {
-            path: path.to_owned(),
-            text,
-            file,
-        })
-    }
-
-    /// Id of the model the spec runs.
-    pub fn model(&self) -> &str {
-        &self.file.model
-    }
-}
-
 /// Runs the sweep the flags or `spec` describe over `entry`, and returns the exit status.
 ///
 /// The status is success when every run is `ok`, and [`SOME_RUNS_NOT_OK`] when the sweep ran to its end with some
@@ -233,49 +205,64 @@ pub fn run(
     args: &Args,
     entry: &ModelEntry,
     gpu: Option<&GpuContext>,
-    runtime: Option<&RuntimeInfo>,
     spec: Option<LoadedSpec>,
-) -> Result<ExitCode> {
-    let (sweep, source, execution) = if let Some(loaded) = spec {
-        let execution = loaded.file.execution;
-        let source = SpecSource::loaded(&loaded.path, loaded.text, &loaded.file);
-        let sweep = loaded
-            .file
-            .into_spec()
-            .with_context(|| format!("cannot read '{}'", loaded.path.display()))?;
-        (sweep, source, execution)
-    } else {
-        let sweep = spec_from_flags(args, &entry.id)?;
-        let source = flags_source(args, &sweep);
-        (sweep, source, ExecutionTable::default())
-    };
-    let options = SweepOptions {
-        output_dir: args.explore.out.clone(),
-        concurrency: args.explore.concurrent.unwrap_or(execution.concurrent),
-        memory_budget: args.explore.memory.or(execution.memory),
-        gpu_memory: args.explore.gpu_memory.or(execution.gpu_memory),
-        dry_run: args.explore.dry_run,
-        shard: args.explore.shard.unwrap_or_default(),
-        resume: args.explore.resume,
-        retry_failed: args.explore.retry_failed,
-        ..SweepOptions::default()
-    };
+    provenance: Provenance,
+) -> Result<u8> {
+    let (sweep, options) = sweep_and_options(args, entry, spec, provenance)?;
     if cfg!(debug_assertions) && !args.explore.dry_run {
         eprintln!("!!! warning: debug build. Runs will step slowly and timings will be unreliable. Use --release !!!");
     }
-    let mut reporter = Reporter::new(&entry.name, args, source.path.is_some());
-    let explore = if sweep.search.is_some() { run_search } else { run_sweep };
-    let report = explore(
-        entry,
-        gpu,
-        runtime,
-        &sweep,
-        &source,
-        &provenance(),
-        &options,
-        &mut reporter,
-    )?;
+    let mut reporter = Reporter::new(entry.name(), args, options.spec_source.path.is_some());
+    let report = match &args.explore.out {
+        _ if args.explore.dry_run => {
+            plan_spec(entry, gpu, &sweep, args.explore.out.as_deref(), &options, &mut reporter)?
+        }
+        Some(output_dir) => {
+            let output = SweepOutput::Directory(output_dir.clone());
+            run_spec(entry, gpu, &sweep, output, &options, &mut reporter)?.report
+        }
+        None => bail!("a sweep needs an output directory unless it is a dry run"),
+    };
     exit_status(report.end, &report.counts)
+}
+
+/// Returns the sweep the flags or `spec` describe, and its options.
+///
+/// A spec's `[execution]` table goes in first, and each of `--concurrent`, `--memory` and `--gpu-memory` given on
+/// the command line then replaces its setting.
+///
+/// # Errors
+///
+/// Returns an error when the flags cannot make a sweep.
+fn sweep_and_options(
+    args: &Args,
+    entry: &ModelEntry,
+    spec: Option<LoadedSpec>,
+    provenance: Provenance,
+) -> Result<(SweepSpec, SweepOptions)> {
+    let mut options = SweepOptions::new(provenance);
+    let sweep = if let Some(loaded) = spec {
+        options.apply_execution(&loaded.execution);
+        options.spec_source = loaded.spec_source;
+        loaded.spec
+    } else {
+        let sweep = spec_from_flags(args, entry.id())?;
+        options.spec_source = flags_source(args, &sweep);
+        sweep
+    };
+    if let Some(concurrency) = args.explore.concurrent {
+        options.concurrency = concurrency;
+    }
+    if let Some(memory) = args.explore.memory {
+        options.memory_budget = Some(memory);
+    }
+    if let Some(gpu_memory) = args.explore.gpu_memory {
+        options.gpu_memory_budget = Some(gpu_memory);
+    }
+    options.shard = args.explore.shard.unwrap_or_default();
+    options.resume = args.explore.resume;
+    options.retry_failed = args.explore.retry_failed;
+    Ok((sweep, options))
 }
 
 /// Merges the shard directories `--merge` names into the `--out` directory, and returns the exit status.
@@ -286,9 +273,9 @@ pub fn run(
 /// # Errors
 ///
 /// Returns an error when the directories cannot be merged.
-pub fn merge_shards(args: &Args) -> Result<ExitCode> {
+pub fn merge_shards(args: &Args) -> Result<u8> {
     let output_dir = args.explore.out.as_deref().context("--merge requires --out")?;
-    let report = merge(&args.explore.merge, output_dir, &mut WarningPrinter)?;
+    let report = merge(&args.explore.merge, output_dir, &mut WarningPrinter { json: args.json })?;
     if args.json {
         json_report::emit(&merge_json(&report, args.explore.merge.len()));
     } else {
@@ -296,9 +283,9 @@ pub fn merge_shards(args: &Args) -> Result<ExitCode> {
     }
     let counts = &report.counts;
     if report.missing == 0 && counts.ok == counts.rows {
-        Ok(ExitCode::SUCCESS)
+        Ok(0)
     } else {
-        Ok(ExitCode::from(SOME_RUNS_NOT_OK))
+        Ok(SOME_RUNS_NOT_OK)
     }
 }
 
@@ -307,11 +294,11 @@ pub fn merge_shards(args: &Args) -> Result<ExitCode> {
 /// # Errors
 ///
 /// Returns an error for a sweep that was aborted or lost its GPU device.
-fn exit_status(end: SweepEnd, counts: &ResultCounts) -> Result<ExitCode> {
+fn exit_status(end: SweepEnd, counts: &ResultCounts) -> Result<u8> {
     match end {
-        SweepEnd::Planned => Ok(ExitCode::SUCCESS),
-        SweepEnd::Complete if counts.ok == counts.rows => Ok(ExitCode::SUCCESS),
-        SweepEnd::Complete => Ok(ExitCode::from(SOME_RUNS_NOT_OK)),
+        SweepEnd::Planned => Ok(0),
+        SweepEnd::Complete if counts.ok == counts.rows => Ok(0),
+        SweepEnd::Complete => Ok(SOME_RUNS_NOT_OK),
         SweepEnd::Aborted => bail!("the sweep was aborted after {} runs", counts.rows),
         SweepEnd::DeviceLost => bail!(
             "the GPU device was lost after {} runs. Use --resume to run the rest",
@@ -439,6 +426,31 @@ pub fn parse_vary(raw: &str) -> Result<FactorSpec> {
     })
 }
 
+/// Checks that `--vary` reads as `ID=LEVELS`, and returns it unchanged.
+///
+/// The model checks the id and the levels once it is known. A malformed flag is then a refused command line.
+fn check_vary(raw: &str) -> Result<String, String> {
+    let (_, levels) = raw.split_once('=').ok_or("expected ID=LEVELS")?;
+    LevelSpec::parse(levels).map_err(|error| error.to_string())?;
+    Ok(raw.to_owned())
+}
+
+/// Checks that `--stop` reads as a condition, and returns it unchanged.
+///
+/// The sweep checks the column once the model's columns are known.
+fn check_stop(raw: &str) -> Result<String, String> {
+    StopSpec::parse(raw, 0).map_err(|error| error.to_string())?;
+    Ok(raw.to_owned())
+}
+
+/// Checks that `--reduce` reads as `COLUMN:KIND`, and returns it unchanged.
+///
+/// The sweep checks the column once the model's columns are known.
+fn check_reduce(raw: &str) -> Result<String, String> {
+    raw.parse::<ReducerSpec>().map_err(|error| error.to_string())?;
+    Ok(raw.to_owned())
+}
+
 /// Returns the actions `--act` adds to every run of a sweep.
 ///
 /// An action is named by its id, or by the first of `ID_2`, `ID_3` and so on that no earlier action has taken. The
@@ -451,8 +463,9 @@ pub fn parse_vary(raw: &str) -> Result<FactorSpec> {
 pub fn fixed_actions(raw: &[String]) -> Result<Vec<ActionSpec>, ScheduleError> {
     let mut actions: Vec<ActionSpec> = Vec::with_capacity(raw.len());
     for entry in raw {
+        // A tick holds no `@`, and an id can.
         let (id, tick) = entry
-            .split_once('@')
+            .rsplit_once('@')
             .ok_or_else(|| ScheduleError::BadEntry { raw: entry.clone() })?;
         let tick = tick.parse().map_err(|source| ScheduleError::BadTick {
             raw: entry.clone(),
@@ -487,26 +500,17 @@ fn parse_sample(raw: &str) -> Result<DesignKind, String> {
     }
 }
 
-/// Reads `--timeout` as a number of seconds from 0.
+/// Reads `--timeout` as a number of seconds from 0 to `u64::MAX`.
 fn parse_timeout(raw: &str) -> Result<Duration, String> {
     raw.parse::<f64>()
         .ok()
         .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-        .ok_or_else(|| format!("expected a non-negative number of seconds, got '{raw}'"))
-}
-
-/// Returns the build of this binary and its command line.
-fn provenance() -> Provenance {
-    Provenance {
-        engine_name: "henad".to_owned(),
-        engine_version: env!("CARGO_PKG_VERSION").to_owned(),
-        commit: env!("HENAD_COMMIT").to_owned(),
-        commit_date: env!("HENAD_COMMIT_DATE").to_owned(),
-        debug_build: cfg!(debug_assertions),
-        argv: std::env::args_os()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect(),
-    }
+        .ok_or_else(|| {
+            format!(
+                "expected a finite number of seconds from 0 to {}, got '{raw}'",
+                u64::MAX
+            )
+        })
 }
 
 /// Progress of a sweep as JSON lines on stdout, or as text on stderr.
@@ -585,11 +589,18 @@ impl Reporter {
             } else {
                 "--series-every"
             };
-            eprintln!(
-                "warning: series.csv will hold about {} rows. \
-                 Increase {name} to write fewer, or set it to 0 to write none.",
+            let message = format!(
+                "series.csv will hold about {} rows. Increase {name} to write fewer, or set it to 0 to write none.",
                 outline.series_rows
             );
+            eprintln!("warning: {message}");
+            if self.json {
+                json_report::emit(&json!({
+                    "kind": "explore_warning",
+                    "warning": "series_rows",
+                    "message": message,
+                }));
+            }
         }
     }
 
@@ -673,11 +684,15 @@ impl Reporter {
         match report.end {
             SweepEnd::Planned => eprintln!("dry run, nothing written"),
             SweepEnd::Complete if skipped > 0 => {
-                eprintln!("wrote {written} runs to {dir} in {elapsed} and skipped {skipped}: {tally} in total");
+                eprintln!(
+                    "wrote {} to {dir} in {elapsed} and skipped {}: {tally} in total",
+                    plural(written, "run"),
+                    plural(skipped, "run")
+                );
             }
-            SweepEnd::Complete => eprintln!("wrote {written} runs to {dir} in {elapsed}: {tally}"),
-            SweepEnd::Aborted => eprintln!("aborted after {written} runs, written to {dir}"),
-            SweepEnd::DeviceLost => eprintln!("GPU device lost after {written} runs, written to {dir}"),
+            SweepEnd::Complete => eprintln!("wrote {} to {dir} in {elapsed}: {tally}", plural(written, "run")),
+            SweepEnd::Aborted => eprintln!("aborted after {}, written to {dir}", plural(written, "run")),
+            SweepEnd::DeviceLost => eprintln!("GPU device lost after {}, written to {dir}", plural(written, "run")),
         }
         if let (Some(search), Some(standing), false) =
             (&self.search, &self.search_standing, report.end == SweepEnd::Planned)
@@ -694,6 +709,9 @@ impl Progress for Reporter {
             ProgressEvent::Warned(warning) => {
                 self.clear_line();
                 eprintln!("warning: {warning}");
+                if self.json {
+                    json_report::emit(&warning_json(warning));
+                }
             }
             ProgressEvent::RunCommitted(outcome) => self.committed(outcome),
             ProgressEvent::Progressed(update) => self.progressed(update),
@@ -703,15 +721,50 @@ impl Progress for Reporter {
     }
 }
 
-/// Progress that prints a merge's warnings and nothing else.
-struct WarningPrinter;
+/// Progress that prints a merge's warnings and nothing else, each also as a JSON line under `--json`.
+struct WarningPrinter {
+    json: bool,
+}
 
 impl Progress for WarningPrinter {
     fn report(&mut self, event: &ProgressEvent<'_>) {
         if let ProgressEvent::Warned(warning) = event {
             eprintln!("warning: {warning}");
+            if self.json {
+                json_report::emit(&warning_json(warning));
+            }
         }
     }
+}
+
+/// Returns the `explore_warning` line of `warning`.
+///
+/// `warning` names its kind, `message` holds the text the warning prints, and a `build_changed` warning adds its
+/// `role`, the `recorded` and `current` builds as the manifest records them, and `between_shards`, true when a merge
+/// found `current` in another shard.
+fn warning_json(warning: &SweepWarning) -> Value {
+    let mut line = json!({
+        "kind": "explore_warning",
+        "message": warning.to_string(),
+    });
+    let kind = match warning {
+        SweepWarning::Plan(_) => "plan",
+        SweepWarning::MissingRuns { .. } => "missing_runs",
+        SweepWarning::BuildChanged {
+            role,
+            recorded,
+            current,
+            between_shards,
+        } => {
+            line["role"] = json!(role.as_str());
+            line["between_shards"] = json!(between_shards);
+            line["recorded"] = serde_json::to_value(recorded.as_ref()).unwrap_or_default();
+            line["current"] = serde_json::to_value(current.as_ref()).unwrap_or_default();
+            "build_changed"
+        }
+    };
+    line["warning"] = json!(kind);
+    line
 }
 
 /// Returns the plan of a sweep over the model named `model_name`, as the lines a person reads.
@@ -861,8 +914,8 @@ fn layout_text(layout: &ExecutionLayout) -> String {
 }
 
 fn progress_text(update: &ProgressUpdate, skipped: u64) -> String {
-    let left = update.remaining_s.map_or_else(String::new, |remaining| {
-        format!(", about {} left", format_seconds(remaining))
+    let left = update.remaining.map_or_else(String::new, |remaining| {
+        format!(", about {} left", format_seconds(remaining.as_secs_f64()))
     });
     let skipped = if skipped > 0 {
         format!(", {skipped} skipped")
@@ -874,7 +927,7 @@ fn progress_text(update: &ProgressUpdate, skipped: u64) -> String {
         update.done,
         update.total,
         update.failed,
-        format_seconds(update.elapsed_s)
+        format_seconds(update.elapsed.as_secs_f64())
     )
 }
 
@@ -1059,8 +1112,8 @@ fn progress_json(update: &ProgressUpdate, skipped: u64) -> Value {
         "total": update.total,
         "skipped": skipped,
         "failed": update.failed,
-        "elapsed_s": update.elapsed_s,
-        "remaining_s": update.remaining_s,
+        "elapsed_s": update.elapsed.as_secs_f64(),
+        "remaining_s": update.remaining.as_ref().map(Duration::as_secs_f64),
     })
 }
 
@@ -1122,7 +1175,6 @@ fn merge_json(report: &MergeReport, inputs: usize) -> Value {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::process::ExitCode;
     use std::time::Duration;
 
     use clap::Parser as _;
@@ -1133,16 +1185,16 @@ mod tests {
     use henad_core::explore::seed::SeedScheme;
     use henad_core::explore::spec::ActionSpec;
     use henad_core::explore::stop::StopSpec;
+    use henad_explore::exec::Concurrency;
     use henad_explore::output::manifest::ResultCounts;
-    use henad_explore::schema::model_schema;
-    use henad_explore::sweep::SweepEnd;
-    use henad_models::registry::model_registry;
+    use henad_explore::sweep::{SweepEnd, SweepOptions, plan_spec};
+    use henad_models::example_models;
 
     use super::{
         LoadedSpec, PatternAxis, SOME_RUNS_NOT_OK, axis_text, exit_status, fixed_actions, format_bytes, format_seconds,
-        parse_vary, plan_text, spec_from_flags,
+        parse_vary, plan_text, spec_from_flags, sweep_and_options,
     };
-    use crate::{Args, Mode};
+    use crate::{Args, Mode, test_provenance};
 
     fn levels(raw: &str) -> LevelSpec {
         parse_vary(raw).expect("reads").levels
@@ -1303,11 +1355,8 @@ mod tests {
             spec.actions,
             [action("seed_outbreak", 40), action("seed_outbreak_2", 80)]
         );
-        let sir = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "sir")
-            .expect("sir is registered");
-        let plan = spec.plan(&model_schema(&sir)).expect("sir declares seed_outbreak");
+        let sir = example_models().get("sir").cloned().expect("sir is registered");
+        let plan = spec.plan(&sir.schema()).expect("sir declares seed_outbreak");
         let ticks: Vec<&[u64]> = plan
             .configs()
             .iter()
@@ -1343,6 +1392,15 @@ mod tests {
         assert_eq!(names(&["seed@1", "seed_2@2", "seed@3"]), ["seed", "seed_2", "seed_3"]);
     }
 
+    /// The regression. An entry split at its first `@`, so an id holding one read the rest of the id as its tick.
+    #[test]
+    fn an_action_id_can_hold_an_at_sign() {
+        let actions = fixed_actions(&["spawn@centre@100".to_owned()]).expect("the entry reads");
+        assert_eq!(actions, [ActionSpec::new("spawn@centre", 100)]);
+        let args = Args::try_parse_from(["henad-cli", "sir", "--act", "spawn@centre@100"]);
+        assert!(args.is_ok(), "the flag reads");
+    }
+
     /// The regression. `--info` or `--list` with no model printed and exited, and the sweep asked for never ran.
     #[test]
     fn info_and_list_do_not_drop_a_sweep() {
@@ -1358,7 +1416,10 @@ mod tests {
             "the sweep then asks for a model"
         );
         assert_eq!(mode(&["henad-cli", "--info", "--dry-run"]), Ok(Mode::Explore));
-        assert_eq!(mode(&["henad-cli", "--info", "--spec", "s.toml"]), Ok(Mode::Explore));
+        assert_eq!(
+            mode(&["henad-cli", "--info", "--spec", "s.toml", "--out", "d"]),
+            Ok(Mode::Explore)
+        );
         let listed: [&[&str]; 3] = [
             &["henad-cli", "--list", "--out", "d"],
             &["henad-cli", "--list", "--dry-run"],
@@ -1441,14 +1502,48 @@ mod tests {
             ];
             assert_eq!(parse(&line), Err(ErrorKind::ValueValidation), "--sample {bad}");
         }
-        for bad in ["-1", "soon", "NaN"] {
+        for bad in ["-1", "soon", "NaN", "inf", "1e30"] {
             let line = ["henad-cli", "sir", "--out", "d", &format!("--timeout={bad}")];
             assert_eq!(parse(&line), Err(ErrorKind::ValueValidation), "--timeout {bad}");
+            let message = Args::try_parse_from(line).err().map(|error| error.to_string());
+            assert!(
+                message
+                    .as_deref()
+                    .is_some_and(|message| message.contains("finite number of seconds")),
+                "--timeout {bad}: {message:?}"
+            );
         }
-        let unread = ["--stop", "Infected", "--reduce", "Infected:median"];
-        for pair in unread.chunks(2) {
-            let args = Args::parse_from(["henad-cli", "sir", "--out", "d", pair[0], pair[1]]);
-            assert!(spec_from_flags(&args, "sir").is_err(), "{pair:?}");
+    }
+
+    /// The regression. A malformed `--set`, `--act`, `--vary`, `--stop` or `--reduce` was read after the parser, so
+    /// the command exited 1, the status of a failed sweep, in place of 2.
+    #[test]
+    fn malformed_flag_values_are_refused_by_the_parser() {
+        let refused = [
+            ("--set", "grid_width"),
+            ("--act", "seed_outbreak"),
+            ("--act", "seed_outbreak@soon"),
+            ("--act", "seed_outbreak@-1"),
+            ("--vary", "infection_rate"),
+            ("--vary", "infection_rate=0.1:x:0.1"),
+            ("--stop", "Infected"),
+            ("--reduce", "Infected:median"),
+            ("--reduce", "Infected"),
+        ];
+        for (flag, value) in refused {
+            let line = ["henad-cli", "sir", "--out", "d", flag, value];
+            assert_eq!(parse(&line), Err(ErrorKind::ValueValidation), "{flag} {value}");
+        }
+        let accepted = [
+            ("--set", "grid_width=64"),
+            ("--act", "seed_outbreak@40"),
+            ("--vary", "infection_rate=0.1:0.5:0.1"),
+            ("--stop", "Infected <= 0"),
+            ("--reduce", "Infected:first<=10"),
+        ];
+        for (flag, value) in accepted {
+            let line = ["henad-cli", "sir", "--out", "d", flag, value];
+            assert_eq!(parse(&line), Ok(()), "{flag} {value}");
         }
     }
 
@@ -1557,7 +1652,11 @@ mod tests {
 
     #[test]
     fn explore_flags_need_a_sweep() {
-        let missing: [&[&str]; 11] = [
+        let missing: [&[&str]; 13] = [
+            // A spec needs `--out`, `--dry-run` or `--params`. Such a line once parsed, and the sweep refused it after
+            // acquiring a device and reading the file.
+            &["henad-cli", "--spec", "s.toml"],
+            &["henad-cli", "--info", "--spec", "s.toml"],
             &["henad-cli", "sir", "--vary", "infection_rate=0.1,0.2"],
             &["henad-cli", "gpu_sir", "--gpu-memory", "1000000"],
             &["henad-cli", "sir", "--out", "d", "--zip"],
@@ -1667,9 +1766,9 @@ mod tests {
             failed,
         };
         let status = |end, counts: ResultCounts| exit_status(end, &counts).ok();
-        assert_eq!(status(SweepEnd::Complete, counts(4, 0, 0)), Some(ExitCode::SUCCESS));
-        assert_eq!(status(SweepEnd::Planned, counts(0, 0, 0)), Some(ExitCode::SUCCESS));
-        let some_not_ok = Some(ExitCode::from(SOME_RUNS_NOT_OK));
+        assert_eq!(status(SweepEnd::Complete, counts(4, 0, 0)), Some(0));
+        assert_eq!(status(SweepEnd::Planned, counts(0, 0, 0)), Some(0));
+        let some_not_ok = Some(SOME_RUNS_NOT_OK);
         assert_eq!(status(SweepEnd::Complete, counts(3, 0, 1)), some_not_ok);
         assert_eq!(status(SweepEnd::Complete, counts(3, 1, 0)), some_not_ok);
         assert_eq!(status(SweepEnd::Aborted, counts(2, 0, 0)), None, "an abort is an error");
@@ -1677,6 +1776,28 @@ mod tests {
             status(SweepEnd::DeviceLost, counts(2, 0, 0)),
             None,
             "a lost device is an error"
+        );
+    }
+
+    /// Checks that an `explore_progress` line holds the fields `docs/reference/cli.md` lists. A sweep quick enough for
+    /// the integration tests sends none.
+    #[test]
+    fn a_progress_line_holds_the_documented_fields() {
+        let update = henad_explore::progress::ProgressUpdate::new(3, 8, 1, Duration::from_secs(2));
+        let line = super::progress_json(&update, 2);
+        let mut fields: Vec<&str> = line
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        let mut expected = ["kind", "done", "total", "skipped", "failed", "elapsed_s", "remaining_s"];
+        expected.sort_unstable();
+        assert_eq!(fields, expected);
+        assert_eq!(
+            (&line["kind"], &line["skipped"]),
+            (&"explore_progress".into(), &2.into())
         );
     }
 
@@ -1693,26 +1814,22 @@ mod tests {
 
     #[test]
     fn a_search_spec_plans_its_budget_and_space() {
+        // The spec sits in henad-explore's package, and a crate built from its tarball skips the test.
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../henad-explore/specs/sir_search_pse.toml");
-        let loaded = LoadedSpec::load(&path).expect("the example spec reads");
-        let spec = loaded.file.clone().into_spec().expect("a search spec");
-        let registry = model_registry(None);
-        let sir = registry
-            .iter()
-            .find(|entry| entry.id == "sir")
-            .expect("sir is registered");
-        let dry_run = henad_explore::sweep::SweepOptions {
-            dry_run: true,
-            ..henad_explore::sweep::SweepOptions::default()
-        };
-        let report = henad_explore::search_run::run_search(
+        if !path.is_file() {
+            eprintln!("note: skipped, {} is absent", path.display());
+            return;
+        }
+        let loaded = LoadedSpec::read(&path).expect("the example spec reads");
+        let models = example_models();
+        let sir = models.get("sir").expect("sir is registered");
+        let options = SweepOptions::new(test_provenance());
+        let report = plan_spec(
             sir,
             None,
+            &loaded.spec,
             None,
-            &spec,
-            &henad_explore::sweep::SpecSource::default(),
-            &henad_explore::sweep::Provenance::default(),
-            &dry_run,
+            &options,
             &mut henad_explore::progress::NoProgress,
         )
         .expect("the search plans");
@@ -1735,5 +1852,70 @@ mod tests {
 
         let args = Args::try_parse_from(["henad-cli", "--spec", "s.toml", "--dry-run"]).expect("a dry run parses");
         assert_eq!(Mode::of(&args), Mode::Explore);
+    }
+
+    /// Checks that a `SweepWarning::BuildChanged` prints as an `explore_warning` line with both builds and its message.
+    #[test]
+    fn a_build_change_prints_as_an_explore_warning_line() {
+        use henad_explore::output::manifest::{BuildRole, RecordedBuild};
+        use henad_explore::sweep::SweepWarning;
+
+        let current = RecordedBuild::engine();
+        let mut recorded = current.clone();
+        recorded.version = "0.1.0".to_owned();
+        let warning = SweepWarning::BuildChanged {
+            role: BuildRole::Engine,
+            recorded: Box::new(recorded),
+            current: Box::new(current),
+            between_shards: false,
+        };
+        let line = super::warning_json(&warning);
+        assert_eq!(line["kind"], "explore_warning");
+        assert_eq!(line["warning"], "build_changed");
+        assert_eq!(line["role"], "engine");
+        assert_eq!(line["recorded"]["version"], "0.1.0");
+        assert_eq!(line["current"]["name"], "henad");
+        assert_eq!(line["between_shards"], false);
+        assert_eq!(line["message"], warning.to_string());
+    }
+
+    /// Checks that a flag given on the command line replaces the spec table's setting, `--concurrent auto` included,
+    /// and that a setting no flag gives keeps the table's value.
+    #[test]
+    fn an_explicit_concurrent_auto_overrides_the_spec_table() {
+        let dir = std::env::temp_dir().join(format!("henad-cli-execution-table-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the scratch directory can be made");
+        let path = dir.join("spec.toml");
+        std::fs::write(
+            &path,
+            "model = \"sir\"\n[execution]\nconcurrent = 4\nmemory = 1000\ngpu_memory = 2000\n",
+        )
+        .expect("the spec can be written");
+        let spec_arg = path.to_str().expect("the temporary directory is UTF-8");
+        let entry = example_models().get("sir").cloned().expect("sir is registered");
+        let options = |extra: &[&str]| {
+            let mut line = vec!["henad-cli", "--spec", spec_arg, "--dry-run"];
+            line.extend(extra);
+            let args = Args::try_parse_from(line).expect("the line parses");
+            let loaded = LoadedSpec::read(&path).expect("the spec reads");
+            sweep_and_options(&args, &entry, Some(loaded), test_provenance())
+                .expect("a sweep")
+                .1
+        };
+
+        let from_table = options(&[]);
+        assert_eq!(from_table.concurrency.to_string(), "4");
+        assert_eq!(
+            (from_table.memory_budget, from_table.gpu_memory_budget),
+            (Some(1000), Some(2000))
+        );
+
+        let overridden = options(&["--concurrent", "auto", "--memory", "500"]);
+        assert_eq!(overridden.concurrency, Concurrency::Auto);
+        assert_eq!(
+            (overridden.memory_budget, overridden.gpu_memory_budget),
+            (Some(500), Some(2000))
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

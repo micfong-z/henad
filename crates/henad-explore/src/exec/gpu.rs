@@ -16,13 +16,13 @@ use std::time::Duration;
 
 use web_time::Instant;
 
+use henad_compute::entry::ModelState;
 use henad_compute::fault::{BUILDING, Fault, FaultKind, STEPPING, catching};
 use henad_compute::gpu::fault::catching_on;
 use henad_compute::gpu::{GpuContext, GpuSimState, StatsPoll, stepping};
 use henad_core::action::Schedule;
 use henad_core::explore::measure::Sampler;
 use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason};
-use henad_models::registry::ModelState;
 
 use super::{
     BatchEnd, ExecutionError, Executor, GpuTrackDepth, ReorderBuffer, RunRequest, RunSink, RunWatch, gpu_memory_budget,
@@ -109,7 +109,7 @@ impl<'x> Interleaver<'x> {
             unbuilt_requests: (0..requests.len()).collect(),
             tracks: Vec::new(),
             track_cap: executor.layout.gpu_tracks.max(1),
-            gpu_memory_budget: gpu_memory_budget(executor.gpu_memory, ctx),
+            gpu_memory_budget: gpu_memory_budget(executor.gpu_memory_budget, ctx),
             admission_held: false,
             submissions: VecDeque::new(),
             failed_builds: Vec::new(),
@@ -164,7 +164,7 @@ impl<'x> Interleaver<'x> {
             let demand_bytes = self
                 .executor
                 .entry
-                .demand(request.params)
+                .demand(request.params, &self.ctx.device.limits())
                 .map_or(0, |demand| demand.bytes());
             let live_bytes: u64 = self.tracks.iter().map(|track| track.demand_bytes).sum();
             if !self.tracks.is_empty() && live_bytes.saturating_add(demand_bytes) > self.gpu_memory_budget {
@@ -416,7 +416,10 @@ impl GpuTrack {
             .as_ref()
             .map(|active_runs| active_runs.watch(request.run, executor.measure.total()));
         let started = Instant::now();
-        let built = (executor.entry.create)(request.params, Some(request.run.seed)).and_then(gpu_state);
+        let built = executor
+            .entry
+            .build(request.params, Some(request.run.seed), executor.gpu)
+            .and_then(gpu_state);
         let build_ms = milliseconds(started.elapsed());
         let state = match built {
             Ok(state) => state,
@@ -641,12 +644,12 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use henad_compute::entry::ModelEntry;
     use henad_compute::gpu::GpuContext;
     use henad_core::explore::measure::MeasurePlan;
     use henad_core::explore::outcome::{RunStatus, StopReason};
     use henad_core::explore::plan::Plan;
     use henad_core::explore::spec::SweepSpec;
-    use henad_models::registry::ModelEntry;
 
     use super::Interleaver;
     use crate::cursor::{RunEnd, RunFailure};

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{BUILDING, Fault, install_panic_hook};
 use henad_compute::gpu::{GpuContext, GpuSimState, StatsPoll, stepping};
 use henad_compute::snapshot::GpuSnapshot;
@@ -20,7 +21,7 @@ use henad_core::metadata::Backend;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
-use henad_models::registry::{ModelEntry, ModelState, model_registry};
+use henad_models::example_models;
 
 use crate::exec::{ActiveRuns, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, SweepControl};
 use crate::output::manifest::ManifestStatus;
@@ -205,27 +206,27 @@ fn instrument(
     counts: &Arc<StateCounts>,
     misbehavior: impl Fn(&[ParamValue]) -> Misbehavior + Send + Sync + 'static,
 ) -> ModelEntry {
-    let create = model.create;
     let device = ctx.device.clone();
     let counts = Arc::clone(counts);
-    ModelEntry {
-        create: Box::new(move |params: &[ParamValue], seed| match create(params, seed)? {
-            ModelState::Gpu(state) => {
-                let live = counts.live.fetch_add(1, Ordering::Relaxed) + 1;
-                counts.most_live.fetch_max(live, Ordering::Relaxed);
-                Ok(ModelState::Gpu(Box::new(HarnessState {
-                    state,
-                    misbehavior: misbehavior(params),
-                    device: device.clone(),
-                    polls_left: 0,
-                    readback_tick: 0,
-                    counts: Arc::clone(&counts),
-                })))
-            }
-            ModelState::Cpu(state) => Ok(ModelState::Cpu(state)),
-        }),
-        ..model
-    }
+    model.wrap_factory(|create| {
+        Arc::new(
+            move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| match create(params, seed, gpu)? {
+                ModelState::Gpu(state) => {
+                    let live = counts.live.fetch_add(1, Ordering::Relaxed) + 1;
+                    counts.most_live.fetch_max(live, Ordering::Relaxed);
+                    Ok(ModelState::Gpu(Box::new(HarnessState {
+                        state,
+                        misbehavior: misbehavior(params),
+                        device: device.clone(),
+                        polls_left: 0,
+                        readback_tick: 0,
+                        counts: Arc::clone(&counts),
+                    })))
+                }
+                ModelState::Cpu(state) => Ok(ModelState::Cpu(state)),
+            },
+        )
+    })
 }
 
 /// Runs every run of `plan` on `executor`, and returns the outcomes with their timing zeroed.
@@ -303,12 +304,9 @@ fn interleaved_spec(
     spec
 }
 
-#[test]
-fn interleaved_gpu_runs_match_sequential_ones() {
-    let Some(ctx) = headless_device() else {
-        return;
-    };
-    let cases = [
+/// Returns the spec of each case of [`interleaved_gpu_runs_match_sequential_ones`].
+fn interleaved_cases() -> [SweepSpec; 3] {
+    [
         interleaved_spec(
             "gpu_sir",
             &[
@@ -328,9 +326,23 @@ fn interleaved_gpu_runs_match_sequential_ones() {
             ("clear", &["9", "20"]),
             "Alive <= 0",
         ),
-    ];
+        interleaved_spec(
+            "gpu_ants",
+            &[("num_agents", "1000"), ("world_width", "64"), ("world_height", "64")],
+            ("momentum", &["0.5", "0.8"]),
+            ("reset_colony", &["4", "12"]),
+            "Total Pheromone >= 200",
+        ),
+    ]
+}
+
+#[test]
+fn interleaved_gpu_runs_match_sequential_ones() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
     let scratch = ScratchDir::new("gpu-interleaved");
-    for spec in cases {
+    for spec in interleaved_cases() {
         let model = entry(&spec.model, Some(&ctx));
         let [one, four] = [1, 4].map(|count| {
             let output_dir = scratch.path().join(format!("{}-{count}", spec.model));
@@ -415,8 +427,8 @@ fn blocking_rows(
 ) -> Vec<(u64, Vec<f64>)> {
     let config = plan.config(run.config_id).expect("the run's config");
     let schedule = plan.schedule(config);
-    let Ok(ModelState::Gpu(mut state)) = (model.create)(&config.params, Some(run.seed)) else {
-        panic!("{} builds on the GPU", model.id);
+    let Ok(ModelState::Gpu(mut state)) = model.build(&config.params, Some(run.seed), Some(ctx)) else {
+        panic!("{} builds on the GPU", model.id());
     };
     let mut refused = stepping::run_due(&mut *state, ctx, &schedule).len();
     let mut rows = Vec::new();
@@ -425,40 +437,45 @@ fn blocking_rows(
         let steps = tick - state.tick();
         let acted = stepping::run_steps_acting(&mut *state, ctx, steps, &schedule, Fire::AfterStep);
         refused += acted.expect("the steps run").len();
-        let stats = stepping::sample_stats(&mut *state, ctx);
+        let stats = stepping::sample_stats(&mut *state, ctx).expect("the sample lands");
         measure
             .columns()
             .extract(tick, &stats, &mut row)
             .expect("the layout holds");
         rows.push((tick, row.clone()));
     }
-    assert_eq!(refused, 0, "{} takes its action", model.id);
+    assert_eq!(refused, 0, "{} takes its action", model.id());
     rows
 }
+
+/// Parameter ids and values a case fixes.
+type FixedValues = &'static [(&'static str, &'static str)];
+
+/// Model, fixed values and action of each case of [`a_pipelined_gpu_sample_matches_a_blocking_one`].
+const PIPELINED_CASES: [(&str, FixedValues, &str); 3] = [
+    (
+        "gpu_sir",
+        &[("grid_width", "32"), ("grid_height", "32")],
+        "seed_outbreak",
+    ),
+    (
+        "gpu_game_of_life",
+        &[("grid_width", "32"), ("grid_height", "32")],
+        "randomise",
+    ),
+    (
+        "gpu_ants",
+        &[("num_agents", "1000"), ("world_width", "64"), ("world_height", "64")],
+        "reset_colony",
+    ),
+];
 
 #[test]
 fn a_pipelined_gpu_sample_matches_a_blocking_one() {
     let Some(ctx) = headless_device() else {
         return;
     };
-    let cases = [
-        (
-            "gpu_sir",
-            &[("grid_width", "32"), ("grid_height", "32")][..],
-            "seed_outbreak",
-        ),
-        (
-            "gpu_game_of_life",
-            &[("grid_width", "32"), ("grid_height", "32")][..],
-            "randomise",
-        ),
-        (
-            "gpu_ants",
-            &[("num_agents", "1000"), ("world_width", "64"), ("world_height", "64")][..],
-            "reset_colony",
-        ),
-    ];
-    for (id, fixed, action) in cases {
+    for (id, fixed, action) in PIPELINED_CASES {
         let model = entry(id, Some(&ctx));
         let mut spec = SweepSpec::new(id);
         spec.fixed = fixed_values(fixed);
@@ -483,6 +500,24 @@ fn a_pipelined_gpu_sample_matches_a_blocking_one() {
     }
 }
 
+/// Checks that the two tests holding a GPU model's results to any track count cover every GPU model that replays
+/// exactly.
+#[test]
+fn every_gpu_model_that_replays_has_a_track_case() {
+    let mut registered: Vec<String> = example_models()
+        .iter()
+        .filter(|model| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly)
+        .map(|model| model.id().to_owned())
+        .collect();
+    registered.sort_unstable();
+    let mut interleaved: Vec<String> = interleaved_cases().into_iter().map(|spec| spec.model).collect();
+    interleaved.sort_unstable();
+    let mut pipelined: Vec<String> = PIPELINED_CASES.iter().map(|&(id, _, _)| id.to_owned()).collect();
+    pipelined.sort_unstable();
+    assert_eq!(interleaved, registered, "interleaved_gpu_runs_match_sequential_ones");
+    assert_eq!(pipelined, registered, "a_pipelined_gpu_sample_matches_a_blocking_one");
+}
+
 #[test]
 fn an_interleaved_queue_executes_every_step() {
     let Some(ctx) = headless_device() else {
@@ -494,16 +529,17 @@ fn an_interleaved_queue_executes_every_step() {
         "gpu_boids" => fixed_values(&[("num_agents", "2000"), ("world_width", "400"), ("world_height", "400")]),
         _ => panic!("{id} has no case"),
     };
-    let models: Vec<ModelEntry> = model_registry(Some(ctx.clone()))
-        .into_iter()
-        .filter(|model| model.metadata.backend == Backend::Gpu)
+    let models: Vec<ModelEntry> = example_models()
+        .iter()
+        .filter(|model| model.metadata().backend == Backend::Gpu)
+        .cloned()
         .collect();
     assert_eq!(models.len(), 4, "every GPU model has a case");
     for model in models {
         let counts = Arc::new(StateCounts::default());
         let model = instrument(model, &ctx, &counts, |_| Misbehavior::default());
-        let mut spec = SweepSpec::new(&model.id);
-        spec.fixed = fixed_by_model(&model.id);
+        let mut spec = SweepSpec::new(model.id());
+        spec.fixed = fixed_by_model(model.id());
         spec.run.steps = 150;
         spec.run.replicates = 8;
         spec.measure.stats_every = 50;
@@ -514,10 +550,10 @@ fn an_interleaved_queue_executes_every_step() {
             counts.most_live.load(Ordering::Relaxed),
             8,
             "{}: every run was live at once",
-            model.id
+            model.id()
         );
         for outcome in &finished {
-            let id = &model.id;
+            let id = model.id();
             assert_eq!(
                 (outcome.status, outcome.ticks),
                 (RunStatus::Ok, 150),
@@ -529,11 +565,11 @@ fn an_interleaved_queue_executes_every_step() {
             assert!(last.iter().any(|&value| value != 0.0), "{id}: {last:?}");
         }
         let final_ticks = counts.final_ticks.lock().expect("the ticks are recorded").clone();
-        assert_eq!(final_ticks.len(), 9, "{}: the probe and 8 runs", model.id);
+        assert_eq!(final_ticks.len(), 9, "{}: the probe and 8 runs", model.id());
         assert!(
             final_ticks[1..].iter().all(|&tick| tick == 150),
             "{}: {final_ticks:?}",
-            model.id
+            model.id()
         );
     }
 }
@@ -553,11 +589,14 @@ fn gpu_admission_respects_the_memory_budget() {
     spec.measure.series_every = 10;
     let (plan, measure) = planned(&model, Some(&ctx), &spec);
     let params = &plan.config(0).expect("the plan has a config").params;
-    let demand = model.demand(params).expect("a GPU model has a demand").bytes();
+    let demand = model
+        .demand(params, &ctx.device.limits())
+        .expect("a GPU model has a demand")
+        .bytes();
 
     let sequential = outcomes(&executor(&model, &ctx, &measure, ONE_TRACK), &plan);
     counts.most_live.store(0, Ordering::Relaxed);
-    let budgeted = executor(&model, &ctx, &measure, tracks(4)).with_gpu_memory(Some(demand * 5 / 2));
+    let budgeted = executor(&model, &ctx, &measure, tracks(4)).with_gpu_memory_budget(Some(demand * 5 / 2));
     assert_eq!(outcomes(&budgeted, &plan), sequential);
     assert_eq!(counts.most_live.load(Ordering::Relaxed), 2, "two runs fit the budget");
 }
@@ -580,26 +619,26 @@ fn an_out_of_memory_build_waits_for_a_track_to_finish() {
 
     // Each build attempt records whether it was refused and how many states had been dropped before it.
     let attempts = Arc::new(Mutex::new(Vec::<(bool, usize)>::new()));
-    let create = model.create;
     let (build_counts, build_attempts) = (Arc::clone(&counts), Arc::clone(&attempts));
-    let refusing_entry = ModelEntry {
-        create: Box::new(move |params: &[ParamValue], seed| {
-            let refused = build_counts.live.load(Ordering::Relaxed) >= 2;
-            let dropped = build_counts.final_ticks.lock().expect("the ticks are recorded").len();
-            build_attempts
-                .lock()
-                .expect("the attempts are recorded")
-                .push((refused, dropped));
-            if refused {
-                let error = wgpu::Error::OutOfMemory {
-                    source: "the device is out of memory".into(),
-                };
-                return Err(Fault::device(BUILDING, error));
-            }
-            create(params, seed)
-        }),
-        ..model
-    };
+    let refusing_entry = model.clone().wrap_factory(|create| {
+        Arc::new(
+            move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| {
+                let refused = build_counts.live.load(Ordering::Relaxed) >= 2;
+                let dropped = build_counts.final_ticks.lock().expect("the ticks are recorded").len();
+                build_attempts
+                    .lock()
+                    .expect("the attempts are recorded")
+                    .push((refused, dropped));
+                if refused {
+                    let error = wgpu::Error::OutOfMemory {
+                        source: "the device is out of memory".into(),
+                    };
+                    return Err(Fault::device(BUILDING, error));
+                }
+                create(params, seed, gpu)
+            },
+        )
+    });
     counts.most_live.store(0, Ordering::Relaxed);
     let finished = outcomes(&executor(&refusing_entry, &ctx, &measure, tracks(4)), &plan);
     assert_eq!(finished, sequential, "the refused builds ran once a track was free");
@@ -826,9 +865,9 @@ fn a_lost_device_leaves_a_directory_a_resume_completes() {
     let options = SweepOptions {
         concurrency: Concurrency::Fixed(2.try_into().expect("2 is above 0")),
         active_runs: Some(active_runs.clone()),
-        ..sweep_options(&lost_dir, false)
+        ..sweep_options(false)
     };
-    let report = sweep_with(&losing, Some(&ctx), &spec, &options, &mut NoProgress)
+    let report = sweep_with(&losing, Some(&ctx), &spec, &lost_dir, &options, &mut NoProgress)
         .expect("a lost device ends the sweep without an error of its own");
     assert!(active_runs.list().is_empty(), "no run is left in progress");
     assert_eq!(active_runs.waiting_count(), 0, "no lost run waits to be committed");
@@ -844,9 +883,10 @@ fn a_lost_device_leaves_a_directory_a_resume_completes() {
     let gpu_sir = entry("gpu_sir", Some(&fresh_ctx));
     let resumed = SweepOptions {
         concurrency: options.concurrency,
-        ..sweep_options(&lost_dir, true)
+        ..sweep_options(true)
     };
-    let report = sweep_with(&gpu_sir, Some(&fresh_ctx), &spec, &resumed, &mut NoProgress).expect("the resume runs");
+    let report =
+        sweep_with(&gpu_sir, Some(&fresh_ctx), &spec, &lost_dir, &resumed, &mut NoProgress).expect("the resume runs");
     assert_eq!((report.end, report.counts.ok), (SweepEnd::Complete, 8));
     let fresh_dir = scratch.path().join("fresh");
     sweep(&gpu_sir, Some(&fresh_ctx), &spec, &fresh_dir, options.concurrency);

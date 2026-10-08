@@ -8,6 +8,7 @@ use std::path::Path;
 
 use egui::containers::Sides;
 use egui::{Align, Button, ComboBox, DragValue, Id, Label, Layout, RadioButton, RichText, TextEdit, TextStyle, vec2};
+use henad_compute::entry::ModelEntry;
 use henad_core::explore::plan::ModelSchema;
 use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
 use henad_core::explore::stop::{Comparator, Comparison};
@@ -16,7 +17,6 @@ use henad_core::helpers::fmt_bytes;
 use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
 use henad_explore::exec::Concurrency;
-use henad_models::registry::ModelEntry;
 
 use crate::icons::material_design_icons::{
     MDI_CLOSE, MDI_DELETE_OUTLINE, MDI_DICE_5, MDI_FILE_DELIMITED_OUTLINE, MDI_FOLDER_OUTLINE, MDI_PLUS,
@@ -95,6 +95,8 @@ pub struct FormInput<'a> {
     pub plan: &'a PlanSummary,
     /// Results the Results tab holds of the draft's model, `None` when it holds none.
     pub results: Option<&'a ResultsStore>,
+    /// Program the tab's advice names, `None` for none.
+    pub cli_command: Option<&'a str>,
 }
 
 /// One-line summary of each section's settings, as its header shows it.
@@ -1207,7 +1209,7 @@ fn ticks_drag_value(ticks: &mut u64) -> DragValue<'_> {
 
 fn first_stat(entry: &ModelEntry) -> String {
     entry
-        .stat_descriptors
+        .stat_descriptors()
         .first()
         .map(|stat| stat.label.to_owned())
         .unwrap_or_default()
@@ -1219,7 +1221,7 @@ fn stat_combo(ui: &mut egui::Ui, id: Id, entry: &ModelEntry, column: &mut String
         .truncate()
         .selected_text(column.as_str())
         .show_ui(ui, |ui| {
-            for stat in &entry.stat_descriptors {
+            for stat in entry.stat_descriptors() {
                 if ui.selectable_label(column == stat.label, stat.label).clicked() {
                     stat.label.clone_into(column);
                 }
@@ -1519,7 +1521,7 @@ pub fn concurrency_feedback(concurrency: Concurrency, backend: Backend, threads:
         (Concurrency::Fixed(runs), Backend::Gpu) if runs.get() == 1 => "One run on the GPU at a time".to_owned(),
         (Concurrency::Fixed(runs), Backend::Gpu) => format!("{runs} runs share the GPU"),
         (Concurrency::Fixed(runs), Backend::Cpu) => {
-            let per_run = (threads / runs.get()).max(1) as u64;
+            let per_run = (threads / runs).max(1) as u64;
             format!("About {per_run} {} per run", plural(per_run, "thread"))
         }
     }
@@ -1532,7 +1534,7 @@ fn execution_section(
     input: &FormInput<'_>,
     request: &mut Option<SweepRequest>,
 ) {
-    concurrency_row(ui, &rows.layout, draft, input.entry.metadata.backend);
+    concurrency_row(ui, &rows.layout, draft, input.entry.metadata().backend);
     budget_row(ui, &rows.layout, draft);
     results_rows(ui, rows, draft, input, request);
 }
@@ -1557,7 +1559,7 @@ fn budget_row(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraft) {
 }
 
 /// Returns the memory budgets as the Memory budget row shows them, as in "4 GB, GPU 2 GB", or `None` for neither.
-fn budget_text(memory_budget: Option<u64>, gpu_memory_budget: Option<u64>) -> Option<String> {
+pub fn budget_text(memory_budget: Option<u64>, gpu_memory_budget: Option<u64>) -> Option<String> {
     match (memory_budget, gpu_memory_budget) {
         (None, None) => None,
         (Some(memory), None) => Some(fmt_bytes(memory)),
@@ -1790,13 +1792,13 @@ mod tests {
     use std::time::Duration;
 
     use egui::accesskit;
+    use henad_compute::entry::ModelEntry;
     use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
     use henad_core::explore::stop::Comparator;
     use henad_core::metadata::Backend;
     use henad_core::params::ParamValue;
     use henad_explore::exec::Concurrency;
-    use henad_explore::schema::model_schema;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::example_models;
 
     use super::{
         FormInput, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, SectionSummaries, SeedField, banner_line, comparator_item,
@@ -1816,15 +1818,12 @@ mod tests {
     const RECOVERY_RATE: usize = 3;
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
         entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect()
@@ -1833,7 +1832,7 @@ mod tests {
     /// Returns the section summaries of the draft that `edit` makes of a new SIR draft.
     fn summaries_of(edit: impl FnOnce(&mut SweepDraft)) -> SectionSummaries {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let panel_values = default_values(&entry);
         let mut panel = SweepPanel::default();
         edit(panel.draft_mut(&schema));
@@ -1845,7 +1844,7 @@ mod tests {
     /// Returns the formula under the Design field of the draft that `edit` makes of a new SIR draft.
     fn formula_of(edit: impl FnOnce(&mut SweepDraft)) -> String {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         edit(&mut draft);
         let planned = draft
@@ -1985,7 +1984,7 @@ mod tests {
             "3 configurations, one per row"
         );
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         assert_eq!(
             formula_of(|draft| {
                 vary(draft, INFECTION_RATE, "0.1, 0.2");
@@ -2000,7 +1999,7 @@ mod tests {
     #[test]
     fn a_table_names_the_parameters_and_ticks_its_columns_set() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.add_action(&schema, 0, 10);
         let table = |text: &str| DesignTableDraft {
@@ -2112,7 +2111,7 @@ mod tests {
     #[test]
     fn a_banner_line_names_the_row_its_issue_belongs_to() {
         let sir = sir();
-        let schema = model_schema(&sir);
+        let schema = sir.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.add_action(&schema, 0, 10);
         let infection = schema
@@ -2276,13 +2275,13 @@ mod tests {
     ///
     /// With `hovered`, the pointer then rests on that control until its tooltip shows.
     fn draw_form(entry: &ModelEntry, draft: SweepDraft, hovered: Option<FormControl<'_>>) -> DrawnForm {
-        let schema = model_schema(entry);
+        let schema = entry.schema();
         let panel_values = default_values(entry);
         let mut panel = SweepPanel::default();
         *panel.draft_mut(&schema) = draft;
         let check = panel.cached_check(&schema, &panel_values);
         let summary = CheckSummary::new(check, entry, &schema);
-        let plan = PlanSummary::for_draft(check, &schema, &entry.name, &summary);
+        let plan = PlanSummary::for_draft(check, &schema, entry.name(), &summary);
         let sections = SectionSummaries::new(check, &schema, &summary);
         let input = FormInput {
             entry,
@@ -2292,6 +2291,7 @@ mod tests {
             sections: &sections,
             plan: &plan,
             results: None,
+            cli_command: Some("henad-cli"),
         };
         let mut draft = check.draft.clone();
         // The Outputs section starts collapsed, and a reveal opens it.
@@ -2363,7 +2363,7 @@ mod tests {
     #[test]
     fn the_outputs_section_shows_that_its_columns_are_pending() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.columns_pending = true;
         let texts = draw_form(&entry, draft, None).texts;
@@ -2386,7 +2386,7 @@ mod tests {
     #[test]
     fn drawing_the_form_leaves_a_loaded_value_alone() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut loaded = SweepDraft::new(&schema);
         loaded.design = DraftDesign::LatinHypercube;
         loaded.samples = 2_000_000;
@@ -2439,7 +2439,7 @@ mod tests {
     #[test]
     fn a_tick_row_under_a_design_table_says_where_its_tick_comes_from() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let under_table = |text: &str| {
             let mut draft = SweepDraft::new(&schema);
             draft.add_action(&schema, 0, 10);
@@ -2498,7 +2498,7 @@ mod tests {
     #[test]
     fn a_timeout_issue_shows_under_its_field_and_names_its_row() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = SweepDraft::new(&schema);
         draft.timeout_s = Some(f64::INFINITY);
         let issues = draft.issues(&schema);

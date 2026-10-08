@@ -35,7 +35,7 @@ pub const NOTE_COLUMN: &str = "note";
 
 /// Returns the names of the columns of `runs.csv` for the parameters `params`, the actions `actions` and the reducer
 /// columns named `reducers`, before CSV escaping.
-pub fn column_names(params: &[ParamDescriptor], actions: &[ActionSpec], reducers: &[String]) -> Vec<String> {
+pub(crate) fn column_names(params: &[ParamDescriptor], actions: &[ActionSpec], reducers: &[String]) -> Vec<String> {
     let mut names: Vec<String> = ID_COLUMNS.iter().map(|&column| column.to_owned()).collect();
     names.extend(params.iter().map(|param| param.id.to_owned()));
     names.extend(actions.iter().map(ActionSpec::column_name));
@@ -46,7 +46,7 @@ pub fn column_names(params: &[ParamDescriptor], actions: &[ActionSpec], reducers
 }
 
 /// Returns the header line of `runs.csv` for the column names `names`, escaped and with its line ending.
-pub fn header_line(names: &[String]) -> String {
+pub(crate) fn header_line(names: &[String]) -> String {
     let mut line = names
         .iter()
         .map(|name| escape_field(name))
@@ -57,6 +57,7 @@ pub fn header_line(names: &[String]) -> String {
 }
 
 /// Writer of `runs.csv`.
+#[derive(Debug)]
 pub struct RunsWriter<W: Write> {
     dest: W,
     /// Kind of every parameter, in descriptor order.

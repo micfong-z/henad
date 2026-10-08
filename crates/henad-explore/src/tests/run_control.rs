@@ -8,7 +8,7 @@ use henad_core::explore::stop::StopSpec;
 
 use crate::exec::Concurrency;
 use crate::sweep::SweepWarning;
-use crate::tests::broken::RefusesActions;
+use crate::tests::broken::{Bug, BuggyState};
 use crate::tests::support::{OutputTables, Recorder, ScratchDir, entry, sweep, sweep_options, sweep_with};
 
 fn values(raw: &[&str]) -> LevelSpec {
@@ -164,7 +164,8 @@ fn an_action_due_after_the_last_tick_is_warned_about() {
         &sir,
         None,
         &wave_spec(&["10", "41", "90"]),
-        &sweep_options(scratch.path(), false),
+        scratch.path(),
+        &sweep_options(false),
         &mut progress,
     )
     .expect("the sweep runs");
@@ -182,7 +183,7 @@ fn an_action_due_after_the_last_tick_is_warned_about() {
 
 #[test]
 fn a_refused_action_is_noted_and_the_run_stays_ok() {
-    let refusing = RefusesActions::wrap(entry("sir", None));
+    let refusing = BuggyState::wrap(entry("sir", None), Bug::RefusesActions);
     let scratch = ScratchDir::new("refused-action");
     let mut spec = wave_spec(&["6"]);
     spec.actions.insert(0, ActionSpec::new("seed_outbreak", 0));

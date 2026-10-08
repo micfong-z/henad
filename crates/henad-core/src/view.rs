@@ -6,6 +6,17 @@ pub struct GridView<'a> {
     pub palette: &'static [[u8; 4]],
 }
 
+/// Prints the grid's size, not its cells.
+impl std::fmt::Debug for GridView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GridView")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("palette_len", &self.palette.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// An agent population for rendering.
 ///
 /// Both layers are stretched to the same rect, so a composite model wants
@@ -20,6 +31,19 @@ pub struct PointView<'a> {
     pub palette: &'static [[u8; 4]],
 }
 
+/// Prints the point count and the world, not the positions.
+impl std::fmt::Debug for PointView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PointView")
+            .field("len", &self.pos_x.len())
+            .field("world_w", &self.world_w)
+            .field("world_h", &self.world_h)
+            .field("colored", &self.color.is_some())
+            .field("palette_len", &self.palette.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Edges for rendering. Endpoints are indices into the point view's positions.
 pub struct EdgeView<'a> {
     pub src: &'a [u32],
@@ -31,6 +55,19 @@ pub struct EdgeView<'a> {
     pub directed: bool,
     /// Used to detect when the edges, their colours or their direction have changed.
     pub version: u64,
+}
+
+/// Prints the edge count and the version, not the edges.
+impl std::fmt::Debug for EdgeView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EdgeView")
+            .field("len", &self.src.len())
+            .field("colored", &self.color.is_some())
+            .field("palette_len", &self.palette.len())
+            .field("directed", &self.directed)
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +140,19 @@ pub struct StatsHistory {
     write_count: usize,
     /// `None` retains every sample, so a whole run can be exported.
     capacity: Option<usize>,
+}
+
+/// Prints the series labels and the sample counts, not the samples.
+impl std::fmt::Debug for StatsHistory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let labels: Vec<&str> = self.descriptors.iter().map(|descriptor| descriptor.label).collect();
+        f.debug_struct("StatsHistory")
+            .field("labels", &labels)
+            .field("len", &self.len())
+            .field("write_count", &self.write_count)
+            .field("capacity", &self.capacity)
+            .finish_non_exhaustive()
+    }
 }
 
 impl StatsHistory {

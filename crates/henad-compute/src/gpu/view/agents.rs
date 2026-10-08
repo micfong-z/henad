@@ -7,6 +7,7 @@
 ///
 /// `Arc`d in a snapshot so an in-flight paint callback keeps the buffers alive if the sim thread
 /// is torn down mid-frame.
+#[derive(Debug)]
 pub struct GpuAgents {
     /// `array<vec2<f32>>`, one instance stream carrying both position attributes.
     pub pos: wgpu::Buffer,

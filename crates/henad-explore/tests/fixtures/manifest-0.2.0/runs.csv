@@ -1,0 +1,5 @@
+run_id,config_id,block,rep,seed,run_key,grid_width,grid_height,infection_rate,recovery_rate,initial_infected_pct,action.seed_outbreak,status,stop_reason,ticks,population,build_ms,wall_ms,steps_per_s,Susceptible:final,Susceptible:min,Susceptible:max,Susceptible:mean,Infected:final,Infected:min,Infected:max,Infected:mean,Recovered:final,Recovered:min,Recovered:max,Recovered:mean,note
+0,0,0,0,11389263990721755462,88daf9687d21c672,16,16,0.2,0.05,0.01,5,ok,steps,20,256,0.004,0.024,840654.029,0,0,254,110.4,135,2,193,103.8,121,0,121,41.8,
+1,0,0,1,3710028182051322707,50b1c3df6a727b09,16,16,0.2,0.05,0.01,5,ok,steps,20,256,0.003,0.024,826173.166,0,0,255,124.8,156,1,198,98.4,100,0,100,32.8,
+2,1,0,0,11389263990721755462,e4d9e0c71b00f2f2,16,16,0.4,0.05,0.01,5,ok,steps,20,256,0.002,0.021,958129.731,0,0,254,78.6,114,2,205,118.4,142,0,142,59,
+3,1,0,1,3710028182051322707,9b5fd5df945a5889,16,16,0.4,0.05,0.01,5,ok,steps,20,256,0.002,0.021,956251.494,0,0,255,90.4,126,1,210,112.6,130,0,130,53,

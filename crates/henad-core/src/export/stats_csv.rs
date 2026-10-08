@@ -217,6 +217,7 @@ impl StatColumns {
 /// header is written on the first `push`, since the column set comes from the sample shape rather
 /// than being declared up front. `StatDescriptor` carries a label and colour but not whether the
 /// value is a scalar, a vector, or a histogram.
+#[derive(Debug)]
 pub struct StatsWriter<W: Write> {
     out: W,
     /// `None` until the first `push` fixes the layout.

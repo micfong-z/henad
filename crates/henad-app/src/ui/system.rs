@@ -38,7 +38,7 @@ fn gpu_warnings(ui: &mut egui::Ui, info: &RuntimeInfo) {
     }
 }
 
-pub fn system_ui(ui: &mut egui::Ui, app: &mut AppState) {
+pub fn system_ui(ui: &mut egui::Ui, app: &AppState) {
     let info = &app.runtime;
 
     egui::ScrollArea::vertical().show(ui, |ui| {

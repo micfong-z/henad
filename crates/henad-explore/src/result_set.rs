@@ -15,14 +15,14 @@ use std::path::{Path, PathBuf};
 use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::{PlannedRun, RunOutcome};
-use henad_core::explore::plan::{Config, Plan, PlanError};
+use henad_core::explore::plan::{Config, ModelSchema, Plan, PlanError};
 use henad_core::explore::replay::Replay;
+use henad_core::explore::search::SearchSpecError;
 use henad_core::explore::spec::SweepSpec;
-use henad_models::registry::ModelEntry;
 
 use henad_core::explore::value::parse_value;
 
-use crate::output::manifest::{Manifest, ManifestError, ManifestMode, ManifestStatus};
+use crate::output::manifest::{BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, RecordedBuild};
 use crate::output::read::{ReadError, parse_one, record_ends};
 use crate::output::runs_csv::{ID_COLUMNS, NOTE_COLUMN, OUTCOME_COLUMNS};
 use crate::output::search_tables::{
@@ -33,7 +33,6 @@ use crate::output::series_csv::SERIES_ID_COLUMNS;
 use crate::output::{
     ARCHIVE_FILE, BATCHES_FILE, BEST_FILE, EVALUATIONS_FILE, GENERATIONS_FILE, MANIFEST_FILE, RUNS_FILE, SERIES_FILE,
 };
-use crate::schema::model_schema;
 use crate::search_run::{SearchPlan, SearchPlanError};
 use crate::spec_file::{SpecFile, SpecFileError};
 use crate::sweep::hex;
@@ -90,7 +89,8 @@ impl ResultSet {
     /// # Errors
     ///
     /// Returns [`ResultSetError`] when the manifest or `runs.csv` is missing or cannot be read, the manifest's spec
-    /// cannot be read back, or a complete record of a table is not one the sweep writes.
+    /// cannot be read back or the search it records has a setting out of range, or a complete record of a table is
+    /// not one the sweep writes.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_dir(dir: &Path, series_budget: usize) -> Result<Self, ResultSetError> {
         let manifest_path = dir.join(MANIFEST_FILE);
@@ -116,6 +116,9 @@ impl ResultSet {
         for file in SEARCH_FILES {
             let path = dir.join(file);
             match std::fs::read(&path) {
+                // A table without a complete header line is one a stopped search had only begun, and reads as none,
+                // as `from_files` reads it.
+                Ok(bytes) if !bytes.contains(&b'\n') => {}
                 Ok(bytes) => {
                     set.search_tables
                         .insert(file, String::from_utf8_lossy(&bytes).into_owned());
@@ -148,8 +151,8 @@ impl ResultSet {
     /// # Errors
     ///
     /// Returns [`ResultSetError`] when the manifest or `runs.csv` is missing or cannot be read, two files hold the
-    /// same table, the manifest's spec cannot be read back, or a complete record of a table is not one the sweep
-    /// writes.
+    /// same table, the manifest's spec cannot be read back or the search it records has a setting out of range, or a
+    /// complete record of a table is not one the sweep writes.
     pub fn from_files(files: Vec<(String, Vec<u8>)>, series_budget: usize) -> Result<Self, ResultSetError> {
         let mut tables: BTreeMap<&'static str, Vec<u8>> = BTreeMap::new();
         for (name, bytes) in files {
@@ -187,6 +190,9 @@ impl ResultSet {
         let spec = SpecFile::from_json(&manifest.spec)
             .and_then(SpecFile::into_spec)
             .map_err(ResultSetError::Spec)?;
+        if let Some(search) = &spec.search {
+            search.check().map_err(ResultSetError::Search)?;
+        }
         let stat_columns = manifest.columns.stats.clone();
         let (column_names, records) = read_runs(runs, runs_path, stat_columns.len())?;
         let positions = records
@@ -281,6 +287,15 @@ impl ResultSet {
         &self.manifest
     }
 
+    /// Returns every distinct build the manifest's sessions that wrote runs record for `role`, in session order, as
+    /// [`Manifest::recorded_builds`] lists them.
+    ///
+    /// A session of a 0.2 manifest records no builds, and reads as the engine build of its own commit and the
+    /// manifest's engine version, with no model build.
+    pub fn recorded_builds(&self, role: BuildRole) -> Vec<RecordedBuild> {
+        self.manifest.recorded_builds(role)
+    }
+
     /// Spec the sweep ran, as its manifest records it.
     pub fn spec(&self) -> &SweepSpec {
         &self.spec
@@ -331,23 +346,24 @@ impl ResultSet {
         self.manifest.status == ManifestStatus::Complete
     }
 
-    /// Returns whether `entry` declares the parameters, stats and actions the sweep ran with.
+    /// Returns whether `schema` declares the parameters, stats and actions the sweep ran with.
     ///
-    /// A replay of a run through an entry that does not match might differ from the run.
-    pub fn schema_matches(&self, entry: &ModelEntry) -> bool {
-        entry.id == self.manifest.model.id && hex(schema_hash(&model_schema(entry))) == self.manifest.model.schema_hash
+    /// A replay of a run through a model that does not match might differ from the run. A host passes
+    /// `entry.schema()` for a [`ModelEntry`](henad_compute::entry::ModelEntry).
+    pub fn schema_matches(&self, schema: ModelSchema<'_>) -> bool {
+        schema.id == self.manifest.model.id && hex(schema_hash(&schema)) == self.manifest.model.schema_hash
     }
 
-    /// Plans the recorded spec against `entry`.
+    /// Plans the recorded spec against `schema`.
     ///
     /// # Errors
     ///
     /// Returns [`PlanError`] when the model refuses the spec.
-    pub fn plan(&self, entry: &ModelEntry) -> Result<Plan, PlanError> {
-        self.spec.plan(&model_schema(entry))
+    pub fn plan(&self, schema: ModelSchema<'_>) -> Result<Plan, PlanError> {
+        self.spec.plan(&schema)
     }
 
-    /// Returns the [`Replay`] of run `run_id` through `entry`.
+    /// Returns the [`Replay`] of run `run_id` through the model `schema` declares.
     ///
     /// The spec is planned afresh on each call. A host that replays several runs of a sweep plans once with
     /// [`Self::plan`] and calls [`Plan::replay`]. A search's run is rebuilt from the config its row records.
@@ -357,16 +373,16 @@ impl ResultSet {
     /// Returns [`ResultReplayError`] when the model refuses the spec, `runs.csv` holds no run `run_id`, or the plan
     /// gives the run another config, replicate, seed or run key than its row. The run key covers the config's
     /// parameter values and action ticks. It also hashes the model's declarations, so it is compared only while
-    /// [`Self::schema_matches`] holds for `entry`.
-    pub fn replay(&self, entry: &ModelEntry, run_id: u64) -> Result<Replay, ResultReplayError> {
+    /// [`Self::schema_matches`] holds for `schema`.
+    pub fn replay(&self, schema: ModelSchema<'_>, run_id: u64) -> Result<Replay, ResultReplayError> {
         let recorded = self.run(run_id).ok_or(ResultReplayError::UnknownRun { run_id })?;
         if self.is_search() {
-            return self.search_replay(entry, recorded);
+            return self.search_replay(schema, recorded);
         }
-        let plan = self.plan(entry).map_err(ResultReplayError::Plan)?;
+        let plan = self.plan(schema).map_err(ResultReplayError::Plan)?;
         match plan.run(run_id) {
             Some(planned)
-                if planned == recorded.outcome.run && self.key_matches(entry, plan.run_key(&planned), recorded) =>
+                if planned == recorded.outcome.run && self.key_matches(schema, plan.run_key(&planned), recorded) =>
             {
                 plan.replay(run_id).ok_or(ResultReplayError::Mismatch { run_id })
             }
@@ -375,39 +391,47 @@ impl ResultSet {
     }
 
     /// Returns the [`Replay`] of `recorded`, a run of a search, from the config its row records.
-    fn search_replay(&self, entry: &ModelEntry, recorded: &RunRow) -> Result<Replay, ResultReplayError> {
+    ///
+    /// Each value is found by its column's name, a parameter's id or an action's `action.<name>`, so a model that
+    /// reorders its parameters still reads each value under its own id.
+    fn search_replay(&self, schema: ModelSchema<'_>, recorded: &RunRow) -> Result<Replay, ResultReplayError> {
         let run = recorded.outcome.run;
         let mismatch = || ResultReplayError::Mismatch { run_id: run.run_id };
-        let plan = SearchPlan::new(&self.spec, &model_schema(entry)).map_err(ResultReplayError::Search)?;
-        let params = entry.param_descriptors.len();
-        if recorded.values.len() != params + plan.base().actions().len() {
+        let plan = SearchPlan::new(&self.spec, &schema).map_err(ResultReplayError::Search)?;
+        let actions = plan.base().actions();
+        if recorded.values.len() != schema.params.len() + actions.len()
+            || self.value_columns.len() != recorded.values.len()
+        {
             return Err(mismatch());
         }
+        let value_of = |column: &str| {
+            let position = self.value_columns.iter().position(|name| name == column)?;
+            recorded.values.get(position)
+        };
         let config = Config {
             block: recorded.block,
-            params: entry
-                .param_descriptors
+            params: schema
+                .params
                 .iter()
-                .zip(&recorded.values)
-                .map(|(descriptor, text)| parse_value(&descriptor.kind, text).ok())
+                .map(|descriptor| parse_value(&descriptor.kind, value_of(descriptor.id)?).ok())
                 .collect::<Option<_>>()
                 .ok_or_else(mismatch)?,
-            action_ticks: recorded.values[params..]
+            action_ticks: actions
                 .iter()
-                .map(|text| text.parse().ok())
+                .map(|action| value_of(&action.column_name())?.parse().ok())
                 .collect::<Option<_>>()
                 .ok_or_else(mismatch)?,
         };
-        if !self.key_matches(entry, plan.run_key(&run, &config), recorded) {
+        if !self.key_matches(schema, plan.run_key(&run, &config), recorded) {
             return Err(mismatch());
         }
         Ok(plan.replay(&run, &config))
     }
 
-    /// Returns whether `key`, the key a plan through `entry` gives `recorded`, matches the key its row holds. Any key
-    /// matches once `entry` no longer declares what the sweep ran with.
-    fn key_matches(&self, entry: &ModelEntry, key: u64, recorded: &RunRow) -> bool {
-        !self.schema_matches(entry) || key == recorded.outcome.run_key
+    /// Returns whether `key`, the key a plan through `schema` gives `recorded`, matches the key its row holds. Any key
+    /// matches once `schema` no longer declares what the sweep ran with.
+    fn key_matches(&self, schema: ModelSchema<'_>, key: u64, recorded: &RunRow) -> bool {
+        !self.schema_matches(schema) || key == recorded.outcome.run_key
     }
 
     /// Returns whether the results are a search's.
@@ -848,6 +872,10 @@ pub enum ResultSetError {
     Manifest(ManifestError),
     /// The manifest's spec cannot be read back, for the reason inside.
     Spec(SpecFileError),
+    /// The search the manifest records has a setting [`SearchSpec::check`] refuses, for the reason inside.
+    ///
+    /// [`SearchSpec::check`]: henad_core::explore::search::SearchSpec::check
+    Search(SearchSpecError),
     /// A table cannot be read, for the reason inside.
     Table(ReadError),
 }
@@ -859,6 +887,7 @@ impl fmt::Display for ResultSetError {
             Self::Duplicate { file } => write!(f, "two selected files hold {file}"),
             Self::Manifest(_) => f.write_str("cannot read the manifest"),
             Self::Spec(_) => f.write_str("cannot read the spec the manifest records"),
+            Self::Search(_) => f.write_str("the search the manifest records has an invalid setting"),
             Self::Table(_) => f.write_str("cannot read the results"),
         }
     }
@@ -870,6 +899,7 @@ impl std::error::Error for ResultSetError {
             Self::Missing { .. } | Self::Duplicate { .. } => None,
             Self::Manifest(error) => Some(error),
             Self::Spec(error) => Some(error),
+            Self::Search(error) => Some(error),
             Self::Table(error) => Some(error),
         }
     }
@@ -904,6 +934,88 @@ impl std::error::Error for ResultReplayError {
             Self::Plan(error) => Some(error),
             Self::Search(error) => Some(error),
             Self::UnknownRun { .. } | Self::Mismatch { .. } => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use henad_core::explore::factor::{FactorSpec, LevelSpec};
+    use henad_core::explore::plan::ModelSchema;
+    use henad_core::explore::replay::Replay;
+    use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, SearchSpec};
+    use henad_core::explore::spec::SweepSpec;
+    use henad_core::params::{ParamDescriptor, ParamValue};
+
+    use super::ResultSet;
+    use crate::progress::NoProgress;
+    use crate::tests::support::{ScratchDir, entry, sweep_options, sweep_with};
+
+    /// Returns the value `replay` gives the parameter `id`, whose schema lists `params`.
+    fn value_of(replay: &Replay, params: &[ParamDescriptor], id: &str) -> ParamValue {
+        let position = params
+            .iter()
+            .position(|param| param.id == id)
+            .expect("the schema has the parameter");
+        replay.params[position].clone()
+    }
+
+    #[test]
+    fn a_search_run_replays_each_value_under_its_parameter_id() {
+        let sir = entry("sir", None);
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = vec![
+            ("grid_width".to_owned(), "8".to_owned()),
+            ("grid_height".to_owned(), "8".to_owned()),
+        ];
+        spec.run.steps = 4;
+        spec.measure.default_reducers = false;
+        spec.measure.reducers = vec!["Infected:max".parse().expect("a valid reducer")];
+        let rate = |min, max| LevelSpec::Range { min, max, step: None };
+        spec.search = Some(SearchSpec {
+            algorithm: SearchAlgorithm::Random,
+            max_evaluations: 2,
+            batch_size: 2,
+            objective: Some(Objective {
+                column: "Infected:max".to_owned(),
+                goal: Goal::Minimize,
+                aggregate: Aggregate::Median,
+            }),
+            space: vec![
+                FactorSpec::param("infection_rate", rate(0.5, 0.9)),
+                FactorSpec::param("recovery_rate", rate(0.02, 0.3)),
+            ],
+        });
+        let scratch = ScratchDir::new("search-replay-by-id");
+        sweep_with(
+            &sir,
+            None,
+            &spec,
+            scratch.path(),
+            &sweep_options(false),
+            &mut NoProgress,
+        )
+        .expect("the search runs");
+        let set = ResultSet::open_dir(scratch.path(), usize::MAX).expect("the folder reads back");
+        let schema = sir.schema();
+        let replay = set.replay(schema, 0).expect("the run replays");
+
+        // A later version of the model lists its two rates the other way round.
+        let mut params = schema.params.to_vec();
+        let position = |id: &str| params.iter().position(|param| param.id == id).expect("a SIR parameter");
+        let (infection, recovery) = (position("infection_rate"), position("recovery_rate"));
+        params.swap(infection, recovery);
+        let reordered = ModelSchema {
+            params: &params,
+            ..schema
+        };
+        let swapped = set.replay(reordered, 0).expect("the run replays");
+        for id in ["infection_rate", "recovery_rate", "grid_width"] {
+            assert_eq!(
+                value_of(&swapped, &params, id),
+                value_of(&replay, schema.params, id),
+                "{id}"
+            );
         }
     }
 }

@@ -48,8 +48,10 @@ pub const CELL_PALETTE: [[u8; 4]; 16] = [
     [0xF2, 0xE4, 0x5C, 0xFF], // 15 nest
 ];
 
+#[derive(Debug)]
 pub struct PheromoneField;
 
+#[derive(Debug)]
 pub struct FieldParams {
     pub evaporation: f32,
 }

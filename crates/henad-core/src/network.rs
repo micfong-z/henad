@@ -43,17 +43,20 @@ impl Csr {
     }
 
     /// Returns the range of indices in `neighbors` and `edges` that correspond to row `i`.
+    #[inline]
     fn span(&self, i: u32) -> Range<usize> {
         let start = self.offset[i as usize] as usize;
         start..start + self.len[i as usize] as usize
     }
 
     /// Returns the slice of neighbour nodes for row `i`.
+    #[inline]
     fn row(&self, i: u32) -> &[u32] {
         &self.neighbors[self.span(i)]
     }
 
     /// Returns the slice of edge indices for row `i`.
+    #[inline]
     fn row_edges(&self, i: u32) -> &[u32] {
         &self.edges[self.span(i)]
     }
@@ -243,6 +246,19 @@ pub struct Network {
     version: u64,
 }
 
+/// Prints the graph's size, not its edges.
+impl std::fmt::Debug for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Network")
+            .field("node_count", &self.node_count)
+            .field("slot_count", &self.slot_count())
+            .field("edge_count", &self.edge_count())
+            .field("directed", &self.directed)
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Network {
     /// Creates a new `Network` with `nodes` slots and no edges. All slots are considered occupied with a node.
     pub fn new(nodes: usize, directed: bool) -> Self {
@@ -284,6 +300,7 @@ impl Network {
     }
 
     /// Spawns a new node and returns its index.
+    #[doc(hidden)]
     pub fn spawn(&mut self) -> u32 {
         self.node_count += 1;
         if let Some(i) = self.free.pop() {
@@ -300,6 +317,7 @@ impl Network {
     }
 
     /// Retires node in slot `i`.
+    #[doc(hidden)]
     pub fn retire(&mut self, i: u32) {
         if !self.contains_node(i) {
             return;
@@ -407,11 +425,13 @@ impl Network {
     }
 
     /// Returns the nodes that have an edge to `i`.
+    #[inline]
     pub fn in_neighbors(&self, i: u32) -> &[u32] {
         self.in_csr.row(i)
     }
 
     /// Returns the nodes that `i` has an edge to.
+    #[inline]
     pub fn out_neighbors(&self, i: u32) -> &[u32] {
         if self.directed {
             self.out_csr.row(i)
@@ -421,6 +441,7 @@ impl Network {
     }
 
     /// Returns the degree of the node. On directed graphs, this is the sum of in-degree and out-degree.
+    #[inline]
     pub fn degree(&self, i: u32) -> usize {
         if self.directed {
             self.in_csr.row(i).len() + self.out_csr.row(i).len()
@@ -433,6 +454,7 @@ impl Network {
     ///
     /// On undirected graphs, an edge in either direction counts, and the shorter of the two rows is searched.
     /// On directed graphs, the out-row of `a` is searched.
+    #[inline]
     pub fn edge_between(&self, a: u32, b: u32) -> Option<u32> {
         let (csr, a, b) = if self.directed {
             (&self.out_csr, a, b)
@@ -446,10 +468,12 @@ impl Network {
     }
 
     /// Returns whether there is an edge from `a` to `b`.
+    #[inline]
     pub fn has_edge(&self, a: u32, b: u32) -> bool {
         self.edge_between(a, b).is_some()
     }
 
+    #[doc(hidden)]
     pub fn set_directed(&mut self, directed: bool) {
         if directed == self.directed {
             return;
@@ -461,7 +485,8 @@ impl Network {
 
     /// Returns whether the graph should be repacked to reclaim space from relocated rows.
     ///
-    /// This is true when the number of stale entries exceeds 1/2 of occupied rows and is greater than [`Csr::MIN_ROW`].
+    /// This is true when the number of stale entries exceeds 1/2 of occupied rows and is greater than `Csr::MIN_ROW`.
+    #[doc(hidden)]
     pub fn should_repack(&self) -> bool {
         let stale = self.in_csr.stale_count + self.out_csr.stale_count;
         let slots = self.in_csr.neighbors.len() + self.out_csr.neighbors.len();
@@ -471,6 +496,7 @@ impl Network {
     /// Packs the rows, reclaiming the stale space left by relocations and retirements.
     ///
     /// The order of entries within each row is preserved.
+    #[doc(hidden)]
     pub fn repack(&mut self) {
         self.in_csr.repack();
         self.out_csr.repack();
@@ -479,6 +505,7 @@ impl Network {
     /// Rebuilds the CSR rows from the edge list, dropping any stale entries.
     ///
     /// This is needed when the direction changes. To only reclaim space, use [`Self::repack`], which is cheaper.
+    #[doc(hidden)]
     pub fn rebuild(&mut self) {
         let n = self.occupied.len();
         let (src, dst) = (&self.src, &self.dst);

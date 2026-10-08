@@ -1,6 +1,6 @@
 
-#import shared::rng::{pcg_hash, random_float}
-#import shared::space::{cell_index, offset_cell, TORUS}
+#import henad::rng::{pcg_hash, random_float}
+#import henad::space::{cell_index, offset_cell, TORUS}
 struct Params {
     width: u32,
     height: u32,

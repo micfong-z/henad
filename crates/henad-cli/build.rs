@@ -1,37 +1,5 @@
-//! Stamps the binary with the commit it was built from.
+//! Stamps the binary with the commit it was built from and a hash of its sources.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
-    emit_commit_stamp(&manifest);
-    Ok(())
-}
-
-fn emit_commit_stamp(manifest: &Path) {
-    let git = |args: &[&str]| -> Option<String> {
-        let output = Command::new("git").args(args).current_dir(manifest).output().ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-    };
-
-    let commit = git(&["rev-parse", "--short=8", "HEAD"]).unwrap_or_default();
-    let date = git(&["log", "-1", "--format=%cd", "--date=short"]).unwrap_or_default();
-    println!("cargo:rustc-env=HENAD_COMMIT={commit}");
-    println!("cargo:rustc-env=HENAD_COMMIT_DATE={date}");
-
-    // A commit rewrites HEAD, or the branch ref it points at. Only track a path that is there.
-    // Naming a missing one reruns this script on every build instead.
-    let Some(git_dir) = git(&["rev-parse", "--absolute-git-dir"]).map(PathBuf::from) else {
-        return;
-    };
-    let branch = git(&["symbolic-ref", "-q", "HEAD"]).map(|reference| git_dir.join(reference));
-    for path in [Some(git_dir.join("HEAD")), branch].into_iter().flatten() {
-        if path.is_file() {
-            println!("cargo:rerun-if-changed={}", path.display());
-        }
-    }
+fn main() {
+    henad_build::stamp_commit();
 }

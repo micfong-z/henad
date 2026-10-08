@@ -7,46 +7,35 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::Plan;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::export::csv::parse_records;
-use henad_models::registry::{ModelEntry, model_registry};
+use henad_models::example_models;
 
-use henad_compute::fault::FaultSink;
+use henad_compute::fault::install_panic_hook;
 
-use crate::device::acquire_headless;
 use crate::exec::{ActiveRun, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, RunSink, SweepControl};
-use crate::output::manifest::Manifest;
+use crate::handle::SweepOutput;
+use crate::output::manifest::{Manifest, RecordedBuild};
 use crate::output::runs_csv::{OUTCOME_COLUMNS, TIMING_COLUMNS};
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::probe::ProbeReport;
 use crate::progress::{NoProgress, Progress, ProgressEvent};
-use crate::schema::model_schema;
-use crate::sweep::{ExploreError, Provenance, SpecSource, SweepOptions, SweepReport, SweepWarning, run_sweep};
+use crate::sweep::{ExploreError, Provenance, SweepOptions, SweepReport, SweepWarning, plan_spec, run_spec};
+use crate::testing::{TestDeviceRequest, headless_test_device};
 
-const REQUIRE_GPU: &str = "HENAD_REQUIRE_GPU";
-
-/// Returns whether `HENAD_REQUIRE_GPU` is set to something other than empty or 0.
-fn gpu_required() -> bool {
-    std::env::var_os(REQUIRE_GPU).is_some_and(|value| !value.is_empty() && value != "0")
-}
-
-/// Returns a headless device, or `None` to skip a GPU test on a machine without one.
+/// Returns a headless device raised to the example models' needs, or `None` to skip a GPU test on a machine without
+/// one.
 ///
 /// # Panics
 ///
 /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
 pub fn headless_device() -> Option<GpuContext> {
-    match acquire_headless() {
-        Ok((ctx, _)) => Some(ctx),
-        Err(error) => {
-            assert!(!gpu_required(), "{REQUIRE_GPU} is set but {error}");
-            None
-        }
-    }
+    headless_test_device(&TestDeviceRequest::raised(example_models().gpu_needs()))
 }
 
 /// Returns a headless device with the limits of `wgpu::Limits::default()`, the WebGPU baseline, or `None` to skip a
@@ -56,40 +45,19 @@ pub fn headless_device() -> Option<GpuContext> {
 ///
 /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
 pub fn baseline_device() -> Option<GpuContext> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let device = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        .map_err(|error| error.to_string())
-        .and_then(|adapter| {
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("henad-explore-baseline"),
-                ..Default::default()
-            }))
-            .map_err(|error| error.to_string())
-        });
-    match device {
-        Ok((device, queue)) => Some(GpuContext::new(
-            device,
-            queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-            FaultSink::new(),
-        )),
-        Err(error) => {
-            assert!(!gpu_required(), "{REQUIRE_GPU} is set but {error}");
-            None
-        }
-    }
+    headless_test_device(&TestDeviceRequest::baseline())
 }
 
-/// Returns the registry entry of model `id`, registered with `gpu` as its device.
+/// Returns example model `id`, as a host with `gpu` as its device finds it.
 ///
 /// # Panics
 ///
-/// Panics when no model has the id.
+/// Panics when no model has the id, or for a GPU model when `gpu` is `None`.
 pub fn entry(id: &str, gpu: Option<&GpuContext>) -> ModelEntry {
-    model_registry(gpu.cloned())
-        .into_iter()
-        .find(|entry| entry.id == id)
-        .expect("the model is registered")
+    example_models()
+        .lookup(id, gpu)
+        .cloned()
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// Path under the system's temporary directory, unique to one test, removed with its contents on drop.
@@ -126,19 +94,23 @@ fn remove(path: &Path) {
     }
 }
 
-/// Returns a record of a build that is not a real one.
+/// Returns an engine build that [`RecordedBuild::same_build`] tells apart from Henad's own, clean or dirty.
+pub fn other_engine() -> RecordedBuild {
+    let mut other = RecordedBuild::engine();
+    other.commit = "0ther000".to_owned();
+    other.dirty = Some(false);
+    other.source_hash = Some(other.source_hash.unwrap_or_default() ^ 1);
+    other
+}
+
+/// Returns the provenance of a sweep the tests run, with henad-explore's own build as the host's.
 pub fn provenance() -> Provenance {
-    Provenance {
-        engine_name: "henad".to_owned(),
-        engine_version: "0.0.0-test".to_owned(),
-        commit: "test".to_owned(),
-        commit_date: String::new(),
-        debug_build: cfg!(debug_assertions),
-        argv: vec!["henad-explore-tests".to_owned()],
-    }
+    Provenance::new(henad_core::build_info!(), vec!["henad-explore-tests".to_owned()])
 }
 
 /// Runs `spec` over `entry` into `output_dir` at `concurrency`, reporting nowhere.
+///
+/// The panic hook is installed first, as a host's `main` installs it, so a fault carries the site of its panic.
 ///
 /// # Panics
 ///
@@ -150,25 +122,14 @@ pub fn sweep(
     output_dir: &Path,
     concurrency: Concurrency,
 ) -> SweepReport {
-    let options = SweepOptions {
-        output_dir: Some(output_dir.to_owned()),
-        concurrency,
-        ..SweepOptions::default()
-    };
-    run_sweep(
-        entry,
-        gpu,
-        None,
-        spec,
-        &SpecSource::default(),
-        &provenance(),
-        &options,
-        &mut NoProgress,
-    )
-    .expect("the sweep runs")
+    let mut options = sweep_options(false);
+    options.concurrency = concurrency;
+    sweep_with(entry, gpu, spec, output_dir, &options, &mut NoProgress).expect("the sweep runs")
 }
 
-/// Runs `spec` over `entry` with `options`, reporting to `progress`.
+/// Runs `spec` over `entry` into `output_dir` with `options`, reporting to `progress`.
+///
+/// The panic hook is installed first, as in [`sweep`].
 ///
 /// # Errors
 ///
@@ -177,28 +138,35 @@ pub fn sweep_with(
     entry: &ModelEntry,
     gpu: Option<&GpuContext>,
     spec: &SweepSpec,
+    output_dir: &Path,
     options: &SweepOptions,
     progress: &mut dyn Progress,
 ) -> Result<SweepReport, ExploreError> {
-    run_sweep(
-        entry,
-        gpu,
-        None,
-        spec,
-        &SpecSource::default(),
-        &provenance(),
-        options,
-        progress,
-    )
+    install_panic_hook();
+    let output = SweepOutput::Directory(output_dir.to_owned());
+    run_spec(entry, gpu, spec, output, options, progress).map(|record| record.report)
 }
 
-/// Returns the options of a sweep into `output_dir`, resumed when `resume` is set.
-pub fn sweep_options(output_dir: &Path, resume: bool) -> SweepOptions {
-    SweepOptions {
-        output_dir: Some(output_dir.to_owned()),
-        resume,
-        ..SweepOptions::default()
-    }
+/// Plans `spec` over `entry` as a dry run reads `folder`, reporting to `progress`.
+///
+/// # Errors
+///
+/// Returns the error of the plan.
+pub fn dry_run(
+    entry: &ModelEntry,
+    spec: &SweepSpec,
+    folder: Option<&Path>,
+    options: &SweepOptions,
+    progress: &mut dyn Progress,
+) -> Result<SweepReport, ExploreError> {
+    plan_spec(entry, None, spec, folder, options, progress)
+}
+
+/// Returns the options of a sweep for this build, resumed when `resume` is set.
+pub fn sweep_options(resume: bool) -> SweepOptions {
+    let mut options = SweepOptions::new(provenance());
+    options.resume = resume;
+    options
 }
 
 /// Progress that keeps the ids of the committed runs and the warnings.
@@ -221,6 +189,43 @@ impl Progress for Recorder {
     }
 }
 
+/// Progress that resumes `spec` over `entry` in `dir` a second time once the first resume reports its outline, after
+/// its scan, and keeps the result of the second.
+#[derive(Debug)]
+pub struct SecondResume<'a> {
+    entry: &'a ModelEntry,
+    spec: &'a SweepSpec,
+    dir: &'a Path,
+    pub result: Option<Result<SweepReport, ExploreError>>,
+}
+
+impl<'a> SecondResume<'a> {
+    pub fn new(entry: &'a ModelEntry, spec: &'a SweepSpec, dir: &'a Path) -> Self {
+        Self {
+            entry,
+            spec,
+            dir,
+            result: None,
+        }
+    }
+}
+
+impl Progress for SecondResume<'_> {
+    fn report(&mut self, event: &ProgressEvent<'_>) {
+        if matches!(event, ProgressEvent::Planned(_)) && self.result.is_none() {
+            let options = sweep_options(true);
+            self.result = Some(sweep_with(
+                self.entry,
+                None,
+                self.spec,
+                self.dir,
+                &options,
+                &mut NoProgress,
+            ));
+        }
+    }
+}
+
 /// Reads the manifest of the output directory `dir`.
 ///
 /// # Panics
@@ -228,6 +233,18 @@ impl Progress for Recorder {
 /// Panics when the manifest is missing or unreadable.
 pub fn manifest(dir: &Path) -> Manifest {
     Manifest::read(&dir.join(MANIFEST_FILE)).expect("the manifest reads back")
+}
+
+/// Rewrites the manifest of the output directory `dir` after `change` edits it.
+///
+/// # Panics
+///
+/// Panics when the manifest is missing, unreadable or cannot be written.
+pub fn rewrite_manifest(dir: &Path, change: impl FnOnce(&mut Manifest)) {
+    let mut recorded = manifest(dir);
+    change(&mut recorded);
+    let bytes = serde_json::to_vec_pretty(&recorded).expect("the manifest writes as JSON");
+    std::fs::write(dir.join(MANIFEST_FILE), bytes).expect("the manifest is written");
 }
 
 /// Three CSV files of an output directory, as their text and as records of fields.
@@ -327,6 +344,19 @@ pub fn without_timing(mut runs: Vec<Vec<String>>) -> Vec<Vec<String>> {
         }
     }
     runs
+}
+
+/// Returns `manifest` with its clock readings cleared: when the sweep started and finished, and when each session
+/// started.
+pub fn without_clocks(mut manifest: Manifest) -> Manifest {
+    manifest.timestamps.started_unix_ms = 0;
+    manifest.timestamps.started.clear();
+    manifest.timestamps.finished_unix_ms = None;
+    manifest.timestamps.finished = None;
+    for session in &mut manifest.sessions {
+        session.started.clear();
+    }
+    manifest
 }
 
 /// Returns the positions of the timing columns in `header`, the header of a `runs.csv`.
@@ -432,7 +462,7 @@ pub fn ticks_seen(active_runs: impl Fn() -> Vec<ActiveRun>) -> BTreeMap<u64, BTr
 ///
 /// Panics when the spec cannot be planned or the probe fails.
 pub fn planned(entry: &ModelEntry, gpu: Option<&GpuContext>, spec: &SweepSpec) -> (Plan, Arc<MeasurePlan>) {
-    let plan = spec.plan(&model_schema(entry)).expect("a valid spec");
+    let plan = spec.plan(&entry.schema()).expect("a valid spec");
     let probe = ProbeReport::for_plan(entry, gpu, &plan).expect("the probe builds");
     let measure =
         MeasurePlan::new(plan.run_settings(), plan.measure_settings(), probe.columns).expect("the columns bind");

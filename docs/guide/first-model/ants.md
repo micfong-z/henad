@@ -9,7 +9,12 @@ icon: material/bug-outline
 In this tutorial we'll build the Ant Foraging model on the CPU from scratch, which automatically uses all available cores.
 This is classified as an **agent model** (as opposed from a **grid model**).
 
+!!! info "Henad 0.3"
+
+    This page describes Henad 0.3.
+
 This page assumes you have worked through our [CPU Grid Model](game-of-life.md) tutorial first.
+Every file on this page goes under `src/` in the same project, made from the template as [Your own project](../your-project.md) describes.
 
 ## What is Ant Foraging?
 
@@ -46,7 +51,13 @@ Assuming that you just built a [CPU Grid Model](game-of-life.md), here's a quick
 | Counting          | a pass over the grid in `stats`      | a per-chunk tally, merged as you go            |
 
 Let's set up.
-Make a directory called `crates/henad-models/src/foraging/`, containing `mod.rs` and `field.rs`.
+Make a directory called `src/foraging/`, containing `mod.rs` and `field.rs`, and declare the field's module at the top of `mod.rs`:
+
+``` rust title="src/foraging/mod.rs"
+pub mod field;
+```
+
+The module is `pub` because the [GPU port](gpu-ants.md) imports the field's items from it later.
 
 ## Agent states (lanes)
 
@@ -62,8 +73,8 @@ So what does an ant need to remember?
 It needs its position, the direction it last moved in, whether it is carrying food, and how much reward it has left to deposit.
 We can declare this in lane form as follows:
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
-use henad_compute::agent_lanes;
+``` { .rust .annotate title="src/foraging/mod.rs" }
+use henad::agent_lanes;
 
 /// No step taken yet, so momentum has nothing to continue.
 pub const NO_STEP: u8 = u8::MAX;
@@ -103,7 +114,7 @@ Buffering is decided per lane rather than per model, so a model that writes ever
 
 We have designated `color` to be `has_food`, which means that the engine will render the ants in the colour specified by the following palette, indexed by the `has_food` lane.
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
+``` rust title="src/foraging/mod.rs"
 pub const ANT_PALETTE: [[u8; 4]; 2] = [
     [0xE8, 0xE8, 0xF0, 0xFF], // searching
     [0x3D, 0xD5, 0x8C, 0xFF], // carrying food
@@ -120,7 +131,7 @@ A `ScalarField` is a set of `f32` grids that agents deposit into and that decay 
 Beside them sits one static terrain layer that never changes at all.
 For this model we want two pheromone grids, plus four marker values describing what occupies a cell of the terrain:
 
-``` rust title="crates/henad-models/src/foraging/field.rs"
+``` rust title="src/foraging/field.rs"
 pub const EMPTY: u8 = 0;
 pub const OBSTACLE: u8 = 1;
 pub const FOOD: u8 = 2;
@@ -132,15 +143,15 @@ pub const TO_HOME: usize = 1;
 
 !!! warning "Separate module must be used"
 
-    `henad_core::params!` generates a function named `descriptors()` into the module it expands in, which means a module can hold only one parameter list.
+    `henad::params!` generates a function named `descriptors()` into the module it expands in, which means a module can hold only one parameter list.
     A field layer declares parameters of its own, separately from the model above it, so it needs to be in a separate module.
 
 The field itself carries a single parameter, which controls how fast a trail fades:
 
-``` rust title="crates/henad-models/src/foraging/field.rs"
-use henad_core::helpers::{extract_f32, f32_param};
+``` rust title="src/foraging/field.rs"
+use henad::authoring::prelude::*;
 
-henad_core::params! {
+henad::params! {
     const EVAPORATION = f32_param("evaporation", "Evaporation", 0.999, 0.9, 1.0, Some(0.001));
 }
 ```
@@ -149,11 +160,7 @@ henad_core::params! {
 
 The `ScalarFieldSpec` trait specifies information about the field to the engine.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/field.rs" }
-use henad_compute::cpu::field::scalar::ScalarFieldSpec;
-use henad_compute::cpu::primitives::scatter::Combine;
-use henad_core::params::{ParamDescriptor, ParamValue};
-
+``` { .rust .annotate title="src/foraging/field.rs" }
 pub struct PheromoneField;
 
 pub struct FieldParams {
@@ -195,14 +202,15 @@ The terrain is specified by a single `u8` grid, which is static and never change
 This is built by the `build_sites` function once at construction.
 We will build two elliptical walls of obstacles, and place the nest and food source in the two corners of the world.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/field.rs" }
+``` { .rust .annotate title="src/foraging/field.rs" }
     fn build_sites(width: u32, height: u32, sites: &mut [u8]) {
+        sites.fill(EMPTY); // (1)!
         let (w, h) = (f64::from(width), f64::from(height));
-        let size = 0.407 * (200.0 / w); // (1)!
+        let size = 0.407 * (200.0 / w); // (2)!
         let blob = |x: f64, y: f64, cx: f64, cy: f64| -> bool {
             let a = ((x - cx) + (y - cy)) * size;
             let b = ((x - cx) - (y - cy)) * size;
-            a * a / 36.0 + b * b / 1024.0 <= 1.0 // (2)!
+            a * a / 36.0 + b * b / 1024.0 <= 1.0 // (3)!
         };
 
         for j in 0..height {
@@ -220,10 +228,11 @@ We will build two elliptical walls of obstacles, and place the nest and food sou
     }
 ```
 
-1. Every quantity here is a fraction of the world size rather than a pixel count, so that the grid size can stay a parameter and the same layout survives a resize.
-2. Each blob is a long, thin ellipse tilted 45 degrees, and the two of them form a pair of walls the colony has to find its way around.
+1. Every cell starts empty, and the walls and the two sites are written over it.
+2. Every quantity here is a fraction of the world size rather than a pixel count, so that the grid size can stay a parameter and the same layout survives a resize.
+3. Each blob is a long, thin ellipse tilted 45 degrees, and the two of them form a pair of walls the colony has to find its way around.
 
-``` rust title="crates/henad-models/src/foraging/field.rs"
+``` rust title="src/foraging/field.rs"
 pub fn nest_cell(width: u32, height: u32) -> usize {
     let x = (0.875 * width as f32) as u32;
     let y = (0.875 * height as f32) as u32;
@@ -241,7 +250,7 @@ pub fn food_cell(width: u32, height: u32) -> usize {
 
 Once the tick's deposits have merged in, `decay` deals with decay.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/field.rs" }
+``` { .rust .annotate title="src/foraging/field.rs" }
 pub const LOW_PHEROMONE: f32 = 1e-14;
 
     fn decay(v: f32, p: &FieldParams) -> f32 {
@@ -257,7 +266,7 @@ pub const LOW_PHEROMONE: f32 = 1e-14;
 
 Displaying the field is controlled by `quantize`, which maps the `f32` pheromone values to a palette index.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/field.rs" }
+``` { .rust .annotate title="src/foraging/field.rs" }
     fn quantize(site: u8, values: &[f32], out: &mut u8) {
         *out = match site {
             OBSTACLE => 13,
@@ -280,7 +289,7 @@ Displaying the field is controlled by `quantize`, which maps the `f32` pheromone
 
 The ramp itself is logarithmic because trails decay geometrically.
 
-``` rust title="crates/henad-models/src/foraging/field.rs"
+``` rust title="src/foraging/field.rs"
 const DISPLAY_DECADES: f32 = 3.0;
 const RAMP_STEPS: u8 = 6;
 
@@ -301,7 +310,7 @@ The palette holds sixteen entries, including a background colour, 6 blues for to
 
 ??? example "`CELL_PALETTE`"
 
-    ``` rust title="crates/henad-models/src/foraging/field.rs"
+    ``` rust title="src/foraging/field.rs"
     pub const CELL_PALETTE: [[u8; 4]; 16] = [
         [0x0E, 0x0E, 0x12, 0xFF], // 0  background
         [0x10, 0x1C, 0x30, 0xFF], // 1  to-home, faintest
@@ -328,8 +337,8 @@ That completes `field.rs`, and we can head back to `mod.rs`.
 
 This is very similar to [Implementing `GridModel`](game-of-life.md#implementing-gridmodel).
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_core::authoring::model::agent_model::AgentModel;
+``` rust title="src/foraging/mod.rs"
+use henad::authoring::prelude::*;
 
 pub struct ForagingModel;
 
@@ -341,7 +350,7 @@ We'll fill in that empty `impl` over the rest of this tutorial.
 
 ### Identity and Metadata
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
 impl AgentModel for ForagingModel {
     const NAME: &'static str = "Ant Foraging";
     const ID: &'static str = "foraging"; // (1)!
@@ -366,7 +375,7 @@ impl AgentModel for ForagingModel {
 }
 ```
 
-1. The shipped model already uses the id `ants`, and ids have to be unique across the registry.
+1. The example model already uses the id `ants`. A model set holds each id once, and our id differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
 2. The number of agents per chunk. There is more to say about this value [below](#deciding-on-chunk).
 3. The engine prepends agent count, world width and world height to the parameter list, and these three consts supply their defaults and the upper bound.
 4. `NoField` places agents in empty space, `ScalarField<S>` places the kind of field we just wrote, and `CaField<M>` (**C**ellular **a**utomata **Field**) places a whole grid model underneath a population as the underlying field.
@@ -374,20 +383,15 @@ impl AgentModel for ForagingModel {
 6. The hot parameters, extracted once per tick.
 7. A per-chunk reduction, merged in chunk order and accumulated across ticks. Use `()` for a model with nothing to count.
 
-Here are the other imports that `impl` relies on:
+The prelude holds every other name that `impl` relies on, and the field's own items take one more import:
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_compute::cpu::field::scalar::ScalarField;
-use henad_core::authoring::model::agent_model::{NoIndex, StepCtx};
-use henad_core::authoring::model::field::Extent;
-use henad_core::view::{StatDescriptor, StatValue};
-
+``` rust title="src/foraging/mod.rs"
 use self::field::{FOOD, HOME, OBSTACLE, PheromoneField, TO_FOOD, TO_HOME, nest_cell};
 ```
 
 We also need stat colours to match the three descriptors:
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
+``` rust title="src/foraging/mod.rs"
 pub const STAT_PALETTE: [[u8; 4]; 3] = [
     [0x3D, 0xD5, 0x8C, 0xFF], // carrying
     [0xF2, 0xE4, 0x5C, 0xFF], // deliveries
@@ -409,11 +413,8 @@ Ants gets away with 4096 because each ant does far more work per step than a boi
 
 The model declares 4 parameters, and all 4 apply live to a running simulation.
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_core::helpers::{extract_f32, f32_param};
-use henad_core::params::{ParamDescriptor, ParamValue};
-
-henad_core::params! {
+``` rust title="src/foraging/mod.rs"
+henad::params! {
     const UPDATE_CUTDOWN = f32_param("update_cutdown", "Trail Falloff", 0.9, 0.5, 1.0, Some(0.01));
     const REWARD = f32_param("reward", "Site Reward", 1.0, 0.1, 10.0, Some(0.1));
     const MOMENTUM = f32_param("momentum", "Momentum Probability", 0.8, 0.0, 1.0, Some(0.01));
@@ -422,10 +423,10 @@ henad_core::params! {
 ```
 
 The list an operator actually sees joins all three sources end to end.
-The shipped ants declares the same 8 parameters, so its output shows us what to expect:
+Here it is for our model:
 
-``` text title="cargo run -p henad-cli -- ants --params" hl_lines="2 3 4 9"
-parameters for ants (Ant Foraging):
+``` text title="cargo run --bin my-model-cli -- foraging --params" hl_lines="2 3 4 9"
+parameters for foraging (Ant Foraging):
   index=0 id=num_agents kind=u32 default=2000 min=1 max=5000000 apply=reload label="Number of Agents"
   index=1 id=world_width kind=f32 default=200 min=1 max=10000 apply=reload label="World Width"
   index=2 id=world_height kind=f32 default=200 min=1 max=10000 apply=reload label="World Height"
@@ -436,14 +437,14 @@ parameters for ants (Ant Foraging):
   index=7 id=evaporation kind=f32 default=0.999 min=0.9 max=1 apply=live label="Evaporation"
 ```
 
-The highlighted lines are the ones automatically generated by the model and its field.
+The highlighted lines are the ones the engine prepends and the one the field contributes.
 Each layer receives its own slice of the list, numbered from zero within that slice, which is why `REWARD` is parameter 1 inside the model and parameter 4 to the outside world.
 
 #### Hot parameters
 
 `from_params` runs once per tick, so it is the place to put anything a kernel would otherwise recompute for every agent.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
 pub struct AntParams {
     pub w: i32, // (1)!
     pub h: i32,
@@ -474,7 +475,7 @@ pub struct AntParams {
 
 Forwarding the descriptors follows the usual pattern:
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
+``` rust title="src/foraging/mod.rs"
     fn param_descriptors() -> Vec<ParamDescriptor> {
         descriptors()
     }
@@ -484,7 +485,7 @@ Forwarding the descriptors follows the usual pattern:
 
 For the first tick, `init` is called to fill the lanes.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
     fn init(lanes: &mut AntLanes, extent: Extent, params: &[ParamValue], _rng: &mut u64) {
         let (width, height) = extent.cells(); // (1)!
         let nest = nest_cell(width, height) as u32;
@@ -501,7 +502,7 @@ For the first tick, `init` is called to fill the lanes.
 1. The whole model shares one extent. `cells()` expresses that extent at one cell per unit.
 2. The ants need some initial reward to start depositing pheromone.
 
-Ants do not need random numbers during setup, which is why `_rng` remain unused here.
+Ants draw no random numbers during setup, and `_rng` stays unused here.
 
 ### Tick lifecycle
 
@@ -529,7 +530,7 @@ We'll write the second pass first, because the deposit pass makes more sense onc
 Now for the heart of the model, which takes the role `step_cell` played on the grid page.
 One ant makes one decision, with no knowledge that any other ant exists.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
 fn advect_agent(
     x: i32,
     y: i32,
@@ -625,7 +626,7 @@ fn advect_agent(
 
 The function relies on three small helpers, together with the `AntMove` struct it returns:
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
 #[inline]
 fn encode_step(dx: i32, dy: i32) -> u8 {
     ((dx + 1) * 3 + (dy + 1)) as u8 // (1)!
@@ -654,13 +655,13 @@ struct AntMove {
 ```
 
 1. The nine directions map onto `0..9`, which leaves `NO_STEP` at 255 well clear of every real encoding.
-2. Every candidate cell funnels through here, including both fallback paths above. Unlike every other model in the repository, ants plays on a bounded world, and forgetting the bounds check in one of the fallbacks is the easiest bug this page can produce.
+2. Every candidate cell funnels through here, including both fallback paths above. Unlike every other example model, ants plays on a bounded world, and forgetting the bounds check in one of the fallbacks is the easiest bug this page can produce.
 
 ##### Running it over the population
 
 The `run_pass` method, generated for us by `agent_lanes!`, handles most nuances of parallelism and random number seeding.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
 fn advect(lanes: &mut AntLanes, ctx: &StepCtx<'_, ForagingModel>, seed: u64, tick: u64) -> u64 {
     let p = ctx.params;
     let field = ctx.field;
@@ -689,11 +690,11 @@ fn advect(lanes: &mut AntLanes, ctx: &StepCtx<'_, ForagingModel>, seed: u64, tic
 }
 ```
 
-1. The closure takes five arguments: the global agent index, the index within the chunk, the read-only half of any `dual` lanes, this chunk's writable slice, and a random generator. Ants uses two of the five.
+1. The closure takes five arguments: the global agent index, the index within the chunk, the read-only half of any `dual` lanes, this chunk's writable slice, and a random generator. Ants uses three of the five.
 2. The closure returns this agent's contribution to the tally, and `run_pass` folds contributions within a chunk, then across chunks in chunk order.
 
-Under the hood, `run_pass` splits the lanes into chunks, hands each chunk a generator derived from `chunk_seed(seed, tick, chunk_index)`, and feeds our closure one agent at a time.
-A chunk's seed derives from its index alone, so which agent meets which random stream is deterministic and reproducible.
+Under the hood, `run_pass` splits the lanes into chunks, hands each chunk a generator seeded from the run's seed, the tick and the chunk's index, and feeds our closure one agent at a time.
+A chunk's seed derives from those three alone, so which agent meets which random stream is deterministic and reproducible.
 
 That leaves `ctx`, which bundles everything an agent kernel reads beyond its own lanes: the field, the neighbour index, the hot parameters and the extent.
 
@@ -705,7 +706,7 @@ Running the deposits as a separate pass keeps that guarantee intact.
 
 Rule 2 governs how much pheromone to lay, and it is subtler than it first sounds.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
 /// Largest pheromone in the 3x3 neighbourhood, cut down by distance and lifted by the reward.
 #[inline]
 fn deposit_value(x: i32, y: i32, reward: f32, field: &[f32], p: &AntParams) -> f32 {
@@ -734,7 +735,7 @@ It gathers the strongest pheromone within reach, cuts that down by distance, add
 
 The pass itself fills three lanes, in which each agent identifies one cell and stores one value per field.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
 fn deposit(lanes: &AntLanes, deposits: &mut Deposits, ctx: &StepCtx<'_, ForagingModel>) {
     let p = ctx.params;
     let (to_food, to_home) = (ctx.field.field(TO_FOOD), ctx.field.field(TO_HOME));
@@ -776,7 +777,7 @@ fn deposit(lanes: &AntLanes, deposits: &mut Deposits, ctx: &StepCtx<'_, Foraging
 
 Lastly, wire both passes into the trait:
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
+``` rust title="src/foraging/mod.rs"
     fn run_deposit_pass(lanes: &AntLanes, deposits: &mut Deposits, ctx: &StepCtx<'_, Self>) {
         deposit(lanes, deposits, ctx);
     }
@@ -788,20 +789,17 @@ Lastly, wire both passes into the trait:
 
 A single-pass model can omit `run_deposit_pass` entirely.
 
-These imports should now all be in place:
+The prelude holds the random draws, the grid helpers and the deposit types these passes use, and `for_each_chunk_mut!` needs one more import:
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_compute::cpu::field::scalar::{Deposits, ScalarRead};
-use henad_compute::for_each_chunk_mut;
-use henad_core::authoring::primitives::rng::{choice3, next_bits, next_float, reservoir_accept};
-use henad_core::authoring::primitives::space::{Boundary, MOORE_COLUMN_MAJOR, cell_index, offset_cell};
+``` rust title="src/foraging/mod.rs"
+use henad::for_each_chunk_mut;
 ```
 
 ### Statistics
 
 We have three statistics to report:
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
     fn stats(lanes: &AntLanes, field: &ScalarField<PheromoneField>, tally: &u64) -> Vec<StatValue> {
         let carrying = lanes.has_food.iter().filter(|&&f| f != 0).count(); // (1)!
         vec![
@@ -817,7 +815,7 @@ We have three statistics to report:
 
 Summing the field needs a bit of care as floats are involved.
 
-``` { .rust .annotate title="crates/henad-models/src/foraging/mod.rs" }
+``` { .rust .annotate title="src/foraging/mod.rs" }
 fn total_pheromone(to_food: &Grid2D<f32>, to_home: &Grid2D<f32>) -> f64 {
     field_sum(to_food.current()) + field_sum(to_home.current())
 }
@@ -835,27 +833,33 @@ fn field_sum(cells: &[f32]) -> f64 {
 
 1. Values widen to `f64` before summing, and the chunks fold in index order. Float addition is not associative, so a sum folded in whatever order chunks happened to finish would differ from machine to machine.
 
-``` rust title="crates/henad-models/src/foraging/mod.rs"
-use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
-use henad_core::grid::Grid2D;
-```
+`reduce_chunks`, `STATS_CHUNK` and `Grid2D` come from the prelude.
 
 ## Running it
 
-That finishes the model. Declare the module and register it, and then we can run it.
+That finishes the model.
+Declare the module and register it in `models()`, as we did for Life in [Running it](game-of-life.md#running-it), and then we can run it.
 
-``` rust title="crates/henad-models/src/lib.rs"
-pub mod foraging;
+``` rust title="src/lib.rs"
+mod foraging;
 ```
 
-``` rust title="crates/henad-models/src/registry.rs"
-register_agent_model::<crate::foraging::ForagingModel>(),
+The template's `src/lib.rs` imports only the grid registration functions so far, and we add the one for an agent model,
+
+``` rust title="src/lib.rs"
+use henad::authoring::register_agent_model;
+```
+
+then insert our model next to the others in `models()`:
+
+``` rust title="src/lib.rs"
+    models.insert(register_agent_model::<foraging::ForagingModel>())?;
 ```
 
 === "Desktop app"
 
     ``` bash
-    cargo run --release --bin henad-app
+    cargo run --release
     ```
 
     Pick Ant Foraging, press Build, and set it playing.
@@ -865,13 +869,13 @@ register_agent_model::<crate::foraging::ForagingModel>(),
 === "Headless"
 
     ``` bash
-    cargo run --release -p henad-cli -- foraging --steps 1000 --reps 3
+    cargo run --release --bin my-model-cli -- foraging --steps 1000 --reps 3
     ```
 
     To scale up, it is likely a good idea to keep the world area proportional to the agent count, so that density stays constant:
 
     ``` bash
-    cargo run --release -p henad-cli -- foraging \
+    cargo run --release --bin my-model-cli -- foraging \
       --set num_agents=1000000 --set world_width=4472 --set world_height=4472 \
       --steps 1000
     ```
@@ -879,10 +883,10 @@ register_agent_model::<crate::foraging::ForagingModel>(),
 === "Browser"
 
     ``` bash
-    ./scripts/build_web.sh serve --release
+    scripts/build_web.sh serve --release
     ```
 
-    Then open `http://localhost:8080`.
+    Then open `http://127.0.0.1:8081`.
     See [App tour](../app.md) for a quick overview of the UI.
 
 ## The finished files
@@ -892,18 +896,18 @@ For reference, here is everything we wrote on this page.
 ??? example "`foraging/mod.rs` completed"
 
     ``` rust
-    --8<-- "crates/henad-models/src/tests/tutorial/foraging/mod.rs"
+    --8<-- "examples/tutorial/src/foraging/mod.rs"
     ```
 
 ??? example "`foraging/field.rs` completed"
 
     ``` rust
-    --8<-- "crates/henad-models/src/tests/tutorial/foraging/field.rs"
+    --8<-- "examples/tutorial/src/foraging/field.rs"
     ```
 
-The listing above is stored in the repository at [`crates/henad-models/src/tests/tutorial/foraging/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/tests/tutorial/foraging/).
+The listing above is stored in the repository at [`examples/tutorial/src/foraging/`](https://github.com/micfong-z/henad/tree/master/examples/tutorial/src/foraging/).
 
-The actual default model is at [`crates/henad-models/src/ants/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/ants).
+The example model is at [`crates/henad-models/src/ants/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/ants).
 
 ## Next
 

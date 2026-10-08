@@ -1,0 +1,7 @@
+available models:
+  sir                SIR Epidemic
+  boids              Boids Flocking
+  game_of_life       Game of Life
+  ants               Ant Foraging
+  virus_network      Virus on a Network
+  team_assembly      Team Assembly

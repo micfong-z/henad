@@ -6,8 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Each event takes a group of its own. A push to `master` and the release checklist's dispatch on it would otherwise
+# cancel each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -37,16 +39,59 @@ jobs:
       - name: clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -W clippy::all
 
-      # Without atomics, so a `std::thread` reaching the web build fails here. henad-app is left
-      # out because `wasm-bindgen-rayon` refuses to compile without them, and the `web` job builds
-      # it the way it actually ships.
+      # Without atomics, so a `std::thread` reaching the web build fails here. henad-app then has
+      # no thread pool, as docs.rs builds it, and the `web` job builds it the way it actually ships.
       - name: wasm typecheck
-        run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-explore --all-features --lib --target wasm32-unknown-unknown
+        run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features --lib --target wasm32-unknown-unknown
 
-      # The release workflow runs this extractor on a tag push, where a parsing bug would surface
-      # at the worst possible moment.
-      - name: Changelog extractor
+      # The facade with no feature and with all four, without atomics, as docs.rs builds it. henad-cli sits behind a
+      # native target gate and never joins.
+      - name: Facade wasm typecheck
+        run: |
+          cargo check --locked -p henad --lib --target wasm32-unknown-unknown
+          cargo check --locked -p henad --all-features --lib --target wasm32-unknown-unknown
+
+      - name: Install nightly
+        run: |
+          rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+            --component rust-src,clippy --target wasm32-unknown-unknown
+
+      # The `cfg` branches only a threaded web build compiles. Stable never sets `target_feature = "atomics"`, and no
+      # build-std is needed to lint. A target directory of its own keeps the native cache valid.
+      - name: clippy with atomics
+        env:
+          CARGO_TARGET_DIR: target/clippy-atomics
+          RUSTFLAGS: -C target-feature=+atomics,+bulk-memory
+        run: |
+          export RUSTUP_TOOLCHAIN="$(cat templates/model-project/scripts/web-toolchain)"
+          cargo clippy --locked -p henad-app --target wasm32-unknown-unknown -- -D warnings -W clippy::all
+          cargo clippy --locked -p henad --features app,example-models --target wasm32-unknown-unknown \
+            -- -D warnings -W clippy::all
+
+      # The changelog extractor, the docs.rs driver and the docs frontmatter check. The release workflow runs the
+      # extractor on a tag push, where a parsing bug would surface at the worst possible moment.
+      - name: Scripts' tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      # Workspace versions, licence copies, paths that climb out of a crate, and the template's release profile.
+      - name: Packaging
+        run: ./scripts/check_packaging.sh
+
+      # GitHub never runs the template's workflow from here, so a mistake in it would otherwise ship in a release.
+      - name: actionlint over the template's workflows
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+        run: |
+          curl -sSfL --retry 5 \
+            "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xzf - -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" templates/model-project/.github/workflows/*.yml
+
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --locked
 
       # `docs/license.html` is committed and deploys with the docs site, so a dependency change
       # that never regenerated it would publish a stale attribution page. cargo-about resolves
@@ -89,46 +134,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev libssl-dev \
-            vulkan-tools
+            libxkbcommon-dev libssl-dev
 
-      # Nothing in the Ubuntu archive ships a lavapipe ICD any more (noble-updates moved to Mesa
-      # 25.2.8, which dropped it), so take the prebuilt Mesa wgpu's own CI runs on. Bumping the
-      # version needs a matching tag from https://github.com/gfx-rs/ci-build/releases.
+      # The script downstream projects run, which also prints the Vulkan summary.
       - name: Install lavapipe
         if: runner.os == 'Linux'
-        env:
-          MESA_VERSION: "26.1.3"
-          CI_BINARY_BUILD: "build29"
-        run: |
-          curl -L --retry 5 --fail \
-            "https://github.com/gfx-rs/ci-build/releases/download/$CI_BINARY_BUILD/mesa-$MESA_VERSION-linux-x86_64.tar.xz" \
-            -o "$RUNNER_TEMP/mesa.tar.xz"
-          mkdir -p "$RUNNER_TEMP/mesa"
-          tar xpf "$RUNNER_TEMP/mesa.tar.xz" -C "$RUNNER_TEMP/mesa"
-
-          lib_dir="$RUNNER_TEMP/mesa/lib/x86_64-linux-gnu"
-          test -f "$lib_dir/libvulkan_lvp.so"
-
-          # The bundled ICD hardcodes paths from the machine Mesa was built on.
-          cat > "$RUNNER_TEMP/icd.json" <<EOF
-          {
-            "ICD": {
-              "api_version": "1.4.348",
-              "library_arch": "64",
-              "library_path": "$lib_dir/libvulkan_lvp.so"
-            },
-            "file_format_version": "1.0.1"
-          }
-          EOF
-
-          echo "VK_DRIVER_FILES=$RUNNER_TEMP/icd.json" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-
-      # GITHUB_ENV only reaches later steps, so the check has to be its own.
-      - name: Vulkan summary
-        if: runner.os == 'Linux'
-        run: vulkaninfo --summary
+        run: templates/model-project/scripts/install-lavapipe.sh
 
       - uses: Swatinem/rust-cache@v2
 
@@ -142,6 +153,10 @@ jobs:
 
       - name: Doc tests
         run: cargo test --locked --workspace --doc
+
+      # The README program. The workspace's doc tests turn on neither feature and compile the short crate doc alone.
+      - name: Facade doc test
+        run: cargo test --locked -p henad --doc --features example-models,app
 
   ports:
     name: reference ports build
@@ -202,15 +217,319 @@ jobs:
       # Threads need a std rebuilt with atomics, which needs nightly and `rust-src`.
       - name: Install nightly
         run: |
-          rustup toolchain install nightly --profile minimal \
-            --component rust-src --target wasm32-unknown-unknown
+          rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+            --component rust-src,clippy --target wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
 
+      # Checked against the template's pin. The template's own workflow checks it too.
       - name: Install trunk
         run: |
-          curl -sSfL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
-            | tar -xzf - -C "$HOME/.cargo/bin"
+          version="$(cat templates/model-project/scripts/trunk-version)"
+          curl -sSfL --retry 5 -o "$RUNNER_TEMP/trunk.tar.gz" \
+            "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$(cat templates/model-project/scripts/trunk-sha256)  $RUNNER_TEMP/trunk.tar.gz" | sha256sum --check --quiet -
+          tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$HOME/.cargo/bin"
 
+      # Release, the build users deploy. Trunk runs `data-wasm-opt` only under `--release`.
       - name: Build
-        run: ./scripts/build_web.sh build
+        run: ./scripts/build_web.sh build --release
+
+      # The worker glue reaches the page through henad-app's re-export of `init_thread_pool`. Without it the thread
+      # pool cannot start, and the build still succeeds.
+      - name: Check the worker glue
+        run: |
+          grep -q wbg_rayon_start_worker dist/henad-app.js
+          grep -q initThreadPool dist/henad-app.js
+          ls dist/snippets/wasm-bindgen-rayon-*/src/workerHelpers.no-bundler.js
+
+  # The template, built against the crates as cargo packages them, in a copy outside any git work tree. The release
+  # checklist starts it before a publish. The wasm32 steps run on the template as shipped, `gpu_vote` included, before
+  # any step changes the copy.
+  downstream:
+    name: downstream template
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    # The steps grep cargo's log for a status word and a crate name together. A colour code would sit between them.
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install nightly
+        run: |
+          rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+            --component rust-src,clippy --target wasm32-unknown-unknown
+
+      # Checked against the template's pin. The template's own workflow checks it too.
+      - name: Install trunk
+        run: |
+          version="$(cat templates/model-project/scripts/trunk-version)"
+          curl -sSfL --retry 5 -o "$RUNNER_TEMP/trunk.tar.gz" \
+            "https://github.com/trunk-rs/trunk/releases/download/v$version/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$(cat templates/model-project/scripts/trunk-sha256)  $RUNNER_TEMP/trunk.tar.gz" | sha256sum --check --quiet -
+          tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$HOME/.cargo/bin"
+
+      - name: Install lavapipe
+        run: templates/model-project/scripts/install-lavapipe.sh
+
+      # The verified packaging of the release checklist. Each pass takes a fresh target directory. A reused one keeps an
+      # earlier extraction of the same version, and verifies the new crates against it.
+      - name: Package and verify
+        run: |
+          CARGO_TARGET_DIR="$RUNNER_TEMP/verify" cargo package --workspace --exclude henad-tutorial --locked
+          CARGO_TARGET_DIR="$RUNNER_TEMP/verify-features" cargo package --workspace --exclude henad-tutorial --locked \
+            --features henad/example-models,henad/app,henad/cli,henad/testing
+          # The later steps read only the unpacked crates under `verify/package`. The two builds would hold several
+          # gigabytes of the runner's disk while the template builds.
+          rm -rf "$RUNNER_TEMP/verify/debug" "$RUNNER_TEMP/verify-features"
+          df -h "$RUNNER_TEMP"
+
+      # The template ships no lock, and a lock resolved before the patch would no longer match it.
+      - name: Copy the template onto the packaged crates
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[] | select(.name == "henad") | .version')"
+          cp -R templates/model-project "$RUNNER_TEMP/my-model"
+          cd "$RUNNER_TEMP/my-model"
+          sed -E "s/^(henad(-build)? = (\{ version = )?)\"[^\"]*\"/\1\"=$version\"/" Cargo.toml > Cargo.toml.patched
+          mv Cargo.toml.patched Cargo.toml
+          test "$(grep -c "\"=$version\"" Cargo.toml)" -eq 3
+          {
+            echo
+            echo "[patch.crates-io]"
+            for crate in henad henad-build henad-core henad-compute henad-explore henad-app henad-cli; do
+              echo "$crate = { path = \"$RUNNER_TEMP/verify/package/$crate-$version\" }"
+            done
+          } >> Cargo.toml
+          cargo generate-lockfile
+
+      # An unused patch entry only prints a warning, and the job would then test the previous release from crates.io.
+      - name: The patch is used
+        working-directory: ${{ runner.temp }}/my-model
+        run: |
+          cargo metadata --format-version 1 --locked | jq -e '
+            [.packages[] | select(.name | startswith("henad"))]
+            | (map(.name) | index("henad") != null and index("henad-build") != null) and all(.source == null)'
+
+      # `cargo tree -i henad-models` would exit 101 when the package is correctly absent.
+      - name: henad-models is absent
+        working-directory: ${{ runner.temp }}/my-model
+        run: |
+          cargo metadata --format-version 1 --locked \
+            | jq -e '[.packages[].name | select(. == "henad-models")] | length == 0'
+
+      # In place of `scripts/ci.sh lint`. The strict lints catch everything the plain pass does, and the template's own
+      # items are `pub(crate)`.
+      - name: Strict clippy
+        working-directory: ${{ runner.temp }}/my-model
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings -D unreachable_pub -D unused_qualifications
+
+      - name: Test
+        working-directory: ${{ runner.temp }}/my-model
+        env:
+          HENAD_REQUIRE_GPU: "1"
+        run: scripts/ci.sh test
+
+      - name: A second build does nothing
+        working-directory: ${{ runner.temp }}/my-model
+        run: |
+          set -o pipefail
+          cargo build -v --locked
+          cargo build -v --locked 2>&1 | tee "$RUNNER_TEMP/second-build.log"
+          if grep -E 'Dirty|Compiling|Running' "$RUNNER_TEMP/second-build.log"; then
+            echo "::error::The second build rebuilt a crate or reran a build script."
+            exit 1
+          fi
+
+      # The library without the app, as a consumer takes it. The empty value keeps the template's atomics flags out.
+      - name: wasm32 library without the app
+        working-directory: ${{ runner.temp }}/my-model
+        env:
+          RUSTFLAGS: ""
+        run: cargo check --locked --lib --no-default-features --target wasm32-unknown-unknown
+
+      - name: Lint the web build
+        working-directory: ${{ runner.temp }}/my-model
+        run: scripts/ci.sh lint-web
+
+      - name: The web build refuses an inherited RUSTFLAGS
+        working-directory: ${{ runner.temp }}/my-model
+        run: |
+          if RUSTFLAGS='-C opt-level=1' scripts/build_web.sh build > "$RUNNER_TEMP/refusal.log" 2>&1; then
+            echo "::error::scripts/build_web.sh ran with RUSTFLAGS set."
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/refusal.log"
+          grep -q '\.cargo/config\.toml' "$RUNNER_TEMP/refusal.log"
+          test ! -e dist
+
+      - name: Web build
+        working-directory: ${{ runner.temp }}/my-model
+        run: scripts/ci.sh web
+
+      # The first step that changes the copy, after every wasm32 step.
+      - name: A model edit recompiles the template alone
+        working-directory: ${{ runner.temp }}/my-model
+        run: |
+          set -o pipefail
+          echo '// An edit that changes no item.' >> src/vote.rs
+          cargo build -v --locked 2>&1 | tee "$RUNNER_TEMP/edit-build.log"
+          if grep -E '(Dirty|Compiling) henad' "$RUNNER_TEMP/edit-build.log"; then
+            echo "::error::A model edit rebuilt a henad crate."
+            exit 1
+          fi
+          grep -q 'Compiling my-model' "$RUNNER_TEMP/edit-build.log"
+
+      - name: A shader added between builds
+        working-directory: ${{ runner.temp }}/my-model
+        run: |
+          mkdir src/probe
+          printf '%s\n' \
+            '@group(0) @binding(0) var<storage, read_write> values: array<u32>;' \
+            '' \
+            '@compute' \
+            '@workgroup_size(64)' \
+            'fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {' \
+            '    values[global_id.x] = global_id.x;' \
+            '}' > src/probe/unused.wgsl
+          cargo build --locked
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          grep -q 'pub mod probe' target/debug/build/my-model-*/out/shader_bindings.rs
+          grep -q 'PROBE_UNUSED' target/debug/build/my-model-*/out/binding_decls.rs
+
+      - name: CLI dry run
+        working-directory: ${{ runner.temp }}/my-model
+        run: cargo run --locked --bin my-model-cli -- --spec specs/vote.toml --out runs --dry-run
+
+      # Outside any git work tree, the resume compares the models' source hashes.
+      - name: A CPU-only crate sweeps and resumes with no BuildChanged
+        working-directory: ${{ runner.temp }}/my-model
+        run: |
+          set -o pipefail
+          rm -r src/gpu_vote src/probe
+          sed -i.orig -e '/^mod gpu_vote;$/d' -e '/^henad::include_shaders!();$/d' -e '/register_gpu_grid_model/d' src/lib.rs
+          sed -i.orig -e '/ShaderBuild::discover/d' build.rs
+          rm src/lib.rs.orig build.rs.orig
+          grep -q 'stamp_commit' build.rs
+          cargo build --locked
+          sweep=(vote --set grid_width=64 --set grid_height=64 --vary "density=0.4,0.6" --steps 20)
+          target/debug/my-model-cli "${sweep[@]}" --reps 1 --out "$RUNNER_TEMP/sweep"
+          target/debug/my-model-cli "${sweep[@]}" --reps 2 --out "$RUNNER_TEMP/sweep" --resume --json \
+            | tee "$RUNNER_TEMP/resume.jsonl"
+          if jq -R -c 'fromjson? | select(.kind == "explore_warning" and .warning == "build_changed")' \
+              "$RUNNER_TEMP/resume.jsonl" | grep .; then
+            echo "::error::The resume warned that the build changed."
+            exit 1
+          fi
+          test "$(tail -n +2 "$RUNNER_TEMP/sweep/runs.csv" | wc -l)" -eq 4
+
+  # Packages every crate without building it, which catches a manifest that cargo refuses.
+  package:
+    name: cargo package
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    # The paths filter lists a pull request's files through the REST API, which needs `pull-requests: read`.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dorny/paths-filter@v3
+        id: manifests
+        with:
+          filters: |
+            changed:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/*/Cargo.toml'
+
+      - name: Package
+        if: steps.manifests.outputs.changed == 'true'
+        run: cargo package --workspace --exclude henad-tutorial --no-verify --locked
+
+  # Every feature of the facade builds alone, so none leans on another for an item it names. A pull request and the
+  # release checklist's dispatch run it.
+  features:
+    name: facade features
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # `app` links eframe, which needs the X11 and xkb libraries.
+      - name: Install eframe build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check
+        run: |
+          cargo check --locked -p henad
+          for feature in example-models app cli testing; do
+            cargo check --locked -p henad --features "$feature"
+          done
+
+  # Holds the declared `rust-version` true. A pull request and the release checklist's dispatch run it.
+  msrv:
+    name: msrv
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install eframe build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev
+
+      - name: Install 1.95
+        run: rustup toolchain install 1.95 --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `--workspace` turns on none of the facade's features, and leaves out the testing kit every template project
+      # builds in its tests.
+      - name: Check
+        run: |
+          cargo +1.95 check --workspace --locked
+          cargo +1.95 check --locked -p henad --features example-models,app,cli,testing
+
+  # The workspace's documentation, and every published crate's as docs.rs builds it. A pull request and the release
+  # checklist's dispatch run it.
+  docs:
+    name: docs
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install eframe build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev
+
+      - name: Install nightly
+        run: |
+          rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
+            --component rust-src,clippy --target wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Workspace docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps --all-features
+
+      # Each crate on every target of its `[package.metadata.docs.rs]` table, with that table's features and flags,
+      # on the pinned nightly.
+      - name: docs.rs builds
+        run: python3 scripts/docs_rs.py

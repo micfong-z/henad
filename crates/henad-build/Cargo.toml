@@ -1,0 +1,25 @@
+[package]
+name = "henad-build"
+version.workspace = true
+description = "Build-script support for Henad model crates: build stamps, and shader bindings generated from WGSL."
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/henad-build"
+readme = "README.md"
+keywords = ["agent-based-model", "wgsl", "build-script", "wgpu", "shader"]
+categories = ["simulation", "development-tools::build-utils"]
+
+[dependencies]
+henad-core = { workspace = true }
+heck = { workspace = true }
+wgsl_bindgen = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]

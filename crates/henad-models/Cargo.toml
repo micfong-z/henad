@@ -1,32 +1,42 @@
 [package]
 name = "henad-models"
 version.workspace = true
-description = "Henad default models."
+description = "Example models for Henad, a parallel agent-based modelling engine."
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
-readme.workspace = true
+documentation = "https://docs.rs/henad-models"
+readme = "README.md"
+keywords = ["agent-based-model", "simulation", "boids", "epidemic", "game-of-life"]
+categories = ["simulation", "science"]
+# The consistency tests and their reference fixtures stay in the repository.
+exclude = ["/tests/"]
 
 [dependencies]
 henad-core = { workspace = true }
 henad-compute = { workspace = true }
-wgpu = { workspace = true }
 bytemuck = { workspace = true }
 
 [build-dependencies]
-wgsl_bindgen = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rayon = { workspace = true }
+henad-build = { workspace = true }
 
 [dev-dependencies]
-pollster = { workspace = true }
+# A path alone, so the published package carries no requirement on henad-explore. The kit's checks run over the
+# example models, and henad-explore's tests build them in turn. The package's own tests name henad-explore, and do
+# not build from the package.
+henad-explore = { path = "../henad-explore", features = ["testing"] }
+rayon = { workspace = true }
 flume = { workspace = true }
 log = { workspace = true }
+wgpu = { workspace = true }
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+rustdoc-args = ["--cfg", "docsrs"]

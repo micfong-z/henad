@@ -9,7 +9,16 @@
 //! them the same way. Each is written in full beside the original with a `.staged` suffix, then a marker file says
 //! both are complete, then both are renamed into place and the marker is removed. A process that ends between the
 //! marker and its removal leaves the replacement for [`OutputDir::open`] to finish.
+//!
+//! A writer holds the operating system's advisory lock on the file [`LOCK_FILE`] while it writes, and a second writer
+//! is refused. A resume takes the lock before it reads the tables and holds it until its last write. The file stays
+//! in the directory when the writer ends, and the next writer locks it again. The lock goes with the process that
+//! holds it, a killed one included.
+//!
+//! A writer creates afresh each file it replaces. It appends to `runs.csv` and `series.csv`, and cuts them, only after
+//! [`OutputDir::open`] has refused either as a symbolic link.
 
+pub mod details;
 pub mod manifest;
 pub mod memory;
 pub mod read;
@@ -20,7 +29,7 @@ pub mod series_csv;
 pub mod summary_csv;
 
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -60,6 +69,9 @@ const RESULT_FILES: [&str; 9] = [
     GENERATIONS_FILE,
 ];
 
+/// File a writer locks while it writes to an output directory.
+pub const LOCK_FILE: &str = ".lock";
+
 /// Suffix of a table written in full to replace the one it names.
 const STAGED_SUFFIX: &str = ".staged";
 
@@ -74,7 +86,7 @@ fn staged_path(dir: &Path, file: &str) -> PathBuf {
 /// Returns the paths of `runs.csv` and `series.csv` in the directory at `path`, as they stand.
 ///
 /// A staged table stands in for its original while a replacement waits to be finished.
-pub fn table_paths(path: &Path) -> (PathBuf, PathBuf) {
+pub(crate) fn table_paths(path: &Path) -> (PathBuf, PathBuf) {
     let complete = path.join(STAGED_MARKER).exists();
     let current = |file: &str| {
         let staged = staged_path(path, file);
@@ -87,14 +99,20 @@ pub fn table_paths(path: &Path) -> (PathBuf, PathBuf) {
     (current(RUNS_FILE), current(SERIES_FILE))
 }
 
-/// A directory that holds, or is about to hold, the results of one sweep.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A directory that holds, or is about to hold, the results of one sweep, locked against other writers.
+///
+/// The lock is released when the value is dropped.
+#[derive(Debug)]
 pub struct OutputDir {
     path: PathBuf,
+    #[expect(dead_code, reason = "held for its drop, which releases the lock")]
+    lock: DirLock,
 }
 
 impl OutputDir {
     /// Checks that the directory at `path` holds no results, without creating it.
+    ///
+    /// A symbolic link under the name of a file counts as that file, even one that points nowhere.
     ///
     /// # Errors
     ///
@@ -107,7 +125,10 @@ impl OutputDir {
                 file,
             })
         };
-        if let Some(&file) = RESULT_FILES.iter().find(|&&file| path.join(file).exists()) {
+        if let Some(&file) = RESULT_FILES
+            .iter()
+            .find(|&&file| std::fs::symlink_metadata(path.join(file)).is_ok())
+        {
             return holds_results(file.to_owned());
         }
         // A staged table can stand in for its original, as `table_paths` reads the directory.
@@ -123,16 +144,24 @@ impl OutputDir {
         }
     }
 
-    /// Creates the directory at `path` and its parents, or takes an existing directory that holds no results.
+    /// Creates the directory at `path` and its parents, or takes an existing directory that holds no results, and
+    /// locks it.
     ///
     /// # Errors
     ///
-    /// Returns [`OutputError::HoldsResults`] when the directory holds a file a sweep or a search writes, and
-    /// [`OutputError::Write`] when it cannot be created.
+    /// Returns [`OutputError::HoldsResults`] when the directory holds a file a sweep or a search writes,
+    /// [`OutputError::Locked`] when another writer holds its lock, and [`OutputError::Write`] when it cannot be
+    /// created.
     pub fn create(path: &Path) -> Result<Self, OutputError> {
         Self::check_free(path)?;
         std::fs::create_dir_all(path).map_err(write_error_at(path))?;
-        Ok(Self { path: path.to_owned() })
+        let dir = Self {
+            path: path.to_owned(),
+            lock: DirLock::acquire(path)?,
+        };
+        // Checked again under the lock. Another writer could have finished between the first check and the lock.
+        Self::check_free(path)?;
+        Ok(dir)
     }
 
     /// Returns whether the directory at `path` holds a file a sweep or a search writes.
@@ -140,15 +169,44 @@ impl OutputDir {
         Self::check_free(path).is_err()
     }
 
-    /// Takes the existing directory at `path`, finishing a replacement of its tables that a process left behind.
+    /// Takes and locks the existing directory at `path`, finishing a replacement of its tables that a process left
+    /// behind.
     ///
     /// # Errors
     ///
-    /// Returns [`OutputError::Write`] when the replacement cannot be finished or discarded.
+    /// Returns [`OutputError::Locked`] when another writer holds the directory's lock, [`OutputError::Link`] when
+    /// `runs.csv` or `series.csv` is a symbolic link, and [`OutputError::Write`] when the replacement cannot be
+    /// finished or discarded.
     pub fn open(path: &Path) -> Result<Self, OutputError> {
-        let dir = Self { path: path.to_owned() };
+        let dir = Self {
+            path: path.to_owned(),
+            lock: DirLock::acquire(path)?,
+        };
         dir.finish_staged()?;
+        // A resume appends to both tables and cuts them, and either would follow a link.
+        for file in [RUNS_FILE, SERIES_FILE] {
+            let table = path.join(file);
+            if std::fs::symlink_metadata(&table).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+                return Err(OutputError::Link { path: table });
+            }
+        }
         Ok(dir)
+    }
+
+    /// Checks that no writer holds the lock of the directory at `path`, without taking it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputError::Locked`] when another writer holds the lock.
+    pub fn check_unlocked(path: &Path) -> Result<(), OutputError> {
+        // A directory or a lock file that is missing is unlocked. The check never creates either.
+        let Ok(file) = File::open(path.join(LOCK_FILE)) else {
+            return Ok(());
+        };
+        match file.try_lock_shared() {
+            Err(TryLockError::WouldBlock) => Err(OutputError::Locked { dir: path.to_owned() }),
+            Ok(()) | Err(TryLockError::Error(_)) => Ok(()),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -218,7 +276,7 @@ impl OutputDir {
         self.write_staged(RUNS_FILE, write_runs)?;
         self.write_staged(SERIES_FILE, write_series)?;
         let marker = self.path.join(STAGED_MARKER);
-        File::create(&marker)
+        create_fresh(&marker)
             .and_then(|file| file.sync_all())
             .map_err(write_error_at(&marker))?;
         self.finish_staged()
@@ -231,7 +289,7 @@ impl OutputDir {
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
     ) -> Result<(), OutputError> {
         let path = staged_path(&self.path, file);
-        let staged = File::create(&path).map_err(write_error_at(&path))?;
+        let staged = create_fresh(&path).map_err(write_error_at(&path))?;
         let mut writer = BufWriter::new(staged);
         write(&mut writer).map_err(write_error_at(&path))?;
         let staged = writer
@@ -247,7 +305,8 @@ impl OutputDir {
         let complete = marker.exists();
         for file in [RUNS_FILE, SERIES_FILE] {
             let staged = staged_path(&self.path, file);
-            if !staged.exists() {
+            // A link that points nowhere is a staged table to remove as well.
+            if std::fs::symlink_metadata(&staged).is_err() {
                 continue;
             }
             if complete {
@@ -305,14 +364,14 @@ impl OutputDir {
         )
     }
 
-    /// Creates the table `file`, emptying one that exists, and returns a buffered writer over it.
+    /// Creates the table `file` afresh, removing one that exists, and returns a buffered writer over it.
     ///
     /// # Errors
     ///
-    /// Returns [`OutputError::Write`] when the file cannot be created.
+    /// Returns [`OutputError::Write`] when the file cannot be removed or created.
     pub fn create_table(&self, file: &str) -> Result<BufWriter<File>, OutputError> {
         let path = self.path.join(file);
-        File::create(&path).map(BufWriter::new).map_err(write_error_at(&path))
+        create_fresh(&path).map(BufWriter::new).map_err(write_error_at(&path))
     }
 
     /// Writes `manifest` to `manifest.json`. An earlier manifest is replaced by a single rename, so a reader sees
@@ -325,10 +384,12 @@ impl OutputDir {
     pub fn write_manifest(&self, manifest: &Manifest) -> Result<(), OutputError> {
         let text = manifest_text(manifest)?;
         let partial = self.path.join(format!("{MANIFEST_FILE}.partial"));
-        let mut file = File::create(&partial).map_err(write_error_at(&partial))?;
-        file.write_all(text.as_bytes()).map_err(write_error_at(&partial))?;
-        file.sync_all().map_err(write_error_at(&partial))?;
-        drop(file);
+        // The file closes at the end of the block, before the rename.
+        {
+            let mut file = create_fresh(&partial).map_err(write_error_at(&partial))?;
+            file.write_all(text.as_bytes()).map_err(write_error_at(&partial))?;
+            file.sync_all().map_err(write_error_at(&partial))?;
+        }
         let manifest_path = self.path.join(MANIFEST_FILE);
         std::fs::rename(&partial, &manifest_path).map_err(write_error_at(&manifest_path))
     }
@@ -347,7 +408,7 @@ impl OutputDir {
         };
         let runs = File::open(&runs_path).map_err(read_error)?;
         let summary_path = self.path.join(SUMMARY_FILE);
-        let summary = File::create(&summary_path).map_err(write_error_at(&summary_path))?;
+        let summary = create_fresh(&summary_path).map_err(write_error_at(&summary_path))?;
         match write_summary(BufReader::new(runs), BufWriter::new(summary)) {
             Ok(_) => Ok(()),
             Err(SummaryError::Read(source)) => Err(read_error(source)),
@@ -362,7 +423,7 @@ impl OutputDir {
 /// # Errors
 ///
 /// Returns [`OutputError::Manifest`] when the manifest cannot be serialized.
-pub fn manifest_text(manifest: &Manifest) -> Result<String, OutputError> {
+pub(crate) fn manifest_text(manifest: &Manifest) -> Result<String, OutputError> {
     let mut text = serde_json::to_string_pretty(manifest).map_err(OutputError::Manifest)?;
     text.push('\n');
     Ok(text)
@@ -374,10 +435,69 @@ fn write_error_at(path: &Path) -> impl FnOnce(io::Error) -> OutputError + use<> 
     move |source| OutputError::Write { path, source }
 }
 
+/// Creates the file at `path` afresh. A file or a symbolic link already there is removed first, never followed.
+///
+/// # Errors
+///
+/// Returns the error of the removal or the creation.
+fn create_fresh(path: &Path) -> io::Result<File> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    File::create_new(path)
+}
+
+/// Advisory lock a writer holds on [`LOCK_FILE`] of an output directory, released when dropped.
+///
+/// Note that the file stays in the directory. Were it removed, a writer that had it open could lock the removed file
+/// while another writer locks a new one.
+#[derive(Debug)]
+struct DirLock {
+    /// File the lock is held on.
+    file: File,
+}
+
+impl DirLock {
+    /// Locks the directory at `dir`, creating its lock file when missing.
+    ///
+    /// Note that a filesystem without file locks, as some network filesystems are, leaves the directory unguarded.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputError::Locked`] when another writer holds the lock, and [`OutputError::Write`] when the lock
+    /// file cannot be opened.
+    fn acquire(dir: &Path) -> Result<Self, OutputError> {
+        let path = dir.join(LOCK_FILE);
+        if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            std::fs::remove_file(&path).map_err(write_error_at(&path))?;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(write_error_at(&path))?;
+        match file.try_lock() {
+            Err(TryLockError::WouldBlock) => Err(OutputError::Locked { dir: dir.to_owned() }),
+            Ok(()) | Err(TryLockError::Error(_)) => Ok(Self { file }),
+        }
+    }
+}
+
+impl Drop for DirLock {
+    /// Releases the lock before the file closes.
+    fn drop(&mut self) {
+        drop(self.file.unlock());
+    }
+}
+
 /// Sink that streams each committed run to `runs.csv` and `series.csv`, and counts the rows by status.
 ///
 /// A run's series is written and flushed before its row in `runs.csv`, so every run in `runs.csv` has its whole
 /// series written.
+#[derive(Debug)]
 pub struct OutputWriter<W: Write> {
     plan: Arc<Plan>,
     runs: RunsWriter<W>,
@@ -474,6 +594,10 @@ impl<W: Write> RunSink for OutputWriter<W> {
 pub enum OutputError {
     /// Directory `dir` holds `file` from an earlier sweep or search.
     HoldsResults { dir: PathBuf, file: String },
+    /// Another sweep, search or merge holds the lock of directory `dir` and writes to it.
+    Locked { dir: PathBuf },
+    /// The table at `path` is a symbolic link. A writer never follows one.
+    Link { path: PathBuf },
     /// Reading `path` failed.
     Read { path: PathBuf, source: io::Error },
     /// Creating or writing `path` failed.
@@ -492,6 +616,16 @@ impl fmt::Display for OutputError {
             Self::HoldsResults { dir, file } => {
                 write!(f, "'{}' already holds results ({file})", dir.display())
             }
+            Self::Locked { dir } => write!(
+                f,
+                "another sweep, search or merge is writing to '{}'. Wait for it to end, or stop it",
+                dir.display()
+            ),
+            Self::Link { path } => write!(
+                f,
+                "'{}' is a symbolic link. A sweep writes to no table through a link",
+                path.display()
+            ),
             Self::Read { path, .. } => write!(f, "cannot read '{}'", path.display()),
             Self::Write { path, .. } => write!(f, "cannot create or write '{}'", path.display()),
             Self::Table(_) => f.write_str("cannot read a table back"),
@@ -504,7 +638,7 @@ impl fmt::Display for OutputError {
 impl std::error::Error for OutputError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::HoldsResults { .. } => None,
+            Self::HoldsResults { .. } | Self::Locked { .. } | Self::Link { .. } => None,
             Self::Read { source, .. } | Self::Write { source, .. } => Some(source),
             Self::Table(error) => Some(error),
             Self::Summary(error) => Some(error),
@@ -518,51 +652,117 @@ mod tests {
     use std::fs;
 
     use super::{
-        MANIFEST_FILE, OutputDir, OutputError, RUNS_FILE, SERIES_FILE, STAGED_MARKER, staged_path, table_paths,
+        LOCK_FILE, MANIFEST_FILE, OutputDir, OutputError, RUNS_FILE, SERIES_FILE, STAGED_MARKER, staged_path,
+        table_paths,
     };
     use crate::tests::support::ScratchDir;
 
     #[test]
     fn a_replacement_cut_short_is_finished_once_both_tables_are_staged() {
         let scratch = ScratchDir::new("staged-tables");
-        let dir = OutputDir::create(scratch.path()).expect("a scratch directory");
+        drop(OutputDir::create(scratch.path()).expect("a scratch directory"));
+        let path = scratch.path();
         for file in [RUNS_FILE, SERIES_FILE] {
-            fs::write(dir.path().join(file), "old\n").expect("a table writes");
-            fs::write(staged_path(dir.path(), file), "new\n").expect("a staged table writes");
+            fs::write(path.join(file), "old\n").expect("a table writes");
+            fs::write(staged_path(path, file), "new\n").expect("a staged table writes");
         }
-        assert_eq!(
-            table_paths(dir.path()).0,
-            dir.path().join(RUNS_FILE),
-            "no marker, no replacement"
-        );
-        OutputDir::open(dir.path()).expect("the directory opens");
+        assert_eq!(table_paths(path).0, path.join(RUNS_FILE), "no marker, no replacement");
+        drop(OutputDir::open(path).expect("the directory opens"));
         for file in [RUNS_FILE, SERIES_FILE] {
-            assert_eq!(
-                fs::read_to_string(dir.path().join(file)).expect("a table reads"),
-                "old\n"
-            );
+            assert_eq!(fs::read_to_string(path.join(file)).expect("a table reads"), "old\n");
             assert!(
-                !staged_path(dir.path(), file).exists(),
+                !staged_path(path, file).exists(),
                 "a staged table without the marker is dropped"
             );
         }
 
         // The process ended after moving runs.csv into place and before series.csv.
-        fs::write(staged_path(dir.path(), SERIES_FILE), "new\n").expect("a staged table writes");
-        fs::write(dir.path().join(RUNS_FILE), "new\n").expect("a table writes");
-        fs::write(dir.path().join(STAGED_MARKER), "").expect("the marker writes");
+        fs::write(staged_path(path, SERIES_FILE), "new\n").expect("a staged table writes");
+        fs::write(path.join(RUNS_FILE), "new\n").expect("a table writes");
+        fs::write(path.join(STAGED_MARKER), "").expect("the marker writes");
         assert_eq!(
-            table_paths(dir.path()),
-            (dir.path().join(RUNS_FILE), staged_path(dir.path(), SERIES_FILE))
+            table_paths(path),
+            (path.join(RUNS_FILE), staged_path(path, SERIES_FILE))
         );
-        OutputDir::open(dir.path()).expect("the directory opens");
+        drop(OutputDir::open(path).expect("the directory opens"));
         for file in [RUNS_FILE, SERIES_FILE] {
-            assert_eq!(
-                fs::read_to_string(dir.path().join(file)).expect("a table reads"),
-                "new\n"
-            );
+            assert_eq!(fs::read_to_string(path.join(file)).expect("a table reads"), "new\n");
         }
-        assert!(!dir.path().join(STAGED_MARKER).exists());
+        assert!(!path.join(STAGED_MARKER).exists());
+    }
+
+    #[test]
+    fn a_second_writer_is_refused_while_the_first_holds_the_lock() {
+        let scratch = ScratchDir::new("locked-directory");
+        let path = scratch.path();
+        let first = OutputDir::create(path).expect("a scratch directory");
+        assert!(path.join(LOCK_FILE).exists(), "the writer holds the lock file");
+        for second in [OutputDir::open(path), OutputDir::create(path)] {
+            assert!(matches!(second, Err(OutputError::Locked { .. })), "{second:?}");
+        }
+        assert!(matches!(
+            OutputDir::check_unlocked(path),
+            Err(OutputError::Locked { .. })
+        ));
+        drop(first);
+        assert!(path.join(LOCK_FILE).exists(), "the writer leaves its lock file");
+        assert!(OutputDir::check_unlocked(path).is_ok());
+        let next = OutputDir::open(path).expect("the next writer locks the file again");
+        assert!(matches!(OutputDir::open(path), Err(OutputError::Locked { .. })));
+        drop(next);
+
+        // A killed process leaves its lock file behind, and the lock goes with the process.
+        fs::write(path.join(LOCK_FILE), "").expect("a stale lock file writes");
+        assert!(OutputDir::check_unlocked(path).is_ok());
+        drop(OutputDir::open(path).expect("a stale lock file is taken over"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writer_follows_no_link_in_its_directory() {
+        use std::os::unix::fs::symlink;
+
+        use henad_core::explore::spec::SweepSpec;
+
+        use super::SUMMARY_FILE;
+        use crate::exec::Concurrency;
+        use crate::tests::support::{entry, sweep};
+
+        let scratch = ScratchDir::new("planted-links");
+        fs::create_dir_all(scratch.path()).expect("a scratch directory");
+        let victim = scratch.path().join("victim.txt");
+        fs::write(&victim, "kept\n").expect("a scratch file");
+        let path = scratch.path().join("out");
+        fs::create_dir(&path).expect("a scratch directory");
+
+        symlink(&victim, path.join(format!("{MANIFEST_FILE}.partial"))).expect("a link");
+        symlink(&victim, path.join(LOCK_FILE)).expect("a link");
+        let mut spec = SweepSpec::new("game_of_life");
+        spec.fixed = vec![
+            ("grid_width".to_owned(), "8".to_owned()),
+            ("grid_height".to_owned(), "8".to_owned()),
+        ];
+        spec.run.steps = 2;
+        sweep(&entry("game_of_life", None), None, &spec, &path, Concurrency::Auto);
+        assert_eq!(fs::read_to_string(&victim).expect("the victim reads"), "kept\n");
+        let manifest = fs::symlink_metadata(path.join(MANIFEST_FILE)).expect("the manifest is written");
+        assert!(manifest.file_type().is_file());
+
+        let dangling = scratch.path().join("dangling");
+        fs::create_dir(&dangling).expect("a scratch directory");
+        symlink(scratch.path().join("nowhere.csv"), dangling.join(SUMMARY_FILE)).expect("a link");
+        let refused = OutputDir::create(&dangling);
+        assert!(
+            matches!(&refused, Err(OutputError::HoldsResults { file, .. }) if file == SUMMARY_FILE),
+            "{refused:?}"
+        );
+
+        let linked = scratch.path().join("linked");
+        fs::create_dir(&linked).expect("a scratch directory");
+        symlink(&victim, linked.join(RUNS_FILE)).expect("a link");
+        let refused = OutputDir::open(&linked);
+        assert!(matches!(refused, Err(OutputError::Link { .. })), "{refused:?}");
+        assert_eq!(fs::read_to_string(&victim).expect("the victim reads"), "kept\n");
     }
 
     #[test]
@@ -571,6 +771,7 @@ mod tests {
         let nested = scratch.path().join("a").join("b");
         let dir = OutputDir::create(&nested).expect("a missing directory is created");
         assert!(dir.path().is_dir());
+        drop(dir);
         assert!(OutputDir::create(&nested).is_ok(), "an empty directory is taken");
 
         fs::write(nested.join("notes.txt"), "kept").expect("a scratch file");

@@ -1,6 +1,6 @@
 // Counting sort pass 1. Bins every agent and tallies how many landed in each cell.
 
-#import shared::prelude::WORKGROUP
+#import henad::dispatch::WORKGROUP
 
 struct HashParams {
     grid_w: u32,

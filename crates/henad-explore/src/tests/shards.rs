@@ -50,10 +50,10 @@ fn merged_shards_equal_an_unsharded_sweep() {
             let shard_dir = scratch.path().join(format!("shard-{index}"));
             let options = SweepOptions {
                 shard: Shard::new(index, 3).expect("a valid shard"),
-                ..sweep_options(&shard_dir, false)
+                ..sweep_options(false)
             };
             let mut progress = Recorder::default();
-            let report = sweep_with(&sir, None, &spec, &options, &mut progress).expect("the shard runs");
+            let report = sweep_with(&sir, None, &spec, &shard_dir, &options, &mut progress).expect("the shard runs");
             assert_eq!(report.outline.pending, 3);
             let expected: Vec<u64> = (0..9).filter(|run_id| run_id % 3 == index).collect();
             assert_eq!(progress.committed, expected);
@@ -93,9 +93,9 @@ fn a_shard_whose_ids_its_manifest_does_not_give_is_refused() {
     let shard_dir = scratch.path().join("shard-0");
     let options = SweepOptions {
         shard: Shard::new(0, 3).expect("a valid shard"),
-        ..sweep_options(&shard_dir, false)
+        ..sweep_options(false)
     };
-    sweep_with(&sir, None, &spec, &options, &mut Recorder::default()).expect("the shard runs");
+    sweep_with(&sir, None, &spec, &shard_dir, &options, &mut Recorder::default()).expect("the shard runs");
 
     // A resume that raised the replicate count wrote its manifest, and ended before renumbering the rows.
     let mut raised = manifest(&shard_dir);
@@ -132,9 +132,9 @@ fn a_merge_missing_a_shard_is_filled_in_by_a_resume() {
             let shard_dir = scratch.path().join(format!("shard-{index}"));
             let options = SweepOptions {
                 shard: Shard::new(index, 3).expect("a valid shard"),
-                ..sweep_options(&shard_dir, false)
+                ..sweep_options(false)
             };
-            sweep_with(&sir, None, &spec, &options, &mut Recorder::default()).expect("the shard runs");
+            sweep_with(&sir, None, &spec, &shard_dir, &options, &mut Recorder::default()).expect("the shard runs");
             shard_dir
         })
         .collect();
@@ -152,7 +152,7 @@ fn a_merge_missing_a_shard_is_filled_in_by_a_resume() {
     assert_eq!(manifest(&merged_dir).status, ManifestStatus::Incomplete);
 
     let mut progress = Recorder::default();
-    sweep_with(&sir, None, &spec, &sweep_options(&merged_dir, true), &mut progress).expect("the merge resumes");
+    sweep_with(&sir, None, &spec, &merged_dir, &sweep_options(true), &mut progress).expect("the merge resumes");
     assert_eq!(progress.committed, [1, 4, 7]);
     let whole_dir = scratch.path().join("whole");
     sweep(&sir, None, &spec, &whole_dir, Concurrency::Auto);

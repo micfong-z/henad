@@ -2,24 +2,25 @@
 //!
 //! The cross-engine harness reads these lines from every engine it drives, so the shape is a
 //! contract rather than a convenience. `benchmarks/protocol.md` states it. The human report in
-//! `main` writes to the same stream, so exactly one of the two runs.
+//! the crate root writes to the same stream, so exactly one of the two runs.
 
 use std::time::Duration;
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runtime_info::{HostInfo, RuntimeInfo};
 use henad_core::params::{ParamDescriptor, ParamValue};
+use henad_explore::output::details::{ChoiceForm, params_by_id_json, scheduled_actions_json};
 use henad_explore::probe::ProbeReport;
 use henad_explore::schema::schema_json;
-use henad_models::registry::ModelEntry;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 /// Emitted once, before any rep.
 pub fn info(model: &str, variant: &str, threads: usize, parallel_jobs: Option<usize>, adapter: Option<&str>) {
     let line = json!({
         "kind": "info",
         "engine": "henad",
-        "engine_version": env!("CARGO_PKG_VERSION"),
+        "engine_version": henad_explore::ENGINE_BUILD.version(),
         "model": model,
         "variant": variant,
         "threads": threads,
@@ -112,36 +113,10 @@ pub fn summary(
         "updates_per_sec": if mean > 0.0 { Some(steps_per_rep as f64 * population as f64 / mean) } else { None },
         "grid_w": grid_dims.map(|(w, _)| w),
         "grid_h": grid_dims.map(|(_, h)| h),
-        "params": params_object(descriptors, params),
-        "actions": actions_array(schedule),
+        "params": params_by_id_json(descriptors, params, ChoiceForm::Index),
+        "actions": scheduled_actions_json(schedule),
     });
     emit(&line);
-}
-
-/// The `--act` schedule this run replayed, so a row says what was done to it.
-fn actions_array(schedule: &henad_core::action::Schedule) -> Value {
-    Value::Array(
-        schedule
-            .entries()
-            .iter()
-            .map(|a| json!({ "id": a.id, "tick": a.tick }))
-            .collect(),
-    )
-}
-
-/// Resolved parameters keyed by id, so a row stays interpretable after a model's defaults change.
-fn params_object(descriptors: &[ParamDescriptor], params: &[ParamValue]) -> Value {
-    let mut map = Map::new();
-    for (desc, value) in descriptors.iter().zip(params) {
-        let value = match *value {
-            ParamValue::F32(v) => json!(v),
-            ParamValue::U32(v) => json!(v),
-            ParamValue::Bool(v) => json!(v),
-            ParamValue::Choice(v) => json!(v),
-        };
-        map.insert(desc.id.to_owned(), value);
-    }
-    Value::Object(map)
 }
 
 /// Returns the `--params --json` line: the parameters, stats and actions of `entry`.
@@ -149,7 +124,7 @@ fn params_object(descriptors: &[ParamDescriptor], params: &[ParamValue]) -> Valu
 /// The line carries `stat_columns` from a build at the defaults, and leaves them out when that build fails.
 pub fn params(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Value {
     let defaults: Vec<ParamValue> = entry
-        .param_descriptors
+        .param_descriptors()
         .iter()
         .map(|descriptor| descriptor.kind.default_value())
         .collect();
@@ -159,7 +134,7 @@ pub fn params(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Value {
             let error = anyhow::Error::new(error);
             eprintln!(
                 "note: '{}' failed to build with default parameters ({error:#}), so stat_columns is omitted",
-                entry.id
+                entry.id()
             );
             None
         }

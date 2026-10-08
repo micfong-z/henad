@@ -6,9 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runner::{Pace, SimLoop as _};
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::plan::MAX_RUNS;
 use henad_core::explore::search::genetic::GeneticSettings;
 use henad_core::explore::search::hill_climb::HillClimbSettings;
 use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
@@ -16,12 +18,11 @@ use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, S
 use henad_core::explore::spec::{ActionSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
 use henad_core::export::csv::{escape_field, parse_records};
-use henad_models::registry::ModelEntry;
 
 use crate::cursor::{CursorState, RunCursor};
 use crate::exec::{Concurrency, RunRequest, SweepControl};
 use crate::handle::{SweepChannel, SweepEvent, SweepOutput, SweepRun, SweepRunOptions};
-use crate::output::manifest::{Manifest, ManifestAxisRanges, ManifestMode, ManifestStatus};
+use crate::output::manifest::{BuildRole, Manifest, ManifestAxisRanges, ManifestMode, ManifestStatus, RecordedBuild};
 use crate::output::resume::ResumeError;
 use crate::output::search_tables::SearchHistory;
 use crate::output::{
@@ -30,14 +31,13 @@ use crate::output::{
 };
 use crate::progress::{NoProgress, Progress, ProgressEvent};
 use crate::pumped::PumpedSweep;
-use crate::result_set::ResultSet;
-use crate::schema::model_schema;
-use crate::search_run::{EvaluationReading, SearchPlan, SearchPlanError, run_search};
+use crate::result_set::{ResultSet, ResultSetError};
+use crate::search_run::{EvaluationReading, SearchPlan, SearchPlanError};
 use crate::spec_file::SpecFile;
-use crate::sweep::{ExploreError, SpecSource, SweepEnd, SweepOptions, SweepReport};
+use crate::sweep::{ExploreError, SweepEnd, SweepOptions, SweepReport, SweepWarning};
 use crate::tests::support::{
-    CommitLimit, OutputTables, ScratchDir, entry, headless_device, planned, provenance, sweep, sweep_options,
-    without_timing,
+    CommitLimit, OutputTables, Recorder, ScratchDir, SecondResume, dry_run, entry, headless_device, other_engine,
+    planned, provenance, rewrite_manifest, sweep, sweep_options, without_clocks, without_timing,
 };
 
 /// Longest a test waits for a search to end.
@@ -143,24 +143,16 @@ fn search_spec(algorithm: SearchAlgorithm, max_evaluations: u64) -> SweepSpec {
     spec
 }
 
-/// Runs the search `spec` over `entry` with `options`, reporting to `progress`.
+/// Runs the search `spec` over `entry` into `output_dir` with `options`, reporting to `progress`.
 fn search_with(
     entry: &ModelEntry,
     gpu: Option<&GpuContext>,
     spec: &SweepSpec,
+    output_dir: &Path,
     options: &SweepOptions,
     progress: &mut dyn Progress,
 ) -> Result<SweepReport, ExploreError> {
-    run_search(
-        entry,
-        gpu,
-        None,
-        spec,
-        &SpecSource::default(),
-        &provenance(),
-        options,
-        progress,
-    )
+    crate::tests::support::sweep_with(entry, gpu, spec, output_dir, options, progress)
 }
 
 /// Runs the search `spec` into `output_dir` at `concurrency`, reporting nowhere.
@@ -176,11 +168,10 @@ fn search(
     concurrency: Concurrency,
 ) -> SweepReport {
     let options = SweepOptions {
-        output_dir: Some(output_dir.to_owned()),
         concurrency,
-        ..SweepOptions::default()
+        ..sweep_options(false)
     };
-    search_with(entry, gpu, spec, &options, &mut NoProgress).expect("the search runs")
+    search_with(entry, gpu, spec, output_dir, &options, &mut NoProgress).expect("the search runs")
 }
 
 /// Returns the search tables a search of `spec` writes, its closing table last.
@@ -245,33 +236,37 @@ impl SearchTables {
     }
 }
 
+/// Plans every example spec with a search table, whatever its file is named. A search spec under a new name has to
+/// join the list of counts too.
 #[test]
 fn every_example_search_spec_parses() {
     let specs = Path::new(env!("CARGO_MANIFEST_DIR")).join("specs");
-    let registry = henad_models::registry::model_registry(None);
+    let models = henad_models::example_models();
     let mut planned = Vec::new();
     for file in std::fs::read_dir(&specs).expect("the specs directory exists") {
         let path = file.expect("the directory lists").path();
+        if path.extension().is_none_or(|extension| extension != "toml") {
+            continue;
+        }
         let name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if !name.starts_with("sir_search_") {
+        let (file, _) = SpecFile::load(&path).expect("an example spec parses");
+        let spec = file.into_spec().expect("an example spec reads");
+        if spec.search.is_none() {
             continue;
         }
-        let (file, _) = SpecFile::load(&path).expect("an example spec parses");
-        let spec = file.into_spec().expect("an example spec is a search spec");
         let written = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
         let back = SpecFile::parse(&written)
             .and_then(SpecFile::into_spec)
             .expect("the written spec reads back");
         assert_eq!(back, spec, "{name} survives a round trip through TOML");
-        let entry = registry
-            .iter()
-            .find(|entry| entry.id == spec.model)
+        let entry = models
+            .get(&spec.model)
             .expect("an example spec names a registered model");
-        let plan = SearchPlan::new(&spec, &model_schema(entry))
-            .unwrap_or_else(|error| panic!("{name} does not plan: {error:?}"));
+        let plan =
+            SearchPlan::new(&spec, &entry.schema()).unwrap_or_else(|error| panic!("{name} does not plan: {error:?}"));
         let search = plan.search();
         planned.push((
             name,
@@ -417,6 +412,95 @@ fn a_reevaluation_gets_fresh_replicate_indices_and_seeds() {
     }
 }
 
+/// Checks that a dry run of a resume counts the runs a search folder holds and the runs its resume would add, and
+/// leaves every file as it was.
+#[test]
+fn a_dry_run_counts_the_runs_a_search_resume_skips() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-resume-dry-run");
+    let spec = search_spec(genetic(), 30);
+    let control = SweepControl::new();
+    let interrupted = SweepOptions {
+        concurrency: lane_count(1),
+        control: control.clone(),
+        ..sweep_options(false)
+    };
+    let mut abort = CommitLimit::new(control, 17);
+    let report =
+        search_with(&sir, None, &spec, scratch.path(), &interrupted, &mut abort).expect("an abort is not an error");
+    assert_eq!(report.end, SweepEnd::Aborted);
+    let kept = report.counts.rows;
+    let files = |dir: &Path| -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir)
+            .expect("the folder reads")
+            .map(|file| {
+                let path = file.expect("an entry").path();
+                let name = path.file_name().expect("a file name").to_string_lossy().into_owned();
+                (name, std::fs::read(&path).expect("the file reads"))
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let before = files(scratch.path());
+
+    let report =
+        dry_run(&sir, &spec, Some(scratch.path()), &sweep_options(true), &mut NoProgress).expect("the dry run plans");
+    assert_eq!(report.end, SweepEnd::Planned);
+    assert_eq!((report.outline.skipped, report.outline.pending), (kept, 60 - kept));
+    assert_eq!(files(scratch.path()), before, "a dry run leaves the folder as it was");
+
+    let error = dry_run(
+        &sir,
+        &spec,
+        Some(scratch.path()),
+        &sweep_options(false),
+        &mut NoProgress,
+    )
+    .expect_err("a folder with results and no resume");
+    assert!(
+        matches!(error, ExploreError::Output(OutputError::HoldsResults { .. })),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_search_resume_under_another_engine_build_warns() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-resume-build");
+    let spec = search_spec(SearchAlgorithm::Random, 12);
+    let control = SweepControl::new();
+    let interrupted = SweepOptions {
+        concurrency: lane_count(1),
+        control: control.clone(),
+        ..sweep_options(false)
+    };
+    let mut abort = CommitLimit::new(control, 5);
+    search_with(&sir, None, &spec, scratch.path(), &interrupted, &mut abort).expect("an abort is not an error");
+
+    let resume = SweepOptions {
+        provenance: provenance().with_engine(other_engine()),
+        ..sweep_options(true)
+    };
+    let mut progress = Recorder::default();
+    let report = search_with(&sir, None, &spec, scratch.path(), &resume, &mut progress).expect("the search resumes");
+    assert_eq!(report.end, SweepEnd::Complete);
+    assert_eq!(
+        progress.warnings,
+        [SweepWarning::BuildChanged {
+            role: BuildRole::Engine,
+            recorded: Box::new(RecordedBuild::engine()),
+            current: Box::new(other_engine()),
+            between_shards: false,
+        }]
+    );
+    let manifest = Manifest::read(&scratch.path().join(MANIFEST_FILE)).expect("the manifest reads back");
+    assert_eq!(
+        manifest.recorded_builds(BuildRole::Engine),
+        [RecordedBuild::engine(), other_engine()]
+    );
+}
+
 #[test]
 fn a_resumed_search_follows_the_same_trajectory() {
     let sir = entry("sir", None);
@@ -434,13 +518,13 @@ fn a_resumed_search_follows_the_same_trajectory() {
         let resumed_dir = scratch.path().join(format!("{name}-resumed"));
         let control = SweepControl::new();
         let interrupted = SweepOptions {
-            output_dir: Some(resumed_dir.clone()),
             concurrency: lane_count(2),
             control: control.clone(),
-            ..SweepOptions::default()
+            ..sweep_options(false)
         };
         let mut abort = CommitLimit::new(control, 17);
-        let report = search_with(&sir, None, &spec, &interrupted, &mut abort).expect("an abort is not an error");
+        let report =
+            search_with(&sir, None, &spec, &resumed_dir, &interrupted, &mut abort).expect("an abort is not an error");
         assert_eq!(report.end, SweepEnd::Aborted, "{name}");
         let kept = report.counts.rows;
         assert!((17..60).contains(&kept), "{name}: {kept} runs written");
@@ -449,12 +533,11 @@ fn a_resumed_search_follows_the_same_trajectory() {
         append(&resumed_dir.join(SERIES_FILE), &format!("{kept},0,1,2,3\n{kept},4,1,2"));
 
         let resume = SweepOptions {
-            output_dir: Some(resumed_dir.clone()),
             concurrency: lane_count(3),
-            resume: true,
-            ..SweepOptions::default()
+            ..sweep_options(true)
         };
-        let report = search_with(&sir, None, &spec, &resume, &mut NoProgress).expect("the search resumes");
+        let report =
+            search_with(&sir, None, &spec, &resumed_dir, &resume, &mut NoProgress).expect("the search resumes");
         assert_eq!(
             (report.end, report.outline.skipped),
             (SweepEnd::Complete, kept),
@@ -518,12 +601,8 @@ fn a_resume_that_meets_a_changed_run_leaves_the_directory_alone() {
     let before = SearchTables::read(scratch.path(), &spec);
     let manifest_before = std::fs::read(scratch.path().join(MANIFEST_FILE)).expect("the manifest reads");
 
-    let resume = SweepOptions {
-        output_dir: Some(scratch.path().to_owned()),
-        resume: true,
-        ..SweepOptions::default()
-    };
-    let error = search_with(&sir, None, &spec, &resume, &mut NoProgress).expect_err("a changed run");
+    let resume = sweep_options(true);
+    let error = search_with(&sir, None, &spec, scratch.path(), &resume, &mut NoProgress).expect_err("a changed run");
     assert!(
         matches!(
             error,
@@ -544,17 +623,83 @@ fn a_resume_that_meets_a_changed_run_leaves_the_directory_alone() {
 }
 
 #[test]
+fn a_second_search_resume_is_refused_while_the_first_holds_its_scan() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-resume-locked");
+    let spec = search_spec(genetic(), 12);
+    search(&sir, None, &spec, scratch.path(), lane_count(1));
+    let before = SearchTables::read(scratch.path(), &spec);
+
+    let mut second = SecondResume::new(&sir, &spec, scratch.path());
+    let report = search_with(&sir, None, &spec, scratch.path(), &sweep_options(true), &mut second)
+        .expect("the first resume runs");
+    let refused = second.result.expect("the first resume reports its outline");
+    assert!(
+        matches!(refused, Err(ExploreError::Output(OutputError::Locked { .. }))),
+        "{refused:?}"
+    );
+    assert_eq!(report.end, SweepEnd::Complete);
+    assert_eq!(SearchTables::read(scratch.path(), &spec), before);
+}
+
+#[test]
+fn a_resume_refuses_runs_past_the_budget() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-resume-past-budget");
+    let spec = search_spec(genetic(), 12);
+    search(&sir, None, &spec, scratch.path(), lane_count(1));
+    let runs_path = scratch.path().join(RUNS_FILE);
+    let text = std::fs::read_to_string(&runs_path).expect("runs.csv reads");
+    let row_count = text.lines().count() - 1;
+    assert_eq!(row_count, 24, "the budget of 12 evaluations of 2 replicates is spent");
+    let last = text.lines().last().expect("runs.csv holds runs");
+    let (_, rest) = last.split_once(',').expect("a run id field");
+    append(&runs_path, &format!("{row_count},{rest}\n"));
+    let before = std::fs::read(&runs_path).expect("runs.csv reads");
+
+    let resume = sweep_options(true);
+    let error = search_with(&sir, None, &spec, scratch.path(), &resume, &mut NoProgress).expect_err("a run too many");
+    assert!(
+        matches!(error, ExploreError::Resume(ResumeError::UnknownRun { run_id }) if run_id == 24),
+        "{error:?}"
+    );
+    assert_eq!(
+        std::fs::read(&runs_path).expect("runs.csv reads"),
+        before,
+        "runs.csv is left as it was"
+    );
+}
+
+#[test]
+fn a_search_resume_names_a_changed_model() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-resume-model");
+    let spec = search_spec(genetic(), 12);
+    search(&sir, None, &spec, scratch.path(), lane_count(1));
+    // Another version of the model changes the schema hash, and with it the search hash.
+    rewrite_manifest(scratch.path(), |recorded| {
+        recorded.model.schema_hash = "0000000000000000".to_owned();
+        if let Some(search) = &mut recorded.search {
+            search.search_hash = "0000000000000000".to_owned();
+        }
+    });
+
+    let resume = sweep_options(true);
+    let error = search_with(&sir, None, &spec, scratch.path(), &resume, &mut NoProgress).expect_err("another model");
+    assert!(
+        matches!(error, ExploreError::Resume(ResumeError::SchemaChanged { .. })),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn a_resume_refuses_another_search_or_a_sweep() {
     let sir = entry("sir", None);
     let scratch = ScratchDir::new("search-resume-refused");
     let spec = search_spec(genetic(), 12);
     let search_dir = scratch.path().join("search");
     search(&sir, None, &spec, &search_dir, lane_count(1));
-    let resume = |output_dir: &Path| SweepOptions {
-        output_dir: Some(output_dir.to_owned()),
-        resume: true,
-        ..SweepOptions::default()
-    };
+    let resume = sweep_options(true);
 
     let mut changed = spec.clone();
     if let Some(SearchSpec {
@@ -564,7 +709,7 @@ fn a_resume_refuses_another_search_or_a_sweep() {
     {
         settings.mutation_rate = 0.5;
     }
-    let error = search_with(&sir, None, &changed, &resume(&search_dir), &mut NoProgress).expect_err("another search");
+    let error = search_with(&sir, None, &changed, &search_dir, &resume, &mut NoProgress).expect_err("another search");
     assert!(
         matches!(error, ExploreError::Resume(ResumeError::SearchChanged { .. })),
         "{error:?}"
@@ -574,7 +719,7 @@ fn a_resume_refuses_another_search_or_a_sweep() {
     sweep_spec.search = None;
     let sweep_dir = scratch.path().join("sweep");
     sweep(&sir, None, &sweep_spec, &sweep_dir, lane_count(1));
-    let error = search_with(&sir, None, &spec, &resume(&sweep_dir), &mut NoProgress).expect_err("a sweep");
+    let error = search_with(&sir, None, &spec, &sweep_dir, &resume, &mut NoProgress).expect_err("a sweep");
     assert!(
         matches!(
             error,
@@ -585,7 +730,7 @@ fn a_resume_refuses_another_search_or_a_sweep() {
         ),
         "{error:?}"
     );
-    let error = crate::tests::support::sweep_with(&sir, None, &sweep_spec, &resume(&search_dir), &mut NoProgress)
+    let error = crate::tests::support::sweep_with(&sir, None, &sweep_spec, &search_dir, &resume, &mut NoProgress)
         .expect_err("a search resumed as a sweep");
     assert!(
         matches!(error, ExploreError::Resume(ResumeError::ModeChanged { .. })),
@@ -605,26 +750,11 @@ fn a_resume_refuses_another_search_or_a_sweep() {
 
     let retry = SweepOptions {
         retry_failed: true,
-        ..resume(&search_dir)
+        ..resume.clone()
     };
-    let error = search_with(&sir, None, &spec, &retry, &mut NoProgress).expect_err("a retry");
+    let error = search_with(&sir, None, &spec, &search_dir, &retry, &mut NoProgress).expect_err("a retry");
     assert!(
         matches!(error, ExploreError::Search(SearchPlanError::RetryFailed)),
-        "{error:?}"
-    );
-    let error = crate::tests::support::sweep_with(
-        &sir,
-        None,
-        &spec,
-        &SweepOptions {
-            dry_run: true,
-            ..SweepOptions::default()
-        },
-        &mut NoProgress,
-    )
-    .expect_err("a search spec run as a sweep");
-    assert!(
-        matches!(error, ExploreError::Search(SearchPlanError::NotASweep)),
         "{error:?}"
     );
 }
@@ -640,16 +770,36 @@ fn a_watched_column_must_name_a_reducer() {
             aggregate: Aggregate::Mean,
         });
     }
-    let dry_run = SweepOptions {
-        dry_run: true,
-        ..SweepOptions::default()
-    };
-    let error = search_with(&sir, None, &spec, &dry_run, &mut NoProgress).expect_err("no such reducer");
+    let error = dry_run(&sir, &spec, None, &sweep_options(false), &mut NoProgress).expect_err("no such reducer");
     let ExploreError::Search(SearchPlanError::UnknownColumn { column, known }) = error else {
         panic!("{error:?}");
     };
     assert_eq!(column, "Recovered:max");
     assert_eq!(known, ["Infected:max", "Infected:argmax"]);
+}
+
+/// The regression. A batch of 4096 candidates at 2^20 replicates each planned, and its first ask allocated more runs
+/// than a machine holds.
+#[test]
+fn a_batch_past_the_run_limit_is_refused() {
+    let sir = entry("sir", None);
+    let mut spec = search_spec(SearchAlgorithm::Random, 12);
+    let batch_size = 16;
+    if let Some(search) = &mut spec.search {
+        search.batch_size = batch_size;
+    }
+    let widest = MAX_RUNS / batch_size as u64;
+    spec.run.replicates = widest;
+    SearchPlan::new(&spec, &sir.schema()).expect("a batch at the limit plans");
+    spec.run.replicates = widest + 1;
+    let error = SearchPlan::new(&spec, &sir.schema()).expect_err("a batch past the limit");
+    assert_eq!(
+        error,
+        SearchPlanError::BatchTooLarge {
+            batch_size,
+            replicates: widest + 1
+        }
+    );
 }
 
 /// Progress that puts a directory where `best.csv` goes once a batch is told. The search then fails as it ends.
@@ -676,7 +826,8 @@ fn a_failed_search_records_its_standing_in_the_manifest() {
         &entry("sir", None),
         None,
         &search_spec(SearchAlgorithm::Random, 12),
-        &sweep_options(scratch.path(), false),
+        scratch.path(),
+        &sweep_options(false),
         &mut blocker,
     )
     .expect_err("best.csv cannot be written");
@@ -728,6 +879,15 @@ fn untimed(files: &[(String, Vec<u8>)]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Returns the manifest among `files`, with its clock readings cleared.
+fn untimed_manifest(files: &[(String, Vec<u8>)]) -> Manifest {
+    let (_, bytes) = files
+        .iter()
+        .find(|(name, _)| name == MANIFEST_FILE)
+        .expect("the files hold a manifest");
+    without_clocks(serde_json::from_slice(bytes).expect("the manifest reads back"))
+}
+
 /// Returns the files of the output directory `dir`, in the order a search held in memory lists them.
 fn directory_files(dir: &Path, algorithm_files: &[&str]) -> Vec<(String, Vec<u8>)> {
     [RUNS_FILE, SERIES_FILE, SUMMARY_FILE, MANIFEST_FILE]
@@ -746,11 +906,8 @@ fn directory_files(dir: &Path, algorithm_files: &[&str]) -> Vec<(String, Vec<u8>
 fn a_search_through_a_handle_sends_each_batch_after_its_runs() {
     let sir = entry("sir", None);
     let spec = search_spec(pattern(), 18);
-    let options = SweepRunOptions {
-        provenance: provenance(),
-        concurrency: lane_count(2),
-        ..SweepRunOptions::default()
-    };
+    let mut options = SweepRunOptions::new(provenance());
+    options.concurrency = lane_count(2);
     let mut run = SweepRun::start(sir, None, spec.clone(), SweepOutput::Memory, options).expect("the search starts");
     assert_eq!(
         run.progress().runs_total,
@@ -811,17 +968,20 @@ fn a_search_through_a_handle_sends_each_batch_after_its_runs() {
     search(&entry("sir", None), None, &spec, scratch.path(), lane_count(1));
     let directory = directory_files(scratch.path(), &[EVALUATIONS_FILE, BATCHES_FILE, ARCHIVE_FILE]);
     assert_eq!(untimed(&files), untimed(&directory));
+    // The manifests record two lanes against one. The standing of the search matches.
+    let (memory, directory) = (untimed_manifest(&files), untimed_manifest(&directory));
+    assert_eq!(
+        (memory.mode, memory.status, memory.search, memory.results),
+        (directory.mode, directory.status, directory.search, directory.results)
+    );
 }
 
 #[test]
 fn the_pumped_search_writes_what_a_directory_search_writes() {
     let spec = search_spec(genetic(), 18);
     let sir = entry("sir", None);
-    let search_plan = Arc::new(SearchPlan::new(&spec, &model_schema(&sir)).expect("a valid search"));
-    let options = || SweepRunOptions {
-        provenance: provenance(),
-        ..SweepRunOptions::default()
-    };
+    let search_plan = Arc::new(SearchPlan::new(&spec, &sir.schema()).expect("a valid search"));
+    let options = || SweepRunOptions::new(provenance());
     let (channel, events, _) = SweepChannel::open(&options());
     let mut pumped = PumpedSweep::new(
         sir,
@@ -858,6 +1018,7 @@ fn the_pumped_search_writes_what_a_directory_search_writes() {
         &[EVALUATIONS_FILE, BATCHES_FILE, GENERATIONS_FILE, BEST_FILE],
     );
     assert_eq!(untimed(&files), untimed(&directory));
+    assert_eq!(untimed_manifest(&files), untimed_manifest(&directory));
 }
 
 #[test]
@@ -964,12 +1125,11 @@ fn a_search_folder_reads_back_with_its_history_and_replays_its_runs() {
         let spec = search_spec(algorithm, 18);
         let output_dir = scratch.path().join(name);
         let options = SweepOptions {
-            output_dir: Some(output_dir.clone()),
             concurrency: lane_count(2),
-            ..SweepOptions::default()
+            ..sweep_options(false)
         };
         let mut recorder = HistoryRecorder::default();
-        search_with(&sir, None, &spec, &options, &mut recorder).expect("the search runs");
+        search_with(&sir, None, &spec, &output_dir, &options, &mut recorder).expect("the search runs");
         let set = ResultSet::open_dir(&output_dir, usize::MAX).expect("the folder reads back");
         assert!(set.is_search(), "{name}");
         let history = set
@@ -984,7 +1144,7 @@ fn a_search_folder_reads_back_with_its_history_and_replays_its_runs() {
         let (_, measure) = planned(&sir, None, &spec);
         for run_id in [0, 7, 35] {
             let row = set.run(run_id).expect("the run is in the folder");
-            let replay = set.replay(&sir, run_id).expect("a search run replays");
+            let replay = set.replay(sir.schema(), run_id).expect("a search run replays");
             assert_eq!(replay.seed, row.outcome.run.seed);
             let request = RunRequest {
                 run: row.outcome.run,
@@ -1015,4 +1175,17 @@ fn a_search_folder_reads_back_with_its_history_and_replays_its_runs() {
         files.search_history().expect("the tables read"),
         "a picked file is known by its header"
     );
+}
+
+#[test]
+fn a_search_folder_with_an_axis_of_no_cells_is_refused() {
+    let scratch = ScratchDir::new("search-no-cells");
+    let spec = search_spec(pattern(), 6);
+    search(&entry("sir", None), None, &spec, scratch.path(), lane_count(1));
+    let manifest_path = scratch.path().join(MANIFEST_FILE);
+    let manifest = std::fs::read_to_string(&manifest_path).expect("the manifest is written");
+    assert!(manifest.contains("\"cells\": 8"), "the manifest records the axis cells");
+    std::fs::write(&manifest_path, manifest.replacen("\"cells\": 8", "\"cells\": 0", 1)).expect("the manifest writes");
+    let opened = ResultSet::open_dir(scratch.path(), usize::MAX);
+    assert!(matches!(opened, Err(ResultSetError::Search(_))), "{opened:?}");
 }

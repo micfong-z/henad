@@ -18,12 +18,29 @@ use crate::for_each_chunk_mut;
 /// therefore be checked against the CPU model as an oracle.
 pub const GRID_INIT_SEED: u64 = 0xDEAD_BEEF_CAFE_1234;
 
+/// Returns the state a grid model's RNG starts from: `seed` mixed, or [`GRID_INIT_SEED`] when it is `None`.
+///
+/// A GPU port that reproduces its CPU model's tick 0 starts from the same state.
+pub fn grid_init_rng(seed: Option<u64>) -> u64 {
+    seed.map_or(GRID_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed)
+}
+
 /// Double-buffered `u8` cells stepped by `M`'s neighbourhood rule.
 pub struct CaField<M: GridModel> {
     grid: Grid2D<u8>,
     /// Advanced once per tick, then fanned out per row by `chunk_seed`.
     seed: u64,
     _marker: PhantomData<M>,
+}
+
+/// Prints the model's name and the grid's size, not its cells.
+impl<M: GridModel> std::fmt::Debug for CaField<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CaField")
+            .field("model", &M::NAME)
+            .field("grid", &self.grid)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<M: GridModel> CaField<M> {
@@ -48,7 +65,7 @@ impl<M: GridModel> CaField<M> {
     pub fn with_seed(extent: Extent, params: &[ParamValue], seed: Option<u64>) -> Self {
         let (width, height) = extent.cells();
         let mut grid = Grid2D::new(width, height);
-        let mut seed = seed.map_or(GRID_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
+        let mut seed = grid_init_rng(seed);
         M::init(&mut grid, params, &mut seed);
         Self {
             grid,
@@ -318,5 +335,16 @@ mod tests {
         // 8192 cells is two rows at this width.
         let wide = CaField::<MooreProbe>::with_seed(Extent { w: 4096.0, h: 100.0 }, &[], None);
         assert_eq!(wide.parallel_jobs(), 50);
+    }
+
+    /// The field implements `Debug` for a model that does not, and prints its size alone. A derive would bound its
+    /// impl on the model and print every cell.
+    #[test]
+    fn the_field_prints_its_size_for_any_model() {
+        let field = CaField::<MooreProbe>::with_seed(Extent { w: 64.0, h: 32.0 }, &[], None);
+        assert_eq!(
+            format!("{field:?}"),
+            "CaField { model: \"order probe\", grid: Grid2D { width: 64, height: 32, .. }, .. }"
+        );
     }
 }

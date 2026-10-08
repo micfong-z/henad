@@ -11,6 +11,13 @@ use henad_core::view::{GridView, PointView, StatEntry, stat_entries};
 /// Default RNG seed.
 pub const AGENT_INIT_SEED: u64 = 0xA175_F01A_6ED5_0001;
 
+/// Returns the state an agent model's RNG starts from: `seed` mixed, or [`AGENT_INIT_SEED`] when it is `None`.
+///
+/// A GPU port that reproduces its CPU model's tick 0 starts from the same state.
+pub fn agent_init_rng(seed: Option<u64>) -> u64 {
+    seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed)
+}
+
 /// Engine wrapper that implements `SimState` for any `AgentModel`.
 pub struct AgentModelState<A: AgentModel> {
     lanes: A::Lanes,
@@ -18,12 +25,25 @@ pub struct AgentModelState<A: AgentModel> {
     index: A::Index,
     deposits: <A::Field as FieldLayer>::DepositLanes,
     params: ParamStore,
+    /// Number of the model's own params, read once from [`AgentModel::param_descriptors`].
+    own_params: usize,
     extent: Extent,
     tally: A::Tally,
     seed: u64,
     /// The action stream, apart from the one the ticks draw from.
     action_seed: u64,
     tick: u64,
+}
+
+impl<A: AgentModel> std::fmt::Debug for AgentModelState<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentModelState")
+            .field("model", &A::ID)
+            .field("tick", &self.tick)
+            .field("extent", &self.extent)
+            .field("params", &self.params)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<A: AgentModel> AgentModelState<A> {
@@ -42,7 +62,7 @@ impl<A: AgentModel> AgentModelState<A> {
         let (own, field_params) = split_params::<A>(params);
         let mut lanes = A::Lanes::alloc(n);
         let actions = action_seed(seed);
-        let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
+        let mut seed = agent_init_rng(seed);
         A::init(&mut lanes, extent, own, &mut seed);
 
         let field = A::Field::new(extent, field_params);
@@ -58,6 +78,7 @@ impl<A: AgentModel> AgentModelState<A> {
             index,
             deposits,
             params: ParamStore::new(&agent_model_param_descriptors::<A>(), params),
+            own_params: A::param_descriptors().len(),
             extent,
             tally: A::Tally::default(),
             seed,
@@ -90,7 +111,7 @@ impl<A: AgentModel> AgentModelState<A> {
 
         let mut lanes = A::Lanes::alloc(n);
         let actions = action_seed(seed);
-        let mut seed = seed.map_or(AGENT_INIT_SEED, henad_core::authoring::primitives::rng::mix_seed);
+        let mut seed = agent_init_rng(seed);
         let (own, field_params) = split_params::<A>(params);
 
         // Init is still needed to ensure that seed is advanced to the right value for the first step.
@@ -112,6 +133,7 @@ impl<A: AgentModel> AgentModelState<A> {
             index,
             deposits,
             params: ParamStore::new(&agent_model_param_descriptors::<A>(), params),
+            own_params: A::param_descriptors().len(),
             extent,
             tally: A::Tally::default(),
             seed,
@@ -151,7 +173,11 @@ pub const AGENT_PARAM_BASE: usize = 3;
 /// Computed from the descriptor lists rather than hard-coded, so a model or a field layer gaining a
 /// parameter cannot shift the other's indices.
 pub fn split_params<A: AgentModel>(params: &[ParamValue]) -> (&[ParamValue], &[ParamValue]) {
-    let own = A::param_descriptors().len();
+    split_at_own(params, A::param_descriptors().len())
+}
+
+/// Splits a composed list as [`split_params`] does, given the number of the model's own params.
+fn split_at_own(params: &[ParamValue], own: usize) -> (&[ParamValue], &[ParamValue]) {
     let start = AGENT_PARAM_BASE.min(params.len());
     let mid = (start + own).min(params.len());
     (&params[start..mid], &params[mid..])
@@ -171,7 +197,7 @@ pub fn agent_model_param_descriptors<A: AgentModel>() -> Vec<ParamDescriptor> {
 
 impl<A: AgentModel> SimState for AgentModelState<A> {
     fn step(&mut self) {
-        let (own, field_slice) = split_params::<A>(self.params.values());
+        let (own, field_slice) = split_at_own(self.params.values(), self.own_params);
         let hot = A::from_params(own, self.extent);
         let field_params = <A::Field as FieldLayer>::from_params(field_slice);
 
@@ -246,11 +272,12 @@ impl<A: AgentModel> SimState for AgentModelState<A> {
             lanes,
             field,
             params,
+            own_params,
             extent,
             action_seed,
             ..
         } = self;
-        let (own, _) = split_params::<A>(params.values());
+        let (own, _) = split_at_own(params.values(), *own_params);
         A::act(index, lanes, field, *extent, own, action_seed);
         true
     }

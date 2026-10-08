@@ -1,35 +1,56 @@
-//! The Henad GUI application.
+//! The app of Henad, a parallel agent-based modelling engine, as a library.
+//!
+//! `run_native` opens a window over the models an [`AppOptions`] holds, and `start_web` starts the same app in a
+//! browser. The official `henad-app` binary calls them with the example models. A project with models of its own opens
+//! the same app over its own [`ModelSet`](henad_compute::entry::ModelSet).
+//!
+//! ```no_run
+//! use henad_app::AppOptions;
+//! use henad_compute::entry::ModelSet;
+//!
+//! fn main() -> Result<(), henad_app::AppError> {
+//!     let models = ModelSet::new(henad_core::build_info!());
+//!     let options = AppOptions::new(models, "My Models", henad_core::build_info!()).cli_command("my-models-cli");
+//!     henad_app::run_native(options)
+//! }
+//! ```
+//!
+//! An [`AppOpening`] opens the app on a results folder, a recorded run or a setup the host built, in place of the
+//! first model of the set.
 
-/// Rust generated from this crate's WGSL by `wgsl_bindgen`, in `build.rs`.
-///
-/// Generated code is not held to the workspace's lints, hence the group allows. `unsafe_code` is
-/// the one that matters. The generator writes `unsafe impl bytemuck::Pod` and an
-/// `unsafe fn from_raw`, so the workspace deny is lifted here and nowhere else.
-#[allow(
-    unsafe_code,
-    dead_code,
-    elided_lifetimes_in_paths,
-    clippy::all,
-    clippy::pedantic,
-    clippy::restriction,
-    clippy::nursery
-)]
-mod shader_bindings {
-    include!(concat!(env!("OUT_DIR"), "/shader_bindings.rs"));
-}
+#![cfg_attr(docsrs, feature(doc_cfg))]
+// Proving a type that holds wgpu handles `Send` or `Sync` walks wgpu-core's registries, deeper than the default
+// limit of 128.
+#![recursion_limit = "256"]
+
+henad_compute::include_shaders!();
 
 mod icons;
 mod init;
+#[cfg(not(target_arch = "wasm32"))]
+mod native;
+mod options;
 mod sim_runner;
-pub mod state;
-pub mod ui;
+mod state;
+mod ui;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 use eframe::egui_wgpu;
 use egui_dock::{DockArea, DockState, Style};
 
 use crate::init::{setup_custom_fonts, setup_custom_styles};
 
-pub use crate::init::wgpu_configuration;
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::native::{results_folder, run_native};
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::options::AppError;
+#[cfg(target_arch = "wasm32")]
+pub use crate::options::WebStartError;
+pub use crate::options::{AppOpening, AppOptions};
+pub use crate::state::OpenAt;
+#[cfg(target_arch = "wasm32")]
+pub use crate::web::{init_web_logger, start_web};
 
 use crate::sim_runner::SimRunner;
 use crate::state::AppState;
@@ -38,14 +59,15 @@ use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::runner::CAN_SPAWN_THREADS;
 use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
 /// Re-exported so wasm-bindgen emits the worker glue `wasm_bindgen_rayon` builds its pool from.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
 /// Pool width asked for by a `?threads=N` query string, clamped to what the host offers.
 ///
 /// `?threads=1` is how the threaded build gets compared against no pool at all, without keeping a
 /// second build around to compare against.
-pub fn requested_threads(search: &str, available: usize) -> usize {
+#[cfg(any(all(target_arch = "wasm32", target_feature = "atomics"), test))]
+pub(crate) fn requested_threads(search: &str, available: usize) -> usize {
     let available = available.max(1);
     search
         .trim_start_matches('?')
@@ -61,13 +83,18 @@ use crate::state::FrameTimings;
 /// Longest time between two repaints while a sweep runs on a thread of its own.
 const SWEEP_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
-pub struct HenadApp {
+struct HenadApp {
     dock: DockState<Tab>,
     state: AppState,
 }
 
 impl HenadApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    /// Returns the app `options` describe, on the device eframe created from [`init::wgpu_configuration`], opened on
+    /// the options' opening.
+    ///
+    /// Note that the device has to be requested for the models' `gpu_needs()`. Otherwise a GPU model that binds more
+    /// storage buffers than the WebGPU baseline allows will fail to build.
+    fn new(cc: &eframe::CreationContext<'_>, options: AppOptions) -> Self {
         install_panic_hook();
 
         let render_state = &cc
@@ -93,22 +120,28 @@ impl HenadApp {
         setup_custom_fonts(&cc.egui_ctx);
         setup_custom_styles(&cc.egui_ctx);
 
+        let AppOptions {
+            models,
+            product,
+            opening,
+            thread_pool_note,
+        } = options;
+        let mut state = AppState::new(
+            cc.egui_ctx.clone(),
+            models,
+            product,
+            render_ctx,
+            gpu_ctx,
+            RuntimeInfo::collect(&render_state.adapter, &render_state.device),
+        );
+        state.thread_pool_note = thread_pool_note;
+        if let Some(opening) = opening {
+            state.open(opening);
+        }
         Self {
             dock: default_dock_state(),
-            state: AppState::new(
-                cc.egui_ctx.clone(),
-                render_ctx,
-                gpu_ctx,
-                RuntimeInfo::collect(&render_state.adapter, &render_state.device),
-            ),
+            state,
         }
-    }
-
-    /// Reads the results a sweep wrote to `folder`, and shows them in the Results tab once read.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn open_results(&mut self, folder: std::path::PathBuf) {
-        ui::results::open_folder(&mut self.state, folder);
-        self.state.focus_request = Some(Tab::Results);
     }
 }
 

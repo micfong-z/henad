@@ -1,7 +1,7 @@
 # A genetic algorithm over the SIR model, looking for the settings and second-wave tick whose epidemic peaks latest.
 # The peak's tick is noisy, so each generation runs its best members again with fresh replicates.
 # It asks for 480 evaluations of 4 replicates each, 1920 runs in all.
-# Run it with `henad-cli --spec crates/henad-explore/specs/sir_search_genetic.toml --out sir-genetic`.
+# Run it with `henad-cli --spec sir_search_genetic.toml --out sir-genetic`.
 
 # --8<-- [start:setup]
 model = "sir"

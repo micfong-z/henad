@@ -14,6 +14,10 @@ accepted = [
     "MPL-2.0",
 ]
 
+# Crates with `publish = false` stay off the page. examples/tutorial is one, and ships nowhere.
+[private]
+ignore = true
+
 # cargo-about keeps one file per licence per crate, whichever its directory walk finds first. Walk
 # order depends on the filesystem, so each crate below with two such files gets its pick pinned.
 

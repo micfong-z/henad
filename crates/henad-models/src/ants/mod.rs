@@ -47,9 +47,11 @@ henad_core::actions! {
 /// chunk per tick rather than drawn per call.
 ///
 /// The reference's biased neighbour tie-break is reproduced rather than corrected, see
-/// [`step::advect_agent`].
+/// `step::advect_agent`.
+#[derive(Debug)]
 pub struct AntsModel;
 
+#[derive(Debug)]
 pub struct AntParams {
     pub w: i32,
     pub h: i32,
@@ -306,7 +308,13 @@ mod tests {
                 .build()
                 .expect("rayon pool");
             pool.install(|| {
-                let mut state = default_state();
+                // Three chunks of `CHUNK`, so the seeding of each chunk meets a split across workers.
+                let num_agents = 3 * <AntsModel as AgentModel>::CHUNK as u32;
+                let mut state = State::from_params(&[
+                    ParamValue::U32(num_agents),
+                    ParamValue::F32(200.0),
+                    ParamValue::F32(200.0),
+                ]);
                 for _ in 0..200 {
                     state.step();
                 }

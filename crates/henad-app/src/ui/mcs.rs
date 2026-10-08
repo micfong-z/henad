@@ -16,6 +16,8 @@
 //! Data colours, such as the plot series and the heatmap scale, are not MCS. They come from
 //! [`crate::ui::results::plot`].
 
+#![allow(dead_code, reason = "the palette lists every entry of MCS, used or not")]
+
 use egui::Color32;
 
 // Gray

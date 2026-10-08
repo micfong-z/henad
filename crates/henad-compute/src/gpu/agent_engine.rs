@@ -8,14 +8,14 @@ use std::sync::Arc;
 use henad_core::authoring::model::binding::{BindingDecl, buffer_target};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Geometry, GpuAgentModel, PassCtx, PassId};
-use henad_core::model::{Model, SimState};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::topology::TopologyHint;
-use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
+use henad_core::model::SimState;
+use henad_core::params::ParamValue;
+use henad_core::view::{StatEntry, stat_entries};
 
 use crate::display_scale::display_dims;
 use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
-use crate::gpu::primitives::dispatch::linear_dispatch;
+use crate::gpu::contracts::{assert_buffer_labels, assert_workgroup_size};
+use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
 use crate::gpu::primitives::pipeline::{compute_pipeline, lane_buffer, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::gpu::primitives::reduce::GpuLaneReduce;
@@ -100,62 +100,6 @@ fn stamps(
         })
 }
 
-/// The `Model` half for a [`GpuAgentModel`]: metadata plus a state factory.
-pub struct GpuAgentModelDescriptor<M: GpuAgentModel> {
-    ctx: GpuContext,
-    _marker: PhantomData<M>,
-}
-
-impl<M: GpuAgentModel> GpuAgentModelDescriptor<M> {
-    pub fn new(ctx: GpuContext) -> Self {
-        Self {
-            ctx,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<M: GpuAgentModel> Model for GpuAgentModelDescriptor<M> {
-    type State = GpuAgentState<M>;
-
-    fn name(&self) -> &'static str {
-        M::NAME
-    }
-
-    fn id(&self) -> &'static str {
-        M::ID
-    }
-
-    fn description(&self) -> &'static str {
-        M::DESCRIPTION
-    }
-
-    /// Everything is reload-only here, because `GpuAgentState::set_param` rejects the lot.
-    fn param_descriptors(&self) -> Vec<ParamDescriptor> {
-        M::param_descriptors()
-            .into_iter()
-            .map(ParamDescriptor::on_reload)
-            .collect()
-    }
-
-    fn stat_descriptors(&self) -> Vec<StatDescriptor> {
-        M::STATS.to_vec()
-    }
-
-    /// A model that declares a display pass draws a grid layer under its agents.
-    fn topology_hint(&self) -> TopologyHint {
-        TopologyHint {
-            grid: M::DISPLAY.is_some(),
-            agents: true,
-            edges: false,
-        }
-    }
-
-    fn create_state(&self, params: &[ParamValue]) -> Self::State {
-        GpuAgentState::new(&self.ctx, params)
-    }
-}
-
 /// GPU-resident state for a [`GpuAgentModel`]. Owned exclusively by the GPU sim thread once
 /// spawned.
 pub struct GpuAgentState<M: GpuAgentModel> {
@@ -193,6 +137,15 @@ pub struct GpuAgentState<M: GpuAgentModel> {
     _marker: PhantomData<M>,
 }
 
+impl<M: GpuAgentModel> std::fmt::Debug for GpuAgentState<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuAgentState")
+            .field("model", &M::ID)
+            .field("tick", &self.tick)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<M: GpuAgentModel> GpuAgentState<M> {
     pub fn new(ctx: &GpuContext, params: &[ParamValue]) -> Self {
         Self::new_seeded(ctx, params, None)
@@ -225,8 +178,8 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         for (spec, len) in M::BUFFERS.iter().zip(M::buffer_lens(&geom)) {
             demand.push_sides(&format!("{}_{}", M::ID, spec.label), len, spec.double_buffered);
         }
-        if M::INDEX {
-            demand.push_index(M::ID, geom.n_cells, geom.num_agents);
+        if let Some(grid) = geom.index {
+            demand.push_index(M::ID, grid.num_cells(), geom.num_agents);
         }
         if M::DISPLAY.is_some() {
             demand.set_display(geom.width, geom.height, limits);
@@ -273,8 +226,16 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
     /// # Panics
     ///
     /// If the device cannot hold the model. The backstop, not the diagnostic, since a UI
-    /// asks [`Self::demand`] first.
+    /// asks [`Self::demand`] first. Also if a shader declares another workgroup size than its pass
+    /// dispatches, or a buffer label is reserved or ends in `_in` or `_out`.
     #[expect(clippy::too_many_lines, reason = "one linear construction of every wgpu object")]
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "atomics"),
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the agent layers hold wgpu buffers, which atomics leave unsendable"
+        )
+    )]
     pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;
         let queue = &ctx.queue;
@@ -287,6 +248,20 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             M::ID,
             shortfalls.join("; ")
         );
+        assert_buffer_labels(M::ID, M::BUFFERS.iter().map(|spec| spec.label));
+        // Every pass but the display folds a linear domain onto workgroups of `WORKGROUP`.
+        let linear = [WORKGROUP, 1, 1];
+        for (pass, shader) in M::STEP_PASSES
+            .iter()
+            .map(|spec| (spec.label, spec.shader))
+            .chain([("reduce leaf", M::REDUCE.shader)])
+            .chain(M::ACTIONS.iter().map(|action| (action.desc.id, action.pass.shader)))
+        {
+            assert_workgroup_size(M::ID, pass, shader, linear);
+        }
+        if let Some(spec) = &M::DISPLAY {
+            assert_workgroup_size(M::ID, "display", spec.shader, [spec.workgroup, spec.workgroup, 1]);
+        }
 
         let mut geom = Self::geometry_for(params, &limits);
         let (num_agents, extent) = (geom.num_agents, geom.extent);
@@ -576,7 +551,7 @@ impl PassBuilder<'_> {
         self.pass::<M>(id, label, shader, bindings, linear_dispatch(invocations), invocations)
     }
 
-    /// `groups.0` is the fold width the prelude's `linear_index` expects, so it goes in the
+    /// `groups.0` is the fold width `henad::dispatch::linear_index` expects, so it goes in the
     /// uniform as `groups_x`.
     fn pass<M: GpuAgentModel>(
         &self,

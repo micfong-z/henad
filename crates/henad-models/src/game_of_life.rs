@@ -31,6 +31,7 @@ pub const PALETTE: [[u8; 4]; 2] = [
     [0x00, 0xE6, 0x76, 0xFF], // Alive - green
 ];
 
+#[derive(Debug)]
 pub struct GameOfLifeModel;
 
 impl GridModel for GameOfLifeModel {

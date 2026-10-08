@@ -69,6 +69,18 @@ pub struct ScatterGrid {
     forced: Option<Strategy>,
 }
 
+/// Prints the arm and its sizes, not the scratch buffers.
+impl std::fmt::Debug for ScatterGrid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScatterGrid")
+            .field("n_cells", &self.n_cells)
+            .field("combine", &self.combine)
+            .field("strategy", &self.strategy)
+            .field("heap_bytes", &self.heap_bytes())
+            .finish_non_exhaustive()
+    }
+}
+
 impl ScatterGrid {
     pub fn new(n_cells: usize, combine: Combine) -> Self {
         Self::with_budget(n_cells, combine, SHADOW_BUDGET_BYTES)

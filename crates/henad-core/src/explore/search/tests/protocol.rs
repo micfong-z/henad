@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::explore::design::MAX_CONFIGS;
 use crate::explore::search::genetic::{GeneticSettings, MAX_POPULATION, MAX_TOURNAMENT_SIZE};
 use crate::explore::search::hill_climb::HillClimbSettings;
 use crate::explore::search::pse::{PatternAxis, PatternSpaceSettings};
@@ -199,6 +200,18 @@ fn a_search_spec_checks_its_objective_and_settings() {
 
     let empty = spec(SearchAlgorithm::Random, 0);
     assert_eq!(empty.check(), Err(SearchSpecError::NoEvaluations));
+
+    // The regression. A batch past the plan's config cap passed the check, and the first ask aborted on allocation.
+    let mut widest = spec(SearchAlgorithm::Random, u64::MAX);
+    widest.batch_size = MAX_CONFIGS;
+    assert_eq!(widest.check(), Ok(()));
+    widest.batch_size = MAX_CONFIGS + 1;
+    assert_eq!(
+        widest.check(),
+        Err(SearchSpecError::BatchTooLarge {
+            batch_size: MAX_CONFIGS + 1
+        })
+    );
 
     let genetic = spec(
         SearchAlgorithm::Genetic(GeneticSettings {

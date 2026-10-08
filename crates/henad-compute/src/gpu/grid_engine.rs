@@ -7,29 +7,21 @@ use std::sync::Arc;
 
 use henad_core::authoring::model::binding::{BindingDecl, buffer_target};
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
-use henad_core::model::{Model, SimState};
-use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::topology::TopologyHint;
-use henad_core::view::{StatDescriptor, StatEntry, stat_entries};
+use henad_core::model::SimState;
+use henad_core::params::ParamValue;
+use henad_core::view::{StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
 use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
+use crate::gpu::contracts::{assert_buffer_labels, assert_workgroup_size};
 use crate::gpu::primitives::pipeline::{compute_pipeline, uniform_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
 use crate::snapshot::GpuSnapshot;
 
-/// The uniform every display and reduce shader reads, mirroring `Dims` in `shared/dims.wgsl`.
-///
-/// Hand written rather than generated, since no shader in this crate uses the type and naga drops
-/// what nothing references. `henad_models` sees both sides and asserts they agree.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Dims {
-    pub grid: [u32; 2],
-    pub tex: [u32; 2],
-}
+/// The uniform every display and reduce shader reads, generated from `henad::dims` through `grid_dims.wgsl`.
+pub(crate) type Dims = crate::shader_bindings::henad::dims::Dims;
 
 /// One ping-ponged pair of storage buffers.
 struct BufferPair {
@@ -49,62 +41,6 @@ struct ActionPass {
 impl ActionPass {
     fn bind(&self, a_is_current: bool) -> &wgpu::BindGroup {
         if a_is_current { &self.bind_a } else { &self.bind_b }
-    }
-}
-
-/// The `Model` half for a [`GpuGridModel`]: metadata plus a state factory.
-///
-/// Holds a cloned [`GpuContext`], which is how the registry hands a device down to a model without
-/// any global state.
-pub struct GpuGridModelDescriptor<M: GpuGridModel> {
-    ctx: GpuContext,
-    _marker: PhantomData<M>,
-}
-
-impl<M: GpuGridModel> GpuGridModelDescriptor<M> {
-    pub fn new(ctx: GpuContext) -> Self {
-        Self {
-            ctx,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<M: GpuGridModel> Model for GpuGridModelDescriptor<M> {
-    type State = GpuGridState<M>;
-
-    fn name(&self) -> &'static str {
-        M::NAME
-    }
-
-    fn id(&self) -> &'static str {
-        M::ID
-    }
-
-    fn description(&self) -> &'static str {
-        M::DESCRIPTION
-    }
-
-    /// Everything is reload-only here, because `GpuGridState::set_param` rejects the lot.
-    fn param_descriptors(&self) -> Vec<ParamDescriptor> {
-        M::param_descriptors()
-            .into_iter()
-            .map(ParamDescriptor::on_reload)
-            .collect()
-    }
-
-    fn stat_descriptors(&self) -> Vec<StatDescriptor> {
-        M::STATS.to_vec()
-    }
-
-    /// Still a 2D grid, just getting its pixels from a texture instead of a cell buffer. The UI
-    /// branches on the *snapshot* variant, not on this hint.
-    fn topology_hint(&self) -> TopologyHint {
-        TopologyHint::GRID
-    }
-
-    fn create_state(&self, params: &[ParamValue]) -> Self::State {
-        GpuGridState::new(&self.ctx, params)
     }
 }
 
@@ -145,6 +81,17 @@ pub struct GpuGridState<M: GpuGridModel> {
     current_is_a: bool,
 
     _marker: PhantomData<M>,
+}
+
+impl<M: GpuGridModel> std::fmt::Debug for GpuGridState<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuGridState")
+            .field("model", &M::ID)
+            .field("tick", &self.tick)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<M: GpuGridModel> GpuGridState<M> {
@@ -202,7 +149,8 @@ impl<M: GpuGridModel> GpuGridState<M> {
     /// # Panics
     ///
     /// If the device cannot hold the model. The backstop, not the diagnostic, since a UI
-    /// asks [`Self::demand`] first.
+    /// asks [`Self::demand`] first. Also if a shader declares another workgroup size than
+    /// [`GpuGridModel::WORKGROUP_SIZE`], or a buffer label is reserved or ends in `_in` or `_out`.
     #[expect(clippy::too_many_lines)]
     pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;
@@ -218,6 +166,19 @@ impl<M: GpuGridModel> GpuGridState<M> {
             M::ID,
             shortfalls.join("; ")
         );
+        assert_buffer_labels(M::ID, M::BUFFERS.iter().copied());
+        // Every pass dispatches square workgroups of `WORKGROUP_SIZE`.
+        let square = [M::WORKGROUP_SIZE, M::WORKGROUP_SIZE, 1];
+        for (pass, shader) in [
+            ("step", M::STEP_SHADER),
+            ("display", M::DISPLAY_SHADER),
+            ("reduce", M::REDUCE_SHADER),
+        ]
+        .into_iter()
+        .chain(M::ACTIONS.iter().map(|action| (action.desc.id, action.shader)))
+        {
+            assert_workgroup_size(M::ID, pass, shader, square);
+        }
 
         // --- Ping-ponged storage buffers, seeded from the model ---
         // Buffer lengths come from the model, not from the cell count: a bit-packed model holds
@@ -298,7 +259,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
             &format!("{}_dims_buffer", M::ID),
             bytemuck::bytes_of(&Dims {
                 grid: [width, height],
-                tex: [tex.0, tex.1],
+                tex: tex.into(),
             }),
         );
 

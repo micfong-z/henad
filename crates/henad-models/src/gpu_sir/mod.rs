@@ -9,15 +9,15 @@
 //! one round, and uses the result for its transition. This makes the GPU stream different from
 //! the CPU stream. See `tests` for further details.
 //!
-//! That RNG buffer is why this model sets `BUFFER_COUNT = 2`: the engine ping-pongs the state and
+//! That RNG buffer is why this model declares two `BUFFERS`: the engine ping-pongs the state and
 //! RNG buffers together, in lockstep. Only the state buffer (index 0) is visible to the display
 //! and reduce shaders.
 
-use henad_compute::cpu::grid_engine::GRID_INIT_SEED;
+use henad_compute::cpu::grid_engine::{GRID_INIT_SEED, grid_init_rng};
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
-use henad_core::authoring::primitives::rng::{mix_seed, xorshift64};
+use henad_core::authoring::primitives::rng::{mix_seed, pcg_hash, xorshift64};
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -37,7 +37,8 @@ henad_core::params! {
     const PARAM_HEIGHT = u32_param("grid_height", "Grid Height", DEFAULT_DIM, 1, 16_384);
     const PARAM_INFECTION_RATE =
         f32_param("infection_rate", "Infection Rate", DEFAULT_INFECTION_RATE, 0.0, 1.0, Some(0.01));
-    const PARAM_RECOVERY_RATE = f32_param("recovery_rate", "Recovery Rate", DEFAULT_RECOVERY_RATE, 0.0, 1.0, Some(0.01));
+    const PARAM_RECOVERY_RATE =
+        f32_param("recovery_rate", "Recovery Rate", DEFAULT_RECOVERY_RATE, 0.0, 1.0, Some(0.01));
     const PARAM_INITIAL_INFECTED_PCT = f32_param(
         "initial_infected_pct",
         "Initial Infected",
@@ -69,13 +70,6 @@ pub fn seed_cells(width: u32, height: u32, initial_infected_pct: f32, mut rng: u
     cells
 }
 
-/// Matches `pcg_hash` in `step.wgsl` bit-for-bit (u32 arithmetic wraps identically on both sides).
-fn pcg_hash(input: u32) -> u32 {
-    let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
-    let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
-    (word >> 22) ^ word
-}
-
 /// Initial per-cell RNG state, seeded independently of the S/I state via `RNG_INIT_SEED`.
 fn seed_rng_states(width: u32, height: u32, seed: u64) -> Vec<u32> {
     let seed32 = (seed ^ (seed >> 32)) as u32;
@@ -84,6 +78,7 @@ fn seed_rng_states(width: u32, height: u32, seed: u64) -> Vec<u32> {
         .collect()
 }
 
+#[derive(Debug)]
 pub struct GpuSir;
 
 impl GpuGridModel for GpuSir {
@@ -127,10 +122,8 @@ impl GpuGridModel for GpuSir {
 
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let initial_infected_pct = extract_f32(params, PARAM_INITIAL_INFECTED_PCT, DEFAULT_INITIAL_INFECTED_PCT);
-        let (cells, rng) = match seed {
-            Some(s) => (mix_seed(s), mix_seed(s ^ RNG_INIT_SEED)),
-            None => (GRID_INIT_SEED, RNG_INIT_SEED),
-        };
+        let cells = grid_init_rng(seed);
+        let rng = seed.map_or(RNG_INIT_SEED, |s| mix_seed(s ^ RNG_INIT_SEED));
         vec![
             seed_cells(width, height, initial_infected_pct, cells),
             seed_rng_states(width, height, rng),
@@ -170,19 +163,22 @@ impl GpuGridModel for GpuSir {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use henad_compute::cpu::grid_engine::GridModelState;
+    use henad_compute::cpu::grid_engine::{GRID_PARAM_BASE, GridModelState};
     use henad_compute::gpu::GpuContext;
     use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::GpuSimState as _;
+    use henad_core::authoring::model::grid_model::GridModel as _;
+    use henad_core::grid::Grid2D;
     use henad_core::model::SimState as _;
     use henad_core::view::StatEntry;
+    use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
     use crate::sir::SirGridModel;
 
     type State = GpuGridState<GpuSir>;
 
     pub(super) fn headless_context() -> Option<GpuContext> {
-        crate::tests::support::headless_context("gpu_sir_test_device", wgpu::Features::empty())
+        headless_test_device(&TestDeviceRequest::baseline())
     }
 
     pub(super) fn params(
@@ -302,6 +298,23 @@ mod tests {
         }
     }
 
+    /// The port repeats `SirGridModel::init` rather than calling it, so every cell is compared.
+    #[test]
+    fn the_seeded_grid_matches_the_cpu_init() {
+        let (width, height) = (37u32, 23u32);
+        let p = params(width, height, 0.3, 0.05, 0.2);
+        for seed in [None, Some(7)] {
+            let mut grid = Grid2D::new(width, height);
+            SirGridModel::init(&mut grid, &p[GRID_PARAM_BASE..], &mut grid_init_rng(seed));
+            let cpu: Vec<u32> = grid.current().iter().copied().map(u32::from).collect();
+            assert_eq!(
+                GpuSir::seed_buffers(width, height, &p, seed)[0],
+                cpu,
+                "the seeded state differs from the CPU grid for seed {seed:?}"
+            );
+        }
+    }
+
     /// Initial seeding uses the same PRNG, traversal order, and threshold as the CPU model, so the
     /// tick-0 compartment counts (before any RNG-dependent step) must match exactly.
     #[test]
@@ -368,7 +381,7 @@ mod runner_tests {
 
     use super::GpuSir;
     use super::tests::{headless_context, params};
-    use crate::registry::{ModelState, model_registry};
+    use henad_compute::entry::ModelState;
     use henad_core::view::StatValue;
 
     fn wait_for(thread: &mut GpuSimThread, timeout: Duration, pred: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
@@ -428,13 +441,13 @@ mod runner_tests {
             return;
         };
 
-        let entries = model_registry(Some(ctx.clone()));
-        let entry = entries
-            .iter()
-            .find(|e| e.id == "gpu_sir")
+        let models = crate::example_models();
+        let entry = models
+            .lookup("gpu_sir", Some(&ctx))
             .expect("a GPU context must make the GPU SIR model selectable");
 
-        let built = (entry.create)(&params(32, 32, 0.3, 0.05, 0.1), None)
+        let built = entry
+            .build(&params(32, 32, 0.3, 0.05, 0.1), None, Some(&ctx))
             .unwrap_or_else(|fault| panic!("the GPU SIR entry's factory failed to build: {fault}"));
         let ModelState::Gpu(mut state) = built else {
             panic!("the GPU SIR entry's factory must yield ModelState::Gpu, not ModelState::Cpu");

@@ -51,6 +51,9 @@ Each lane is declared `dual` or `plain`, one decision per lane rather than one f
     Only the agent owning the slot ever touches it, and there is nothing to buffer.
     Ants declares every lane `plain`, since its ants never read one another.
 
+Every `dual` lane comes before the first `plain` lane.
+A doc comment or an attribute on a lane goes on its field, and on both fields of a `dual` lane.
+
 Beyond the lanes themselves, the macro generates two view types, named in the declaration.
 `BoidRead` holds the current side of every `dual` lane and is readable by every agent, while `BoidChunk` is the slice of each writable lane that one chunk owns.
 
@@ -70,7 +73,8 @@ These four types wire your model into the engine.
 
 :   Use `SpatialHash` when agents read each other.
     `NoIndex` covers a population that ignores its neighbours.
-    The hash is a flat counting-sort grid rebuilt every tick from agent positions, and all neighbour queries, toroidal wraparound included, go through `query_radius`.
+    Both are at `henad::authoring`, and the authoring prelude holds them.
+    The hash is a flat counting-sort grid rebuilt every tick from agent positions, and all neighbour queries, toroidal wraparound included, go through `query_radius` or `for_each_within`.
     `index_cell_size` is read every tick, so a live parameter edit reaches the index.
 
 `Tally`

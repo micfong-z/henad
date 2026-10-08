@@ -31,8 +31,10 @@ pub const PALETTE: [[u8; 4]; 3] = [
     [0x80, 0x80, 0x80, 0xFF], // R - gray
 ];
 
+#[derive(Debug)]
 pub struct SirGridModel;
 
+#[derive(Debug)]
 pub struct SirParams {
     infection_rate: f32,
     recovery_rate: f32,

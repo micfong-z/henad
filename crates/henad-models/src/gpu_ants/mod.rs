@@ -6,7 +6,7 @@
 //! unlike [`crate::gpu_boids`] a run does replay.
 
 use henad_compute::cpu::agent_engine::{
-    AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_model_param_descriptors, split_params,
+    AGENT_INIT_SEED, NUM_AGENTS, WORLD_HEIGHT, WORLD_WIDTH, agent_init_rng, agent_model_param_descriptors, split_params,
 };
 use henad_compute::cpu::field::scalar::ScalarFieldSpec as _;
 use henad_core::action::ActionDescriptor;
@@ -15,7 +15,7 @@ use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{
     BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentAction, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
-use henad_core::authoring::primitives::rng::mix_seed;
+use henad_core::authoring::primitives::rng::{mix_seed, pcg_hash};
 use henad_core::helpers::{extract_f32, extract_u32};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -49,6 +49,7 @@ const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
 const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
 
+#[derive(Debug)]
 pub struct GpuAnts;
 
 impl GpuAgentModel for GpuAnts {
@@ -61,7 +62,7 @@ impl GpuAgentModel for GpuAnts {
 
     /// Nothing is double buffered. Ants never read one another, and deposits land in `accum`
     /// rather than in the field the step is reading.
-    const BUFFERS: &'static [BufferSpec] = SPECS;
+    const BUFFERS: &'static [BufferSpec] = BUFFER_SPECS;
     const POS_BUFFER: usize = POS;
     const COLOR_BUFFER: usize = COLOR;
 
@@ -136,7 +137,7 @@ impl GpuAgentModel for GpuAnts {
         // Seeding through the model's own `init` is what keeps tick 0 bit identical. A port would
         // be free to drift.
         let mut lanes = AntLanes::alloc(n);
-        let mut rng_state = seed.map_or(AGENT_INIT_SEED, mix_seed);
+        let mut rng_state = agent_init_rng(seed);
         AntsModel::init(
             &mut lanes,
             geom.extent,
@@ -195,7 +196,7 @@ impl GpuAgentModel for GpuAnts {
             PassId::Step(_) => bytemuck::bytes_of(&MergeParams {
                 n: ctx.invocations,
                 groups_x: ctx.groups_x,
-                evaporation: PheromoneField::from_params(params).evaporation,
+                evaporation: PheromoneField::from_params(split_params::<AntsModel>(params).1).evaporation,
                 low: LOW_PHEROMONE,
             })
             .to_vec(),
@@ -204,7 +205,7 @@ impl GpuAgentModel for GpuAnts {
                 height: geom.height,
                 n_cells: geom.n_cells,
                 _pad: 0,
-                tex: [geom.display.0, geom.display.1],
+                tex: geom.display.into(),
                 _pad2: [0; 2],
                 palette: packed_cell_palette(),
             })
@@ -252,25 +253,18 @@ fn pack_state(lanes: &AntLanes, i: usize) -> u32 {
     packed
 }
 
-/// Matches `pcg_hash` in `step.wgsl` bit-for-bit (u32 arithmetic wraps identically on both sides).
-fn pcg_hash(input: u32) -> u32 {
-    let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
-    let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
-    (word >> 22) ^ word
-}
-
 fn seed_rng_states(n: usize, seed: u64) -> Vec<u32> {
     let seed32 = (seed ^ (seed >> 32)) as u32;
     (0..n).map(|i| pcg_hash(seed32 ^ i as u32)).collect()
 }
 
-/// Packed for the step uniform, from the one palette in `ants` so colours cannot drift.
 /// Where `AntsModel::init` puts every ant, in world coordinates.
 fn nest_position(width: u32, height: u32) -> (f32, f32) {
     let nest = nest_cell(width, height) as u32;
     ((nest % width) as f32, (nest / width) as f32)
 }
 
+/// Packed for the step uniform, from the one palette in `ants` so colours cannot drift.
 fn packed_ant_palette() -> [u32; 2] {
     [u32::from_le_bytes(ANT_PALETTE[0]), u32::from_le_bytes(ANT_PALETTE[1])]
 }
@@ -296,11 +290,12 @@ mod tests {
     use henad_compute::cpu::agent_engine::AgentModelState;
     use henad_compute::gpu::{GpuAgentState, GpuContext};
     use henad_core::model::SimState as _;
+    use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
     type State = GpuAgentState<GpuAnts>;
 
     fn headless_context() -> Option<GpuContext> {
-        crate::tests::support::headless_context("gpu_ants_test_device", wgpu::Features::empty())
+        headless_test_device(&TestDeviceRequest::baseline())
     }
 
     fn params(num_agents: u32, world: f32) -> Vec<ParamValue> {
@@ -341,7 +336,8 @@ mod tests {
         }
     }
 
-    /// Both backends seed through `AntsModel::init`, so any later divergence is the step's.
+    /// Both backends seed through `AntsModel::init`, by default and from a seed, so any later divergence is the
+    /// step's.
     #[test]
     fn the_initial_colony_matches_the_cpu_model() {
         let Some(ctx) = headless_context() else {
@@ -350,13 +346,15 @@ mod tests {
         };
 
         let values = params(2_000, 200.0);
-        let gpu = State::new(&ctx, &values);
-        let cpu = AgentModelState::<AntsModel>::from_params(&values);
+        for seed in [None, Some(7)] {
+            let gpu = State::new_seeded(&ctx, &values, seed);
+            let cpu = AgentModelState::<AntsModel>::from_params_seeded(&values, seed);
 
-        let (pos_x, pos_y) = positions(&gpu);
-        let cpu_lanes = cpu.lanes();
-        assert_eq!(pos_x, cpu_lanes.pos_x, "initial x positions must match the CPU model");
-        assert_eq!(pos_y, cpu_lanes.pos_y, "initial y positions must match the CPU model");
+            let (pos_x, pos_y) = positions(&gpu);
+            let cpu_lanes = cpu.lanes();
+            assert_eq!(pos_x, cpu_lanes.pos_x, "initial x positions differ for seed {seed:?}");
+            assert_eq!(pos_y, cpu_lanes.pos_y, "initial y positions differ for seed {seed:?}");
+        }
     }
 
     /// The reference is bounded, not toroidal like the other models.
@@ -503,6 +501,34 @@ mod tests {
                 "ant {i} left the field at ({x}, {y}); the dispatch fold probably missed it"
             );
         }
+    }
+
+    /// The field's parameters sit after the model's own in the composed list, and the merge reads
+    /// them from there.
+    #[test]
+    fn the_merge_pass_reads_the_evaporation_param() {
+        let mut values = params(1_000, 200.0);
+        let Some(index) = GpuAnts::param_descriptors()
+            .iter()
+            .position(|desc| desc.id == "evaporation")
+        else {
+            panic!("gpu_ants declares no evaporation parameter");
+        };
+        values[index] = ParamValue::F32(0.95);
+
+        let geom = State::geometry_for(&values, &wgpu::Limits::default());
+        let ctx = PassCtx {
+            geom: &geom,
+            invocations: geom.n_cells * 2,
+            groups_x: 1,
+            seed: 0,
+        };
+        let bytes = GpuAnts::pass_params_bytes(PassId::Step(1), ctx, &values);
+        let merge = bytemuck::pod_read_unaligned::<MergeParams>(&bytes);
+        assert_eq!(
+            merge.evaporation, 0.95,
+            "the merge uniform ignores the evaporation parameter"
+        );
     }
 
     /// The site markers are what the ants navigate between, so a layout mismatch would make the

@@ -43,6 +43,7 @@ pub const MAX_VIEW_BUDGET_MS: f32 = PUMP_BUDGET_MS as f32;
 pub const MAX_VIEW_BUDGET_MS: f32 = f32::INFINITY;
 
 /// What a loop wants after one [`SimLoop::pump`].
+#[derive(Debug)]
 pub enum Pace {
     /// Nothing until a command arrives.
     Idle,
@@ -72,7 +73,7 @@ pub trait SimLoop {
 ///
 /// `fresh` is the newest publish waiting to be taken, `spare` a consumed one handed back for its
 /// buffers. A `fresh` nobody took is stale by definition, so it becomes the next spare.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct SnapshotSlot {
     fresh: Option<Snapshot>,
     spare: Option<Snapshot>,
@@ -85,10 +86,24 @@ pub type SharedSlot = Arc<Mutex<SnapshotSlot>>;
 impl SnapshotSlot {
     /// For a loop that publishes its own first snapshot from [`SimLoop::start`], where building
     /// one here would mean reporting stats nothing has read back yet.
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "atomics"),
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "a snapshot holds wgpu handles, which atomics leave unsendable"
+        )
+    )]
     pub fn empty() -> SharedSlot {
         Arc::new(Mutex::new(Self::default()))
     }
 
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "atomics"),
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "a snapshot holds wgpu handles, which atomics leave unsendable"
+        )
+    )]
     pub fn with_initial(snapshot: Snapshot) -> SharedSlot {
         Arc::new(Mutex::new(Self {
             fresh: Some(snapshot),

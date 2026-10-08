@@ -1,0 +1,11 @@
+parameters for gpu_boids (Boids Flocking (GPU)):
+  index=0 id=num_agents kind=u32 default=50000 min=1 max=1000000 apply=reload label="Number of Agents"
+  index=1 id=world_width kind=f32 default=1000 min=1 max=10000 apply=reload label="World Width"
+  index=2 id=world_height kind=f32 default=1000 min=1 max=10000 apply=reload label="World Height"
+  index=3 id=visual_range kind=f32 default=50 min=1 max=200 apply=reload label="Visual Range"
+  index=4 id=protected_range kind=f32 default=8 min=0.5 max=50 apply=reload label="Protected Range"
+  index=5 id=separation kind=f32 default=0.05 min=0 max=2 apply=reload label="Separation"
+  index=6 id=alignment kind=f32 default=0.05 min=0 max=2 apply=reload label="Alignment"
+  index=7 id=cohesion kind=f32 default=0.0005 min=0 max=0.01 apply=reload label="Cohesion"
+  index=8 id=max_speed kind=f32 default=15 min=1 max=50 apply=reload label="Max Speed"
+  index=9 id=min_speed kind=f32 default=3 min=0.5 max=20 apply=reload label="Min Speed"

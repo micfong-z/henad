@@ -46,15 +46,19 @@ The core of the Game of Life model looks like this:
 
 -   **[Installation](guide/installation.md)**
     
-    What you need to build Henad on your machine, natively and for the web.
+    Installing the app and the command line, or building them from a clone, natively and for the web.
 
 -   **[Running Henad](guide/running.md)**
     
     The desktop app, the browser build, and the headless benchmark runner.
 
--   **[The models](reference/models.md)**
+-   **[Your own project](guide/your-project.md)**
+
+    A project of your own from the template, with its own models, app, command line and web build.
+
+-   **[Example models](reference/models.md)**
     
-    Ten models ship with the engine, six on the CPU and four on the GPU.
+    Ten example models, six on the CPU and four on the GPU.
 
 -   **[Authoring](authoring/index.md)**
   
@@ -66,7 +70,7 @@ The core of the Game of Life model looks like this:
 
 -   **[Architecture](developing/architecture.md)**
   
-    How the six crates fit together and where a tick actually runs.
+    How the eight crates fit together and where a tick actually runs.
 
 </div>
 

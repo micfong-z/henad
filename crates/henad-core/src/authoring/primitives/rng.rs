@@ -1,7 +1,9 @@
 //! Random draws, and the generator behind them.
 //!
-//! The draws take raw bits so the same function serves both backends. Only they have WGSL twins:
-//! the generators differ, since WGSL has no 64-bit integers and uses `pcg_hash` over `u32`.
+//! The draws take raw bits so the same function serves both backends, and each but [`next_index`]
+//! has a WGSL twin. The generators differ. WGSL has no 64-bit integers, and a shader advances with
+//! [`pcg_hash`] over `u32` where a CPU kernel runs [`xorshift64`] over `u64`. [`pcg_hash`] is here
+//! as well, for a GPU port that seeds a state buffer the shader draws from.
 //!
 //! Every draw needs its own [`next_bits`]. Two draws off one word are correlated, and nothing will
 //! say so.
@@ -13,6 +15,26 @@ pub fn xorshift64(mut state: u64) -> u64 {
     state ^= state >> 7;
     state ^= state << 17;
     state
+}
+
+/// Returns the 32-bit PCG hash of `input`, the generator a WGSL shader advances with.
+///
+/// The twin of `henad::rng::pcg_hash`, bit for bit. A GPU port seeds a per-agent or per-cell state
+/// buffer with it, so the shader's first draw comes from a known state.
+///
+/// # Examples
+///
+/// ```
+/// use henad_core::authoring::primitives::rng::pcg_hash;
+///
+/// assert_eq!(pcg_hash(0), 129_708_002);
+/// assert_eq!(pcg_hash(1), 2_831_084_092);
+/// ```
+#[inline]
+pub fn pcg_hash(input: u32) -> u32 {
+    let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
+    (word >> 22) ^ word
 }
 
 /// Scrambles a user-supplied seed into a usable RNG state.

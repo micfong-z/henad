@@ -1,0 +1,6 @@
+# Reference output that tests compare byte for byte. Git keeps their line endings as committed.
+crates/henad-explore/tests/fixtures/** -text
+crates/henad-cli/tests/golden/** -text
+
+# Bash fails on a script with CRLF line ends. A Windows checkout writes them unless told otherwise.
+*.sh text eol=lf

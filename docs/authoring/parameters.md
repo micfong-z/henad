@@ -15,6 +15,8 @@ This page covers the declaration API, when an edit lands live, when it needs a r
 ```
 
 The `params!` macro expands to one `const` per entry, holding an index derived from the entry's position in the declaration, together with a `descriptors()` function that returns the whole list.
+The example models sit below the facade, in henad-models, and name it `henad_core::params!`.
+A project names it `henad::params!`, as the template's `src/vote.rs` does.
 Your impl forwards `param_descriptors` to `descriptors`, and reads values back through the generated index constants.
 
 ```rust
@@ -84,7 +86,7 @@ The app reads the same flag and can say so before anything is sent.
 Declare `.on_reload()` for any parameter that only `init` reads.
 Otherwise a live edit to it changes nothing, with no sign that it failed.
 
-A registry test builds every model, edits every parameter, and asserts that the state accepts exactly the edits the descriptor says it will.
+The testing kit's `ApplyModes` check builds the model, edits every parameter, and asserts that the state accepts exactly the edits the descriptor says it will.
 
 ## Hot parameters
 
@@ -156,7 +158,7 @@ See [the command line](../reference/cli.md) for the full CLI, and [the models](.
 ## Actions
 
 An action is a one-off change to the state that the user asks for between ticks, such as Game of Life's Randomise and Clear.
-You declare actions next to the parameters, through the `actions!` macro.
+You declare actions next to the parameters, through the `actions!` macro, which a project names `henad::actions!`.
 
 ```rust
 --8<-- "crates/henad-models/src/game_of_life.rs:actions"
@@ -222,8 +224,11 @@ The result shows even while the simulation is paused.
 The Parameters tab draws one button per action under the parameter widgets, disabled until the selected model is built.
 `henad-cli --act ID@TICK` runs one when the state reaches that tick, and [the command line](../reference/cli.md) covers the flag.
 
-A registry test presses every declared action on a freshly built state, and asserts that the state accepts each one and refuses an index past the last.
-A second one asserts that no two actions of a model share an id, since `--act` could not tell them apart.
+The testing kit's `Actions` check presses every declared action on a freshly built state, and asserts that the state accepts each one and refuses an index past the last.
+Its `ActionIds` check asserts that no two actions of a model share an id, since `--act` could not tell them apart.
+It also refuses an id that is empty or holds whitespace or `=`.
+Neither `--vary action.NAME=LEVELS` nor a design table can name one.
+`ParamIds` refuses the same in a parameter id, and an id that starts with `action.`.
 
 ## Actions on the GPU
 

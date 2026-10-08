@@ -956,12 +956,12 @@ fn aggregate_row(ui: &mut Ui, layout: &FormLayout, id: Id, aggregate: &mut Aggre
 
 #[cfg(test)]
 mod tests {
+    use henad_compute::entry::ModelEntry;
     use henad_core::explore::search::genetic::GeneticSettings;
     use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
     use henad_core::params::ParamValue;
     use henad_explore::probe::ProbeReport;
-    use henad_explore::schema::model_schema;
-    use henad_models::registry::{ModelEntry, model_registry};
+    use henad_models::example_models;
 
     use super::{
         AXES_UNSET, OutputChoices, axes_note, batches_feedback, evaluations_feedback, initial_samples_feedback,
@@ -973,15 +973,12 @@ mod tests {
     use crate::ui::sweep::layout::Note;
 
     fn sir() -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "sir")
-            .expect("SIR is registered")
+        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     fn search_draft(algorithm: DraftAlgorithm) -> SweepDraft {
         let entry = sir();
-        let mut draft = SweepDraft::new(&model_schema(&entry));
+        let mut draft = SweepDraft::new(&entry.schema());
         draft.mode = DraftMode::Search;
         draft.search.algorithm = algorithm;
         draft
@@ -1061,7 +1058,7 @@ mod tests {
     #[test]
     fn the_output_lists_offer_what_the_runs_do_not_record_yet() {
         let entry = sir();
-        let schema = model_schema(&entry);
+        let schema = entry.schema();
         let mut draft = search_draft(DraftAlgorithm::Random);
         let choices = OutputChoices::of(&draft, &schema);
         assert_eq!(
@@ -1091,13 +1088,10 @@ mod tests {
 
     #[test]
     fn the_output_lists_offer_the_parts_of_a_vector_stat() {
-        let entry = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "boids")
-            .expect("boids is registered");
-        let schema = model_schema(&entry);
+        let entry = example_models().get("boids").cloned().expect("boids is registered");
+        let schema = entry.schema();
         let values: Vec<ParamValue> = entry
-            .param_descriptors
+            .param_descriptors()
             .iter()
             .map(|descriptor| descriptor.kind.default_value())
             .collect();

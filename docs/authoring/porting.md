@@ -30,18 +30,21 @@ fn param_descriptors() -> Vec<ParamDescriptor> {
 ```
 
 Both backends then take the same vector in the same order, and moving a slider on one gives you the same simulation on the other.
-Read the engine's own three parameters back out by the names `cpu::agent_engine` gives them, and route the rest through the CPU model's `from_params`.
+Read the engine's own three parameters back out by the names `henad::authoring` gives them, `NUM_AGENTS`, `WORLD_WIDTH` and `WORLD_HEIGHT`, and route the rest through the CPU model's `from_params`.
 
 ## Seed through the CPU `init`
 
 ```rust
 fn seed_buffers(geom: &Geometry, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u8>> {
     let mut lanes = BoidLanes::alloc(geom.num_agents as usize);
-    let mut rng = seed.map_or(AGENT_INIT_SEED, mix_seed);
+    let mut rng = agent_init_rng(seed);
     BoidsModel::init(&mut lanes, geom.extent, split_params::<BoidsModel>(params).0, &mut rng);
     // ... pack the lanes into the buffer layout the shaders read
 }
 ```
+
+`agent_init_rng` starts the generator where the CPU engine starts it for the same seed, and `grid_init_rng` does the same for a grid model.
+Both sit in the authoring prelude.
 
 This call belongs in `seed_buffers` and nowhere else in a port.
 Confining it there means the initial state is imported rather than reimplemented, and the port has no room to drift from its counterpart.
@@ -51,7 +54,9 @@ Boids interleaves `pos_x`/`pos_y` into the `vec2<f32>` layout its shaders read, 
 
 ## Tick 0 and after
 
-**Tick 0 is bit-identical** across all four ports, because it comes straight from the CPU `init`.
+**Tick 0 is bit-identical** across all four ports.
+The two agent ports call the CPU `init`.
+The two grid ports repeat it draw for draw, and a test compares their seeded buffers with the CPU grid.
 
 **After tick 0 it depends on the model.**
 
@@ -98,16 +103,20 @@ Two limits shape ports in practice.
 - Storage bindings per shader stage sit at 8 in the WebGPU baseline, and the engine asks for exactly what the widest model needs rather than for headroom.
   If a pass needs nine storage buffers, restructure the pass rather than asking for a higher limit.
 
-A registry test builds every GPU model on a stock baseline device and asserts at the same time that the capacity check agrees, so an over-reported pass count fails there.
+The testing kit's `BaselineBuild` check builds a GPU model on the test's device and asserts at the same time that the capacity check agrees, so an over-reported pass count fails there.
+The example models' test gives it a stock baseline device.
 
 ## Check it against the counterpart
 
 Register the port, then run both sides.
+In the template, the two are `vote` and `gpu_vote`:
 
 ```bash
-cargo run --release -p henad-cli -- boids --steps 1000 --reps 3
-cargo run --release -p henad-cli -- gpu_boids --steps 1000 --reps 3
+cargo run --release --bin my-model-cli -- vote --steps 1000 --reps 3
+cargo run --release --bin my-model-cli -- gpu_vote --steps 1000 --reps 3
 ```
+
+In a clone of Henad's repository, `cargo run --release -p henad-cli -- boids` and `gpu_boids` run the example pair the same way.
 
 A CPU run against a GPU run measures throughput, and it says nothing about correctness.
 For correctness, compare like with like: the same backend, the same seed, and the invariants holding on both sides.
@@ -116,4 +125,4 @@ For correctness, compare like with like: the same backend, the same seed, and th
 
 - [Shaders and bindings](shaders.md) covers the WGSL side.
 - [Determinism and testing](determinism.md) covers the oracles a diverging port needs.
-- [Registering a model](registering.md) describes the last step for either backend.
+- [Model sets](model-sets.md) describes the last step for either backend.

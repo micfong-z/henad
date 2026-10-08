@@ -4,6 +4,7 @@ use std::fmt;
 
 use web_time::Instant;
 
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{Fault, STEPPING, catching};
 use henad_compute::gpu::{Demand, GpuContext};
 #[cfg(not(target_arch = "wasm32"))]
@@ -11,7 +12,6 @@ use henad_compute::gpu::{GpuSimState, fault::catching_on, stepping};
 use henad_core::explore::plan::Plan;
 use henad_core::export::StatColumns;
 use henad_core::params::ParamValue;
-use henad_models::registry::{ModelEntry, ModelState};
 
 use crate::output::manifest::now_unix_ms;
 
@@ -52,7 +52,10 @@ impl ProbeReport {
         params: &[ParamValue],
         seed: Option<u64>,
     ) -> Result<Self, ProbeError> {
-        match (entry.create)(params, seed).map_err(ProbeError::Fault)? {
+        if entry.gpu_needs().is_some() && gpu.is_none() {
+            return Err(ProbeError::NoDevice);
+        }
+        match entry.build(params, seed, gpu).map_err(ProbeError::Fault)? {
             ModelState::Cpu(mut state) => {
                 let stats = catching(STEPPING, || {
                     state.prepare_view();
@@ -214,7 +217,9 @@ fn probe_gpu(
     seed: Option<u64>,
 ) -> Result<ProbeReport, ProbeError> {
     let ctx = gpu.ok_or(ProbeError::NoDevice)?;
-    let stats = catching_on(ctx, STEPPING, || stepping::sample_stats(&mut *state, ctx)).map_err(ProbeError::Fault)?;
+    let stats = catching_on(ctx, STEPPING, || stepping::sample_stats(&mut *state, ctx))
+        .flatten()
+        .map_err(ProbeError::Fault)?;
     stepping::wait(ctx).map_err(ProbeError::Fault)?;
     Ok(ProbeReport {
         params: params.to_vec(),
@@ -223,7 +228,7 @@ fn probe_gpu(
         heap_bytes: state.heap_bytes() as u64,
         population: state.population(),
         parallel_jobs: state.parallel_jobs(),
-        demand: entry.demand(params),
+        demand: entry.demand(params, &ctx.device.limits()),
     })
 }
 
@@ -330,8 +335,8 @@ impl std::error::Error for CapacityError {}
 /// # Errors
 ///
 /// Returns [`CapacityError`] when some config needs more than the device allows.
-pub fn check_capacity(entry: &ModelEntry, plan: &Plan, limits: &wgpu::Limits) -> Result<(), CapacityError> {
-    if entry.capacity.is_none() {
+pub(crate) fn check_capacity(entry: &ModelEntry, plan: &Plan, limits: &wgpu::Limits) -> Result<(), CapacityError> {
+    if entry.gpu_needs().is_none() {
         return Ok(());
     }
     let mut error = CapacityError {
@@ -353,22 +358,19 @@ pub fn check_capacity(entry: &ModelEntry, plan: &Plan, limits: &wgpu::Limits) ->
 
 #[cfg(test)]
 mod tests {
+    use henad_compute::entry::{ModelEntry, register_grid_model};
     use henad_compute::fault::install_panic_hook;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
     use henad_core::params::ParamValue;
-    use henad_models::registry::{ModelEntry, model_registry, register_grid_model};
+    use henad_models::example_models;
 
     use super::{MAX_LISTED_CONFIGS, MAX_PROBED_CONFIGS, ProbeError, ProbeReport, check_capacity};
-    use crate::schema::model_schema;
     use crate::tests::broken::DividesByParam;
 
     fn entry(id: &str) -> ModelEntry {
-        model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == id)
-            .expect("the model is registered")
+        example_models().get(id).cloned().expect("the model is registered")
     }
 
     #[test]
@@ -376,7 +378,7 @@ mod tests {
         let entry = entry("boids");
         let mut spec = SweepSpec::new("boids");
         spec.fixed = vec![("num_agents".to_owned(), "300".to_owned())];
-        let plan = spec.plan(&model_schema(&entry)).expect("a valid spec");
+        let plan = spec.plan(&entry.schema()).expect("a valid spec");
         let probe = ProbeReport::for_plan(&entry, None, &plan).expect("boids builds");
         assert_eq!(probe.population, 300);
         assert!(probe.heap_bytes > 0);
@@ -408,10 +410,12 @@ mod tests {
         let gpu_sir = crate::tests::support::entry("gpu_sir", Some(&ctx));
         let sides = ["16", "32", "48", "64", "80", "96", "112"];
         let plan = square_grids("gpu_sir", &sides)
-            .plan(&model_schema(&gpu_sir))
+            .plan(&gpu_sir.schema())
             .expect("a valid spec");
         let fitting = plan.config(0).expect("the plan has config 0");
-        let demand = gpu_sir.demand(&fitting.params).expect("a GPU model has a demand");
+        let demand = gpu_sir
+            .demand(&fitting.params, &ctx.device.limits())
+            .expect("a GPU model has a demand");
         let largest = demand
             .buffers
             .iter()
@@ -431,7 +435,7 @@ mod tests {
 
         let game_of_life = entry("game_of_life");
         let plan = square_grids("game_of_life", &sides)
-            .plan(&model_schema(&game_of_life))
+            .plan(&game_of_life.schema())
             .expect("a valid spec");
         assert!(
             check_capacity(&game_of_life, &plan, &limits).is_ok(),
@@ -463,7 +467,7 @@ mod tests {
         install_panic_hook();
         let entry = register_grid_model::<DividesByParam>();
         let plan = init_divisors(&["0", "0", "1"])
-            .plan(&model_schema(&entry))
+            .plan(&entry.schema())
             .expect("a valid spec");
         let probe = ProbeReport::for_plan(&entry, None, &plan).expect("config 2 builds");
         assert_eq!(probe.params[3], ParamValue::U32(1), "init_divisor of config 2");
@@ -474,7 +478,7 @@ mod tests {
         );
 
         let zeros = vec!["0"; MAX_PROBED_CONFIGS + 1];
-        let plan = init_divisors(&zeros).plan(&model_schema(&entry)).expect("a valid spec");
+        let plan = init_divisors(&zeros).plan(&entry.schema()).expect("a valid spec");
         let error = ProbeReport::for_plan(&entry, None, &plan).expect_err("no config builds");
         let ProbeError::EveryConfigFaulted(faults) = &error else {
             panic!("{error:?}");
@@ -494,7 +498,7 @@ mod tests {
             ("world_width".to_owned(), "64".to_owned()),
             ("world_height".to_owned(), "64".to_owned()),
         ];
-        let plan = spec.plan(&model_schema(&entry)).expect("a valid spec");
+        let plan = spec.plan(&entry.schema()).expect("a valid spec");
         let probe = ProbeReport::for_plan(&entry, None, &plan).expect("ants builds");
         let [one, four] = [1, 4].map(|threads| probe.rebuilt_on(&entry, threads).expect("ants builds on a pool"));
         assert!(

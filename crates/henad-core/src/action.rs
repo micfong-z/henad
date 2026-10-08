@@ -50,7 +50,7 @@ macro_rules! actions {
         $crate::__indices!(0usize, $([$(#[$meta])* $vis $name],)+);
 
         /// This model's actions, in index order.
-        const ACTION_SPECS: &[$crate::action::ActionDescriptor] = &[$($descriptor),+];
+        const ACTION_SPECS: &[$crate::__macro_support::ActionDescriptor] = &[$($descriptor),+];
     };
 }
 
@@ -131,6 +131,8 @@ impl Schedule {
     /// Resolves each `ID@TICK` against `actions`, the actions of model `model_id`. Order is preserved, so two at
     /// one tick run as given.
     ///
+    /// An entry splits at its last `@`, and an id can hold one.
+    ///
     /// # Errors
     ///
     /// Returns [`ScheduleError`] for an entry that does not read as `ID@TICK`, or names no action in `actions`.
@@ -138,7 +140,7 @@ impl Schedule {
         let mut entries = Vec::with_capacity(raw.len());
         for spec in raw {
             let (id, tick) = spec
-                .split_once('@')
+                .rsplit_once('@')
                 .ok_or_else(|| ScheduleError::BadEntry { raw: spec.clone() })?;
             let tick = tick.parse::<u64>().map_err(|source| ScheduleError::BadTick {
                 raw: spec.clone(),
@@ -205,8 +207,8 @@ impl Schedule {
     /// `start + 1..=start + count`. A run of no steps fires nothing under either rule.
     pub fn fire_ticks(&self, start: u64, count: u64, fire: Fire) -> Vec<u64> {
         let window = match fire {
-            Fire::BeforeStep => start..start + count,
-            Fire::AfterStep => start + 1..start + count + 1,
+            Fire::BeforeStep => start..start.saturating_add(count),
+            Fire::AfterStep => start.saturating_add(1)..start.saturating_add(count).saturating_add(1),
         };
         let mut ticks: Vec<u64> = self
             .entries
@@ -354,6 +356,21 @@ mod tests {
         assert_eq!(
             refuse("reset@5", &actions),
             "unknown action 'reset' for 'life' (has randomise, clear)"
+        );
+    }
+
+    /// The regression. An entry split at its first `@`, so an id holding one read the rest of the id as its tick.
+    #[test]
+    fn an_id_holding_an_at_sign_resolves() {
+        let actions = [ActionDescriptor::new("spawn@centre", "Spawn at centre")];
+        let schedule = Schedule::parse(&["spawn@centre@100".to_owned()], "life", &actions).expect("a declared action");
+        assert_eq!(
+            schedule.entries(),
+            [Scheduled {
+                index: 0,
+                id: "spawn@centre".to_owned(),
+                tick: 100,
+            }]
         );
     }
 }

@@ -10,6 +10,7 @@ use web_time::Instant;
 use crate::ui::results::ResultsRequest;
 use crate::ui::results::plot::{MAX_PLOT_POINTS, config_color, decimate, labeled_combo, refresh_due};
 use crate::ui::results::store::{BandKind, ResultsStore, SeriesBand};
+use crate::ui::sweep::draft::capitalize;
 use crate::ui::{plural, show_plot};
 
 /// Most configs the view draws at once.
@@ -104,14 +105,15 @@ pub fn series_ui(
     held_line(ui, store, selected_configs, request);
 
     let drawn: Vec<u64> = selected_configs.iter().take(MAX_DRAWN_CONFIGS).copied().collect();
+    let configs = store.configs_noun();
     if selected_configs.len() > MAX_DRAWN_CONFIGS {
         ui.weak(format!(
-            "Showing the first {MAX_DRAWN_CONFIGS} of {} selected configurations",
+            "Showing the first {MAX_DRAWN_CONFIGS} of {} selected {configs}",
             selected_configs.len()
         ));
     }
     if drawn.is_empty() {
-        ui.weak("Select configurations to draw.");
+        ui.weak(format!("Select {configs} to draw."));
         return;
     }
     let plotted = view.cached_plot(ui.ctx(), store, drawn);
@@ -213,7 +215,8 @@ fn controls(ui: &mut egui::Ui, store: &ResultsStore, view: &mut SeriesView, sele
 
 /// Draws the menu that picks the configs the view draws.
 fn configs_menu(ui: &mut egui::Ui, store: &ResultsStore, selected_configs: &mut BTreeSet<u64>) {
-    ui.menu_button(format!("Configurations ({})", selected_configs.len()), |ui| {
+    let configs = store.configs_noun();
+    ui.menu_button(format!("{} ({})", capitalize(configs), selected_configs.len()), |ui| {
         ui.horizontal(|ui| {
             if ui.button("All").clicked() {
                 selected_configs.extend(store.config_ids());
@@ -243,7 +246,7 @@ fn configs_menu(ui: &mut egui::Ui, store: &ResultsStore, selected_configs: &mut 
         );
         if store.config_count() > MAX_LISTED_CONFIGS {
             ui.weak(format!(
-                "First {MAX_LISTED_CONFIGS} of {} configurations",
+                "First {MAX_LISTED_CONFIGS} of {} {configs}",
                 store.config_count()
             ));
         }
@@ -435,8 +438,7 @@ mod tests {
     use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
     use henad_core::explore::plan::Plan;
     use henad_core::explore::spec::SweepSpec;
-    use henad_explore::schema::model_schema;
-    use henad_models::registry::model_registry;
+    use henad_models::example_models;
 
     use super::{ConfigBand, SeriesPlot, SeriesView, center_line, draw_plot, thin_band};
     use crate::ui::results::plot::{MAX_PLOT_POINTS, REFRESH_INTERVAL};
@@ -559,17 +561,14 @@ mod tests {
 
     #[test]
     fn a_rerun_that_replaces_a_run_refreshes_its_band() {
-        let sir = model_registry(None)
-            .into_iter()
-            .find(|entry| entry.id == "sir")
-            .expect("SIR is registered");
+        let sir = example_models().get("sir").cloned().expect("SIR is registered");
         let mut spec = SweepSpec::new("sir");
         spec.run.steps = 10;
         spec.run.replicates = 2;
         spec.measure.stats_every = 10;
         spec.measure.series_every = 10;
-        let plan = Arc::new(spec.plan(&model_schema(&sir)).expect("a valid spec"));
-        let mut store = ResultsStore::for_sweep(Arc::clone(&plan), &sir, 0, None, usize::MAX);
+        let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
+        let mut store = ResultsStore::for_sweep(Arc::clone(&plan), &sir, None, usize::MAX);
         store.set_columns(&["Susceptible", "Infected", "Recovered"].map(str::to_owned), &[]);
         store.push_run(run(&plan, 0, 2.0), false);
         store.push_run(run(&plan, 1, 4.0), false);

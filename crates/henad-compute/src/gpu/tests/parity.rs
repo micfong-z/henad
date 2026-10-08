@@ -1,6 +1,6 @@
-//! Holds each `shared::space` primitive to its Rust twin on a real device.
+//! Holds each `henad::space` and `henad::rng` primitive to its Rust twin on a real device.
 //!
-//! Drives `shared/parity.wgsl`, where the ops themselves live.
+//! Drives `parity.wgsl` beside this file, where the ops themselves live.
 //!
 //! Integer results must match exactly. Float results are compared with a tolerance, since WGSL's
 //! float `%` is defined through a division while Rust's is an exact fmod, so the two round
@@ -11,12 +11,12 @@ use henad_core::authoring::primitives::space::{self, Boundary, MOORE_COLUMN_MAJO
 
 use crate::gpu::headless_context;
 use crate::gpu::primitives::pipeline::compute_pipeline;
-use crate::shader_bindings::shared::parity::{
+use crate::shader_bindings::henad::space as codes;
+use crate::shader_bindings::tests::parity::{
     Case, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT, OP_NEIGHBOR_COUNT,
-    OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD, OP_WRAP_INDEX, Out,
-    SHADER_STRING, WgpuBindGroup0,
+    OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_PCG_HASH, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD,
+    OP_WRAP_INDEX, Out, SHADER_STRING, WgpuBindGroup0,
 };
-use crate::shader_bindings::shared::space as codes;
 
 /// Absolute slack allowed on a float result that goes through WGSL's float `%`.
 const TOLERANCE: f32 = 1e-4;
@@ -94,8 +94,9 @@ fn wrap_index_checks(out: &mut Vec<Check>) {
 
 fn wrap_coord_checks(out: &mut Vec<Check>) {
     for world in [1.0f32, 7.5, 10.0, 128.0] {
-        for k in -40i32..=40 {
-            let v = k as f32 * 0.5;
+        // A tiny negative value whose wrap rounds up to `world`.
+        let tiny = [-1e-8f32, -1e-12];
+        for v in (-40i32..=40).map(|k| k as f32 * 0.5).chain(tiny) {
             let mut case = blank(OP_WRAP_COORD);
             case.f = [v, world, 0.0, 0.0];
             out.push(Check {
@@ -262,6 +263,15 @@ fn rng_checks(out: &mut Vec<Check>) {
             });
         }
 
+        let mut case = blank(OP_PCG_HASH);
+        case.u = [bits, 0, 0, 0];
+        out.push(Check {
+            case,
+            // The shader returns the word through a bitcast, since the result lane holds `i32`.
+            expected: ints([rng::pcg_hash(bits).cast_signed(), 0, 0, 0]),
+            call: format!("pcg_hash({bits})"),
+        });
+
         let mut case = blank(OP_CHOICE3);
         case.u = [bits, 0, 0, 0];
         out.push(Check {
@@ -410,7 +420,8 @@ fn every_space_primitive_agrees_with_its_wgsl_twin() {
         }
         let tolerance = tolerance_for(check.case.op);
         for (k, (expected, got)) in check.expected.f.iter().zip(&got.f).enumerate() {
-            if (expected - got).abs() > tolerance {
+            // A NaN on either side compares false against any tolerance, and no Rust twin returns one.
+            if expected.is_nan() || got.is_nan() || (expected - got).abs() > tolerance {
                 failures.push(format!("{}: float {k} expected {expected}, got {got}", check.call));
             }
         }

@@ -13,5 +13,5 @@ pub mod network_engine;
 pub mod primitives;
 pub mod sim_thread;
 
-pub use agent_engine::{AgentModelState, agent_model_param_descriptors};
-pub use grid_engine::{GRID_INIT_SEED, GridModelState, grid_model_param_descriptors};
+pub use agent_engine::{AGENT_INIT_SEED, AgentModelState, agent_init_rng, agent_model_param_descriptors};
+pub use grid_engine::{GRID_INIT_SEED, GridModelState, grid_init_rng, grid_model_param_descriptors};
