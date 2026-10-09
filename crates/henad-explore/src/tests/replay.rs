@@ -2,6 +2,7 @@
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use henad_compute::cpu::sim_thread::SimThread;
 use henad_compute::entry::ModelState;
@@ -34,15 +35,21 @@ fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Takes snapshots from `take` until a snapshot reports `tick`, or gives up after ten seconds.
+/// Time that [`snapshot_at`] waits for a loop to publish its target tick.
+///
+/// The adapter of the Windows runner is WARP, which renders on the CPU that the tests beside it share.
+const SNAPSHOT_DEADLINE: Duration = Duration::from_secs(120);
+
+/// Takes snapshots from `take` until a snapshot reports `tick`, or gives up after [`SNAPSHOT_DEADLINE`].
 fn snapshot_at(mut take: impl FnMut() -> Option<Snapshot>, tick: u64) -> Option<Snapshot> {
-    for _ in 0..1000 {
+    let deadline = Instant::now() + SNAPSHOT_DEADLINE;
+    while Instant::now() < deadline {
         if let Some(snap) = take()
             && snap.tick == tick
         {
             return Some(snap);
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(10));
     }
     None
 }
