@@ -319,7 +319,7 @@ Make sure that `--release` is present to reach full performance.
     ```
 
     This runs with no rendering, no sim thread and no pacing, so the reported number measures nothing but `step()`.
-    Add `--set grid_width=4096 --set grid_height=4096` to see the model at scale, which reaches around 950 steps a second on a 24-core desktop.
+    Add `--set grid_width=4096 --set grid_height=4096` to see the model at scale, which reaches around 1,100 steps a second on a 12-core desktop CPU.
 
 === "Browser"
 

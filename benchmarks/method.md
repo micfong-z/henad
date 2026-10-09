@@ -103,7 +103,7 @@ Every port's grid came out bit-identical to the NetLogo fixture recorded for the
 The Agents.jl comparison reports this next to time, and it is worth keeping: an engine that wins on throughput and loses badly here has moved the cost rather than removed it.
 
 Read the column, not the row, and read it loosely.
-Henad's files also declare that model's parameters, statistics and display palette, which in most engines live in the harness.
+Henad's files also declare that model's parameters, statistics, actions and display palette, which in most engines live in the harness.
 NetLogo's are worse: a model is one file, so its count includes the scenario setup and the fixture export as well as the rule, and its Game of Life is 52 lines of which 9 are the rule.
 Making this table fair needs a way to count only the rule, which does not exist yet.
 
