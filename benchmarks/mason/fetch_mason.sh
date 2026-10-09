@@ -8,7 +8,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 jar="$here/mason.22.jar"
-url="${MASON_URL:-https://cs.gmu.edu/~eclab/projects/mason/mason.22.jar}"
+url="${MASON_URL:-https://people.cs.gmu.edu/~eclab/projects/mason/mason.22.jar}"
 digest="e9726d0fc049090ea7d0105e5e4b130abcad7eb32a7d8c0e54d1d33016e9e3d8"
 
 check() {
