@@ -13,7 +13,7 @@ docs_dir = "docs"
 site_dir = "site"
 
 
-extra_css = ["stylesheets/henad.css"]
+extra_css = ["stylesheets/mcs.css", "stylesheets/henad.css"]
 
 nav = [
     { "Overview" = [
@@ -131,6 +131,7 @@ nav = [
             { "#46, 2026-10-03" = "developing/agent-record/20261003-46-library-branch-review.md" },
             { "#47, 2026-10-08" = "developing/agent-record/20261008-47-doc-comment-pass.md" },
             { "#48, 2026-10-09" = "developing/agent-record/20261009-48-rtx-4090-rerun.md" },
+            { "#49, 2026-10-09" = "developing/agent-record/20261009-49-docs-theme.md" },
         ] },
     ] },
 ]
@@ -175,6 +176,8 @@ pymdownx.snippets.dedent_subsections = true
 [project.theme]
 variant = "modern"
 language = "en"
+# The fonts are self-hosted in docs/assets/fonts and declared in henad.css.
+font = false
 
 features = [
     "content.action.edit",
@@ -212,15 +215,15 @@ view = "material/file-code-outline"
 top = "material/arrow-up"
 
 [project.theme.icon.admonition]
-note = "material/information-box-outline"
+note = "material/information-outline"
 abstract = "material/note-text-outline"
 info = "material/information-outline"
-tip = "material/lightbulb-outline"
+tip = "material/lightbulb-on-outline"
 success = "material/check"
 question = "material/help-circle"
 warning = "material/alert-outline"
 failure = "material/close-octagon-outline"
-danger = "material/flash-alert-outline"
+danger = "material/alert-octagon-outline"
 bug = "material/bug-outline"
 example = "material/flask-outline"
 quote = "material/format-quote-open-outline"

@@ -54,6 +54,13 @@ Material's Markdown dialect, so admonitions are `!!! note`, not GitHub's `> [!NO
 as a literal blockquote. Python dependencies are pinned in `pyproject.toml` and `uv.lock`, and CI
 builds the site on every pull request and deploys it to GitHub Pages from `master`.
 
+The site's look is CSS over Zensical's modern variant, with no template override and no script.
+`docs/stylesheets/mcs.css` lists the MCS entries as `--mcs-<hue>-<step>`, equal to `ui/mcs.rs`, and
+`docs/stylesheets/henad.css` names them by role per scheme (`--hd-*`) and points Zensical's `--md-*`
+variables at the roles. A new style takes a role rather than a hex value, and corners are square
+everywhere. Code is set in subsets of Iosevka Micfong under `docs/assets/fonts`, and `theme.font =
+false` keeps Google Fonts out. A fence in a new language needs a label line in `henad.css`.
+
 Anything under `docs/` is published, the session records included. Those sit under
 `developing/agent-record/` behind a landing page that tells readers what they are. Notes written for
 nobody but the maintainer still do not belong anywhere under `docs/`.

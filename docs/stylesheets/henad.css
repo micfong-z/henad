@@ -1,41 +1,1441 @@
-:root {
-  --md-text-font: "IBM Plex Sans";
-}
+/*
+ * The Henad documentation theme, over Zensical's modern variant.
+ *
+ * The look follows the Micfong Typst template and micfong.space, with ideas from PRTS Design: square corners,
+ * one-pixel rules, callouts ruled on the left under a tinted title strip, bracketed code, and a dark band holding
+ * the header and the tabs in both schemes. Colours are MCS entries from mcs.css, named here by role.
+ */
+
+/* Fonts */
 
 @font-face {
   font-family: "IBM Plex Sans";
   src: url("../assets/fonts/IBM Plex Sans Var-Roman.woff2") format("woff2");
   font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
 }
 
 @font-face {
   font-family: "IBM Plex Sans";
   src: url("../assets/fonts/IBM Plex Sans Var-Italic.woff2") format("woff2");
   font-style: italic;
+  font-weight: 100 700;
+  font-display: swap;
+}
+
+/* Subsets of Micfong's Iosevka build, holding Latin, punctuation, arrows, maths and box drawing. */
+@font-face {
+  font-family: "Iosevka Micfong";
+  src: url("../assets/fonts/Iosevka Micfong-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Iosevka Micfong";
+  src: url("../assets/fonts/Iosevka Micfong-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Iosevka Micfong";
+  src: url("../assets/fonts/Iosevka Micfong-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --md-text-font: "IBM Plex Sans";
+  --md-code-font: "Iosevka Micfong";
+
+  /* The band behind the header, the tabs and the footer, the same in both schemes. */
+  --hd-band: #000;
+  --hd-band-rule: var(--mcs-gray-800);
+  --hd-band-text: #fff;
+  --hd-band-text-secondary: var(--mcs-gray-400);
+  --hd-accent: var(--mcs-orange-500);
+  --hd-rule: 1px;
+}
+
+/* Roles per scheme. "strong" is text on a tint and "subtle" the tint itself, a title strip or a large fill. */
+
+[data-md-color-scheme="default"] {
+  --hd-page: #fff;
+  --hd-text: var(--mcs-gray-900);
+  --hd-text-strong: #000;
+  --hd-heading: #000;
+  --hd-text-secondary: var(--mcs-gray-700);
+  --hd-text-faint: var(--mcs-gray-400);
+  --hd-rule-light: var(--mcs-gray-200);
+  --hd-rule-dark: var(--mcs-gray-300);
+  --hd-surface: var(--mcs-gray-50);
+  --hd-surface-strong: var(--mcs-gray-100);
+  --hd-accent-ink: var(--mcs-orange-700);
+  --hd-accent-ink-hover: var(--mcs-orange-800);
+  --hd-accent-tint: color-mix(in srgb, var(--mcs-orange-500) 8%, transparent);
+  --hd-selection: var(--mcs-orange-600);
+  --hd-highlight: var(--mcs-yellow-300);
+
+  --hd-gray-strong: var(--mcs-gray-700);
+  --hd-gray-subtle: var(--mcs-gray-50);
+  --hd-red-strong: var(--mcs-red-700);
+  --hd-red-subtle: var(--mcs-red-50);
+  --hd-orange-strong: var(--mcs-orange-700);
+  --hd-orange-subtle: var(--mcs-orange-50);
+  --hd-yellow-strong: var(--mcs-yellow-700);
+  --hd-yellow-subtle: var(--mcs-yellow-50);
+  --hd-green-strong: var(--mcs-green-700);
+  --hd-green-subtle: var(--mcs-green-50);
+  --hd-blue-strong: var(--mcs-blue-700);
+  --hd-blue-subtle: var(--mcs-blue-50);
+  --hd-purple-strong: var(--mcs-purple-700);
+  --hd-purple-subtle: var(--mcs-purple-50);
+
+  /* Syntax steps from the Typst template. The lighter hues take a step more weight on white. */
+  --hd-syntax-red: var(--mcs-red-600);
+  --hd-syntax-orange: var(--mcs-orange-700);
+  --hd-syntax-yellow: var(--mcs-yellow-700);
+  --hd-syntax-green: var(--mcs-green-700);
+  --hd-syntax-blue: var(--mcs-blue-600);
+  --hd-syntax-purple: var(--mcs-purple-600);
+  --hd-syntax-gray: var(--mcs-gray-600);
+
+  --color-foreground: 33 33 33;
+  --color-background: 255 255 255;
+  --color-background-subtle: 245 245 245;
+  --color-backdrop: 255 255 255;
+}
+
+[data-md-color-scheme="slate"] {
+  --hd-page: var(--mcs-gray-950);
+  --hd-text: var(--mcs-gray-300);
+  --hd-text-strong: var(--mcs-gray-100);
+  --hd-heading: #fff;
+  --hd-text-secondary: var(--mcs-gray-400);
+  --hd-text-faint: var(--mcs-gray-600);
+  --hd-rule-light: var(--mcs-gray-800);
+  --hd-rule-dark: var(--mcs-gray-700);
+  --hd-surface: var(--mcs-gray-900);
+  --hd-surface-strong: var(--mcs-gray-800);
+  --hd-accent-ink: var(--mcs-orange-500);
+  --hd-accent-ink-hover: var(--mcs-orange-300);
+  --hd-accent-tint: color-mix(in srgb, var(--mcs-orange-500) 10%, transparent);
+  --hd-selection: color-mix(in srgb, var(--mcs-orange-500) 67%, transparent);
+  --hd-highlight: var(--mcs-yellow-700);
+
+  --hd-gray-strong: var(--mcs-gray-200);
+  --hd-gray-subtle: var(--mcs-gray-900);
+  --hd-red-strong: var(--mcs-red-200);
+  --hd-red-subtle: var(--mcs-red-900);
+  --hd-orange-strong: var(--mcs-orange-200);
+  --hd-orange-subtle: var(--mcs-orange-900);
+  --hd-yellow-strong: var(--mcs-yellow-200);
+  --hd-yellow-subtle: var(--mcs-yellow-900);
+  --hd-green-strong: var(--mcs-green-200);
+  --hd-green-subtle: var(--mcs-green-900);
+  --hd-blue-strong: var(--mcs-blue-200);
+  --hd-blue-subtle: var(--mcs-blue-900);
+  --hd-purple-strong: var(--mcs-purple-200);
+  --hd-purple-subtle: var(--mcs-purple-900);
+
+  --hd-syntax-red: var(--mcs-red-300);
+  --hd-syntax-orange: var(--mcs-orange-200);
+  --hd-syntax-yellow: var(--mcs-yellow-200);
+  --hd-syntax-green: var(--mcs-green-200);
+  --hd-syntax-blue: var(--mcs-blue-300);
+  --hd-syntax-purple: var(--mcs-purple-300);
+  --hd-syntax-gray: var(--mcs-gray-500);
+
+  --color-foreground: 189 189 189;
+  --color-background: 19 19 19;
+  --color-background-subtle: 33 33 33;
+  --color-backdrop: 0 0 0;
+}
+
+/* Zensical's own variables, pointed at the roles. The extra attribute outranks the primary-colour rules. */
+[data-md-color-scheme][data-md-color-primary] {
+  --md-default-fg-color: var(--hd-text);
+  --md-default-fg-color--light: var(--hd-text-secondary);
+  --md-default-fg-color--lighter: var(--hd-text-faint);
+  --md-default-fg-color--lightest: var(--hd-rule-light);
+  --md-default-bg-color: var(--hd-page);
+  --md-default-bg-color--light: var(--hd-page);
+  --md-default-bg-color--lighter: var(--hd-page);
+  --md-default-bg-color--lightest: var(--hd-page);
+  --md-primary-fg-color: var(--hd-band);
+  --md-primary-fg-color--light: var(--hd-band);
+  --md-primary-fg-color--dark: var(--hd-band);
+  --md-primary-bg-color: var(--hd-band-text);
+  --md-primary-bg-color--light: var(--hd-band-text-secondary);
+  --md-accent-fg-color: var(--hd-accent-ink);
+  --md-accent-fg-color--transparent: var(--hd-accent-tint);
+  --md-accent-bg-color: var(--hd-page);
+  --md-typeset-color: var(--hd-text);
+  --md-typeset-a-color: var(--hd-accent-ink);
+  --md-typeset-table-color: var(--hd-rule-light);
+  --md-typeset-table-color--light: var(--hd-surface);
+  --md-typeset-kbd-color: var(--hd-surface-strong);
+  --md-typeset-kbd-accent-color: var(--hd-surface-strong);
+  --md-typeset-kbd-border-color: var(--hd-rule-dark);
+  --md-admonition-fg-color: var(--hd-text);
+  --md-admonition-bg-color: transparent;
+  --md-shadow-z1: 0 0 0 var(--hd-rule) var(--hd-rule-light);
+  --md-shadow-z2: 0 0 0 var(--hd-rule) var(--hd-rule-dark);
+  --md-shadow-z3: 0 0 0 var(--hd-rule) var(--hd-rule-dark);
+
+  --md-code-fg-color: var(--hd-text);
+  --md-code-bg-color: transparent;
+  --md-code-bg-color--light: var(--hd-page);
+  --md-code-bg-color--lighter: var(--hd-page);
+  --md-code-hl-color: var(--hd-highlight);
+  --md-code-hl-color--light: color-mix(in srgb, var(--mcs-yellow-500) 14%, transparent);
+  --md-code-hl-number-color: var(--hd-syntax-orange);
+  --md-code-hl-special-color: var(--hd-syntax-orange);
+  --md-code-hl-function-color: var(--hd-syntax-blue);
+  --md-code-hl-constant-color: var(--hd-syntax-orange);
+  --md-code-hl-keyword-color: var(--hd-syntax-purple);
+  --md-code-hl-string-color: var(--hd-syntax-green);
+  --md-code-hl-name-color: var(--hd-text);
+  --md-code-hl-operator-color: var(--hd-text);
+  --md-code-hl-punctuation-color: var(--hd-text);
+  --md-code-hl-comment-color: var(--hd-syntax-gray);
+  --md-code-hl-generic-color: var(--hd-syntax-gray);
+  --md-code-hl-variable-color: var(--hd-syntax-red);
+
+  --md-mermaid-font-family: var(--md-text-font-family);
+  --md-mermaid-edge-color: var(--hd-text-secondary);
+  --md-mermaid-node-bg-color: var(--hd-surface);
+  --md-mermaid-node-fg-color: var(--hd-text);
+  --md-mermaid-label-bg-color: var(--hd-page);
+  --md-mermaid-label-fg-color: var(--hd-text);
+}
+
+/* Square corners everywhere, as in PRTS Design and the app. */
+*,
+::before,
+::after {
+  border-radius: 0 !important;
 }
 
 body {
-  font-feature-settings: "kern", "liga", "tnum", "ss02", "ss01";
+  font-feature-settings: "kern", "liga", "tnum", "ss01", "ss02";
+  background-color: var(--hd-page);
 }
 
-/* Inline chip standing in for a button in the app. */
-.md-typeset .ui {
+::selection {
+  background-color: var(--hd-selection);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--hd-accent);
+  outline-offset: 2px;
+}
+
+/* Header and tabs */
+
+.md-header,
+.md-tabs {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--hd-band);
+  color: var(--hd-band-text);
+}
+
+.md-header {
+  position: sticky;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+/* micfong.space's grid with its crosshair, fading in from the left as PRTS fades its halftone. */
+.md-header::before,
+.md-tabs::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128'%3E%3Cpath d='M.5 0V128M32.5 0V128M64.5 0V128M96.5 0V128M0 31.5H128M0 63.5H128M0 95.5H128M0 127.5H128' stroke='%23212121'/%3E%3Cpath d='M64.5 55V72M56 63.5H73' stroke='%23616161'/%3E%3C/svg%3E");
+  /* The crosshairs sit on the header's middle line. At its edge, they were cut in half once the tabs scrolled away.
+   * Half the header's height, rounded to whole pixels, keeps them there when Zensical raises the root size. */
+  background-position: right -1px top -40px;
+  background-position: right -1px top calc(round(1.2rem, 1px) - 64px);
+  -webkit-mask-image: linear-gradient(to right, transparent 30%, #000 90%);
+  mask-image: linear-gradient(to right, transparent 30%, #000 90%);
+}
+
+/* The tabs continue the header's grid. 2.4rem is the header height. */
+.md-tabs::before {
+  background-position: right -1px top calc(-40px - 2.4rem);
+  background-position: right -1px top calc(round(1.2rem, 1px) - 2.4rem - 64px);
+}
+
+.md-header--shadow {
+  box-shadow: 0 var(--hd-rule) 0 var(--hd-band-rule);
+}
+
+.md-header__title {
+  color: var(--hd-band-text);
+}
+
+.md-header__topic:first-child {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.md-header__button,
+.md-header .md-source {
+  color: var(--hd-band-text);
+}
+
+.md-header .md-source__repository,
+.md-header .md-source__facts {
+  color: var(--hd-band-text-secondary);
+}
+
+.md-header .md-search__button {
+  background-color: var(--mcs-gray-900);
+  border: var(--hd-rule) solid var(--hd-band-rule);
+  color: var(--hd-band-text-secondary);
+  box-shadow: none;
+}
+
+.md-header .md-search__button:is(:hover, :focus) {
+  border-color: var(--mcs-gray-700);
+  background-color: var(--mcs-gray-900);
+  color: var(--hd-band-text);
+}
+
+.md-header .md-search__button::before {
+  background-color: currentcolor;
+}
+
+/* The header buttons knock the grid out behind them, as the search box does. A shadow widens the knockout past a
+ * crosshair's arms and leaves the focus outline alone. */
+.md-header .md-header__button:not(.md-logo),
+.md-header .md-source__icon svg {
+  background-color: var(--hd-band);
+  box-shadow: 0 0 0 4px var(--hd-band);
+}
+
+/* The repository name knocks the grid out as well. Its box starts 2rem back under the icon, so the fill starts at the
+ * text. */
+.md-header .md-source__repository {
+  margin-block: -0.2rem;
+  padding-block: 0.2rem;
+  background: linear-gradient(var(--hd-band), var(--hd-band)) right / calc(100% - 1.8rem) 100% no-repeat;
+  box-shadow: 0.2rem 0 0 var(--hd-band);
+}
+
+/* The page title knocks the grid out behind its line, as the header buttons do. */
+.md-header__topic {
+  background: linear-gradient(var(--hd-band), var(--hd-band)) center / 100% 1.6em no-repeat;
+}
+
+.md-header .md-search__button::after {
+  border: var(--hd-rule) solid var(--hd-band-rule);
+  background: var(--hd-band);
+  color: var(--hd-band-text-secondary);
+}
+
+/* Reading progress along the header's lower edge, where scroll-driven animations exist. */
+@supports (animation-timeline: scroll()) {
+  .md-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(-1 * var(--hd-rule));
+    height: var(--hd-rule);
+    background-color: var(--hd-accent);
+    transform-origin: left;
+    transform: scaleX(0);
+    animation: hd-reading-progress linear both;
+    animation-timeline: scroll(root block);
+  }
+
+  @keyframes hd-reading-progress {
+    to {
+      transform: scaleX(1);
+    }
+  }
+}
+
+.md-progress {
+  background-color: var(--hd-accent);
+}
+
+/* Zensical rules the tabs with an inset shadow in the scheme's rule colour, which the grid would cross. */
+.md-tabs {
+  border-bottom: var(--hd-rule) solid var(--hd-band-rule);
+  box-shadow: none;
+}
+
+.md-tabs__item {
+  min-width: 6.4rem;
+  padding: 0 0.4rem;
+  text-align: center;
+}
+
+.md-tabs__link {
+  justify-content: center;
+  color: var(--mcs-gray-300);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  opacity: 1;
+  text-transform: uppercase;
+}
+
+.md-tabs__link:focus,
+.md-tabs__link:hover {
+  color: var(--hd-band-text);
+}
+
+/* The current tab, as micfong.space marks it: a bar along the top over a faint tint. */
+.md-tabs__item--active {
+  border-bottom: 0;
+  background-color: color-mix(in srgb, var(--mcs-orange-500) 9%, transparent);
+  transition: background-color 0.25s;
+}
+
+/* Zensical hides the tabs after a little scrolling, and the tint goes with their labels. */
+.md-tabs[hidden] .md-tabs__item--active {
+  background-color: transparent;
+}
+
+.md-tabs__item--active::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background-color: var(--hd-accent);
+}
+
+.md-tabs__item--active .md-tabs__link {
+  color: var(--hd-band-text);
+}
+
+/* Shared label style for small group names: capitals and tracking. */
+.md-nav--secondary .md-nav__title,
+.md-footer__direction {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Navigation */
+
+.md-nav--primary .md-nav__link {
+  margin-top: 0.15em;
+  padding: 0.3em 0.6em;
+  border-left: 2px solid transparent;
+  color: var(--hd-text-secondary);
+}
+
+/* A page with no icon, such as an external link, keeps its title in line with the titles that follow an icon. */
+.md-nav--primary .md-nav__list:has(> .md-nav__item > a.md-nav__link > svg)
+  > .md-nav__item > a.md-nav__link:not(:has(> svg))::before {
+  content: "";
+  flex: none;
+  width: 1.3em;
+}
+
+/* Zensical's hover rules match [href] or [for] and skip the current item. These selectors match theirs to win. */
+.md-nav--primary .md-nav__link:is([href], [for]):is(:hover, :focus):not(.md-nav__link--active) {
+  background-color: var(--hd-surface);
+  border-left-color: var(--hd-rule-dark);
+  color: var(--hd-text);
+}
+
+.md-nav--primary .md-nav__item .md-nav__link--active {
+  background-color: var(--hd-accent-tint);
+  border-left-color: var(--hd-accent);
+  color: var(--hd-accent-ink);
+  font-weight: 700;
+}
+
+/* On a wide screen a group name in the sidebar is a label followed by a rule. */
+@media screen and (min-width: 76.25em) {
+  .md-nav--primary .md-nav__item--section > .md-nav__link {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-top: 1.2em;
+    padding-block: 0.2em;
+    padding-left: 0;
+    border-left: 0;
+    color: var(--hd-text-secondary);
+  }
+
+  .md-nav--primary .md-nav__item--section > .md-nav__link:hover {
+    background-color: transparent;
+  }
+
+  .md-nav--primary .md-nav__item--section > .md-nav__link > .md-ellipsis {
+    flex: 0 1 auto;
+  }
+
+  /* The rule takes only the space left on the label's line. A label that wraps has none. */
+  .md-nav--primary .md-nav__item--section > .md-nav__link::after {
+    content: "";
+    flex: 1 0 0;
+    border-top: var(--hd-rule) solid var(--hd-rule-light);
+  }
+
+  /* The toggle draws nothing at this width. Its box and Zensical's right padding wrapped the longer group names. */
+  .md-nav--primary .md-nav__item--section > .md-nav__link > .md-nav__icon {
+    display: none;
+  }
+
+  .md-nav--primary .md-nav__item--section > .md-nav__link:not(.md-nav__container) {
+    padding-right: 0;
+  }
+
+  /* A first group opens the sidebar level with the table of contents title. */
+  .md-nav--primary .md-nav__list > .md-nav__item--section:first-child > .md-nav__link {
+    margin-top: 0;
+  }
+}
+
+/* On a narrow screen the drawer title is a strip of the band, lettered as the header is. The white logo needs it in
+ * the light scheme. The negative margin reaches past the navigation's side margin to the drawer's edges. */
+@media screen and (max-width: 76.234375em) {
+  .md-nav--primary > .md-nav__title[for="__drawer"] {
+    margin: 0 -0.2rem;
+    background-color: var(--hd-band);
+    color: var(--hd-band-text);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  /* Zensical paints the overlay behind the drawer with a variable henad.css makes opaque. The page stays faintly
+   * visible behind it. */
+  .md-overlay {
+    background-color: color-mix(in srgb, var(--hd-page) 80%, transparent);
+  }
+}
+
+/* Table of contents, ruled on the left with the current section marked as in the navigation. */
+.md-nav--secondary .md-nav__title {
+  margin: 0 0 0.4em;
+  padding: 0.2em 0 0.2em 0.6em;
+  border-left: 2px solid var(--hd-rule-dark);
+  color: var(--hd-text-secondary);
+}
+
+.md-nav--secondary > .md-nav__list {
+  border-left: var(--hd-rule) solid var(--hd-rule-light);
+  counter-reset: hd-toc;
+}
+
+.md-nav--secondary .md-nav__list .md-nav__list {
+  margin-left: 0;
+}
+
+.md-nav--secondary .md-nav__link {
+  margin: 0 0 0 calc(-1 * var(--hd-rule));
+  padding: 0.25em 0.7em;
+  border-left: 2px solid transparent;
+  color: var(--hd-text-secondary);
+}
+
+/* A nested entry starts at its parent's text, past the padding, the number column and Zensical's 0.6rem gap. */
+.md-nav--secondary .md-nav__list .md-nav__list .md-nav__link {
+  padding-left: calc(2.1em + 0.6rem);
+}
+
+/* A third level steps in once more. */
+.md-nav--secondary .md-nav__list .md-nav__list .md-nav__list .md-nav__link {
+  padding-left: calc(2.9em + 0.6rem);
+}
+
+.md-nav--secondary .md-nav__link:is([href], [for]):is(:hover, :focus):not(.md-nav__link--active) {
+  color: var(--hd-text);
+}
+
+/* Code in a navigation entry takes the entry's colour and size, without Zensical's code box. */
+.md-nav .md-nav__link code {
+  padding: 0;
+  color: inherit;
+  font-size: 0.95em;
+}
+
+.md-nav--secondary .md-nav__link--active {
+  border-left-color: var(--hd-accent);
+  color: var(--hd-accent-ink);
+}
+
+/* The sidebar clips at the entry's left edge, which would cut an outer focus ring. */
+.md-nav--secondary .md-nav__link:focus-visible {
+  outline-offset: -2px;
+}
+
+/* In the floating panel of a narrow screen, the panel's frame already rules the left edge. */
+@media screen and (max-width: 59.984375em) {
+  .md-sidebar--secondary .md-nav--secondary > :is(.md-nav__title, .md-nav__list) {
+    border-left-color: transparent;
+  }
+}
+
+/* Section numbers, faded as the Typst template fades its heading counter. */
+.md-nav--secondary > .md-nav__list > .md-nav__item {
+  counter-increment: hd-toc;
+}
+
+.md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav__link::before {
+  content: counter(hd-toc);
+  flex: none;
+  min-width: 1.4em;
+  color: var(--hd-text-faint);
+  font-weight: 700;
+}
+
+/* Page */
+
+.md-path__link {
+  color: var(--hd-text-secondary);
+  font-weight: 600;
+}
+
+/* The page actions are bare icons, as a code block's buttons are. The page title is positioned for its permalink,
+ * and without a z-index of their own the buttons sit under it and take no clicks. */
+.md-typeset .md-content__button {
+  position: relative;
+  z-index: 1;
+  background-color: transparent;
+  color: var(--hd-text-faint);
+}
+
+.md-typeset .md-content__button svg {
+  opacity: 1;
+}
+
+.md-typeset .md-content__button:is(:hover, :focus) {
+  background-color: transparent;
+  color: var(--hd-accent-ink);
+}
+
+.md-typeset {
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  line-height: 1.7;
+}
+
+.md-typeset :is(strong, b) {
+  color: var(--hd-text-strong);
+}
+
+.md-typeset :is(h1, h2, h3, h4, h5, h6) {
+  position: relative;
+  color: var(--hd-heading);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.md-typeset h1 {
+  margin: 0 0 0.9em;
+  font-size: 1.75em;
+  line-height: 1.2;
+}
+
+.md-content__inner {
+  counter-reset: hd-section;
+}
+
+/* A section heading: a faded number, then a light rule. */
+.md-typeset h2 {
+  margin: 1.8em 0 0.75em;
+  padding-bottom: 0.3em;
+  border-bottom: var(--hd-rule) solid var(--hd-rule-light);
+  font-size: 1.375em;
+  line-height: 1.3;
+}
+
+.md-content__inner h2 {
+  counter-increment: hd-section;
+}
+
+.md-content__inner h2::before {
+  content: counter(hd-section);
+  margin-right: 0.6em;
+  color: var(--hd-text-faint);
+}
+
+.md-typeset h3 {
+  margin: 1.5em 0 0.5em;
+  font-size: 1.15em;
+  line-height: 1.35;
+}
+
+.md-typeset h4 {
+  margin: 1.4em 0 0.4em;
+  font-size: 1em;
+}
+
+.md-typeset :is(h5, h6) {
+  color: var(--hd-text-secondary);
+  font-size: 0.75em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The permalink hangs in the left margin. Inline, it wrapped a full heading onto a second line. Past the heading's
+ * end, it widened the page. */
+.md-typeset .headerlink {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  margin: 0 0.3em 0 0;
+  color: var(--hd-text-faint);
+}
+
+/* Below the wide layout the content's gutter is narrower than the permalink, which would hang off the screen. */
+@media screen and (max-width: 76.234375em) {
+  .md-typeset .headerlink {
+    display: none;
+  }
+}
+
+.md-typeset .headerlink:is(:hover, :focus) {
+  color: var(--hd-accent-ink);
+}
+
+/* Links in running text, coloured and underlined in a lighter stroke as on micfong.space. */
+.md-typeset a {
+  color: var(--hd-accent-ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--mcs-orange-500) 40%, transparent);
+  text-decoration-thickness: var(--hd-rule);
+  text-underline-offset: 0.2em;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+
+.md-typeset a:is(:hover, :focus) {
+  color: var(--hd-accent-ink-hover);
+  text-decoration-color: currentcolor;
+}
+
+.md-typeset :is(.headerlink, .md-button, .md-annotation__index, .footnote-ref, .footnote-backref) {
+  text-decoration: none;
+}
+
+/* Inline code is an inline block, and a link's underline does not reach into it. A link of code draws its own, and the
+ * brackets stay out of it as inline blocks. */
+.md-typeset a > code {
+  text-decoration: inherit;
+}
+
+.md-typeset a > code::before,
+.md-typeset a > code::after {
   display: inline-block;
-  padding: 0.1em 0.4em;
-  background-color: var(--md-default-fg-color--lightest);
+}
+
+/* A hovered link of code takes the hover colour of a text link, without Zensical's tinted box. */
+.md-typeset a:is(:hover, :focus) code {
+  background-color: transparent;
+  color: inherit;
+}
+
+/* One dotted underline. Zensical adds a dotted border, and the browser an underline. */
+.md-typeset abbr {
+  border-bottom: 0;
+  text-decoration: underline dotted var(--hd-text-faint);
+  text-underline-offset: 0.2em;
+}
+
+/* In a link, the link's underline is the only one. */
+.md-typeset a abbr {
+  text-decoration: none;
+}
+
+.md-typeset mark {
+  background: linear-gradient(transparent 50%, var(--hd-highlight) 50%, var(--hd-highlight) 94%, transparent 94%);
+  color: inherit;
+}
+
+.md-typeset hr {
+  border-bottom: var(--hd-rule) solid var(--hd-rule-light);
+}
+
+.md-typeset blockquote {
+  color: var(--hd-text-secondary);
+  font-style: italic;
+}
+
+/* Zensical draws a 4px bar under [dir=ltr], a selector that outranks the plain one above. */
+[dir="ltr"] .md-typeset blockquote {
+  border-left: var(--hd-rule) solid var(--hd-rule-dark);
+}
+
+.md-typeset figcaption {
+  color: var(--hd-text-secondary);
+  font-size: 0.875em;
+}
+
+/* Lists. A bullet is a small diamond, grey as the ordered-list numbers are, and fainter below the first level. The
+ * first selector covers a list straight in the article, whose parent is .md-typeset itself. */
+.md-typeset > ul:not([class]) > li,
+.md-typeset :not(.grid) > ul:not([class]) > li {
+  position: relative;
+  list-style: none;
+}
+
+.md-typeset > ul:not([class]) > li::before,
+.md-typeset :not(.grid) > ul:not([class]) > li::before {
+  content: "";
+  position: absolute;
+  top: calc(0.85em - 2.5px);
+  left: -1em;
+  width: 5px;
+  height: 5px;
+  background-color: var(--hd-text-secondary);
+  transform: rotate(45deg);
+}
+
+.md-typeset ul:not([class]) ul:not([class]) > li::before {
+  background-color: var(--hd-text-faint);
+}
+
+.md-typeset ol > li::marker {
+  color: var(--hd-text-secondary);
+  font-weight: 600;
+}
+
+/* A definition list sets the term in bold, as the Typst template does, with its description close below. */
+.md-typeset dt {
+  color: var(--hd-text-strong);
+  font-weight: 700;
+}
+
+.md-typeset dd {
+  margin-top: 0.25em;
+}
+
+/* Code. Inline code sits between brackets that are never selected or copied. */
+.md-typeset :is(code, kbd, pre) {
+  font-feature-settings: normal;
+  font-variant-ligatures: normal;
+  /* Chrome turns ligatures off under any letter spacing. */
+  letter-spacing: 0;
+}
+
+/* An inline box, so a line never breaks inside short code. Code longer than the line wraps inside its box. */
+.md-typeset :not(pre) > code {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0;
+  background-color: transparent;
+  color: inherit;
+  font-size: 0.95em;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.md-typeset :not(pre) > code::before,
+.md-typeset :not(pre) > code::after {
+  color: var(--hd-rule-dark);
+  font-weight: 400;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.md-typeset :not(pre) > code::before {
+  content: "[";
+}
+
+.md-typeset :not(pre) > code::after {
+  content: "]";
+}
+
+/* A block sits between a top and a bottom rule whose ends turn inwards. The background draws the four ends. Inline
+ * code highlighted with #! carries the block's classes too. Every rule for the frame names the div. */
+.md-typeset div.highlight {
+  --hd-tick: 0.45rem;
+  position: relative;
+  margin: 1.25em 0;
+  border-top: var(--hd-rule) solid var(--hd-rule-dark);
+  border-bottom: var(--hd-rule) solid var(--hd-rule-dark);
+  background:
+    linear-gradient(var(--hd-rule-dark), var(--hd-rule-dark)) left top / var(--hd-rule) var(--hd-tick) no-repeat,
+    linear-gradient(var(--hd-rule-dark), var(--hd-rule-dark)) right top / var(--hd-rule) var(--hd-tick) no-repeat,
+    linear-gradient(var(--hd-rule-dark), var(--hd-rule-dark)) left bottom / var(--hd-rule) var(--hd-tick) no-repeat,
+    linear-gradient(var(--hd-rule-dark), var(--hd-rule-dark)) right bottom / var(--hd-rule) var(--hd-tick) no-repeat;
+}
+
+.md-typeset div.highlight pre {
+  margin: 0;
+}
+
+.md-typeset div.highlight pre > code {
+  padding: 0.8em 0.9em;
+  background-color: transparent;
   font-size: 0.85em;
-  line-height: 1.4;
+  line-height: 1.6;
+}
+
+/* Half the file name hangs below the top rule. The code starts lower to clear it. */
+.md-typeset div.highlight:has(> span.filename) pre > code {
+  padding-top: 1.1em;
+}
+
+/* The language sits in the top rule at the right, and a file name at the left. */
+.md-typeset div.highlight::before,
+.md-typeset div.highlight span.filename {
+  position: absolute;
+  top: 0;
+  z-index: 1;
+  padding: 0 0.45rem;
+  background-color: var(--hd-page);
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.md-typeset div.highlight::before {
+  right: 0.7rem;
+  color: var(--hd-text-secondary);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.md-typeset div.language-rust::before { content: "Rust"; }
+.md-typeset div.language-bash::before { content: "Bash"; }
+.md-typeset div.language-wgsl::before { content: "WGSL"; }
+.md-typeset div.language-toml::before { content: "TOML"; }
+.md-typeset div.language-json::before { content: "JSON"; }
+.md-typeset div.language-markdown::before { content: "Markdown"; }
+.md-typeset div.language-python::before { content: "Python"; }
+
+.md-typeset div.highlight span.filename {
+  left: 0.7rem;
+  max-width: calc(100% - 1.4rem);
+  margin: 0;
+  padding-block: 0.15em;
+  border: 0;
+  overflow: hidden;
+  color: var(--hd-text);
+  font-family: var(--md-code-font-family);
+  /* The size of the code below it. */
+  font-size: 0.85em;
+  font-weight: 700;
+  /* A long file name stays on one line and ends in an ellipsis. */
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.md-typeset .ui:hover {
-  background-color: var(--md-default-fg-color--lighter);
-  outline: 1px solid var(--md-default-fg-color--light);
+/* Room for the language label at the right. */
+.md-typeset div.highlight:not(.language-text) span.filename {
+  max-width: calc(100% - 4.5rem);
 }
 
-.md-typeset .ui:active {
-  background-color: var(--md-default-fg-color--lightest);
-  outline: 1px solid var(--md-default-fg-color);
+/* A highlighted line spans the code's padding. Zensical sized it for a wider padding. Its bar was clipped, and the
+ * block scrolled sideways. */
+.md-typeset .highlight .hll {
+  margin: 0 -0.9em;
+  padding: 0 0.9em;
+}
+
+/* Copy and select sit in the bottom rule. */
+.md-typeset .md-code__nav {
+  top: auto;
+  right: 0.7rem;
+  bottom: 0;
+  padding: 0 0.3rem;
+  background-color: var(--hd-page);
+  transform: translateY(50%);
+}
+
+:hover > .md-code__nav {
+  background-color: var(--hd-page);
+}
+
+.md-typeset .md-code__button {
+  color: var(--hd-text-faint);
+}
+
+.md-typeset .md-code__button:is(:hover, .focus-visible) {
+  color: var(--hd-accent-ink);
+}
+
+/* A code annotation is a square that turns into a diamond when open, and it holds still. The square spans 15 of 24
+ * units. Turned, its tips stay inside the marker's clipped box. */
+:root {
+  --md-annotation-bg-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 4.5h15v15h-15z'/%3E%3C/svg%3E");
+  --md-annotation-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill-rule='evenodd' d='M4.5 4.5h15v15h-15zM11 7.5v3.5H7.5v2H11v3.5h2V13h3.5v-2H13V7.5z'/%3E%3C/svg%3E");
+}
+
+[data-md-visible] > .md-annotation__index {
+  animation: none;
+}
+
+/* Pygments classes the Typst theme colours apart from the variables above. */
+.md-typeset .highlight :is(.kt, .nc, .nn, .ne, .nb) {
+  color: var(--hd-syntax-yellow);
+}
+
+.md-typeset .highlight :is(.kc, .no) {
+  color: var(--hd-syntax-orange);
+}
+
+.md-typeset .highlight :is(.bp, .nt, .na, .nl) {
+  color: var(--hd-syntax-red);
+}
+
+.md-typeset .highlight :is(.c, .c1, .ch, .cm, .cs, .sd) {
+  font-style: italic;
+}
+
+.md-typeset kbd {
+  padding: 0.05em 0.35em;
+  border: var(--hd-rule) solid var(--hd-rule-dark);
+  background-color: var(--hd-surface-strong);
+  box-shadow: none;
+  color: var(--hd-text);
+  font-size: 0.85em;
+  font-weight: 500;
+}
+
+/* Tables: a dark rule above and below, light rules between rows, and a tinted header closed by a dark rule. */
+.md-typeset table:not([class]) {
+  border: 0;
+  border-top: var(--hd-rule) solid var(--hd-rule-dark);
+  border-bottom: var(--hd-rule) solid var(--hd-rule-dark);
+  background-color: transparent;
+  /* 0.85 of the 0.75rem body, in root units. A table in a callout keeps the size of a table on the page. */
+  font-size: 0.6375rem;
+}
+
+.md-typeset table:not([class]) th {
+  padding: 0.5em 0.8em;
+  border-bottom: var(--hd-rule) solid var(--hd-rule-dark);
+  background-color: var(--hd-surface);
+  color: var(--hd-heading);
+  font-weight: 700;
+}
+
+.md-typeset table:not([class]) td {
+  padding: 0.45em 0.8em;
+  border-top: var(--hd-rule) solid var(--hd-rule-light);
+  vertical-align: top;
+}
+
+/* Above phone width a column takes its content's width. The 5rem minimum Zensical sets pushed an eight-column table
+ * past the text column. Code in a cell breaks only where it can. Under overflow-wrap: anywhere its narrowest width
+ * fell to one character, and the table squeezed code columns below their content. */
+@media screen and (min-width: 45em) {
+  .md-typeset table:not([class]) th {
+    min-width: 0;
+  }
+
+  .md-typeset table:not([class]) :is(td, th) > code {
+    overflow-wrap: normal;
+  }
+}
+
+.md-typeset table:not([class]) tbody tr:first-child td {
+  border-top: 0;
+}
+
+.md-typeset table:not([class]) tbody tr:hover {
+  background-color: var(--hd-surface);
+  box-shadow: none;
+}
+
+/* Callouts: a rule in the hue's key colour down the left, under a title strip in its subtle tint. */
+.md-typeset :is(.admonition, details)[class] {
+  --hd-callout-base: var(--mcs-blue-500);
+  --hd-callout-strong: var(--hd-blue-strong);
+  --hd-callout-subtle: var(--hd-blue-subtle);
+  margin: 1.25em 0;
+  padding: 0 1em;
+  border: 0;
+  border-left: var(--hd-rule) solid var(--hd-callout-base);
+  background-color: transparent;
+  box-shadow: none;
+  color: var(--hd-text);
+  font-size: 0.875em;
+}
+
+.md-typeset :is(.admonition, details)[class] > :is(.admonition-title, summary) {
+  margin: 0 -1em 0.75em;
+  padding: 0.5em 2.4em 0.5em 2.7em;
+  border: 0;
+  background-color: var(--hd-callout-subtle);
+  color: var(--hd-callout-strong);
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+/* The extra :is() lifts this rule above the title strip's margin. */
+.md-typeset :is(.admonition, details)[class]:not([open]) > summary {
+  margin-bottom: 0;
+}
+
+/* The icons centre on the first line of the title: 0.5em of padding, then (1.5em - 1.1em) / 2. */
+.md-typeset :is(.admonition, details)[class] > :is(.admonition-title, summary)::before,
+.md-typeset :is(.admonition, details)[class] > summary::after {
+  top: 0.7em;
+  width: 1.1em;
+  height: 1.1em;
+}
+
+.md-typeset :is(.admonition, details)[class] > :is(.admonition-title, summary)::before {
+  left: 1em;
+  background-color: var(--hd-callout-strong);
+}
+
+.md-typeset :is(.admonition, details)[class] > summary::after {
+  right: 0.8em;
+  color: var(--hd-callout-strong);
+}
+
+.md-typeset :is(.admonition, details)[class] > :last-child:not(summary) {
+  /* The same 1em that separates the title strip from the first line. */
+  margin-bottom: 1em;
+}
+
+/* A final code block makes room for the buttons that hang from its bottom rule. */
+.md-typeset :is(.admonition, details)[class] > div.highlight:last-child {
+  margin-bottom: calc(1em + 0.5rem);
+}
+
+.md-typeset :is(.admonition, details):is(.abstract, .summary, .tldr, .quote, .cite) {
+  --hd-callout-base: var(--mcs-gray-500);
+  --hd-callout-strong: var(--hd-gray-strong);
+  --hd-callout-subtle: var(--hd-gray-subtle);
+}
+
+.md-typeset :is(.admonition, details):is(.tip, .hint, .important, .success, .check, .done) {
+  --hd-callout-base: var(--mcs-green-500);
+  --hd-callout-strong: var(--hd-green-strong);
+  --hd-callout-subtle: var(--hd-green-subtle);
+}
+
+.md-typeset :is(.admonition, details):is(.question, .help, .faq) {
+  --hd-callout-base: var(--mcs-yellow-500);
+  --hd-callout-strong: var(--hd-yellow-strong);
+  --hd-callout-subtle: var(--hd-yellow-subtle);
+}
+
+.md-typeset :is(.admonition, details):is(.warning, .caution, .attention) {
+  --hd-callout-base: var(--mcs-orange-500);
+  --hd-callout-strong: var(--hd-orange-strong);
+  --hd-callout-subtle: var(--hd-orange-subtle);
+}
+
+.md-typeset :is(.admonition, details):is(.failure, .fail, .missing, .danger, .error, .bug) {
+  --hd-callout-base: var(--mcs-red-500);
+  --hd-callout-strong: var(--hd-red-strong);
+  --hd-callout-subtle: var(--hd-red-subtle);
+}
+
+.md-typeset :is(.admonition, details):is(.example) {
+  --hd-callout-base: var(--mcs-purple-500);
+  --hd-callout-strong: var(--hd-purple-strong);
+  --hd-callout-subtle: var(--hd-purple-subtle);
+}
+
+/* Danger takes PRTS Design's hazard stripes. */
+.md-typeset :is(.admonition, details)[class]:is(.danger, .error) {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 0.6em,
+    var(--hd-callout-subtle) 0.6em 1.2em
+  );
+}
+
+/* Content tabs */
+.md-typeset .tabbed-labels {
+  box-shadow: inset 0 calc(-1 * var(--hd-rule)) 0 var(--hd-rule-light);
+}
+
+/* Every label takes the weight Zensical gives the checked one, so colour and the indicator mark it. */
+.md-typeset .tabbed-labels > label {
+  color: var(--hd-text-secondary);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.md-typeset .tabbed-labels > label:hover {
+  color: var(--hd-text);
+}
+
+.js .md-typeset .tabbed-labels::before {
+  height: 2px;
+  background-color: var(--hd-accent);
+}
+
+/* Buttons. The primary one is the brand orange with black text, as the Typst frame cover sets it. */
+.md-typeset .md-button {
+  padding: 0.6em 1.4em;
+  border: var(--hd-rule) solid var(--hd-rule-dark);
+  background-color: transparent;
+  color: var(--hd-heading);
+  font-weight: 700;
+}
+
+.md-typeset .md-button:is(:hover, :focus) {
+  border-color: var(--hd-heading);
+  background-color: var(--hd-surface);
+  color: var(--hd-heading);
+  opacity: 1;
+}
+
+.md-typeset .md-button--primary {
+  border-color: var(--hd-accent);
+  background-color: var(--hd-accent);
+  color: #000;
+}
+
+.md-typeset .md-button--primary:is(:hover, :focus) {
+  border-color: var(--mcs-orange-400);
+  background-color: var(--mcs-orange-400);
+  color: #000;
+}
+
+/* A hovered floating control answers as a secondary button does. Zensical fills it with the accent, in a pair that
+ * differs per scheme. */
+.md-top:is(:hover, :focus),
+.md-sidebar--secondary .md-sidebar-button:is(:hover, :focus) {
+  background-color: var(--hd-surface);
+  box-shadow: 0 0 0 var(--hd-rule) var(--hd-heading);
+  color: var(--hd-heading);
+}
+
+/* The copy notice is a strip of the band in both schemes, marked by the accent edge the current tab uses. */
+.md-dialog {
+  background-color: var(--hd-band);
+  box-shadow: inset 3px 0 0 var(--hd-accent), 0 0 0 var(--hd-rule) var(--hd-band-rule);
+}
+
+.md-dialog__inner {
+  color: var(--hd-band-text);
+}
+
+/* Grid cards. A hovered card gets PRTS Design's corner mark, as a hovered page link in the footer does. */
+.md-typeset .grid.cards > :is(ul, ol) > li,
+.md-typeset .grid > .card {
+  position: relative;
+  padding: 0.9em 1.1em;
+  border: var(--hd-rule) solid var(--hd-rule-light);
+  background-color: transparent;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li:is(:hover, :focus-within),
+.md-typeset .grid > .card:is(:hover, :focus-within) {
+  border-color: var(--hd-rule-dark);
+  box-shadow: none;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li::after,
+.md-typeset .grid > .card::after,
+.md-footer__link::after {
+  content: "";
+  position: absolute;
+  top: calc(-1 * var(--hd-rule));
+  left: calc(-1 * var(--hd-rule));
+  border-style: solid;
+  border-width: 10px 10px 0 0;
+  border-color: var(--hd-accent) transparent transparent transparent;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li:is(:hover, :focus-within)::after,
+.md-typeset .grid > .card:is(:hover, :focus-within)::after,
+.md-footer__link:is(:hover, :focus)::after {
+  opacity: 1;
+}
+
+/* The whole card is its title's link. The link's box stretches over the card, and a link further down the card sits
+ * above it. The corner mark lets clicks through. */
+.md-typeset .grid.cards > :is(ul, ol) > li > :first-child a::before,
+.md-typeset .grid > .card > :first-child a::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li > :not(:first-child) a,
+.md-typeset .grid > .card > :not(:first-child) a {
+  position: relative;
+  z-index: 1;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li::after,
+.md-typeset .grid > .card::after {
+  pointer-events: none;
+}
+
+.md-typeset .grid.cards a {
+  color: var(--hd-heading);
+  text-decoration-color: transparent;
+}
+
+.md-typeset .grid.cards a:is(:hover, :focus) {
+  color: var(--hd-accent-ink);
+  text-decoration-color: currentcolor;
+}
+
+/* Footer: the previous and next pages as ruled blocks, then the band again under the copyright. */
+.md-footer {
+  background-color: var(--hd-page);
+  color: var(--hd-text);
+}
+
+.md-footer__inner {
+  gap: 1.2rem;
+}
+
+/* The corner mark overhangs the border, and Zensical clipped it with the link's overflow. A zero minimum width keeps a
+ * long title truncating once the overflow shows. */
+.md-footer__link {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: calc(50% - 0.6rem);
+  margin: 1.2rem 0 1.6rem;
+  padding: 0.7rem 1rem;
+  border: var(--hd-rule) solid var(--hd-rule-light);
+  overflow: visible;
+  transition: border-color 0.15s;
+}
+
+.md-footer__link--next {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.md-footer__link:is(:hover, :focus) {
+  border-color: var(--hd-rule-dark);
+  opacity: 1;
+}
+
+.md-footer__link:is(:hover, :focus) .md-footer__title {
+  color: var(--hd-accent-ink);
+}
+
+/* Below the wide layout, the previous and next pages keep the content's gutter. */
+@media screen and (max-width: 76.234375em) {
+  .md-footer__inner {
+    padding-inline: 0.8rem;
+  }
+}
+
+/* Below 45em Zensical drops the previous page's title, leaving its arrow. A smaller gap and padding return the
+ * gutter's width to the next page's title. */
+@media screen and (max-width: 44.984375em) {
+  .md-footer__inner {
+    gap: 0.6rem;
+  }
+
+  .md-footer__link {
+    padding-inline: 0.6rem;
+  }
+
+  .md-footer__link--prev {
+    flex: none;
+  }
+
+  .md-footer__link--next {
+    max-width: none;
+  }
+}
+
+.md-footer__title {
+  font-weight: 700;
+}
+
+.md-footer__direction {
+  color: var(--hd-text-secondary);
+  opacity: 1;
+}
+
+.md-footer-meta {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--hd-band);
+  color: var(--hd-band-text-secondary);
+}
+
+/* Zensical colours the copyright from the scheme's text, which is dark in the light scheme. */
+.md-footer-meta .md-copyright {
+  color: var(--hd-band-text-secondary);
+}
+
+.md-footer-meta .md-copyright__highlight {
+  color: var(--mcs-gray-300);
+}
+
+/* Zensical colours footer links from the scheme's text as well, through a selector that outranks a plain one. */
+html .md-footer-meta.md-typeset a:not(:focus, :hover) {
+  color: var(--hd-band-text);
+}
+
+.md-footer-meta.md-typeset a {
+  text-decoration-color: color-mix(in srgb, var(--mcs-orange-500) 50%, transparent);
+}
+
+.md-footer-meta.md-typeset a:is(:hover, :focus) {
+  color: var(--mcs-orange-300);
+  text-decoration-color: currentcolor;
+}
+
+/* On the wide layout the band's text lines up with the previous and next pages above it. */
+@media screen and (min-width: 76.25em) {
+  .md-footer-meta .md-copyright {
+    margin-left: 0;
+  }
+
+  .md-footer-meta__inner::after {
+    margin-right: 0;
+  }
+}
+
+/* The Typst wordmark, MICFONG and its triangle, closing the band on the right. */
+.md-footer-meta__inner {
+  align-items: center;
+}
+
+.md-footer-meta__inner::after {
+  content: "MICFONG";
+  content: "MICFONG" / "";
+  margin: 0.6rem;
+  padding-right: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 7'%3E%3Cpath d='M0 7L4 0L8 7Z' fill='white'/%3E%3C/svg%3E") right 0.06em / 0.8em 0.7em no-repeat;
+  color: var(--hd-band-text);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Chip standing in for a button in the app. */
+.md-typeset .ui {
+  display: inline-block;
+  padding: 0.1em 0.4em;
+  border: var(--hd-rule) solid var(--hd-rule-dark);
+  background-color: var(--hd-surface-strong);
+  font-size: 0.85em;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .md-typeset .ui .twemoji {
