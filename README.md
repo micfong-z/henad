@@ -29,9 +29,9 @@ See [Benchmarks](https://micfong-z.github.io/henad/benchmarks/) for more details
 
 ## Screenshots
 
-<img width="800" height="450" alt="GIF screen recording" src="https://github.com/user-attachments/assets/a64ffa6d-2d96-4fe7-9351-ee9e7810b751" />
+<img width="100%" alt="gif recording" src="https://github.com/user-attachments/assets/f22d7ac9-5369-4daa-95c2-c79d903338f1" />
 
-https://github.com/user-attachments/assets/7ee3fadb-a8fa-4b79-84fa-7b4cd4099f23
+https://github.com/user-attachments/assets/75ab824a-3700-48fb-aca0-1ba06575ee1f
 
 ## Running Henad
 
