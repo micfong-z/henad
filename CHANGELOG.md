@@ -5,7 +5,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 
 ## [Unreleased]
 
-## [0.3.0]
+## [0.3.0] - 2026-10-10
 
 Henad as libraries on crates.io: your own program can build, run, sweep, test and show your own models.
 
