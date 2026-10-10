@@ -73,6 +73,7 @@ nav = [
         "reference/primitives.md",
         "reference/models.md",
         "reference/cli.md",
+        "reference/model-files.md",
         "reference/environment.md",
     ] },
     { "Developing" = [
@@ -137,6 +138,7 @@ nav = [
             { "#52, 2026-10-10" = "developing/agent-record/20261010-52-gpu-grid-spec.md" },
             { "#53, 2026-10-10" = "developing/agent-record/20261010-53-runtime-grid-rules.md" },
             { "#54, 2026-10-10" = "developing/agent-record/20261010-54-app-install-path.md" },
+            { "#56, 2026-10-10" = "developing/agent-record/20261010-56-cli-model-files.md" },
         ] },
     ] },
 ]

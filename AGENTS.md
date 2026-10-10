@@ -1167,6 +1167,8 @@ cargo builds a primary package with a static std, and every member linking it wo
   places each problem of the step at its file line by the string's start offset. `ModelFileError`
   is `Toml`, `Format` or `Rule`, each of `CodeDiagnostic`s. `specs/models/` holds the example model
   files, which the spec tests, reading the top level of `specs/`, leave alone.
+  `docs/reference/model-files.md` includes `life_rule.toml` whole, and henad-cli's model file tests
+  edit copies of it by its text.
   `src/tests/model_file.rs` holds `a_model_file_round_trips_through_to_toml`,
   `unknown_keys_are_refused`, `a_declaration_error_points_at_its_table`,
   `the_canonical_code_ignores_formatting`, `a_wgsl_error_points_at_its_file_line` and
@@ -1584,7 +1586,7 @@ cargo builds a primary package with a static std, and every member linking it wo
   returns clap's own code for `--help`, `--version` and a usage error. Argument parsing, the modes,
   `Reporter`, `json_report` and the text formats are private. `main.rs` is three lines over `run`
   with `example_models()` and its `build_info!()`. henad-models is optional behind the default
-  `example-models` feature, which the `[[bin]]` and the three integration tests that run it name in
+  `example-models` feature, which the `[[bin]]` and the four integration tests that run it name in
   `required-features`, and `cargo build -p henad-cli --no-default-features` builds the library
   alone. Steps a state in a bare loop with no rendering, no
   `SimThread` and no pacing, so a measurement times nothing but `step()`. `--act ID@TICK`
@@ -1599,12 +1601,28 @@ cargo builds a primary package with a static std, and every member linking it wo
   `--export-stats` step a `Simulation` (`run_to` and `write_state`, `run_sampled`). The shared
   `params_by_id_json` and `scheduled_actions_json` sit in henad-explore's `output/details.rs`, for
   the CLI's summary and the app's run details. A GPU run steps through `gpu/stepping.rs` on a device
-  from henad-explore's `acquire_headless`, sized to the options' set's `gpu_needs()`. A set without
-  a GPU model asks for no device, apart from `--info`, and prints no GPU note. The CLI resolves its
-  positional id through that set's `ModelSet::lookup`, and refuses an id outside the set ("this
-  build does not include model 'x' (try --list)") apart from a GPU model on a machine without a
-  device. `--list` prints only the models this machine can run. The CLI never publishes and never
-  lays out a network.
+  from henad-explore's `acquire_headless`, sized to the `gpu_needs()` of the options' set with the
+  model files in it. A set without a GPU model asks for no device, apart from `--info`, and prints
+  no GPU note. The CLI resolves its positional id through that set's `ModelSet::lookup`, and
+  refuses an id outside the set ("this build does not include model 'x' (try --list)") apart from
+  a GPU model on a machine without a device. `--list` prints only the models this machine can run.
+  The CLI never publishes and never lays out a network.
+  `--model-file PATH` is repeatable, sits in `Args` outside `ExploreArgs`, and selects no mode.
+  `with_model_files` runs after the pool is sized and `--merge` has returned, and before `--spec`
+  is read and the device acquired. It reads each file through `ModelFile::parse` and `entry` and
+  `ModelSet::replace`s its entry into a clone of the options' set, and the set is cloned only when
+  a file is given. A file whose id the set holds prints a note on stderr in text mode and nothing
+  under `--json`, and two files of one id are refused. A file that does not load is an error whose
+  cause lists each `CodeDiagnostic` with the path as its file, `path:line:column: error: message`,
+  and exits 1 before any device. With one file and neither a positional id nor a spec, the file's
+  id is the model, under `--info` too (`Mode::of`). Two files or more without either are a usage
+  error from `parse_args`, exit 2. `--merge` conflicts with the flag. `tests/model_file.rs` runs
+  the binary on copies of henad-explore's `specs/models/life_rule.toml`, and holds
+  `a_model_file_sweeps_and_records_its_code`, `a_resume_with_an_edited_model_file_is_refused`,
+  `a_merge_of_shards_with_different_model_files_is_refused`,
+  `a_model_file_can_shadow_an_example_model`, `model_file_is_allowed_with_spec_and_resume`,
+  `list_and_params_json_show_a_model_file` and `a_model_file_error_points_at_its_line`. The last
+  needs no device, and the others skip without one. Keep them.
   `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
   publish would.
   `explore.rs` is the sweep mode. `--out`, `--spec` or `--dry-run` selects it (`Mode::Explore`), and

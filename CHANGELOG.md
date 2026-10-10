@@ -13,6 +13,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Grid rules (henad-compute `runtime-wgsl`, henad-explore and facade `model-files`, at `henad::rules`): `GridRule`, `RuleState`, `RuleDeclaration`, `GridRule::check_declarations`, `CompiledGridRule::entry`, `GridRule::life()`; a WGSL `step_cell` composed at run time after an engine template, refused at its line for loops, bindings, entry points, atomics, barriers, shared writes, engine buffers but `params`, built-in names at module scope, template names, variables past WGSL's 8192-byte limits, and a call past 65536 expressions and statements.
 - `compose_wgsl`: run-time WGSL composition over naga_oil 0.23, byte-equal to henad-build's for every stock shader; a directive check refuses what naga_oil would rewrite or panic on.
 - Model files (`ModelFile`, `ModelFileError`): a grid rule as one TOML file (`format = "henad-model"`, version 1, `kind = "gpu_grid"`), canonical text as its code identity, declaration and step problems at their file line; `specs/models/life_rule.toml`.
+- henad-cli `--model-file PATH` (repeatable): a model file's model added to the set, replacing a model of its id with a note on stderr (text mode); with `--spec`, `--resume`, `--list`, `--params` and `--dry-run`, not `--merge`; problems at `path:line:column`, exit 1; `MODEL` optional with one file, required with two (exit 2). Model files reference page.
 - `CodeDiagnostic` and `DiagnosticSeverity` (henad-core, facade root): span, 1-based line and character column, notes.
 - `helpers::check_choice_options` (`henad::authoring`): the option-name check of `choice_param`, without the panic.
 
@@ -25,6 +26,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - GPU grid engine non-generic, built from a private spec of the model's declarations; `GpuGridState<M>` an adapter over it, its API unchanged. Workgroup counts and buffer sizes cached at construction.
 - `register_gpu_grid_model` builds one spec per entry, shared by its builds and its demand.
 - henad-app and henad-cli turn on henad-explore's `model-files`.
+- henad-cli reads `--model-file` and `--spec` before it acquires the GPU device, which is sized to the files' models too.
 - Breaking: `RecordedBuild` is `#[non_exhaustive]`, with `origin` and `code_hash` (build through `From<&BuildInfo>`, `From<&ModelSource>` or `engine()`); `ManifestModel` gains `code` (`None` for compiled models); `ModelSource` compares its origin and code; `same_build` compares code identity alone when either build has an origin.
 
 ## [0.3.0] - 2026-10-10

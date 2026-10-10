@@ -24,7 +24,7 @@ name = "henad-cli"
 path = "src/main.rs"
 required-features = ["example-models"]
 
-# All three run the official binary.
+# All four run the official binary.
 [[test]]
 name = "golden"
 required-features = ["example-models"]
@@ -35,6 +35,10 @@ required-features = ["example-models"]
 
 [[test]]
 name = "manifest"
+required-features = ["example-models"]
+
+[[test]]
+name = "model_file"
 required-features = ["example-models"]
 
 [features]
