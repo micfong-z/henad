@@ -62,20 +62,11 @@ pub(crate) struct Declared {
 /// A problem in a rule's declarations, with the declaration it is about when there is one.
 pub(crate) type DeclarationProblem = (Option<RuleDeclaration>, CodeDiagnostic);
 
-/// Checks the declarations of `rule`: its id, size, states and parameters. Returns the problems, or the [`Declared`]
-/// values when the declarations have no problem.
+/// Checks the declarations of `rule`: its id, name, description, size, states and parameters. Returns the problems, or
+/// the [`Declared`] values when the declarations have no problem.
 pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<DeclarationProblem>> {
     let mut problems = Vec::new();
-    if let Err(reason) = crate::entry::check_id_grammar(&rule.id) {
-        problems.push((
-            Some(RuleDeclaration::Id),
-            CodeDiagnostic::error(format!(
-                "rule id '{}' {reason} (an id is a lowercase ASCII letter, then lowercase letters, digits and \
-                 underscores)",
-                rule.id
-            )),
-        ));
-    }
+    check_names(rule, &mut problems);
     for (side, value) in [("width", rule.width), ("height", rule.height)] {
         if value == 0 || value > MAX_GRID_SIDE {
             problems.push((
@@ -108,6 +99,9 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
         let mut problem = |message: String| {
             problems.push((Some(RuleDeclaration::State(index)), CodeDiagnostic::error(message)));
         };
+        if let Some(message) = control_message(&format!("the label of state {index}"), &state.label) {
+            problem(message);
+        }
         let (constant, refusal) = state_constant(&state.label);
         if let Some(message) = refusal {
             problem(message);
@@ -160,6 +154,37 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
     } else {
         Err(problems)
     }
+}
+
+/// Checks the rule's id against the id grammar, and its name and description for control characters.
+fn check_names(rule: &GridRule, problems: &mut Vec<DeclarationProblem>) {
+    if let Err(reason) = crate::entry::check_id_grammar(&rule.id) {
+        problems.push((
+            Some(RuleDeclaration::Id),
+            CodeDiagnostic::error(format!(
+                "rule id '{}' {reason} (an id is a lowercase ASCII letter, then lowercase letters, digits and \
+                 underscores)",
+                rule.id
+            )),
+        ));
+    }
+    for (holder, text) in [
+        ("the rule's name", &rule.name),
+        ("the rule's description", &rule.description),
+    ] {
+        if let Some(message) = control_message(holder, text) {
+            problems.push((None, CodeDiagnostic::error(message)));
+        }
+    }
+}
+
+/// Returns the message that `holder` holds a control character, when `text` holds one.
+fn control_message(holder: &str, text: &str) -> Option<String> {
+    let character = text.chars().find(|character| character.is_control())?;
+    Some(format!(
+        "{holder} holds the control character U+{:04X}",
+        u32::from(character)
+    ))
 }
 
 /// Returns the constant name of the state labelled `label`, empty when the label gives none, and the reason the name
@@ -219,6 +244,16 @@ fn check_params(params: &[ParamDescriptor], problems: &mut Vec<DeclarationProble
         }
         if !seen.insert(id) {
             problem(format!("parameter id '{id}' is declared twice"));
+        }
+        if let Some(message) = control_message(&format!("the label of parameter '{id}'"), param.label()) {
+            problem(message);
+        }
+        if let ParamKind::Choice { options, .. } = param.kind()
+            && let Some(message) = options
+                .iter()
+                .find_map(|option| control_message(&format!("an option of parameter '{id}'"), option))
+        {
+            problem(message);
         }
         if let Err(reason) = check_kind(param.kind()) {
             problem(format!("parameter '{id}' {reason}"));

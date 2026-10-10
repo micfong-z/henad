@@ -5,7 +5,7 @@ use std::path::Path;
 use henad_compute::gpu::runtime_grid::{GridRule, LIFE_STEP, RuleState};
 use henad_core::authoring::primitives::space::Boundary;
 use henad_core::helpers::{bool_param, choice_param, u32_param};
-use henad_core::provenance::{CodeOrigin, ModelCode};
+use henad_core::provenance::CodeOrigin;
 
 use crate::model_file::{ModelFile, ModelFileError};
 
@@ -44,14 +44,6 @@ fn a_model_file_round_trips_through_to_toml() {
     assert_eq!(rule.states, rich_rule().states);
     assert_eq!(format!("{:?}", rule.params), format!("{:?}", rich_rule().params));
     assert_eq!((rule.boundary, rule.width, rule.height), (Boundary::Bounded, 64, 48));
-
-    // A results folder holds the code, and the code gives the file back.
-    let again = ModelFile::from_code(&file.code()).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(again.to_toml(), text);
-    assert!(matches!(
-        ModelFile::from_code(&ModelCode::new("henad-grid-rule/0", text.clone())),
-        Err(ModelFileError::Format(_))
-    ));
 
     // A step a literal string cannot hold is refused.
     let mut rule = GridRule::life();
@@ -94,6 +86,39 @@ fn a_model_file_round_trips_through_to_toml() {
     );
 }
 
+/// A step holds every character a TOML literal string holds, the C1 control characters included, and no ASCII control
+/// character other than a tab and a line end.
+#[test]
+fn a_step_holds_what_a_literal_string_holds() {
+    // Mis-decoded Windows-1252 text often holds U+0085.
+    let step = format!("// note\u{85}\n{LIFE_STEP}");
+    let text = ModelFile::from_rule(life_with(&step))
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    let read = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(read.rule().step, step);
+    // WGSL ends a line at U+0085, and the compiler refuses it. Another C1 character compiles.
+    assert!(matches!(read.entry(), Err(ModelFileError::Rule(_))));
+    let step = format!("// note\u{90}\tend\n{LIFE_STEP}");
+    let file = ModelFile::from_rule(life_with(&step)).unwrap_or_else(|error| panic!("{error}"));
+    file.entry().unwrap_or_else(|error| panic!("{error}"));
+
+    let error = ModelFile::from_rule(life_with(&format!("// note\u{1}\n{LIFE_STEP}")))
+        .err()
+        .unwrap_or_else(|| panic!("a step holding U+0001 was read"));
+    assert!(
+        matches!(&error, ModelFileError::Format(diagnostic) if diagnostic.message.contains("U+0001")),
+        "{error:?}"
+    );
+    // A file that holds U+0001 in its step is refused at its line.
+    let ascii = text.replace('\u{85}', "\u{1}");
+    let line = ascii[..ascii.find('\u{1}').unwrap_or_default()].matches('\n').count() as u32 + 1;
+    let error = ModelFile::parse(&ascii)
+        .err()
+        .unwrap_or_else(|| panic!("a file holding U+0001 was read"));
+    assert_eq!(error.diagnostics()[0].line, Some(line), "{error:?}");
+}
+
 #[test]
 fn unknown_keys_are_refused() {
     let text = ModelFile::from_rule(GridRule::life())
@@ -132,7 +157,7 @@ fn unknown_keys_are_refused() {
     let other = text.replace("kind = \"gpu_grid\"", "kind = \"gpu_agents\"");
     assert!(matches!(ModelFile::parse(&other), Err(ModelFileError::Format(_))));
 
-    // A later version with keys this build does not know reads as a later version, not as unknown keys.
+    // A later version with keys this build does not know is refused for its version. The unknown keys go unreported.
     let later = format!(
         "{}[future]\nkey = 1\n",
         text.replace("format_version = 1", "format_version = 2")
@@ -187,6 +212,65 @@ fn a_declaration_error_points_at_its_table() {
     }
 }
 
+/// A name, a label or an option that holds a control character is refused, and a diagnostic prints each control
+/// character escaped.
+#[test]
+fn control_characters_in_the_declarations_are_refused() {
+    let text = ModelFile::from_rule(rich_rule())
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    // OSC 52 sets the clipboard of a terminal that prints it.
+    let sequence = "\\u001B]52;c;eA==\\u0007";
+    let edited = text
+        .replace("name = \"Life rule\"", &format!("name = \"Life{sequence}\""))
+        .replace("label = \"Ghost\"", &format!("label = \"Ghost{sequence}\""))
+        .replace("\"wild\"", &format!("\"wild{sequence}\""));
+    let error = ModelFile::parse(&edited)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .entry()
+        .err()
+        .unwrap_or_else(|| panic!("the declarations passed"));
+    let line_at = |offset: usize| edited[..offset].matches('\n').count() as u32 + 1;
+    let third_state = edited.match_indices("[[state]]").nth(2).map_or(0, |(at, _)| at);
+    let choice = edited.match_indices("[[param]]").nth(3).map_or(0, |(at, _)| at);
+    let mut placed: Vec<(Option<u32>, &str)> = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.line, diagnostic.message.as_str()))
+        .collect();
+    placed.sort_unstable();
+    assert_eq!(
+        placed,
+        [
+            (None, "the rule's name holds the control character U+001B"),
+            (
+                Some(line_at(third_state)),
+                "the label of state 2 holds the control character U+001B"
+            ),
+            (
+                Some(line_at(choice)),
+                "an option of parameter 'mode' holds the control character U+001B"
+            ),
+        ],
+        "{}",
+        lines_of(&error).join("\n")
+    );
+
+    // A refused id and an unknown key are quoted in their messages, and print escaped.
+    for edited in [
+        text.replace("id = \"life_rule\"", &format!("id = \"life{sequence}\"")),
+        text.replace("[grid]\n", &format!("[grid]\n\"{sequence}\" = 1\n")),
+    ] {
+        let error = ModelFile::parse(&edited)
+            .and_then(|file| file.entry())
+            .err()
+            .unwrap_or_else(|| panic!("a control character was read:\n{edited}"));
+        let printed = error.to_string();
+        assert!(printed.contains("\\u{1b}"), "{printed}");
+        assert!(!printed.contains(['\u{1b}', '\u{7}']), "{printed:?}");
+    }
+}
+
 /// The code of a file depends on what the file declares and on its step, and on nothing else: comments outside the
 /// step, key order, blank lines, a colour without its alpha and the form of a number all leave it alone.
 #[test]
@@ -198,7 +282,7 @@ fn the_canonical_code_ignores_formatting() {
          rule\"\r\n\r\n\r\n[[param]]\r\nstep = 1e-2\r\ndefault = 0.30\r\nmax = 1\r\nmin = 0\r\nkind = \"f32\"\r\n\
          label = \"Initial Density\"\r\nid = \"density\"\r\n\r\n[grid]\r\nheight = 256\r\nwidth = 256\r\n\r\n\
          [step]\r\nwgsl = '''\n{LIFE_STEP}'''\r\n\r\n[[state]]\r\nlabel = \"Dead\" # no share\r\n\
-         color = [21, 21, 21]\r\n\r\n[[state]]\r\ninitial = \"density\"\r\nlabel = \"Alive\"\r\n\
+         color = [97, 97, 97]\r\n\r\n[[state]]\r\ninitial = \"density\"\r\nlabel = \"Alive\"\r\n\
          color = [0, 230, 118, 255]\r\n"
     );
     let read = ModelFile::parse(&written).unwrap_or_else(|error| panic!("{error}"));

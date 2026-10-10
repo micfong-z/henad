@@ -650,8 +650,9 @@ cargo builds a primary package with a static std, and every member linking it wo
   column counted from 1, and notes), `#[non_exhaustive]` and built through `error` and the `with_`
   methods, with `at(text, span)` reading the line and column from a text, and the
   `#[non_exhaustive]` `DiagnosticSeverity`, whose one variant is `Error`. Its `Display` writes
-  `file:line:column: severity: message`. `helpers::check_choice_options` is the option-name check
-  `choice_param` panics on, for options read at run time.
+  `file:line:column: severity: message` with each control character escaped (`write_escaped`), so
+  a key or a label quoted from a file never reaches a terminal raw. `helpers::check_choice_options`
+  is the option-name check `choice_param` panics on, for options read at run time.
   Also the `Grid2D<T>`
   double-buffered SoA grid (`grid.rs`),
   the counting-sort `SpatialHash` and the `HashGrid` cell geometry both backends share
@@ -938,6 +939,7 @@ cargo builds a primary package with a static std, and every member linking it wo
     `GridRule::life()` returns `LIFE_STEP` (`life_step.wgsl`, outside `ENTRY_POINTS`) with Dead,
     then Alive at the share `density`. `compile` checks the declarations first (`checks.rs`, public
     as `check_declarations`, each problem with the `RuleDeclaration` it is about: the id grammar,
+    no control character in the name, the description, a label or an option (`control_message`),
     sides up to `MAX_GRID_SIDE`, `MAX_STATES`, `MAX_PARAMS`, parameter ids outside WGSL's reserved
     words, `width`, `height`, `seed`, `tick`, the grid's two and `henad_`, a default within its
     bounds, a positive finite step, choice options that `check_choice_options` passes, percent on
@@ -1170,8 +1172,10 @@ cargo builds a primary package with a static std, and every member linking it wo
   `[[state]]` (label, a colour of 3 or 4 bytes, `initial`), `[[param]]` in the `--params --json`
   vocabulary, and `[step] wgsl`, a string the file holds verbatim, as a `'''` literal does. A step
   holding `'''` is refused by `parse` and `from_rule` alike, since the canonical text could not
-  hold it. `from_rule` (which reads its canonical text back through `parse`), `from_code`, `rule`,
-  `to_toml` (the canonical text: keys in a fixed order, one form per value, the step verbatim),
+  hold it, as is a step holding an ASCII control character other than a tab or a line end (the C1
+  characters pass, as TOML allows them). `from_rule` (which reads its canonical text back through
+  `parse`), `rule`, `to_toml` (the canonical text: keys in a fixed order, one form per value, the
+  step verbatim),
   `code` (a `ModelCode` of `GridRule::CODE_FORMAT` over the canonical text) and `entry`, which runs
   `GridRule::check_declarations` and places each problem at its table or key, then compiles and
   places each problem of the step at its file line by the string's start offset. `ModelFileError`
@@ -1180,7 +1184,8 @@ cargo builds a primary package with a static std, and every member linking it wo
   `docs/reference/model-files.md` includes `life_rule.toml` whole, and henad-cli's model file tests
   edit copies of it by its text.
   `src/tests/model_file.rs` holds `a_model_file_round_trips_through_to_toml`,
-  `unknown_keys_are_refused`, `a_declaration_error_points_at_its_table`,
+  `a_step_holds_what_a_literal_string_holds`, `unknown_keys_are_refused`,
+  `a_declaration_error_points_at_its_table`, `control_characters_in_the_declarations_are_refused`,
   `the_canonical_code_ignores_formatting`, `a_wgsl_error_points_at_its_file_line` and
   `every_example_model_file_loads`. Keep them.
   `progress.rs` is the `Progress` trait the host renders. The library never prints. `device.rs`
@@ -1432,16 +1437,21 @@ cargo builds a primary package with a static std, and every member linking it wo
   stopping.") and, once one has run past `DEFAULT_STOP_TIMEOUT` since the stop, `DID_NOT_STOP`
   ("Previous run did not stop. It will keep running until the app quits."). The viewport's uploads
   (the grid, the density map, the agent and edge layers), the export's grid pixels and the Sweep
-  tab's column builds run through `ModelPool::install`, so a stuck run in a retired pool never
-  stalls them. A CPU or GPU runner reports a panic into `AppState::sim_faults`, which each teardown
+  tab's column builds run through `ModelPool::install`, and `SweepSession::start` and
+  `resume_folder` pass the current pool as the sweep's `build_pool`, so a stuck run in a retired
+  pool never stalls them. After `stop_simulation`, the app's drop stops a Sweep tab session through
+  `SweepSession::stop` with `DEFAULT_STOP_TIMEOUT`, and a sweep thread held in a step is detached.
+  A CPU or GPU runner reports a panic into `AppState::sim_faults`, which each teardown
   replaces, so a detached runner's late panic reaches no later run. `src/tests/runaway.rs` holds
   `a_cpu_build_after_a_detach_runs_on_a_fresh_pool`,
   `a_slow_runner_is_waited_for_and_keeps_the_pool`,
   `a_viewport_frame_after_a_detach_runs_on_the_fresh_pool`,
   `a_build_that_never_returns_leaves_the_ui_responsive`,
   `commands_sent_during_a_build_reach_the_new_runner`,
-  `offload_and_quit_do_not_wait_for_a_runaway_runner` and
-  `a_gpu_build_on_the_build_thread_reports_a_validation_error_as_a_fault`, over the `held` entries
+  `offload_and_quit_do_not_wait_for_a_runaway_runner`,
+  `a_gpu_build_on_the_build_thread_reports_a_validation_error_as_a_fault`,
+  `a_sweep_after_a_detach_probes_in_the_fresh_pool` and
+  `quitting_does_not_wait_for_a_sweep_held_in_its_model`, over the `held` entries
   of `support.rs`, whose first build waits on a `Gate` and whose first run's steps a `StepHold`
   holds, on the step's thread or on every worker of its pool. Keep them. A test that builds calls
   `AppState::wait_for_build` before it reads the runner.
@@ -2329,8 +2339,12 @@ A sweep started from the app runs off the UI thread as well, through
 `SearchBatchTold` with an `Arc<SearchUpdate>` after each batch's runs, then one `Finished` with the
 `SweepRecord`, or `Failed`), and a `SweepProgress` where the latest write wins. The `wake`
 callback of `SweepRunOptions` runs after each event, and an idle UI then repaints to collect it.
-Dropping the handle aborts the sweep, and on native waits for the thread to write its files. A
-pause never changes a result. A run's trajectory depends on its seed and schedule alone.
+Dropping the handle aborts the sweep, and on native waits for the thread to write its files.
+`SweepRun::stop(timeout)` aborts and waits at most `timeout`, and leaves a thread held in a step
+detached. `SweepRunOptions::build_pool` (native) names the pool the probes and a GPU model's run
+builds run in (`SweepOptions::in_build_pool`, `Executor::with_build_pool`), and a CPU model's runs
+build in their lane pools either way. A pause never changes a result. A run's trajectory depends
+on its seed and schedule alone.
 
 The UI thread only ever reads the latest snapshot (`snapshot.rs`) and never touches the live
 `SimState` directly. Publishing goes through a `SnapshotSlot`, holding the `fresh` snapshot plus a

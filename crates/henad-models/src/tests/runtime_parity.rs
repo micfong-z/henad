@@ -13,7 +13,7 @@ use henad_core::provenance::ModelCode;
 use henad_core::view::{StatEntry, StatValue};
 use henad_explore::testing::{CheckSettings, TestDeviceRequest, assert_set_conforms, headless_test_device};
 
-use crate::game_of_life::{GameOfLifeModel, PALETTE};
+use crate::game_of_life::GameOfLifeModel;
 
 /// The import path of `gpu_ants/state.wgsl`, the one module of the example shaders.
 const ANTS_STATE: WgslFile<'static> = WgslFile {
@@ -306,8 +306,8 @@ fn snapshot(ctx: &GpuContext, state: &mut dyn GpuSimState) {
     state.poll_stats_readback(&ctx.device, true);
 }
 
-/// Returns the state of each cell as `display` draws it, row after row, one texel per cell. Dead and alive cells take
-/// the two colours of the Game of Life's palette.
+/// Returns the state of each cell as `display` draws it, row after row, one texel per cell. Each state takes its colour
+/// in [`GridRule::life`].
 fn drawn_cells(display: &GpuDisplay, ctx: &GpuContext) -> Vec<u8> {
     let size = wgpu::Extent3d {
         width: display.width,
@@ -390,12 +390,13 @@ fn drawn_cells(display: &GpuDisplay, ctx: &GpuContext) -> Vec<u8> {
         .slice(..)
         .get_mapped_range()
         .unwrap_or_else(|error| panic!("the staging buffer has no range: {error}"));
+    let colors: Vec<[u8; 4]> = GridRule::life().states.iter().map(|state| state.color).collect();
     let cells = mapped
         .chunks(padded_row as usize)
         .flat_map(|row| row[..row_bytes as usize].chunks(4))
-        .map(|pixel| match PALETTE.iter().position(|color| color[..] == *pixel) {
+        .map(|pixel| match colors.iter().position(|color| color[..] == *pixel) {
             Some(state) => state as u8,
-            None => panic!("a pixel {pixel:?} has no colour of the palette"),
+            None => panic!("a pixel {pixel:?} has the colour of no state of the Life starter"),
         })
         .collect();
     drop(mapped);

@@ -30,13 +30,13 @@ use henad_core::params::{ChoiceOptions, ParamDescriptor, ParamFormat, ParamKind}
 use henad_core::provenance::ModelCode;
 
 /// Value of a model file's `format` key.
-pub const FORMAT: &str = "henad-model";
+const FORMAT: &str = "henad-model";
 
 /// Version of the model file format this build reads and writes.
-pub const FORMAT_VERSION: u64 = 1;
+const FORMAT_VERSION: u64 = 1;
 
 /// Value of the `kind` key of a grid rule.
-pub const KIND_GPU_GRID: &str = "gpu_grid";
+const KIND_GPU_GRID: &str = "gpu_grid";
 
 /// A grid rule read from a model file, with the text it was read from.
 #[derive(Clone)]
@@ -79,7 +79,9 @@ impl Places {
     }
 }
 
-/// Every `\r` of a `\r\n` that reading a text took out, which maps an offset in the read text back to the text.
+/// Line ends written `\r\n` that reading a text turned into `\n`.
+///
+/// [`Self::original`] maps an offset in the read text back to the original text.
 #[derive(Debug, Clone, Default)]
 struct LineEnds {
     /// Offset in the read text of the `\n` that followed each `\r` taken out, in order.
@@ -87,7 +89,7 @@ struct LineEnds {
 }
 
 impl LineEnds {
-    /// Returns `text` with each `\r\n` and lone `\r` made `\n`, and the line ends that maps it back.
+    /// Returns `text` with each `\r\n` and lone `\r` made `\n`, and the [`LineEnds`] value that maps it back.
     fn normalize(text: &str) -> (String, Self) {
         let mut read = String::with_capacity(text.len());
         let mut removed = Vec::new();
@@ -168,9 +170,9 @@ impl ModelFile {
     ///
     /// # Errors
     ///
-    /// Returns [`ModelFileError::Format`] when the step holds `'''` or a control character other than a tab and a line
-    /// end, since a literal string holds neither, when a parameter holds a float that is not finite, or when the
-    /// canonical text does not read back, as for a choice whose options [`check_choice_options`] refuses.
+    /// Returns [`ModelFileError::Format`] when the step holds `'''` or an ASCII control character other than a tab
+    /// and a line end, since a literal string holds neither, when a parameter holds a float that is not finite, or when
+    /// the canonical text does not read back, as for a choice whose options [`check_choice_options`] refuses.
     pub fn from_rule(mut rule: GridRule) -> Result<Self, ModelFileError> {
         rule.step = LineEnds::normalize(&rule.step).0;
         check_step(&rule.step).map_err(|(message, _)| format_error(message))?;
@@ -282,23 +284,6 @@ impl ModelFile {
         })
     }
 
-    /// Reads the model file whose canonical text `code` holds, as a results folder records it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModelFileError::Format`] for code of another format than [`GridRule::CODE_FORMAT`], and the errors of
-    /// [`Self::parse`] otherwise.
-    pub fn from_code(code: &ModelCode) -> Result<Self, ModelFileError> {
-        if code.format() != GridRule::CODE_FORMAT {
-            return Err(format_error(format!(
-                "the code is in the format '{}', and this build reads '{}'",
-                code.format(),
-                GridRule::CODE_FORMAT
-            )));
-        }
-        Self::parse(code.text())
-    }
-
     /// Rule the file holds.
     pub fn rule(&self) -> &GridRule {
         &self.rule
@@ -363,7 +348,7 @@ impl ModelFile {
 ///
 /// # Errors
 ///
-/// Returns the message and the bytes in `step` of the first `'''`, which ends a literal string, or of a control
+/// Returns the message and the bytes in `step` of the first `'''`, which ends a literal string, or of an ASCII control
 /// character other than a tab and a line end, which a literal string cannot hold.
 fn check_step(step: &str) -> Result<(), (String, Range<usize>)> {
     if let Some(at) = step.find("'''") {
@@ -374,7 +359,7 @@ fn check_step(step: &str) -> Result<(), (String, Range<usize>)> {
     }
     match step
         .char_indices()
-        .find(|&(_, c)| c.is_control() && c != '\t' && c != '\n')
+        .find(|&(_, c)| matches!(c, '\u{0}'..='\u{8}' | '\u{B}'..='\u{1F}' | '\u{7F}'))
     {
         Some((at, c)) => Err((
             format!(

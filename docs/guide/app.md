@@ -1062,11 +1062,14 @@ A tick of a large model can take longer than a quarter of a second, and the line
 A build waits up to two seconds for the previous run to stop, and the old model frees its memory before the new one allocates.
 After two seconds the line changes to **:material-alert: Previous run did not stop. It will keep running until the app quits.**
 The next model then builds and runs on a fresh set of worker threads, and the stuck run cannot hold it up.
+A sweep started from the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab after that runs on fresh worker threads as well.
 The line disappears if the run stops after all.
 
 A stuck run can keep processor cores busy, and holds the memory of its model.
 Restart the app to end it.
 Closing the app waits the same quarter of a second, and the stuck run ends with the app.
+Closing the app also aborts a running sweep, and waits up to two seconds for it to write its results.
+A sweep run that does not stop ends with the app.
 
 In a browser, a tick that never returns freezes the page.
 

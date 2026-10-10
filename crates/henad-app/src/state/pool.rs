@@ -1,5 +1,5 @@
-//! Thread pool the app's CPU work runs in: model builds and runners, the viewport's uploads and the Sweep tab's column
-//! builds.
+//! Thread pool the app's CPU work runs in: model builds and runners, the viewport's uploads, the Sweep tab's column
+//! builds, and the probes and GPU run builds of the Sweep tab's sweeps.
 //!
 //! The pool starts as rayon's global pool. A run or a build that has not stopped [`DEFAULT_STOP_TIMEOUT`] after the app
 //! stopped it can hold workers of its pool for good, and retires that pool. The app's CPU work then moves to a fresh

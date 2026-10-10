@@ -2,12 +2,14 @@
 //! browser runs.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use henad_compute::entry::ModelState;
 use henad_compute::entry::{ModelEntry, register_gpu_grid_model};
 use henad_compute::fault::Fault;
+use henad_compute::gpu::GpuContext;
 use henad_compute::runner::{Pace, SimLoop as _};
 use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
@@ -721,4 +723,155 @@ fn a_gpu_model_outside_the_example_set_sweeps_on_its_own_device() {
         record.manifest.runtime.adapter.is_some(),
         "the manifest records the sweep's device"
     );
+}
+
+/// Name of the thread each build ran on, in the order the builds started.
+type BuildThreads = Arc<Mutex<Vec<Option<String>>>>;
+
+/// Returns `entry` with the name of the thread each build runs on recorded in `threads`.
+fn recording_threads(entry: ModelEntry, threads: &BuildThreads) -> ModelEntry {
+    let threads = Arc::clone(threads);
+    entry.wrap_factory(move |create| {
+        Arc::new(
+            move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| -> Result<ModelState, Fault> {
+                threads
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(std::thread::current().name().map(str::to_owned));
+                create(params, seed, gpu)
+            },
+        )
+    })
+}
+
+/// Returns a pool of two workers, each named `henad-test-build-` and its index, and a test of whether a thread name
+/// names one of them.
+fn build_pool() -> (Arc<rayon::ThreadPool>, impl Fn(&Option<String>) -> bool) {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .thread_name(|worker| format!("henad-test-build-{worker}"))
+        .build()
+        .expect("the pool builds");
+    let in_pool = |name: &Option<String>| {
+        name.as_deref()
+            .is_some_and(|name| name.starts_with("henad-test-build-"))
+    };
+    (Arc::new(pool), in_pool)
+}
+
+/// The probes of a sweep build in the pool its options name, and its CPU runs in the pools of their lanes.
+#[test]
+fn a_sweep_builds_its_probes_in_its_build_pool() {
+    let threads = BuildThreads::default();
+    let mut spec = SweepSpec::new("game_of_life");
+    spec.fixed = fixed(&[("grid_width", "16"), ("grid_height", "16")]);
+    spec.run.steps = 4;
+    spec.blocks = vec![BlockSpec {
+        design: DesignKind::Factorial,
+        factors: vec![FactorSpec::param("density", values(&["0.2", "0.4"]))],
+        design_seed: None,
+    }];
+    let (pool, in_pool) = build_pool();
+    let mut pooled = options();
+    pooled.build_pool = Some(pool);
+    let events = run_handle(
+        recording_threads(entry("game_of_life", None), &threads),
+        spec,
+        SweepOutput::Memory,
+        pooled,
+    );
+    assert_eq!(record(&events).report.counts.ok, 2);
+
+    let threads = threads.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let built_in_pool: Vec<bool> = threads.iter().map(&in_pool).collect();
+    assert!(built_in_pool.len() >= 4, "two probes and two runs: {threads:?}");
+    assert_eq!(
+        built_in_pool[..2],
+        [true, true],
+        "the first and the last config probe in the pool: {threads:?}"
+    );
+    let runs = &threads[threads.len() - 2..];
+    assert!(
+        runs.iter()
+            .all(|name| name.as_deref().is_some_and(|name| name.starts_with("henad-lane-"))),
+        "the runs build in their lanes: {threads:?}"
+    );
+}
+
+/// The probe and each run of a GPU model build in the pool a sweep's options name.
+#[test]
+fn a_gpu_sweep_builds_its_runs_in_its_build_pool() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
+    let threads = BuildThreads::default();
+    let (pool, in_pool) = build_pool();
+    let mut pooled = options();
+    pooled.build_pool = Some(pool);
+    let gpu_sir = recording_threads(entry("gpu_sir", Some(&ctx)), &threads);
+    let mut run =
+        SweepRun::start(gpu_sir, Some(ctx), gpu_sir_spec(), SweepOutput::Memory, pooled).expect("the sweep starts");
+    let events = drain(&mut run);
+    assert_eq!(record(&events).report.counts.ok, 2);
+
+    let threads = threads.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    assert_eq!(threads.len(), 3, "a probe and two runs: {threads:?}");
+    assert!(threads.iter().all(in_pool), "{threads:?}");
+}
+
+/// A stop returns once the timeout passes, and leaves a sweep held in its model's build running. A sweep that reads
+/// the abort stops in time.
+#[test]
+fn a_stop_waits_for_a_held_sweep_no_longer_than_its_timeout() {
+    /// Time the stop may take past its timeout, for the scheduler.
+    const SLACK: Duration = Duration::from_secs(1);
+
+    let (release, hold) = std::sync::mpsc::channel::<()>();
+    let hold = Arc::new(Mutex::new(hold));
+    let builds = Arc::new(AtomicUsize::new(0));
+    let held = {
+        let builds = Arc::clone(&builds);
+        entry("game_of_life", None).wrap_factory(move |create| {
+            Arc::new(
+                move |params: &[ParamValue],
+                      seed: Option<u64>,
+                      gpu: Option<&GpuContext>|
+                      -> Result<ModelState, Fault> {
+                    builds.fetch_add(1, Ordering::SeqCst);
+                    // Waits until the test drops `release`.
+                    hold.lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .recv()
+                        .unwrap_or_default();
+                    create(params, seed, gpu)
+                },
+            )
+        })
+    };
+    let run = SweepRun::start(held, None, endless_spec(), SweepOutput::Memory, options()).expect("the sweep starts");
+    let deadline = Instant::now() + PATIENCE;
+    while builds.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "the probe never started");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let timeout = Duration::from_millis(100);
+    let started = Instant::now();
+    assert!(!run.stop(timeout), "a sweep held in its build stopped");
+    let waited = started.elapsed();
+    assert!(
+        waited >= timeout && waited < timeout + SLACK,
+        "the stop waited {waited:?}"
+    );
+    drop(release);
+
+    let run = SweepRun::start(
+        entry("game_of_life", None),
+        None,
+        endless_spec(),
+        SweepOutput::Memory,
+        options(),
+    )
+    .expect("the sweep starts");
+    wait_for(&run, "a run in progress", |progress| !progress.active_runs.is_empty());
+    assert!(run.stop(PATIENCE), "the sweep did not stop");
 }

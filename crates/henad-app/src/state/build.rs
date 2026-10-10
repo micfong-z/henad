@@ -519,13 +519,20 @@ impl AppState {
     }
 }
 
-/// Stops the live simulation and abandons a build without waiting past [`STOP_WAIT`], as the app quits.
+/// Stops the live simulation and abandons a build without waiting past [`STOP_WAIT`], as the app quits. Then aborts a
+/// sweep of the Sweep tab and waits for it up to [`DEFAULT_STOP_TIMEOUT`], for a sweep that stops to write its files.
 ///
 /// The detached threads are dropped with the app and end with the process. Otherwise the runner's own drop would wait
-/// [`DEFAULT_STOP_TIMEOUT`].
+/// [`DEFAULT_STOP_TIMEOUT`], and the sweep's drop would wait for a run held in its step for good.
 impl Drop for AppState {
     fn drop(&mut self) {
         self.stop_simulation();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(session) = self.sweep.session.take()
+            && !session.stop(DEFAULT_STOP_TIMEOUT)
+        {
+            log::warn!("The sweep did not stop within {} s", DEFAULT_STOP_TIMEOUT.as_secs_f64());
+        }
     }
 }
 

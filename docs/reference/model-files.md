@@ -49,6 +49,8 @@ Line ends can be `\n` or `\r\n`.
 | `name` | Name the app and `--list` show. The id when left out |
 | `description` | One line about the model. Empty when left out |
 
+The name and the description hold no control character, such as a tab or an escape, and neither do a state's label, a parameter's label or an option name.
+
 The three header keys are read before anything else.
 A file of another format, version or kind is refused at that key, even when it holds keys this version does not know.
 

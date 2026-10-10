@@ -186,6 +186,9 @@ pub struct SweepOptions {
     pub spec_source: SpecSource,
     /// Build of the host and its command line, for the manifest.
     pub provenance: Provenance,
+    /// Thread pool the probes and the runs of a GPU model are built in, `None` for rayon's global pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) build_pool: Option<Arc<rayon::ThreadPool>>,
 }
 
 impl SweepOptions {
@@ -202,7 +205,21 @@ impl SweepOptions {
             active_runs: None,
             spec_source: SpecSource::default(),
             provenance,
+            #[cfg(not(target_arch = "wasm32"))]
+            build_pool: None,
         }
+    }
+
+    /// Runs `build` on a worker of the build pool, or on the calling thread for rayon's global pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn in_build_pool<R: Send>(&self, build: impl FnOnce() -> R + Send) -> R {
+        crate::exec::run_in_build_pool(self.build_pool.as_deref(), build)
+    }
+
+    /// Runs `build` on the calling thread, in rayon's global pool.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn in_build_pool<R>(&self, build: impl FnOnce() -> R) -> R {
+        build()
     }
 
     /// Copies the concurrency and memory settings of a spec's `[execution]` table into the options.
@@ -842,7 +859,7 @@ impl SweepPreparation {
         }
         let probe = match probe {
             Some(probe) => probe,
-            None => ProbeReport::for_plan(entry, gpu, &plan)?,
+            None => options.in_build_pool(|| ProbeReport::for_plan(entry, gpu, &plan))?,
         };
         let measure = MeasurePlan::new(plan.run_settings(), plan.measure_settings(), probe.columns.clone())?;
         let resumed = resume_dir
@@ -870,7 +887,7 @@ impl SweepPreparation {
 
         // The layout is sized from the first config that builds without a fault or the last config, whichever holds
         // more.
-        let last_probe = ProbeReport::for_last_config(entry, gpu, &plan, &probe);
+        let last_probe = options.in_build_pool(|| ProbeReport::for_last_config(entry, gpu, &plan, &probe));
         let sizing_probe = match &last_probe {
             Some(last_probe) if last_probe.footprint() > probe.footprint() => last_probe,
             _ => &probe,
@@ -1037,7 +1054,8 @@ impl SweepPreparation {
         )?
         .with_timeout(self.plan.run_settings().timeout)
         .with_active_runs(options.active_runs.clone())
-        .with_gpu_memory_budget(options.gpu_memory_budget);
+        .with_gpu_memory_budget(options.gpu_memory_budget)
+        .with_build_pool(options.build_pool.clone());
         let requests: Vec<RunRequest<'_>> = self
             .pending
             .iter()
