@@ -14,6 +14,7 @@ pub mod painted;
 pub mod params;
 pub mod performance;
 pub mod playback;
+pub mod rebuild;
 pub mod results;
 pub mod stats;
 pub mod sweep;

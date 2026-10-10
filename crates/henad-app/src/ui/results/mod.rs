@@ -229,6 +229,20 @@ impl ResultsPanel {
         }
     }
 
+    /// Compares the held results of model `id` with `entry`, the entry that has replaced the set's entry under that
+    /// id, or `None` when the app cannot run the model. Results of another model are left alone.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "nothing in the app installs a model set yet, and the tests do")
+    )]
+    pub fn model_replaced(&mut self, id: &str, entry: Option<&ModelEntry>) {
+        if let Some(store) = &mut self.store
+            && store.model_id == id
+        {
+            store.model_changed(entry);
+        }
+    }
+
     /// Files of a sweep held in memory, `None` for a sweep written to a folder or a sweep still running.
     pub fn files(&self) -> Option<&Arc<SweepFiles>> {
         self.files.as_ref()
@@ -462,7 +476,12 @@ fn poll_folder_load(app: &mut AppState) {
         return;
     }
     match read {
-        Ok(read) => show_results(app, read),
+        Ok(mut read) => {
+            // The set's entry might have been replaced while the thread read the folder.
+            let entry = app.lookup(&read.store.model_id).ok();
+            read.store.model_changed(entry);
+            show_results(app, read);
+        }
         Err(message) => app.results.status = Some(format!("Open failed: {message}")),
     }
 }
@@ -605,10 +624,18 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
             } else {
                 "sweep"
             };
+            let refusal = if sweep_running {
+                Some(running_hover.clone())
+            } else {
+                code_refusal(panel.store.as_ref(), noun)
+            };
             let resume = ui
-                .add_enabled(!sweep_running, egui::Button::new(format!("{MDI_PLAY} Resume {noun}")))
+                .add_enabled(
+                    refusal.is_none(),
+                    egui::Button::new(format!("{MDI_PLAY} Resume {noun}")),
+                )
                 .on_hover_text("Run missing runs")
-                .on_disabled_hover_text(&running_hover);
+                .on_disabled_hover_text(refusal.unwrap_or_default());
             if resume.clicked() {
                 *request = Some(ResultsRequest::ResumeSweep);
             }
@@ -617,7 +644,7 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
     let resume_text = panel
         .store
         .as_ref()
-        .filter(|_| !sweep_running && resumable(app))
+        .filter(|store| !sweep_running && resumable(app) && store.code_matches)
         .and_then(|store| {
             let noun = if store.is_search() { "search" } else { "sweep" };
             store.recorded_execution?.resume_text(noun)
@@ -633,7 +660,19 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
     }
 }
 
+/// Returns the reason Resume cannot resume the folder of `store`, a folder of runtime or plugin code that differs from
+/// the app's entry, or `None` when the code matches.
+///
+/// `noun` names the results, "sweep" or "search".
+fn code_refusal(store: Option<&ResultsStore>, noun: &str) -> Option<String> {
+    store
+        .filter(|store| !store.code_matches)
+        .map(|_| format!("Model code changed since this {noun} ran"))
+}
+
 /// Returns whether the results come from an incomplete folder whose sweep this app can resume.
+///
+/// Resume shows for such a folder, and [`code_refusal`] can still disable it.
 fn resumable(app: &AppState) -> bool {
     app.results.store.as_ref().is_some_and(|store| {
         cfg!(not(target_arch = "wasm32"))

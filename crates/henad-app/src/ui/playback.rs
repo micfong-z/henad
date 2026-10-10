@@ -1,13 +1,9 @@
 use crate::icons::material_design_icons::{
     MDI_ALERT, MDI_FAST_FORWARD, MDI_FLASK_OUTLINE, MDI_PAUSE, MDI_PLAY, MDI_RESTART, MDI_SKIP_NEXT, MDI_TRAY_REMOVE,
 };
-use crate::state::{AppState, setup_message};
-use crate::ui::params::{INVALID_SEED, parse_seed};
+use crate::state::AppState;
 use crate::ui::results::table::INEXACT_REPLAY;
 use crate::ui::{add_progress_bar, mcs};
-
-/// Reason shown for the disabled Build button when no model is selected.
-const NO_SELECTED_MODEL: &str = "Select a model in the Model tab";
 
 pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let has_thread = app.sim_thread.is_some();
@@ -41,8 +37,7 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     });
 
-    let shortfalls = app.selection_shortfalls();
-    let build_disabled_reason = build_refusal(app, &shortfalls);
+    let build_disabled_reason = app.build_refusal();
 
     run_to_row(ui, app, build_disabled_reason.as_deref());
 
@@ -74,20 +69,6 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     });
 
     opened_run_line(ui, app);
-}
-
-/// Returns the reason the selection cannot be built, or `None` when it can.
-fn build_refusal(app: &AppState, shortfalls: &[String]) -> Option<String> {
-    if app.selected_entry().is_none() {
-        return Some(NO_SELECTED_MODEL.to_owned());
-    }
-    if !shortfalls.is_empty() {
-        return Some(format!("Too large for this device: {}", shortfalls.join("; ")));
-    }
-    if parse_seed(&app.seed_text).is_err() {
-        return Some(INVALID_SEED.to_owned());
-    }
-    app.build_setup()?.err().map(|error| setup_message(&error))
 }
 
 /// Draws the Run to tick row, or the progress of a pending run to a tick with its Cancel button.
@@ -147,7 +128,10 @@ fn run_refusal(app: &AppState, build_disabled_reason: Option<&str>, current: u64
     if app.sim_running {
         return Some("Pause to run to a tick".to_owned());
     }
-    if app.loaded_model.is_some() && !app.selection_is_loaded() {
+    if app.code_pending() {
+        return Some(format!("Model code changed. Press {MDI_RESTART}\u{a0}Build first."));
+    }
+    if app.loaded_entry().is_some() && !app.selection_is_loaded() {
         return Some(format!(
             "Selected model not loaded. Press {MDI_RESTART}\u{a0}Build first."
         ));
@@ -193,9 +177,9 @@ mod tests {
     use henad_core::action::Schedule;
     use henad_core::explore::replay::Replay;
 
-    use super::{NO_SELECTED_MODEL, build_refusal, opened_run_warning};
+    use super::opened_run_warning;
     use crate::options::AppOpening;
-    use crate::state::{AppState, OpenAt};
+    use crate::state::{AppState, NO_SELECTED_MODEL, OpenAt};
     use crate::ui::results::table::INEXACT_REPLAY;
 
     #[test]
@@ -209,7 +193,7 @@ mod tests {
         let Some(app) = AppState::headless(models, false) else {
             return;
         };
-        assert_eq!(build_refusal(&app, &[]).as_deref(), Some(NO_SELECTED_MODEL));
+        assert_eq!(app.build_refusal().as_deref(), Some(NO_SELECTED_MODEL));
     }
 
     /// A host's opening never passes through the Results tab, where the warning sits beside Open.

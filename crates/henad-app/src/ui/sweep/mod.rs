@@ -24,6 +24,7 @@ use egui::{CentralPanel, Frame, Id, Margin, Panel, ScrollArea};
 use henad_compute::cpu::sim_thread::WakeFn;
 use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
+use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::plan::{ModelSchema, PlanWarning};
 use henad_core::export::StatColumns;
 use henad_core::metadata::Backend;
@@ -277,6 +278,23 @@ impl SweepPanel {
 
     /// Drops the last check, so the next check reads the output folder again.
     fn clear_check(&mut self) {
+        self.last_check = None;
+    }
+
+    /// Forgets what the tab learned from the code of model `id` that the set has replaced: the build of its stat
+    /// columns, its draft when `declarations_changed`, and the last check.
+    ///
+    /// The draft lists one row per parameter of the previous code. The next frame builds the replacement for its
+    /// columns.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "nothing in the app installs a model set yet, and the tests do")
+    )]
+    pub fn forget_model(&mut self, id: &str, declarations_changed: bool) {
+        self.column_builds.remove(id);
+        if declarations_changed {
+            self.drafts.remove(id);
+        }
         self.last_check = None;
     }
 
@@ -914,6 +932,7 @@ fn start(app: &mut AppState) {
     };
     let summary = CheckSummary::new(check, entry, &schema);
     let kept = KeptDraft {
+        entry: entry.clone(),
         draft: check.draft.clone(),
         panel_values: check.panel_values.clone(),
         plan: PlanSummary::for_draft(check, &schema, entry.name(), &summary),
@@ -958,21 +977,19 @@ fn start(app: &mut AppState) {
 
 /// Saves the spec of the session's draft while a session exists, and of the selected model's draft otherwise.
 fn save_spec(app: &mut AppState) {
-    let (draft, panel_values) = if let Some(session) = &app.sweep.session {
+    // A session's draft pairs with the entry it started with. The set's entry might have been replaced since.
+    let (entry, draft, panel_values) = if let Some(session) = &app.sweep.session {
         let Some(kept) = &session.kept else {
             return;
         };
-        (kept.draft.clone(), kept.panel_values.clone())
+        (kept.entry.clone(), kept.draft.clone(), kept.panel_values.clone())
     } else {
         let Some(entry) = app.selected_entry().cloned() else {
             return;
         };
         let schema = entry.schema();
         let draft = app.sweep.draft_mut(&schema).clone();
-        (draft, app.param_values.clone())
-    };
-    let Some(entry) = app.models.get(&draft.model_id) else {
-        return;
+        (entry, draft, app.param_values.clone())
     };
     let schema = entry.schema();
     let name = match draft.mode {
@@ -1085,8 +1102,18 @@ fn read_spec(app: &mut AppState, file: &DialogFile) -> Result<(), String> {
 fn edit_sweep(app: &mut AppState) {
     let kept = app.sweep.session.as_ref().and_then(|session| session.kept.as_deref());
     let reselect = kept.and_then(|kept| {
-        let id = app.models.get(&kept.draft.model_id)?.id().to_owned();
-        let panel_values = || kept.panel_values.iter().cloned().map(Some).collect::<Vec<_>>();
+        let current = app.models.get(&kept.draft.model_id)?;
+        let id = current.id().to_owned();
+        // The values follow the parameters the sweep ran with. Replaced code with other parameters starts from its own
+        // values.
+        let same_declarations = schema_hash(&current.schema()) == schema_hash(&kept.entry.schema());
+        let panel_values = || {
+            if same_declarations {
+                kept.panel_values.iter().cloned().map(Some).collect()
+            } else {
+                Vec::new()
+            }
+        };
         (app.selected_model.as_deref() != Some(id.as_str())).then(|| (id, panel_values()))
     });
     if let Some((id, panel_values)) = reselect {
@@ -1389,6 +1416,58 @@ mod tests {
             "a failed build leaves the stat labels to check against"
         );
         assert!(check.draft.stat_columns.is_none());
+    }
+
+    #[test]
+    fn install_forgets_the_sweep_tab_columns_of_the_model() {
+        use henad_core::provenance::ModelCode;
+
+        use crate::state::{AppState, default_values};
+        use crate::tests::support::{edited_sir, set_of};
+
+        let Some(mut app) = AppState::headless(example_models(), false) else {
+            return;
+        };
+        let wake: WakeFn = Arc::new(|| {});
+        let sir = app.models.get("sir").cloned().expect("SIR is registered");
+        let boids = app.models.get("boids").cloned().expect("boids is registered");
+        for entry in [&sir, &boids] {
+            app.sweep
+                .column_builds
+                .insert(entry.id().to_owned(), ColumnsBuild::Sampled(None));
+            app.sweep.learn_stat_columns(entry, &wake);
+            app.sweep.draft_mut(&entry.schema()).replicates = 7;
+        }
+        app.sweep.cached_check(&sir.schema(), &default_values(&sir));
+        assert!(app.sweep.last_check.is_some());
+
+        app.install_models(&set_of(sir.clone()));
+        assert!(
+            app.sweep.column_builds.contains_key("sir"),
+            "the same code changes nothing"
+        );
+        assert!(app.sweep.last_check.is_some());
+
+        let recoded = sir.clone().__with_code(ModelCode::new("henad-app-test", "edited sir"));
+        app.install_models(&set_of(recoded));
+        assert!(
+            !app.sweep.column_builds.contains_key("sir"),
+            "the columns of the old code"
+        );
+        assert!(app.sweep.column_builds.contains_key("boids"), "another model's columns");
+        assert_eq!(
+            app.sweep.drafts.get("sir").map(|draft| draft.replicates),
+            Some(7),
+            "a draft of unchanged declarations stays"
+        );
+        assert!(app.sweep.last_check.is_none());
+
+        app.install_models(&set_of(edited_sir()));
+        assert!(
+            !app.sweep.drafts.contains_key("sir"),
+            "a draft of other declarations is dropped"
+        );
+        assert_eq!(app.sweep.drafts.get("boids").map(|draft| draft.replicates), Some(7));
     }
 
     #[test]

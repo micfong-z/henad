@@ -33,6 +33,8 @@ mod native;
 mod options;
 mod sim_runner;
 mod state;
+#[cfg(test)]
+mod tests;
 mod ui;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -212,6 +214,7 @@ impl eframe::App for HenadApp {
 
         ui::menu_bar::menu_bar_panel(ui, &mut self.dock, &mut self.state);
         ui::fault::fault_modal(ui.ctx(), &mut self.state);
+        ui::rebuild::rebuild_modal(ui.ctx(), &mut self.state);
         ui::about::about_modal(ui.ctx(), &mut self.state);
 
         let mut dock_style = Style::from_egui(ui.style());
@@ -236,30 +239,5 @@ impl eframe::App for HenadApp {
         let render_ms = self.state.timings.frame_render_ms;
         FrameTimings::update_ema(&mut self.state.timings.render_ms, render_ms);
         FrameTimings::update_ema(&mut self.state.timings.ui_ms, (total_ms - render_ms).max(0.0));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::requested_threads;
-
-    #[test]
-    fn an_absent_query_asks_for_every_core() {
-        assert_eq!(requested_threads("", 14), 14);
-        assert_eq!(requested_threads("?debug=1", 14), 14);
-    }
-
-    #[test]
-    fn threads_one_is_how_a_single_threaded_run_is_asked_for() {
-        assert_eq!(requested_threads("?threads=1", 14), 1);
-        assert_eq!(requested_threads("?foo=a&threads=4", 14), 4);
-    }
-
-    /// More workers than cores only adds contention, and zero would build no pool at all.
-    #[test]
-    fn a_request_is_clamped_to_the_host() {
-        assert_eq!(requested_threads("?threads=99", 14), 14);
-        assert_eq!(requested_threads("?threads=0", 14), 1);
-        assert_eq!(requested_threads("?threads=nonsense", 14), 14);
     }
 }

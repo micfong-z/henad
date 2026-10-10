@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use henad_compute::entry::ModelEntry;
 use henad_core::explore::plan::Plan;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::params::ParamValue;
@@ -21,6 +22,8 @@ use crate::ui::sweep::plan::PlanSummary;
 
 /// Draft that started a session, kept for Save spec and the Plan panel while the session lasts.
 pub struct KeptDraft {
+    /// Entry the session started with. The set's entry under its id can be replaced while the session lasts.
+    pub entry: ModelEntry,
     pub draft: SweepDraft,
     /// Parameters tab values the draft was checked against at the start.
     pub panel_values: Vec<ParamValue>,
