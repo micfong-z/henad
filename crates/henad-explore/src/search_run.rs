@@ -38,6 +38,7 @@ use henad_core::explore::search::{
 };
 use henad_core::explore::seed::search_seed;
 use henad_core::explore::spec::SweepSpec;
+use henad_core::provenance::ModelSource;
 
 use crate::exec::{BatchEnd, RunRequest};
 #[cfg(not(target_arch = "wasm32"))]
@@ -47,7 +48,7 @@ use crate::output::manifest::{
 };
 use crate::output::memory::{SweepFiles, memory_writer};
 use crate::output::read::{ReadError, RunsCsv, SeriesScan, parse_one};
-use crate::output::resume::{ResumeError, check_model};
+use crate::output::resume::{ResumeError, check_code, check_directory_code, check_model};
 use crate::output::runs_csv::{ID_COLUMNS, OUTCOME_COLUMNS, column_names};
 use crate::output::search_tables::{ConfigColumns, SearchTablesWriter, write_archive, write_ranking};
 use crate::output::{
@@ -852,18 +853,19 @@ pub(crate) struct RecordedSearch {
 impl RecordedSearch {
     /// Reads the directory at `path` for a resume of a search of `plan`, without changing it.
     ///
-    /// `runs_header` and `series_header` are the header lines the search writes to `runs.csv` and `series.csv`,
-    /// `watched_reducers` the position of each watched column among the reducer columns, and `config_column_count`
-    /// the number of parameter and action columns.
+    /// `source` is the source of the model that resumes. `runs_header` and `series_header` are the header lines the
+    /// search writes to `runs.csv` and `series.csv`, `watched_reducers` the position of each watched column among the
+    /// reducer columns, and `config_column_count` the number of parameter and action columns.
     ///
     /// # Errors
     ///
     /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds a sweep, a different
-    /// search, model, model schema or column layout, or `runs.csv` lists its runs out of order or more runs than the
-    /// search's budget.
+    /// search, model, model code, model schema or column layout, or `runs.csv` lists its runs out of order or more
+    /// runs than the search's budget.
     pub(crate) fn read(
         path: &Path,
         plan: &SearchPlan,
+        source: &ModelSource,
         runs_header: &str,
         series_header: &str,
         watched_reducers: &[usize],
@@ -877,6 +879,7 @@ impl RecordedSearch {
             });
         }
         check_model(&recorded, plan.base.model())?;
+        check_code(&recorded, source)?;
         let current_schema = hex(plan.base.schema_hash());
         if recorded.model.schema_hash != current_schema {
             return Err(ResumeError::SchemaChanged {
@@ -1111,6 +1114,9 @@ impl SearchPreparation {
             _ => None,
         };
         let base = plan.base();
+        if let Some(output_dir) = resume_dir {
+            check_directory_code(output_dir, ManifestMode::Search, base.model(), entry.source())?;
+        }
         if let Some(ctx) = gpu {
             check_capacity(entry, base, &ctx.device.limits())?;
         }
@@ -1127,6 +1133,7 @@ impl SearchPreparation {
                 RecordedSearch::read(
                     output_dir,
                     &plan,
+                    entry.source(),
                     &runs_csv::header_line(&columns),
                     &series_csv::header_line(measure.columns()),
                     &watched_reducers,

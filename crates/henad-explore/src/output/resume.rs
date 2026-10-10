@@ -1,9 +1,10 @@
 //! Resumes of a sweep into a directory that holds some of its runs.
 //!
 //! A resume accepts a directory only when its manifest records the same model, plan, model schema and shard, and no
-//! more replicates than the sweep runs. It keeps every run that ended `ok` or `non_finite`, and every failed run unless
-//! asked to retry failures. A run that timed out is always run again. Kept runs take their ids in the current plan. A
-//! changed replicate count assigns them new ids.
+//! more replicates than the sweep runs. A model composed at run time or loaded from a plugin also has to run the code
+//! that every session ran its runs with. A resume keeps every run that ended `ok` or `non_finite`, and every failed
+//! run unless asked to retry failures. A run that timed out is always run again. Kept runs take their ids in the
+//! current plan. A changed replicate count assigns them new ids.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -12,8 +13,11 @@ use std::path::Path;
 
 use henad_core::explore::outcome::RunStatus;
 use henad_core::explore::plan::{Plan, Shard};
+use henad_core::provenance::ModelSource;
 
-use crate::output::manifest::{Manifest, ManifestError, ManifestMode, ManifestShard, ResultCounts};
+use crate::output::manifest::{
+    Manifest, ManifestError, ManifestMode, ManifestShard, RecordedBuild, ResultCounts, code_text, codes_differ,
+};
 use crate::output::read::{ReadError, RunRecord, RunsCsv, SeriesScan, SeriesSegment, merge_series};
 use crate::output::runs_csv::header_line;
 use crate::output::{MANIFEST_FILE, OutputDir, OutputError, RUNS_FILE, SERIES_FILE, table_paths};
@@ -53,23 +57,25 @@ enum Repair {
 impl ResumeScan {
     /// Reads the directory at `path` for a resume of the runs of `plan` in `shard`, without changing it.
     ///
-    /// `runs_header` and `series_header` are the header lines the sweep writes to `runs.csv` and `series.csv`. With
-    /// `retry_failed`, a run that ended on a fault is run again.
+    /// `source` is the source of the model that resumes. `runs_header` and `series_header` are the header lines the
+    /// sweep writes to `runs.csv` and `series.csv`. With `retry_failed`, a run that ended on a fault is run again.
     ///
     /// # Errors
     ///
-    /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds another model, plan,
-    /// model schema, shard or column layout or more replicates, or a row refers to a run that the plan does not have.
+    /// Returns [`ResumeError`] when the manifest or a table cannot be read, the directory holds another model, model
+    /// code, plan, model schema, shard or column layout or more replicates, or a row refers to a run that the plan
+    /// does not have.
     pub fn read(
         path: &Path,
         plan: &Plan,
+        source: &ModelSource,
         shard: Shard,
         retry_failed: bool,
         runs_header: &str,
         series_header: &str,
     ) -> Result<Self, ResumeError> {
         let recorded = Manifest::read(&path.join(MANIFEST_FILE)).map_err(ResumeError::Manifest)?;
-        check_recorded(&recorded, plan, shard)?;
+        check_recorded(&recorded, plan, source, shard)?;
 
         let (runs_path, series_path) = table_paths(path);
         let runs = RunsCsv::read(&runs_path).map_err(ResumeError::Table)?;
@@ -223,8 +229,8 @@ impl ResumeScan {
 }
 
 /// Checks that `recorded`, the manifest of a directory to resume, holds a sweep of `plan` in `shard` with no more
-/// replicates than `plan`.
-fn check_recorded(recorded: &Manifest, plan: &Plan, shard: Shard) -> Result<(), ResumeError> {
+/// replicates than `plan`, run with the code of `source` when either is runtime or plugin code.
+fn check_recorded(recorded: &Manifest, plan: &Plan, source: &ModelSource, shard: Shard) -> Result<(), ResumeError> {
     if recorded.mode != ManifestMode::Sweep {
         return Err(ResumeError::ModeChanged {
             recorded: recorded.mode,
@@ -232,6 +238,7 @@ fn check_recorded(recorded: &Manifest, plan: &Plan, shard: Shard) -> Result<(), 
         });
     }
     check_model(recorded, plan.model())?;
+    check_code(recorded, source)?;
     let current_schema = hex(plan.schema_hash());
     if recorded.model.schema_hash != current_schema {
         return Err(ResumeError::SchemaChanged {
@@ -273,6 +280,53 @@ pub(crate) fn check_model(recorded: &Manifest, model: &str) -> Result<(), Resume
             recorded: recorded.model.id.clone(),
             current: model.to_owned(),
         })
+    }
+}
+
+/// Reads the manifest of the directory at `path`, and checks the mode, the model and the model code it records, as
+/// [`ResumeScan::read`] and a search resume check them.
+///
+/// A resume of `mode` calls this before its probe build and its measure plan. The probe then never builds changed
+/// code. Note that the spec is planned before this check, and a spec that names a parameter or a stat that the edit
+/// removed fails its plan first.
+///
+/// # Errors
+///
+/// Returns [`ResumeError`] when the manifest cannot be read, or records another mode, model or model code.
+pub(crate) fn check_directory_code(
+    path: &Path,
+    mode: ManifestMode,
+    model: &str,
+    source: &ModelSource,
+) -> Result<(), ResumeError> {
+    let recorded = Manifest::read(&path.join(MANIFEST_FILE)).map_err(ResumeError::Manifest)?;
+    if recorded.mode != mode {
+        return Err(ResumeError::ModeChanged {
+            recorded: recorded.mode,
+            current: mode,
+        });
+    }
+    check_model(&recorded, model)?;
+    check_code(&recorded, source)
+}
+
+/// Checks that every session of `recorded` that wrote runs ran the code of `source`, the model that resumes, when
+/// either records a runtime or plugin origin.
+///
+/// Called after the model id and before the schema hash. A runtime model's edit can change its declarations as well,
+/// and the changed code is then the error reported.
+pub(crate) fn check_code(recorded: &Manifest, source: &ModelSource) -> Result<(), ResumeError> {
+    let current = RecordedBuild::from(source);
+    match recorded
+        .run_model_builds()
+        .iter()
+        .find(|build| codes_differ(build.as_ref(), Some(&current)))
+    {
+        Some(build) => Err(ResumeError::CodeChanged {
+            recorded: code_text(build.as_ref()),
+            current: code_text(Some(&current)),
+        }),
+        None => Ok(()),
     }
 }
 
@@ -322,6 +376,14 @@ pub enum ResumeError {
         /// Model id the directory's manifest records.
         recorded: String,
         /// Id of the model passed to the resume.
+        current: String,
+    },
+    /// A directory holding runs of other model code, where the code that ran them or the code that resumes is runtime
+    /// or plugin code.
+    CodeChanged {
+        /// Code that a session of the directory ran, as text naming its origin and its hash.
+        recorded: String,
+        /// Code of the model passed to the resume, as text naming its origin and its hash.
         current: String,
     },
     /// A directory holding runs of another model schema.
@@ -407,6 +469,11 @@ impl fmt::Display for ResumeError {
                     "the directory holds runs of model '{recorded}', expected '{current}'"
                 )
             }
+            Self::CodeChanged { recorded, current } => write!(
+                f,
+                "the directory holds runs of different model code ({recorded}, expected {current}). A model \
+                 composed at run time or loaded from a plugin resumes only with the code its runs ran"
+            ),
             Self::SchemaChanged { recorded, current } => write!(
                 f,
                 "the directory holds runs of a different model version (schema hash {recorded}, expected \
@@ -456,6 +523,7 @@ impl std::error::Error for ResumeError {
             Self::Table(error) => Some(error),
             Self::PlanChanged { .. }
             | Self::ModelChanged { .. }
+            | Self::CodeChanged { .. }
             | Self::SchemaChanged { .. }
             | Self::ShardChanged { .. }
             | Self::ColumnsChanged { .. }

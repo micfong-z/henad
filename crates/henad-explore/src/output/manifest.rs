@@ -17,7 +17,7 @@ use henad_compute::runtime_info::{HostInfo, RuntimeInfo};
 use henad_core::explore::outcome::RunStatus;
 use henad_core::explore::plan::Shard;
 use henad_core::explore::search::pse::PatternSpaceSettings;
-use henad_core::provenance::{BuildInfo, ModelSource};
+use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode, ModelSource};
 
 /// Value of the `format` field, naming the kind of file.
 pub const FORMAT: &str = "henad-explore";
@@ -138,6 +138,8 @@ impl Manifest {
                 source_hash: None,
                 debug_build: self.engine.debug_build,
                 type_path: None,
+                origin: None,
+                code_hash: None,
                 crate_hashes: BTreeMap::new(),
                 crate_versions: BTreeMap::new(),
             })),
@@ -154,21 +156,37 @@ impl Manifest {
     /// resume credits that last session with its runs. A 0.2 session could end without its runs credited, and always
     /// counts.
     pub fn recorded_builds(&self, role: BuildRole) -> Vec<RecordedBuild> {
-        let uncredited = matches!(self.status, ManifestStatus::Running | ManifestStatus::Failed);
-        let last = self.sessions.len().saturating_sub(1);
         let mut builds: Vec<RecordedBuild> = Vec::new();
         for build in self
-            .sessions
-            .iter()
-            .enumerate()
-            .filter(|&(index, session)| session.ran > 0 || session.host.is_none() || (uncredited && index == last))
-            .filter_map(|(_, session)| self.session_build(session, role))
+            .run_sessions()
+            .filter_map(|session| self.session_build(session, role))
         {
             if !builds.iter().any(|known| known.reads_as(&build)) {
                 builds.push(build);
             }
         }
         builds
+    }
+
+    /// Returns the model build of each session that wrote runs, in session order, `None` for a session that records
+    /// no model build, as a 0.2 session does.
+    ///
+    /// Sessions are selected as [`Self::recorded_builds`] selects them, and no two builds are merged.
+    pub(crate) fn run_model_builds(&self) -> Vec<Option<RecordedBuild>> {
+        self.run_sessions()
+            .map(|session| self.session_build(session, BuildRole::Model))
+            .collect()
+    }
+
+    /// Returns the sessions that wrote runs, in session order, as [`Self::recorded_builds`] selects them.
+    fn run_sessions(&self) -> impl Iterator<Item = &ManifestSession> {
+        let uncredited = matches!(self.status, ManifestStatus::Running | ManifestStatus::Failed);
+        let last = self.sessions.len().saturating_sub(1);
+        self.sessions
+            .iter()
+            .enumerate()
+            .filter(move |&(index, session)| session.ran > 0 || session.host.is_none() || (uncredited && index == last))
+            .map(|(_, session)| session)
     }
 
     /// For each session that records no engine build, writes the build that [`Self::session_build`] returns for it.
@@ -351,9 +369,11 @@ pub enum ManifestStatus {
 
 /// One build as a manifest records it: Henad's engine, a host binary or the crate that registered a model.
 ///
-/// A 0.2 manifest's `engine` block is read as a `RecordedBuild`, with the fields that 0.2 did not write at their
-/// defaults.
+/// A model's build also records the origin of code that is not compiled into the host: `runtime` for a model composed
+/// at run time, with the hash of its code and no crate, and `plugin` for a crate that a dev host loaded. A 0.2
+/// manifest's `engine` block is read as a `RecordedBuild`, with the fields that 0.2 did not write at their defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RecordedBuild {
     /// Package name, under the key `name` that 0.2's engine block uses.
     #[serde(rename = "name")]
@@ -372,9 +392,18 @@ pub struct RecordedBuild {
     pub source_hash: Option<u64>,
     /// Whether the build was compiled with debug assertions.
     pub debug_build: bool,
-    /// Type path of a model's registered type. `None` for the engine and the host.
+    /// Type path of a model's registered type, or `runtime:` and the label of a runtime model. `None` for the
+    /// engine and the host.
     #[serde(default)]
     pub type_path: Option<String>,
+    /// Origin of a model's code, `runtime` or `plugin`, as [`CodeOrigin::as_str`] names it. Left out for compiled
+    /// code, the engine and the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// Hash that identifies the code of a runtime or plugin model, as 16 hexadecimal digits: the hash of a runtime
+    /// model's text, or the plugin crate's source hash. Left out for compiled code, the engine and the host.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "hex_hash")]
+    pub code_hash: Option<u64>,
     /// Hash of each engine crate's own sources, by package name. Empty for a host or a model.
     #[serde(default, with = "hex_hash_map")]
     pub crate_hashes: BTreeMap<String, u64>,
@@ -394,6 +423,8 @@ impl From<&BuildInfo> for RecordedBuild {
             source_hash: build.source_hash(),
             debug_build: build.debug_build(),
             type_path: None,
+            origin: None,
+            code_hash: None,
             crate_hashes: BTreeMap::new(),
             crate_versions: BTreeMap::new(),
         }
@@ -401,8 +432,9 @@ impl From<&BuildInfo> for RecordedBuild {
 }
 
 impl From<&ModelSource> for RecordedBuild {
-    /// Records the registering crate's build and the type path. A source whose set recorded no build is treated as an
-    /// empty package that cannot be identified.
+    /// Records the registering crate's build and the type path, with the origin and the code hash of runtime and
+    /// plugin code. A source with no build, a runtime source or a compiled source that no set recorded a build on, is
+    /// recorded as an empty package.
     fn from(source: &ModelSource) -> Self {
         let mut build = source.build().map_or_else(
             || Self {
@@ -414,14 +446,29 @@ impl From<&ModelSource> for RecordedBuild {
                 source_hash: None,
                 debug_build: cfg!(debug_assertions),
                 type_path: None,
+                origin: None,
+                code_hash: None,
                 crate_hashes: BTreeMap::new(),
                 crate_versions: BTreeMap::new(),
             },
             Self::from,
         );
         build.type_path = Some(source.type_path().to_owned());
+        if source.origin() != CodeOrigin::Compiled {
+            build.origin = Some(source.origin().as_str().to_owned());
+            build.code_hash = source.code_hash();
+        }
         build
     }
+}
+
+/// Identity of a model's code, compared when either of two builds records a runtime or plugin origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodeIdentity {
+    /// Hash of a runtime model's text.
+    Runtime(u64),
+    /// Source hash of the crate that a compiled or plugin model comes from.
+    Rust(u64),
 }
 
 /// Package name the `engine` block of a manifest records for Henad.
@@ -459,9 +506,14 @@ impl RecordedBuild {
 
     /// Returns whether `self` and `other` are the same build.
     ///
-    /// The checks run in order. A different package or version is a change, as is a different version or source hash
-    /// of an engine crate that both sides record. Then two builds that each record a clean commit compare by commit
-    /// alone. Otherwise the source hashes decide.
+    /// When either build records a runtime or plugin origin, the two compare by the identity of their code alone. A
+    /// runtime model's identity is the hash of its text, and the identity of compiled and plugin code is the source
+    /// hash of its crate, so a plugin of unchanged sources is the same build as the compiled crate. Both identities
+    /// have to be known and equal.
+    ///
+    /// Otherwise the checks run in order. A different package or version is a change, as is a different version or
+    /// source hash of an engine crate that both sides record. Then two builds that each record a clean commit compare
+    /// by commit alone. Otherwise the source hashes decide.
     ///
     /// A commit counts as clean when the build records `dirty` as `false`. A build whose dirty flag is unknown counts
     /// as clean only when it records no source hash either, as a session of a 0.2 manifest does. Any other build with
@@ -469,6 +521,12 @@ impl RecordedBuild {
     ///
     /// Two builds that both record neither a commit nor a source hash are never the same.
     pub fn same_build(&self, other: &Self) -> bool {
+        if self.records_origin() || other.records_origin() {
+            return matches!(
+                (self.code_identity(), other.code_identity()),
+                (Some(left), Some(right)) if left == right
+            );
+        }
         if self.package != other.package || self.version != other.version {
             return false;
         }
@@ -483,20 +541,58 @@ impl RecordedBuild {
         matches!((self.source_hash, other.source_hash), (Some(left), Some(right)) if left == right)
     }
 
-    /// Returns whether a list treats `self` and `other` as one build: the same build, or two builds that record
-    /// neither a commit nor a source hash under one package, version, type path and set of engine crates.
+    /// Returns whether a list treats `self` and `other` as one build: the same build of one origin and code hash, or
+    /// two [unidentified builds](Self::is_identified) under one package, version, type path, origin, code hash and
+    /// set of engine crates.
     ///
-    /// Note that two such builds are still never [the same](Self::same_build). A list shows them once, and a
-    /// comparison cannot tell them apart.
+    /// A plugin and the compiled crate of the same sources are the same build, and a list still shows both. Note that
+    /// two unidentified builds are still never [the same](Self::same_build). A list shows them once, and a comparison
+    /// cannot tell them apart.
     pub fn reads_as(&self, other: &Self) -> bool {
-        self.same_build(other)
+        (self.same_build(other) && self.origin == other.origin && self.code_hash == other.code_hash)
             || (!self.is_identified()
                 && !other.is_identified()
                 && self.package == other.package
                 && self.version == other.version
                 && self.type_path == other.type_path
+                && self.origin == other.origin
+                && self.code_hash == other.code_hash
                 && self.crate_versions == other.crate_versions
                 && self.crate_hashes == other.crate_hashes)
+    }
+
+    /// Returns whether runs of `self` and runs of `other` cannot share a folder: either build records a runtime or
+    /// plugin origin, and the two are not [the same build](Self::same_build).
+    ///
+    /// A resume, a search resume and a merge reject such builds. Two compiled builds never differ this way, and a
+    /// change between them is a warning.
+    pub(crate) fn code_differs(&self, other: &Self) -> bool {
+        (self.records_origin() || other.records_origin()) && !self.same_build(other)
+    }
+
+    /// Returns the origin of a model's code: [`CodeOrigin::Compiled`] for a build that records no origin, and `None`
+    /// for an origin that this build does not know.
+    fn code_origin(&self) -> Option<CodeOrigin> {
+        match self.origin.as_deref() {
+            None => Some(CodeOrigin::Compiled),
+            Some(origin) => [CodeOrigin::Compiled, CodeOrigin::Runtime, CodeOrigin::Plugin]
+                .into_iter()
+                .find(|known| known.as_str() == origin),
+        }
+    }
+
+    /// Returns whether the build records an origin other than compiled code, an unknown one included.
+    fn records_origin(&self) -> bool {
+        self.code_origin() != Some(CodeOrigin::Compiled)
+    }
+
+    /// Returns the identity of the build's code, `None` when the build records no hash for it or an unknown origin.
+    fn code_identity(&self) -> Option<CodeIdentity> {
+        match self.code_origin()? {
+            CodeOrigin::Runtime => self.code_hash.map(CodeIdentity::Runtime),
+            CodeOrigin::Compiled | CodeOrigin::Plugin => self.source_hash.map(CodeIdentity::Rust),
+            _ => None,
+        }
     }
 
     /// Returns whether the build records a commit known to be clean, or a commit alone, with neither a dirty flag nor
@@ -509,22 +605,37 @@ impl RecordedBuild {
             }
     }
 
-    /// Returns whether the build records a commit or a source hash.
+    /// Returns whether the build records a commit or a source hash. A build with a runtime or plugin origin has to
+    /// record the hash that identifies its code: a runtime model's code hash, or a plugin's source hash.
     pub fn is_identified(&self) -> bool {
-        !self.commit.is_empty() || self.source_hash.is_some()
+        if self.records_origin() {
+            self.code_identity().is_some()
+        } else {
+            !self.commit.is_empty() || self.source_hash.is_some()
+        }
     }
 
     /// Returns the package, the version and what identifies the build, as in `henad 0.2.0 (52fb2ab3, modified,
-    /// sources 0123456789abcdef)`.
+    /// sources 0123456789abcdef)` or `my-model 0.1.0 (plugin, sources 0123456789abcdef)`, or the code of a runtime
+    /// model, as in `runtime code 0123456789abcdef`.
     pub fn describe(&self) -> String {
+        if self.code_origin() == Some(CodeOrigin::Runtime) {
+            return match self.code_hash {
+                Some(hash) => format!("runtime code {hash:016x}"),
+                None => "runtime code (unidentified)".to_owned(),
+            };
+        }
         let mut parts = Vec::new();
+        if let Some(origin) = &self.origin {
+            parts.push(origin.clone());
+        }
         if !self.commit.is_empty() {
             parts.push(self.commit.clone());
         }
         if self.dirty == Some(true) {
             parts.push("modified".to_owned());
         }
-        if (self.commit.is_empty() || self.dirty == Some(true))
+        if (self.commit.is_empty() || self.dirty == Some(true) || self.origin.is_some())
             && let Some(hash) = self.source_hash
         {
             parts.push(format!("sources {hash:016x}"));
@@ -559,6 +670,40 @@ impl RecordedBuild {
                 .filter(|other_hash| *other_hash != hash)
                 .map(|_| format!("the sources of {package}"))
         })
+    }
+}
+
+/// Returns whether runs of the model builds `left` and `right` cannot share a folder, as
+/// [`RecordedBuild::code_differs`] decides. `None` is a session that records no model build, which differs from any
+/// build with a runtime or plugin origin.
+pub(crate) fn codes_differ(left: Option<&RecordedBuild>, right: Option<&RecordedBuild>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.code_differs(right),
+        (Some(build), None) | (None, Some(build)) => build.records_origin(),
+        (None, None) => false,
+    }
+}
+
+/// Returns the code of the model build `build` as a rejection names it, as in `plugin code of my-model 0.1.0, sources
+/// 0123456789abcdef` or `runtime code 0123456789abcdef`.
+pub(crate) fn code_text(build: Option<&RecordedBuild>) -> String {
+    let Some(build) = build else {
+        return "code of an unrecorded build".to_owned();
+    };
+    match build.code_origin() {
+        Some(CodeOrigin::Runtime) => build.describe(),
+        Some(origin @ (CodeOrigin::Compiled | CodeOrigin::Plugin)) => {
+            let package = if build.package.is_empty() {
+                "an unknown package".to_owned()
+            } else {
+                format!("{} {}", build.package, build.version).trim_end().to_owned()
+            };
+            let sources = build
+                .source_hash
+                .map_or_else(|| "no source hash".to_owned(), |hash| format!("sources {hash:016x}"));
+            format!("{} code of {package}, {sources}", origin.as_str())
+        }
+        _ => format!("{} code", build.origin.as_deref().unwrap_or_default()),
     }
 }
 
@@ -643,6 +788,30 @@ pub struct ManifestModel {
     /// Whether two builds of the model on one seed step through identical states, `true` in a 0.2 manifest.
     #[serde(default = "default_true")]
     pub replays_exactly: bool,
+    /// Canonical text of a model composed at run time. Left out for compiled and plugin code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<ManifestModelCode>,
+}
+
+/// Code of a model composed at run time, as a manifest carries it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestModelCode {
+    /// Name and version of the text's format.
+    pub format: String,
+    /// Hash of the format and the text, as [`ModelCode::hash`] computes it, as 16 hexadecimal digits.
+    pub fnv1a64: String,
+    /// Canonical text of the model.
+    pub text: String,
+}
+
+impl From<&ModelCode> for ManifestModelCode {
+    fn from(code: &ModelCode) -> Self {
+        Self {
+            format: code.format().to_owned(),
+            fnv1a64: format!("{:016x}", code.hash()),
+            text: code.text().to_owned(),
+        }
+    }
 }
 
 /// Default of [`ManifestModel::replays_exactly`]. Serde accepts a default only as a function path.
@@ -873,7 +1042,8 @@ pub struct ManifestSession {
     /// Build of the host binary that ran the session, `None` in a 0.2 manifest.
     #[serde(default)]
     pub host: Option<RecordedBuild>,
-    /// Build of the crate that registered the model, with the model's type path, `None` in a 0.2 manifest.
+    /// Build of the crate that registered the model, with the model's type path, and the origin and code hash of
+    /// runtime and plugin code. `None` in a 0.2 manifest.
     #[serde(default)]
     pub model_source: Option<RecordedBuild>,
 }

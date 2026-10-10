@@ -286,6 +286,8 @@ A resume or a merge compares the recorded builds with its own, and warns when He
 The app warns before it opens a run when Henad's build or the model's build differs from a build that the folder records.
 `ResultSet::replay` compares no builds.
 To check a rebuild, a program compares `results.recorded_builds(BuildRole::Engine)` with `RecordedBuild::engine()`, and `recorded_builds(BuildRole::Model)` with `RecordedBuild::from(entry.source())`, using `RecordedBuild::same_build`.
+A model composed at run time or loaded from a plugin also records the hash that identifies its code, and a resume or a merge rejects a folder whose runs ran other code.
+`results.code_matches(entry.source())` returns whether a resume would accept the entry's code.
 
 `henad::build_info!()` returns the build of the crate it expands in.
 A crate that holds models builds its set with `ModelSet::new(henad::build_info!())`, and the set records that build on each model inserted into it.

@@ -6,6 +6,7 @@ use henad_compute::entry::ModelEntry;
 use henad_core::explore::fingerprint::schema_hash;
 use henad_core::metadata::Backend;
 use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind};
+use henad_core::provenance::CodeOrigin;
 
 use crate::probe::ProbeReport;
 
@@ -15,7 +16,8 @@ pub const SCHEMA_VERSION: u64 = 1;
 /// Returns the parameters, stats and actions of `entry` as one JSON object.
 ///
 /// The object carries `stat_columns`, the columns a sweep writes, only when `probe` is given. A choice's default is
-/// its option name, with its index beside it as `default_index`.
+/// its option name, with its index beside it as `default_index`. A model composed at run time or loaded from a plugin
+/// adds its `origin` and the `code_hash` that identifies its code, and a compiled model writes neither.
 pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
     let params: Vec<Value> = entry
         .param_descriptors()
@@ -48,6 +50,11 @@ pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
     if let Some(probe) = probe {
         let columns: Vec<&str> = (0..probe.columns.len()).map(|i| probe.columns.name(i)).collect();
         schema["stat_columns"] = json!(columns);
+    }
+    let source = entry.source();
+    if source.origin() != CodeOrigin::Compiled {
+        schema["origin"] = json!(source.origin().as_str());
+        schema["code_hash"] = json!(source.code_hash().map(|hash| format!("{hash:016x}")));
     }
     schema
 }
@@ -128,6 +135,7 @@ mod tests {
     use serde_json::json;
 
     use henad_core::explore::fingerprint::schema_hash;
+    use henad_core::provenance::ModelCode;
 
     use super::{f32_json, schema_json};
     use crate::probe::ProbeReport;
@@ -197,6 +205,34 @@ mod tests {
         assert_eq!(grid_width["id"], json!("grid_width"));
         assert_eq!(grid_width["kind"], json!("u32"));
         assert_eq!(grid_width["apply"], json!("reload"));
+    }
+
+    #[test]
+    fn schema_json_names_code_only_for_runtime_models() {
+        let models = example_models();
+        let life = models.get("game_of_life").cloned().expect("game_of_life is registered");
+        let compiled = schema_json(&life, None);
+        assert!(
+            compiled.get("origin").is_none() && compiled.get("code_hash").is_none(),
+            "{compiled}"
+        );
+
+        let code = ModelCode::new("test-rule/1", "life");
+        let runtime = schema_json(&life.clone().__with_code(code.clone()), None);
+        assert_eq!(runtime["origin"], json!("runtime"));
+        assert_eq!(runtime["code_hash"], json!(format!("{:016x}", code.hash())));
+        assert_eq!(
+            runtime["schema_hash"], compiled["schema_hash"],
+            "the code is no part of the schema"
+        );
+
+        let plugin = schema_json(&life.clone().__into_plugin(), None);
+        assert_eq!(plugin["origin"], json!("plugin"));
+        assert_eq!(
+            plugin["code_hash"],
+            json!(life.source().source_hash().map(|hash| format!("{hash:016x}"))),
+            "a plugin is identified by its crate's sources"
+        );
     }
 
     #[test]

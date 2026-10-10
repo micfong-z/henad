@@ -6,7 +6,7 @@
 use std::fmt;
 use std::iter::FusedIterator;
 
-use henad_core::provenance::{BuildInfo, ModelSource};
+use henad_core::provenance::{BuildInfo, CodeOrigin, ModelSource};
 
 use super::ModelEntry;
 use crate::gpu::{GpuContext, GpuNeeds};
@@ -28,8 +28,9 @@ impl ModelSet {
         }
     }
 
-    /// Adds `entry`. An entry whose source records no build yet receives the set's build, and any other entry keeps
-    /// the build it records.
+    /// Adds `entry`. An entry whose compiled source records no build yet receives the set's build, and any other entry
+    /// keeps the build it records. A model composed at run time records its code, and receives no build. A plugin's
+    /// source receives none either. The set's build is not the build of the plugin's crate.
     ///
     /// Note that an entry registered from a type in a third-party crate also receives the set's build. Its source's
     /// type path still refers to the real crate. A model library therefore exports a set built from its own
@@ -42,14 +43,28 @@ impl ModelSet {
     pub fn insert(&mut self, entry: ModelEntry) -> Result<&mut Self, ModelSetError> {
         check_id(entry.id())?;
         self.check_free(&entry)?;
-        let entry = if entry.source().build().is_some() {
-            entry
-        } else {
-            let source = entry.source().clone().__with_build(self.build);
-            entry.with_source(source)
-        };
+        let entry = self.stamped(entry);
         self.entries.push(entry);
         Ok(self)
+    }
+
+    /// Puts `entry` in place of the entry with its id, at that entry's position, and returns the entry it replaced.
+    /// Adds `entry` at the end when the set holds no entry with its id, and returns `None`.
+    ///
+    /// The entry's source receives the set's build as [`Self::insert`] gives it. Work that holds a clone of the
+    /// replaced entry, such as a running sweep or simulation, keeps it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelSetError::InvalidId`] for an id outside the grammar. The set is unchanged on an error.
+    pub fn replace(&mut self, entry: ModelEntry) -> Result<Option<ModelEntry>, ModelSetError> {
+        check_id(entry.id())?;
+        let entry = self.stamped(entry);
+        if let Some(held) = self.entries.iter_mut().find(|held| held.id() == entry.id()) {
+            return Ok(Some(std::mem::replace(held, entry)));
+        }
+        self.entries.push(entry);
+        Ok(None)
     }
 
     /// Adds every entry of `other`, each keeping its own source.
@@ -118,6 +133,18 @@ impl ModelSet {
             .iter()
             .filter_map(ModelEntry::gpu_needs)
             .fold(GpuNeeds::default(), GpuNeeds::merge)
+    }
+
+    /// Returns `entry` with the set's build recorded on its source, unless the source records a build already or holds
+    /// runtime or plugin code.
+    fn stamped(&self, entry: ModelEntry) -> ModelEntry {
+        let source = entry.source();
+        if source.build().is_some() || source.origin() != CodeOrigin::Compiled {
+            entry
+        } else {
+            let source = source.clone().__with_build(self.build);
+            entry.with_source(source)
+        }
     }
 
     /// Returns an error when the set already holds an entry with the same id as `entry`.
@@ -260,7 +287,7 @@ mod tests {
     use henad_core::authoring::model::grid_model::GridModel;
     use henad_core::grid::Grid2D;
     use henad_core::params::{ParamDescriptor, ParamValue};
-    use henad_core::provenance::BuildInfo;
+    use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode};
     use henad_core::topology::NeighborhoodKind;
     use henad_core::view::{StatDescriptor, StatValue};
 
@@ -310,6 +337,11 @@ mod tests {
 
     fn build(package: &'static str) -> BuildInfo {
         BuildInfo::__from_env(package, "1.0.0", None, None, None, None, false)
+    }
+
+    /// Returns the build of a crate whose sources hash to `0xAA`.
+    fn hashed_build(package: &'static str) -> BuildInfo {
+        BuildInfo::__from_env(package, "1.0.0", None, None, None, Some("00000000000000aa"), false)
     }
 
     fn ids(models: &ModelSet) -> Vec<&str> {
@@ -407,5 +439,126 @@ mod tests {
             models.lookup("calm_2", None),
             Err(ModelLookupError::NotInSet { .. })
         ));
+    }
+
+    #[test]
+    fn replace_keeps_the_position_and_returns_the_old_entry() {
+        let mut models = ModelSet::new(build("host"));
+        models.insert(register_grid_model::<Still>()).expect("a fresh id");
+        models.insert(register_grid_model::<Calm>()).expect("a fresh id");
+        let replaced = models
+            .replace(register_grid_model::<StillAgain>())
+            .expect("a valid id")
+            .expect("the set held 'still'");
+        assert!(replaced.source().type_path().ends_with("::Still"));
+        assert_eq!(ids(&models), ["still", "calm_2"]);
+        let held = models.get("still").expect("'still' is in the set");
+        assert!(held.source().type_path().ends_with("::StillAgain"));
+        assert_eq!(
+            held.source().package(),
+            "host",
+            "the set records its build as insert does"
+        );
+
+        let mut library = ModelSet::new(build("library"));
+        library.insert(register_grid_model::<Calm>()).expect("a fresh id");
+        let entry = library.get("calm_2").expect("calm_2 is in the library").clone();
+        models.replace(entry).expect("a valid id");
+        assert_eq!(ids(&models), ["still", "calm_2"]);
+        assert_eq!(
+            models.get("calm_2").map(|entry| entry.source().package()),
+            Some("library"),
+            "an entry from another set keeps its source"
+        );
+    }
+
+    #[test]
+    fn replace_appends_a_new_id() {
+        let mut models = ModelSet::new(build("host"));
+        models.insert(register_grid_model::<Still>()).expect("a fresh id");
+        let replaced = models.replace(register_grid_model::<Calm>()).expect("a valid id");
+        assert!(replaced.is_none());
+        assert_eq!(ids(&models), ["still", "calm_2"]);
+        assert_eq!(models.get("calm_2").map(|entry| entry.source().package()), Some("host"));
+    }
+
+    #[test]
+    fn replace_refuses_an_id_outside_the_grammar() {
+        let mut models = ModelSet::new(build("host"));
+        models.insert(register_grid_model::<Still>()).expect("a fresh id");
+        for entry in [register_grid_model::<Capital>(), register_grid_model::<Hyphen>()] {
+            let id = entry.id().to_owned();
+            let Err(error) = models.replace(entry) else {
+                panic!("'{id}' joined the set");
+            };
+            assert!(matches!(error, ModelSetError::InvalidId { .. }), "{error:?}");
+        }
+        assert_eq!(ids(&models), ["still"]);
+    }
+
+    #[test]
+    fn a_runtime_source_is_never_stamped_with_the_set_build() {
+        let code = ModelCode::new("test-rule/1", "rule");
+        let mut models = ModelSet::new(hashed_build("host"));
+        models
+            .insert(register_grid_model::<Still>().__with_code(code.clone()))
+            .expect("a fresh id");
+        let source = models.get("still").expect("'still' is in the set").source();
+        assert_eq!(source.origin(), CodeOrigin::Runtime);
+        assert_eq!(source.type_path(), "runtime:still");
+        assert_eq!(source.build(), None);
+        assert_eq!(
+            source.code_hash(),
+            Some(code.hash()),
+            "the code identifies the model, never the host"
+        );
+
+        let edited = ModelCode::new("test-rule/1", "edited rule");
+        let replaced = models
+            .replace(register_grid_model::<StillAgain>().__with_code(edited.clone()))
+            .expect("a valid id")
+            .expect("the set held 'still'");
+        assert_eq!(replaced.source().code(), Some(&code));
+        let source = models.get("still").expect("'still' is in the set").source();
+        assert_eq!((source.build(), source.code_hash()), (None, Some(edited.hash())));
+    }
+
+    #[test]
+    fn a_marked_plugin_source_reads_as_plugin() {
+        let mut plugin = ModelSet::new(hashed_build("plugin-crate"));
+        plugin.insert(register_grid_model::<Still>()).expect("a fresh id");
+        let entry = plugin.get("still").expect("'still' is in the set").clone();
+        assert_eq!(entry.source().origin(), CodeOrigin::Compiled);
+
+        let marked = entry.clone().__into_plugin();
+        let source = marked.source();
+        assert_eq!(source.origin(), CodeOrigin::Plugin);
+        assert_eq!(source.package(), "plugin-crate", "the plugin keeps its crate's build");
+        assert_eq!(
+            source.code_hash(),
+            Some(0xAA),
+            "a plugin is identified by its crate's sources"
+        );
+        assert_eq!(source.code(), None);
+        assert_ne!(source, entry.source());
+
+        let mut host = ModelSet::new(build("host"));
+        host.insert(register_grid_model::<Still>()).expect("a fresh id");
+        host.replace(marked).expect("a valid id");
+        let source = host.get("still").expect("'still' is in the set").source();
+        assert_eq!(
+            (source.origin(), source.package()),
+            (CodeOrigin::Plugin, "plugin-crate")
+        );
+
+        // A plugin's entry marked before any set recorded a build stays without one. The host's build would claim the
+        // host's sources as the plugin's code.
+        host.replace(register_grid_model::<Still>().__into_plugin())
+            .expect("a valid id");
+        let source = host.get("still").expect("'still' is in the set").source();
+        assert_eq!(
+            (source.origin(), source.build(), source.code_hash()),
+            (CodeOrigin::Plugin, None, None)
+        );
     }
 }

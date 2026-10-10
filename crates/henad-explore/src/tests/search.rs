@@ -18,6 +18,7 @@ use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, S
 use henad_core::explore::spec::{ActionSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
 use henad_core::export::csv::{escape_field, parse_records};
+use henad_core::provenance::ModelCode;
 
 use crate::cursor::{CursorState, RunCursor};
 use crate::exec::{Concurrency, RunRequest, SweepControl};
@@ -37,7 +38,7 @@ use crate::spec_file::SpecFile;
 use crate::sweep::{ExploreError, SweepEnd, SweepOptions, SweepReport, SweepWarning};
 use crate::tests::support::{
     CommitLimit, OutputTables, Recorder, ScratchDir, SecondResume, dry_run, entry, headless_device, other_engine,
-    planned, provenance, rewrite_manifest, sweep, sweep_options, without_clocks, without_timing,
+    planned, provenance, rewrite_manifest, sweep, sweep_options, unbuildable, without_clocks, without_timing,
 };
 
 /// Maximum time a test waits for a search to end.
@@ -690,6 +691,42 @@ fn a_search_resume_names_a_changed_model() {
         matches!(error, ExploreError::Resume(ResumeError::SchemaChanged { .. })),
         "{error:?}"
     );
+}
+
+#[test]
+fn a_search_resume_refuses_changed_code() {
+    let rule = ModelCode::new("test-rule/1", "sir");
+    let sir = entry("sir", None).__with_code(rule.clone());
+    let scratch = ScratchDir::new("search-resume-code");
+    let spec = search_spec(SearchAlgorithm::Random, 12);
+    let control = SweepControl::new();
+    let interrupted = SweepOptions {
+        concurrency: lane_count(1),
+        control: control.clone(),
+        ..sweep_options(false)
+    };
+    let mut abort = CommitLimit::new(control, 5);
+    search_with(&sir, None, &spec, scratch.path(), &interrupted, &mut abort).expect("an abort is not an error");
+    let runs_before = std::fs::read(scratch.path().join(RUNS_FILE)).expect("runs.csv reads");
+
+    // The edited code never builds. The code is checked before the probe build, which would otherwise fault.
+    let edited = unbuildable(entry("sir", None).__with_code(ModelCode::new("test-rule/1", "sir, edited")));
+    let resume = sweep_options(true);
+    let error = search_with(&edited, None, &spec, scratch.path(), &resume, &mut NoProgress).expect_err("other code");
+    assert!(
+        matches!(error, ExploreError::Resume(ResumeError::CodeChanged { .. })),
+        "{error:?}"
+    );
+    assert_eq!(
+        std::fs::read(scratch.path().join(RUNS_FILE)).expect("runs.csv reads"),
+        runs_before,
+        "a refused resume leaves the directory alone"
+    );
+
+    let mut progress = Recorder::default();
+    let report = search_with(&sir, None, &spec, scratch.path(), &resume, &mut progress).expect("the same code resumes");
+    assert_eq!(report.end, SweepEnd::Complete);
+    assert_eq!(progress.warnings, []);
 }
 
 #[test]

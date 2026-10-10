@@ -1,4 +1,8 @@
 //! Checks that every session records the builds it ran, and that a resume or a merge warns when a build changed.
+//!
+//! A model composed at run time or loaded from a plugin records the identity of its code, and a resume or a merge
+//! refuses code that changed. The runtime entries here are the registered Game of Life with runtime code attached,
+//! which steps exactly as the registered entry does.
 
 use std::path::PathBuf;
 
@@ -6,17 +10,19 @@ use henad_compute::entry::{ModelEntry, ModelSet, register_grid_model};
 use henad_core::authoring::model::grid_model::GridModel as _;
 use henad_core::explore::plan::Shard;
 use henad_core::explore::spec::SweepSpec;
-use henad_core::provenance::BuildInfo;
+use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode, ModelSource};
 use henad_models::game_of_life::GameOfLifeModel;
 
 use crate::exec::Concurrency;
-use crate::merge::merge;
-use crate::output::manifest::{BuildRole, Manifest, RecordedBuild};
+use crate::merge::{MergeError, merge};
+use crate::output::manifest::{BuildRole, FORMAT_VERSION, Manifest, ManifestModelCode, RecordedBuild};
+use crate::output::resume::ResumeError;
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::result_set::ResultSet;
-use crate::sweep::{Provenance, SweepOptions, SweepWarning};
+use crate::sweep::{ExploreError, Provenance, SweepOptions, SweepWarning};
 use crate::tests::support::{
     OutputTables, Recorder, ScratchDir, entry, manifest, other_engine, provenance, sweep_options, sweep_with,
+    unbuildable,
 };
 
 /// Returns Game of Life on an 8 by 8 grid for 2 steps, with `replicates` replicates.
@@ -553,4 +559,337 @@ fn a_0_2_0_manifest_still_resumes() {
         OutputTables::read(&fresh_dir),
         "the runs 0.2.0 wrote match the runs this build writes"
     );
+}
+
+/// Returns the code of a rule in the test format, whose text is `text`.
+fn rule(text: &str) -> ModelCode {
+    ModelCode::new("test-rule/1", text.to_owned())
+}
+
+/// Returns Game of Life with the source of a model composed at run time from `code`.
+fn runtime_life(code: &ModelCode) -> ModelEntry {
+    entry(GameOfLifeModel::ID, None).__with_code(code.clone())
+}
+
+/// Returns Game of Life loaded from a plugin of the model crate whose sources hash to `hash`, given as 16
+/// hexadecimal digits.
+fn plugin_life(hash: &'static str) -> ModelEntry {
+    registered_by(model_crate(Some("true"), Some(hash))).__into_plugin()
+}
+
+/// Sweeps `first` with one replicate into a fresh directory, then resumes it with `second` and two replicates.
+///
+/// Returns the warnings or the error of the resume, and whether the resume left the manifest and `runs.csv` as they
+/// were.
+fn resume_with(first: &ModelEntry, second: &ModelEntry) -> (Result<Vec<SweepWarning>, ExploreError>, bool) {
+    let scratch = ScratchDir::new("code-identity");
+    sweep_with(
+        first,
+        None,
+        &life_spec(1),
+        scratch.path(),
+        &sweep_options(false),
+        &mut Recorder::default(),
+    )
+    .expect("the sweep runs");
+    let before = folder_bytes(scratch.path());
+    let mut progress = Recorder::default();
+    let result = sweep_with(
+        second,
+        None,
+        &life_spec(2),
+        scratch.path(),
+        &sweep_options(true),
+        &mut progress,
+    )
+    .map(|_| progress.warnings);
+    let unchanged = folder_bytes(scratch.path()) == before;
+    (result, unchanged)
+}
+
+/// Returns the bytes of the manifest and `runs.csv` in `dir`.
+fn folder_bytes(dir: &std::path::Path) -> Vec<Vec<u8>> {
+    [MANIFEST_FILE, RUNS_FILE]
+        .map(|file| std::fs::read(dir.join(file)).expect("the file reads"))
+        .to_vec()
+}
+
+/// Asserts that `result` is the refusal of changed code, and returns its message.
+fn code_refusal(result: Result<Vec<SweepWarning>, ExploreError>) -> String {
+    match result {
+        Err(ExploreError::Resume(error @ ResumeError::CodeChanged { .. })) => error.to_string(),
+        other => panic!("expected the refusal of changed code, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_value_built_entry_sweeps_byte_identically_to_the_registered_one() {
+    let registered = entry(GameOfLifeModel::ID, None);
+    let runtime = runtime_life(&rule("life"));
+    assert_eq!(runtime.source().origin(), CodeOrigin::Runtime);
+    let scratch = ScratchDir::new("value-built");
+    let (registered_dir, runtime_dir) = (scratch.path().join("registered"), scratch.path().join("runtime"));
+    crate::tests::support::sweep(&registered, None, &life_spec(2), &registered_dir, Concurrency::Auto);
+    crate::tests::support::sweep(&runtime, None, &life_spec(2), &runtime_dir, Concurrency::Auto);
+    assert_eq!(
+        OutputTables::read(&runtime_dir),
+        OutputTables::read(&registered_dir),
+        "the source is recorded in the manifest alone"
+    );
+    assert_eq!(
+        manifest(&runtime_dir).model.schema_hash,
+        manifest(&registered_dir).model.schema_hash
+    );
+}
+
+#[test]
+fn a_resume_refuses_runtime_code_that_changed() {
+    let life = rule("life");
+    let (result, _) = resume_with(&runtime_life(&life), &runtime_life(&life));
+    assert_eq!(
+        result.expect("the same code resumes"),
+        [],
+        "the same code is the same build"
+    );
+
+    let edited = rule("life, edited");
+    let (result, unchanged) = resume_with(&runtime_life(&life), &runtime_life(&edited));
+    let message = code_refusal(result);
+    assert!(unchanged, "a refused resume leaves the directory alone");
+    assert!(
+        message.contains(&format!("runtime code {:016x}", life.hash()))
+            && message.contains(&format!("expected runtime code {:016x}", edited.hash())),
+        "{message}"
+    );
+
+    let compiled = entry(GameOfLifeModel::ID, None);
+    let (result, _) = resume_with(&runtime_life(&life), &compiled);
+    code_refusal(result);
+    let (result, _) = resume_with(&compiled, &runtime_life(&life));
+    code_refusal(result);
+
+    // The code is checked before the probe build, which never builds the edited code. Otherwise every probed config
+    // faults, and the resume reports the probe.
+    let (result, unchanged) = resume_with(&runtime_life(&life), &unbuildable(runtime_life(&edited)));
+    code_refusal(result);
+    assert!(unchanged);
+}
+
+#[test]
+fn a_resume_refuses_a_plugin_whose_sources_changed() {
+    let (result, _) = resume_with(&plugin_life("00000000000000aa"), &plugin_life("00000000000000aa"));
+    assert_eq!(result.expect("unchanged sources resume"), []);
+
+    let (result, unchanged) = resume_with(&plugin_life("00000000000000aa"), &plugin_life("00000000000000bb"));
+    let message = code_refusal(result);
+    assert!(unchanged);
+    assert!(
+        message.contains("plugin code of life-crate 1.0.0, sources 00000000000000aa"),
+        "{message}"
+    );
+
+    // A plugin whose build records no source hash cannot show that its code is unchanged.
+    let unhashed = registered_by(model_crate(Some("false"), None)).__into_plugin();
+    let (result, _) = resume_with(&unhashed, &unhashed);
+    code_refusal(result);
+}
+
+#[test]
+fn a_plugin_with_unchanged_sources_resumes_a_compiled_folder() {
+    let compiled = registered_by(model_crate(Some("false"), Some("00000000000000aa")));
+    let (result, _) = resume_with(&compiled, &plugin_life("00000000000000aa"));
+    assert_eq!(result.expect("unchanged sources resume"), []);
+    let (result, _) = resume_with(&plugin_life("00000000000000aa"), &compiled);
+    assert_eq!(result.expect("unchanged sources resume"), []);
+
+    let (result, _) = resume_with(&compiled, &plugin_life("00000000000000bb"));
+    code_refusal(result);
+}
+
+#[test]
+fn a_compiled_build_change_still_only_warns() {
+    let before = registered_by(model_crate(Some("false"), Some("00000000000000aa")));
+    let after = registered_by(BuildInfo::__from_env(
+        "life-crate",
+        "1.0.0",
+        Some("def67890"),
+        None,
+        Some("false"),
+        Some("00000000000000bb"),
+        false,
+    ));
+    let (result, unchanged) = resume_with(&before, &after);
+    let warnings = result.expect("a compiled build change resumes");
+    assert!(!unchanged, "the resume ran");
+    assert_eq!(
+        warnings,
+        [changed(
+            BuildRole::Model,
+            RecordedBuild::from(before.source()),
+            RecordedBuild::from(after.source())
+        )]
+    );
+}
+
+#[test]
+fn a_merge_refuses_shards_of_two_codes() {
+    let scratch = ScratchDir::new("merge-codes");
+    let dirs: Vec<PathBuf> = (0..3)
+        .map(|index| scratch.path().join(format!("shard-{index}")))
+        .collect();
+    let (life, edited) = (rule("life"), rule("life, edited"));
+    let shard = |dir: &std::path::Path, index: u64, count: u64, entry: &ModelEntry, spec: &SweepSpec| {
+        let options = SweepOptions {
+            shard: Shard::new(index, count).expect("a valid shard"),
+            ..sweep_options(false)
+        };
+        sweep_with(entry, None, spec, dir, &options, &mut Recorder::default()).expect("the shard runs");
+    };
+    shard(&dirs[0], 0, 2, &runtime_life(&life), &life_spec(2));
+    shard(&dirs[1], 1, 2, &runtime_life(&life), &life_spec(2));
+    shard(&dirs[2], 1, 2, &runtime_life(&edited), &life_spec(2));
+
+    let merged = scratch.path().join("merged");
+    merge(&dirs[..2], &merged, &mut Recorder::default()).expect("shards of one code merge");
+    assert_eq!(
+        manifest(&merged).model.code,
+        Some(ManifestModelCode::from(&life)),
+        "the merged manifest keeps the code inline"
+    );
+
+    let refused = scratch.path().join("refused");
+    let error = merge(&[dirs[0].clone(), dirs[2].clone()], &refused, &mut Recorder::default())
+        .expect_err("shards of two codes");
+    let MergeError::CodeChanged { dir, lower_dir, .. } = &error else {
+        panic!("expected the refusal of changed code, got {error:?}");
+    };
+    assert_eq!((dir, lower_dir), (&dirs[2], &dirs[0]));
+    assert!(!refused.exists(), "a refused merge writes nothing");
+    assert!(error.to_string().contains("ran different model code"), "{error}");
+
+    // The code is compared before the plan. Edited code whose shard also ran a longer plan reports the code.
+    let longer = scratch.path().join("longer");
+    let mut longer_spec = life_spec(2);
+    longer_spec.run.steps = 3;
+    shard(&longer, 1, 2, &runtime_life(&edited), &longer_spec);
+    let error = merge(&[dirs[0].clone(), longer], &refused, &mut Recorder::default())
+        .expect_err("shards of two codes and two plans");
+    assert!(matches!(error, MergeError::CodeChanged { .. }), "{error:?}");
+
+    // Every pair of shards is compared. A compiled shard of sources `aa`, a plugin shard of `aa` and a compiled shard
+    // of `bb` each match the first shard, and the plugin shard and the last shard differ.
+    let three: Vec<PathBuf> = (0..3)
+        .map(|index| scratch.path().join(format!("three-{index}")))
+        .collect();
+    let compiled = |hash| registered_by(model_crate(Some("false"), Some(hash)));
+    shard(&three[0], 0, 3, &compiled("00000000000000aa"), &life_spec(3));
+    shard(&three[1], 1, 3, &plugin_life("00000000000000aa"), &life_spec(3));
+    shard(&three[2], 2, 3, &compiled("00000000000000bb"), &life_spec(3));
+    let error = merge(&three, &refused, &mut Recorder::default()).expect_err("a plugin and other sources");
+    let MergeError::CodeChanged { dir, lower_dir, .. } = &error else {
+        panic!("expected the refusal of changed code, got {error:?}");
+    };
+    assert_eq!((dir, lower_dir), (&three[2], &three[1]));
+    assert!(!refused.exists(), "a refused merge writes nothing");
+}
+
+#[test]
+fn a_manifest_carries_runtime_code_inline() {
+    let code = rule("life\nwith a second line");
+    let scratch = ScratchDir::new("code-inline");
+    crate::tests::support::sweep(
+        &runtime_life(&code),
+        None,
+        &life_spec(1),
+        scratch.path(),
+        Concurrency::Auto,
+    );
+    let recorded = manifest(scratch.path());
+    assert_eq!(recorded.format_version, FORMAT_VERSION);
+    assert_eq!(FORMAT_VERSION, 1, "runtime code adds optional fields alone");
+    let inline = recorded.model.code.as_ref().expect("the manifest carries the code");
+    assert_eq!(
+        (inline.format.as_str(), inline.text.as_str()),
+        ("test-rule/1", code.text())
+    );
+    assert_eq!(inline.fnv1a64, format!("{:016x}", code.hash()));
+    let source = recorded.sessions[0]
+        .model_source
+        .as_ref()
+        .expect("the session records the model");
+    assert_eq!(source.origin.as_deref(), Some("runtime"));
+    assert_eq!(source.code_hash, Some(code.hash()));
+    assert_eq!(source.type_path.as_deref(), Some("runtime:game_of_life"));
+    assert_eq!((source.package.as_str(), source.source_hash), ("", None));
+    assert_eq!(recorded.model.schema["origin"], "runtime");
+
+    let set = ResultSet::open_dir(scratch.path(), 0).expect("the folder reads");
+    assert!(set.code_matches(&ModelSource::runtime("game_of_life", code.clone())));
+    assert!(!set.code_matches(&ModelSource::runtime("game_of_life", rule("other"))));
+    assert!(!set.code_matches(entry(GameOfLifeModel::ID, None).source()));
+
+    let compiled = ScratchDir::new("code-compiled");
+    crate::tests::support::sweep(
+        &entry(GameOfLifeModel::ID, None),
+        None,
+        &life_spec(1),
+        compiled.path(),
+        Concurrency::Auto,
+    );
+    let text = std::fs::read_to_string(compiled.path().join(MANIFEST_FILE)).expect("the manifest reads");
+    for key in ["\"code\"", "\"origin\"", "\"code_hash\""] {
+        assert!(!text.contains(key), "a compiled model's manifest writes no {key}");
+    }
+    let set = ResultSet::open_dir(compiled.path(), 0).expect("the folder reads");
+    assert!(set.code_matches(entry(GameOfLifeModel::ID, None).source()));
+    assert!(!set.code_matches(&ModelSource::runtime("game_of_life", code)));
+}
+
+#[test]
+fn two_codes_under_one_label_are_listed_apart() {
+    let (life, edited) = (rule("life"), rule("life, edited"));
+    let first = RecordedBuild::from(&ModelSource::runtime("life", life.clone()));
+    let second = RecordedBuild::from(&ModelSource::runtime("life", edited.clone()));
+    assert_eq!(first.type_path, second.type_path);
+    assert!(first.is_identified() && second.is_identified());
+    assert!(!first.same_build(&second) && !first.reads_as(&second));
+    assert!(first.code_differs(&second));
+
+    // A plugin of unchanged sources is the same code as the compiled crate, and a list still shows that a plugin ran.
+    let compiled = RecordedBuild::from(registered_by(model_crate(Some("false"), Some("00000000000000aa"))).source());
+    let plugin = RecordedBuild::from(plugin_life("00000000000000aa").source());
+    assert!(compiled.same_build(&plugin) && !compiled.code_differs(&plugin));
+    assert!(!compiled.reads_as(&plugin) && !plugin.reads_as(&compiled));
+    assert_eq!(first.describe(), format!("runtime code {:016x}", life.hash()));
+    assert_ne!(first.describe(), second.describe());
+
+    let mut unhashed = first.clone();
+    unhashed.code_hash = None;
+    assert!(!unhashed.is_identified());
+    assert!(
+        unhashed.reads_as(&unhashed.clone()),
+        "a list shows an unidentified build once"
+    );
+    assert!(!unhashed.same_build(&unhashed.clone()));
+    assert_eq!(unhashed.describe(), "runtime code (unidentified)");
+
+    let scratch = ScratchDir::new("two-codes");
+    crate::tests::support::sweep(
+        &runtime_life(&life),
+        None,
+        &life_spec(1),
+        scratch.path(),
+        Concurrency::Auto,
+    );
+    crate::tests::support::rewrite_manifest(scratch.path(), |recorded| {
+        let mut session = recorded.sessions[0].clone();
+        session.model_source = Some(RecordedBuild::from(&ModelSource::runtime(
+            "game_of_life",
+            edited.clone(),
+        )));
+        recorded.sessions.push(session);
+    });
+    let builds = manifest(scratch.path()).recorded_builds(BuildRole::Model);
+    let hashes: Vec<Option<u64>> = builds.iter().map(|build| build.code_hash).collect();
+    assert_eq!(hashes, [Some(life.hash()), Some(edited.hash())]);
 }

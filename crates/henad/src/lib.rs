@@ -11,7 +11,7 @@ pub use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelSetE
 pub use henad_compute::fault::{Fault, FaultKind, install_panic_hook};
 pub use henad_compute::simulation::{ExportError, RunSetup, SetupError, Simulation, SimulationViews, StatSample};
 pub use henad_core::metadata::{Backend, LaneSpec, ModelMetadata, Structure};
-pub use henad_core::provenance::{BuildInfo, ModelSource};
+pub use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode, ModelSource};
 pub use henad_core::send_sync::{WasmNotSend, WasmNotSync};
 pub use henad_core::topology::TopologyHint;
 pub use henad_explore::ENGINE_BUILD;
@@ -122,9 +122,9 @@ pub mod explore {
     pub use henad_explore::output::OutputError;
     pub use henad_explore::output::manifest::{
         BuildRole, Manifest, ManifestAxisRanges, ManifestBlock, ManifestColumns, ManifestDesignTable, ManifestError,
-        ManifestExecution, ManifestLimits, ManifestMode, ManifestModel, ManifestPlan, ManifestRuntime, ManifestSearch,
-        ManifestSeeds, ManifestSession, ManifestShard, ManifestSpecSource, ManifestStatus, ManifestTimestamps,
-        RecordedBuild, ResultCounts,
+        ManifestExecution, ManifestLimits, ManifestMode, ManifestModel, ManifestModelCode, ManifestPlan,
+        ManifestRuntime, ManifestSearch, ManifestSeeds, ManifestSession, ManifestShard, ManifestSpecSource,
+        ManifestStatus, ManifestTimestamps, RecordedBuild, ResultCounts,
     };
     pub use henad_explore::output::memory::SweepFiles;
     pub use henad_explore::output::read::ReadError;
