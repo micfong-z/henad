@@ -29,7 +29,9 @@ use henad_compute::simulation::RunSetup;
 use henad_core::metadata::Backend;
 
 use super::AppState;
+#[cfg(not(target_arch = "wasm32"))]
 use super::pool::ModelPool;
+use super::pool::UiPool;
 use crate::sim_runner::SimRunner;
 
 /// Longest time a teardown waits on the UI thread for the runner to stop. A runner still running after it is detached.
@@ -194,8 +196,8 @@ impl BuildJob {
     /// Builds the model and its runner on the calling thread. The runner runs in `pool`, or in rayon's global pool for
     /// `None`.
     ///
-    /// A GPU build runs inside error scopes pushed on the calling thread, the thread that makes every device call of the
-    /// build. Scopes are thread-local, and scopes on another thread would leave a device error to the device's
+    /// A GPU build runs inside error scopes pushed on the calling thread, the thread that makes every device call of
+    /// the build. Scopes are thread-local, and scopes on another thread would leave a device error to the device's
     /// handler.
     fn run_here(self, pool: Option<Arc<rayon::ThreadPool>>) -> Result<SimRunner, Fault> {
         let gpu_ctx = self.gpu_ctx.clone();
@@ -426,9 +428,15 @@ impl AppState {
         }
     }
 
-    /// Pool the app's CPU work runs in.
+    /// Pool the app's model code runs in.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn model_pool(&self) -> &ModelPool {
         &self.pools
+    }
+
+    /// Pool the UI thread's parallel work runs in, such as the viewport's uploads. No model code runs in it.
+    pub fn ui_pool(&self) -> &UiPool {
+        &self.ui_pool
     }
 
     /// Stops the live simulation within [`STOP_WAIT`], and abandons a build that runs.

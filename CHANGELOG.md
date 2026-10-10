@@ -21,6 +21,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - App Editor tab for grid rules (closed by default, opens beside the Viewport): one model file as text with a line-number gutter; Apply checks, installs and selects the rule, rebuilt at tick 0 or after the Rebuild model dialog, a refused text leaving the run alone; problems listed at line and column, pressed to move the cursor; New grid rule (the Life starter), Edit model, Open model and Save model, also in a new File menu (a download in a browser); a device fault of the applied rule before its run passes tick 0 shown in the Editor.
 - `ModelSet::remove`.
 - `SweepRunOptions::build_pool` (native): rayon pool for a sweep's probes and GPU run builds. `SweepRun::stop(timeout)` (native): abort, join or detach after `timeout`.
+- `DevHost::with_source_directories`, `source_directories`, `manifest_directory`, `dependency_recompiled`; `BuildDiagnostic::from_json`.
 
 ### Changed
 

@@ -12,7 +12,6 @@ use henad_core::action::Schedule;
 use henad_core::explore::replay::Replay;
 use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
-use henad_core::provenance::ModelSource;
 use henad_core::view::StatsHistory;
 use henad_explore::output::memory::SweepFiles;
 
@@ -43,8 +42,8 @@ pub use build::{BUILDING_MODEL, DID_NOT_STOP};
 use build::{PendingBuild, Stopping};
 #[cfg(test)]
 pub use build::{STILL_STOPPING, STOP_WAIT};
-pub use install::{PendingRebuild, remap_schedule, remap_values};
-pub use pool::ModelPool;
+pub use install::{PendingRebuild, remap_schedule, remap_values, same_code};
+pub use pool::{ModelPool, UiPool};
 
 /// Exponential moving average smoothing factor (0..1, higher = more responsive).
 const EMA_ALPHA: f64 = 0.1;
@@ -132,8 +131,10 @@ pub struct AppState {
     /// Runs and builds that did not stop in time, kept until their threads end. A build started meanwhile holds them
     /// too, and waits for them.
     stopping: Vec<Arc<Stopping>>,
-    /// Pool the app's CPU work runs in. A fresh pool replaces it once a detached thread has held it past the timeout.
+    /// Pool the app's model code runs in. A fresh pool replaces it once a detached thread has held it past the timeout.
     pools: ModelPool,
+    /// Pool the UI thread's parallel work runs in, apart from any model code.
+    ui_pool: UiPool,
     /// Generation of the pool the live runner runs in.
     runner_generation: u64,
     /// Sink the live runner, CPU or GPU, stores a panic out of its loop in. A teardown replaces it, so a detached
@@ -230,11 +231,11 @@ pub enum OpenAt {
 }
 
 /// Sweep run the loaded model was built from.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct OpenedRun {
     pub replay: Replay,
-    /// Source of the entry that built the run when it was opened.
-    pub source: ModelSource,
+    /// Entry that built the run when it was opened.
+    pub entry: ModelEntry,
     /// Whether a live edit, an action, or a build from other values or other code has left the run's trajectory.
     pub modified: bool,
 }
@@ -304,6 +305,7 @@ impl AppState {
             building: None,
             stopping: Vec::new(),
             pools,
+            ui_pool: UiPool::default(),
             runner_generation: 0,
             sim_faults: FaultSink::new(),
             snapshot: None,
@@ -350,8 +352,8 @@ impl AppState {
 
     /// Tears down the live simulation and builds the selected model from the fields the next build reads.
     ///
-    /// Does nothing when [`Self::build_setup`] rejects the fields. Build is disabled then, with the reason
-    /// [`setup_message`] returns.
+    /// Does nothing when [`Self::build_setup`] rejects the fields, or the device cannot hold the selection at them.
+    /// Build is disabled then, with the reason [`Self::build_refusal`] returns.
     pub fn reset_simulation(&mut self) {
         let setup = match self.build_setup() {
             Some(Ok(setup)) => Some(setup),
@@ -361,6 +363,12 @@ impl AppState {
             }
             None => None,
         };
+        // The engine asserts the same check, and in a browser its panic ends the page.
+        let shortfalls = self.selection_shortfalls();
+        if !shortfalls.is_empty() {
+            log::warn!("Build refused: {}", too_large_message(&shortfalls));
+            return;
+        }
         self.load(setup);
     }
 
@@ -420,7 +428,7 @@ impl AppState {
     }
 
     /// Clears the opened run before a build of another model or a teardown, or sets its `modified` to whether
-    /// `setup` differs from the run in its values or its code.
+    /// `setup` differs from the run in its values or its code, as [`same_code`] compares code.
     ///
     /// A rebuild from the run's own values and code clears the mark that [`Self::mark_opened_run_modified`] sets.
     fn settle_opened_run(&mut self, setup: Option<&RunSetup>) {
@@ -432,7 +440,7 @@ impl AppState {
             return;
         };
         run.modified =
-            run.source != *setup.entry().source() || !run.is_built_by(setup.values(), setup.seed(), setup.schedule());
+            !same_code(&run.entry, setup.entry()) || !run.is_built_by(setup.values(), setup.seed(), setup.schedule());
     }
 
     /// Opens `opening`, the results, run or setup that the host requested.
@@ -471,8 +479,9 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// Returns a message when this build or this machine has no model `replay.model`, or the model declares a different
-    /// number of parameters. A build that fails goes to the fault modal instead, and leaves no run open.
+    /// Returns a message when this build or this machine has no model `replay.model`, the model declares a different
+    /// number of parameters, or the device cannot hold the model at the run's values. A build that fails goes to the
+    /// fault modal instead, and leaves no run open.
     pub fn open_run(&mut self, replay: Replay, start: OpenAt) -> Result<(), String> {
         let declared = self
             .lookup(&replay.model)
@@ -490,6 +499,10 @@ impl AppState {
 
         let entry = self.lookup(&replay.model).map_err(|error| lookup_message(&error))?;
         RunSetup::from_replay(entry, &replay).map_err(|error| setup_message(&error))?;
+        let shortfalls = entry.shortfalls(&replay.params, &self.runtime.granted);
+        if !shortfalls.is_empty() {
+            return Err(too_large_message(&shortfalls));
+        }
 
         let built = self.open_values(
             &replay.model,
@@ -501,7 +514,7 @@ impl AppState {
         if built && let Some(loaded) = &self.loaded {
             self.opened_run = Some(OpenedRun {
                 replay,
-                source: loaded.source().clone(),
+                entry: loaded.clone(),
                 modified: false,
             });
         }
@@ -515,13 +528,18 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// Returns a message when this build or this machine has no model under the setup's id, or that model rejects the
-    /// setup's values. A build that fails goes to the fault modal instead.
+    /// Returns a message when this build or this machine has no model under the setup's id, that model rejects the
+    /// setup's values, or the device cannot hold the model at them. A build that fails goes to the fault modal
+    /// instead.
     pub fn open_setup(&mut self, setup: &RunSetup, start: OpenAt) -> Result<(), String> {
         let id = setup.entry().id();
         let entry = self.lookup(id).map_err(|error| lookup_message(&error))?;
         RunSetup::from_parts(entry, setup.values(), setup.seed(), setup.schedule().clone())
             .map_err(|error| setup_message(&error))?;
+        let shortfalls = entry.shortfalls(setup.values(), &self.runtime.granted);
+        if !shortfalls.is_empty() {
+            return Err(too_large_message(&shortfalls));
+        }
         self.open_values(id, setup.values(), setup.seed(), setup.schedule(), start);
         Ok(())
     }
@@ -651,7 +669,8 @@ impl AppState {
     /// a browser the device reports a shader it refuses after the build that created it.
     fn show_fault(&mut self, fault: Fault, model: Option<&ModelEntry>) {
         let at_start = self.snapshot.as_ref().is_none_or(|snapshot| snapshot.tick == 0);
-        if at_start && model.is_some_and(|entry| self.editor.claims(entry.source(), &fault)) {
+        let claimed = at_start && model.is_some_and(|entry| self.editor.claims(entry.source(), &fault));
+        if claimed {
             log::error!("{fault}");
             self.offload_simulation();
             self.editor.show_fault(&fault);
@@ -1125,7 +1144,7 @@ mod tests {
         }]);
         let params = vec![ParamValue::U32(64), ParamValue::F32(0.3)];
         let run = OpenedRun {
-            source: henad_core::provenance::ModelSource::__from_type_path("henad_models::sir::SirGridModel"),
+            entry: henad_compute::entry::register_grid_model::<henad_models::sir::SirGridModel>(),
             replay: Replay {
                 model: "sir".to_owned(),
                 params: params.clone(),
@@ -1170,7 +1189,7 @@ mod tests {
         assert!(app.sim_thread.is_some(), "the setup built");
         assert_eq!(app.loaded_seed, None);
         assert_eq!(app.loaded_schedule, *setup.schedule());
-        assert_eq!(app.opened_run, None, "a setup is no sweep run");
+        assert!(app.opened_run.is_none(), "a setup is no sweep run");
         assert_eq!(app.focus_request, Some(Tab::Viewport));
 
         assert_eq!(app.open_setup(&setup.with_seed(7), OpenAt::Start), Ok(()));

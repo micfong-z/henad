@@ -317,10 +317,10 @@ Varies one parameter at a time. Other parameters use values from the Parameters 
   concrete implementations, never designed ahead of them — `GridModel` came from two grid models,
   `GpuGridModel` from GoL plus SIR, `GpuAgentModel` from boids plus ants. A generic with one caller
   is a regression, not a head start.
-- **Verify UI work by running the app, not by compiling it.** `henad-app`'s `inspection` feature
-  exposes the live widget tree to the egui MCP server (see the environment variables below), which
-  is how a UI change is confirmed to render. Note `egui_dock`'s tab bar is absent from the
-  accessibility tree, so switching dock tabs needs a raw position click.
+- **Verify UI work by running the app, not by compiling it.** The `inspection` feature of henad-app,
+  the facade, the template and hot-host exposes the live widget tree to the egui MCP server (see the
+  environment variables below), which is how a UI change is confirmed to render. Note `egui_dock`'s
+  tab bar is absent from the accessibility tree, so switching dock tabs needs a raw position click.
 - **A test-only module goes under a `tests/` directory in `src/`, never beside production modules.**
   `henad-compute/src/gpu/tests/`, `henad-models/src/tests/` and `henad-app/src/tests/` hold any test
   module too big to inline, and henad-compute's holds its `support.rs` (the headless device) as
@@ -381,7 +381,7 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
 cargo-deny is not installed. CI alone runs `cargo package --workspace --exclude henad-tutorial
 --no-verify --locked`, then henad-dylib's `cargo package --manifest-path` with the facade patched to
 the workspace's through `--config` (the `package` job, on manifest changes), `cargo +1.95 check
---workspace --locked` and the facade with all five features on 1.95 (`msrv`), `cargo check -p henad`
+--workspace --locked` and the facade with every feature on 1.95 (`msrv`), `cargo check -p henad`
 with no features and then with each feature alone (`features`), `scripts/check_hot.sh` under
 `HENAD_REQUIRE_GPU=1` on Linux (lavapipe), macOS and Windows, then the template's `ci.sh hot` in a
 copy outside the checkout, locked to the root's versions and patched by path, with the export count
@@ -420,9 +420,11 @@ Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
 Run desktop app: `cargo run -p henad-app` (`-- --open DIR` opens a folder a sweep wrote in the
 Results tab)
-Run Henad's own dev host: `cargo run --manifest-path examples/hot-host/Cargo.toml --profile hot
---features hot` (through `cargo run` alone, which sets the library path; `HENAD_HOT_CHECK=1` checks
-the dev host and opens no window)
+Run Henad's own dev host:
+`cargo run --manifest-path examples/hot-host/Cargo.toml --profile hot --features hot` (through
+`cargo run` alone, which sets the library path; `HENAD_HOT_CHECK=1` checks the dev host and opens no
+window; Model > Reload models and the Editor's project panel rebuild the example models from
+`crates/henad-models/src`)
 Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` + `index.html`)
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
@@ -501,8 +503,8 @@ would otherwise outrank the `RUSTFLAGS` it sets.
   rebuild and load, and the plugin's ids compared with the set's. Set to anything but empty or `0`,
   as `HENAD_REQUIRE_GPU` is. Options without a dev host fail it. `check_hot.sh` runs hot-host's app
   with it, and the template's `scripts/ci.sh hot` sets it.
-- `EGUI_INSPECTION=1` with `--features inspection` opens the app's inspection port on 5719, which
-  the egui MCP server drives.
+- `EGUI_INSPECTION=1` with the `inspection` feature (henad-app's, the facade's, the template's or
+  hot-host's) opens the app's inspection port on 5719, which the egui MCP server drives.
 
 ### Lints
 
@@ -562,7 +564,8 @@ henad-core ─┬─ henad-build      (build dependency of every crate with WGSL
             │                 └─ henad-explore ─┬─ henad-cli
             │                                   └─ henad-app
             └─ henad-hot        (on henad-core and henad-compute, native only, behind hot)
-henad (facade): core, compute and explore, plus models, app, cli and hot behind features
+henad (facade): core, compute and explore, plus models, app, cli, testing, rules, hot and
+               inspection behind features
 henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!, grid rules
@@ -829,17 +832,19 @@ cargo builds a primary package with a static std, and every member linking it wo
   equal. Keep it. A set refuses a duplicate id or one outside the grammar, records its `BuildInfo`
   on an entry that has none unless its source is runtime or plugin code, and merges the entries'
   `GpuNeeds` for the device request. `ModelSet::replace` puts an entry in place of the one with its
-  id, at its position, and returns it, or appends the entry and returns `None`, stamping as
-  `insert` does. The `register_*` functions are generic, and the engines and kernels monomorphise
-  in the crate that calls them. The GPU grid engine is the exception. henad-compute compiles it
+  id, at its position, and returns it, or appends the entry and returns `None`, stamping as `insert`
+  does, and `ModelSet::remove` takes the entry with an id out and returns it, keeping the order. The
+  `register_*` functions are generic, and the engines and kernels monomorphise in the crate that
+  calls them. The GPU grid engine is the exception. henad-compute compiles it
   once, and only the model's hooks monomorphise in the caller. `register_gpu_grid_model` reads one
   `Arc<GpuGridSpec>` from the model and passes it to the crate-private `ModelEntry::from_grid_spec`,
   whose builds and demand share it and which boxes the engine itself, as a grid rule's entry does.
   `GpuGridState<M>` is the adapter a test or a host builds directly.
   henad-compute instantiates no model outside its own tests.
   `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for other crates' tests alone. The
-  hidden `ModelEntry::__into_plugin` marks an entry as a plugin's, and only tests call it. The hidden
-  `__with_code` gives a test's entry a runtime source labelled with its id.
+  hidden `ModelEntry::__into_plugin` marks an entry as a plugin's, and henad-hot's
+  `DevHost::rebuild` calls it on every entry a plugin exports. The hidden `__with_code` gives a
+  test's entry a runtime source labelled with its id.
   `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU ports
   share. `simulation.rs` is the programmatic API over an entry. `RunSetup`
   (`ModelEntry::setup`) holds values by id, a seed and scheduled actions, each checked when set
@@ -1346,15 +1351,43 @@ cargo builds a primary package with a static std, and every member linking it wo
   `wgpu_configuration` are private. `HenadApp` (`lib.rs`) owns the `SimThread` and polls snapshots each frame.
   `HenadApp::new` takes the options and hands the opening to `AppState::open`, and
   `wgpu_configuration` takes `AppOptions::gpu_needs`, the set's `GpuNeeds`, for the device request.
-  `hot.rs`, behind the native-only `hot` feature, holds `HotHost`. `AppOptions::hot_reload(DevHost)`
-  makes `HenadApp::new` start the dev host's warm-up on the thread `henad-plugin-build`, `logic`
-  polls it, the System tab's Dev host section shows its `HotStatus` (Building, Ready, Failed with
-  the reason) and, once the warm-up has returned the dev host, its package and features, and its
-  drop cancels and joins a build still running. Options with a dev host merge
-  `GpuNeeds::ADAPTER_MAXIMUM` into the request. With `HENAD_HOT_CHECK` set, `run_native` runs
-  `hot::self_check` (`DevHost::check` against the set) first and returns its outcome, an `AppError`
-  for a failure or for options without a dev host, before any window. `From<HotError> for AppError`
-  lets a `main` write `henad::dev_host!()?`.
+  `hot/`, behind the native-only `hot` feature, holds `HotHost`, the app's side of the dev host.
+  `AppOptions::hot_reload(DevHost)` makes `HenadApp::new` start one build thread,
+  `henad-plugin-build`, that runs the warm-up, then one rebuild per request through the private
+  `PluginBuilder` trait (the `DevHost`, or a scripted builder in the tests), and sends each change
+  of stage and each outcome back over a channel, repainting the UI. A rebuild returns a
+  `PluginLoad`, the models with `DevHost::dependency_recompiled`. `HotHost::request_reload` starts a
+  reload, or marks one more while a build runs, and `poll` drops the result of a build that a
+  queued reload follows, since the files changed after it started, and passes its recompile on to
+  the load that follows. `poll` also returns a warm-up that failed to compile, whose problems are
+  then listed as a reload's. `logic` calls `AppState::poll_dev_host` (`state/reload.rs`), which
+  installs a reload's set through `install_plugin_models`, which hands every entry to
+  `install_models`. There an entry of the same code as the one it replaces (`state::same_code`:
+  equal `schema_hash`, and equal sources or compiled and plugin code of one type, package and known
+  source hash) takes its place and changes nothing else, so a reload of unchanged sources leaves
+  every run alone and live edits still reach it, since `selection_is_loaded` and `code_pending`
+  compare through `same_code` too. The source hash covers the registering crate alone. A crate the
+  package depends on compiled again while no model's code changed, as an edit to a path dependency
+  leaves it, installs as unchanged code, and its `ReloadOutcome::Loaded` sets `other_crates`, which
+  adds "Press Build to run edits to other crates." to the status. An id the crate provided at its
+  last load (at the start, the options' set) and no longer provides leaves the set through
+  `ModelSet::remove`, unless a runtime rule holds it now, with its Sweep draft and Results
+  comparison dropped, and a selection of it reads "Removed from the crate." (`selection_removed`,
+  `ui::model::REMOVED_FROM_CRATE`). An id that returns comes back under the entry it left with, and
+  one whose code is unchanged gets its Results comparison and `settle_loaded` back after
+  `install_models` passes it over. A failed reload installs nothing and is kept as a `ReloadOutcome`
+  (`BuildFailed` with the diagnostics and the standard error tail, or `Refused` with the text
+  `hot::message::error_text` gives its `HotError`, such as "Henad changed since the app started. Run
+  the app again with cargo run to load models." or "Model 'x' records no source hash. Call
+  henad_build::stamp_commit in build.rs."), and a failed build brings the Editor to the front. The
+  menu bar's Model menu, in a dev host alone, holds Reload models. The System tab's Dev host section
+  shows the warm-up's state (Preparing, Ready, Building, Failed with the reason), the last reload's
+  status line, and the package, features and source directories. The drop of `HotHost` closes the
+  request channel and cancels the running build until the thread ends, for at most five seconds.
+  Options with a dev host merge `GpuNeeds::ADAPTER_MAXIMUM` into the request. With `HENAD_HOT_CHECK`
+  set, `run_native` runs `hot::self_check` (`DevHost::check` against the set) first and returns its
+  outcome, an `AppError` for a failure or for options without a dev host, before any window.
+  `From<HotError> for AppError` lets a `main` write `henad::dev_host!()?`.
   henad-models and the binary's env_logger are optional behind the default
   `example-models` feature, which the `[[bin]]` requires, and `main.rs` builds the official options over
   `example_models()`: "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and `__official()`. The
@@ -1374,7 +1407,7 @@ cargo builds a primary package with a static std, and every member linking it wo
   View menu's order. The default layout leaves it closed, and `focus_tab` and `toggle_tab` open it
   through `open_tab`, in a leaf of its own split to the right of the Viewport's leaf, with the
   Viewport brought to the front of its stack. The menu bar's File menu holds New grid rule, Open
-  model and Save model.
+  model and Save model, and a dev host's Model menu Reload models.
   `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
   and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
   bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
@@ -1409,17 +1442,18 @@ cargo builds a primary package with a static std, and every member linking it wo
   `loaded_seed` and `loaded_schedule`, starts the build and sends `SimCommand::SetSchedule` when the
   schedule is not empty. The loaded fields are the setup's from the start of the build.
   `state/build.rs` holds the build and the teardown, and `state/pool.rs` the `ModelPool`, a shared
-  slot holding the pool the app's CPU work runs in (`None` for rayon's global pool) and its
-  generation. On native `start_build` runs a `BuildJob` on a thread named `henad-model-build`. The
-  job first waits (`settle`) until each detached thread in `stopping` has ended, or has run past
-  `DEFAULT_STOP_TIMEOUT` since its stop and retired its pool through `ModelPool::retire`, which puts
-  a fresh pool at the global width in place, its threads named `henad-pool-N`. The old run then
-  frees its memory before the new model allocates. The job builds inside the current pool:
-  `entry.build`, then `SimThread::new_in` or `GpuSimThread::new_in` (`new` in the global pool). A
-  GPU build runs whole inside `catching_on` on the thread that builds it, since error scopes are
-  thread-local. The thread sends the runner or the fault back over a channel with the pool's
-  generation and wakes the UI, and `HenadApp::logic` calls `poll_build` each frame, which installs
-  the runner, applies the Pacing tab's GPU batch settings and sends it the `PendingBuild`'s queue.
+  slot holding the pool the app's model code runs in (`None` for rayon's global pool) and its
+  generation, and the `UiPool`. On native `start_build` runs a `BuildJob` on a thread named
+  `henad-model-build`. The job first waits (`settle`) until each detached thread in `stopping` has
+  ended, or has run past `DEFAULT_STOP_TIMEOUT` since its stop and retired its pool through
+  `ModelPool::retire`, which puts a fresh pool at the global width in place, its threads named
+  `henad-pool-N`. The old run then frees its memory before the new model allocates. The job builds
+  inside the current pool: `entry.build`, then `SimThread::new_in` or `GpuSimThread::new_in` (`new`
+  in the global pool). A GPU build runs whole inside `catching_on` on the thread that builds it,
+  since error scopes are thread-local. The thread sends the runner or the fault back over a channel
+  with the pool's generation and wakes the UI, and `HenadApp::logic` calls `poll_build` each frame,
+  which installs the runner, applies the Pacing tab's GPU batch settings and sends it the
+  `PendingBuild`'s queue.
   Every command goes through `AppState::send_command`, which queues it while a build runs: the
   `SetSchedule` of `load`, the `RunTo` of `run_to`, `open_run` and `open_setup`, live edits, action
   presses and pacing. `has_simulation` holds for a runner or a build, `is_building` for a build, and
@@ -1436,16 +1470,20 @@ cargo builds a primary package with a static std, and every member linking it wo
   `DEFAULT_STOP_TIMEOUT`. Playback reads `stopping_status`: `STILL_STOPPING` ("Previous run is still
   stopping.") and, once one has run past `DEFAULT_STOP_TIMEOUT` since the stop, `DID_NOT_STOP`
   ("Previous run did not stop. It will keep running until the app quits."). The viewport's uploads
-  (the grid, the density map, the agent and edge layers), the export's grid pixels and the Sweep
-  tab's column builds run through `ModelPool::install`, and `SweepSession::start` and
-  `resume_folder` pass the current pool as the sweep's `build_pool`, so a stuck run in a retired
-  pool never stalls them. After `stop_simulation`, the app's drop stops a Sweep tab session through
-  `SweepSession::stop` with `DEFAULT_STOP_TIMEOUT`, and a sweep thread held in a step is detached.
-  A CPU or GPU runner reports a panic into `AppState::sim_faults`, which each teardown
-  replaces, so a detached runner's late panic reaches no later run. `src/tests/runaway.rs` holds
+  (the grid, the density map, the agent and edge layers) and the export's grid pixels run through
+  `AppState::ui_pool`, a `UiPool` that no model code runs in, built on first use with threads named
+  `henad-ui-N` (the calling thread in a browser). A run that holds every worker of its pool then
+  never stalls a frame, stopped or not. The Sweep tab's column builds run through
+  `ModelPool::install`, and `SweepSession::start` and `resume_folder` pass the current pool as the
+  sweep's `build_pool`, so a stuck run in a retired pool never stalls them. After `stop_simulation`,
+  the app's drop stops a Sweep tab session through `SweepSession::stop` with `DEFAULT_STOP_TIMEOUT`,
+  and a sweep thread held in a step is detached. A CPU or GPU runner reports a panic into
+  `AppState::sim_faults`, which each teardown replaces, so a detached runner's late panic reaches no
+  later run. `src/tests/runaway.rs` holds
   `a_cpu_build_after_a_detach_runs_on_a_fresh_pool`,
   `a_slow_runner_is_waited_for_and_keeps_the_pool`,
   `a_viewport_frame_after_a_detach_runs_on_the_fresh_pool`,
+  `a_viewport_frame_beside_a_run_that_holds_its_pool_returns`,
   `a_build_that_never_returns_leaves_the_ui_responsive`,
   `commands_sent_during_a_build_reach_the_new_runner`,
   `offload_and_quit_do_not_wait_for_a_runaway_runner`,
@@ -1495,10 +1533,13 @@ cargo builds a primary package with a static std, and every member linking it wo
   action is gone. A selected model whose hash matches keeps everything. `SweepPanel::forget_model`
   drops the id's `ColumnsBuild`, its draft when the hash changed, and the last check, and
   `ResultsPanel::model_replaced` has the store recompute `schema_matches`, `changed_builds`,
-  `replays_exactly` and `code_matches` against the replacement (`ResultsStore::model_changed`). The
-  store keeps a `RecordedModel` for it: the recorded builds, schema hash, replay flag and manifest
-  of a folder, or the builds of the entry an in-app sweep ran, and a folder read on its thread
-  compares again with the current set when it lands. A loaded model replaced by another source
+  `replays_exactly` and `code_matches` against the replacement (`ResultsStore::model_changed`). A
+  store of files (`RecordedSpec`) plans its recorded spec again against a replacement whose
+  declarations differ from those of its plan, or without an entry, and takes the replacement's
+  parameters and action labels. An id that joins the set reaches the store as well. The store keeps
+  a `RecordedModel` for it: the recorded builds, schema hash, replay flag and manifest of a folder,
+  or the builds of the entry an in-app sweep ran, and a folder read on its thread compares again
+  with the current set when it lands. A loaded model replaced by another source
   rebuilds at once while `run_at_start` holds (no snapshot past tick 0, not playing, no run to a
   tick pending) and `AppState::rebuild_refusal` returns no reason. Otherwise it sets
   `pending_rebuild` (`PendingRebuild`, with the run's values the new code does not take and the
@@ -1511,15 +1552,16 @@ cargo builds a primary package with a static std, and every member linking it wo
   pinned entry, and the Parameters banner (`notice_content`, a `ParamsNotice`) reads "Model code
   changed. Press Build to apply.", and Run's disabled reason names the change too. `KeptDraft` keeps
   the entry its session started with, a session's Save spec writes against it, and Edit sweep
-  restores the kept values only while the declarations match. The Editor's Apply is the caller in
-  the app.
+  restores the kept values only while the declarations match. The Editor's Apply and a dev host's
+  reload are its callers in the app.
   `src/tests/install.rs` holds `the_panels_describe_the_running_entry`,
   `an_opened_run_is_modified_after_its_source_changes`,
   `install_keeps_values_when_the_schema_matches`,
   `install_remaps_values_by_id_when_the_schema_changes`, `results_flag_runs_of_replaced_code`,
   `install_works_for_every_model_type`, `a_loaded_run_past_tick_zero_asks_before_rebuilding`,
-  `cancel_keeps_the_old_run_and_flags_the_code_change`, `an_install_during_a_run_to_asks_first` and
-  `a_rebuild_the_new_code_refuses_leaves_the_old_run_alone`, the Sweep tab's test
+  `cancel_keeps_the_old_run_and_flags_the_code_change`, `an_install_during_a_run_to_asks_first`,
+  `a_rebuild_the_new_code_refuses_leaves_the_old_run_alone` and
+  `compiled_and_plugin_code_of_one_source_hash_is_the_same_code`, the Sweep tab's test
   `install_forgets_the_sweep_tab_columns_of_the_model`, and the store's
   `a_folder_store_compares_its_runs_with_a_replaced_entry`. Keep them.
   `ui/editor/` is the Editor tab, the in-app editor of a grid rule's model file, a test harness
@@ -1531,7 +1573,10 @@ cargo builds a primary package with a static std, and every member linking it wo
   `code_view.rs` draws one `TextEdit::multiline(..).code_editor()` with a layouter that never wraps,
   in one `ScrollArea::both`, beside a gutter outside it. The gutter's numbers come from the galley's
   rows (`gutter_numbers`) and follow them up and down, and stay in place while a long line scrolls
-  sideways. No syntax highlighting, and the check runs on Apply alone. `editor::apply` reads the
+  sideways. A text replaced from outside the field clears its undo history on the next frame
+  (`ViewReset`, `clear_history`), since egui keeps one history under the field's id, and another
+  file's text also returns the view to the top left. No syntax highlighting, and the check runs on
+  Apply alone. `editor::apply` reads the
   text through `ModelFile::parse` and `entry`, which leave the set and the run alone on a refusal,
   then installs a one-entry set through `install_models` and selects the model. With no run, or a
   run at tick 0 (`run_at_start`, also true during a build unless a run to a tick waits for it), it
@@ -1551,8 +1596,10 @@ cargo builds a primary package with a static std, and every member linking it wo
   on native and a picked file or a download in a browser. Opening loads the text and applies
   nothing. `AppState::show_fault` gives a fault to the Editor (`EditorPanel::claims`) when it
   belongs to a run built from the applied source that has not passed tick 0, in place of the
-  fault modal. A lost device, a failed poll and a device out of memory stay with the modal, since
-  no edit of the code fixes them. `PendingBuild` keeps the entry it builds, and `finish_build`
+  fault modal. A project file in the buffer gives way to the model file text kept from before it
+  opened (`project::show_model_file`), and without that text the fault goes to the modal. A lost
+  device, a failed poll and a device out of memory stay with the modal, since no edit of the code
+  fixes them. `PendingBuild` keeps the entry it builds, and `finish_build`
   passes it to `show_fault`, so a fault the build thread returns reaches the Editor on the frame
   `poll_build` takes it. `show_fault_in_modal` passes the Editor over: a build thread that did not
   start or ended without a result, and on native a fault `report_fault` takes from a sink while a
@@ -1560,7 +1607,11 @@ cargo builds a primary package with a static std, and every member linking it wo
   `poll_build`'s frame, and ends early only when the Editor claims a fault during the call, as it
   can for a browser's inline build. In a browser `catching_on` pushes no scopes, and the device
   reports a refused rule through the `FaultSink` a frame or more after the build. Without compute,
-  Apply is disabled and the tab reads `NO_COMPUTE`. `src/tests/editor.rs` holds
+  Apply is disabled and the tab reads `NO_COMPUTE`. Apply builds no model the device cannot hold at
+  the next build's values, and reports the sizes as `ApplyOutcome::Faulted`. `reset_simulation`,
+  `open_run` and `open_setup` refuse it too, since the engine's own assert would end a browser's
+  page. An Open model that fails beside a project file writes its status in the project's status.
+  `src/tests/editor.rs` holds
   `new_grid_rule_starts_from_the_life_starter`,
   `applying_an_edit_installs_and_rebuilds_from_tick_zero`,
   `applying_beside_another_run_past_tick_zero_waits_for_build`,
@@ -1571,6 +1622,43 @@ cargo builds a primary package with a static std, and every member linking it wo
   `a_build_fault_of_the_applied_code_reaches_the_editor_from_the_build_thread`,
   `a_diagnostic_moves_the_cursor_to_its_line` and `edit_model_shows_the_code_the_rule_runs`. Keep
   them.
+  `ui/editor/project.rs`, behind `hot`, is the Editor's project mode in a dev host. A left panel
+  names the package, holds Reload models and the dev host's status line, and lists the `.rs` and
+  `.wgsl` files under the dev host's source directories (`list_files`: labels relative to the
+  directory that holds each source directory's parent, names starting with `.` left out, listed
+  again after each reload). With several source directories the list groups the files under each
+  (`file_groups`), each named from its directory, with its label as the tooltip. A press opens a
+  file into the same code buffer (`open_file`). An edited project file keeps its text in
+  `ProjectEditor::unsaved`, with the disk text it started from, while another file is open, a model
+  file
+  the buffer held becomes the list's first entry, and `EditorPanel::load` keeps an open file's edit
+  before New grid rule, Open model or Edit model replace the text. Save writes every edited file,
+  and Apply writes them, then calls `AppState::reload_models`. `problems` places a failed build's
+  errors: rustc's `compiler-message` errors by their primary span, a relative path matched to a
+  listed file under a directory that holds the manifest's and an absolute one by its path, and
+  without any the shader compiler's `┌─ path:line:column` lines on standard error, then any line
+  that starts with `error`. The list reads `<line>:<column> <message>` in the open file and puts the
+  file's label first for another, and a press opens the file at the place. `check_disk` reads the
+  open file again (`read_changed_file`), at most once a second, when its modification time changes,
+  and takes the new text into a buffer without edits. A Save or Apply that finds a file changed on
+  disk since its edit started, open or not, writes nothing, says so, and takes the disk text as the
+  edit's start, so the next press writes it. Opening a kept edit of a changed file says the same.
+  `src/tests/project.rs` holds
+  `a_plugin_set_replaces_every_id_it_holds`, `a_model_removed_from_the_crate_leaves_the_set`,
+  `a_rule_the_editor_applied_stays_when_the_crate_drops_its_id`, `apply_saves_before_it_builds`,
+  `a_save_that_fails_starts_no_build`, `a_file_changed_on_disk_is_read_again_unless_edited`,
+  `a_kept_edit_of_a_file_changed_on_disk_is_not_written_unasked`,
+  `a_warm_up_that_fails_to_compile_lists_its_problems`,
+  `a_library_compiled_with_no_model_changed_says_so`,
+  `a_build_overtaken_by_a_reload_passes_its_compile_on`,
+  `an_apply_during_a_build_queues_one_more_build`, `a_build_error_keeps_the_running_model`,
+  `a_crate_without_a_source_hash_is_refused_with_its_advice` and
+  `a_plugin_step_that_never_returns_leaves_the_app_responsive` (a reload past a held plugin step
+  returns within `STOP_WAIT`, and the rebuild steps on a fresh pool), over a scripted builder that
+  reports a library compiled again when its file's text changed, and
+  `project.rs` holds `the_file_list_holds_the_sources_by_label`,
+  `a_compiler_error_is_placed_in_its_project_file` and `a_shader_error_on_standard_error_is_placed`.
+  Keep them.
   `export/metadata.rs` writes `loaded_values` as `params`, the loaded `seed` (null for the default),
   `scheduled_actions`, the `host` build from `AppState::product` and the `model_source` build, and
   reads `engine_version` from `ENGINE_BUILD`. A sweep's manifest records the product's host build as
@@ -1582,8 +1670,9 @@ cargo builds a primary package with a static std, and every member linking it wo
   build, and the code hash of a runtime model under its id. Copy copies the name and every row. The
   menu entry reads "About" and the product name.
   The runs table's Copy command builds `ResultsStore::cli_command(program, run_id)` from the
-  product's `cli_command` and is hidden without one, and the Sweep tab's advice names it through
-  `options::cli_phrase`, or "on the command line" without one.
+  product's `cli_command` and is hidden without one, and disabled for the runs of a model file
+  (`ResultsStore::command_refusal`, `MODEL_FILE_COMMAND`), which need `--model-file`, and the Sweep
+  tab's advice names it through `options::cli_phrase`, or "on the command line" without one.
   `ui/sweep/` is the Sweep tab. `mod.rs` holds `SweepPanel` and `sweep_ui`, which splits the tab
   into four egui panels: a header and a footer of fixed height (`header.rs`, `footer.rs`), a Plan
   panel on the right while the tab is wide enough (`PLAN_PANEL_BREAKPOINT`), and a central scroll
@@ -1792,8 +1881,9 @@ cargo builds a primary package with a static std, and every member linking it wo
   the hidden `__macro_support`. A `use` of henad-core's would bring its `params` module along, and
   docs.rs would show that module at `henad::params`. The other root macros are plain re-exports.
   henad-cli and henad-hot sit under a native target table, and `cli` adds nothing on wasm32. `hot`
-  turns on `app` and henad-app's `hot`, and adds nothing else on wasm32. docs.rs builds the facade
-  for wasm32 too, without atomics, for the app's web entry point.
+  turns on `app` and henad-app's `hot`, and adds nothing else on wasm32. `inspection` turns on `app`
+  and henad-app's `inspection`, and adds no item. docs.rs builds the facade for wasm32 too, without
+  atomics, for the app's web entry point.
   No feature changes a bound,
   a layout or a result. `examples/complete.rs` is the program a newcomer reads first, and
   `README.md`, which the crate doc includes with `app` and `example-models` both on, holds a copy in
@@ -1852,8 +1942,9 @@ cargo builds a primary package with a static std, and every member linking it wo
   dylib --profile <profile> --no-default-features --features <host's> --message-format json --color
   never` with `RUSTUP_AUTO_INSTALL=0`, the cargo `CARGO` names, else `cargo`, in the working
   directory the process had when the dev host was created. It reads `compiler-artifact` and
-  `compiler-message` lines into `Artifact`s and `BuildDiagnostic`s, drains standard error on a
-  thread of its own into a 40-line tail and reports `HotProgress::WaitingForLock` once.
+  `compiler-message` lines into `Artifact`s and `BuildDiagnostic`s (`BuildDiagnostic::from_json`
+  reads one line for a host), drains standard error on a thread of its own into a 40-line tail and
+  reports `HotProgress::WaitingForLock` once.
   `package_dylib` picks the plugin among the artifacts, which cargo reports at their uplifted paths
   (`target/hot/libhot_host.dylib`), and its tests read lines recorded from cargo 1.97. A
   `BuildCancel` ends the build: the process group on Unix (rustix, `process_group(0)`), cargo's job
@@ -1880,18 +1971,26 @@ cargo builds a primary package with a static std, and every member linking it wo
   copy, checks the header and calls the models function under `catching`. `symbols.rs` reads the
   defined symbols of a 64-bit little-endian Mach-O (`LC_SYMTAB`, `N_SECT` entries), ELF (`.symtab`
   and `.dynsym`, entries not `SHN_UNDEF`) or PE32+ file (export names), with no new dependency.
-  `dev_host.rs` holds `DevHost` (`new`, `profile`, `package`, `features`, `cancel_handle`,
+  `dev_host.rs` holds `DevHost` (`new`, `profile`, `with_source_directories`, `package`,
+  `manifest_directory`, `source_directories`, `features`, `dependency_recompiled`, `cancel_handle`,
   `warm_up`, `rebuild`, `check`) and `HotProgress`, whose `Loading` names the copy and the file
-  cargo built. A load writes the plugin to `henad-plugin-<package>-<pid>-<n>.<ext>` in a directory
-  of its own, `<profile directory>/henad-plugins/<package>-<pid>-<n>/`. The warm-up removes the
-  directories of ended processes (`remove_stale_loads`): a name that reads `<package>-<pid>-<n>`
-  exactly, another pid, and on Unix a pid that no longer runs. `rebuild` refuses an entry whose
-  build records no source hash.
-  The host and the plugin find henad-dylib and std through the library path `cargo run` sets, and a
-  dev host starts through `cargo run` alone. Its tests sit in `src/tests/`, among them a scripted
-  cargo on Unix (`a_cancel_ends_the_build_and_its_children`,
-  `a_cancel_before_the_build_starts_is_kept`) and the symbol reader on the test binary itself
-  (`a_definition_is_found_and_a_reference_is_not`).
+  cargo built. `dependency_recompiled` reads whether cargo compiled a unit of a package other than
+  the plugin's and henad-dylib again (its artifact not `fresh`, `cargo::dependency_compiled`) since
+  the plugin the rebuild before returned, or since the warm-up, across refused loads. The package's
+  own library, which a save without a change compiles again, does not count. A load writes
+  the plugin to `henad-plugin-<package>-<pid>-<n>.<ext>` in a directory of its own,
+  `<profile directory>/henad-plugins/<package>-<pid>-<n>/`. The warm-up removes the directories of
+  ended processes (`remove_stale_loads`): a name that reads `<package>-<pid>-<n>` exactly, another
+  pid, and on Unix a pid that no longer runs. `rebuild` refuses an entry whose build records no
+  source hash, and returns every other entry marked as plugin code through
+  `ModelEntry::__into_plugin` (`plugin_models`). The source directories, `src` unless a host names
+  others (resolved against the manifest directory and normalised without the file system), change no
+  build, and a host lists their files for editing. The host and the plugin find henad-dylib and std
+  through the library path `cargo run` sets, and a dev host starts through `cargo run` alone. Its
+  tests sit in `src/tests/`, among them a scripted cargo on Unix
+  (`a_cancel_ends_the_build_and_its_children`, `a_cancel_before_the_build_starts_is_kept`), the
+  symbol reader on the test binary itself (`a_definition_is_found_and_a_reference_is_not`), and
+  `a_plugin_s_entries_read_as_plugin_code_of_their_crate`.
 - **henad-dylib** (`crates/henad-dylib`, outside the workspace with a `[workspace]` of its own,
   published): `crate-type = ["dylib"]`, a `lib.rs` of `pub use henad;`, and `henad = "=X.Y.Z"` with
   `hot`. Cargo builds a dylib with `-C prefer-dynamic` only as a non-primary package, so a host
@@ -1901,9 +2000,12 @@ cargo builds a primary package with a static std, and every member linking it wo
 - **hot-host** (`examples/hot-host`, `publish = false`, outside the workspace with a `[workspace]`
   and a lock of its own, the lock the root's pruned): Henad's own dev host and the test bed of
   henad-hot. `models()` (`src/lib.rs`) returns `example_models()`, and under `check` the fixtures of
-  `src/tests/fixture.rs` after them: `fixture_grid`, whose kernel copies its cell, panics or writes
-  `rayon::current_num_threads()` and whose live cells hold the generation, and `fixture_gpu`,
-  `GpuGameOfLife` with a `poison` parameter that shortens its uniform block. The generation comes
+  `src/tests/fixture.rs` after them: `fixture_grid`, whose kernel copies its cell, panics, spins
+  for good or writes `rayon::current_num_threads()` and whose live cells hold the generation, and
+  `fixture_gpu`, `GpuGameOfLife` with a step shader of its own, `src/tests/fixture_step.wgsl`,
+  which copies each word, and a `poison` parameter that shortens its uniform block. `build.rs`
+  calls `stamp_commit` and `ShaderBuild::discover("src")`, and `lib.rs` `include_shaders!`, as the
+  template's do. The generation comes
   from `generation/` (package `hot-host-generation`, a member of hot-host's workspace), a
   never-inlined function that host and plugin each link outside henad-dylib, as they link
   henad-models. Under `hot` the library names henad-dylib (`use henad_dylib as _;`) and calls
@@ -1915,66 +2017,82 @@ cargo builds a primary package with a static std, and every member linking it wo
   points one directory off for the binary cargo copies up. `src/main.rs` is the app binary
   `hot-host`, the default run: the example models under "Henad Dev Host" with the official icon,
   links and licence and `cli_command("hot-cli")`, and under `hot` `hot_reload(henad::dev_host!()?)`,
-  the dev host created first in `main`. `check_hot.sh` runs it with `HENAD_HOT_CHECK=1` and
+  the dev host created first in `main`, with `crates/henad-models/src` among its source directories
+  (`with_source_directories`), so its Editor lists the example models' files. Its `inspection`
+  feature forwards to the facade's. `check_hot.sh` runs it with `HENAD_HOT_CHECK=1` and
   `hot,check`, so a binary that links eframe and winit through henad-dylib links on arm64 macOS
   (bevy#11779) and passes its self-check. `src/bin/hot-check.rs` runs as a `[[bin]]` with `hot` and
   `check`, since a test binary resolves dev-dependency features, and `check_hot.sh` starts it twice
   through `cargo run`.
   The first run checks, in order, `a_plugin_build_uses_the_host_features`,
   `a_plugin_build_from_the_running_host_keeps_henad_dylib_fresh`,
-  `the_plugin_binds_to_the_host_image`,
+  `the_plugin_binds_to_the_host_image`, `every_plugin_entry_reads_as_plugin_code_of_its_sources`
+  (plugin origin, and the package, type path, declarations and source hash of the host's static
+  copy), with the first load not compiled again,
   `every_example_model_from_the_plugin_steps_like_the_static_one` (50 ticks, stats every ten and a
   CPU model's state, ticks and population alone for a model that does not replay exactly),
   `a_plugin_panic_is_a_located_fault`, `a_plugin_pass_honours_the_lane_pool_width`,
   `a_plugin_gpu_model_builds_on_the_host_device`, `the_kit_passes_on_plugin_entries`,
-  `a_plugin_with_a_global_allocator_is_refused` (a `#[global_allocator]` appended to
-  `generation/src/lib.rs`, refused before any load), `a_failed_build_is_reported_at_its_line` (a
-  type error in `generation/src/lib.rs`, then a load) and
-  `an_edit_outside_henad_dylib_reaches_the_next_load` (20 edits of the generation, restored after,
-  each read from the plugin's copy and not the host's, each copy in a directory of its own and
-  hashing as cargo's output, with the resident memory printed per load). The second, `hot-check
-  relink`, loads a plugin, sets the modification time of
-  `crates/henad-dylib/src/lib.rs` to now and runs `a_changed_henad_build_is_refused_before_loading`:
-  the build that rebuilds henad-dylib under the running host is refused before any load
-  (`HenadDylibRebuilt`, or on Windows a failed link naming henad-dylib), the loaded plugin and a
-  linked model step on, and the next build is refused again or, on macOS where the relink can write
-  the same bytes, loads. It runs last, and the next `cargo run` relinks the binary. Keep them.
-- **The template** (`templates/model-project`, package `my-model`, `publish = false`): the project
-  a user fetches from a release tag and builds on the published crates, outside the workspace
-  through the root `exclude`. It depends on `henad` and `henad-build`, and on `henad-dylib` in its
-  native target table behind its `hot` feature, all at the workspace's major and minor (`"0.3"`),
-  with the app and the CLI behind its own default features `app` and `cli`. `hot = ["app",
-  "henad/hot", "dep:henad-dylib"]` is the dev host, run as `cargo run --profile hot --features hot`.
-  `src/hot.rs` (`use henad_dylib as _;` and `henad::export_models!(crate::models);`) sits behind one
+  `a_plugin_panic_on_a_runner_is_a_located_fault` (the fault of a `SimThread::new_in` run, at its
+  line, and the runner joined), `a_plugin_with_a_global_allocator_is_refused` (a
+  `#[global_allocator]` appended to `generation/src/lib.rs`, refused before any load),
+  `a_failed_build_is_reported_at_its_line` (a type error in `generation/src/lib.rs`, then a load),
+  `an_edit_to_a_cpu_step_cell_reaches_the_next_load` (`fixture_grid`'s `step_cell` edited to add
+  one, a new source hash, then a type error at its line with the earlier load stepping on, then the
+  restored source), `an_edit_to_a_wgsl_step_shader_reaches_the_next_load` (with a device: the copy
+  edited to clear every word under a new source hash, then a missing semicolon placed by the `┌─`
+  line of the build script's standard error with the earlier load stepping on, then the restored
+  shader), `an_edit_outside_henad_dylib_reaches_the_next_load` (20 edits of the generation,
+  restored after, each read from the plugin's copy and not the host's, each compiled again under
+  the fixture's unchanged source hash, each copy in a directory of its own and hashing as cargo's
+  output, with the resident memory printed per load) and, last,
+  `a_plugin_step_that_never_returns_is_detached` (a spinning `step_cell` on a runner in a pool of
+  its own, detached within `DEFAULT_STOP_TIMEOUT`, and a run on a fresh pool stepping while it
+  spins until the process ends). Each edit is restored when its check ends, failed or not. The
+  second,
+  `hot-check relink`, loads a plugin, sets the modification time of `crates/henad-dylib/src/lib.rs`
+  to now and runs `a_changed_henad_build_is_refused_before_loading`: the build that rebuilds
+  henad-dylib under the running host is refused before any load (`HenadDylibRebuilt`, or on Windows
+  a failed link naming henad-dylib), the loaded plugin and a linked model step on, and the next
+  build is refused again or, on macOS where the relink can write the same bytes, loads. It runs
+  last, and the next `cargo run` relinks the binary. Keep them.
+- **The template** (`templates/model-project`, package `my-model`, `publish = false`): the project a
+  user fetches from a release tag and builds on the published crates, outside the workspace through
+  the root `exclude`. It depends on `henad` and `henad-build`, and on `henad-dylib` in its native
+  target table behind its `hot` feature, all at the workspace's major and minor (`"0.3"`), with the
+  app and the CLI behind its own default features `app` and `cli`.
+  `hot = ["app", "henad/hot", "dep:henad-dylib"]` is the dev host, run as
+  `cargo run --profile hot --features hot`, and `inspection = ["app", "henad/inspection"]` the app's
+  inspection port. `src/hot.rs` (`use henad_dylib as _;` and
+  `henad::export_models!(crate::models);`) sits behind one
   `#[cfg(all(feature = "hot", not(target_arch = "wasm32")))] mod hot;` line in `src/lib.rs`, and
   `src/main.rs` creates the dev host first in `main` and passes it to `hot_reload` under the
   feature, and a `hot` build keeps its console window on Windows. `[profile.hot]` (region `hot`)
-  equals hot-host's. `src/vote.rs` (`Vote`, a `GridModel`) and `src/gpu_vote/` (`GpuVote`,
-  its `GpuGridModel` port seeded through `Vote::init`) follow the tutorial's import shape, and
-  `models()` (`src/lib.rs`) inserts each on a line of its own. The test at the foot of `lib.rs`
-  runs `assert_set_conforms` over `models()` and names no model. `src/main.rs` and
+  equals hot-host's. `src/vote.rs` (`Vote`, a `GridModel`) and `src/gpu_vote/` (`GpuVote`, its
+  `GpuGridModel` port seeded through `Vote::init`) follow the tutorial's import shape, and
+  `models()` (`src/lib.rs`) inserts each on a line of its own. The test at the foot of `lib.rs` runs
+  `assert_set_conforms` over `models()` and names no model. `src/main.rs` and
   `src/bin/my-model-cli.rs` are the app and the CLI over `henad::app` and `henad::cli`, under the
-  product name "My Model". `build.rs` calls `stamp_commit` and `ShaderBuild::discover("src")`,
-  and ends in `Ok(())`, so a crate without shaders deletes one line. `.cargo/config.toml` holds the
+  product name "My Model". `build.rs` calls `stamp_commit` and `ShaderBuild::discover("src")`, and
+  ends in `Ok(())`, so a crate without shaders deletes one line. `.cargo/config.toml` holds the
   wasm32 rustflags. `scripts/web-checks.sh`, which `scripts/build_web.sh` and the `lint-web` stage
   source, refuses an inherited `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` rather than drop them, and
   prints the install line of a missing nightly. `scripts/ci.sh` runs the stages `lint`, `lint-web`,
-  `test` and `web` (all four without an argument), and `hot` (`HENAD_HOT_CHECK=1 cargo run --profile
-  hot --features hot`) only when named. `lint`, `lint-web` and `test` take the features in its
-  `features` array, every feature but `hot`, so they build Henad linked as it ships. Each stage
-  passes `--locked` once a lock exists, and `.github/workflows/ci.yml` runs them through `bash`,
-  since a checkout from Windows keeps no executable bit, under `HENAD_REQUIRE_GPU=1` on lavapipe.
-  `.gitattributes` keeps the scripts and the pins at LF line ends.
-  `scripts/install-lavapipe.sh` holds the Mesa and gfx-rs/ci-build pins, and Henad's own `test`
-  job calls it. `.github/dependabot.yml` groups `henad`, `henad-build` and `henad-dylib`.
-  `README.md` holds the `fetch`, `rename`, `run`, `dev-host` and `update` regions, `Cargo.toml` the
-  `profile` and `hot` regions, and `guide/your-project.md`, `guide/library.md` and
+  `test` and `web` (all four without an argument), and `hot`
+  (`HENAD_HOT_CHECK=1 cargo run --profile hot --features hot`) only when named. `lint`, `lint-web`
+  and `test` take the features in its `features` array, every feature but `hot` and `inspection`, so
+  they build Henad linked as it ships. Each stage passes `--locked` once a lock exists, and
+  `.github/workflows/ci.yml` runs them through `bash`, since a checkout from Windows keeps no
+  executable bit, under `HENAD_REQUIRE_GPU=1` on lavapipe. `.gitattributes` keeps the scripts and
+  the pins at LF line ends. `scripts/install-lavapipe.sh` holds the Mesa and gfx-rs/ci-build pins,
+  and Henad's own `test` job calls it. `.github/dependabot.yml` groups `henad`, `henad-build` and
+  `henad-dylib`. `README.md` holds the `fetch`, `rename`, `run`, `dev-host` and `update` regions,
+  `Cargo.toml` the `profile` and `hot` regions, and `guide/your-project.md`, `guide/library.md` and
   `guide/hot-reload.md` include them. `cargo update -p henad -p henad-dylib` moves the Henad crates:
   henad-dylib's exact requirement holds the facade back under `-p henad` alone, which then moves
-  nothing. The template ships no `Cargo.lock`,
-  and its `.gitignore` never lists one.
-  `rustfmt.toml` sets the 120 columns Henad formats at. Its `[profile.release]` equals the root's,
-  which `scripts/check_packaging.sh` checks, and `./check.sh` never builds it.
+  nothing. The template ships no `Cargo.lock`, and its `.gitignore` never lists one. `rustfmt.toml`
+  sets the 120 columns Henad formats at. Its `[profile.release]` equals the root's, which
+  `scripts/check_packaging.sh` checks, and `./check.sh` never builds it.
 
 ### Adding a new model
 

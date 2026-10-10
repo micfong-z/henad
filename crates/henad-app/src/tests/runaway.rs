@@ -236,6 +236,61 @@ fn a_viewport_frame_after_a_detach_runs_on_the_fresh_pool() {
 }
 
 #[test]
+fn a_viewport_frame_beside_a_run_that_holds_its_pool_returns() {
+    /// Time after which the watchdog releases the held pool, and the test fails.
+    const WATCHDOG: Duration = Duration::from_secs(20);
+
+    let probe = Arc::new(Probe::default());
+    let gate = Gate::default();
+    let _release = OpenOnDrop(gate.clone());
+    let Some(mut app) = app_over(held(&sir(), &probe, None, Some(StepHold::Pool(gate.clone())))) else {
+        return;
+    };
+    app.reset_simulation();
+    app.wait_for_build();
+    let thread = app.sim_thread.as_mut().expect("the run");
+    let mut first = None;
+    wait_until("the first snapshot", || {
+        first = thread.take_snapshot();
+        first.is_some()
+    });
+    // A step right after a publish holds every worker of the run's pool, and nothing stops the run.
+    thread.step_once();
+    let workers = rayon::current_num_threads();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while probe.held_workers.load(Ordering::SeqCst) < workers && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(pool_of(&app), (0, true), "the run holds the global pool");
+
+    let fired = Arc::new(AtomicBool::new(false));
+    let (stop_watchdog, watchdog) = std::sync::mpsc::channel::<()>();
+    let watchdog_gate = gate.clone();
+    let watchdog_fired = Arc::clone(&fired);
+    let watchdog = std::thread::spawn(move || {
+        if watchdog.recv_timeout(WATCHDOG).is_err() {
+            watchdog_fired.store(true, Ordering::SeqCst);
+            watchdog_gate.open();
+        }
+    });
+    app.snapshot = first;
+    egui::Context::default()
+        .run_ui(egui::RawInput::default(), |ui| viewport_ui(ui, &mut app))
+        .drop_without_applying_deltas();
+    assert!(
+        !fired.load(Ordering::SeqCst),
+        "the viewport frame waited for the pool the run holds"
+    );
+    assert!(app.grid_texture.is_some(), "the frame uploaded the grid");
+
+    drop(stop_watchdog);
+    watchdog.join().expect("the watchdog never panics");
+    gate.open();
+    app.offload_simulation();
+    wait_until("the end of the run", || stopped(&mut app));
+}
+
+#[test]
 fn a_build_that_never_returns_leaves_the_ui_responsive() {
     let probe = Arc::new(Probe::default());
     let gate = Gate::default();

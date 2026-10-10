@@ -15,7 +15,7 @@ use henad_explore::output::details::{ChoiceForm, params_by_id_json};
 use henad_explore::output::manifest::{BuildRole, RecordedBuild};
 
 use crate::icons::material_design_icons::MDI_RESTART;
-use crate::state::{AppState, OpenAt, PendingRebuild, remap_schedule, remap_values};
+use crate::state::{AppState, OpenAt, PendingRebuild, remap_schedule, remap_values, same_code};
 use crate::tests::support::{counter, edited_sir, recoded, set_of, step_past};
 use crate::ui::export::metadata::run_details;
 use crate::ui::params::INVALID_SEED;
@@ -136,7 +136,7 @@ fn an_opened_run_is_modified_after_its_source_changes() {
     app.open_run(replay, OpenAt::Start).expect("the run opens");
     app.wait_for_build();
     let run = app.opened_run.as_ref().expect("an opened run");
-    assert_eq!(run.source, *sir.source());
+    assert_eq!(run.entry.source(), sir.source());
     assert!(!run.modified);
 
     let builds = counter();
@@ -561,4 +561,35 @@ fn a_rebuild_the_new_code_refuses_leaves_the_old_run_alone() {
     app.wait_for_build();
     assert_eq!(builds.load(Ordering::SeqCst), 1);
     assert_eq!(app.pending_rebuild, None);
+}
+
+#[test]
+fn equal_sources_with_other_declarations_are_other_code() {
+    let Some(mut app) = app_with_small_sir() else {
+        return;
+    };
+    let sir = example(&app, "sir");
+    // Two entries of one source that declare different parameters.
+    let builds = counter();
+    let first = recoded(&sir, "one source", &builds);
+    let second = recoded(&edited_sir(), "one source", &builds);
+    assert_eq!(first.source(), second.source());
+    assert!(!same_code(&first, &second), "the declarations differ");
+
+    app.install_models(&set_of(first));
+    app.reset_simulation();
+    step_past(&mut app, 0);
+    assert!(app.selection_is_loaded());
+
+    app.install_models(&set_of(second));
+    assert!(app.pending_rebuild.is_some(), "a run past tick 0 asks first");
+    assert!(!app.selection_is_loaded() && app.code_pending());
+    let vaccination = app
+        .selected_entry()
+        .and_then(|entry| entry.param_index("vaccination_rate"))
+        .expect("the edit declares a vaccination rate");
+    assert!(
+        !app.send_live_param(vaccination, ParamValue::F32(0.5)),
+        "an index of the new declarations reached the running state"
+    );
 }

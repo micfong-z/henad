@@ -100,7 +100,8 @@ delta_state: "uncommitted on `49/r-runaway-rails`, 4 new files and 27 changed fi
   `stopping_status` returns `STILL_STOPPING` or, once one has run past `DEFAULT_STOP_TIMEOUT` since its stop, `DID_NOT_STOP`.
   Playback shows the first as a weak line with an information icon and the second in the theme's warn colour with an alert icon.
   The pool is retired at the moment the line turns to `DID_NOT_STOP`, by whichever of the UI thread and a waiting build sees it first.
-- The UI thread's own parallel work goes through `ModelPool::install`: the viewport's `expand_grid` and `sample_grid`, the density map, the agent layer's colours and the edge layer's packing (`upload` and `upload_edges` take the pool), and the export's `grid_pixels`.
+- The UI thread's own parallel work went through `ModelPool::install`: the viewport's `expand_grid` and `sample_grid`, the density map, the agent layer's colours and the edge layer's packing (`upload` and `upload_edges` take the pool), and the export's `grid_pixels`.
+  The final review of #49 moved it to a `UiPool` of its own, which no model code runs in, since a run that holds every worker of the model pool stalled the frame before any stop retired that pool.
   The Sweep tab's `ColumnsBuild` builds on its `henad-stat-columns` thread inside the pool (`SweepPanel::model_pool`, set by `AppState::new`).
   A stuck run that holds every worker of the global pool then stalls none of them once its pool is retired.
 - A CPU runner reports into `AppState::sim_faults` in place of `render_ctx.faults`, and each teardown replaces the sink, so a detached runner that panics later reaches no later run.

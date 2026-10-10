@@ -4,7 +4,7 @@
 //! Only the edge list is copied to the GPU, and only when it changes.
 
 use crate::shader_bindings::edges::Uniforms;
-use crate::state::ModelPool;
+use crate::state::UiPool;
 use crate::ui::agent_layer::{AGENT_SIZE_PT, palette_lut};
 use henad_compute::snapshot::EdgeSnapshot;
 
@@ -221,7 +221,7 @@ impl EdgeLayer {
 
     /// Copies the edge list into the GPU instance buffer, unless the buffer already holds the same version in the
     /// same palette. The edges are packed on workers of `pool`.
-    pub fn upload(&mut self, edges: &EdgeSnapshot, pool: &ModelPool) {
+    pub fn upload(&mut self, edges: &EdgeSnapshot, pool: &UiPool) {
         self.directed = edges.directed;
         let n = edges.src.len().min(edges.dst.len());
         if self.uploaded == Some((edges.version, n)) && self.uploaded_palette == edges.palette {

@@ -177,8 +177,8 @@ const EDITOR_SPLIT: f32 = 0.5;
 
 /// Opens `tab`, which is closed.
 ///
-/// The Editor opens in a leaf of its own to the right of the Viewport's leaf, and the Viewport comes to the front of its
-/// leaf, so the run stays in view while its code is edited. Any other tab, and the Editor while the Viewport is
+/// The Editor opens in a leaf of its own to the right of the Viewport's leaf, and the Viewport comes to the front of
+/// its leaf, so the run stays in view while its code is edited. Any other tab, and the Editor while the Viewport is
 /// closed, joins the focused leaf.
 fn open_tab(dock: &mut DockState<Tab>, tab: Tab) {
     if tab == Tab::Editor

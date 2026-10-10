@@ -303,7 +303,8 @@ impl TableView {
 /// Draws the strip for run `run_id`: its name, Open, Open at end and, with a `cli_command`, Copy command.
 ///
 /// The buttons are disabled with the store's [`ResultsStore::replay_refusal`] when the runs cannot replay, and with
-/// [`ResultsStore::untold_candidate`] for a run of a search whose batch is not told yet.
+/// [`ResultsStore::untold_candidate`] for a run of a search whose batch is not told yet. Copy command is also disabled
+/// with [`ResultsStore::command_refusal`] for the runs of a model file.
 pub fn detail_strip(
     ui: &mut egui::Ui,
     store: &ResultsStore,
@@ -347,13 +348,17 @@ pub fn detail_strip(
             *request = Some(ResultsRequest::OpenRun { run_id, start });
         }
         if let Some(program) = cli_command {
+            let command_refusal = refusal.or(store.command_refusal());
             let copy = ui
-                .add_enabled(replays, egui::Button::new(format!("{MDI_CONTENT_COPY} Copy command")))
+                .add_enabled(
+                    command_refusal.is_none(),
+                    egui::Button::new(format!("{MDI_CONTENT_COPY} Copy command")),
+                )
                 .on_hover_text(format!(
                     "Copy {program} command to replay this run. Its stats might fall on other ticks than this run's \
                      series."
                 ))
-                .on_disabled_hover_text(refusal_text);
+                .on_disabled_hover_text(command_refusal.unwrap_or_default());
             if copy.clicked() {
                 *request = Some(ResultsRequest::CopyCommand(run_id));
             }

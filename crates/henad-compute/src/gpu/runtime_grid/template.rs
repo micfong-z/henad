@@ -142,7 +142,8 @@ pub(crate) fn step_template(params: &[(&str, FieldType)], constants: &[String], 
     let anchor_offset = text.len();
     text.push_str(&format!(
         "fn neighbor(dx: i32, dy: i32) -> u32 {{\n    \
-         let cell = henad_offset_cell(henad_cell.x, henad_cell.y, dx, dy, params.width, params.height, {boundary});\n    \
+         let cell = henad_offset_cell(henad_cell.x, henad_cell.y, dx, dy,\n        \
+         params.width, params.height, {boundary});\n    \
          if (cell.z == 0) {{\n        \
          return 0u;\n    \
          }}\n    \
@@ -151,7 +152,8 @@ pub(crate) fn step_template(params: &[(&str, FieldType)], constants: &[String], 
     ));
     text.push_str(
         "fn moore_count(state: u32) -> u32 {\n    \
-         return u32(neighbor(-1, -1) == state) + u32(neighbor(0, -1) == state) + u32(neighbor(1, -1) == state)\n        \
+         return u32(neighbor(-1, -1) == state) + u32(neighbor(0, -1) == state)\n        \
+         + u32(neighbor(1, -1) == state)\n        \
          + u32(neighbor(-1, 0) == state) + u32(neighbor(1, 0) == state)\n        \
          + u32(neighbor(-1, 1) == state) + u32(neighbor(0, 1) == state) + u32(neighbor(1, 1) == state);\n\
          }\n\n\
