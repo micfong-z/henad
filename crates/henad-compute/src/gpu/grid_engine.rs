@@ -192,7 +192,7 @@ impl GpuGridEngine {
         // Uniforms.
         // Display and reduce get their own small buffer rather than depending on the model's
         // layout starting with the dimensions.
-        let step_params = spec.hooks.step_params_bytes(width, height, params);
+        let step_params = spec.hooks.step_params_bytes(width, height, params, seed);
         let step_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("{id}_step_params_buffer")),
             size: step_params.len() as u64,

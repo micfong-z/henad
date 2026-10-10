@@ -28,6 +28,8 @@ henad-build = { workspace = true }
 # example models, and henad-explore's tests build them in turn. The package's own tests depend on henad-explore, and do
 # not build from the package.
 henad-explore = { path = "../henad-explore", features = ["testing"] }
+# The normal edge again, with the run-time composer for the tests that compose the shaders and run grid rules.
+henad-compute = { workspace = true, features = ["runtime-wgsl"] }
 rayon = { workspace = true }
 flume = { workspace = true }
 log = { workspace = true }

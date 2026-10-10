@@ -3,7 +3,7 @@
 [Henad](https://github.com/micfong-z/henad) is a parallel agent-based modelling engine, built to run millions of agents at interactive speeds on one machine.
 
 This is the crate that a program depends on.
-It re-exports the engine, the sweeps and the model authoring API under one module tree, with the example models, the app and the command line behind features.
+It re-exports the engine, the sweeps and the model authoring API under one module tree, with the example models, the app, the command line, the testing kit and the grid rules behind features.
 
 | Feature | Adds |
 |---|---|
@@ -11,6 +11,7 @@ It re-exports the engine, the sweeps and the model authoring API under one modul
 | `app` | The app as a library, at `henad::app` |
 | `cli` | The command line as a library, at `henad::cli`, on native targets |
 | `testing` | The checks a model's tests run against its entry, at `henad::testing` |
+| `model-files` | Grid rules, the model files that hold them, and the composer of their WGSL, at `henad::rules` |
 
 No feature is on by default, and no feature changes a result.
 

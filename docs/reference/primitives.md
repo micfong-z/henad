@@ -219,6 +219,9 @@ See also: [`axis_delta`](#axis_delta).
 The offset tables and the two ways of walking them.
 Rust holds each table as a const slice, WGSL as an id plus an accessor.
 
+A grid rule, a GPU grid model declared as data in `henad::rules`, refuses loops and walks no table.
+Its engine template declares `neighbor(dx, dy)`, the state of the cell `dx` east and `dy` south, and `moore_count(state)` and `von_neumann_count(state)`, the neighbours in `state` around the cell.
+
 ### `MOORE_ROW_MAJOR`
 
 ```rust

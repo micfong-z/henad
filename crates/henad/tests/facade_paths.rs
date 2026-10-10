@@ -169,7 +169,54 @@ mod named_only {
         henad::CodeOrigin,
         henad::ModelCode,
         henad::explore::ManifestModelCode,
+        henad::CodeDiagnostic,
+        henad::DiagnosticSeverity,
     );
+
+    /// Types of the grid rules that a host built with the `model-files` feature names.
+    #[cfg(feature = "model-files")]
+    type RuleTypes = (
+        henad::rules::GridRule,
+        henad::rules::RuleState,
+        henad::rules::RuleDeclaration,
+        henad::rules::CompiledGridRule,
+        henad::rules::ModelFile,
+        henad::rules::ModelFileError,
+        henad::rules::WgslFile<'static>,
+        henad::rules::ComposedWgsl,
+    );
+
+    /// Returns the entry of the Life starter, read back from its model file, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    fn life_entry() -> Result<henad::ModelEntry, henad::rules::ModelFileError> {
+        let file = henad::rules::ModelFile::from_rule(henad::rules::GridRule::life())?;
+        henad::rules::ModelFile::parse(&file.to_toml())?.entry()
+    }
+
+    /// Limits of a grid rule, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    const RULE_LIMITS: [usize; 3] = [
+        henad::rules::MAX_STEP_BYTES,
+        henad::rules::MAX_STATES,
+        henad::rules::MAX_PARAMS,
+    ];
+
+    /// Step of the Life starter, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    const LIFE_STEP: &str = henad::rules::LIFE_STEP;
+
+    /// Returns the composed text of `text`, or its diagnostics.
+    #[cfg(feature = "model-files")]
+    fn composed(text: &str) -> Result<String, Vec<henad::CodeDiagnostic>> {
+        henad::rules::compose_wgsl(
+            henad::rules::WgslFile {
+                path: "shader.wgsl",
+                text,
+            },
+            &[],
+        )
+        .map(henad::rules::ComposedWgsl::into_text)
+    }
 
     /// Number of steps that one command buffer of a GPU state may hold, for a host that encodes its own command
     /// buffers.

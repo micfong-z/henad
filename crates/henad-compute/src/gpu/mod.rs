@@ -6,12 +6,18 @@
 
 pub mod agent_engine;
 pub mod capacity;
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub mod compose;
 mod contracts;
 pub mod fault;
 pub mod grid_engine;
-mod grid_spec;
+pub(crate) mod grid_spec;
 pub mod limits;
 pub mod primitives;
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub mod runtime_grid;
 pub mod sim_thread;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stepping;

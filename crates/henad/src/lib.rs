@@ -10,6 +10,7 @@
 pub use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelSetError, ModelSetIter, ModelState};
 pub use henad_compute::fault::{Fault, FaultKind, install_panic_hook};
 pub use henad_compute::simulation::{ExportError, RunSetup, SetupError, Simulation, SimulationViews, StatSample};
+pub use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
 pub use henad_core::metadata::{Backend, LaneSpec, ModelMetadata, Structure};
 pub use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode, ModelSource};
 pub use henad_core::send_sync::{WasmNotSend, WasmNotSync};
@@ -171,8 +172,8 @@ pub mod authoring {
     pub use henad_core::authoring::model::network_model::*;
     pub use henad_core::grid::Grid2D;
     pub use henad_core::helpers::{
-        bool_param, choice_param, extract_bool, extract_choice, extract_f32, extract_u32, f32_param, stat,
-        stat_histogram, stat_vec2, u32_param,
+        bool_param, check_choice_options, choice_param, extract_bool, extract_choice, extract_f32, extract_u32,
+        f32_param, stat, stat_histogram, stat_vec2, u32_param,
     };
     pub use henad_core::network::Network;
     pub use henad_core::spatial_hash::{HashGrid, SpatialHash};
@@ -252,6 +253,23 @@ pub mod models {
         ants, boids, example_models, game_of_life, gpu_ants, gpu_boids, gpu_game_of_life, gpu_sir, sir, team_assembly,
         virus_network,
     };
+}
+
+/// Grid rules: GPU grid models declared as data, with a step written in WGSL and composed while the program runs.
+///
+/// A [`GridRule`](rules::GridRule) compiles into a [`CompiledGridRule`](rules::CompiledGridRule), whose entry joins a
+/// model set like any other. A [`ModelFile`](rules::ModelFile) holds a rule as one TOML file, and its canonical text is
+/// the rule's code identity in a results folder. [`compose_wgsl`](rules::compose_wgsl) composes any shader against the
+/// shared modules, as henad-build does at build time.
+#[cfg(feature = "model-files")]
+#[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
+pub mod rules {
+    pub use henad_compute::gpu::compose::{ComposedWgsl, WgslFile, compose_wgsl};
+    pub use henad_compute::gpu::runtime_grid::{
+        CompiledGridRule, GridRule, LIFE_STEP, MAX_GRID_SIDE, MAX_PARAMS, MAX_STATES, MAX_STEP_BYTES, RuleDeclaration,
+        RuleState,
+    };
+    pub use henad_explore::model_file::{FORMAT, FORMAT_VERSION, KIND_GPU_GRID, ModelFile, ModelFileError};
 }
 
 /// The app, opened over a host's own model set.

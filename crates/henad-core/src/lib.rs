@@ -7,6 +7,7 @@
 //! - [`model`] holds [`SimState`](model::SimState), the interface the runner drives.
 //! - [`explore`] plans sweeps and searches without an engine, and [`export`] writes a run's results.
 //! - [`provenance`] identifies the build of each crate and the source of each model.
+//! - [`diagnostic`] holds the findings about code a program reads while it runs, such as a grid rule's WGSL.
 //!
 //! A program depends on the `henad` facade instead. It re-exports these items under one module tree.
 //! The [authoring guide](https://micfong-z.github.io/henad/authoring/) explains each trait.
@@ -16,6 +17,7 @@
 
 pub mod action;
 pub mod authoring;
+pub mod diagnostic;
 pub mod explore;
 pub mod export;
 pub mod grid;

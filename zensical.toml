@@ -135,6 +135,7 @@ nav = [
             { "#50, 2026-10-10" = "developing/agent-record/20261010-50-owned-descriptors.md" },
             { "#51, 2026-10-10" = "developing/agent-record/20261010-51-code-identity.md" },
             { "#52, 2026-10-10" = "developing/agent-record/20261010-52-gpu-grid-spec.md" },
+            { "#53, 2026-10-10" = "developing/agent-record/20261010-53-runtime-grid-rules.md" },
         ] },
     ] },
 ]

@@ -13,12 +13,18 @@ readme = "README.md"
 keywords = ["agent-based-model", "simulation", "gpu", "wgpu", "rayon"]
 categories = ["simulation", "science", "concurrency"]
 
+[features]
+# `gpu::compose` and `gpu::runtime_grid`, which compose WGSL while the program runs and build grid rules from it.
+runtime-wgsl = ["dep:naga", "dep:naga_oil"]
+
 [dependencies]
 henad-core = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 flume = { workspace = true }
 log = { workspace = true }
+naga = { workspace = true, optional = true }
+naga_oil = { workspace = true, optional = true }
 pollster = { workspace = true }
 rayon = { workspace = true }
 web-time = { workspace = true }

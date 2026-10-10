@@ -38,7 +38,8 @@ inspection = ["eframe/inspection"]
 henad-core = { workspace = true }
 henad-compute = { workspace = true }
 henad-models = { workspace = true, optional = true }
-henad-explore = { workspace = true }
+# Grid rules and the model files that hold them.
+henad-explore = { workspace = true, features = ["model-files"] }
 egui = { workspace = true }
 egui_dock = { workspace = true }
 egui_extras = { workspace = true }

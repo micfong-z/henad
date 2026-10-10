@@ -2004,6 +2004,8 @@ dependencies = [
  "henad-build",
  "henad-core",
  "log",
+ "naga",
+ "naga_oil",
  "pollster 1.0.1",
  "rayon",
  "send_wrapper",

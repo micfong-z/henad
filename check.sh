@@ -5,7 +5,7 @@ set -eux
 cargo check --quiet --workspace --all-targets
 # Without atomics. henad-app then has no thread pool, as docs.rs builds it.
 cargo check --quiet -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features --lib --target wasm32-unknown-unknown
-# The facade with no feature and with all four. henad-cli sits behind a native target gate and never joins.
+# The facade with no feature and with all five. henad-cli sits behind a native target gate and never joins.
 cargo check --quiet -p henad --lib --target wasm32-unknown-unknown
 cargo check --quiet -p henad --all-features --lib --target wasm32-unknown-unknown
 cargo fmt --all -- --check
