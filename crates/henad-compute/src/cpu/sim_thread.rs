@@ -446,7 +446,7 @@ impl SimThread {
     ///
     /// `wake` is `None` only for a headless caller that polls on its own schedule.
     ///
-    /// A panic out of the loop is stored in `faults`. The GPU runner reads the same sink off its `GpuContext`.
+    /// A panic out of the loop is stored in `faults`.
     pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
         // The first snapshot gives the UI something to draw before play is pressed.
         let first = build_snapshot(None, &mut *state, 0.0, 0.0, 0, false);

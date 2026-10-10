@@ -249,13 +249,13 @@ impl BuildJob {
                 // `run_here` holds the error scopes and the panic catch around the whole build.
                 #[cfg(not(target_arch = "wasm32"))]
                 let thread = match pool {
-                    Some(pool) => GpuSimThread::new_in(pool, ctx, state, gpu_settings, Some(wake)),
-                    None => GpuSimThread::new(ctx, state, gpu_settings, Some(wake)),
+                    Some(pool) => GpuSimThread::new_in(pool, ctx, state, gpu_settings, Some(wake), faults),
+                    None => GpuSimThread::new(ctx, state, gpu_settings, Some(wake), faults),
                 };
                 #[cfg(target_arch = "wasm32")]
                 let thread = {
                     drop(pool);
-                    GpuSimThread::new(ctx, state, gpu_settings, Some(wake))
+                    GpuSimThread::new(ctx, state, gpu_settings, Some(wake), faults)
                 };
                 Ok(SimRunner::Gpu(thread))
             }
@@ -435,7 +435,7 @@ impl AppState {
     ///
     /// A runner that does not stop in time and a build thread abandoned while it builds are detached, kept until they
     /// end, and counted by [`Self::stopping_status`]. A build still waiting for older threads ends without building.
-    /// The sink of the CPU runner is replaced, so a detached runner's late fault reaches no later run.
+    /// The sink of the runner's panics is replaced, so a detached runner's late panic reaches no later run.
     pub(super) fn stop_simulation(&mut self) {
         if let Some(build) = self.building.take() {
             match build.phase.swap(PHASE_CANCELLED, Ordering::SeqCst) {

@@ -320,7 +320,8 @@ mod tests {
         }
     }
 
-    /// Returns the declarations of `bindings` as names and kinds, which compare.
+    /// Returns the declarations of `bindings` as name and kind pairs. Unlike the declarations, the pairs implement
+    /// `PartialEq`.
     fn declared(bindings: &[BindingDecl]) -> Vec<(&'static str, BindingKind)> {
         bindings.iter().map(|decl| (decl.name, decl.kind)).collect()
     }

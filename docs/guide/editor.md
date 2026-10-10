@@ -127,7 +127,8 @@ Opening a file does not apply it.
 Press Apply to install it.
 
 A model file holds data and WGSL alone, and its step runs only on the GPU, inside the checks above and the device's own.
-It is safe to share.
+It runs no native code.
+A heavy step on a large grid can still take long enough per tick to lose the GPU device, as the [model file reference](../reference/model-files.md#limits) describes.
 
 ## Limits
 

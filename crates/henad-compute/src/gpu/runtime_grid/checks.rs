@@ -15,7 +15,9 @@ use naga::{AddressSpace, Block, Expression, Function, Handle, Module, Span, Stat
 
 use super::template::{FieldType, PRIVATE_PREFIX, TEMPLATE_NAMES, constant_name};
 use super::{GridRule, MAX_GRID_SIDE, MAX_PARAMS, MAX_STATES, MAX_STEP_BYTES, RuleDeclaration};
-use crate::gpu::compose::{Composition, Located, code_lines, undecorate, words};
+use crate::gpu::compose::{
+    Composition, Located, code_lines, find_wgsl_only_line_break, undecorate, wgsl_only_line_break_message, words,
+};
 
 /// Most bytes the local variables of one function hold, WGSL's limit on the function address space.
 pub(crate) const MAX_FUNCTION_BYTES: u64 = 8192;
@@ -28,7 +30,7 @@ pub(crate) const MAX_PRIVATE_BYTES: u64 = 8192;
 /// call.
 pub(crate) const MAX_STEP_COST: u64 = 1 << 16;
 
-/// Grid parameter ids the engine puts in front of a rule's own.
+/// Grid parameter ids the engine puts in front of a rule's own parameter ids.
 const GRID_PARAM_IDS: &[&str] = &["grid_width", "grid_height"];
 
 /// Parameter ids the template keeps for itself besides WGSL's reserved words: the fields it fills in `Params`, and
@@ -41,7 +43,8 @@ pub(crate) const STEP_SIGNATURE: &str = "fn step_cell(cell: u32, rng: ptr<functi
 /// Engine buffer the rule's text reads, the uniform of its parameters.
 const PARAMS_BUFFER: &str = "params";
 
-/// What the declarations of a rule fix for its template and its hooks.
+/// State constants, parameter fields and initial shares that the declarations of a rule fix for its template and its
+/// hooks.
 #[derive(Debug)]
 pub(crate) struct Declared {
     /// Constant name of each state, in state order.
@@ -49,8 +52,8 @@ pub(crate) struct Declared {
     /// Name and type of each field of `Params` after [`PARAMS_HEAD`](super::template::PARAMS_HEAD), one per parameter
     /// of the rule.
     pub(crate) fields: Vec<(String, FieldType)>,
-    /// For each state with an initial share, the state and the position of its parameter among the rule's own,
-    /// in state order.
+    /// For each state with an initial share, the state and the position of its parameter among the rule's own
+    /// parameters, in state order.
     pub(crate) shares: Vec<(u32, usize)>,
     /// State a cell takes when no share claims it: the first state without an initial share.
     pub(crate) rest: u32,
@@ -59,8 +62,8 @@ pub(crate) struct Declared {
 /// A problem in a rule's declarations, with the declaration it is about when there is one.
 pub(crate) type DeclarationProblem = (Option<RuleDeclaration>, CodeDiagnostic);
 
-/// Checks the declarations of `rule`: its id, size, states and parameters. Returns the problems, or what the
-/// declarations fix when there are none.
+/// Checks the declarations of `rule`: its id, size, states and parameters. Returns the problems, or the [`Declared`]
+/// values when the declarations have no problem.
 pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<DeclarationProblem>> {
     let mut problems = Vec::new();
     if let Err(reason) = crate::entry::check_id_grammar(&rule.id) {
@@ -287,7 +290,8 @@ fn is_reserved_name(name: &str) -> bool {
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PRIVATE_PREFIX))
 }
 
-/// Checks the rule's text before it is composed: its size, the names it declares, its attributes and its `step_cell`.
+/// Checks the rule's text before it is composed: its size, its line breaks, the names it declares, its attributes and
+/// its `step_cell`.
 ///
 /// `constants` are the state constants, which the text cannot declare again. Each problem is placed in the text.
 pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic> {
@@ -296,6 +300,14 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
             "the rule's text holds {} bytes, and a rule's text holds at most {MAX_STEP_BYTES}",
             step.len()
         ))];
+    }
+    // naga ends a `//` comment at a line break such as U+2028, and the checks below would read the rest of the line
+    // as comment.
+    if let Some((start, character)) = find_wgsl_only_line_break(step) {
+        return vec![
+            CodeDiagnostic::error(wgsl_only_line_break_message(character))
+                .at(step, start..start + character.len_utf8()),
+        ];
     }
     let code = blank_comments(step);
     let bytes = code.as_bytes();
@@ -367,9 +379,7 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
         } else if depth == 0 && naga::keywords::wgsl::BUILTIN_IDENTIFIERS.contains(&name) {
             // A module-scope item of the same name would take the place of the built-in in the template's own lines.
             problems.push(place(
-                CodeDiagnostic::error(format!(
-                    "`{name}` is a predeclared name of WGSL, and a rule's module-scope items cannot take it"
-                )),
+                CodeDiagnostic::error(builtin_name_message(name)),
                 name_offset,
                 name.len(),
             ));
@@ -381,6 +391,11 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
         );
     }
     problems
+}
+
+/// Returns the message of a diagnostic about a module-scope item of the rule's text named `name`, a WGSL built-in.
+fn builtin_name_message(name: &str) -> String {
+    format!("`{name}` is a predeclared name of WGSL, and a rule's module-scope items cannot take it")
 }
 
 /// Returns the name a declaration keyword ending at byte `after` of `code` declares, with its offset.
@@ -435,6 +450,7 @@ pub(crate) fn check_module(composition: &Composition, start_offset: usize) -> Ve
         verdicts: HashMap::new(),
     };
     walker.check_globals();
+    walker.check_builtin_names();
     for (handle, constant) in module.constants.iter() {
         let Some(located) = walker.locate(module.constants.get_span(handle)) else {
             continue;
@@ -490,7 +506,7 @@ pub(crate) fn check_module(composition: &Composition, start_offset: usize) -> Ve
     walker.problems
 }
 
-/// Returns why a value or variable of type `inner` is refused, or `None` when it is allowed.
+/// Returns the reason a value or variable of type `inner` is refused, or `None` when it is allowed.
 fn type_problem(module: &Module, inner: &TypeInner) -> Option<String> {
     if contains_atomic(module, inner) {
         return Some("holds an atomic, and a grid rule uses no atomics".to_owned());
@@ -526,6 +542,8 @@ enum Finding {
     Loop,
     /// A write into the named variable. The cell does not own it.
     Write(String),
+    /// A pointer into the named variable, passed to a function. The cell does not own the variable.
+    Pointer(String),
     Atomic,
     Barrier,
     /// Any other statement outside the ones a step needs.
@@ -540,6 +558,10 @@ impl Finding {
             Self::Write(name) => {
                 format!("this writes `{name}`. A grid rule writes only its locals and `private` variables")
             }
+            Self::Pointer(name) => format!(
+                "this passes a pointer to `{name}`. A grid rule passes pointers only to its locals and `private` \
+                 variables"
+            ),
             Self::Atomic => "atomics are not allowed in a grid rule".to_owned(),
             Self::Barrier => "barriers are not allowed in a grid rule".to_owned(),
             Self::Statement => "this statement is not allowed in a grid rule".to_owned(),
@@ -551,6 +573,7 @@ impl Finding {
         let what = match self {
             Self::Loop => "holds a loop".to_owned(),
             Self::Write(name) => format!("writes `{name}`, memory the cell does not own"),
+            Self::Pointer(name) => format!("passes a pointer to `{name}`, memory the cell does not own"),
             Self::Atomic => "uses atomics".to_owned(),
             Self::Barrier => "uses a barrier".to_owned(),
             Self::Statement => "holds a statement a grid rule cannot use".to_owned(),
@@ -565,7 +588,8 @@ struct Walker<'a> {
     composition: &'a Composition,
     start_offset: usize,
     problems: Vec<CodeDiagnostic>,
-    /// First finding in each function outside the rule's text that the rule calls, `None` for one with none.
+    /// First finding in each function outside the rule's text that the rule calls, or `None` for a function without a
+    /// finding.
     verdicts: HashMap<Handle<Function>, Option<Finding>>,
 }
 
@@ -629,6 +653,44 @@ impl Walker<'_> {
                 self.problems.push(located.place(CodeDiagnostic::error(format!(
                     "`{name}` holds an atomic, and a grid rule uses no atomics"
                 ))));
+            }
+        }
+    }
+
+    /// Refuses each function, constant, `private` variable and struct of the rule's text named as a WGSL built-in.
+    ///
+    /// [`check_text`] refuses the same names in the text. This check reads the names naga parsed.
+    fn check_builtin_names(&mut self) {
+        let module = self.module;
+        let named = module
+            .functions
+            .iter()
+            .map(|(handle, function)| (module.functions.get_span(handle), function.name.as_deref()))
+            .chain(
+                module
+                    .constants
+                    .iter()
+                    .map(|(handle, constant)| (module.constants.get_span(handle), constant.name.as_deref())),
+            )
+            .chain(
+                module
+                    .global_variables
+                    .iter()
+                    .map(|(handle, global)| (module.global_variables.get_span(handle), global.name.as_deref())),
+            )
+            .chain(
+                module
+                    .types
+                    .iter()
+                    .map(|(handle, ty)| (module.types.get_span(handle), ty.name.as_deref())),
+            );
+        for (span, name) in named {
+            let Some(name) = name.filter(|name| naga::keywords::wgsl::BUILTIN_IDENTIFIERS.contains(name)) else {
+                continue;
+            };
+            if let Some(located) = self.locate(span) {
+                self.problems
+                    .push(located.place(CodeDiagnostic::error(builtin_name_message(name))));
             }
         }
     }
@@ -778,7 +840,20 @@ impl Walker<'_> {
                         findings.push((span, Finding::Write(name)));
                     }
                 }
-                Statement::Call { function: callee, .. } => self.check_call(*callee, span),
+                Statement::Call {
+                    function: callee,
+                    arguments,
+                    ..
+                } => {
+                    // A callee may write through a pointer argument into function or private memory. The pointer
+                    // has to reach memory the cell owns.
+                    for &argument in arguments {
+                        if let Some(name) = self.argument_target(function, argument, own) {
+                            findings.push((span, Finding::Pointer(name)));
+                        }
+                    }
+                    self.check_call(*callee, span);
+                }
                 Statement::Atomic { .. } | Statement::ImageAtomic { .. } => findings.push((span, Finding::Atomic)),
                 Statement::ControlBarrier(_) | Statement::MemoryBarrier(_) | Statement::WorkGroupUniformLoad { .. } => {
                     findings.push((span, Finding::Barrier));
@@ -809,21 +884,43 @@ impl Walker<'_> {
                     return (!private)
                         .then(|| argument.name.clone().unwrap_or_else(|| "a pointer argument".to_owned()));
                 }
-                Expression::GlobalVariable(global) => {
-                    let variable = &self.module.global_variables[*global];
-                    if own && variable.binding.is_some() {
-                        return None;
-                    }
-                    let in_text = self.locate(self.module.global_variables.get_span(*global)).is_some();
-                    let name = variable
-                        .name
-                        .as_deref()
-                        .map_or_else(|| "a shared variable".to_owned(), undecorate);
-                    return (variable.space != AddressSpace::Private || !in_text).then_some(name);
-                }
+                Expression::GlobalVariable(global) => return self.global_target(*global, own),
                 _ => return None,
             }
         }
+    }
+
+    /// Returns the name of the variable that `argument`, an argument of a call in `function`, points into when the
+    /// cell does not own it, or `None` for a value, a pointer argument or local of `function`, or a `private` variable
+    /// of the rule's text.
+    ///
+    /// In a function of the rule's text (`own`), a buffer of the engine is left to [`Self::check_buffers`].
+    fn argument_target(&self, function: &Function, argument: Handle<Expression>, own: bool) -> Option<String> {
+        let mut current = argument;
+        loop {
+            match &function.expressions[current] {
+                Expression::Access { base, .. } | Expression::AccessIndex { base, .. } => current = *base,
+                Expression::GlobalVariable(global) => return self.global_target(*global, own),
+                _ => return None,
+            }
+        }
+    }
+
+    /// Returns the name of `global` when the cell does not own it, or `None` for a `private` variable of the rule's
+    /// text.
+    ///
+    /// In a function of the rule's text (`own`), a buffer of the engine is left to [`Self::check_buffers`].
+    fn global_target(&self, global: Handle<naga::GlobalVariable>, own: bool) -> Option<String> {
+        let variable = &self.module.global_variables[global];
+        if own && variable.binding.is_some() {
+            return None;
+        }
+        let in_text = self.locate(self.module.global_variables.get_span(global)).is_some();
+        let name = variable
+            .name
+            .as_deref()
+            .map_or_else(|| "a shared variable".to_owned(), undecorate);
+        (variable.space != AddressSpace::Private || !in_text).then_some(name)
     }
 
     /// Checks a call at `at` to `callee`.

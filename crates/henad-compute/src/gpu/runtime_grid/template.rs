@@ -14,7 +14,7 @@ pub(crate) const WORKGROUP_SIZE: u32 = 16;
 /// Labels of the buffers a rule ping-pongs: the cells, and a one-word tick counter.
 pub(crate) const BUFFERS: &[&str] = &["state", "tick"];
 
-/// Names the template declares for the rule's text to use, which the text cannot declare again.
+/// Names the template declares for the rule's text to use. The text cannot declare them again.
 pub(crate) const TEMPLATE_NAMES: &[&str] = &[
     "Params",
     "params",

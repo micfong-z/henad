@@ -210,7 +210,7 @@ fn a_gpu_schedule_matches_export_stats() {
         batch_size: 16,
         ..GpuBatchSettings::default()
     };
-    let mut thread = GpuSimThread::new(ctx.clone(), build(), settings, None);
+    let mut thread = GpuSimThread::new(ctx.clone(), build(), settings, None, ctx.faults.clone());
     thread.set_schedule(schedule);
     thread.run_to(total);
     let reached = snapshot_at(|| thread.take_snapshot(), total).expect("the loop reaches its target");
@@ -324,7 +324,7 @@ fn a_replayed_gpu_run_from_a_result_set_matches_its_row() {
             batch_size: 16,
             ..GpuBatchSettings::default()
         };
-        let mut thread = GpuSimThread::new(ctx.clone(), state, settings, None);
+        let mut thread = GpuSimThread::new(ctx.clone(), state, settings, None, ctx.faults.clone());
         thread.set_schedule(replay.schedule.clone());
         thread.run_to(replay.ticks);
         let reached = snapshot_at(|| thread.take_snapshot(), replay.ticks).expect("the loop reaches its target");

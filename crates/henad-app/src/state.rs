@@ -136,8 +136,8 @@ pub struct AppState {
     pools: ModelPool,
     /// Generation of the pool the live runner runs in.
     runner_generation: u64,
-    /// Sink the live CPU runner stores a panic out of its loop in. A teardown replaces it, so a detached runner's late
-    /// fault reaches no later run.
+    /// Sink the live runner, CPU or GPU, stores a panic out of its loop in. A teardown replaces it, so a detached
+    /// runner's late panic reaches no later run.
     pub sim_faults: FaultSink,
     pub snapshot: Option<Snapshot>,
     pub sim_running: bool,
@@ -169,7 +169,7 @@ pub struct AppState {
     /// Host, adapter and device limits, collected once at startup.
     pub runtime: RuntimeInfo,
     /// Device and queue for rendering, present wherever the app runs. The renderer and a live GPU
-    /// simulation report their errors into `faults`, and a live CPU simulation into `sim_faults`. A GPU
+    /// simulation report their device errors into `faults`, and a live runner's panic goes to `sim_faults`. A GPU
     /// sweep runs on its own device, and its errors stay with the sweep. `gpu_ctx` below is a different
     /// thing, and gates GPU models.
     pub render_ctx: GpuContext,

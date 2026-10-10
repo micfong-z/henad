@@ -922,7 +922,10 @@ cargo builds a primary package with a static std, and every member linking it wo
     `#import` of a known module and a module's `#define_import_path`, and refuses every other `#`
     line, a `#`, `::` or `"` elsewhere in code, `enable`, `requires` and `diagnostic`, `virtual` and
     `override`, `@binding(auto)` and naga_oil's own name decoration. naga_oil panics decoding a
-    decoration it did not write, as on `override fn pcg_hashX_naga_oil_mod_X1X(`. The call into
+    decoration it did not write, as on `override fn pcg_hashX_naga_oil_mod_X1X(`. It also refuses
+    a vertical tab, a form feed, U+0085, U+2028 and U+2029 (`find_wgsl_only_line_break`). naga ends
+    a `//` comment at each, and naga_oil and the checks read the rest of the line as comment, so a
+    `fn min` behind one would pass every text check unread. The call into
     naga_oil also runs inside `catching`, a backstop on native. Diagnostics point into the caller's
     text (see the GPU traps). `runtime_composition_matches_build_time_shader_strings`
     (`gpu/tests/compose.rs`, henad-compute's seven entries) and henad-models'
@@ -939,7 +942,8 @@ cargo builds a primary package with a static std, and every member linking it wo
     words, `width`, `height`, `seed`, `tick`, the grid's two and `henad_`, a default within its
     bounds, a positive finite step, choice options that `check_choice_options` passes, percent on
     an f32 alone, one constant per state outside the template's names and WGSL's reserved words,
-    an f32 `initial`, one state without a share). Then the text (`MAX_STEP_BYTES`, a template name
+    an f32 `initial`, one state without a share). Then the text (`MAX_STEP_BYTES`, a line break
+    only naga reads, as in the directive check, a template name
     or a `henad_` name declared again, a WGSL predeclared name
     (`naga::keywords::wgsl::BUILTIN_IDENTIFIERS`) declared at module scope, where it would replace
     the built-in in the template's own lines, `@group`, `@binding` and an entry point, blanks or a
@@ -948,10 +952,13 @@ cargo builds a primary package with a static std, and every member linking it wo
     offset back from the template's `neighbor`, and walks the IR of every function of the text, and
     once each imported function it calls. The walk refuses a loop, an atomic, a barrier and any
     other statement but `if`, `switch`, a store and a call, a store outside the function's locals, a
-    pointer argument and the text's own `private` variables, and a reference to an engine buffer
-    other than `params`. A read of `state_out` or `tick_out` races the other cells, and one of
+    pointer argument and the text's own `private` variables, a call passed a pointer into any other
+    global, such as the template's `henad_cell`, and a reference to an engine buffer other than
+    `params`. A read of `state_out` or `tick_out` races the other cells, and one of
     `state_in` by index reads past the grid as the backend's bounds policy decides. It also refuses
     a module-scope variable outside `private`, a binding, an entry point other than `main`, a
+    function, constant, `private` variable or struct of the text named as a WGSL built-in
+    (`check_builtin_names`, behind the text check), a
     function whose locals pass `MAX_FUNCTION_BYTES` (8192), the shader's `private` variables past
     `MAX_PRIVATE_BYTES` (8192, the template's `henad_cell` included), a value or constant past 8192
     bytes, and a `step_cell` whose one call runs more than `MAX_STEP_COST` (65536) expressions and
@@ -976,6 +983,7 @@ cargo builds a primary package with a static std, and every member linking it wo
     `naga_oil_span_encoding_is_unchanged`, `a_syntax_error_points_at_the_user_line_and_column`,
     `an_error_inside_the_template_has_no_user_line`, `a_loop_in_user_code_is_refused_at_its_line`,
     `bindings_and_foreign_directives_in_user_text_are_refused`,
+    `a_line_break_only_wgsl_reads_is_refused`, `the_module_check_refuses_a_builtin_name`,
     `shared_writes_and_barriers_are_refused`, `oversized_arrays_and_text_are_refused`,
     `a_call_chain_past_the_work_limit_is_refused`, `a_param_named_seed_is_refused`,
     `a_parameter_its_kind_cannot_hold_is_refused`, `two_states_with_one_constant_name_are_refused`,
@@ -1425,8 +1433,8 @@ cargo builds a primary package with a static std, and every member linking it wo
   ("Previous run did not stop. It will keep running until the app quits."). The viewport's uploads
   (the grid, the density map, the agent and edge layers), the export's grid pixels and the Sweep
   tab's column builds run through `ModelPool::install`, so a stuck run in a retired pool never
-  stalls them. A CPU runner reports into `AppState::sim_faults`, which each teardown replaces, so a
-  detached runner's late fault reaches no later run. `src/tests/runaway.rs` holds
+  stalls them. A CPU or GPU runner reports a panic into `AppState::sim_faults`, which each teardown
+  replaces, so a detached runner's late panic reaches no later run. `src/tests/runaway.rs` holds
   `a_cpu_build_after_a_detach_runs_on_a_fresh_pool`,
   `a_slow_runner_is_waited_for_and_keeps_the_pool`,
   `a_viewport_frame_after_a_detach_runs_on_the_fresh_pool`,
