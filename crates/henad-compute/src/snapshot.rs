@@ -94,7 +94,7 @@ pub struct GridSnapshot {
     /// Palette index of each cell, row by row.
     pub cells: Vec<u8>,
     /// RGBA colour of each palette index.
-    pub palette: &'static [[u8; 4]],
+    pub palette: Vec<[u8; 4]>,
 }
 
 /// Prints the grid's size, not its cells.
@@ -120,7 +120,7 @@ pub struct EdgeSnapshot {
     /// One palette index per edge, or empty if every edge has the same colour.
     pub color: Vec<u8>,
     /// RGBA colour of each palette index.
-    pub palette: &'static [[u8; 4]],
+    pub palette: Vec<[u8; 4]>,
     /// Whether the edges are directed.
     pub directed: bool,
 }
@@ -152,7 +152,7 @@ pub struct PointSnapshot {
     /// so the buffer recycles like the rest.
     pub color: Vec<u8>,
     /// RGBA colour of each palette index.
-    pub palette: &'static [[u8; 4]],
+    pub palette: Vec<[u8; 4]>,
 }
 
 /// Prints the point count and the world, not the positions.

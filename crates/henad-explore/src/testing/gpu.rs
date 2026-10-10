@@ -87,7 +87,7 @@ pub(super) fn full_submission(entry: &ModelEntry, settings: &CheckSettings, ctx:
     let stats = whole.stats();
 
     let Some(sliced_stats) = sliced_stats else {
-        if !stats.is_empty() && stats.iter().all(|stat| stat.value.scalar() == 0.0) {
+        if !stats.is_empty() && stats.iter().all(|stat| stat.value().scalar() == 0.0) {
             return Err(format!(
                 "Every stat read back zero after a submission of {MAX_STEPS_PER_SUBMISSION} steps, as a dropped \
                  submission reads."

@@ -50,7 +50,7 @@ fn defaults(entry: &ModelEntry) -> Vec<ParamValue> {
     entry
         .param_descriptors()
         .iter()
-        .map(|desc| desc.kind.default_value())
+        .map(|desc| desc.kind().default_value())
         .collect()
 }
 

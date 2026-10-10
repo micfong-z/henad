@@ -1,5 +1,6 @@
 //! One-off steps a model offers the user, run between ticks.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::num::ParseIntError;
 
@@ -9,18 +10,40 @@ use crate::model::SimState;
 /// An action a model declares.
 ///
 /// The Parameters panel draws a button per entry, and `henad-cli` schedules an action with `--act`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A compiled model borrows its strings for `'static` through the `const fn` [`Self::new`]. Strings built at run
+/// time are owned through [`Self::owned`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionDescriptor {
-    /// Stable name that `--act` matches on.
-    pub id: &'static str,
-    /// Button label.
-    pub label: &'static str,
+    id: Cow<'static, str>,
+    label: Cow<'static, str>,
 }
 
 impl ActionDescriptor {
     /// Creates a descriptor from its id and its button label.
     pub const fn new(id: &'static str, label: &'static str) -> Self {
-        Self { id, label }
+        Self {
+            id: Cow::Borrowed(id),
+            label: Cow::Borrowed(label),
+        }
+    }
+
+    /// Creates a descriptor that owns its id and its button label.
+    pub fn owned(id: String, label: String) -> Self {
+        Self {
+            id: Cow::Owned(id),
+            label: Cow::Owned(label),
+        }
+    }
+
+    /// Stable name that `--act` matches on.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Button label.
+    pub fn label(&self) -> &str {
+        &self.label
     }
 }
 
@@ -111,7 +134,7 @@ pub enum ScheduleError {
         /// Id of the model.
         model: String,
         /// Action ids the model declares.
-        known: Vec<&'static str>,
+        known: Vec<String>,
     },
 }
 
@@ -164,8 +187,8 @@ impl Schedule {
                 raw: spec.clone(),
                 source,
             })?;
-            let Some(index) = actions.iter().position(|action| action.id == id) else {
-                let known: Vec<&'static str> = actions.iter().map(|action| action.id).collect();
+            let Some(index) = actions.iter().position(|action| action.id() == id) else {
+                let known: Vec<String> = actions.iter().map(|action| action.id().to_owned()).collect();
                 if known.is_empty() {
                     return Err(ScheduleError::NoActions {
                         model: model_id.to_owned(),
@@ -276,7 +299,7 @@ mod tests {
         }
         assert_eq!((RANDOMISE, CLEAR), (0, 1), "indices follow declaration order");
         assert_eq!(ACTION_SPECS.len(), 2);
-        assert_eq!(ACTION_SPECS[CLEAR].label, "Clear");
+        assert_eq!(ACTION_SPECS[CLEAR].label(), "Clear");
     }
 
     /// Two states built from one seed must agree, and two states built from different seeds must not.

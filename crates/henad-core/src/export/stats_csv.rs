@@ -54,7 +54,7 @@ struct Column {
     /// Header text, already escaped for CSV.
     header: String,
     /// Label of the series feeding the column.
-    label: &'static str,
+    label: String,
     /// Index into the `Vec<StatEntry>` returned by `stats()`.
     series: usize,
     part: Part,
@@ -71,10 +71,11 @@ impl Column {
                 stats.len()
             )));
         };
-        part_value(&entry.value, self.part).ok_or_else(|| {
+        part_value(entry.value(), self.part).ok_or_else(|| {
             StatsWriteError::Shape(format!(
                 "stat series '{}' changed shape mid-run at tick {tick}: column '{}' no longer applies",
-                entry.label, self.header
+                entry.label(),
+                self.header
             ))
         })
     }
@@ -110,19 +111,19 @@ impl StatColumns {
         for (series, entry) in stats.iter().enumerate() {
             let mut push = |suffix: Option<&str>, part: Part| {
                 let name = match suffix {
-                    Some(suffix) => format!("{}{SUFFIX_SEP}{suffix}", entry.label),
-                    None => entry.label.to_owned(),
+                    Some(suffix) => format!("{}{SUFFIX_SEP}{suffix}", entry.label()),
+                    None => entry.label().to_owned(),
                 };
                 let header = escape_field(&name);
                 columns.push(Column {
                     name,
                     header,
-                    label: entry.label,
+                    label: entry.label().to_owned(),
                     series,
                     part,
                 });
             };
-            match &entry.value {
+            match entry.value() {
                 StatValue::Scalar(_) => push(None, Part::Scalar),
                 StatValue::Vector2D { .. } => {
                     push(Some("x"), Part::VecX);
@@ -312,27 +313,15 @@ mod tests {
     const C: [u8; 4] = [0, 0, 0, 255];
 
     fn scalar(label: &'static str, v: f64) -> StatEntry {
-        StatEntry {
-            label,
-            value: StatValue::Scalar(v),
-            color: C,
-        }
+        StatEntry::new(label, StatValue::Scalar(v), C)
     }
 
     fn vec2(label: &'static str, x: f64, y: f64) -> StatEntry {
-        StatEntry {
-            label,
-            value: StatValue::Vector2D { x, y },
-            color: C,
-        }
+        StatEntry::new(label, StatValue::Vector2D { x, y }, C)
     }
 
     fn hist(label: &'static str, edges: Vec<f64>, counts: Vec<u64>) -> StatEntry {
-        StatEntry {
-            label,
-            value: StatValue::Histogram { edges, counts },
-            color: C,
-        }
+        StatEntry::new(label, StatValue::Histogram { edges, counts }, C)
     }
 
     /// Runs samples through a writer and returns the CSV text.
@@ -515,8 +504,8 @@ mod tests {
             .extract(0, &stats, &mut values)
             .expect("a sample fits its own plan");
         for entry in &stats {
-            let i = columns.resolve(entry.label).expect("every label resolves");
-            assert_eq!(values[i], entry.value.scalar(), "{}", entry.label);
+            let i = columns.resolve(entry.label()).expect("every label resolves");
+            assert_eq!(values[i], entry.value().scalar(), "{}", entry.label());
         }
         assert_eq!(columns.resolve("V"), columns.resolve("V.magnitude"));
         assert_eq!(columns.resolve("H"), columns.resolve("H.total"));
@@ -542,19 +531,15 @@ mod tests {
         /// A scalar beside a vector, so the replay has to reach both stores.
         fn sample(i: u64) -> Vec<StatEntry> {
             vec![
-                StatEntry {
-                    label: "Alive",
-                    value: StatValue::Scalar(i as f64 * 1.5),
-                    color: C,
-                },
-                StatEntry {
-                    label: "Average Velocity",
-                    value: StatValue::Vector2D {
+                StatEntry::new("Alive", StatValue::Scalar(i as f64 * 1.5), C),
+                StatEntry::new(
+                    "Average Velocity",
+                    StatValue::Vector2D {
                         x: i as f64,
                         y: -(i as f64) * 0.25,
                     },
-                    color: C,
-                },
+                    C,
+                ),
             ]
         }
 

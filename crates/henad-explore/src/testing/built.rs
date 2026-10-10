@@ -34,8 +34,8 @@ pub(super) fn apply_modes(entry: &ModelEntry, values: &[ParamValue], gpu: Option
         if accepted != descriptor.is_live() {
             disagreeing.push(format!(
                 "'{}' is declared {:?}, but the state {} a live edit",
-                descriptor.id,
-                descriptor.apply,
+                descriptor.id(),
+                descriptor.apply(),
                 if accepted { "accepts" } else { "refuses" }
             ));
         }
@@ -113,7 +113,7 @@ pub(super) fn actions(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&Gp
         .iter()
         .enumerate()
         .filter(|&(index, _)| !state.act(index))
-        .map(|(index, action)| format!("'{}' at index {index}", action.id))
+        .map(|(index, action)| format!("'{}' at index {index}", action.id()))
         .collect();
     if !refused.is_empty() {
         return Err(format!("The state refuses declared action {}.", refused.join(" and ")));

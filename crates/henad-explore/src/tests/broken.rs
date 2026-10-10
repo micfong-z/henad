@@ -655,7 +655,7 @@ impl SimState for BuggyGpuState {
         let mut stats = self.state.stats();
         if self.stopped.load(Ordering::Relaxed) {
             for stat in &mut stats {
-                stat.value = match &stat.value {
+                let zero = match stat.value() {
                     StatValue::Scalar(_) => StatValue::Scalar(0.0),
                     StatValue::Vector2D { .. } => StatValue::Vector2D { x: 0.0, y: 0.0 },
                     StatValue::Histogram { edges, counts } => StatValue::Histogram {
@@ -663,6 +663,7 @@ impl SimState for BuggyGpuState {
                         counts: vec![0; counts.len()],
                     },
                 };
+                *stat = StatEntry::new(stat.label().to_owned(), zero, stat.color());
             }
         }
         stats
@@ -755,10 +756,15 @@ impl GpuGridModel for OversizedGpuSir {
     fn param_descriptors() -> Vec<ParamDescriptor> {
         let mut descriptors = GpuSir::param_descriptors();
         for descriptor in &mut descriptors {
-            if let ParamKind::U32 { default, .. } = &mut descriptor.kind
-                && matches!(descriptor.id, "grid_width" | "grid_height")
+            if let ParamKind::U32 { min, max, .. } = *descriptor.kind()
+                && matches!(descriptor.id(), "grid_width" | "grid_height")
             {
-                *default = OVERSIZED_SIDE;
+                let kind = ParamKind::U32 {
+                    min,
+                    max,
+                    default: OVERSIZED_SIDE,
+                };
+                *descriptor = ParamDescriptor::new(descriptor.id().to_owned(), descriptor.label().to_owned(), kind);
             }
         }
         descriptors

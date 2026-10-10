@@ -74,11 +74,11 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
             continue;
         };
 
-        match (&desc.kind, val) {
+        match (desc.kind(), val) {
             (ParamKind::F32 { min, max, step, .. }, ParamValue::F32(v)) => {
                 let before = *v;
                 let mut slider = f32_slider(v, *min, *max, *step).text(text);
-                if desc.format == ParamFormat::Percent {
+                if desc.format() == ParamFormat::Percent {
                     slider = as_percent(slider, *step);
                 }
                 with_hint(ui.add(slider), hint);
@@ -101,10 +101,10 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
             }
             (ParamKind::Choice { options, .. }, ParamValue::Choice(v)) => {
                 let combo = egui::ComboBox::from_label(text)
-                    .selected_text(options.get(*v).copied().unwrap_or("?"))
+                    .selected_text(options.get(*v).unwrap_or("?"))
                     .show_ui(ui, |ui| {
                         for (j, opt) in options.iter().enumerate() {
-                            if ui.selectable_value(v, j, *opt).changed() {
+                            if ui.selectable_value(v, j, opt).changed() {
                                 param_changed.push((i, ParamValue::Choice(*v)));
                             }
                         }
@@ -235,10 +235,10 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
     ui.horizontal_wrapped(|ui| {
         for (i, action) in actions.iter().enumerate() {
             if ui
-                .add_enabled(loaded, egui::Button::new(action.label))
+                .add_enabled(loaded, egui::Button::new(action.label()))
                 .on_disabled_hover_text(format!(
                     "Press {MDI_RESTART}\u{a0}Build to run this model, then {}",
-                    action.label.to_lowercase()
+                    action.label().to_lowercase()
                 ))
                 .clicked()
             {
@@ -276,7 +276,7 @@ fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[ActionDescripto
     for (position, entry) in app.schedule.entries().iter().enumerate() {
         let label = actions
             .get(entry.index)
-            .map_or(entry.id.as_str(), |action| action.label);
+            .map_or(entry.id.as_str(), |action| action.label());
         let text = format!("{label} at tick {}", entry.tick);
         ui.horizontal(|ui| {
             if remove_button(ui, &text).clicked() {
@@ -291,12 +291,14 @@ fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[ActionDescripto
 
     let mut added = false;
     ui.horizontal(|ui| {
-        let selected = actions.get(app.schedule_action_input).map_or("", |action| action.label);
+        let selected = actions
+            .get(app.schedule_action_input)
+            .map_or("", |action| action.label());
         egui::ComboBox::from_id_salt("scheduled_action")
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 for (index, action) in actions.iter().enumerate() {
-                    ui.selectable_value(&mut app.schedule_action_input, index, action.label);
+                    ui.selectable_value(&mut app.schedule_action_input, index, action.label());
                 }
             });
         let tick_label = ui.label("at tick");
@@ -310,7 +312,7 @@ fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[ActionDescripto
     if added && let Some(action) = actions.get(app.schedule_action_input) {
         let entry = Scheduled {
             index: app.schedule_action_input,
-            id: action.id.to_owned(),
+            id: action.id().to_owned(),
             tick: app.schedule_tick_input,
         };
         app.schedule = with_entry(&app.schedule, entry);
@@ -356,9 +358,9 @@ fn is_pending_reload(app: &AppState, index: usize, desc: &ParamDescriptor) -> bo
 /// Returns the widget label, marked when the parameter needs a reload and coloured while an edit of it is pending.
 fn param_text(ui: &egui::Ui, desc: &ParamDescriptor, pending: bool) -> egui::RichText {
     if desc.is_live() {
-        return egui::RichText::new(desc.label);
+        return egui::RichText::new(desc.label());
     }
-    let text = egui::RichText::new(format!("{} {MDI_RESTART}", desc.label));
+    let text = egui::RichText::new(format!("{} {MDI_RESTART}", desc.label()));
     if pending {
         text.color(ui.visuals().warn_fg_color)
     } else {
@@ -395,11 +397,11 @@ fn decimal_value(value: f32) -> f64 {
 
 /// Returns `value` as the Parameters panel shows it, a fraction as a percentage.
 pub(crate) fn display_value(descriptor: &ParamDescriptor, value: &ParamValue) -> String {
-    match (&descriptor.kind, value) {
-        (ParamKind::F32 { step, .. }, ParamValue::F32(number)) if descriptor.format == ParamFormat::Percent => {
+    match (descriptor.kind(), value) {
+        (ParamKind::F32 { step, .. }, ParamValue::F32(number)) if descriptor.format() == ParamFormat::Percent => {
             percent_text(f64::from(*number), percent_decimals(*step))
         }
-        _ => format_value(&descriptor.kind, value),
+        _ => format_value(descriptor.kind(), value),
     }
 }
 
@@ -569,16 +571,16 @@ mod tests {
                 min,
                 max,
                 step,
-            } = descriptor.kind
+            } = *descriptor.kind()
             else {
                 continue;
             };
             let context = egui::Context::default();
             let mut value = default;
             for _ in 0..2 {
-                let changed = draw_slider(&context, &descriptor.kind, &mut value, &[]);
-                assert!(!changed, "{model} {}: drawing reports a change", descriptor.id);
-                assert_eq!(value.to_bits(), default.to_bits(), "{model} {}: drawn", descriptor.id);
+                let changed = draw_slider(&context, descriptor.kind(), &mut value, &[]);
+                assert!(!changed, "{model} {}: drawing reports a change", descriptor.id());
+                assert_eq!(value.to_bits(), default.to_bits(), "{model} {}: drawn", descriptor.id());
             }
             let Some(step) = step else {
                 continue;
@@ -593,14 +595,14 @@ mod tests {
             } else {
                 (egui::Key::ArrowLeft, egui::Key::ArrowRight)
             };
-            assert!(draw_slider(&context, &descriptor.kind, &mut value, &[there]));
-            assert_ne!(value, default, "{model} {}: the key moves the slider", descriptor.id);
-            assert!(draw_slider(&context, &descriptor.kind, &mut value, &[back]));
+            assert!(draw_slider(&context, descriptor.kind(), &mut value, &[there]));
+            assert_ne!(value, default, "{model} {}: the key moves the slider", descriptor.id());
+            assert!(draw_slider(&context, descriptor.kind(), &mut value, &[back]));
             assert_eq!(
                 value.to_bits(),
                 default.to_bits(),
                 "{model} {}: {value} after a step there and back",
-                descriptor.id
+                descriptor.id()
             );
             checked += 1;
         }
@@ -614,16 +616,16 @@ mod tests {
         let descriptor = sir
             .param_descriptors()
             .iter()
-            .find(|descriptor| descriptor.id == "recovery_rate")
+            .find(|descriptor| descriptor.id() == "recovery_rate")
             .expect("SIR declares a recovery rate");
         let context = egui::Context::default();
         let mut value = 0.04;
         for keys in [&[][..], &[], &[egui::Key::ArrowRight]] {
-            draw_slider(&context, &descriptor.kind, &mut value, keys);
+            draw_slider(&context, descriptor.kind(), &mut value, keys);
         }
         assert_eq!(
             Ok(ParamValue::F32(value)),
-            parse_value(&descriptor.kind, "0.05"),
+            parse_value(descriptor.kind(), "0.05"),
             "0.04 and one step is 0.05"
         );
     }
@@ -635,12 +637,12 @@ mod tests {
         let percent = sir
             .param_descriptors()
             .iter()
-            .find(|descriptor| descriptor.id == "initial_infected_pct")
+            .find(|descriptor| descriptor.id() == "initial_infected_pct")
             .expect("SIR declares its initially infected share");
         let rate = sir
             .param_descriptors()
             .iter()
-            .find(|descriptor| descriptor.id == "infection_rate")
+            .find(|descriptor| descriptor.id() == "infection_rate")
             .expect("SIR declares an infection rate");
         assert_eq!(display_value(percent, &ParamValue::F32(0.01)), "1.0%");
         assert_eq!(display_value(rate, &ParamValue::F32(0.3)), "0.3");

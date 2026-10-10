@@ -188,7 +188,7 @@ impl SearchDraft {
                 .stats
                 .get(position)
                 .or_else(|| schema.stats.first())
-                .map(|stat| format!("{}:{kind}", stat.label))
+                .map(|stat| format!("{}:{kind}", stat.label()))
                 .unwrap_or_default()
         };
         let axis = |column: String| PatternAxis::automatic(column, DEFAULT_AXIS_CELLS);
@@ -349,7 +349,7 @@ impl ActionDraft {
     pub fn label(&self, schema: &ModelSchema<'_>) -> String {
         schema.actions.get(self.action_index).map_or_else(
             || self.name.clone(),
-            |declared| action_label(declared.label, declared.id, &self.name),
+            |declared| action_label(declared.label(), declared.id(), &self.name),
         )
     }
 }
@@ -658,7 +658,7 @@ impl SweepDraft {
                 .iter()
                 .map(|descriptor| FactorDraft {
                     vary: false,
-                    levels_text: default_levels_text(&descriptor.kind),
+                    levels_text: default_levels_text(descriptor.kind()),
                 })
                 .collect(),
             search: SearchDraft::new(schema),
@@ -757,8 +757,8 @@ impl SweepDraft {
         let name_taken = |name: &str| self.actions.iter().any(|action| action.name == name);
         let name = (1..)
             .map(|count| match count {
-                1 => declared.id.to_owned(),
-                count => format!("{}_{count}", declared.id),
+                1 => declared.id().to_owned(),
+                count => format!("{}_{count}", declared.id()),
             })
             .find(|name| !name_taken(name))
             .unwrap_or_default();
@@ -818,7 +818,7 @@ impl SweepDraft {
             .filter_map(|action| {
                 let declared = schema.actions.get(action.action_index)?;
                 Some(ActionSpec {
-                    id: declared.id.to_owned(),
+                    id: declared.id().to_owned(),
                     name: action.name.clone(),
                     tick: action.tick,
                 })
@@ -835,13 +835,13 @@ impl SweepDraft {
         index: usize,
     ) -> Result<Factor, (IssueKind, String)> {
         let descriptor = &schema.params[index];
-        let missing = || match descriptor.kind {
+        let missing = || match descriptor.kind() {
             ParamKind::Bool { .. } | ParamKind::Choice { .. } => "Select at least one option".to_owned(),
-            _ if self.draws_ranges() => format!("Enter values, such as {}", whole_range_text(&descriptor.kind)),
-            _ => format!("Enter values, such as {}", levels_example(&descriptor.kind)),
+            _ if self.draws_ranges() => format!("Enter values, such as {}", whole_range_text(descriptor.kind())),
+            _ => format!("Enter values, such as {}", levels_example(descriptor.kind())),
         };
         let levels = row_levels(&self.factors[index].levels_text, self.draws_ranges(), missing)?;
-        FactorSpec::param(descriptor.id, levels)
+        FactorSpec::param(descriptor.id(), levels)
             .resolve(schema.params, actions, &self.factor_design())
             .map_err(|error| (IssueKind::Invalid, factor_message(&error)))
     }
@@ -908,7 +908,7 @@ impl SweepDraft {
                 match self.resolve_param(schema, &actions, index) {
                     Ok(factor) => {
                         if let Some(levels) = factor.levels() {
-                            listed.push((descriptor.label.to_owned(), levels.len()));
+                            listed.push((descriptor.label().to_owned(), levels.len()));
                         }
                     }
                     Err((kind, message)) => row_issues.push(DraftIssue {
@@ -936,7 +936,7 @@ impl SweepDraft {
             match self.resolve_ticks(schema, &actions, position) {
                 Ok(factor) => {
                     if let Some(levels) = factor.levels() {
-                        listed.push((format!("{} tick", declared.label), levels.len()));
+                        listed.push((format!("{} tick", declared.label()), levels.len()));
                     }
                 }
                 Err((kind, message)) => row_issues.push(DraftIssue {
@@ -1154,7 +1154,7 @@ impl SweepDraft {
         for (position, action) in self.actions.iter().enumerate() {
             match schema.actions.get(action.action_index) {
                 Some(declared) => spec.actions.push(ActionSpec {
-                    id: declared.id.to_owned(),
+                    id: declared.id().to_owned(),
                     name: action.name.clone(),
                     tick: action.tick,
                 }),
@@ -1436,7 +1436,7 @@ impl SweepDraft {
         let names_stat = |column: &String| {
             schema.stats.iter().any(|stat| {
                 column
-                    .strip_prefix(stat.label)
+                    .strip_prefix(stat.label())
                     .is_some_and(|part| part.is_empty() || part.starts_with('.'))
             })
         };
@@ -1444,7 +1444,7 @@ impl SweepDraft {
             .into_iter()
             .chain(self.last_stop_column.clone())
             .find(names_stat)
-            .or_else(|| schema.stats.first().map(|stat| stat.label.to_owned()))
+            .or_else(|| schema.stats.first().map(|stat| stat.label().to_owned()))
             .unwrap_or_default()
     }
 
@@ -1554,7 +1554,7 @@ impl SweepDraft {
             let action_index = schema
                 .actions
                 .iter()
-                .position(|declared| declared.id == action.id)
+                .position(|declared| declared.id() == action.id)
                 .ok_or_else(|| format!("{} has no action {}", schema.id, action.id))?;
             draft.actions.push(ActionDraft {
                 action_index,
@@ -1667,7 +1667,7 @@ impl SweepDraft {
         for (index, (factor, descriptor)) in self.factors.iter().zip(schema.params).enumerate() {
             if factor.vary {
                 match row_levels(&factor.levels_text, draws_ranges, || "Enter values".to_owned()) {
-                    Ok(levels) => params.push((index, FactorSpec::param(descriptor.id, levels))),
+                    Ok(levels) => params.push((index, FactorSpec::param(descriptor.id(), levels))),
                     Err((kind, message)) => issues.push(DraftIssue {
                         site: DraftSite::Factor(index),
                         kind,
@@ -1706,12 +1706,12 @@ impl SweepDraft {
             .zip(&self.factors)
             .filter(|((descriptor, _), factor)| {
                 if table_design {
-                    !table_columns.iter().any(|column| column == descriptor.id)
+                    !table_columns.iter().any(|column| column == descriptor.id())
                 } else {
                     !factor.vary
                 }
             })
-            .map(|((descriptor, value), _)| (descriptor.id.to_owned(), format_value(&descriptor.kind, value)))
+            .map(|((descriptor, value), _)| (descriptor.id().to_owned(), format_value(descriptor.kind(), value)))
             .collect()
     }
 
@@ -1858,7 +1858,7 @@ impl SweepDraft {
             FactorTarget::Param(id) => schema
                 .params
                 .iter()
-                .position(|descriptor| descriptor.id == *id)
+                .position(|descriptor| descriptor.id() == *id)
                 .map_or(DraftSite::Sweep, DraftSite::Factor),
             FactorTarget::Action(name) => self.action_site(name),
         }
@@ -1994,10 +1994,10 @@ fn vary_each_alone_blocks(
         let value = panel_values
             .get(index)
             .cloned()
-            .unwrap_or_else(|| descriptor.kind.default_value());
+            .unwrap_or_else(|| descriptor.kind().default_value());
         FactorSpec::param(
-            descriptor.id,
-            LevelSpec::Values(vec![format_value(&descriptor.kind, &value)]),
+            descriptor.id(),
+            LevelSpec::Values(vec![format_value(descriptor.kind(), &value)]),
         )
     };
     let baselines = |own_index: Option<usize>| -> Vec<FactorSpec> {
@@ -2128,7 +2128,7 @@ fn param_preview(descriptor: &ParamDescriptor, factor: &Factor) -> LevelPreview 
             FactorLevel::Tick(tick) => tick.to_string(),
         },
         |bound| {
-            let value = match descriptor.kind {
+            let value = match descriptor.kind() {
                 ParamKind::U32 { .. } => ParamValue::U32(bound as u32),
                 _ => ParamValue::F32(bound as f32),
             };
@@ -2461,11 +2461,7 @@ fn scalar_columns(schema: &ModelSchema<'_>) -> StatColumns {
     let stats: Vec<StatEntry> = schema
         .stats
         .iter()
-        .map(|stat| StatEntry {
-            label: stat.label,
-            value: StatValue::Scalar(0.0),
-            color: stat.color,
-        })
+        .map(|stat| stat.entry(StatValue::Scalar(0.0)))
         .collect();
     StatColumns::plan(&stats)
 }
@@ -2482,12 +2478,12 @@ fn param_index(schema: &ModelSchema<'_>, id: &str) -> Result<usize, String> {
     schema
         .params
         .iter()
-        .position(|descriptor| descriptor.id == id)
+        .position(|descriptor| descriptor.id() == id)
         .ok_or_else(|| format!("{} has no parameter {id}", schema.id))
 }
 
 fn read_value(schema: &ModelSchema<'_>, index: usize, text: &str) -> Result<ParamValue, String> {
-    parse_value(&schema.params[index].kind, text).map_err(|error| describe_error(&error))
+    parse_value(schema.params[index].kind(), text).map_err(|error| describe_error(&error))
 }
 
 /// Returns `error` and each of its causes, joined by colons, starting with a capital letter.
@@ -2575,7 +2571,7 @@ mod tests {
         entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect()
     }
 
@@ -2591,7 +2587,7 @@ mod tests {
         let mut values: Vec<ParamValue> = entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         values[0] = ParamValue::U32(32);
         values[1] = ParamValue::U32(32);
@@ -3161,7 +3157,7 @@ mod tests {
         let initial = schema
             .params
             .iter()
-            .position(|descriptor| descriptor.id == "initial_infected_pct")
+            .position(|descriptor| descriptor.id() == "initial_infected_pct")
             .expect("SIR has an initial share of infected cells");
         let mut draft = SweepDraft::new(&schema);
         draft.factors[initial].vary = true;
@@ -3587,7 +3583,7 @@ mod tests {
         let separation = schema
             .params
             .iter()
-            .position(|descriptor| descriptor.id == "separation")
+            .position(|descriptor| descriptor.id() == "separation")
             .expect("boids has a separation weight");
         draft.factors[separation].vary = true;
         draft.factors[separation].levels_text = "0:2".to_owned();
@@ -3658,7 +3654,7 @@ mod tests {
         let separation = schema
             .params
             .iter()
-            .position(|descriptor| descriptor.id == "separation")
+            .position(|descriptor| descriptor.id() == "separation")
             .expect("boids has a separation weight");
         draft.factors[separation].vary = true;
         draft.factors[separation].levels_text = "0:2".to_owned();
@@ -3913,7 +3909,7 @@ mod tests {
             "the editor and the Plan read the range as typed"
         );
         assert_eq!(EditorSegment::of("1:5000000", true), EditorSegment::Drawn);
-        let width = &schema.params[0].kind;
+        let width = schema.params[0].kind();
         assert_eq!(
             segment_text(EditorSegment::Drawn, "100:3000000", width),
             "100:3000000",
@@ -4003,7 +3999,7 @@ mod tests {
     fn an_integer_levels_example_resolves_as_vary_text() {
         for (min, max) in [(1, 2), (0, 1), (5, 5), (0, 100), (1, 7)] {
             let descriptor = henad_core::helpers::u32_param("count", "Count", min, min, max);
-            let example = super::levels_example(&descriptor.kind);
+            let example = super::levels_example(descriptor.kind());
             let factor = FactorSpec {
                 target: henad_core::explore::factor::FactorTarget::Param("count".to_owned()),
                 levels: LevelSpec::parse(&example).expect("the example parses"),

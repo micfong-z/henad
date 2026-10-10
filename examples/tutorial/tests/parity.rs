@@ -29,13 +29,13 @@ const SEED: u64 = 0x5EED_0DE5_0DE5_5EED;
 fn descriptor_shape(descs: &[ParamDescriptor]) -> Vec<(&str, &str, String, ParamApply, ParamFormat)> {
     descs
         .iter()
-        .map(|d| (d.id, d.label, format!("{:?}", d.kind), d.apply, d.format))
+        .map(|d| (d.id(), d.label(), format!("{:?}", d.kind()), d.apply(), d.format()))
         .collect()
 }
 
 /// Returns the labels and colours of the stat series, in declaration order.
 fn stat_shape(descs: &[StatDescriptor]) -> Vec<(&str, [u8; 4])> {
-    descs.iter().map(|d| (d.label, d.color)).collect()
+    descs.iter().map(|d| (d.label(), d.color())).collect()
 }
 
 // Game of Life.
@@ -47,7 +47,7 @@ fn run_grid<M: GridModel>(params: &[ParamValue], steps: usize) -> (Vec<u8>, Vec<
         state.step();
     }
     let cells = state.grid_view().expect("a grid model draws a grid").cells.to_vec();
-    let stats = state.stats().iter().map(|e| e.value.scalar().to_bits()).collect();
+    let stats = state.stats().iter().map(|e| e.value().scalar().to_bits()).collect();
     (cells, stats)
 }
 
@@ -122,7 +122,7 @@ where
         tally: *state.tally(),
         fields,
         display: state.field().display_cells().to_vec(),
-        stats: state.stats().iter().map(|e| e.value.scalar().to_bits()).collect(),
+        stats: state.stats().iter().map(|e| e.value().scalar().to_bits()).collect(),
     }
 }
 
@@ -232,15 +232,15 @@ struct NetworkSnapshot {
 fn network_params<N: NetworkModel>(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
     let descs = network_model_param_descriptors::<N>();
     for (id, _) in overrides {
-        assert!(descs.iter().any(|d| d.id == *id), "{} has no parameter '{id}'", N::ID);
+        assert!(descs.iter().any(|d| d.id() == *id), "{} has no parameter '{id}'", N::ID);
     }
     descs
         .iter()
         .map(|d| {
             overrides
                 .iter()
-                .find(|(id, _)| *id == d.id)
-                .map_or_else(|| d.kind.default_value(), |(_, v)| v.clone())
+                .find(|(id, _)| *id == d.id())
+                .map_or_else(|| d.kind().default_value(), |(_, v)| v.clone())
         })
         .collect()
 }
@@ -263,14 +263,14 @@ fn run_network<N: NetworkModel>(
                 Nudge::Set(id, value) => {
                     let index = descs
                         .iter()
-                        .position(|d| d.id == *id)
+                        .position(|d| d.id() == *id)
                         .unwrap_or_else(|| panic!("{} has no parameter '{id}'", N::ID));
                     assert!(state.set_param(index, value), "'{id}' is not a live parameter");
                 }
                 Nudge::Press(id) => {
                     let index = N::ACTIONS
                         .iter()
-                        .position(|a| a.id == *id)
+                        .position(|a| a.id() == *id)
                         .unwrap_or_else(|| panic!("{} has no action '{id}'", N::ID));
                     assert!(state.act(index), "the engine refused action '{id}'");
                 }
@@ -299,7 +299,7 @@ fn run_network<N: NetworkModel>(
         trail: trail.finish(),
         directed: state.graph().directed(),
         version: state.graph().version(),
-        stats: state.stats().iter().map(|e| e.value.scalar().to_bits()).collect(),
+        stats: state.stats().iter().map(|e| e.value().scalar().to_bits()).collect(),
     }
 }
 
@@ -421,8 +421,16 @@ fn the_virus_tutorial_declares_the_same_parameters_and_actions() {
     let shape = |descs: Vec<ParamDescriptor>| -> Vec<_> {
         descs
             .into_iter()
-            .filter(|d| d.id != "network")
-            .map(|d| (d.id, d.label, format!("{:?}", d.kind), d.apply, d.format))
+            .filter(|d| d.id() != "network")
+            .map(|d| {
+                (
+                    d.id().to_owned(),
+                    d.label().to_owned(),
+                    format!("{:?}", d.kind()),
+                    d.apply(),
+                    d.format(),
+                )
+            })
             .collect()
     };
     assert_eq!(
@@ -433,10 +441,10 @@ fn the_virus_tutorial_declares_the_same_parameters_and_actions() {
 
     let network = network_model_param_descriptors::<Shipped>()
         .into_iter()
-        .find(|d| d.id == "network")
+        .find(|d| d.id() == "network")
         .expect("the shipped model offers a generator choice");
     assert_eq!(
-        network.kind.default_value(),
+        network.kind().default_value(),
         ParamValue::Choice(0),
         "the page builds the random graph, so the shipped default has to be the random one"
     );
@@ -521,7 +529,7 @@ fn the_gpu_life_tutorial_matches_the_shipped_model() {
         ctx.queue.submit(Some(encoder.finish()));
         state.begin_stats_readback();
         state.poll_stats_readback(&ctx.device, true);
-        state.stats()[0].value.scalar() as u64
+        state.stats()[0].value().scalar() as u64
     }
 
     fn step<S: GpuSimState>(ctx: &GpuContext, state: &mut S) {
@@ -556,13 +564,13 @@ fn the_gpu_life_tutorial_matches_the_shipped_model() {
 fn gpu_foraging_params(num_agents: u32) -> Vec<ParamValue> {
     let mut values: Vec<ParamValue> = gpu_ants::GpuAnts::param_descriptors()
         .iter()
-        .map(|d| d.kind.default_value())
+        .map(|d| d.kind().default_value())
         .collect();
     values[NUM_AGENTS] = ParamValue::U32(num_agents);
     // Off its default, so the merge uniforms differ if either copy reads it from the wrong place.
     let Some(evaporation) = gpu_ants::GpuAnts::param_descriptors()
         .iter()
-        .position(|d| d.id == "evaporation")
+        .position(|d| d.id() == "evaporation")
     else {
         panic!("gpu_ants declares no evaporation parameter");
     };
@@ -664,7 +672,8 @@ fn the_gpu_foraging_tutorial_matches_the_shipped_model() {
     shipped.run_batched(STEPS);
     taught.refresh_stats();
     shipped.refresh_stats();
-    let stat_bits = |stats: Vec<StatEntry>| -> Vec<u64> { stats.iter().map(|e| e.value.scalar().to_bits()).collect() };
+    let stat_bits =
+        |stats: Vec<StatEntry>| -> Vec<u64> { stats.iter().map(|e| e.value().scalar().to_bits()).collect() };
     assert_eq!(
         stat_bits(taught.stats()),
         stat_bits(shipped.stats()),

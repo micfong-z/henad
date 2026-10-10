@@ -67,6 +67,8 @@ pub struct EdgeLayer {
     directed: bool,
     /// Version and length of the edge list currently in `instances`.
     uploaded: Option<(u64, usize)>,
+    /// Palette of the edge list currently in `instances`.
+    uploaded_palette: Vec<[u8; 4]>,
     /// Instances packed for the next copy to the GPU, reused across uploads.
     scratch: Vec<u32>,
 }
@@ -179,6 +181,7 @@ impl EdgeLayer {
             count: 0,
             directed: false,
             uploaded: None,
+            uploaded_palette: Vec::new(),
             scratch: Vec::new(),
         };
         layer.bind(pos_x, pos_y);
@@ -215,20 +218,22 @@ impl EdgeLayer {
         }));
     }
 
-    /// Copies the edge list into the GPU instance buffer, unless the buffer already holds the same version.
+    /// Copies the edge list into the GPU instance buffer, unless the buffer already holds the same version in the
+    /// same palette.
     pub fn upload(&mut self, edges: &EdgeSnapshot) {
         self.directed = edges.directed;
         let n = edges.src.len().min(edges.dst.len());
-        if self.uploaded == Some((edges.version, n)) {
+        if self.uploaded == Some((edges.version, n)) && self.uploaded_palette == edges.palette {
             return;
         }
         self.uploaded = Some((edges.version, n));
+        self.uploaded_palette.clone_from(&edges.palette);
         self.count = 0;
         if n == 0 || !self.grow_to(n) {
             return;
         }
 
-        let lut = palette_lut(edges.palette);
+        let lut = palette_lut(&edges.palette);
         let (src, dst, color) = (&edges.src, &edges.dst, &edges.color);
         self.scratch.clear();
         self.scratch.resize(n * WORDS, 0);

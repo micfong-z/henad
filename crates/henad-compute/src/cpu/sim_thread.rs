@@ -537,20 +537,24 @@ fn build_snapshot(
         Some(SnapshotView::Cpu(layers)) => layers,
         _ => CpuLayers::default(),
     };
-    let mut cells = recycled.grid.map(|g| g.cells).unwrap_or_default();
+    let (mut cells, mut grid_palette) = match recycled.grid {
+        Some(g) => (g.cells, g.palette),
+        None => (Vec::new(), Vec::new()),
+    };
     let mut spare_edges = recycled.edges;
-    let (mut pos_x, mut pos_y, mut color) = match recycled.points {
-        Some(p) => (p.pos_x, p.pos_y, p.color),
-        None => (Vec::new(), Vec::new(), Vec::new()),
+    let (mut pos_x, mut pos_y, mut color, mut point_palette) = match recycled.points {
+        Some(p) => (p.pos_x, p.pos_y, p.color, p.palette),
+        None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
     };
 
     let grid = state.grid_view().map(|gv| {
         refill(&mut cells, gv.cells);
+        refill(&mut grid_palette, gv.palette);
         GridSnapshot {
             width: gv.width,
             height: gv.height,
             cells: std::mem::take(&mut cells),
-            palette: gv.palette,
+            palette: std::mem::take(&mut grid_palette),
         }
     });
 
@@ -558,13 +562,14 @@ fn build_snapshot(
         refill(&mut pos_x, pv.pos_x);
         refill(&mut pos_y, pv.pos_y);
         refill(&mut color, pv.color.unwrap_or(&[]));
+        refill(&mut point_palette, pv.palette);
         PointSnapshot {
             pos_x: std::mem::take(&mut pos_x),
             pos_y: std::mem::take(&mut pos_y),
             world_w: pv.world_w,
             world_h: pv.world_h,
             color: std::mem::take(&mut color),
-            palette: pv.palette,
+            palette: std::mem::take(&mut point_palette),
         }
     });
 
@@ -577,7 +582,7 @@ fn build_snapshot(
             refill(&mut snap.color, ev.color.unwrap_or(&[]));
             snap.version = ev.version;
         }
-        snap.palette = ev.palette;
+        refill(&mut snap.palette, ev.palette);
         snap.directed = ev.directed;
         snap
     });
@@ -1322,12 +1327,15 @@ mod snapshot_tests {
     }
 
     /// A model with a field and agents. `build_snapshot` has to publish both.
+    ///
+    /// The model owns its palette, and its views borrow the palette for `'a`.
     struct Composite {
         cells: Vec<u8>,
         pos_x: Vec<f32>,
         pos_y: Vec<f32>,
         color: Vec<u8>,
         with_color: bool,
+        palette: Vec<[u8; 4]>,
     }
 
     impl Composite {
@@ -1338,6 +1346,7 @@ mod snapshot_tests {
                 pos_y: (0..agents).map(|i| i as f32 * 2.0).collect(),
                 color: (0..agents).map(|i| (i % 2) as u8).collect(),
                 with_color,
+                palette: PALETTE.to_vec(),
             }
         }
     }
@@ -1352,7 +1361,7 @@ mod snapshot_tests {
                 width: 4,
                 height: 3,
                 cells: &self.cells,
-                palette: PALETTE,
+                palette: &self.palette,
             })
         }
         fn point_view(&self) -> Option<PointView<'_>> {
@@ -1362,7 +1371,7 @@ mod snapshot_tests {
                 world_w: 4.0,
                 world_h: 3.0,
                 color: self.with_color.then_some(&self.color),
-                palette: PALETTE,
+                palette: &self.palette,
             })
         }
         fn stats(&self) -> Vec<StatEntry> {
@@ -1432,6 +1441,34 @@ mod snapshot_tests {
         assert_eq!(points.color, vec![0, 1, 0, 1, 0]);
         assert_eq!(points.color.capacity(), capacity, "the color lane reallocated");
         assert_eq!(points.pos_x.len(), 5);
+    }
+
+    /// Each publish copies the palettes, and a recycled snapshot takes the copies into the room the last one left.
+    #[test]
+    fn a_snapshot_palette_is_refilled_without_reallocating() {
+        let mut state = Composite::new(3, true);
+        let first = build_snapshot(None, &mut state, 0.0, 0.0, 1, false);
+        let grid = layers(&first.view).grid.as_ref().expect("field layer");
+        let points = layers(&first.view).points.as_ref().expect("agent layer");
+        let (grid_palette, point_palette) = (grid.palette.as_ptr(), points.palette.as_ptr());
+        assert_eq!(grid.palette, PALETTE);
+
+        state.palette[1] = [9, 9, 9, 255];
+        let second = build_snapshot(Some(first), &mut state, 0.0, 0.0, 2, false);
+        let grid = layers(&second.view).grid.as_ref().expect("field layer");
+        let points = layers(&second.view).points.as_ref().expect("agent layer");
+        assert_eq!(grid.palette, state.palette, "the edit did not reach the grid layer");
+        assert_eq!(points.palette, state.palette, "the edit did not reach the agent layer");
+        assert_eq!(grid.palette.as_ptr(), grid_palette, "the grid palette reallocated");
+        assert_eq!(points.palette.as_ptr(), point_palette, "the agent palette reallocated");
+
+        let mut graph = Graph::new(4, 1);
+        let first = build_snapshot(None, &mut graph, 0.0, 0.0, 1, false);
+        let edge_palette = layers(&first.view).edges.as_ref().expect("edges").palette.as_ptr();
+        let second = build_snapshot(Some(first), &mut graph, 0.0, 0.0, 2, false);
+        let edges = layers(&second.view).edges.as_ref().expect("edges");
+        assert_eq!(edges.palette, PALETTE);
+        assert_eq!(edges.palette.as_ptr(), edge_palette, "the edge palette reallocated");
     }
 
     #[test]

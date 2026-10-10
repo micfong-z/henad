@@ -48,7 +48,7 @@ impl RunSetup {
         let values = entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         Self {
             entry,
@@ -69,7 +69,7 @@ impl RunSetup {
     pub fn set(mut self, id: &str, value: impl Into<ParamValue>) -> Result<Self, SetupError> {
         let value = value.into();
         let index = param_index(&self.entry, id)?;
-        check_value(&self.entry.param_descriptors()[index].kind, &value).map_err(|error| param_error(id, error))?;
+        check_value(self.entry.param_descriptors()[index].kind(), &value).map_err(|error| param_error(id, error))?;
         self.values[index] = value;
         Ok(self)
     }
@@ -84,7 +84,7 @@ impl RunSetup {
     pub fn set_text(mut self, id: &str, text: &str) -> Result<Self, SetupError> {
         let index = param_index(&self.entry, id)?;
         let value =
-            parse_value(&self.entry.param_descriptors()[index].kind, text).map_err(|error| param_error(id, error))?;
+            parse_value(self.entry.param_descriptors()[index].kind(), text).map_err(|error| param_error(id, error))?;
         self.values[index] = value;
         Ok(self)
     }
@@ -153,13 +153,13 @@ impl RunSetup {
             });
         }
         for (descriptor, value) in descriptors.iter().zip(values) {
-            check_value(&descriptor.kind, value).map_err(|error| param_error(descriptor.id, error))?;
+            check_value(descriptor.kind(), value).map_err(|error| param_error(descriptor.id(), error))?;
         }
         let actions = entry.action_descriptors();
         for scheduled in schedule.entries() {
             if actions
                 .get(scheduled.index)
-                .is_none_or(|action| action.id != scheduled.id)
+                .is_none_or(|action| action.id() != scheduled.id)
             {
                 return Err(SetupError::UnknownAction {
                     id: scheduled.id.clone(),
@@ -248,7 +248,7 @@ fn param_index(entry: &ModelEntry, id: &str) -> Result<usize, SetupError> {
             known: entry
                 .param_descriptors()
                 .iter()
-                .map(|descriptor| descriptor.id)
+                .map(|descriptor| descriptor.id().to_owned())
                 .collect(),
         })
     })
@@ -634,7 +634,7 @@ impl Simulation {
         let value = value.into();
         let index = param_index(&self.setup.entry, id)?;
         let descriptor = &self.setup.entry.param_descriptors()[index];
-        check_value(&descriptor.kind, &value).map_err(|error| param_error(id, error))?;
+        check_value(descriptor.kind(), &value).map_err(|error| param_error(id, error))?;
         self.check_earlier_fault()?;
         // The state rejects a reload-only index itself, from the descriptors it was built with.
         let accepted = match &mut self.engine {
@@ -1013,8 +1013,8 @@ impl StatSample {
     pub fn get(&self, label: &str) -> Option<&StatValue> {
         self.entries
             .iter()
-            .find(|entry| entry.label == label)
-            .map(|entry| &entry.value)
+            .find(|entry| entry.label() == label)
+            .map(StatEntry::value)
     }
 
     /// Returns [`StatValue::scalar`] of stat `label`: a scalar's value, a vector's magnitude, a histogram's total

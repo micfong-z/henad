@@ -221,17 +221,17 @@ A **patch release** goes from 0.x.y to 0.x.(y+1) and stays compatible, as Cargo'
   So are the majors of the crates whose types appear in a public signature: `toml` and `serde_json` in `SpecFileError`, `LoadedSpec::to_toml` and the `Value` fields of `Manifest`, `rayon` in `ExecutionError::Pool`, `log` in `init_web_logger`, and, for henad-app on wasm32, `wasm-bindgen-rayon`.
 - Types whose fields authors fill by struct literal gain fields in a breaking release only: `BufferSpec`, `PassSpec`, `BindingDecl`, `SpringParams`, `Extent`, `LaneSpec`, `GpuGridAction`, `GpuAgentAction`, `ReduceSpec` and `DisplaySpec`.
   The enums that authors pick or match on, `Domain`, `Boundary`, `NeighborhoodKind` and `PassId`, gain variants in a breaking release only.
-- `ParamDescriptor`, `StatDescriptor`, `StatEntry` and `ActionDescriptor` keep public `&'static` fields in 0.3.
-  A later breaking release makes them private and owned, with `ModelMetadata` and the details of `Structure`.
-  Model code builds the descriptors through helpers and `const fn new`, and no model file changes with them.
+- `ParamDescriptor`, `StatDescriptor`, `StatEntry` and `ActionDescriptor` keep their fields private, and each holds its strings borrowed for `'static` or owned.
+  Model code builds the descriptors through helpers and `const fn new`, and a model read at run time through `ParamDescriptor::new`, `StatDescriptor::owned` and `ActionDescriptor::owned`.
+  The details inside `Structure` (`LaneSpec`, `BufferSpec` and `PassSpec`) stay `&'static`.
   The spec types (`SweepSpec`, `BlockSpec`, `RunSettings`, `MeasureSettings`, `SeedSettings`, `ActionSpec`, `FactorSpec` and the rest) stay exhaustive in 0.3, since hosts and tests build them by literal.
 - henad-models' items belong to the example models, and may change in any breaking release.
 - `ParamValue` converts from `f32`, `u32` and `bool` alone.
   Another `From` impl would break the unsuffixed literals callers pass.
 - A struct with public fields gains a field, and an enum gains a variant, in a breaking release only.
   That covers the enums that the engine produces and hosts match on, such as `ProgressEvent`, `SweepEvent`, `SweepWarning`, `RunStatus`, `StopReason` and `ModelState`, and the output structs such as `SweepRecord`, `SweepReport`, `ResultCounts` and `Manifest`.
-- `#[non_exhaustive]` marks the types built through `new`: `SweepOptions`, `SweepRunOptions`, `BenchmarkSettings`, `TestDeviceRequest` and `SimulationViews`.
-  It also marks the types that are lists by nature: the error enums `SetupError`, `ExportError`, `ModelSetError`, `ModelLookupError` and `ShaderBuildError`, `AppOpening`, `OpenAt`, `ModelCheck` and `SkipReason`.
+- `#[non_exhaustive]` marks the types built through `new`: `SweepOptions`, `SweepRunOptions`, `BenchmarkSettings`, `TestDeviceRequest`, `SimulationViews` and `ModelMetadata`.
+  It also marks the types that are lists by nature: the error enums `SetupError`, `ExportError`, `ModelSetError`, `ModelLookupError` and `ShaderBuildError`, `AppOpening`, `OpenAt`, `ModelCheck`, `SkipReason` and `Structure`.
   `ExploreError` and `SweepOutput` carry it as well, since their variants differ between targets.
   `FaultKind` carries it too, and gains a variant when the engine learns to report a new kind of fault.
   So do the benchmark's `BenchmarkEvent`, `BenchmarkReport` and `RepetitionReport`.

@@ -1094,7 +1094,7 @@ mod tests {
         let values: Vec<ParamValue> = entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         let report = ProbeReport::build(&entry, None, &values, None).unwrap_or_else(|error| panic!("{error}"));
         let mut draft = SweepDraft::new(&schema);

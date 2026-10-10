@@ -1497,15 +1497,19 @@ mod tests {
 
     use std::time::Duration;
 
+    use henad_core::action::ActionDescriptor;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::fingerprint::fnv1a64;
     use henad_core::explore::measure::MeasureError;
-    use henad_core::explore::plan::PlanError;
+    use henad_core::explore::plan::{ModelSchema, PlanError};
     use henad_core::explore::reducer::{ReducerError, ReducerKind, ReducerSpec};
     use henad_core::explore::seed::SeedScheme;
     use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
     use henad_core::explore::stop::StopSpec;
+    use henad_core::explore::value::format_value;
+    use henad_core::params::{ChoiceOptions, ParamDescriptor, ParamKind};
+    use henad_core::view::StatDescriptor;
 
     use super::{DesignTableFile, ExecutionTable, SpecFile, SpecFileError, SpecValue};
     use crate::exec::Concurrency;
@@ -1934,6 +1938,84 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
         let sir = models.get("sir").expect("sir is registered");
         let plan = spec.plan(&sir.schema()).expect("the spec plans");
         assert_eq!(plan.configs().len(), 43);
+    }
+
+    /// A spec planned against owned descriptors sets a choice by name, writes it back by name, and plans as it does
+    /// against the same declarations borrowed.
+    #[test]
+    fn an_owned_param_descriptor_round_trips_through_a_spec() {
+        let models = henad_models::example_models();
+        let virus = models.get("virus_network").expect("virus_network is registered");
+        let borrowed = virus.schema();
+        let params: Vec<ParamDescriptor> = borrowed
+            .params
+            .iter()
+            .map(|param| {
+                let kind = match param.kind() {
+                    ParamKind::Choice { options, default } => ParamKind::Choice {
+                        options: ChoiceOptions::new(options.iter().map(str::to_owned).collect()),
+                        default: *default,
+                    },
+                    kind => kind.clone(),
+                };
+                let owned = ParamDescriptor::new(param.id().to_owned(), param.label().to_owned(), kind);
+                if param.is_live() { owned } else { owned.on_reload() }
+            })
+            .collect();
+        let stats: Vec<StatDescriptor> = borrowed
+            .stats
+            .iter()
+            .map(|stat| StatDescriptor::owned(stat.label().to_owned(), stat.color()))
+            .collect();
+        let actions: Vec<ActionDescriptor> = borrowed
+            .actions
+            .iter()
+            .map(|action| ActionDescriptor::owned(action.id().to_owned(), action.label().to_owned()))
+            .collect();
+        let owned = ModelSchema {
+            id: borrowed.id,
+            params: &params,
+            stats: &stats,
+            actions: &actions,
+        };
+
+        let text = r#"
+model = "virus_network"
+
+[set]
+network = "Geometric"
+
+[[block]]
+design = "factorial"
+factors = [{ param = "virus_spread_chance", values = [0.01, 0.05] }]
+"#;
+        let spec = parse(text).and_then(SpecFile::into_spec).expect("the sweep reads");
+        let plan = spec.plan(&owned).expect("the spec plans against owned descriptors");
+        let network = params
+            .iter()
+            .position(|param| param.id() == "network")
+            .expect("virus_network declares a network");
+        for config in plan.configs() {
+            assert_eq!(
+                format_value(params[network].kind(), &config.params[network]),
+                "Geometric",
+                "the choice was set by name"
+            );
+        }
+        assert_eq!(
+            plan.plan_hash(),
+            spec.plan(&borrowed).expect("the spec plans").plan_hash()
+        );
+
+        let text = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
+        let back = parse(&text)
+            .and_then(SpecFile::into_spec)
+            .expect("the written file reads back");
+        assert_eq!(back, spec, "{text}");
+        assert_eq!(
+            back.plan(&owned).expect("the written spec plans").plan_hash(),
+            plan.plan_hash()
+        );
     }
 
     #[test]

@@ -26,13 +26,13 @@ pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
     let stats: Vec<Value> = entry
         .stat_descriptors()
         .iter()
-        .map(|stat| json!({ "label": stat.label, "color": stat.color }))
+        .map(|stat| json!({ "label": stat.label(), "color": stat.color() }))
         .collect();
     let actions: Vec<Value> = entry
         .action_descriptors()
         .iter()
         .enumerate()
-        .map(|(index, action)| json!({ "index": index, "id": action.id, "label": action.label }))
+        .map(|(index, action)| json!({ "index": index, "id": action.id(), "label": action.label() }))
         .collect();
     let mut schema = json!({
         "schema_version": SCHEMA_VERSION,
@@ -63,19 +63,19 @@ pub fn backend_name(backend: Backend) -> &'static str {
 fn param_json(index: usize, descriptor: &ParamDescriptor) -> Value {
     let mut param = Map::new();
     param.insert("index".to_owned(), json!(index));
-    param.insert("id".to_owned(), json!(descriptor.id));
-    param.insert("label".to_owned(), json!(descriptor.label));
-    let apply = match descriptor.apply {
+    param.insert("id".to_owned(), json!(descriptor.id()));
+    param.insert("label".to_owned(), json!(descriptor.label()));
+    let apply = match descriptor.apply() {
         ParamApply::Live => "live",
         ParamApply::OnReload => "reload",
     };
     param.insert("apply".to_owned(), json!(apply));
-    let format = match descriptor.format {
+    let format = match descriptor.format() {
         ParamFormat::Plain => "plain",
         ParamFormat::Percent => "percent",
     };
     param.insert("format".to_owned(), json!(format));
-    let fields = match descriptor.kind {
+    let fields = match descriptor.kind() {
         ParamKind::F32 {
             min,
             max,
@@ -84,12 +84,12 @@ fn param_json(index: usize, descriptor: &ParamDescriptor) -> Value {
         } => {
             let mut fields = json!({
                 "kind": "f32",
-                "min": f32_json(min),
-                "max": f32_json(max),
-                "default": f32_json(default),
+                "min": f32_json(*min),
+                "max": f32_json(*max),
+                "default": f32_json(*default),
             });
             if let Some(step) = step {
-                fields["step"] = f32_json(step);
+                fields["step"] = f32_json(*step);
             }
             fields
         }
@@ -99,8 +99,8 @@ fn param_json(index: usize, descriptor: &ParamDescriptor) -> Value {
         ParamKind::Bool { default } => json!({ "kind": "bool", "default": default }),
         ParamKind::Choice { options, default } => json!({
             "kind": "choice",
-            "options": options,
-            "default": options.get(default),
+            "options": options.iter().collect::<Vec<_>>(),
+            "default": options.get(*default),
             "default_index": default,
         }),
     };
@@ -170,7 +170,7 @@ mod tests {
             assert_eq!(params.len(), entry.param_descriptors().len(), "{}", entry.id());
             for (index, param) in params.iter().enumerate() {
                 assert_eq!(param["index"], json!(index));
-                assert_eq!(param["id"], json!(entry.param_descriptors()[index].id));
+                assert_eq!(param["id"], json!(entry.param_descriptors()[index].id()));
                 assert!(param["kind"].is_string() && param["default"] != json!(null), "{param}");
             }
             assert_eq!(schema["model"], json!(entry.id()));
@@ -188,7 +188,7 @@ mod tests {
         let defaults: Vec<_> = entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         let probe = ProbeReport::build(&entry, None, &defaults, None).expect("sir builds at its defaults");
         let schema = schema_json(&entry, Some(&probe));

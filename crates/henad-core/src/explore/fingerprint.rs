@@ -93,8 +93,8 @@ pub fn schema_hash(schema: &ModelSchema<'_>) -> u64 {
     hasher.write_str(schema.id);
     hasher.write_u64(schema.params.len() as u64);
     for param in schema.params {
-        hasher.write_str(param.id);
-        match param.kind {
+        hasher.write_str(param.id());
+        match param.kind() {
             ParamKind::F32 { min, max, default, .. } => {
                 hasher.write(&[0]);
                 for number in [min, max, default] {
@@ -104,30 +104,30 @@ pub fn schema_hash(schema: &ModelSchema<'_>) -> u64 {
             ParamKind::U32 { min, max, default } => {
                 hasher.write(&[1]);
                 for number in [min, max, default] {
-                    hasher.write_u64(u64::from(number));
+                    hasher.write_u64(u64::from(*number));
                 }
             }
             ParamKind::Bool { default } => {
                 hasher.write(&[2]);
-                hasher.write_u64(u64::from(default));
+                hasher.write_u64(u64::from(*default));
             }
             ParamKind::Choice { options, default } => {
                 hasher.write(&[3]);
                 hasher.write_u64(options.len() as u64);
-                for option in options {
+                for option in options.iter() {
                     hasher.write_str(option);
                 }
-                hasher.write_u64(default as u64);
+                hasher.write_u64(*default as u64);
             }
         }
     }
     hasher.write_u64(schema.stats.len() as u64);
     for stat in schema.stats {
-        hasher.write_str(stat.label);
+        hasher.write_str(stat.label());
     }
     hasher.write_u64(schema.actions.len() as u64);
     for action in schema.actions {
-        hasher.write_str(action.id);
+        hasher.write_str(action.id());
     }
     hasher.finish()
 }
@@ -353,8 +353,8 @@ mod tests {
     use crate::explore::search::{SearchAlgorithm, SearchSpec};
     use crate::explore::spec::{ActionSpec, BlockSpec, MeasureSettings, RunSettings, SweepSpec};
     use crate::explore::stop::StopSpec;
-    use crate::helpers::{f32_param, u32_param};
-    use crate::params::{ParamDescriptor, ParamValue};
+    use crate::helpers::{choice_param, f32_param, u32_param};
+    use crate::params::{ChoiceOptions, ParamDescriptor, ParamKind, ParamValue};
     use crate::view::StatDescriptor;
 
     const STATS: &[StatDescriptor] = &[StatDescriptor::new("Infected", [0, 0, 0, 255])];
@@ -403,6 +403,52 @@ mod tests {
         assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    /// Owned descriptors hash as the same declarations borrowed do. Otherwise results recorded under one could not
+    /// resume or merge under the other.
+    #[test]
+    fn owned_and_borrowed_descriptors_hash_alike() {
+        let mut borrowed_params = params();
+        borrowed_params.push(choice_param("neighborhood", "Neighborhood", &["moore", "von_neumann"], 1).percent());
+        let owned_params: Vec<ParamDescriptor> = borrowed_params
+            .iter()
+            .map(|param| {
+                let kind = match param.kind() {
+                    ParamKind::Choice { options, default } => ParamKind::Choice {
+                        options: ChoiceOptions::new(options.iter().map(str::to_owned).collect()),
+                        default: *default,
+                    },
+                    kind => kind.clone(),
+                };
+                ParamDescriptor::new(param.id().to_owned(), param.label().to_owned(), kind)
+            })
+            .collect();
+        let owned_stats: Vec<StatDescriptor> = STATS
+            .iter()
+            .map(|stat| StatDescriptor::owned(stat.label().to_owned(), stat.color()))
+            .collect();
+        let owned_actions: Vec<ActionDescriptor> = ACTIONS
+            .iter()
+            .map(|action| ActionDescriptor::owned(action.id().to_owned(), action.label().to_owned()))
+            .collect();
+        assert_eq!(owned_stats, STATS);
+        assert_eq!(owned_actions, ACTIONS);
+
+        let borrowed = schema(&borrowed_params);
+        let owned = ModelSchema {
+            id: "sir",
+            params: &owned_params,
+            stats: &owned_stats,
+            actions: &owned_actions,
+        };
+        assert_eq!(schema_hash(&owned), schema_hash(&borrowed));
+        let (from_owned, from_borrowed) = (
+            sweep().plan(&owned).expect("an owned schema plans"),
+            sweep().plan(&borrowed).expect("a borrowed schema plans"),
+        );
+        assert_eq!(from_owned.plan_hash(), from_borrowed.plan_hash());
+        assert_eq!(from_owned.results_fingerprint(), from_borrowed.results_fingerprint());
     }
 
     #[test]

@@ -87,10 +87,10 @@ fn encoding_matches_the_models_own_stats() {
         let counted = grid.iter().filter(|&&c| c == value).count() as f64;
         let entry = stats
             .iter()
-            .find(|e| e.label == name)
+            .find(|e| e.label() == name)
             .unwrap_or_else(|| panic!("no `{name}` stat"));
-        let StatValue::Scalar(reported) = entry.value else {
-            panic!("`{name}` is not a scalar: {:?}", entry.value)
+        let StatValue::Scalar(reported) = entry.value() else {
+            panic!("`{name}` is not a scalar: {:?}", entry.value())
         };
         assert!(
             (counted - reported).abs() < 0.5,

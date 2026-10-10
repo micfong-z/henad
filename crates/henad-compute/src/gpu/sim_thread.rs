@@ -925,11 +925,11 @@ mod tests {
             self.tick
         }
         fn stats(&self) -> Vec<StatEntry> {
-            vec![StatEntry {
-                label: "Landed",
-                value: StatValue::Scalar(if self.polls_left == 0 { 1.0 } else { 0.0 }),
-                color: [0; 4],
-            }]
+            vec![StatEntry::new(
+                "Landed",
+                StatValue::Scalar(if self.polls_left == 0 { 1.0 } else { 0.0 }),
+                [0; 4],
+            )]
         }
         fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
             false
@@ -1000,7 +1000,7 @@ mod tests {
         let mut rows: Vec<(u64, f64)> = Vec::new();
         let record = |rows: &mut Vec<(u64, f64)>| {
             if let Some(snap) = crate::runner::take_snapshot(&slot) {
-                let landed = snap.stats[0].value.scalar();
+                let landed = snap.stats[0].value().scalar();
                 match rows.last_mut() {
                     Some(row) if row.0 == snap.tick => row.1 = landed,
                     _ => rows.push((snap.tick, landed)),

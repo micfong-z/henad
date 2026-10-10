@@ -485,14 +485,14 @@ mod tests {
     fn ring(nodes: u32) -> NetworkModelState<Ring> {
         let mut params: Vec<ParamValue> = network_model_param_descriptors::<Ring>()
             .iter()
-            .map(|d| d.kind.default_value())
+            .map(|d| d.kind().default_value())
             .collect();
         params[NUM_NODES] = ParamValue::U32(nodes);
         NetworkModelState::<Ring>::from_params(&params)
     }
 
     fn lit(state: &NetworkModelState<Ring>) -> f64 {
-        match &state.stats()[0].value {
+        match state.stats()[0].value() {
             StatValue::Scalar(v) => *v,
             other => panic!("Lit is not a scalar: {other:?}"),
         }
@@ -510,10 +510,10 @@ mod tests {
     #[test]
     fn the_engine_prepends_the_size_parameters() {
         let descs = network_model_param_descriptors::<Ring>();
-        assert_eq!(descs[0].id, "num_agents", "the scaling scripts look this up by id");
-        assert_eq!(descs[0].label, "Number of Nodes");
-        assert_eq!(descs[1].id, "world_width");
-        assert_eq!(descs[2].id, "world_height");
+        assert_eq!(descs[0].id(), "num_agents", "the scaling scripts look this up by id");
+        assert_eq!(descs[0].label(), "Number of Nodes");
+        assert_eq!(descs[1].id(), "world_width");
+        assert_eq!(descs[2].id(), "world_height");
         assert!(
             descs.iter().all(|d| !d.is_live()),
             "size is fixed once a state is built"
@@ -612,7 +612,7 @@ mod tests {
     fn population_counts_the_living_and_jobs_count_the_slots() {
         let params: Vec<ParamValue> = network_model_param_descriptors::<Churn>()
             .iter()
-            .map(|d| d.kind.default_value())
+            .map(|d| d.kind().default_value())
             .collect();
         let mut state = NetworkModelState::<Churn>::from_params(&params);
         assert_eq!(state.population(), 4);
@@ -642,7 +642,7 @@ mod tests {
     fn a_retired_node_keeps_its_lane_row_and_loses_its_position() {
         let params: Vec<ParamValue> = network_model_param_descriptors::<Churn>()
             .iter()
-            .map(|d| d.kind.default_value())
+            .map(|d| d.kind().default_value())
             .collect();
         let mut state = NetworkModelState::<Churn>::from_params(&params);
         state.step();

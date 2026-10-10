@@ -484,10 +484,10 @@ impl SweepSpec {
             let index = schema
                 .actions
                 .iter()
-                .position(|declared| declared.id == action.id)
+                .position(|declared| declared.id() == action.id)
                 .ok_or_else(|| PlanError::UnknownAction {
                     id: action.id.clone(),
-                    known: schema.actions.iter().map(|declared| declared.id).collect(),
+                    known: schema.actions.iter().map(|declared| declared.id().to_owned()).collect(),
                 })?;
             indices.push(index);
         }
@@ -529,7 +529,7 @@ impl SweepSpec {
         };
         for factor in &factors {
             if let FactorSlot::Param(param) = factor.slot {
-                let id = schema.params[param].id;
+                let id = schema.params[param].id();
                 if self.fixed.iter().any(|(fixed_id, _)| fixed_id == id) {
                     return Err(PlanError::FixedAndVaried {
                         id: id.to_owned(),
@@ -590,7 +590,7 @@ pub enum PlanError {
         /// Action id as given.
         id: String,
         /// Action ids the model declares.
-        known: Vec<&'static str>,
+        known: Vec<String>,
     },
     /// A name that two actions of the spec share.
     DuplicateActionName {
@@ -604,7 +604,7 @@ pub enum PlanError {
         /// Parameter id as given.
         id: String,
         /// Parameter ids the model declares.
-        known: Vec<&'static str>,
+        known: Vec<String>,
     },
     /// Parameter `id`, varied in block `block` and fixed as well.
     FixedAndVaried {

@@ -91,14 +91,14 @@ fn column_slot(
             .map(FactorSlot::Action),
         None => params
             .iter()
-            .position(|descriptor| descriptor.id == column)
+            .position(|descriptor| descriptor.id() == column)
             .map(FactorSlot::Param),
     };
     slot.ok_or_else(|| DesignTableError::UnknownColumn {
         column: column.to_owned(),
         known: params
             .iter()
-            .map(|descriptor| descriptor.id.to_owned())
+            .map(|descriptor| descriptor.id().to_owned())
             .chain(actions.iter().map(ActionSpec::column_name))
             .collect(),
     })
@@ -111,7 +111,7 @@ fn table_level(
     params: &[ParamDescriptor],
 ) -> Result<FactorLevel, DesignTableValueError> {
     match slot {
-        FactorSlot::Param(index) => parse_value(&params[index].kind, field)
+        FactorSlot::Param(index) => parse_value(params[index].kind(), field)
             .map(FactorLevel::Param)
             .map_err(DesignTableValueError::Param),
         FactorSlot::Action(_) => field
@@ -262,7 +262,7 @@ mod tests {
     fn base() -> Config {
         Config {
             block: 0,
-            params: params().iter().map(|param| param.kind.default_value()).collect(),
+            params: params().iter().map(|param| param.kind().default_value()).collect(),
             action_ticks: vec![40],
         }
     }
@@ -281,14 +281,14 @@ mod tests {
     /// Returns `configs` as a design table over every parameter and action.
     fn table(configs: &[Config]) -> String {
         let params = params();
-        let mut header: Vec<String> = params.iter().map(|param| param.id.to_owned()).collect();
+        let mut header: Vec<String> = params.iter().map(|param| param.id().to_owned()).collect();
         header.extend(actions().iter().map(ActionSpec::column_name));
         let mut lines = vec![header.join(",")];
         for config in configs {
             let mut fields: Vec<String> = params
                 .iter()
                 .zip(&config.params)
-                .map(|(param, value)| escape_field(&format_value(&param.kind, value)))
+                .map(|(param, value)| escape_field(&format_value(param.kind(), value)))
                 .collect();
             fields.extend(config.action_ticks.iter().map(ToString::to_string));
             lines.push(fields.join(","));

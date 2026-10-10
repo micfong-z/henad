@@ -208,7 +208,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         passes.push((format!("{}_reduce_leaf", M::ID), storage_bindings(M::REDUCE.bindings)));
         for action in M::ACTIONS {
             passes.push((
-                format!("{}_action_{}", M::ID, action.desc.id),
+                format!("{}_action_{}", M::ID, action.desc.id()),
                 storage_bindings(action.pass.bindings),
             ));
         }
@@ -259,7 +259,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             .iter()
             .map(|spec| (spec.label, spec.shader))
             .chain([("reduce leaf", M::REDUCE.shader)])
-            .chain(M::ACTIONS.iter().map(|action| (action.desc.id, action.pass.shader)))
+            .chain(M::ACTIONS.iter().map(|action| (action.desc.id(), action.pass.shader)))
         {
             assert_workgroup_size(M::ID, pass, shader, linear);
         }
@@ -416,7 +416,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
                 let invocations = spec.domain.invocations(&geom);
                 build.pass_in_place::<M>(
                     PassId::Action(i),
-                    &format!("action_{}", action.desc.id),
+                    &format!("action_{}", action.desc.id()),
                     spec.shader,
                     spec.bindings,
                     linear_dispatch(invocations),

@@ -128,7 +128,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
         ];
         for action in M::ACTIONS {
             passes.push((
-                format!("{}_action_{}", M::ID, action.desc.id),
+                format!("{}_action_{}", M::ID, action.desc.id()),
                 storage_bindings(action.bindings),
             ));
         }
@@ -176,7 +176,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
             ("reduce", M::REDUCE_SHADER),
         ]
         .into_iter()
-        .chain(M::ACTIONS.iter().map(|action| (action.desc.id, action.shader)))
+        .chain(M::ACTIONS.iter().map(|action| (action.desc.id(), action.shader)))
         {
             assert_workgroup_size(M::ID, pass, shader, square);
         }
@@ -280,7 +280,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
                 uniform_buffer(
                     device,
                     queue,
-                    &format!("{}_action_{}_params", M::ID, action.desc.id),
+                    &format!("{}_action_{}_params", M::ID, action.desc.id()),
                     &M::action_params_bytes(i, width, height, params, action_seed),
                 )
             })
@@ -354,7 +354,7 @@ impl<M: GpuGridModel> GpuGridState<M> {
             .iter()
             .enumerate()
             .map(|(i, action)| {
-                let label = format!("action_{}", action.desc.id);
+                let label = format!("action_{}", action.desc.id());
                 let (pipeline, (bind_a, bind_b)) = build(&label, action.shader, action.bindings, Some(i));
                 ActionPass {
                     label: format!("{}_{label}", M::ID),

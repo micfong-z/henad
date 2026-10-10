@@ -1,7 +1,7 @@
 //! Builders for parameter descriptors and stat entries, parameter value readers, and
 //! [`fmt_bytes`].
 
-use crate::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+use crate::params::{ChoiceOptions, ParamDescriptor, ParamKind, ParamValue};
 use crate::view::{StatEntry, StatValue};
 
 /// Formats a byte count in B, KB, MB or GB, counting in powers of 1024, to one decimal place above B.
@@ -28,40 +28,26 @@ pub fn f32_param(
     max: f32,
     step: Option<f32>,
 ) -> ParamDescriptor {
-    ParamDescriptor {
+    ParamDescriptor::new(
         id,
         label,
-        kind: ParamKind::F32 {
+        ParamKind::F32 {
             min,
             max,
             default,
             step,
         },
-        apply: ParamApply::Live,
-        format: ParamFormat::Plain,
-    }
+    )
 }
 
 /// Returns a descriptor for a live `u32` parameter.
 pub fn u32_param(id: &'static str, label: &'static str, default: u32, min: u32, max: u32) -> ParamDescriptor {
-    ParamDescriptor {
-        id,
-        label,
-        kind: ParamKind::U32 { min, max, default },
-        apply: ParamApply::Live,
-        format: ParamFormat::Plain,
-    }
+    ParamDescriptor::new(id, label, ParamKind::U32 { min, max, default })
 }
 
 /// Returns a descriptor for a live switch.
 pub fn bool_param(id: &'static str, label: &'static str, default: bool) -> ParamDescriptor {
-    ParamDescriptor {
-        id,
-        label,
-        kind: ParamKind::Bool { default },
-        apply: ParamApply::Live,
-        format: ParamFormat::Plain,
-    }
+    ParamDescriptor::new(id, label, ParamKind::Bool { default })
 }
 
 /// Returns a descriptor for a choice among `options`, starting at option `default`.
@@ -92,13 +78,14 @@ pub fn choice_param(
             "choice '{id}' has option '{option}' twice"
         );
     }
-    ParamDescriptor {
+    ParamDescriptor::new(
         id,
         label,
-        kind: ParamKind::Choice { options, default },
-        apply: ParamApply::Live,
-        format: ParamFormat::Plain,
-    }
+        ParamKind::Choice {
+            options: ChoiceOptions::from_static(options),
+            default,
+        },
+    )
 }
 
 // Parameter value readers.
@@ -139,29 +126,17 @@ pub fn extract_choice(params: &[ParamValue], index: usize, default: usize) -> us
 
 /// Returns an entry holding a scalar.
 pub fn stat(label: &'static str, value: f64, color: [u8; 4]) -> StatEntry {
-    StatEntry {
-        label,
-        value: StatValue::Scalar(value),
-        color,
-    }
+    StatEntry::new(label, StatValue::Scalar(value), color)
 }
 
 /// Returns an entry holding a 2D vector.
 pub fn stat_vec2(label: &'static str, x: f64, y: f64, color: [u8; 4]) -> StatEntry {
-    StatEntry {
-        label,
-        value: StatValue::Vector2D { x, y },
-        color,
-    }
+    StatEntry::new(label, StatValue::Vector2D { x, y }, color)
 }
 
 /// Returns an entry holding a histogram, in which `counts[i]` counts the values in `[edges[i], edges[i + 1])`.
 pub fn stat_histogram(label: &'static str, edges: Vec<f64>, counts: Vec<u64>, color: [u8; 4]) -> StatEntry {
-    StatEntry {
-        label,
-        value: StatValue::Histogram { edges, counts },
-        color,
-    }
+    StatEntry::new(label, StatValue::Histogram { edges, counts }, color)
 }
 
 #[cfg(test)]
@@ -171,18 +146,18 @@ mod tests {
     #[test]
     fn param_builders() {
         let p = f32_param("test", "Test", 0.5, 0.0, 1.0, Some(0.1));
-        assert_eq!(p.id, "test");
-        assert_eq!(p.label, "Test");
-        assert_eq!(p.kind.default_value(), ParamValue::F32(0.5));
+        assert_eq!(p.id(), "test");
+        assert_eq!(p.label(), "Test");
+        assert_eq!(p.kind().default_value(), ParamValue::F32(0.5));
 
         let p = u32_param("count", "Count", 10, 1, 100);
-        assert_eq!(p.kind.default_value(), ParamValue::U32(10));
+        assert_eq!(p.kind().default_value(), ParamValue::U32(10));
     }
 
     #[test]
     fn choice_builder_takes_named_options() {
         let p = choice_param("shape", "Shape", &["square", "hexagon"], 1);
-        assert_eq!(p.kind.default_value(), ParamValue::Choice(1));
+        assert_eq!(p.kind().default_value(), ParamValue::Choice(1));
     }
 
     #[test]

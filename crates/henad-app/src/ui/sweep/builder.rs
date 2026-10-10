@@ -302,9 +302,9 @@ fn execution_summary(draft: &SweepDraft) -> String {
 ///
 /// Labels of collapsed sections count too, so opening a section moves no column. A design's own rows count only
 /// under that design.
-fn form_labels(ui: &egui::Ui, draft: &SweepDraft, schema: &ModelSchema<'_>) -> Vec<(&'static str, f32)> {
+fn form_labels<'a>(ui: &egui::Ui, draft: &SweepDraft, schema: &ModelSchema<'a>) -> Vec<(&'a str, f32)> {
     let indent = checkbox_indent(ui);
-    let mut labels: Vec<(&'static str, f32)> = Vec::new();
+    let mut labels: Vec<(&'a str, f32)> = Vec::new();
     match draft.mode {
         DraftMode::Sweep => {
             labels.push(("Design", 0.0));
@@ -317,7 +317,7 @@ fn form_labels(ui: &egui::Ui, draft: &SweepDraft, schema: &ModelSchema<'_>) -> V
         }
         DraftMode::Search => labels.extend(search_labels(ui, draft.search.algorithm)),
     }
-    labels.extend(schema.params.iter().map(|descriptor| (descriptor.label, indent)));
+    labels.extend(schema.params.iter().map(|descriptor| (descriptor.label(), indent)));
     if !draft.actions.is_empty() {
         labels.extend([("Action", 0.0), ("Tick", 0.0)]);
     }
@@ -544,7 +544,7 @@ pub fn design_formula(
         .zip(&draft.factors)
         .zip(param_previews)
         .filter(|((_, factor), _)| factor.vary)
-        .map(|((descriptor, _), preview)| (descriptor.label.to_owned(), preview.as_ref()));
+        .map(|((descriptor, _), preview)| (descriptor.label().to_owned(), preview.as_ref()));
     let ticks = draft
         .actions
         .iter()
@@ -670,8 +670,8 @@ pub fn table_note(table: &DesignTableDraft, draft: &SweepDraft, schema: &ModelSc
             schema
                 .params
                 .iter()
-                .find(|descriptor| descriptor.id == column)
-                .map(|descriptor| descriptor.label.to_owned())
+                .find(|descriptor| descriptor.id() == column)
+                .map(|descriptor| descriptor.label().to_owned())
         })
         .collect();
     match names.as_slice() {
@@ -756,7 +756,7 @@ fn actions_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
         let selected = schema
             .actions
             .get(action.action_index)
-            .map_or("", |declared| declared.label);
+            .map_or("", |declared| declared.label());
         let (label, combo) = layout.row(ui, "Action", |ui| {
             ui.horizontal(|ui| {
                 let mut action_index = action.action_index;
@@ -769,7 +769,7 @@ fn actions_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
                             for (index, declared) in schema.actions.iter().enumerate() {
-                                ui.selectable_value(&mut action_index, index, declared.label);
+                                ui.selectable_value(&mut action_index, index, declared.label());
                             }
                         })
                         .response
@@ -1211,7 +1211,7 @@ fn first_stat(entry: &ModelEntry) -> String {
     entry
         .stat_descriptors()
         .first()
-        .map(|stat| stat.label.to_owned())
+        .map(|stat| stat.label().to_owned())
         .unwrap_or_default()
 }
 
@@ -1222,8 +1222,8 @@ fn stat_combo(ui: &mut egui::Ui, id: Id, entry: &ModelEntry, column: &mut String
         .selected_text(column.as_str())
         .show_ui(ui, |ui| {
             for stat in entry.stat_descriptors() {
-                if ui.selectable_label(column == stat.label, stat.label).clicked() {
-                    stat.label.clone_into(column);
+                if ui.selectable_label(column == stat.label(), stat.label()).clicked() {
+                    stat.label().clone_into(column);
                 }
             }
         })
@@ -1759,7 +1759,7 @@ pub(super) fn banner_line(issue: &DraftIssue, draft: &SweepDraft, schema: &Model
         | DraftSite::Sampling
         | DraftSite::Outputs
         | DraftSite::MethodSetting(_) => None,
-        DraftSite::Factor(index) => schema.params.get(index).map(|descriptor| descriptor.label.to_owned()),
+        DraftSite::Factor(index) => schema.params.get(index).map(|descriptor| descriptor.label().to_owned()),
         DraftSite::Action(position) => draft
             .actions
             .get(position)
@@ -1826,7 +1826,7 @@ mod tests {
         entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect()
     }
 
@@ -2118,7 +2118,7 @@ mod tests {
         let infection = schema
             .params
             .iter()
-            .position(|descriptor| descriptor.id == "infection_rate")
+            .position(|descriptor| descriptor.id() == "infection_rate")
             .expect("SIR has an infection rate");
         let line = |draft: &SweepDraft, site, message: &str| {
             let issue = DraftIssue::new(site, message);

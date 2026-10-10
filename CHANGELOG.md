@@ -5,6 +5,17 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 
 ## [Unreleased]
 
+### Added
+
+- Descriptors that own their strings, for models read at run time: `ParamDescriptor::new`, `StatDescriptor::owned`, `ActionDescriptor::owned`, `StatEntry::new`, `ChoiceOptions` (`from_static`, `new`; `henad::params::ChoiceOptions`); `StatDescriptor::entry`.
+
+### Changed
+
+- Breaking: `ParamDescriptor`, `StatDescriptor`, `StatEntry` and `ActionDescriptor` fields private behind accessors (`id()`, `label()`, `kind()`, `apply()`, `format()`, `value()`, `color()`); `ActionDescriptor` no longer `Copy`.
+- Breaking: `ParamKind::Choice` holds `ChoiceOptions` (was `&'static [&'static str]`); `stat_entries` takes `&[StatDescriptor]`; `known` lists and `ValueError::UnknownOption.options` are `Vec<String>`.
+- Breaking: `GridView`, `PointView` and `EdgeView` borrow their palettes for `'a`; snapshots own theirs as `Vec<[u8; 4]>`.
+- Breaking: `ModelMetadata` and `Structure` are `#[non_exhaustive]`; `ModelMetadata` built through `new`, `palette` and `replays_exactly`, its palette a `Cow`.
+
 ## [0.3.0] - 2026-10-10
 
 Henad as libraries on crates.io: your own program can build, run, sweep, test and show your own models.

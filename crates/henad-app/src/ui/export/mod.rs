@@ -332,11 +332,7 @@ mod tests {
     use super::Recording;
 
     fn row(value: f64) -> Vec<StatEntry> {
-        vec![StatEntry {
-            label: "a",
-            value: StatValue::Scalar(value),
-            color: [0, 0, 0, 255],
-        }]
+        vec![StatEntry::new("a", StatValue::Scalar(value), [0, 0, 0, 255])]
     }
 
     /// An action publishes at the tick it was pressed on. The recording keeps one row for that

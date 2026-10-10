@@ -12,11 +12,11 @@ pub fn stats_ui(ui: &mut egui::Ui, app: &AppState) {
 
     crate::ui::kv_grid(ui, "stats_grid").show(ui, |ui, rows| {
         for stat in &snap.stats {
-            let [r, g, b, _] = stat.color;
+            let [r, g, b, _] = stat.color();
             let color = egui::Color32::from_rgb(r, g, b);
-            ui.colored_label(color, stat.label);
+            ui.colored_label(color, stat.label());
             ui.horizontal(|ui| {
-                let (text, data_type) = match &stat.value {
+                let (text, data_type) = match stat.value() {
                     StatValue::Scalar(v) => (format_scalar(*v), "Scalar"),
                     StatValue::Vector2D { x, y } => {
                         let mag = x.hypot(*y);
@@ -28,7 +28,7 @@ pub fn stats_ui(ui: &mut egui::Ui, app: &AppState) {
                     }
                 };
 
-                let icon = match &stat.value {
+                let icon = match stat.value() {
                     StatValue::Scalar(_) => MDI_CIRCLE_SMALL,
                     StatValue::Vector2D { .. } => MDI_ARROW_TOP_RIGHT_THIN,
                     StatValue::Histogram { .. } => MDI_CHART_HISTOGRAM,

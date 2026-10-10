@@ -248,10 +248,10 @@ mod tests {
         let inv = 1.0 / lanes.vel_x.len() as f64;
         let stats = state.stats();
 
-        let StatValue::Scalar(avg_speed) = stats[0].value else {
+        let StatValue::Scalar(avg_speed) = *stats[0].value() else {
             panic!("average speed is a scalar");
         };
-        let StatValue::Vector2D { x, y } = stats[1].value else {
+        let StatValue::Vector2D { x, y } = *stats[1].value() else {
             panic!("average velocity is a vector");
         };
 
@@ -273,7 +273,7 @@ mod tests {
         let after = state.stats();
 
         let (StatValue::Vector2D { x: bx, .. }, StatValue::Vector2D { x: ax, .. }) =
-            (&before[1].value, &after[1].value)
+            (before[1].value(), after[1].value())
         else {
             panic!("average velocity is a vector");
         };

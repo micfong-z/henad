@@ -1,5 +1,7 @@
 //! Views a state passes to the renderer, and the stat values and history the UI charts.
 
+use std::borrow::Cow;
+
 /// A 2D grid for rendering, each cell a `u8` index into the palette.
 pub struct GridView<'a> {
     /// Width in cells.
@@ -9,7 +11,7 @@ pub struct GridView<'a> {
     /// Palette index of each cell, row-major.
     pub cells: &'a [u8],
     /// RGBA colours that the cells index.
-    pub palette: &'static [[u8; 4]],
+    pub palette: &'a [[u8; 4]],
 }
 
 /// Prints the grid's size, not its cells.
@@ -39,7 +41,7 @@ pub struct PointView<'a> {
     /// One palette index per agent. `None` colours the whole population `palette[0]`.
     pub color: Option<&'a [u8]>,
     /// RGBA colours that the agents index.
-    pub palette: &'static [[u8; 4]],
+    pub palette: &'a [[u8; 4]],
 }
 
 /// Prints the point count and the world, not the positions.
@@ -64,7 +66,7 @@ pub struct EdgeView<'a> {
     /// One palette index per edge. `None` colours every edge `palette[0]`.
     pub color: Option<&'a [u8]>,
     /// RGBA colours that the edges index.
-    pub palette: &'static [[u8; 4]],
+    pub palette: &'a [[u8; 4]],
     /// Whether the edges are directed.
     pub directed: bool,
     /// Version of the graph. It moves whenever the edges, their colours or their direction change.
@@ -120,27 +122,81 @@ impl StatValue {
 /// One sample of a stat series, with the series' label and colour.
 #[derive(Debug, Clone)]
 pub struct StatEntry {
+    label: Cow<'static, str>,
+    value: StatValue,
+    color: [u8; 4],
+}
+
+impl StatEntry {
+    /// Creates an entry from the series' label and colour and the value of this sample.
+    ///
+    /// `label` takes a `&'static str` or a `String`.
+    pub fn new(label: impl Into<Cow<'static, str>>, value: StatValue, color: [u8; 4]) -> Self {
+        Self {
+            label: label.into(),
+            value,
+            color,
+        }
+    }
+
     /// Label of the series.
-    pub label: &'static str,
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
     /// Value of this sample.
-    pub value: StatValue,
+    pub fn value(&self) -> &StatValue {
+        &self.value
+    }
+
     /// RGBA colour of the series.
-    pub color: [u8; 4],
+    pub fn color(&self) -> [u8; 4] {
+        self.color
+    }
 }
 
 /// A stat series a model declares.
-#[derive(Debug, Clone)]
+///
+/// A compiled model borrows its label for `'static` through the `const fn` [`Self::new`]. A label built at run time
+/// is owned through [`Self::owned`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatDescriptor {
-    /// Label that identifies the series in the UI, in result columns and in a stop condition.
-    pub label: &'static str,
-    /// RGBA colour of the series in the chart.
-    pub color: [u8; 4],
+    label: Cow<'static, str>,
+    color: [u8; 4],
 }
 
 impl StatDescriptor {
     /// Creates a descriptor from a label and a colour.
     pub const fn new(label: &'static str, color: [u8; 4]) -> Self {
-        Self { label, color }
+        Self {
+            label: Cow::Borrowed(label),
+            color,
+        }
+    }
+
+    /// Creates a descriptor that owns its label.
+    pub fn owned(label: String, color: [u8; 4]) -> Self {
+        Self {
+            label: Cow::Owned(label),
+            color,
+        }
+    }
+
+    /// Label that identifies the series in the UI, in result columns and in a stop condition.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// RGBA colour of the series in the chart.
+    pub fn color(&self) -> [u8; 4] {
+        self.color
+    }
+
+    /// Returns an entry of this series holding `value`.
+    ///
+    /// A borrowed label is copied as a pointer. An owned label is cloned.
+    pub fn entry(&self, value: StatValue) -> StatEntry {
+        StatEntry::new(self.label.clone(), value, self.color)
     }
 }
 
@@ -148,15 +204,11 @@ impl StatDescriptor {
 ///
 /// A model declares labels and colours once as a const and returns bare values, so the labels and the values
 /// cannot drift apart. A short `values` leaves the trailing series out rather than mislabelling anything.
-pub fn stat_entries(descriptors: &'static [StatDescriptor], values: Vec<StatValue>) -> Vec<StatEntry> {
+pub fn stat_entries(descriptors: &[StatDescriptor], values: Vec<StatValue>) -> Vec<StatEntry> {
     descriptors
         .iter()
         .zip(values)
-        .map(|(d, value)| StatEntry {
-            label: d.label,
-            value,
-            color: d.color,
-        })
+        .map(|(descriptor, value)| descriptor.entry(value))
         .collect()
 }
 
@@ -182,7 +234,7 @@ pub struct StatsHistory {
 /// Prints the series labels and the sample counts, not the samples.
 impl std::fmt::Debug for StatsHistory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let labels: Vec<&str> = self.descriptors.iter().map(|descriptor| descriptor.label).collect();
+        let labels: Vec<&str> = self.descriptors.iter().map(StatDescriptor::label).collect();
         f.debug_struct("StatsHistory")
             .field("labels", &labels)
             .field("len", &self.len())
@@ -329,11 +381,7 @@ impl StatsHistory {
                     Some(values) => values[idx].clone(),
                     None => StatValue::Scalar(self.columns[col][idx]),
                 };
-                StatEntry {
-                    label: desc.label,
-                    value,
-                    color: desc.color,
-                }
+                desc.entry(value)
             })
             .collect();
         Some(entries)
@@ -406,20 +454,12 @@ mod tests {
     fn scalars(values: &[f64]) -> Vec<StatEntry> {
         values
             .iter()
-            .map(|v| StatEntry {
-                label: "s",
-                value: StatValue::Scalar(*v),
-                color: C,
-            })
+            .map(|v| StatEntry::new("s", StatValue::Scalar(*v), C))
             .collect()
     }
 
     fn vec2(x: f64, y: f64) -> Vec<StatEntry> {
-        vec![StatEntry {
-            label: "v",
-            value: StatValue::Vector2D { x, y },
-            color: C,
-        }]
+        vec![StatEntry::new("v", StatValue::Vector2D { x, y }, C)]
     }
 
     #[test]
@@ -450,7 +490,7 @@ mod tests {
             assert_eq!((h.len(), h.write_count()), (len, writes), "a second entry was added");
             assert_eq!(h.get(0, len - 1), Some((5.0, newest)));
             let sample = h.entries(len - 1).expect("the newest entry exists");
-            assert!(matches!(sample[0].value, StatValue::Vector2D { x, y } if x == 3.0 && y == 4.0));
+            assert!(matches!(*sample[0].value(), StatValue::Vector2D { x, y } if x == 3.0 && y == 4.0));
             assert_eq!(h.tick(len - 2), Some(newest - 1), "an older entry changed");
         }
     }
@@ -479,11 +519,11 @@ mod tests {
 
         let sample = h.entries(1).expect("index 1 exists");
         assert!(
-            matches!(sample[0].value, StatValue::Vector2D { x, y } if x == 6.0 && y == 8.0),
+            matches!(*sample[0].value(), StatValue::Vector2D { x, y } if x == 6.0 && y == 8.0),
             "got {:?}",
-            sample[0].value
+            sample[0].value()
         );
-        assert_eq!(sample[0].label, "v");
+        assert_eq!(sample[0].label(), "v");
     }
 
     #[test]
@@ -492,8 +532,8 @@ mod tests {
         h.push_entries(&scalars(&[1.0, 2.0]), 7);
         let sample = h.entries(0).expect("index 0 exists");
         assert_eq!(sample.len(), 2);
-        assert!(matches!(sample[0].value, StatValue::Scalar(v) if v == 1.0));
-        assert!(matches!(sample[1].value, StatValue::Scalar(v) if v == 2.0));
+        assert!(matches!(*sample[0].value(), StatValue::Scalar(v) if v == 1.0));
+        assert!(matches!(*sample[1].value(), StatValue::Scalar(v) if v == 2.0));
         assert!(h.entries(1).is_none());
     }
 
@@ -507,9 +547,9 @@ mod tests {
         for (j, expected) in [3.0, 4.0].into_iter().enumerate() {
             let sample = h.entries(j).expect("both slots are filled");
             assert!(
-                matches!(sample[0].value, StatValue::Vector2D { x, .. } if x == expected),
+                matches!(*sample[0].value(), StatValue::Vector2D { x, .. } if x == expected),
                 "slot {j} got {:?}",
-                sample[0].value
+                sample[0].value()
             );
             assert_eq!(h.get(0, j).map(|(v, _)| v), Some(expected));
         }
@@ -525,7 +565,7 @@ mod tests {
         h.resize(Some(3));
         assert_eq!(h.len(), 3);
         assert_eq!(h.tick(0), Some(3));
-        assert!(matches!(h.entries(0).expect("kept")[0].value, StatValue::Vector2D { x, .. } if x == 3.0));
+        assert!(matches!(*h.entries(0).expect("kept")[0].value(), StatValue::Vector2D { x, .. } if x == 3.0));
 
         h.resize(None);
         assert_eq!(h.len(), 3, "growing adds no samples back");

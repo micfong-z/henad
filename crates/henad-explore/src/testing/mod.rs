@@ -398,16 +398,16 @@ fn declared_defaults(entry: &ModelEntry) -> Vec<ParamValue> {
     entry
         .param_descriptors()
         .iter()
-        .map(|descriptor| descriptor.kind.default_value())
+        .map(|descriptor| descriptor.kind().default_value())
         .collect()
 }
 
 /// Returns the bits of every value of `entries`, each under its label.
-fn stat_bits(entries: &[StatEntry]) -> Vec<(&'static str, Vec<u64>)> {
+fn stat_bits(entries: &[StatEntry]) -> Vec<(&str, Vec<u64>)> {
     entries
         .iter()
         .map(|entry| {
-            let bits = match &entry.value {
+            let bits = match entry.value() {
                 StatValue::Scalar(value) => vec![value.to_bits()],
                 StatValue::Vector2D { x, y } => vec![x.to_bits(), y.to_bits()],
                 StatValue::Histogram { edges, counts } => edges
@@ -416,7 +416,7 @@ fn stat_bits(entries: &[StatEntry]) -> Vec<(&'static str, Vec<u64>)> {
                     .chain(counts.iter().copied())
                     .collect(),
             };
-            (entry.label, bits)
+            (entry.label(), bits)
         })
         .collect()
 }

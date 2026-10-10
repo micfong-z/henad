@@ -253,14 +253,14 @@ fn has_points(app: &AppState) -> bool {
 /// Returns the grid's colours at one texel per cell.
 fn expand_grid(grid: &GridSnapshot) -> Vec<egui::Color32> {
     use rayon::prelude::*;
-    let colors = grid_colors(grid.palette);
+    let colors = grid_colors(&grid.palette);
     grid.cells.par_iter().map(|&cell| colors[usize::from(cell)]).collect()
 }
 
 /// Returns the colour of one representative cell per texel, for a grid too large to upload whole.
 fn sample_grid(grid: &GridSnapshot, tex_w: u32, tex_h: u32) -> Vec<egui::Color32> {
     let width = grid.width as usize;
-    let colors = grid_colors(grid.palette);
+    let colors = grid_colors(&grid.palette);
     let row = |ty: u32| {
         let sy = source_row(ty, grid.height, tex_h) as usize;
         let cells = &grid.cells[sy * width..(sy + 1) * width];
@@ -425,7 +425,7 @@ mod tests {
             width: 4,
             height: 2,
             cells: vec![0, 1, 2, 255, 1, 1, 7, 0],
-            palette: &[[10, 20, 30, 255], [40, 50, 60, 255]],
+            palette: vec![[10, 20, 30, 255], [40, 50, 60, 255]],
         };
         let first = egui::Color32::from_rgb(10, 20, 30);
         let second = egui::Color32::from_rgb(40, 50, 60);
