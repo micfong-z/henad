@@ -10,7 +10,8 @@ icon: material/expansion-card
 
 ```text
 gpu/
-  grid_engine.rs    GpuGridState<M>      GpuGridModel  -> SimState + GpuSimState
+  grid_engine.rs    GpuGridState<M>      GpuGridModel  -> SimState + GpuSimState, over GpuGridEngine
+  grid_spec.rs      GpuGridSpec          a grid model's declarations, held as values
   agent_engine.rs   GpuAgentState<M>     GpuAgentModel -> SimState + GpuSimState
   primitives/       spatial_hash, prefix_scan, reduce, readback, dispatch, pipeline
   grid_dims.wgsl    an entry point that brings henad::dims into the generated bindings, for Dims
@@ -33,6 +34,16 @@ A GPU entry builds on whatever device the host provides, and the host learns fro
 
 `GpuGridState<M>` and `GpuAgentState<M>` mirror their `cpu/` namesakes.
 Each derives every buffer, layout, pipeline and bind group from what its model declares, and each implements both `SimState` and `GpuSimState`.
+
+The grid engine reads its model through a value.
+`GpuGridSpec` holds what a `GpuGridModel` declares: the id, the workgroup size, the buffer labels, each shader's source and binding declarations, and the stat series.
+The sources and declarations are `Cow`s, borrowed from the model's consts.
+The model's functions sit behind the private `GridHooks` trait.
+The non-generic `GpuGridEngine` builds every wgpu object from a spec and implements both traits.
+`GpuGridState<M>` reads a spec from `M` at each build and forwards every call to the engine.
+Its `demand` and `max_storage_bindings` read a spec too, and the capacity check and the device request see the declarations the build sees.
+The engine computes the workgroups of each pass and the bytes of its buffers once, at construction.
+A step calls no hook, an action press calls one for its uniform block, and `stats` calls one for the values.
 
 `GpuSimState` is the extra interface a GPU model needs on top of `SimState`, and `GpuSimThread` drives the state through it.
 A host refers to it as `henad::runner::GpuSimState`.

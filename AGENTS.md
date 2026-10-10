@@ -741,7 +741,9 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   holds no device from its registration. A set refuses a duplicate id or one outside the grammar,
   records its `BuildInfo` on an entry that has none, and merges the entries' `GpuNeeds` for the
   device request. The `register_*` functions are generic, and the engines and kernels monomorphise
-  in the crate that calls them. henad-compute instantiates none outside its own tests.
+  in the crate that calls them. The GPU grid engine is the exception. henad-compute compiles it
+  once, and only `GpuGridState<M>`'s forwarders and the model's hooks monomorphise in the caller.
+  henad-compute instantiates no model outside its own tests.
   `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for henad-explore's test harnesses
   alone. `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU
   ports share. `simulation.rs` is the programmatic API over an entry. `RunSetup`
@@ -784,6 +786,14 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
     leaf repeats are WGSL in henad-core's `authoring/primitives/wgsl/`. `gpu/grid_dims.wgsl` is an
     entry point that is never dispatched. It brings `henad::dims::Dims` into the generated
     bindings, and `grid_engine.rs`'s `Dims` is a `pub(crate)` alias of that struct.
+    The grid engine is non-generic. `gpu/grid_spec.rs` holds `GpuGridSpec`, a `GpuGridModel`'s
+    declarations as values: its shader sources and binding lists as `Cow`s, borrowed from the
+    consts, and its functions behind the private `GridHooks` trait. `GpuGridEngine` builds every
+    wgpu object from a spec and implements `SimState` and `GpuSimState`, and `GpuGridState<M>`
+    reads a spec from `M` and forwards every call. `GpuGridSpec` and `GpuGridEngine` are
+    `pub(crate)`. `demand`, `max_storage_bindings` and the contract asserts read the spec. The
+    engine computes each pass's workgroups and its buffer bytes at construction, and a step calls
+    no hook.
     `gpu/tests/parity.wgsl` is the parity test's shader, with a `CODES` array that references
     each boundary and table code the test reads.
     `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`
