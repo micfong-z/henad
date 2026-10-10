@@ -15,6 +15,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Breaking: `ParamKind::Choice` holds `ChoiceOptions` (was `&'static [&'static str]`); `stat_entries` takes `&[StatDescriptor]`; `known` lists and `ValueError::UnknownOption.options` are `Vec<String>`.
 - Breaking: `GridView`, `PointView` and `EdgeView` borrow their palettes for `'a`; snapshots own theirs as `Vec<[u8; 4]>`.
 - Breaking: `ModelMetadata` and `Structure` are `#[non_exhaustive]`; `ModelMetadata` built through `new`, `palette` and `replays_exactly`, its palette a `Cow`.
+- GPU grid engine non-generic, built from a private spec of the model's declarations; `GpuGridState<M>` an adapter over it, its API unchanged. Workgroup counts and buffer sizes cached at construction.
 
 ## [0.3.0] - 2026-10-10
 

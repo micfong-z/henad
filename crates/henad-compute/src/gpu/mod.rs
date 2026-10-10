@@ -9,6 +9,7 @@ pub mod capacity;
 mod contracts;
 pub mod fault;
 pub mod grid_engine;
+mod grid_spec;
 pub mod limits;
 pub mod primitives;
 pub mod sim_thread;
