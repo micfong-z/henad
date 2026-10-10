@@ -11,6 +11,7 @@ use henad_compute::snapshot::Snapshot;
 use henad_core::action::Schedule;
 use henad_core::explore::replay::Replay;
 use henad_core::params::ParamValue;
+use henad_core::provenance::ModelSource;
 use henad_core::view::StatsHistory;
 use henad_explore::output::memory::SweepFiles;
 
@@ -24,6 +25,7 @@ use crate::ui::export::image::PendingCapture;
 use crate::ui::files::open::spawn_open;
 use crate::ui::files::save::{spawn_save, spawn_save_files};
 use crate::ui::files::{OpenOutcome, OpenTarget, SaveOutcome, SaveResult, SaveTarget};
+use crate::ui::params::{INVALID_SEED, parse_seed};
 use crate::ui::results::ResultsPanel;
 use crate::ui::sweep::SweepPanel;
 use henad_compute::runtime_info::RuntimeInfo;
@@ -33,8 +35,15 @@ use henad_compute::gpu::fault::catching_on;
 use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
 use henad_compute::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
 
+mod install;
+
+pub use install::{PendingRebuild, remap_schedule, remap_values};
+
 /// Exponential moving average smoothing factor (0..1, higher = more responsive).
 const EMA_ALPHA: f64 = 0.1;
+
+/// Reason shown for the disabled Build button when no model is selected.
+pub const NO_SELECTED_MODEL: &str = "Select a model in the Model tab";
 
 /// Default number of snapshots the chart history keeps before it starts dropping the oldest snapshots.
 pub const DEFAULT_HISTORY_LEN: usize = 10_000;
@@ -80,17 +89,18 @@ pub struct AppState {
     /// Id of the model the panels show, `None` when no offered model runs on this machine or the opening was rejected.
     pub selected_model: Option<String>,
     pub param_values: Vec<ParamValue>,
-    /// Id of the model the live simulation was built from.
-    pub loaded_model: Option<String>,
+    /// Entry the live simulation was built from. It stays the running model's entry after the set's entry under its
+    /// id is replaced, until a build replaces the simulation.
+    loaded: Option<ModelEntry>,
     pub pending_reload: Vec<bool>,
     /// Seed of the next build, `None` for the model's default seed.
     pub seed: Option<u64>,
     /// Text of the Seed field, including text that does not parse.
     pub seed_text: String,
-    /// Values the loaded model runs with, those it was built with and any live edit since. Meaningful only while
-    /// `loaded_model` is set.
+    /// Values the loaded model runs with, those it was built with and any live edit since, in the order of the loaded
+    /// entry's parameters. Meaningful only while a model is loaded.
     pub loaded_values: Vec<ParamValue>,
-    /// Seed the loaded model was built with. Meaningful only while `loaded_model` is set.
+    /// Seed the loaded model was built with. Meaningful only while a model is loaded.
     pub loaded_seed: Option<u64>,
     /// Actions the next build runs at their ticks.
     pub schedule: Schedule,
@@ -101,6 +111,8 @@ pub struct AppState {
     pub schedule_tick_input: u64,
     /// Sweep run the loaded model replays.
     pub opened_run: Option<OpenedRun>,
+    /// Rebuild of the loaded model under replaced code, waiting on the Rebuild model modal.
+    pub pending_rebuild: Option<PendingRebuild>,
     /// Tick a pending [`SimCommand::RunTo`] stops at.
     pub run_to_target: Option<u64>,
     pub run_to_input: u64,
@@ -199,7 +211,9 @@ pub enum OpenAt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenedRun {
     pub replay: Replay,
-    /// Whether a live edit, an action or a build from other values has left the run's trajectory.
+    /// Source of the entry that built the run when it was opened.
+    pub source: ModelSource,
+    /// Whether a live edit, an action, or a build from other values or other code has left the run's trajectory.
     pub modified: bool,
 }
 
@@ -248,7 +262,7 @@ impl AppState {
             opening_refusal: None,
             selected_model,
             param_values,
-            loaded_model: None,
+            loaded: None,
             seed: None,
             seed_text: String::new(),
             loaded_values: Vec::new(),
@@ -258,6 +272,7 @@ impl AppState {
             schedule_action_input: 0,
             schedule_tick_input: 0,
             opened_run: None,
+            pending_rebuild: None,
             run_to_target: None,
             run_to_input: 0,
             focus_request: None,
@@ -316,7 +331,15 @@ impl AppState {
             }
             None => None,
         };
-        self.settle_opened_run();
+        self.load(setup);
+    }
+
+    /// Tears down the live simulation and builds `setup`. The setup's entry then becomes the loaded entry, and `None`
+    /// tears down alone.
+    ///
+    /// A build that fails goes to the fault modal and leaves no model loaded.
+    fn load(&mut self, setup: Option<RunSetup>) {
+        self.settle_opened_run(setup.as_ref());
         self.stop_recording();
         // Dropping the sim thread releases a GPU model's buffers and pipelines. A paint callback still in flight this
         // frame holds its own `Arc` to the display, and keeps the texture alive.
@@ -328,7 +351,8 @@ impl AppState {
         self.density_texture = None;
         self.density_max = 4.0;
         self.ticks_per_snapshot = 1;
-        self.loaded_model = None;
+        self.loaded = None;
+        self.pending_rebuild = None;
         self.export_status = None;
         self.run_to_target = None;
         // The next model may have no agents at all.
@@ -344,39 +368,45 @@ impl AppState {
 
         match self.build_runner(&setup, &self.repaint_waker()) {
             Ok(mut runner) => {
-                if !self.schedule.is_empty() {
-                    runner.send(SimCommand::SetSchedule(self.schedule.clone()));
+                if !setup.schedule().is_empty() {
+                    runner.send(SimCommand::SetSchedule(setup.schedule().clone()));
                 }
                 self.sim_thread = Some(runner);
             }
             Err(fault) => {
-                self.report_fault(fault);
+                let model = setup.entry().name().to_owned();
+                self.show_fault(fault, Some(model));
                 return;
             }
         }
 
         self.stats_history = Some(stats_history);
         self.sim_running = false;
-        self.loaded_model.clone_from(&self.selected_model);
-        self.pending_reload = vec![false; self.param_values.len()];
-        self.loaded_values.clone_from(&self.param_values);
-        self.loaded_seed = self.seed;
-        self.loaded_schedule = self.schedule.clone();
+        // The fields of the next build are the setup's only for the selected model. A rebuild of a model loaded
+        // while another one is selected leaves them alone.
+        if self.selected_model.as_deref() == Some(setup.entry().id()) {
+            self.pending_reload = vec![false; self.param_values.len()];
+        }
+        self.loaded_values = setup.values().to_vec();
+        self.loaded_seed = setup.seed();
+        self.loaded_schedule = setup.schedule().clone();
+        self.loaded = Some(setup.entry().clone());
     }
 
-    /// Clears the opened run before a build of another model, or sets its `modified` to whether the build's values
-    /// differ from the run's.
+    /// Clears the opened run before a build of another model or a teardown, or sets its `modified` to whether
+    /// `setup` differs from the run in its values or its code.
     ///
-    /// A rebuild from the run's own values clears the mark that [`Self::mark_opened_run_modified`] sets.
-    fn settle_opened_run(&mut self) {
+    /// A rebuild from the run's own values and code clears the mark that [`Self::mark_opened_run_modified`] sets.
+    fn settle_opened_run(&mut self, setup: Option<&RunSetup>) {
         let Some(run) = &mut self.opened_run else {
             return;
         };
-        if self.selected_model.as_deref() != Some(run.replay.model.as_str()) {
+        let Some(setup) = setup.filter(|setup| setup.entry().id() == run.replay.model) else {
             self.opened_run = None;
             return;
-        }
-        run.modified = !run.is_built_by(&self.param_values, self.seed, &self.schedule);
+        };
+        run.modified =
+            run.source != *setup.entry().source() || !run.is_built_by(setup.values(), setup.seed(), setup.schedule());
     }
 
     /// Opens `opening`, the results, run or setup that the host requested.
@@ -442,9 +472,10 @@ impl AppState {
             &replay.schedule,
             start,
         );
-        if built {
+        if built && let Some(loaded) = &self.loaded {
             self.opened_run = Some(OpenedRun {
                 replay,
+                source: loaded.source().clone(),
                 modified: false,
             });
         }
@@ -607,13 +638,18 @@ impl AppState {
     /// A fault while building belongs to the selected model, and any other to the loaded one. The Model panel stays
     /// usable while a model runs, and the selection can be another model by then.
     pub fn report_fault(&mut self, fault: Fault) {
-        log::error!("{fault}");
         let model = if fault.during == BUILDING {
             self.selected_entry()
         } else {
             self.loaded_entry()
         };
         let model = model.map(|entry| entry.name().to_owned());
+        self.show_fault(fault, model);
+    }
+
+    /// Offloads the live simulation and passes the fault to the modal, naming `model` as the model it stopped.
+    fn show_fault(&mut self, fault: Fault, model: Option<String>) {
+        log::error!("{fault}");
         self.offload_simulation();
         self.fault = Some(ShownFault { fault, model });
     }
@@ -628,8 +664,9 @@ impl AppState {
         self.density_texture = None;
         self.last_rendered_serial = None;
         self.stats_history = None;
-        self.loaded_model = None;
+        self.loaded = None;
         self.opened_run = None;
+        self.pending_rebuild = None;
         self.run_to_target = None;
         if let Some(layer) = &mut self.agent_layer {
             layer.clear();
@@ -651,8 +688,25 @@ impl AppState {
         }
     }
 
+    /// Returns whether the live simulation runs the selected model under the set's entry for it, the same id with the
+    /// same source.
+    ///
+    /// Note that a model whose code the set has replaced since its build is not the selection, and live edits and
+    /// actions do not reach it.
     pub fn selection_is_loaded(&self) -> bool {
-        self.loaded_model.is_some() && self.loaded_model == self.selected_model
+        self.loaded.as_ref().is_some_and(|loaded| {
+            self.selected_entry()
+                .is_some_and(|selected| selected.id() == loaded.id() && selected.source() == loaded.source())
+        })
+    }
+
+    /// Returns whether the live simulation runs the selected model under code that the set has replaced since its
+    /// build.
+    pub fn code_pending(&self) -> bool {
+        self.loaded.as_ref().is_some_and(|loaded| {
+            self.selected_entry()
+                .is_some_and(|selected| selected.id() == loaded.id() && selected.source() != loaded.source())
+        })
     }
 
     /// Entry of the selected model.
@@ -673,9 +727,17 @@ impl AppState {
         ))
     }
 
-    /// Entry of the model the live simulation was built from.
+    /// Entry the live simulation was built from.
+    ///
+    /// Note that it can differ from the set's entry under its id, once [`Self::install_models`] has replaced that
+    /// entry.
     pub fn loaded_entry(&self) -> Option<&ModelEntry> {
-        self.models.get(self.loaded_model.as_deref()?)
+        self.loaded.as_ref()
+    }
+
+    /// Id of the model the live simulation was built from.
+    pub fn loaded_id(&self) -> Option<&str> {
+        self.loaded.as_ref().map(ModelEntry::id)
     }
 
     /// Returns the models of the set that run on this machine, in the set's order.
@@ -696,7 +758,9 @@ impl AppState {
     /// Selects model `id` with its default values and no scheduled actions, or the values, seed and actions the
     /// loaded model runs with when `id` is the loaded model.
     ///
-    /// An already selected model keeps its values. An id missing from the set leaves no values.
+    /// An already selected model keeps its values. An id missing from the set leaves no values. The values and actions
+    /// of a loaded model whose code the set has replaced are carried to the set's entry by id, as
+    /// [`remap_values`] and [`remap_schedule`] carry them.
     pub fn select_model(&mut self, id: &str) {
         if self.selected_model.as_deref() == Some(id) {
             return;
@@ -704,12 +768,18 @@ impl AppState {
         self.selected_model = Some(id.to_owned());
         self.opening_refusal = None;
         self.schedule_action_input = 0;
-        if self.loaded_model.as_deref() == Some(id) {
-            self.param_values.clone_from(&self.loaded_values);
+        if let Some(loaded) = self.loaded.as_ref().filter(|loaded| loaded.id() == id) {
+            let current = self.models.get(id).unwrap_or(loaded);
+            self.param_values = remap_values(
+                loaded.param_descriptors(),
+                &self.loaded_values,
+                current.param_descriptors(),
+            )
+            .values;
             self.pending_reload = vec![false; self.param_values.len()];
             self.seed = self.loaded_seed;
             self.seed_text = self.loaded_seed.map(|seed| seed.to_string()).unwrap_or_default();
-            self.schedule = self.loaded_schedule.clone();
+            self.schedule = remap_schedule(&self.loaded_schedule, current.action_descriptors()).schedule;
             return;
         }
         self.param_values = self.models.get(id).map(default_values).unwrap_or_default();
@@ -744,6 +814,24 @@ impl AppState {
         self.selected_entry().map_or_else(Vec::new, |entry| {
             entry.shortfalls(&self.param_values, &self.runtime.granted)
         })
+    }
+
+    /// Returns the reason Build cannot build the selection, or `None` when it can.
+    ///
+    /// Build is disabled with the reason as its tooltip. The reasons are no selection, a size the device cannot
+    /// hold, a Seed field that does not parse and values that [`Self::build_setup`] rejects, in that order.
+    pub fn build_refusal(&self) -> Option<String> {
+        if self.selected_entry().is_none() {
+            return Some(NO_SELECTED_MODEL.to_owned());
+        }
+        let shortfalls = self.selection_shortfalls();
+        if !shortfalls.is_empty() {
+            return Some(too_large_message(&shortfalls));
+        }
+        if parse_seed(&self.seed_text).is_err() {
+            return Some(INVALID_SEED.to_owned());
+        }
+        self.build_setup()?.err().map(|error| setup_message(&error))
     }
 
     pub fn is_gpu(&self) -> bool {
@@ -915,6 +1003,11 @@ pub fn lookup_message(error: &ModelLookupError) -> String {
     crate::ui::sweep::draft::capitalize(&error.to_string())
 }
 
+/// Returns `shortfalls`, the reasons the device cannot build a model, as Build's disabled reason.
+pub fn too_large_message(shortfalls: &[String]) -> String {
+    format!("Too large for this device: {}", shortfalls.join("; "))
+}
+
 /// Returns `error` as Build's disabled reason, as in `Parameter 'infection_rate': 2 is outside 0..=1`.
 pub fn setup_message(error: &SetupError) -> String {
     use crate::ui::sweep::draft::describe_error;
@@ -998,6 +1091,7 @@ mod tests {
         }]);
         let params = vec![ParamValue::U32(64), ParamValue::F32(0.3)];
         let run = OpenedRun {
+            source: henad_core::provenance::ModelSource::__from_type_path("henad_models::sir::SirGridModel"),
             replay: Replay {
                 model: "sir".to_owned(),
                 params: params.clone(),
@@ -1118,14 +1212,14 @@ mod tests {
         };
         let name = |app: &AppState, id: &str| app.models.get(id).map(|entry| entry.name().to_owned());
         app.reset_simulation();
-        assert_eq!(app.loaded_model.as_deref(), Some("sir"));
+        assert_eq!(app.loaded_id(), Some("sir"));
         app.select_model("boids");
         app.report_fault(Fault::refused(STEPPING, "a test fault"));
         assert_eq!(
             app.fault.as_ref().and_then(|shown| shown.model.clone()),
             name(&app, "sir")
         );
-        assert_eq!(app.loaded_model, None, "the faulted model is offloaded");
+        assert_eq!(app.loaded_id(), None, "the faulted model is offloaded");
 
         app.report_fault(Fault::refused(BUILDING, "a test fault"));
         assert_eq!(

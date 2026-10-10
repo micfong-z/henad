@@ -178,6 +178,18 @@ impl Manifest {
             .collect()
     }
 
+    /// Returns whether `source` runs the code that every session of the manifest ran its runs with, the condition a
+    /// resume of the folder sets when either code is runtime or plugin code.
+    ///
+    /// Always `true` while the manifest and `source` hold compiled code alone. A compiled build that changed shows in
+    /// [`Self::recorded_builds`] instead.
+    pub fn code_matches(&self, source: &ModelSource) -> bool {
+        let current = RecordedBuild::from(source);
+        self.run_model_builds()
+            .iter()
+            .all(|build| !codes_differ(build.as_ref(), Some(&current)))
+    }
+
     /// Returns the sessions that wrote runs, in session order, as [`Self::recorded_builds`] selects them.
     fn run_sessions(&self) -> impl Iterator<Item = &ManifestSession> {
         let uncredited = matches!(self.status, ManifestStatus::Running | ManifestStatus::Failed);

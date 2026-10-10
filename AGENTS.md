@@ -322,9 +322,11 @@ Varies one parameter at a time. Other parameters use values from the Parameters 
   is how a UI change is confirmed to render. Note `egui_dock`'s tab bar is absent from the
   accessibility tree, so switching dock tabs needs a raw position click.
 - **A test-only module goes under a `tests/` directory in `src/`, never beside production modules.**
-  `henad-compute/src/gpu/tests/` and `henad-models/src/tests/` hold any test module too big to
-  inline, and henad-compute's holds its `support.rs` (the headless device) as well, so each `mod.rs`
-  lists exactly one `#[cfg(test)] mod tests;` rather than interleaving test modules with real ones.
+  `henad-compute/src/gpu/tests/`, `henad-models/src/tests/` and `henad-app/src/tests/` hold any test
+  module too big to inline, and henad-compute's holds its `support.rs` (the headless device) as
+  well, as henad-app's holds the model and helpers its tests of replaced code share, so each
+  `mod.rs` lists exactly one `#[cfg(test)] mod tests;` rather than interleaving test modules with
+  real ones.
   An inline `#[cfg(test)] mod tests` at the bottom of the file it tests is still the default and is
   unaffected. Every other crate's tests take their device from
   `henad_explore::testing::headless_test_device`. henad-compute keeps its own helper on purpose. It
@@ -1140,7 +1142,7 @@ cargo builds a primary package with a static std, and every member linking it wo
   plan checks (`MergeError::CodeChanged`). One reference shard misses a plugin shard between two
   compiled shards of other sources. Compiled against compiled keeps `BuildChanged`. `schema_json`
   writes `origin` and `code_hash` only for a model that is not compiled, and
-  `ResultSet::code_matches` answers the rule for a host.
+  `ResultSet::code_matches` and `Manifest::code_matches` answer the rule for a host.
   `a_value_built_entry_sweeps_byte_identically_to_the_registered_one`,
   `a_resume_refuses_runtime_code_that_changed`,
   `a_resume_refuses_a_plugin_whose_sources_changed`,
@@ -1342,15 +1344,15 @@ cargo builds a primary package with a static std, and every member linking it wo
   eframe app name "Henad" names the native storage folder, which left 0.2.0's `Henad-Engine` behind,
   and a browser keeps eframe's one key per origin. `ui/` has one file per panel or window
   (`menu_bar.rs`, `model.rs`, `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
-  `charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `about.rs`). The Export tab lives in a
-  directory,
-  `export/`. Its `mod.rs` draws the tab and writes the stat series and final state, `image.rs`
-  captures the viewport and `metadata.rs` builds the run details. `files/` holds the file dialogs:
-  `save.rs` hands bytes to a save dialog (several files go into one picked folder on native and
-  download one by one in a browser), and `open.rs` reads picked files, or takes a picked folder on
-  native. Each outcome carries a `SaveTarget` or `OpenTarget`, and `AppState::poll_saves` and
-  `poll_opens` route it to the panel that asked. `dock.rs` holds the tab definitions, the default
-  layout and the dispatch to each panel. Sweep and Results stack behind Viewport.
+  `charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `rebuild.rs`, `about.rs`). The Export tab
+  lives in a directory, `export/`. Its `mod.rs` draws the tab and writes the stat series and final
+  state, `image.rs` captures the viewport and `metadata.rs` builds the run details. `files/` holds
+  the file dialogs: `save.rs` hands bytes to a save dialog (several files go into one picked folder
+  on native and download one by one in a browser), and `open.rs` reads picked files, or takes a
+  picked folder on native. Each outcome carries a `SaveTarget` or `OpenTarget`, and
+  `AppState::poll_saves` and `poll_opens` route it to the panel that asked. `dock.rs` holds the tab
+  definitions, the default layout and the dispatch to each panel. Sweep and Results stack behind
+  Viewport.
   `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
   and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
   bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
@@ -1359,24 +1361,31 @@ cargo builds a primary package with a static std, and every member linking it wo
   needs `DownlevelFlags::VERTEX_STORAGE`, and WebGL2 lacks it. Without that flag there is no edge
   layer, and a network model runs with its edges undrawn. `world.wgsl` holds the helpers both
   shaders `#import`, including `is_placed`, the finiteness test that hides a retired node.
-  `state.rs` (`AppState`) holds the set as `models` and keys the selection by id:
-  `selected_model` and `loaded_model` are `Option<String>`, resolved at use through
-  `selected_entry`, `loaded_entry` and `lookup`. `offered_models` hides a GPU model where the
-  adapter has no compute, through `ModelSet::runnable`, and the app opens on the first offered
-  model, or with none selected and `NO_MODEL_RUNS` in the Model panel. A missing id reads as
+  `state.rs` (`AppState`) holds the set as `models` and keys the selection by id: `selected_model`
+  is an `Option<String>`, resolved at use through `selected_entry` and `lookup`. The live
+  simulation's entry is pinned: the private `loaded` holds the `ModelEntry` of the `RunSetup` it was
+  built from, `loaded_entry()` returns it and `loaded_id()` its id. The panels, pacing, the run
+  details, a fault's model name and live edits then describe the running code after the set's entry
+  under its id is replaced. `selection_is_loaded` compares the id and the `ModelSource`, and
+  `code_pending` holds for the same id under another source. `offered_models` hides a GPU model
+  where the adapter has no compute, through `ModelSet::runnable`, and the app opens on the first
+  offered model, or with none selected and `NO_MODEL_RUNS` in the Model panel. A missing id reads as
   `lookup_message` words it, "This build does not include model 'x'" or "Model 'x' needs a GPU with
   compute support, and this device has none", with no full stop. `select_model` loads the defaults
   and clears the schedule, or, for the loaded model, restores `loaded_values` (its built values with
-  every live edit, kept by `send_live_param`), its seed and its schedule, for the Model panel and
-  the Sweep tab alike, and an id the set lacks leaves no values. `AppState` also holds the values
-  the next build reads: `param_values`, the Seed field's `seed` with its raw `seed_text`, and the
-  scheduled actions in `schedule`.
-  `AppState::build_setup` checks all three through `RunSetup::from_parts`. Playback's
-  `build_refusal` shows a `SetupError` as Build's disabled reason (`setup_message`), as it shows
-  `INVALID_SEED`, `reset_simulation` builds nothing while the check fails, and `open_run` refuses
-  a replay `RunSetup::from_replay` refuses. `build_runner` builds the checked setup, and
-  `reset_simulation` sends `SimCommand::SetSchedule` to
-  the new runner when the schedule is not empty, then records `loaded_seed` and `loaded_schedule`.
+  every live edit, kept by `send_live_param`), its seed and its schedule, carried by id to the set's
+  entry (`remap_values`, `remap_schedule`), for the Model panel and the Sweep tab alike, and an id
+  the set lacks leaves no values. `AppState` also holds the values the next build reads:
+  `param_values`, the Seed field's `seed` with its raw `seed_text`, and the scheduled actions in
+  `schedule`.
+  `AppState::build_setup` checks all three through `RunSetup::from_parts`. `AppState::build_refusal`
+  returns Build's disabled reason, which Playback shows. It shows a `SetupError` through
+  `setup_message`, as it shows `INVALID_SEED` and a shortfall through `too_large_message`.
+  `reset_simulation` builds nothing while the check fails, and `open_run` refuses a replay
+  `RunSetup::from_replay` refuses. `build_runner` builds the checked setup, and `reset_simulation`
+  builds it through the private `load`, which sends `SimCommand::SetSchedule` to the new runner when
+  the schedule is not empty, then pins the setup's entry and records `loaded_values`, `loaded_seed`
+  and `loaded_schedule`.
   `seed_pending` and `schedule_pending` compare each with its loaded copy, and the Reload needed
   notice counts both. A `None` seed is the model's default, the constant `henad-cli` uses without
   `--seed`. The engines take `seed.map_or(CONST, mix_seed)`, and the field keeps `None` as a state
@@ -1397,7 +1406,8 @@ cargo builds a primary package with a static std, and every member linking it wo
   and schedule, rebuilds, sends `RunTo` for `OpenAt::Tick`, and sets `focus_request` to the
   Viewport. `HenadApp::ui` applies that request through `dock::focus_tab` after
   `DockArea::show_inside`. The panels draw while the dock is borrowed. `OpenedRun` names the run in
-  Playback. A live param edit, an action press or a build from other values marks it modified
+  Playback. A live param edit, an action press, or a build from other values or under another
+  `ModelSource` than the `OpenedRun::source` it was opened with marks it modified
   (`settle_opened_run`), and a build of another model or Offload drops it.
   `AppState::open_setup(&RunSetup, OpenAt)` builds the set's entry under the setup's id from its
   values, seed and schedule through the same fields, keeps a default seed as `None`, and records no
@@ -1405,16 +1415,54 @@ cargo builds a primary package with a static std, and every member linking it wo
   the compute filter hid, say) leaves nothing selected, keeps an `OpeningRefusal` (a lead line such
   as "Run not opened" and the reason) in `opening_refusal`, which the Model panel shows with "Select
   a model to continue." until a model is picked, or above "No model in this build runs on this
-  device." when none runs here, and brings the Model tab to the front. `export/metadata.rs` writes
-  `loaded_values` as `params`, the loaded `seed` (null for the default), `scheduled_actions`, the
-  `host` build from `AppState::product` and the `model_source` build, and reads `engine_version`
-  from `ENGINE_BUILD`. A sweep's manifest records the product's host build as well. `about.rs` draws the product's name,
-  its links and its build rows, Henad's logo and tagline for the official app and the host's icon
-  otherwise (decoded once into the `OnceCell` `logo_texture`, a failed decode included), a Built on
-  row from `ENGINE_BUILD` (with henad-core's version when it differs) for any other product, and one
-  Models row per distinct `ModelSource` build, showing the hash of its sources when the build stamps
-  no commit, `plugin` beside a plugin's build, and the code hash of a runtime model under its id.
-  Copy copies the name and every row. The menu entry reads "About" and the product name.
+  device." when none runs here, and brings the Model tab to the front.
+  `state/install.rs` is the install path. `AppState::install_models(&ModelSet)` puts each entry in
+  place of the set's entry with its id through `ModelSet::replace`, or appends it, so a runtime or
+  plugin entry can shadow a built-in id. A replacement with the same `ModelSource` and `schema_hash`
+  changes nothing else. For each other replaced id it carries a selected model whose `schema_hash`
+  changed to the replacement by id: `param_values` through `remap_values` (a choice by its option's
+  name, and a new parameter or a value the new descriptor rejects at its default), the
+  `pending_reload` marks, and the schedule through `remap_schedule`, which drops an entry whose
+  action is gone. A selected model whose hash matches keeps everything. `SweepPanel::forget_model`
+  drops the id's `ColumnsBuild`, its draft when the hash changed, and the last check, and
+  `ResultsPanel::model_replaced` has the store recompute `schema_matches`, `changed_builds`,
+  `replays_exactly` and `code_matches` against the replacement (`ResultsStore::model_changed`). The
+  store keeps a `RecordedModel` for it: the recorded builds, schema hash, replay flag and manifest
+  of a folder, or the builds of the entry an in-app sweep ran, and a folder read on its thread
+  compares again with the current set when it lands. A loaded model replaced by another source
+  rebuilds at once while `run_at_start` holds (no snapshot past tick 0, not playing, no run to a
+  tick pending) and `AppState::rebuild_refusal` returns no reason. Otherwise it sets
+  `pending_rebuild` (`PendingRebuild`, with the run's values the new code does not take and the
+  run's actions it drops, counted against the loaded entry), which `ui/rebuild.rs` shows as the
+  Rebuild model modal. Rebuild calls `AppState::rebuild_loaded`: Build for the selected model, or
+  the running values carried by id (`carried_setup`) for a model loaded while another one is
+  selected, which keeps the selection. `rebuild_refusal` is `build_refusal` for the selected model,
+  and the carried setup's `SetupError` or device shortfall otherwise. It disables Rebuild with its
+  reason, and `rebuild_loaded` checks it before any teardown. Cancel keeps the old run under its
+  pinned entry, and the Parameters banner (`notice_content`, a `ParamsNotice`) reads "Model code
+  changed. Press Build to apply.", and Run's disabled reason names the change too. `KeptDraft` keeps
+  the entry its session started with, a session's Save spec writes against it, and Edit sweep
+  restores the kept values only while the declarations match. No caller in the app installs a set
+  yet, and the module, `forget_model` and `model_replaced` carry `expect(dead_code)` outside tests.
+  `src/tests/install.rs` holds `the_panels_describe_the_running_entry`,
+  `an_opened_run_is_modified_after_its_source_changes`,
+  `install_keeps_values_when_the_schema_matches`,
+  `install_remaps_values_by_id_when_the_schema_changes`, `results_flag_runs_of_replaced_code`,
+  `install_works_for_every_model_type`, `a_loaded_run_past_tick_zero_asks_before_rebuilding`,
+  `cancel_keeps_the_old_run_and_flags_the_code_change`, `an_install_during_a_run_to_asks_first` and
+  `a_rebuild_the_new_code_refuses_leaves_the_old_run_alone`, the Sweep tab's test
+  `install_forgets_the_sweep_tab_columns_of_the_model`, and the store's
+  `a_folder_store_compares_its_runs_with_a_replaced_entry`. Keep them.
+  `export/metadata.rs` writes `loaded_values` as `params`, the loaded `seed` (null for the default),
+  `scheduled_actions`, the `host` build from `AppState::product` and the `model_source` build, and
+  reads `engine_version` from `ENGINE_BUILD`. A sweep's manifest records the product's host build as
+  well. `about.rs` draws the product's name, its links and its build rows, Henad's logo and tagline
+  for the official app and the host's icon otherwise (decoded once into the `OnceCell`
+  `logo_texture`, a failed decode included), a Built on row from `ENGINE_BUILD` (with henad-core's
+  version when it differs) for any other product, and one Models row per distinct `ModelSource`
+  build, showing the hash of its sources when the build stamps no commit, `plugin` beside a plugin's
+  build, and the code hash of a runtime model under its id. Copy copies the name and every row. The
+  menu entry reads "About" and the product name.
   The runs table's Copy command builds `ResultsStore::cli_command(program, run_id)` from the
   product's `cli_command` and is hidden without one, and the Sweep tab's advice names it through
   `options::cli_phrase`, or "on the command line" without one.
@@ -1508,7 +1556,9 @@ cargo builds a primary package with a static std, and every member linking it wo
   `ui::results::poll` takes the `egui::Context` for it.
   Resume sweep resumes an incomplete folder through `SweepRun::resume_directory`, with the memory
   budgets its manifest records and automatic concurrency (`SessionExecution::recorded`), and the
-  folder is read again once that sweep ends. `henad-app --open DIR` opens a folder at start.
+  folder is read again once that sweep ends. Resume is disabled while `ResultsStore::code_matches`
+  fails (`code_refusal`), for a folder of runtime or plugin code other than the app's entry
+  (`Manifest::code_matches`). `henad-app --open DIR` opens a folder at start.
   `ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
   PSE axes, the budget, and each method's other settings in a nested Method settings section. An
   output picked there that the runs do not record joins the Outputs section, and Use range from

@@ -115,12 +115,12 @@ Reload
 
 There are 4 possible banners:
 
-| Banner                                      | Meaning                                                                                |
-| ------------------------------------------- | -------------------------------------------------------------------------------------- |
-| :material-information: No simulation loaded | Nothing built yet. Parameters apply on the first build.                                |
-| :material-alert: Selected model not loaded  | A model different from the running one is selected.                                    |
-| :material-alert: Reload needed              | Reload parameters, the seed or the scheduled actions have been edited but not applied. |
-| :material-alert: Too large for this device  | The selected parameters require too many resources. Try lowering them.                 |
+| Banner                                      | Meaning                                                                                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| :material-information: No simulation loaded | Nothing built yet. Parameters apply on the first build.                                                                                    |
+| :material-alert: Selected model not loaded  | A model different from the running one is selected.                                                                                        |
+| :material-alert: Reload needed              | Reload parameters, the seed or the scheduled actions have been edited but not applied, or the [model's code changed](#model-code-changes). |
+| :material-alert: Too large for this device  | The selected parameters require too many resources. Try lowering them.                                                                     |
 
 ### Seed
 
@@ -872,7 +872,7 @@ With the CLI installed, it runs as it is.
 From a clone, run it as `target/release/henad-cli` after a release build, or put `cargo run --release -p henad-cli --` instead of `henad-cli`.
 
 The <span class="ui" markdown>:material-play-circle-outline: Playback</span> tab labels the opened run, as in **Sweep run 6: config 1, replicate 1**, or **Search run 6: candidate 1, replicate 2** for a run of a search.
-A live parameter edit or an action press adds **(modified)** to the name.
+A live parameter edit, an action press or a rebuild under [changed code](#model-code-changes) adds **(modified)** to the name.
 GPU Boids is the one example model whose runs do not replay, for the reason under [Seed](#seed).
 For a model that declares it does not replay exactly, a note beside <span class="ui" markdown>:material-play-box-outline: Open</span> says so, and the same note shows under the run's name in the <span class="ui" markdown>:material-play-circle-outline: Playback</span> tab.
 
@@ -881,6 +881,7 @@ They are also disabled when the model rejects the sweep's spec, for example afte
 A sweep of more than 1,048,576 configurations disables them as well.
 The app opens such a sweep from `runs.csv` alone, without planning it.
 A warning shows when the model's parameters, stats or actions changed after the sweep ran, or when the build of Henad or of the model differs from any build a session of the sweep recorded, and the replay might then differ.
+The same warning shows for a sweep that ran in this window once the [model's code changes](#model-code-changes).
 A model crate whose `build.rs` does not call `henad_build::stamp_commit` has an unidentified build that cannot be compared.
 A second warning then reads **Model build is unidentified**, below any warning of a change.
 
@@ -906,6 +907,8 @@ It keeps the memory budgets that the folder's manifest records, and a line under
 **Concurrent runs** is automatic, as on a new sweep.
 `henad-cli --resume` takes the concurrency and the memory budgets from its flags and its spec's `[execution]` table instead.
 For a search the button reads <span class="ui" markdown>:material-play: Resume search</span>, and it [replays the search](search.md#resuming-a-search) up to where it stopped before running the rest.
+The button is disabled when the folder's runs came from runtime or plugin code other than the model's code in this app.
+`henad-cli --resume` refuses such a folder as well.
 The progress shows in the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab, and the folder is read again once the sweep ends.
 
 ## :material-gauge: Performance tab
@@ -969,6 +972,36 @@ A banner at the top appears when there are potential compatibility issues with t
 | ------------------------------------------------ | ----------------------------------------------------------------------------------- |
 | :material-information: GPU performance uncertain | No discrete GPU was directly detected. This may or may not affect performance.      |
 | :material-alert: No GPU detected                 | Rendering is going through a software rasteriser, and GPU models will be very slow. |
+
+## Model code changes
+
+The code behind a model can change while the app runs, as when a [dev host](hot-reload.md) reloads its models.
+The new code replaces the model of the same id, and the panels describe it at once.
+
+The running simulation keeps the code it was built with.
+A run still at tick 0, neither playing nor running to a tick, is rebuilt under the new code straight away.
+For any other run, a **Rebuild model** dialog appears first, reading **The model will be rebuilt from tick 0. The current run will be lost.**
+
+<span class="ui">Rebuild</span>
+: Ends the run and builds the model again from tick 0, under the new code.
+  For the selected model this is the same as pressing <span class="ui" markdown>:material-restart: Build</span>.
+  The button is disabled when the new code cannot be built, for example when it is too large for this device, and its tooltip gives the reason.
+  The run then keeps going, and a run at tick 0 shows the dialog as well.
+
+<span class="ui">Cancel</span>
+: Keeps the run going under the code it was built with.
+  The **:material-alert: Reload needed** banner then reads **Model code changed. Press :material-restart: Build to apply.**
+  Parameter edits apply at the next build, and the action buttons stay disabled until then.
+
+When the new code declares other parameters, each value is carried over by the parameter's id.
+A parameter new to the code, or a value outside its new bounds, takes its default.
+The dialog counts the running values that the new code does not take, as in **2 parameters will use their defaults.**
+A scheduled action that the new code no longer declares is removed, and the dialog counts the run's removed actions as well.
+The seed stays as it is.
+
+The <span class="ui" markdown>:material-flask-outline: Sweep</span> tab reads the model's outputs again, and starts a new draft when the parameters, stats or actions changed.
+A sweep that is running keeps the code it started with.
+In the <span class="ui" markdown>:material-chart-box-outline: Results</span> tab, runs of other code carry the warning under [Opening a run](#opening-a-run), and a folder of other runtime or plugin code cannot be [resumed](#opening-results).
 
 ## Model build and simulation errors
 

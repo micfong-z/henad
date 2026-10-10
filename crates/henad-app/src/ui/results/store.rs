@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use henad_compute::entry::{ModelEntry, ModelLookupError};
 use henad_core::explore::factor::FactorTarget;
+use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::{Config, Plan};
@@ -26,7 +27,7 @@ use henad_core::explore::spec::{ACTION_COLUMN_PREFIX, ActionSpec};
 use henad_core::explore::summary::{ReplicateSummary, RunningMoments};
 use henad_core::explore::value::{format_value, parse_value};
 use henad_core::params::ParamDescriptor;
-use henad_explore::output::manifest::{BuildRole, RecordedBuild};
+use henad_explore::output::manifest::{BuildRole, Manifest, RecordedBuild};
 use henad_explore::output::search_tables::SearchHistory;
 use henad_explore::result_set::ResultSet;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
@@ -488,20 +489,75 @@ impl SortValue {
     }
 }
 
-/// Returns the roles whose current build, Henad's build or the build of the crate that registered `entry`, differs
-/// from a build that a session of `set` recorded for that role, and then the roles whose builds cannot be compared.
+/// Declarations and builds that a sweep recorded of its model. The store compares them with the app's entry.
+#[derive(Debug, Clone)]
+struct RecordedModel {
+    /// Henad's builds that the sessions recorded.
+    engine_builds: Vec<RecordedBuild>,
+    /// Builds of the model's code that the sessions recorded.
+    model_builds: Vec<RecordedBuild>,
+    /// Hash of the model's declarations, `None` for a manifest whose hash does not read as one.
+    schema_hash: Option<u64>,
+    /// Whether the sweep recorded that the model replays exactly.
+    replays_exactly: bool,
+    /// Manifest of a folder's sweep, `None` for a sweep run in this app. A resume of the folder compares the code of
+    /// its sessions with the app's entry ([`Manifest::code_matches`]).
+    manifest: Option<Manifest>,
+}
+
+impl RecordedModel {
+    /// Returns the model that the manifest of `set` records.
+    fn of_result_set(set: &ResultSet) -> Self {
+        let model = &set.manifest().model;
+        Self {
+            engine_builds: set.recorded_builds(BuildRole::Engine),
+            model_builds: set.recorded_builds(BuildRole::Model),
+            schema_hash: u64::from_str_radix(&model.schema_hash, 16).ok(),
+            replays_exactly: model.replays_exactly,
+            manifest: Some(set.manifest().clone()),
+        }
+    }
+
+    /// Returns the model of a sweep of `entry` on this build of Henad.
+    fn of_entry(entry: &ModelEntry) -> Self {
+        Self {
+            engine_builds: vec![RecordedBuild::engine()],
+            model_builds: vec![RecordedBuild::from(entry.source())],
+            schema_hash: Some(schema_hash(&entry.schema())),
+            replays_exactly: entry.metadata().replays_exactly,
+            manifest: None,
+        }
+    }
+
+    /// Returns whether `entry` runs the code a resume of the folder needs, `false` without an entry.
+    ///
+    /// For a sweep run in this app, always `true` with an entry. The Results tab never resumes such a sweep.
+    fn code_matches(&self, entry: Option<&ModelEntry>) -> bool {
+        entry.is_some_and(|entry| {
+            self.manifest
+                .as_ref()
+                .is_none_or(|manifest| manifest.code_matches(entry.source()))
+        })
+    }
+}
+
+/// Returns the roles whose current build, Henad's build or the build of the code of `entry`, differs from a build in
+/// `recorded` for that role, and then the roles whose builds cannot be compared.
 ///
 /// A build that records neither a commit nor a source hash is never the same as another build, itself included. A role
 /// goes in the second list when each of its differences is between two builds of one package and version, and one
 /// of the two is such a build.
-fn compare_builds(set: &ResultSet, entry: &ModelEntry) -> (Vec<BuildRole>, Vec<BuildRole>) {
+fn compare_builds(recorded: &RecordedModel, entry: &ModelEntry) -> (Vec<BuildRole>, Vec<BuildRole>) {
     let mut changed = Vec::new();
     let mut unidentified = Vec::new();
-    for (role, current) in [
-        (BuildRole::Engine, RecordedBuild::engine()),
-        (BuildRole::Model, RecordedBuild::from(entry.source())),
+    for (role, recorded, current) in [
+        (BuildRole::Engine, &recorded.engine_builds, RecordedBuild::engine()),
+        (
+            BuildRole::Model,
+            &recorded.model_builds,
+            RecordedBuild::from(entry.source()),
+        ),
     ] {
-        let recorded = set.recorded_builds(role);
         let mut differing = recorded
             .iter()
             .filter(|recorded| !recorded.same_build(&current))
@@ -544,6 +600,13 @@ pub struct ResultsStore {
     /// Whether two builds of the model on one seed step through identical states, as the model and the sweep both
     /// declare.
     pub replays_exactly: bool,
+    /// Whether the app's entry for the model runs the code that every session of a folder's sweep ran its runs with,
+    /// as a resume of the folder requires.
+    ///
+    /// `false` without an entry. For a sweep run in this app, `true` whenever the app has an entry.
+    pub code_matches: bool,
+    /// Model as the sweep recorded it. [`Self::model_changed`] compares it with a replacement.
+    recorded: RecordedModel,
     /// Whether every run of the sweep is held.
     pub complete: bool,
     /// Settings a resume runs with: the memory budgets the folder's manifest records, and automatic concurrency.
@@ -598,6 +661,8 @@ impl ResultsStore {
             changed_builds: Vec::new(),
             unidentified_builds: Vec::new(),
             replays_exactly: entry.metadata().replays_exactly,
+            code_matches: true,
+            recorded: RecordedModel::of_entry(entry),
             complete: false,
             recorded_execution: None,
             folder,
@@ -671,8 +736,9 @@ impl ResultsStore {
         let (model_id, model_name) = (recorded.id.clone(), recorded.name.clone());
         let entry = model.as_ref().ok().copied();
         let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry.schema()));
+        let recorded_model = RecordedModel::of_result_set(&set);
         let (changed_builds, unidentified_builds) =
-            entry.map_or_else(Default::default, |entry| compare_builds(&set, entry));
+            entry.map_or_else(Default::default, |entry| compare_builds(&recorded_model, entry));
         let replays_exactly = recorded.replays_exactly && entry.is_none_or(|entry| entry.metadata().replays_exactly);
         let search = set
             .spec()
@@ -728,6 +794,8 @@ impl ResultsStore {
             changed_builds,
             unidentified_builds,
             replays_exactly,
+            code_matches: recorded_model.code_matches(entry),
+            recorded: recorded_model,
             complete: set.is_complete(),
             recorded_execution: Some(SessionExecution::recorded(&set.manifest().execution)),
             folder: set.dir().map(Path::to_path_buf),
@@ -1449,6 +1517,22 @@ impl ResultsStore {
                 .map(|level| SortValue::Whole(level as u64)),
             RunsColumn::Output(output) => outcome.reducers.get(output).copied().flatten().map(SortValue::Real),
         }
+    }
+
+    /// Compares the declarations and builds the sweep recorded with `entry`, the app's entry under the sweep's model id
+    /// after the set's entry was replaced, or `None` when the app cannot run the model.
+    ///
+    /// A replay of a run of other code then carries the warning that the replay might differ, and a folder of runtime
+    /// or plugin code that differs from `entry` cannot be resumed.
+    pub fn model_changed(&mut self, entry: Option<&ModelEntry>) {
+        self.schema_matches = entry.is_some_and(|entry| {
+            entry.id() == self.model_id && self.recorded.schema_hash == Some(schema_hash(&entry.schema()))
+        });
+        (self.changed_builds, self.unidentified_builds) =
+            entry.map_or_else(Default::default, |entry| compare_builds(&self.recorded, entry));
+        self.replays_exactly =
+            self.recorded.replays_exactly && entry.is_none_or(|entry| entry.metadata().replays_exactly);
+        self.code_matches = self.recorded.code_matches(entry);
     }
 
     /// Reason the runs cannot replay, `None` when they can.
@@ -3136,6 +3220,78 @@ mod tests {
         let store = open();
         assert_eq!(store.changed_builds, [BuildRole::Engine]);
         assert_eq!(store.unidentified_builds, [BuildRole::Model]);
+    }
+
+    /// Results read from files compare their recorded builds and declarations with the entry that replaced the
+    /// sweep's model, as Open on a run of other code warns.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_folder_store_compares_its_runs_with_a_replaced_entry() {
+        use henad_core::provenance::ModelCode;
+        use henad_explore::handle::SweepOutput;
+        use henad_explore::output::manifest::BuildRole;
+        use henad_explore::progress::NoProgress;
+        use henad_explore::result_set::ResultSet;
+        use henad_explore::sweep::{Provenance, SweepOptions, run_spec};
+
+        use crate::tests::support::edited_sir;
+        use crate::ui::results::store::ResultsSource;
+
+        let models = example_models();
+        let sir = models.get("sir").expect("SIR is registered");
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = [("grid_width", "8"), ("grid_height", "8")]
+            .map(|(id, value)| (id.to_owned(), value.to_owned()))
+            .to_vec();
+        spec.run.steps = 3;
+        let options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
+        let record =
+            run_spec(sir, None, &spec, SweepOutput::Memory, &options, &mut NoProgress).expect("the sweep runs");
+        let files = record.files.expect("a sweep in memory returns its files");
+        let named = files
+            .entries()
+            .into_iter()
+            .map(|(name, bytes)| (name.to_owned(), bytes.to_vec()))
+            .collect();
+        let set = ResultSet::from_files(named, usize::MAX).expect("the files read");
+        let mut store = ResultsStore::from_result_set(
+            set,
+            ResultsSource::Files(Vec::new()),
+            models.lookup("sir", None),
+            usize::MAX,
+        );
+        assert!(store.schema_matches);
+        assert_eq!(store.changed_builds, []);
+        assert!(store.code_matches);
+
+        let recoded = sir.clone().__with_code(ModelCode::new("henad-app-test", "edited sir"));
+        store.model_changed(Some(&recoded));
+        assert!(store.schema_matches);
+        assert_eq!(store.changed_builds, [BuildRole::Model]);
+        assert!(
+            !store.code_matches,
+            "a resume refuses runtime code the sweep did not run"
+        );
+        assert_eq!(
+            super::super::code_refusal(Some(&store), "sweep").as_deref(),
+            Some("Model code changed since this sweep ran")
+        );
+
+        store.model_changed(Some(&edited_sir()));
+        assert!(!store.schema_matches, "the edit declares other parameters");
+        assert!(store.code_matches, "a compiled change is a warning alone");
+
+        store.model_changed(None);
+        assert!(!store.schema_matches);
+        assert_eq!(store.changed_builds, [], "no entry to compare with");
+        assert!(!store.code_matches);
+
+        store.model_changed(Some(sir));
+        assert!(store.schema_matches);
+        assert_eq!(store.changed_builds, [], "the sweep's own code again");
+        assert!(store.replays_exactly);
+        assert!(store.code_matches);
+        assert_eq!(super::super::code_refusal(Some(&store), "sweep"), None);
     }
 
     /// A sweep whose manifest records more configs than the bound is never planned. It lists the configs `runs.csv`

@@ -386,7 +386,7 @@ const STAMP_COMMIT_HINT: &str = "Call henad_build::stamp_commit in the model cra
 /// A change of the model's parameters, stats or actions, or of a build, comes first, and a build that cannot be
 /// compared after it. The list is empty when the model's declarations and every recorded build match the current
 /// ones.
-fn replay_warnings(store: &ResultsStore) -> Vec<(String, Option<&'static str>)> {
+pub(crate) fn replay_warnings(store: &ResultsStore) -> Vec<(String, Option<&'static str>)> {
     let noun = if store.is_search() { "search" } else { "sweep" };
     let changed = if store.schema_matches {
         match store.changed_builds.as_slice() {

@@ -443,7 +443,7 @@ fn with_hint(response: egui::Response, hint: Option<&str>) -> egui::Response {
 }
 
 /// Draws a banner on the state of the parameters when one applies: a size the device cannot hold, no simulation,
-/// another model loaded, or edits awaiting a build.
+/// another model loaded, or edits or code awaiting a build.
 fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], width: f32) {
     let pending_count = descriptors
         .iter()
@@ -453,57 +453,102 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
         + usize::from(app.seed_pending())
         + usize::from(app.schedule_pending());
     let shortfalls = app.selection_shortfalls();
-
-    let error = ui.visuals().error_fg_color;
-    let warn = ui.visuals().warn_fg_color;
-    let plain = ui.visuals().text_color();
-
-    let (icon, color, title, detail) = if !shortfalls.is_empty() {
-        (
-            MDI_ALERT,
-            error,
-            "Too large for this device",
-            format!("{}. Reduce the size parameters to build.", shortfalls.join(". ")),
-        )
-    } else if app.sim_thread.is_none() {
-        (
-            MDI_INFORMATION,
-            plain,
-            "No simulation loaded",
-            format!("Parameters will be applied after {MDI_RESTART}\u{a0}Build."),
-        )
-    } else if !app.selection_is_loaded() {
-        let running = app.loaded_entry().map_or("Another model", |entry| entry.name());
-        (
-            MDI_ALERT,
-            warn,
-            "Selected model not loaded",
-            format!(
-                "The parameters above do not apply to {running}. Press {MDI_RESTART}\u{a0}Build to switch to the selected model."
-            ),
-        )
-    } else if pending_count > 0 {
-        let (plural, verb) = if pending_count == 1 {
-            ("", "takes")
-        } else {
-            ("s", "take")
-        };
-        (
-            MDI_ALERT,
-            warn,
-            "Reload needed",
-            format!("{pending_count} change{plural} {verb} effect after {MDI_RESTART}\u{a0}Build."),
-        )
-    } else {
+    let Some(notice) = notice_content(app, pending_count, &shortfalls) else {
         return;
+    };
+    let color = match notice.tone {
+        ParamsNoticeTone::Error => ui.visuals().error_fg_color,
+        ParamsNoticeTone::Warn => ui.visuals().warn_fg_color,
+        ParamsNoticeTone::Plain => ui.visuals().text_color(),
     };
 
     ui.add_space(8.0);
     ui.scope(|ui| {
         ui.set_max_width(width);
         ui.separator();
-        banner(ui, icon, color, title, &detail);
+        banner(ui, notice.icon, color, notice.title, &notice.detail);
     });
+}
+
+/// Banner on the state of the parameters, as [`notice_content`] returns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParamsNotice {
+    pub icon: &'static str,
+    pub tone: ParamsNoticeTone,
+    pub title: &'static str,
+    pub detail: String,
+}
+
+/// Colour role of a [`ParamsNotice`], read from the theme when it is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParamsNoticeTone {
+    Error,
+    Warn,
+    Plain,
+}
+
+/// Returns the banner on the state of the parameters, or `None` when none applies.
+///
+/// `pending_count` is the number of edits of the selection awaiting a build, and `shortfalls` holds the reasons the
+/// device cannot build the selection.
+pub(crate) fn notice_content(app: &AppState, pending_count: usize, shortfalls: &[String]) -> Option<ParamsNotice> {
+    let notice = |icon, tone, title, detail| {
+        Some(ParamsNotice {
+            icon,
+            tone,
+            title,
+            detail,
+        })
+    };
+    if !shortfalls.is_empty() {
+        return notice(
+            MDI_ALERT,
+            ParamsNoticeTone::Error,
+            "Too large for this device",
+            format!("{}. Reduce the size parameters to build.", shortfalls.join(". ")),
+        );
+    }
+    if app.sim_thread.is_none() {
+        return notice(
+            MDI_INFORMATION,
+            ParamsNoticeTone::Plain,
+            "No simulation loaded",
+            format!("Parameters will be applied after {MDI_RESTART}\u{a0}Build."),
+        );
+    }
+    if app.code_pending() {
+        return notice(
+            MDI_ALERT,
+            ParamsNoticeTone::Warn,
+            "Reload needed",
+            format!("Model code changed. Press {MDI_RESTART}\u{a0}Build to apply."),
+        );
+    }
+    if !app.selection_is_loaded() {
+        let running = app.loaded_entry().map_or("Another model", |entry| entry.name());
+        return notice(
+            MDI_ALERT,
+            ParamsNoticeTone::Warn,
+            "Selected model not loaded",
+            format!(
+                "The parameters above do not apply to {running}. Press {MDI_RESTART}\u{a0}Build to switch to the selected model."
+            ),
+        );
+    }
+    if pending_count > 0 {
+        let (plural, verb) = if pending_count == 1 {
+            ("", "takes")
+        } else {
+            ("s", "take")
+        };
+        return notice(
+            MDI_ALERT,
+            ParamsNoticeTone::Warn,
+            "Reload needed",
+            format!("{pending_count} change{plural} {verb} effect after {MDI_RESTART}\u{a0}Build."),
+        );
+    }
+    None
 }
 
 #[cfg(test)]

@@ -23,9 +23,7 @@ use henad_core::explore::spec::SweepSpec;
 use henad_core::explore::value::parse_value;
 use henad_core::provenance::ModelSource;
 
-use crate::output::manifest::{
-    BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, RecordedBuild, codes_differ,
-};
+use crate::output::manifest::{BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, RecordedBuild};
 use crate::output::read::{ReadError, parse_one, record_ends};
 use crate::output::runs_csv::{ID_COLUMNS, NOTE_COLUMN, OUTCOME_COLUMNS};
 use crate::output::search_tables::{
@@ -363,13 +361,9 @@ impl ResultSet {
     /// resume of the folder sets when either code is runtime or plugin code.
     ///
     /// Always `true` while the folder and `source` hold compiled code alone. A compiled build that changed shows in
-    /// [`Self::recorded_builds`] instead.
+    /// [`Self::recorded_builds`] instead. [`Manifest::code_matches`] makes the same comparison.
     pub fn code_matches(&self, source: &ModelSource) -> bool {
-        let current = RecordedBuild::from(source);
-        self.manifest
-            .run_model_builds()
-            .iter()
-            .all(|build| !codes_differ(build.as_ref(), Some(&current)))
+        self.manifest.code_matches(source)
     }
 
     /// Plans the recorded spec against `schema`.
