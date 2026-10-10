@@ -40,7 +40,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 
 ### Migrating to 0.4
 
-- Models: a model built through the authoring traits and helpers compiles unchanged, as the tutorial's and the template's do; rename a choice option holding `,` or `:` or named `all`.
+- Models: model code built through the authoring traits and helpers compiles unchanged; tests that read descriptor or stat fields switch to the accessors, as the tutorial's `gpu_life` and `gpu_foraging` tests did (`d.kind().default_value()`, `s.value().clone()`); rename a choice option holding `,` or `:` or named `all`.
 - Descriptors: read fields through accessors (`descriptor.id()`, `.label()`, `.kind()`, ...); build them through the helpers, `ParamDescriptor::new`, `StatDescriptor::owned` or `ActionDescriptor::owned` (struct literals no longer compile); clone an `ActionDescriptor` where it was copied; a choice's options are `ChoiceOptions` (`get`, `iter`, `position`); pass `&[StatDescriptor]` to `stat_entries`; `known` lists and `ValueError::UnknownOption.options` are `Vec<String>`.
 - Views: `GridView`, `PointView` and `EdgeView` borrow their palettes for `'a`; a snapshot's palette is a `Vec<[u8; 4]>`.
 - Metadata: build `ModelMetadata` with `ModelMetadata::new(backend, structure).palette(..).replays_exactly(..)`; add a wildcard arm to matches on `Structure`.

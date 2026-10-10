@@ -2369,8 +2369,11 @@ is about not undoing them.
   stamp. Otherwise the shaders' return would match the old stamp and keep the empty file.
   `ShaderBuildError`'s `Debug` writes its `Display`. Uniform structs, workgroup sizes and bind group
   layouts therefore come from the WGSL, and each model asserts its own struct against the generated
-  one. Shared WGSL is reached with `#import henad::<module>`, resolved at build time, so no shader
-  is assembled at runtime any more. henad-build also reads each entry's `@group(0)` lines into
+  one. Shared WGSL is reached with `#import henad::<module>`, resolved at build time for every
+  compiled entry point. A grid rule's step, display and reduce shaders are composed at run time
+  instead, through `gpu/compose.rs` behind `runtime-wgsl`. Their bindings and the step's `Params`
+  block come from the engine's template (`gpu/runtime_grid/template.rs`), and none of the generated
+  assertions above cover them. henad-build also reads each entry's `@group(0)` lines into
   `binding_decls`, in `@binding` order, and fails the build on any line holding `@binding` or
   `@group` in another form than `@group(G) @binding(N) var<...> name: Type;` (`BindingLine`), on a
   sampler, a sampled texture or another address space (`UnsupportedBinding`), or on a gap in the

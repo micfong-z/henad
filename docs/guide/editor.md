@@ -30,7 +30,7 @@ Save what you want to keep first.
 
 ## The model file
 
-The Life starter is this file, without its comments:
+The Life starter is this file without the comments outside its step:
 
 ```toml title="life_rule.toml"
 --8<-- "crates/henad-explore/specs/models/life_rule.toml"
@@ -39,37 +39,10 @@ The Life starter is this file, without its comments:
 The header names the format, its version and the kind of model, then the rule's `id`, `name` and `description`.
 The `id` is the model's id in the app, and a rule whose id is already in the app replaces that model, a built-in one included.
 
-`[grid]`
-: The default `width` and `height` of the grid, and its `boundary`, `torus` or `bounded`.
-
-`[[state]]`
-: One table per state a cell can take, numbered from 0 in the order they appear.
-  Each has a `label` and an RGBA `color`.
-  An `initial` names the `f32` parameter that gives the state's share of the cells at tick 0, and the one state without an `initial` takes the cells left over.
-
-`[[param]]`
-: One table per parameter, with the keys `henad-cli --params --json` prints: `id`, `label`, `kind` (`f32`, `u32`, `bool` or `choice`), `min`, `max`, `default`, and an `f32`'s `step`.
-  The app puts **Grid Width** and **Grid Height** in front of them.
-  Every parameter of a grid rule applies when the model is built.
-
-`[step]`
-: The step, between `'''` and `'''`.
-  It defines `fn step_cell(cell: u32, rng: ptr<function, u32>) -> u32`, which returns the next state of one cell.
-
-A step reads its neighbourhood through a few names that the engine declares in front of it:
-
-| Name | What it gives |
-|---|---|
-| `neighbor(dx, dy)` | State of the cell `dx` columns and `dy` rows away, or 0 past the edge of a bounded grid |
-| `moore_count(state)` | Number of the eight surrounding cells in `state` |
-| `von_neumann_count(state)` | Number of the four adjacent cells in `state` |
-| `NUM_STATES` | Number of states |
-| `DEAD`, `ALIVE`, ... | One constant per state, its label in upper case with spaces as underscores |
-| `params.density`, ... | Value of each parameter, by its id |
-
-`rng` holds a random word for the cell and the tick.
-Import the shared random functions to draw from it, as in `#import henad::rng::{next_float}` and `next_float(rng, 1.0)`.
-A step that returns a state past the last one leaves the cell in the last state.
+The tables declare the grid, the states and the parameters, and `[step]` holds the step between `'''` and `'''`.
+The step defines `fn step_cell(cell: u32, rng: ptr<function, u32>) -> u32`, which returns the next state of one cell.
+[Model files](../reference/model-files.md#the-format) lists the keys of each table.
+[What the template declares](../reference/model-files.md#what-the-template-declares) lists the names a step reads its neighbours and parameters through, and [Randomness](../reference/model-files.md#randomness) describes how a step draws from `rng`.
 
 ## Apply
 
@@ -101,14 +74,8 @@ The line numbers are those of the gutter beside the code.
 Press a problem to move the cursor to it.
 The list holds the problems of the last Apply, and an edit since then shows its problems on the next one.
 
-The check refuses a step that could run without end or reach past its own cell:
-
-- loops: `loop`, `for` and `while`,
-- a chain of function calls past 65,536 expressions and statements for one cell,
-- bindings, entry points of its own, atomics and barriers,
-- writes to any memory but the step's own variables, and reads of the engine's buffers but `params`,
-- a name the engine declares, declared again,
-- variables past the 8,192-byte limits of WGSL, and a step past 64 KiB.
+The check refuses a step that could run without end or reach past its own cell.
+[What is refused](../reference/model-files.md#what-is-refused) lists each refusal, and [Limits](../reference/model-files.md#limits) the sizes a step has to keep within.
 
 The device can still refuse a rule that the check passed, as a browser's WebGPU can.
 When it refuses the rule as the rule is built, before the run passes tick 0, the Editor reads **Model build failed. Fix the problem below.** over the device's message, and the run is gone.
