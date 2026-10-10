@@ -19,8 +19,11 @@ Before we start, make sure you have [installed Henad](installation.md) and can [
 Henad uses a docking UI powered by [egui_dock](https://github.com/anhosh/egui_dock).
 You can resize each panel, collapse or expand them, move them around, and even drag a tab into its own window.
 
-In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists all 12 tabs and highlights the open ones, and is the only way to reopen a tab you closed.
+In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists all 13 tabs and highlights the open ones, and is the only way to reopen a tab you closed.
 Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bottom to put everything back to the default layout, in case the workspace gets too messy.
+The default layout leaves the <span class="ui" markdown>:material-code-braces: Editor</span> closed.
+
+<span class="ui" markdown>:material-file-outline: File</span> holds <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, which fill the [Editor](#editor-tab) or save its text.
 
 <span class="ui" markdown>:material-information-outline: About</span> links to the source code and this documentation.
 Select <span class="ui" markdown>:material-information-outline: About Henad</span> to open a window with the app's version, commit, source hash, build type and licence, and the version of the crate that provides the models with its commit or the hash of its sources.
@@ -34,6 +37,7 @@ An app built on Henad shows its own name there, and adds a **Built on** row with
 | <span class="ui" markdown>:material-speedometer: Pacing</span>           | Speed control                           |
 | <span class="ui" markdown>:material-cog-outline: Model</span>            | Model selection and metadata            |
 | <span class="ui" markdown>:material-tune: Parameters</span>              | Model parameters, seed and actions      |
+| <span class="ui" markdown>:material-code-braces: Editor</span>          | Grid rules written as model files       |
 | <span class="ui" markdown>:material-flask-outline: Sweep</span>          | Parameter sweeps, searches and progress |
 | <span class="ui" markdown>:material-chart-box-outline: Results</span>    | Plots and runs of a sweep or search     |
 | <span class="ui" markdown>:material-table: Statistics</span>             | Latest value of each stat               |
@@ -55,6 +59,8 @@ Picking a model also loads its default parameters, discarding parameters set in 
 The GPU model entries only appear when a suitable device is detected.
 
 See the [models reference](../reference/models.md) for more details on each model.
+
+Under the dropdown, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> opens the [Editor](#editor-tab) on a new grid rule, and <span class="ui" markdown>:material-code-braces: Edit model</span> opens it on the model file of a selected grid rule.
 
 ### Metadata
 
@@ -988,9 +994,23 @@ A banner at the top appears when there are potential compatibility issues with t
 | :material-information: GPU performance uncertain | No discrete GPU was directly detected. This may or may not affect performance.      |
 | :material-alert: No GPU detected                 | Rendering is going through a software rasteriser, and GPU models will be very slow. |
 
+## :material-code-braces: Editor tab
+
+The <span class="ui" markdown>:material-code-braces: Editor</span> tab edits a grid rule, a GPU grid model written as a model file, and runs it without a restart.
+It is closed in the default layout, and opens to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> when you press <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab, or select it in the View menu.
+
+The code fills the tab, with its line numbers in a gutter beside it, and long lines scroll sideways rather than wrap.
+Above it, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> replace or save the text, and <span class="ui" markdown>:material-check: Apply</span> checks it and installs the rule.
+Below it, a list shows the outcome of the last Apply and each problem at its line and column.
+Press a problem to move the cursor to it.
+
+A text that fails the check leaves the running model alone.
+A rule that passes joins the models under its id and starts from tick 0, after the dialog under [Model code changes](#model-code-changes) when its own run is past tick 0.
+The [Editor](editor.md) page describes the model file, Apply and the limits of grid rules.
+
 ## Model code changes
 
-The code behind a model can change while the app runs, as when a [dev host](hot-reload.md) reloads its models.
+The code behind a model can change while the app runs, as when a [dev host](hot-reload.md) reloads its models or the [Editor](#editor-tab) applies a grid rule.
 The new code replaces the model of the same id, and the panels describe it at once.
 
 The running simulation keeps the code it was built with.
@@ -1068,6 +1088,8 @@ Although Henad is designed so that the web app runs identically to the native ap
   <span class="ui" markdown>:material-tray-arrow-down: Save results</span> therefore stays after its downloads start.
 - A panic in a run of a sweep or search ends the page.
   The desktop app records such a run as failed and carries on.
+- The browser's WebGPU checks a grid rule again when the rule is built, and reports a rule it refuses a moment later.
+  The <span class="ui" markdown>:material-code-braces: Editor</span> shows that report under **Model build failed.**
 - A browser cannot open a folder, and <span class="ui" markdown>:material-folder-open-outline: Open results</span> reads the files picked from a folder.
   <span class="ui" markdown>:material-play: Resume sweep</span>, <span class="ui" markdown>:material-play: Resume search</span> and <span class="ui" markdown>Load series</span> need the desktop app.
 - Boids, Ants and Virus on a Network call maths functions such as `sin` and `cos`.

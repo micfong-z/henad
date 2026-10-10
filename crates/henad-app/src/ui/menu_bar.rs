@@ -1,19 +1,55 @@
 //! The menu bar above the docking area.
 
 use crate::icons::material_design_icons::{
-    MDI_BOOK_OPEN_VARIANT, MDI_CODE_BRACES, MDI_GITHUB, MDI_INFORMATION_OUTLINE, MDI_OPEN_IN_NEW, MDI_RESTART,
-    MDI_VIEW_DASHBOARD_OUTLINE,
+    MDI_BOOK_OPEN_VARIANT, MDI_CODE_BRACES, MDI_FILE_OUTLINE, MDI_FILE_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE,
+    MDI_GITHUB, MDI_INFORMATION_OUTLINE, MDI_OPEN_IN_NEW, MDI_RESTART, MDI_TRAY_ARROW_DOWN, MDI_VIEW_DASHBOARD_OUTLINE,
 };
 use crate::state::AppState;
 use crate::ui::dock::{Tab, default_dock_state, toggle_tab};
+use crate::ui::editor::{self, EMPTY_EDITOR};
 use egui_dock::DockState;
 
 pub fn menu_bar_panel(ui: &mut egui::Ui, dock: &mut DockState<Tab>, app: &mut AppState) {
     egui::Panel::top("menu_bar").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
+            file_menu(ui, app);
             view_menu(ui, dock);
             about_menu(ui, app);
         });
+    });
+}
+
+/// Draws the File menu, whose entries fill the Editor or save its text. Each one that fills the Editor brings it to the
+/// front.
+fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
+    ui.menu_button(format!("{MDI_FILE_OUTLINE}  File"), |ui| {
+        if ui
+            .button(format!("{MDI_FILE_PLUS_OUTLINE}  New grid rule"))
+            .on_hover_text("Open Game of Life rule in Editor")
+            .clicked()
+        {
+            editor::new_grid_rule(app);
+            ui.close();
+        }
+        if ui
+            .button(format!("{MDI_FOLDER_OPEN_OUTLINE}  Open model"))
+            .on_hover_text("Open TOML model file in Editor")
+            .clicked()
+        {
+            editor::open_model(app);
+            ui.close();
+        }
+        let save = ui
+            .add_enabled(
+                !app.editor.text.is_empty(),
+                egui::Button::new(format!("{MDI_TRAY_ARROW_DOWN}  Save model")),
+            )
+            .on_hover_text("Save Editor text to TOML model file")
+            .on_disabled_hover_text(EMPTY_EDITOR);
+        if save.clicked() {
+            editor::save_model(app);
+            ui.close();
+        }
     });
 }
 

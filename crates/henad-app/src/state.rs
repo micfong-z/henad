@@ -21,6 +21,7 @@ use crate::sim_runner::SimRunner;
 use crate::ui::agent_layer::AgentLayer;
 use crate::ui::dock::Tab;
 use crate::ui::edge_layer::EdgeStyle;
+use crate::ui::editor::EditorPanel;
 use crate::ui::export::Recording;
 use crate::ui::export::image::PendingCapture;
 use crate::ui::files::open::spawn_open;
@@ -194,6 +195,7 @@ pub struct AppState {
     opens: (flume::Sender<OpenOutcome>, flume::Receiver<OpenOutcome>),
     pub sweep: SweepPanel,
     pub results: ResultsPanel,
+    pub editor: EditorPanel,
     // GPU batching controls
     pub gpu_adaptive: bool,
     pub gpu_target_ms: f64,
@@ -339,6 +341,7 @@ impl AppState {
             opens: flume::unbounded(),
             sweep,
             results: ResultsPanel::default(),
+            editor: EditorPanel::default(),
             gpu_adaptive: true,
             gpu_target_ms: DEFAULT_TARGET_MS,
             gpu_batch_size: DEFAULT_BATCH_SIZE,
@@ -365,7 +368,8 @@ impl AppState {
     /// tears down alone.
     ///
     /// The loaded fields are the setup's from the start of the build, and commands sent while it runs wait for its
-    /// runner. A build that fails goes to the fault modal and leaves no model loaded.
+    /// runner. A build that fails goes to the fault modal, or to the Editor for a fault of the code the Editor
+    /// applied, and leaves no model loaded.
     fn load(&mut self, setup: Option<RunSetup>) {
         self.settle_opened_run(setup.as_ref());
         self.stop_recording();
@@ -616,25 +620,56 @@ impl AppState {
         self.run_to_target = None;
     }
 
-    /// Offloads the live simulation and passes the fault to the modal. A running sweep carries on.
+    /// Offloads the live simulation and passes the fault to the modal, or to the Editor for a fault of the code the
+    /// Editor applied. A running sweep carries on.
     ///
     /// A fault while building belongs to the selected model, and any other to the loaded one. The Model panel stays
     /// usable while a model runs, and the selection can be another model by then.
+    ///
+    /// While a build runs on its own thread, the fault goes to the modal. The build thread returns the build's own
+    /// faults, and a fault in a sink meanwhile comes from a detached run or from rendering.
     pub fn report_fault(&mut self, fault: Fault) {
         let model = if fault.during == BUILDING {
             self.selected_entry()
         } else {
             self.loaded_entry()
         };
-        let model = model.map(|entry| entry.name().to_owned());
-        self.show_fault(fault, model);
+        let model = model.cloned();
+        if self.is_building() {
+            self.show_fault_in_modal(fault, model.as_ref());
+        } else {
+            self.show_fault(fault, model.as_ref());
+        }
     }
 
     /// Offloads the live simulation and passes the fault to the modal, naming `model` as the model it stopped.
-    fn show_fault(&mut self, fault: Fault, model: Option<String>) {
+    ///
+    /// A fault of a run built from the code the Editor applied last, before the run passes tick 0, goes to the Editor
+    /// instead, as the outcome of the edit, when an edit of the code can fix it ([`EditorPanel::claims`]).
+    ///
+    /// On native the build thread returns the fault of a build in a later frame than the press that started it, and in
+    /// a browser the device reports a shader it refuses after the build that created it.
+    fn show_fault(&mut self, fault: Fault, model: Option<&ModelEntry>) {
+        let at_start = self.snapshot.as_ref().is_none_or(|snapshot| snapshot.tick == 0);
+        if at_start && model.is_some_and(|entry| self.editor.claims(entry.source(), &fault)) {
+            log::error!("{fault}");
+            self.offload_simulation();
+            self.editor.show_fault(&fault);
+            self.focus_request = Some(Tab::Editor);
+        } else {
+            self.show_fault_in_modal(fault, model);
+        }
+    }
+
+    /// Offloads the live simulation and passes the fault to the modal, naming `model` as the model it stopped, for a
+    /// fault the Editor never claims.
+    fn show_fault_in_modal(&mut self, fault: Fault, model: Option<&ModelEntry>) {
         log::error!("{fault}");
         self.offload_simulation();
-        self.fault = Some(ShownFault { fault, model });
+        self.fault = Some(ShownFault {
+            fault,
+            model: model.map(|entry| entry.name().to_owned()),
+        });
     }
 
     /// Tears down the live simulation, or abandons the build that runs, and leaves no model loaded.
@@ -857,6 +892,7 @@ impl AppState {
         match target {
             SaveTarget::Export => &mut self.export_status,
             SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => &mut self.sweep.status,
+            SaveTarget::Model => &mut self.editor.file_status,
         }
     }
 
@@ -869,6 +905,11 @@ impl AppState {
                 && matches!(result, SaveResult::Saved(_) | SaveResult::Downloaded(_))
             {
                 self.results.mark_files_saved(generation);
+            }
+            if target == SaveTarget::Model
+                && let SaveResult::Saved(name) | SaveResult::Downloaded(name) = &result
+            {
+                self.editor.file_name = Some(name.clone());
             }
             *self.save_status(target) = Some(match result {
                 SaveResult::Saved(name) => format!("Saved {name}"),
@@ -894,6 +935,7 @@ impl AppState {
                     crate::ui::sweep::receive_open(self, target, result);
                 }
                 OpenTarget::Results => crate::ui::results::receive_open(self, result),
+                OpenTarget::Model => crate::ui::editor::receive_open(self, result),
             }
         }
     }

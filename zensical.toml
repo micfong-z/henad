@@ -29,6 +29,7 @@ nav = [
             "guide/sweeps.md",
             "guide/search.md",
             "guide/app.md",
+            "guide/editor.md",
         ] },
         { "Writing your first model" = [
             "guide/your-project.md",
@@ -138,6 +139,7 @@ nav = [
             { "#52, 2026-10-10" = "developing/agent-record/20261010-52-gpu-grid-spec.md" },
             { "#53, 2026-10-10" = "developing/agent-record/20261010-53-runtime-grid-rules.md" },
             { "#54, 2026-10-10" = "developing/agent-record/20261010-54-app-install-path.md" },
+            { "#55, 2026-10-10" = "developing/agent-record/20261010-55-editor-tab.md" },
             { "#56, 2026-10-10" = "developing/agent-record/20261010-56-cli-model-files.md" },
             { "#57, 2026-10-10" = "developing/agent-record/20261010-57-runaway-rails.md" },
         ] },

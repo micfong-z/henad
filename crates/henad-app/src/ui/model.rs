@@ -7,8 +7,10 @@ use henad_core::metadata::{LaneSpec, Structure};
 use henad_core::params::ParamDescriptor;
 use henad_core::topology::{NeighborhoodKind, TopologyHint};
 
-use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE};
+use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE, MDI_CODE_BRACES, MDI_FILE_PLUS_OUTLINE};
 use crate::state::{AppState, OpeningRefusal};
+use crate::ui::editor;
+use crate::ui::sweep::layout::add_button;
 use crate::ui::{KvGridRows, kv_grid};
 
 /// Text the Model panel shows when no model of the set runs on this machine.
@@ -62,6 +64,7 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     if let Some(id) = picked {
         app.select_model(&id);
     }
+    editor_buttons(ui, app);
 
     let Some(entry) = app.selected_entry() else {
         if let Some(refusal) = &app.opening_refusal {
@@ -109,6 +112,35 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
             kv_grid(ui, "model_footprint_grid").show(ui, |ui, rows| {
                 footprint_rows(ui, rows, entry.id(), demand, storage_limit);
             });
+        }
+    });
+}
+
+/// Draws New grid rule, and Edit model for a selected model whose code the Editor can show. Both open the Editor.
+fn editor_buttons(ui: &mut egui::Ui, app: &mut AppState) {
+    let editable = app.selected_entry().and_then(editor::editable_text).is_some();
+    ui.horizontal_wrapped(|ui| {
+        let new = add_button(
+            ui,
+            true,
+            egui::Button::new(format!("{MDI_FILE_PLUS_OUTLINE} New grid rule")),
+            "New grid rule",
+        )
+        .on_hover_text("Open Game of Life rule in Editor");
+        if new.clicked() {
+            editor::new_grid_rule(app);
+        }
+        if editable {
+            let edit = add_button(
+                ui,
+                true,
+                egui::Button::new(format!("{MDI_CODE_BRACES} Edit model")),
+                "Edit model",
+            )
+            .on_hover_text("Open model file in Editor");
+            if edit.clicked() {
+                editor::edit_model(app);
+            }
         }
     });
 }

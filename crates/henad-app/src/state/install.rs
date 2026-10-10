@@ -5,11 +5,6 @@
 //! run still at tick 0 is rebuilt at once under the replacement, and any other run waits on the Rebuild model modal.
 //! A rebuild starts the run again from tick 0.
 
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "nothing in the app installs a model set yet, and the tests do")
-)]
-
 use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::simulation::{RunSetup, SetupError};
 use henad_core::action::{ActionDescriptor, Schedule, Scheduled};
@@ -132,7 +127,7 @@ impl AppState {
     /// while the run is at tick 0 and the new code can rebuild it, and otherwise after the Rebuild model modal.
     ///
     /// The modal counts what the new code does not take from the run, its values and its scheduled actions.
-    fn settle_loaded(&mut self) {
+    pub fn settle_loaded(&mut self) {
         let Some(loaded) = self.loaded.clone() else {
             return;
         };
@@ -164,7 +159,7 @@ impl AppState {
     /// no run to a tick pending.
     ///
     /// The snapshot lags the run. A run to a tick or a play started this frame has no snapshot past tick 0 yet.
-    fn run_at_start(&self) -> bool {
+    pub fn run_at_start(&self) -> bool {
         !self.sim_running
             && self.run_to_target.is_none()
             && self.snapshot.as_ref().is_none_or(|snapshot| snapshot.tick == 0)
