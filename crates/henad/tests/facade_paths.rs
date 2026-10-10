@@ -218,6 +218,14 @@ mod named_only {
         .map(henad::rules::ComposedWgsl::into_text)
     }
 
+    /// Returns the thread of `runner` when it does not stop within the time a drop waits.
+    fn detached(runner: henad::runner::SimThread) -> Option<henad::runner::DetachedRunner> {
+        match runner.stop(henad::runner::DEFAULT_STOP_TIMEOUT) {
+            henad::runner::RunnerShutdown::Joined => None,
+            henad::runner::RunnerShutdown::Detached(detached) => Some(detached),
+        }
+    }
+
     /// Number of steps that one command buffer of a GPU state may hold, for a host that encodes its own command
     /// buffers.
     const SUBMISSION_STEPS: u32 = henad::runner::MAX_STEPS_PER_SUBMISSION;

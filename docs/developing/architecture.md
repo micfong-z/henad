@@ -119,6 +119,13 @@ Its runner encodes many steps into a single submission, capped at 64 steps per s
 The cap exists because enough passes in one command buffer trips the OS GPU watchdog, which raises no error and no panic and leaves every later readback silently reading zero.
 An action on a GPU model goes out in its own submission.
 
+On native the app builds a model on a thread of its own, `henad-model-build`.
+The thread builds the state and its runner, and the app takes the runner on a later frame.
+Commands sent meanwhile wait in a queue for the runner.
+A teardown waits a quarter of a second for the runner to stop, then detaches a thread still running.
+The next build waits on its own thread until the detached thread ends, or for two seconds since the stop.
+A thread still running then retires the rayon pool it runs in, and the app's CPU work moves to a fresh pool at the global width.
+
 The app holds the loaded model's runner behind one enum, `SimRunner`.
 The CPU `SimThread` and the GPU `GpuSimThread` stay separate types, since the CPU runner steps a state once per loop iteration and the GPU runner encodes many steps into one submission.
 Their handles share play, pause, step, send and the snapshot.

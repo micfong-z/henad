@@ -247,10 +247,8 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     });
 
-    if let Some(index) = pressed
-        && let Some(thread) = &mut app.sim_thread
-    {
-        thread.send(SimCommand::Act(index));
+    if let Some(index) = pressed {
+        app.send_command(SimCommand::Act(index));
         app.mark_opened_run_modified();
     }
 
@@ -508,7 +506,7 @@ pub(crate) fn notice_content(app: &AppState, pending_count: usize, shortfalls: &
             format!("{}. Reduce the size parameters to build.", shortfalls.join(". ")),
         );
     }
-    if app.sim_thread.is_none() {
+    if !app.has_simulation() {
         return notice(
             MDI_INFORMATION,
             ParamsNoticeTone::Plain,
@@ -566,6 +564,7 @@ mod tests {
     };
     use crate::icons::material_design_icons::{MDI_DELETE_OUTLINE, MDI_DICE_5};
     use crate::state::AppState;
+    use crate::tests::support::{accessible_names, accessible_texts};
 
     /// Draws the slider of an F32 parameter of `kind` over `value` for one frame of `context`, focused and pressed
     /// with `keys`, and returns whether it reports a change.
@@ -741,35 +740,6 @@ mod tests {
         assert_eq!(percent_decimals(Some(0.005)), 1, "0.5% steps");
         assert_eq!(percent_decimals(Some(0.0025)), 2, "0.25% steps");
         assert_eq!(percent_decimals(None), 1, "no step");
-    }
-
-    /// Returns the accessible names of the widgets `add` draws in one frame.
-    fn accessible_names(add: impl FnMut(&mut egui::Ui)) -> Vec<String> {
-        accessible_texts(add, |node| node.label())
-    }
-
-    /// Returns the text that `read` extracts from each accessible node that `add` draws in one frame.
-    fn accessible_texts(
-        add: impl FnMut(&mut egui::Ui),
-        read: impl Fn(&egui::accesskit::Node) -> Option<&str>,
-    ) -> Vec<String> {
-        let context = egui::Context::default();
-        context.enable_accesskit();
-        let output = context.run_ui(egui::RawInput::default(), add);
-        let texts = output
-            .platform_output
-            .accesskit_update
-            .as_ref()
-            .map(|update| {
-                update
-                    .nodes
-                    .iter()
-                    .filter_map(|(_, node)| read(node).map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
-        output.drop_without_applying_deltas();
-        texts
     }
 
     /// With no model selected, the panel shows neither a Seed field nor a claim that the model has no parameters.

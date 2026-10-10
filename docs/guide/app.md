@@ -197,6 +197,7 @@ Picking the running model again brings back the parameters, seed and scheduled a
 
 <span class="ui" markdown>:material-restart: Build</span>
 : Construct the selected model from the current parameters, replacing the running simulation if it exists.
+  See [Building a model](#building-a-model).
 
 <span class="ui" markdown>:material-tray-remove: Offload</span>
 : Remove the simulation from memory and free its resources.
@@ -225,6 +226,20 @@ When the run stops, the <span class="ui" markdown>:material-table: Statistics</s
 - The simulation is playing, until you pause it.
 - The <span class="ui" markdown>:material-cog-outline: Model</span> tab has a model selected other than the one loaded, until you press <span class="ui" markdown>:material-restart: Build</span>.
 - The tick is behind the current one and <span class="ui" markdown>:material-restart: Build</span> is disabled, for example while the **Seed** field shows an error.
+
+### Building a model
+
+The desktop app builds a model on a thread of its own, and stays responsive however long the build takes.
+While the model builds, the **Run to tick** row reads **Building model…** beside <span class="ui">Cancel</span>, and <span class="ui" markdown>:material-restart: Build</span> is disabled.
+The simulation appears once the build finishes.
+A run to a tick, scheduled actions, parameter edits and action presses made in the meantime apply to it as soon as it appears.
+A build that follows a run still stopping waits for that run first, as [A run that does not stop](#a-run-that-does-not-stop) describes.
+
+<span class="ui">Cancel</span> stops waiting for the build and leaves no model loaded.
+The build itself cannot be interrupted, and runs on in the background until it returns.
+A build that never returns, as one stuck in an endless loop would, behaves like a run that does not stop.
+
+In a browser the build runs inside the frame, and the page waits for it.
 
 ## :material-speedometer: Pacing tab
 
@@ -1017,6 +1032,23 @@ Simulation aborted
 : Something went wrong on a tick, and the simulation was stopped.
 
 When such an error occurs, a modal dialog appears with the error message.
+
+## A run that does not stop
+
+A tick that never returns, as a model stuck in an endless loop would make, cannot be stopped from outside.
+<span class="ui" markdown>:material-restart: Build</span> and <span class="ui" markdown>:material-tray-remove: Offload</span> wait a quarter of a second for the run to stop, then leave it running in the background.
+The <span class="ui" markdown>:material-play-circle-outline: Playback</span> tab then reads **Previous run is still stopping.**
+A tick of a large model can take longer than a quarter of a second, and the line then shows until the tick ends.
+A build waits up to two seconds for the previous run to stop, and the old model frees its memory before the new one allocates.
+After two seconds the line changes to **:material-alert: Previous run did not stop. It will keep running until the app quits.**
+The next model then builds and runs on a fresh set of worker threads, and the stuck run cannot hold it up.
+The line disappears if the run stops after all.
+
+A stuck run can keep processor cores busy, and holds the memory of its model.
+Restart the app to end it.
+Closing the app waits the same quarter of a second, and the stuck run ends with the app.
+
+In a browser, a tick that never returns freezes the page.
 
 ## Browser-specific notes
 

@@ -149,6 +149,10 @@ impl HenadApp {
 
 impl eframe::App for HenadApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Takes the runner of a build that has finished on its thread, with its first snapshot.
+        self.state.poll_build();
+        self.state.poll_stopping(ctx);
+
         // Advances the sim where it has no dedicated thread. Where it has one, this does nothing.
         let dt = ctx.input(|i| f64::from(i.unstable_dt));
         if let Some(thread) = &mut self.state.sim_thread {
@@ -185,7 +189,12 @@ impl eframe::App for HenadApp {
             }
         }
 
-        if let Some(fault) = self.state.render_ctx.faults.take() {
+        if let Some(fault) = self
+            .state
+            .sim_faults
+            .take()
+            .or_else(|| self.state.render_ctx.faults.take())
+        {
             self.state.report_fault(fault);
         }
 

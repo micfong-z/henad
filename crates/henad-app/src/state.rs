@@ -3,13 +3,14 @@
 use std::sync::Arc;
 
 use egui::TextureHandle;
-use henad_compute::cpu::sim_thread::{SimCommand, SimThread, WakeFn};
-use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelState};
-use henad_compute::fault::{BUILDING, Fault, catching};
+use henad_compute::cpu::sim_thread::{SimCommand, WakeFn};
+use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet};
+use henad_compute::fault::{BUILDING, Fault, FaultSink};
 use henad_compute::simulation::{RunSetup, SetupError};
 use henad_compute::snapshot::Snapshot;
 use henad_core::action::Schedule;
 use henad_core::explore::replay::Replay;
+use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
 use henad_core::provenance::ModelSource;
 use henad_core::view::StatsHistory;
@@ -31,13 +32,18 @@ use crate::ui::sweep::SweepPanel;
 use henad_compute::runtime_info::RuntimeInfo;
 
 use henad_compute::gpu::GpuContext;
-use henad_compute::gpu::fault::catching_on;
-use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
 use henad_compute::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
 
+mod build;
 mod install;
+mod pool;
 
+pub use build::{BUILDING_MODEL, DID_NOT_STOP};
+use build::{PendingBuild, Stopping};
+#[cfg(test)]
+pub use build::{STILL_STOPPING, STOP_WAIT};
 pub use install::{PendingRebuild, remap_schedule, remap_values};
+pub use pool::ModelPool;
 
 /// Exponential moving average smoothing factor (0..1, higher = more responsive).
 const EMA_ALPHA: f64 = 0.1;
@@ -118,7 +124,20 @@ pub struct AppState {
     pub run_to_input: u64,
     /// Tab brought to the front once the dock has drawn.
     pub focus_request: Option<Tab>,
+    /// Runner of the live simulation. `None` while a build runs, until [`Self::poll_build`] takes the build's runner.
     pub sim_thread: Option<SimRunner>,
+    /// Build of the live simulation on its own thread. Always `None` in a browser, where builds run inline.
+    building: Option<PendingBuild>,
+    /// Runs and builds that did not stop in time, kept until their threads end. A build started meanwhile holds them
+    /// too, and waits for them.
+    stopping: Vec<Arc<Stopping>>,
+    /// Pool the app's CPU work runs in. A fresh pool replaces it once a detached thread has held it past the timeout.
+    pools: ModelPool,
+    /// Generation of the pool the live runner runs in.
+    runner_generation: u64,
+    /// Sink the live CPU runner stores a panic out of its loop in. A teardown replaces it, so a detached runner's late
+    /// fault reaches no later run.
+    pub sim_faults: FaultSink,
     pub snapshot: Option<Snapshot>,
     pub sim_running: bool,
     pub grid_texture: Option<TextureHandle>,
@@ -148,9 +167,10 @@ pub struct AppState {
     pub history_len: usize,
     /// Host, adapter and device limits, collected once at startup.
     pub runtime: RuntimeInfo,
-    /// Device and queue for rendering, present wherever the app runs. The renderer and the live
-    /// simulation report their errors into `faults`. A GPU sweep runs on its own device, and
-    /// its errors stay with the sweep. `gpu_ctx` below is a different thing, and gates GPU models.
+    /// Device and queue for rendering, present wherever the app runs. The renderer and a live GPU
+    /// simulation report their errors into `faults`, and a live CPU simulation into `sim_faults`. A GPU
+    /// sweep runs on its own device, and its errors stay with the sweep. `gpu_ctx` below is a different
+    /// thing, and gates GPU models.
     pub render_ctx: GpuContext,
     /// The fault being shown, cleared when the user dismisses the modal.
     pub fault: Option<ShownFault>,
@@ -251,8 +271,10 @@ impl AppState {
         let first = models.runnable(gpu_ctx.as_ref()).next();
         let selected_model = first.map(|entry| entry.id().to_owned());
         let param_values: Vec<ParamValue> = first.map(default_values).unwrap_or_default();
+        let pools = ModelPool::default();
         let mut sweep = SweepPanel::default();
         sweep.cli_command.clone_from(&product.cli_command);
+        sweep.model_pool = pools.clone();
 
         Self {
             egui_ctx,
@@ -277,6 +299,11 @@ impl AppState {
             run_to_input: 0,
             focus_request: None,
             sim_thread: None,
+            building: None,
+            stopping: Vec::new(),
+            pools,
+            runner_generation: 0,
+            sim_faults: FaultSink::new(),
             snapshot: None,
             sim_running: false,
             grid_texture: None,
@@ -337,13 +364,15 @@ impl AppState {
     /// Tears down the live simulation and builds `setup`. The setup's entry then becomes the loaded entry, and `None`
     /// tears down alone.
     ///
-    /// A build that fails goes to the fault modal and leaves no model loaded.
+    /// The loaded fields are the setup's from the start of the build, and commands sent while it runs wait for its
+    /// runner. A build that fails goes to the fault modal and leaves no model loaded.
     fn load(&mut self, setup: Option<RunSetup>) {
         self.settle_opened_run(setup.as_ref());
         self.stop_recording();
-        // Dropping the sim thread releases a GPU model's buffers and pipelines. A paint callback still in flight this
-        // frame holds its own `Arc` to the display, and keeps the texture alive.
-        self.sim_thread = None;
+        // A runner that stops releases a GPU model's buffers and pipelines, and the build waits for one that has not
+        // stopped yet. A paint callback still in flight this frame holds its own `Arc` to the display, and keeps the
+        // texture alive.
+        self.stop_simulation();
         drop(self.render_ctx.faults.take());
         self.snapshot = None;
         self.last_rendered_serial = None;
@@ -364,23 +393,10 @@ impl AppState {
             return;
         };
 
-        let stats_history = StatsHistory::new(setup.entry().stat_descriptors().to_vec(), self.history_capacity);
-
-        match self.build_runner(&setup, &self.repaint_waker()) {
-            Ok(mut runner) => {
-                if !setup.schedule().is_empty() {
-                    runner.send(SimCommand::SetSchedule(setup.schedule().clone()));
-                }
-                self.sim_thread = Some(runner);
-            }
-            Err(fault) => {
-                let model = setup.entry().name().to_owned();
-                self.show_fault(fault, Some(model));
-                return;
-            }
-        }
-
-        self.stats_history = Some(stats_history);
+        self.stats_history = Some(StatsHistory::new(
+            setup.entry().stat_descriptors().to_vec(),
+            self.history_capacity,
+        ));
         self.sim_running = false;
         // The fields of the next build are the setup's only for the selected model. A rebuild of a model loaded
         // while another one is selected leaves them alone.
@@ -391,6 +407,12 @@ impl AppState {
         self.loaded_seed = setup.seed();
         self.loaded_schedule = setup.schedule().clone();
         self.loaded = Some(setup.entry().clone());
+
+        let schedule = setup.schedule().clone();
+        self.start_build(setup);
+        if !schedule.is_empty() {
+            self.send_command(SimCommand::SetSchedule(schedule));
+        }
     }
 
     /// Clears the opened run before a build of another model or a teardown, or sets its `modified` to whether
@@ -501,7 +523,9 @@ impl AppState {
     }
 
     /// Selects model `id`, builds it from `params`, `seed` and `schedule`, steps it to `start`, and brings the
-    /// viewport to the front. Returns whether the build succeeded.
+    /// viewport to the front.
+    ///
+    /// Returns whether the build runs or has succeeded. A run to a tick sent while the build runs waits for its runner.
     fn open_values(
         &mut self,
         id: &str,
@@ -520,7 +544,7 @@ impl AppState {
         self.schedule = schedule.clone();
         self.schedule_action_input = 0;
         self.reset_simulation();
-        if self.sim_thread.is_none() {
+        if !self.has_simulation() {
             return false;
         }
         if let OpenAt::Tick(tick) = start {
@@ -539,10 +563,10 @@ impl AppState {
         if self.snapshot.as_ref().is_some_and(|snap| tick < snap.tick) {
             self.reset_simulation();
         }
-        let Some(thread) = &mut self.sim_thread else {
+        if !self.has_simulation() {
             return;
-        };
-        thread.send(SimCommand::RunTo(tick));
+        }
+        self.send_command(SimCommand::RunTo(tick));
         self.sim_running = false;
         self.run_to_target = Some(tick);
     }
@@ -564,47 +588,6 @@ impl AppState {
         self.selection_is_loaded() && self.loaded_schedule != self.schedule
     }
 
-    /// Builds the selected model and the thread that will drive it.
-    ///
-    /// # Errors
-    ///
-    /// Returns the fault when the build panics, the GPU rejects it, or this machine has no device for a GPU model.
-    fn build_runner(&self, setup: &RunSetup, wake: &WakeFn) -> Result<SimRunner, Fault> {
-        let entry = setup.entry();
-        match entry.build(setup.values(), setup.seed(), self.gpu_ctx.as_ref())? {
-            ModelState::Cpu(state) => catching(BUILDING, || {
-                let mut thread = SimThread::new(
-                    state,
-                    self.target_tps,
-                    Some(wake.clone()),
-                    self.render_ctx.faults.clone(),
-                );
-                if self.uncapped {
-                    thread.send(SimCommand::SetUncapped(true));
-                }
-                if entry.topology_hint().edges {
-                    thread.send(self.layout_command());
-                }
-                SimRunner::Cpu(thread)
-            }),
-            ModelState::Gpu(state) => {
-                // Unreachable in practice. Without a context the Model panel hides every GPU entry,
-                // and an entry built without one returns a fault.
-                let Some(ctx) = self.gpu_ctx.clone() else {
-                    return Err(Fault::refused(BUILDING, "no GPU context is available"));
-                };
-                let settings = GpuBatchSettings {
-                    adaptive: self.gpu_adaptive,
-                    batch_size: self.gpu_batch_size,
-                    target_ms: self.gpu_target_ms,
-                };
-                catching_on(&ctx.clone(), BUILDING, || {
-                    SimRunner::Gpu(GpuSimThread::new(ctx, state, settings, Some(wake.clone())))
-                })
-            }
-        }
-    }
-
     /// Returns a waker that repaints the UI.
     ///
     /// A sim thread or a sweep calls it after publishing, so an idle UI picks the result up next frame instead of
@@ -623,11 +606,11 @@ impl AppState {
 
     /// Pauses the live simulation, a run to a tick included.
     pub fn pause_simulation(&mut self) {
-        let Some(thread) = &mut self.sim_thread else {
+        if !self.has_simulation() {
             return;
-        };
+        }
         if self.sim_running || self.run_to_target.is_some() {
-            thread.pause();
+            self.send_command(SimCommand::Pause);
         }
         self.sim_running = false;
         self.run_to_target = None;
@@ -654,9 +637,12 @@ impl AppState {
         self.fault = Some(ShownFault { fault, model });
     }
 
+    /// Tears down the live simulation, or abandons the build that runs, and leaves no model loaded.
+    ///
+    /// Neither waits past [`STOP_WAIT`]. A runner or a build still running then is detached.
     pub fn offload_simulation(&mut self) {
         self.stop_recording();
-        self.sim_thread = None;
+        self.stop_simulation();
         drop(self.render_ctx.faults.take());
         self.snapshot = None;
         self.sim_running = false;
@@ -793,13 +779,10 @@ impl AppState {
     ///
     /// Returns whether the edit was sent. It is sent only while the selection is the loaded model.
     pub fn send_live_param(&mut self, index: usize, value: ParamValue) -> bool {
-        if !self.selection_is_loaded() {
+        if !self.selection_is_loaded() || !self.has_simulation() {
             return false;
         }
-        let Some(thread) = &mut self.sim_thread else {
-            return false;
-        };
-        thread.send(SimCommand::SetParam {
+        self.send_command(SimCommand::SetParam {
             index,
             value: value.clone(),
         });
@@ -834,8 +817,17 @@ impl AppState {
         self.build_setup()?.err().map(|error| setup_message(&error))
     }
 
+    /// Returns whether the live simulation, or the model a build runs for, is a GPU model.
     pub fn is_gpu(&self) -> bool {
-        self.sim_thread.as_ref().is_some_and(|t| t.gpu_stats().is_some())
+        match &self.sim_thread {
+            Some(thread) => thread.gpu_stats().is_some(),
+            None => {
+                self.is_building()
+                    && self
+                        .loaded_entry()
+                        .is_some_and(|entry| entry.metadata().backend == Backend::Gpu)
+            }
+        }
     }
 
     /// Opens a save dialog for `bytes` under the name `name`, for the panel `target`.
@@ -1127,6 +1119,7 @@ mod tests {
             .expect("a valid setup");
 
         assert_eq!(app.open_setup(&setup, OpenAt::Start), Ok(()));
+        app.wait_for_build();
         assert_eq!(app.selected_model.as_deref(), Some("sir"));
         assert_eq!(app.param_values, setup.values());
         assert_eq!(app.schedule, *setup.schedule());
@@ -1159,6 +1152,7 @@ mod tests {
             .expect("a valid setup")
             .with_seed(9);
         assert_eq!(app.open_setup(&setup, OpenAt::Start), Ok(()));
+        app.wait_for_build();
         let details = |app: &AppState| -> serde_json::Value {
             serde_json::from_str(&run_details(app)).expect("the run details are JSON")
         };
@@ -1212,6 +1206,7 @@ mod tests {
         };
         let name = |app: &AppState, id: &str| app.models.get(id).map(|entry| entry.name().to_owned());
         app.reset_simulation();
+        app.wait_for_build();
         assert_eq!(app.loaded_id(), Some("sir"));
         app.select_model("boids");
         app.report_fault(Fault::refused(STEPPING, "a test fault"));

@@ -142,10 +142,14 @@ use std::sync::{Arc, Mutex};
 use web_time::Instant;
 
 use crate::cpu::sim_thread::{SimCommand, WakeFn};
+use crate::fault::Fault;
 use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms, tps_over};
 use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
-use crate::runner::{Driver, Pace, RUN_TO_PUBLISH_INTERVAL, SharedSlot, SimLoop, SnapshotSlot};
+use crate::runner::{
+    DEFAULT_STOP_TIMEOUT, Driver, Pace, RUN_TO_PUBLISH_INTERVAL, RunnerShutdown, SharedSlot, SimLoop, SnapshotSlot,
+};
 use crate::snapshot::{Snapshot, SnapshotView};
+use henad_core::send_sync::WasmNotSend;
 
 /// Time to leave an outstanding batch alone before looking again.
 ///
@@ -711,6 +715,47 @@ impl GpuSimThread {
     ///
     /// A panic out of the loop is stored in `ctx.faults`.
     pub fn new(ctx: GpuContext, state: Box<dyn GpuSimState>, settings: GpuBatchSettings, wake: Option<WakeFn>) -> Self {
+        let (sim, slot, gpu_stats, on_fault) = Self::parts(ctx, state, &settings, wake);
+        Self {
+            driver: Driver::spawn(sim, on_fault),
+            slot,
+            gpu_stats,
+        }
+    }
+
+    /// Starts a paused runner over `state` on `ctx` in `pool`, in the batch mode that `settings` specifies.
+    ///
+    /// The loop's start, each pump and each command run on a worker of `pool`, as for
+    /// [`SimThread::new_in`](crate::cpu::sim_thread::SimThread::new_in). A pump then never waits for a worker of the
+    /// global pool, which a CPU step that never returns can hold. A panic out of the loop is stored in `ctx.faults`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_in(
+        pool: Arc<rayon::ThreadPool>,
+        ctx: GpuContext,
+        state: Box<dyn GpuSimState>,
+        settings: GpuBatchSettings,
+        wake: Option<WakeFn>,
+    ) -> Self {
+        let (sim, slot, gpu_stats, on_fault) = Self::parts(ctx, state, &settings, wake);
+        Self {
+            driver: Driver::spawn_in(pool, sim, on_fault),
+            slot,
+            gpu_stats,
+        }
+    }
+
+    /// Returns the loop over `state`, the slot it publishes to, its GPU numbers and the handler of a panic out of it.
+    fn parts(
+        ctx: GpuContext,
+        state: Box<dyn GpuSimState>,
+        settings: &GpuBatchSettings,
+        wake: Option<WakeFn>,
+    ) -> (
+        Loop,
+        SharedSlot,
+        Arc<Mutex<GpuStats>>,
+        impl FnOnce(Fault) + WasmNotSend + 'static,
+    ) {
         let batch_size = settings.batch_size.max(1);
         let gpu_stats = Arc::new(Mutex::new(GpuStats {
             gpu_us_per_step: None,
@@ -724,24 +769,26 @@ impl GpuSimThread {
         let sim = Loop::new(
             ctx,
             state,
-            &settings,
+            settings,
             SharedSlot::clone(&slot),
             Arc::clone(&gpu_stats),
             wake.clone(),
         );
-
-        let driver = Driver::spawn(sim, move |fault| {
+        let on_fault = move |fault| {
             faults.set_once(fault);
             if let Some(wake) = &wake {
                 wake();
             }
-        });
+        };
+        (sim, slot, gpu_stats, on_fault)
+    }
 
-        Self {
-            driver,
-            slot,
-            gpu_stats,
-        }
+    /// Stops the loop, and joins its thread once it stops or detaches the thread after `timeout`.
+    ///
+    /// The loop stops between two pumps, and a pump waits for the batch on the GPU. A batch that never completes keeps
+    /// the detached thread waiting, and [`RunnerShutdown::Detached`] returns its handle.
+    pub fn stop(mut self, timeout: std::time::Duration) -> RunnerShutdown {
+        self.driver.shutdown(Command::Sim(SimCommand::Shutdown), timeout)
     }
 
     /// Sends a command to the loop.
@@ -808,9 +855,18 @@ impl GpuSimThread {
     }
 }
 
+/// Stops the loop as [`GpuSimThread::stop`] does with [`DEFAULT_STOP_TIMEOUT`], and logs a detached thread.
 impl Drop for GpuSimThread {
     fn drop(&mut self) {
-        self.driver.shutdown(Command::Sim(SimCommand::Shutdown));
+        if let RunnerShutdown::Detached(_) = self
+            .driver
+            .shutdown(Command::Sim(SimCommand::Shutdown), DEFAULT_STOP_TIMEOUT)
+        {
+            log::warn!(
+                "The GPU simulation thread did not stop within {} s, and runs on detached",
+                DEFAULT_STOP_TIMEOUT.as_secs_f64()
+            );
+        }
     }
 }
 
@@ -1216,5 +1272,85 @@ mod tests {
         thread.step_once();
         assert!(snapshot_at(&mut thread, 151).0.is_some());
         assert_eq!(fired_ticks(), [0, 40, 90, 151]);
+    }
+
+    /// State that records the width of the pool its steps are encoded on.
+    struct PoolWidth {
+        ticks: u64,
+        encode_width: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl SimState for PoolWidth {
+        fn step(&mut self) {}
+        fn tick(&self) -> u64 {
+            self.ticks
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    impl GpuSimState for PoolWidth {
+        fn encode_steps(
+            &mut self,
+            _encoder: &mut wgpu::CommandEncoder,
+            count: u32,
+            _timestamps: Option<&wgpu::QuerySet>,
+        ) {
+            assert!(rayon::current_thread_index().is_some(), "the pump ran outside a pool");
+            self.encode_width.store(rayon::current_num_threads(), Ordering::SeqCst);
+            self.ticks += u64::from(count);
+        }
+        fn encode_snapshot_passes(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
+        fn begin_stats_readback(&mut self) {}
+        fn poll_stats_readback(&mut self, _device: &wgpu::Device, _block: bool) -> StatsPoll {
+            StatsPoll::Landed
+        }
+        fn stats_readback_pending(&self) -> bool {
+            false
+        }
+        fn view(&self) -> GpuSnapshot {
+            GpuSnapshot {
+                display: None,
+                agents: None,
+            }
+        }
+    }
+
+    /// Every pump of a GPU runner started in a pool runs on that pool, and the global pool runs none of it.
+    #[test]
+    fn a_gpu_runner_in_a_pool_pumps_on_its_workers() {
+        let Some(ctx) = headless_context("henad_gpu_pool_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_gpu_runner_in_a_pool_pumps_on_its_workers: no adapter");
+            return;
+        };
+        let width = rayon::current_num_threads() + 1;
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(width)
+                .build()
+                .expect("a pool of a few threads"),
+        );
+        let encode_width = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let state = PoolWidth {
+            ticks: 0,
+            encode_width: Arc::clone(&encode_width),
+        };
+        let mut thread = GpuSimThread::new_in(pool, ctx, Box::new(state), GpuBatchSettings::default(), None);
+        thread.run_to(10);
+        assert!(
+            snapshot_at(&mut thread, 10).0.is_some(),
+            "the run never reached tick 10"
+        );
+        assert_eq!(encode_width.load(Ordering::SeqCst), width);
     }
 }

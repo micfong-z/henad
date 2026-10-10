@@ -90,7 +90,8 @@ pub fn start(app: &AppState, name: String) -> Result<PendingCapture, String> {
     if let SnapshotView::Cpu(layers) = &snapshot.view
         && let Some(grid) = &layers.grid
     {
-        write_grid(ctx, &target, grid, width, height, format);
+        let pixels = app.model_pool().install(|| grid_pixels(grid, width, height, format));
+        write_grid(ctx, &target, &pixels, width, height);
     }
 
     let gpu_display = match &snapshot.view {
@@ -155,18 +156,11 @@ fn make_target(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, h
     })
 }
 
-fn write_grid(
-    ctx: &henad_compute::gpu::GpuContext,
-    target: &wgpu::Texture,
-    grid: &GridSnapshot,
-    width: u32,
-    height: u32,
-    format: wgpu::TextureFormat,
-) {
-    let pixels = grid_pixels(grid, width, height, format);
+/// Writes `pixels`, a `width` x `height` grid in the target's format, into `target`.
+fn write_grid(ctx: &henad_compute::gpu::GpuContext, target: &wgpu::Texture, pixels: &[u8], width: u32, height: u32) {
     ctx.queue.write_texture(
         copy_source(target),
-        &pixels,
+        pixels,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(width * 4),

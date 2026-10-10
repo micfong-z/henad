@@ -4,6 +4,7 @@
 //! Only the edge list is copied to the GPU, and only when it changes.
 
 use crate::shader_bindings::edges::Uniforms;
+use crate::state::ModelPool;
 use crate::ui::agent_layer::{AGENT_SIZE_PT, palette_lut};
 use henad_compute::snapshot::EdgeSnapshot;
 
@@ -219,8 +220,8 @@ impl EdgeLayer {
     }
 
     /// Copies the edge list into the GPU instance buffer, unless the buffer already holds the same version in the
-    /// same palette.
-    pub fn upload(&mut self, edges: &EdgeSnapshot) {
+    /// same palette. The edges are packed on workers of `pool`.
+    pub fn upload(&mut self, edges: &EdgeSnapshot, pool: &ModelPool) {
         self.directed = edges.directed;
         let n = edges.src.len().min(edges.dst.len());
         if self.uploaded == Some((edges.version, n)) && self.uploaded_palette == edges.palette {
@@ -237,14 +238,15 @@ impl EdgeLayer {
         let (src, dst, color) = (&edges.src, &edges.dst, &edges.color);
         self.scratch.clear();
         self.scratch.resize(n * WORDS, 0);
-        {
+        let scratch = &mut self.scratch;
+        pool.install(|| {
             use rayon::prelude::*;
-            self.scratch.par_chunks_mut(WORDS).enumerate().for_each(|(e, words)| {
+            scratch.par_chunks_mut(WORDS).enumerate().for_each(|(e, words)| {
                 words[0] = src[e];
                 words[1] = dst[e];
                 words[2] = lut[usize::from(color.get(e).copied().unwrap_or(0))];
             });
-        }
+        });
         self.queue
             .write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.scratch));
         self.count = u32::try_from(n).unwrap_or(u32::MAX);

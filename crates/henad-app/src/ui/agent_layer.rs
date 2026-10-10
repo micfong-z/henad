@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use crate::shader_bindings::agents::Uniforms;
+use crate::state::ModelPool;
 use crate::ui::edge_layer::{EdgeDraw, EdgeLayer, EdgeStyle};
 use crate::ui::painted::{Painted, painted};
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait};
@@ -202,21 +203,22 @@ impl AgentLayer {
         }
     }
 
-    /// Copies network edges to the GPU, or clears the previous model's edges when `edges` is `None`.
-    pub fn upload_edges(&mut self, edges: Option<&EdgeSnapshot>) {
+    /// Copies network edges to the GPU, or clears the previous model's edges when `edges` is `None`. The edges are
+    /// packed on workers of `pool`.
+    pub fn upload_edges(&mut self, edges: Option<&EdgeSnapshot>, pool: &ModelPool) {
         let Some(layer) = &mut self.edges else {
             return;
         };
         match edges {
-            Some(edges) => layer.upload(edges),
+            Some(edges) => layer.upload(edges, pool),
             None => layer.clear(),
         }
     }
 
-    /// Copies the population of `points` to the instance buffers.
+    /// Copies the population of `points` to the instance buffers. The colours are widened on workers of `pool`.
     ///
     /// The viewport calls it only for a snapshot it has not drawn yet.
-    pub fn upload(&mut self, points: &PointSnapshot) {
+    pub fn upload(&mut self, points: &PointSnapshot, pool: &ModelPool) {
         let n = points.pos_x.len().min(points.pos_y.len());
         self.count = u32::try_from(n).unwrap_or(u32::MAX);
         if n == 0 {
@@ -229,7 +231,7 @@ impl AgentLayer {
         self.queue
             .write_buffer(&self.buffers.pos_y, 0, bytemuck::cast_slice(&points.pos_y[..n]));
 
-        self.widen_colors(points, n);
+        self.widen_colors(points, n, pool);
         self.queue
             .write_buffer(&self.buffers.color, 0, bytemuck::cast_slice(&self.color_scratch[..n]));
     }
@@ -239,7 +241,7 @@ impl AgentLayer {
     /// The lane cannot be bound as-is. WebGPU has no one-byte vertex format and wants
     /// `array_stride % 4 == 0`, and the storage-buffer alternative needs `VERTEX_STORAGE`, which
     /// WebGL2 lacks. Only this last hop widens. The snapshot copy stays one byte per agent.
-    fn widen_colors(&mut self, points: &PointSnapshot, n: usize) {
+    fn widen_colors(&mut self, points: &PointSnapshot, n: usize, pool: &ModelPool) {
         let lut = palette_lut(&points.palette);
 
         if points.color.is_empty() {
@@ -259,9 +261,11 @@ impl AgentLayer {
         self.color_scratch.resize(n, lut[0]);
         let dst = &mut self.color_scratch[..color.len()];
 
-        use rayon::prelude::*;
-        dst.par_iter_mut().zip(color.par_iter()).for_each(|(out, &c)| {
-            *out = lut[c as usize];
+        pool.install(|| {
+            use rayon::prelude::*;
+            dst.par_iter_mut().zip(color.par_iter()).for_each(|(out, &c)| {
+                *out = lut[c as usize];
+            });
         });
     }
 

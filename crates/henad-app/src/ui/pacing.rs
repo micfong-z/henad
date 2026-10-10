@@ -28,13 +28,13 @@ fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
                     .text("Target TPS"),
             )
             .changed();
-        if tps_changed && let Some(thread) = &mut app.sim_thread {
-            thread.send(SimCommand::SetTargetTps(app.target_tps));
+        if tps_changed {
+            app.send_command(SimCommand::SetTargetTps(app.target_tps));
         }
     }
 
-    if uncapped_changed && let Some(thread) = &mut app.sim_thread {
-        thread.send(SimCommand::SetUncapped(app.uncapped));
+    if uncapped_changed {
+        app.send_command(SimCommand::SetUncapped(app.uncapped));
     }
 
     let mut max = app.ticks_per_snapshot as i32;
@@ -47,9 +47,7 @@ fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
         .changed()
     {
         app.ticks_per_snapshot = max as u32;
-        if let Some(thread) = &mut app.sim_thread {
-            thread.send(SimCommand::SetTicksPerSnapshot(app.ticks_per_snapshot));
-        }
+        app.send_command(SimCommand::SetTicksPerSnapshot(app.ticks_per_snapshot));
     }
 
     let network = app.loaded_entry().is_some_and(|entry| entry.topology_hint().edges);
@@ -84,10 +82,7 @@ fn layout_controls(ui: &mut egui::Ui, app: &mut AppState) {
         .on_hover_text("Maximum time for layout per snapshot")
         .changed();
     if changed {
-        let command = app.layout_command();
-        if let Some(thread) = &mut app.sim_thread {
-            thread.send(command);
-        }
+        app.send_command(app.layout_command());
     }
 }
 

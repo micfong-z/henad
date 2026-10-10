@@ -134,12 +134,14 @@ fn an_opened_run_is_modified_after_its_source_changes() {
         label: "Sweep run 0: config 0, replicate 0".to_owned(),
     };
     app.open_run(replay, OpenAt::Start).expect("the run opens");
+    app.wait_for_build();
     let run = app.opened_run.as_ref().expect("an opened run");
     assert_eq!(run.source, *sir.source());
     assert!(!run.modified);
 
     let builds = counter();
     app.install_models(&set_of(recoded(&sir, "edited sir", &builds)));
+    app.wait_for_build();
     assert_eq!(builds.load(Ordering::SeqCst), 1, "the run at tick 0 was rebuilt");
     assert!(
         app.opened_run.as_ref().is_some_and(|run| run.modified),
@@ -190,9 +192,11 @@ fn install_keeps_values_when_the_schema_matches() {
     );
 
     app.reset_simulation();
+    app.wait_for_build();
     assert_eq!(builds.load(Ordering::SeqCst), 1, "Build builds the installed entry");
     let rebuilds = counter();
     app.install_models(&set_of(recoded(&sir, "second edit", &rebuilds)));
+    app.wait_for_build();
     assert_eq!(
         rebuilds.load(Ordering::SeqCst),
         1,
@@ -361,11 +365,13 @@ fn install_works_for_every_model_type() {
         let entry = example(&app, id);
         app.select_model(id);
         app.reset_simulation();
+        app.wait_for_build();
         assert!(app.sim_thread.is_some(), "{id} built");
 
         let builds = counter();
         let first = recoded(&entry, &format!("{id}, first edit"), &builds);
         app.install_models(&set_of(first.clone()));
+        app.wait_for_build();
         assert_eq!(builds.load(Ordering::SeqCst), 1, "{id} was rebuilt at tick 0");
         assert_eq!(app.loaded_entry().map(ModelEntry::source), Some(first.source()), "{id}");
         assert!(app.sim_thread.is_some() && app.selection_is_loaded(), "{id}");
@@ -385,6 +391,7 @@ fn install_works_for_every_model_type() {
         );
         assert_eq!(rebuilds.load(Ordering::SeqCst), 0, "{id} waits on the modal");
         app.rebuild_loaded();
+        app.wait_for_build();
         assert_eq!(rebuilds.load(Ordering::SeqCst), 1, "{id}");
         assert_eq!(
             app.loaded_entry().map(ModelEntry::source),
@@ -432,6 +439,7 @@ fn a_loaded_run_past_tick_zero_asks_before_rebuilding() {
     );
 
     app.rebuild_loaded();
+    app.wait_for_build();
     assert_eq!(app.pending_rebuild, None);
     assert_eq!(app.loaded_entry().map(ModelEntry::name), Some("SIR Edited"));
     assert_eq!(app.loaded_entry().map(ModelEntry::source), Some(kernel_edit.source()));
@@ -457,6 +465,7 @@ fn a_loaded_run_past_tick_zero_asks_before_rebuilding() {
         })
     );
     app.rebuild_loaded();
+    app.wait_for_build();
     assert_eq!(builds.load(Ordering::SeqCst), 1);
     assert_eq!(app.loaded_entry().map(ModelEntry::source), Some(restored.source()));
     assert_eq!(app.loaded_values, expected.values);
@@ -498,6 +507,7 @@ fn cancel_keeps_the_old_run_and_flags_the_code_change() {
     );
 
     app.reset_simulation();
+    app.wait_for_build();
     assert_eq!(builds.load(Ordering::SeqCst), 1, "Build builds the new code");
     assert!(app.selection_is_loaded() && !app.code_pending());
     assert_eq!(notice_content(&app, 0, &[]), None);
@@ -527,6 +537,7 @@ fn a_rebuild_the_new_code_refuses_leaves_the_old_run_alone() {
     };
     let sir = example(&app, "sir");
     app.reset_simulation();
+    app.wait_for_build();
     app.seed_text = "not a seed".to_owned();
 
     let builds = counter();
@@ -547,6 +558,7 @@ fn a_rebuild_the_new_code_refuses_leaves_the_old_run_alone() {
     app.seed_text = String::new();
     assert_eq!(app.rebuild_refusal(), None);
     app.rebuild_loaded();
+    app.wait_for_build();
     assert_eq!(builds.load(Ordering::SeqCst), 1);
     assert_eq!(app.pending_rebuild, None);
 }

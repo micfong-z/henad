@@ -1,8 +1,11 @@
 //! The sim thread driving the loaded model, the CPU [`SimThread`] or the GPU [`GpuSimThread`], behind one handle.
 
+use std::time::Duration;
+
 use henad_compute::cpu::sim_thread::{SimCommand, SimThread};
 use henad_compute::gpu::GpuStats;
 use henad_compute::gpu::sim_thread::GpuSimThread;
+use henad_compute::runner::RunnerShutdown;
 use henad_compute::snapshot::Snapshot;
 
 pub enum SimRunner {
@@ -11,6 +14,14 @@ pub enum SimRunner {
 }
 
 impl SimRunner {
+    /// Stops the sim thread, and joins it once it stops or detaches it after `timeout`.
+    pub fn stop(self, timeout: Duration) -> RunnerShutdown {
+        match self {
+            Self::Cpu(t) => t.stop(timeout),
+            Self::Gpu(t) => t.stop(timeout),
+        }
+    }
+
     /// Sends a command to the sim thread.
     ///
     /// The GPU backend ignores the pacing and layout commands (`SetTargetTps`, `SetUncapped`, `SetTicksPerSnapshot`

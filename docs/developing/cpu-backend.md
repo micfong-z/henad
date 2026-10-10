@@ -288,6 +288,18 @@ The native driver pumps inside a `rayon::scope`, so a kernel's parallel passes a
 Only the pump runs inside the scope.
 The waits before and after the pump stay outside the scope, since a worker blocked on a command channel is unavailable to the pool, and on a one-worker pool it would never resume.
 
+`SimThread::new_in` starts a runner in a pool of the host's own.
+Its first snapshot is built inside that pool, and its start, each pump and each command run there through `pool.install`.
+A step that never returns then holds workers of that pool alone, and the global pool stays whole.
+`GpuSimThread::new_in` does the same for a GPU runner, whose pumps then never wait for a worker of a pool that a stuck CPU step holds.
+
+A runner stops between two pumps.
+`stop(timeout)` sends the stop command and waits for the thread to end, then returns `RunnerShutdown::Joined`.
+A thread still running at the timeout is detached, and `RunnerShutdown::Detached` returns its handle, whose `is_finished` reports when it ends.
+Dropping a runner stops it the same way with `DEFAULT_STOP_TIMEOUT` of two seconds, and logs a detached thread.
+A pump that never returns would otherwise hold the dropping thread for good.
+In a browser the loop stops at once, and nothing is ever detached.
+
 The public API is identical either way, and nothing in `henad-app` needs to know which driver is active.
 rayon still parallelises the kernels in both cases, and no kernel has a sequential twin.
 If you find a `#[cfg(target_arch = "wasm32")]` around a hot loop, someone rebuilt a twin.
