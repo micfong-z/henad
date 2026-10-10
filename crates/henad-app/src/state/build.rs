@@ -19,7 +19,7 @@ use std::time::Duration;
 use web_time::Instant;
 
 use henad_compute::cpu::sim_thread::{SimCommand, SimThread, WakeFn};
-use henad_compute::entry::ModelState;
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{BUILDING, Fault, FaultSink, catching};
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::fault::catching_on;
@@ -82,8 +82,9 @@ pub struct PendingBuild {
     thread: JoinHandle<()>,
     /// Phase of the build, one of [`PHASE_WAITING`], [`PHASE_BUILDING`], [`PHASE_DONE`] and [`PHASE_CANCELLED`].
     phase: Arc<AtomicU8>,
-    /// Name of the model being built, for the fault modal.
-    model: String,
+    /// Entry of the model being built. A fault of the build names it in the fault modal, and the Editor claims a
+    /// fault of the code the Editor applied.
+    model: ModelEntry,
     /// Commands sent since the build started, in order. The runner receives them when it arrives.
     queued: Vec<SimCommand>,
 }
@@ -265,10 +266,10 @@ impl BuildJob {
 impl AppState {
     /// Builds `setup` and the runner that will drive it, on the build thread on native and inline in a browser.
     ///
-    /// The runner becomes [`Self::sim_thread`] once [`Self::poll_build`] takes it, and a build that fails goes to the
-    /// fault modal.
+    /// The runner becomes [`Self::sim_thread`] once [`Self::poll_build`] takes it. A build that fails goes to the fault
+    /// modal, or to the Editor for a fault of the code the Editor applied.
     pub(super) fn start_build(&mut self, setup: RunSetup) {
-        let model = setup.entry().name().to_owned();
+        let model = setup.entry().clone();
         let layout = setup.entry().topology_hint().edges.then(|| self.layout_command());
         let job = BuildJob {
             setup,
@@ -299,16 +300,16 @@ impl AppState {
                 runner: job.run_here(None),
                 generation: self.pools.current().0,
             };
-            self.finish_build(built, Vec::new(), model);
+            self.finish_build(built, Vec::new(), &model);
         }
 
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_build(job, model);
     }
 
-    /// Starts the build thread for `job`, the build of model `model`.
+    /// Starts the build thread for `job`, the build of entry `model`.
     #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_build(&mut self, job: BuildJob, model: String) {
+    fn spawn_build(&mut self, job: BuildJob, model: ModelEntry) {
         let (sender, built) = std::sync::mpsc::channel();
         let phase = Arc::clone(&job.phase);
         let wake = job.wake.clone();
@@ -339,15 +340,16 @@ impl AppState {
                     queued: Vec::new(),
                 });
             }
+            // No edit of the code fixes a thread that did not start, and the Editor never claims the fault.
             Err(error) => {
                 let fault = Fault::refused(BUILDING, format!("the build thread did not start: {error}"));
-                self.show_fault(fault, Some(model));
+                self.show_fault_in_modal(fault, Some(&model));
             }
         }
     }
 
     /// Takes the runner of a build that has finished, and sends it the commands sent meanwhile. A build that failed
-    /// goes to the fault modal.
+    /// goes to the fault modal, or to the Editor for a fault of the code the Editor applied.
     ///
     /// Called once per frame. Does nothing while the build runs, and nothing in a browser, where builds run inline.
     pub fn poll_build(&mut self) {
@@ -357,21 +359,26 @@ impl AppState {
         let built = match build.built.try_recv() {
             Ok(built) => built,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Built {
-                runner: Err(Fault::refused(BUILDING, "the build thread ended without a result")),
-                generation: self.pools.current().0,
-            },
+            Err(TryRecvError::Disconnected) => {
+                // The build catches a panic of the model's code. A thread that ended without a result panicked
+                // outside that catch, and the Editor never claims the fault.
+                if let Some(build) = self.building.take() {
+                    let fault = Fault::refused(BUILDING, "the build thread ended without a result");
+                    self.show_fault_in_modal(fault, Some(&build.model));
+                }
+                return;
+            }
         };
         if let Some(build) = self.building.take() {
-            self.finish_build(built, build.queued, build.model);
+            self.finish_build(built, build.queued, &build.model);
         }
     }
 
-    /// Makes the runner of `built` the live simulation and sends it `queued` in order, or shows the fault of model
-    /// `model`.
+    /// Makes the runner of `built` the live simulation and sends it `queued` in order, or shows the fault of the build
+    /// of entry `model`.
     ///
     /// A GPU runner takes the batch settings of the Pacing tab first, which can have changed during the build.
-    fn finish_build(&mut self, built: Built, queued: Vec<SimCommand>, model: String) {
+    fn finish_build(&mut self, built: Built, queued: Vec<SimCommand>, model: &ModelEntry) {
         match built.runner {
             Ok(mut runner) => {
                 if let Some(gpu) = runner.as_gpu_mut() {
@@ -433,7 +440,7 @@ impl AppState {
         if let Some(build) = self.building.take() {
             match build.phase.swap(PHASE_CANCELLED, Ordering::SeqCst) {
                 PHASE_BUILDING => {
-                    log::warn!("Build of {} abandoned before it returned", build.model);
+                    log::warn!("Build of {} abandoned before it returned", build.model.name());
                     // The build took the current pool once every thread before it had ended or retired its pool, and
                     // no pool has been retired since.
                     let generation = self.pools.current().0;

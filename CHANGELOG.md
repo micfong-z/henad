@@ -18,6 +18,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - `helpers::check_choice_options` (`henad::authoring`): the option-name check of `choice_param`, without the panic.
 - `SimThread::new_in`, `GpuSimThread::new_in`, `runner::Driver::spawn_in` (native): a runner whose start, pumps and commands (and, on the CPU, first snapshot) run in a given rayon pool.
 - App builds a model on its own thread: Building model… with Cancel in Playback, commands sent meanwhile queued for the new run; a run or build that does not stop within 250 ms is detached and reported (Previous run is still stopping; did not stop after 2 s); the next build waits up to 2 s for it; past 2 s the app's CPU work (builds, runners, viewport uploads, Sweep tab column builds) moves to a fresh pool.
+- App Editor tab for grid rules (closed by default, opens beside the Viewport): one model file as text with a line-number gutter; Apply checks, installs and selects the rule, rebuilt at tick 0 or after the Rebuild model dialog, a refused text leaving the run alone; problems listed at line and column, pressed to move the cursor; New grid rule (the Life starter), Edit model, Open model and Save model, also in a new File menu (a download in a browser); a device fault of the applied rule before its run passes tick 0 shown in the Editor.
 
 ### Changed
 

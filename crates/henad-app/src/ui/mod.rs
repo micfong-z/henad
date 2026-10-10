@@ -3,6 +3,7 @@ pub mod agent_layer;
 pub mod charts;
 pub mod dock;
 pub mod edge_layer;
+pub mod editor;
 pub mod export;
 pub mod fault;
 pub mod files;

@@ -290,10 +290,6 @@ impl SweepPanel {
     ///
     /// The draft lists one row per parameter of the previous code. The next frame builds the replacement for its
     /// columns.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "nothing in the app installs a model set yet, and the tests do")
-    )]
     pub fn forget_model(&mut self, id: &str, declarations_changed: bool) {
         self.column_builds.remove(id);
         if declarations_changed {
@@ -1063,7 +1059,7 @@ pub fn receive_open(app: &mut AppState, target: OpenTarget, result: OpenResult) 
     match target {
         OpenTarget::SweepSpec => load_spec(app, &file),
         OpenTarget::DesignTable => load_table(app, file),
-        OpenTarget::OutputFolder | OpenTarget::Results => {}
+        OpenTarget::OutputFolder | OpenTarget::Results | OpenTarget::Model => {}
     }
 }
 

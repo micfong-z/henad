@@ -18,6 +18,8 @@ pub enum SaveTarget {
     /// The files of a sweep held in memory, from the Sweep panel, identified by their generation number
     /// ([`crate::ui::results::ResultsPanel::files_generation`]).
     SweepResults(u64),
+    /// A model file, from the Editor.
+    Model,
 }
 
 /// Result of one save.
@@ -63,6 +65,8 @@ pub enum OpenTarget {
     OutputFolder,
     /// Results written by `henad-cli --out`: the folder on native, its files in a browser.
     Results,
+    /// A TOML model file, for the Editor.
+    Model,
 }
 
 /// A file the user picked, read into memory.

@@ -20,6 +20,7 @@ async fn pick(target: OpenTarget) -> OpenResult {
         OpenTarget::DesignTable => pick_file("Design table", &["csv"]).await,
         OpenTarget::OutputFolder => pick_folder().await,
         OpenTarget::Results => pick_results().await,
+        OpenTarget::Model => pick_file("Model file", &["toml"]).await,
     }
 }
 

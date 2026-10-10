@@ -1,15 +1,18 @@
 //! Tab definitions, the default layout, and dispatch to each panel module.
 
-use egui_dock::{DockState, NodeIndex, TabViewer};
+use egui_dock::{DockState, Node, NodeIndex, NodePath, Split, TabViewer};
 
 use crate::icons::material_design_icons::{
-    MDI_CHART_BOX_OUTLINE, MDI_CHART_LINE, MDI_CHIP, MDI_COG_OUTLINE, MDI_CUBE_OUTLINE, MDI_EXPORT, MDI_FLASK_OUTLINE,
-    MDI_GAUGE, MDI_PLAY_CIRCLE_OUTLINE, MDI_SPEEDOMETER, MDI_TABLE, MDI_TUNE,
+    MDI_CHART_BOX_OUTLINE, MDI_CHART_LINE, MDI_CHIP, MDI_CODE_BRACES, MDI_COG_OUTLINE, MDI_CUBE_OUTLINE, MDI_EXPORT,
+    MDI_FLASK_OUTLINE, MDI_GAUGE, MDI_PLAY_CIRCLE_OUTLINE, MDI_SPEEDOMETER, MDI_TABLE, MDI_TUNE,
 };
 use crate::state::AppState;
 use crate::ui;
 
 /// A dockable panel.
+///
+/// Note that egui keys a tab's stored state on the variant's discriminant. A new tab goes last, so the others keep
+/// theirs.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Tab {
     Viewport,
@@ -24,16 +27,18 @@ pub enum Tab {
     Export,
     Performance,
     System,
+    Editor,
 }
 
 impl Tab {
     /// Every tab that exists, in View-menu order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Viewport,
         Self::Playback,
         Self::Pacing,
         Self::Model,
         Self::Params,
+        Self::Editor,
         Self::Sweep,
         Self::Results,
         Self::Stats,
@@ -57,6 +62,7 @@ impl Tab {
             Self::Export => "Export",
             Self::Performance => "Performance",
             Self::System => "System",
+            Self::Editor => "Editor",
         }
     }
 
@@ -74,11 +80,12 @@ impl Tab {
             Self::Export => MDI_EXPORT,
             Self::Performance => MDI_GAUGE,
             Self::System => MDI_CHIP,
+            Self::Editor => MDI_CODE_BRACES,
         }
     }
 }
 
-/// Returns the default layout, as Reset layout restores it.
+/// Returns the default layout, as Reset layout restores it. Every tab but the Editor is open.
 pub fn default_dock_state() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Viewport, Tab::Sweep, Tab::Results]);
     let surface = dock.main_surface_mut();
@@ -125,6 +132,7 @@ impl TabViewer for AppState {
             Tab::Export => ui::export::export_ui(ui, self),
             Tab::Performance => ui::performance::performance_ui(ui, self),
             Tab::System => ui::system::system_ui(ui, self),
+            Tab::Editor => ui::editor::editor_ui(ui, self),
         }
     }
 
@@ -133,10 +141,11 @@ impl TabViewer for AppState {
         *tab != Tab::Viewport
     }
 
-    /// The Sweep tab scrolls its own form between a fixed header and footer. An outer scroll would carry them away.
+    /// The Sweep tab scrolls its own form between a fixed header and footer, and the Editor its code between a fixed
+    /// header and diagnostics list. An outer scroll would carry them away.
     fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
         match tab {
-            Tab::Sweep => [false, false],
+            Tab::Sweep | Tab::Editor => [false, false],
             _ => [true, true],
         }
     }
@@ -147,7 +156,7 @@ pub fn toggle_tab(dock: &mut DockState<Tab>, tab: Tab) {
     if let Some(indices) = dock.find_tab(&tab) {
         dock.remove_tab(indices);
     } else {
-        dock.push_to_focused_leaf(tab);
+        open_tab(dock, tab);
     }
 }
 
@@ -159,20 +168,57 @@ pub fn focus_tab(dock: &mut DockState<Tab>, tab: Tab) {
                 log::warn!("Could not bring {tab:?} to the front: {error}");
             }
         }
-        None => dock.push_to_focused_leaf(tab),
+        None => open_tab(dock, tab),
     }
+}
+
+/// Share of the Viewport's leaf that the Viewport keeps when the Editor opens beside it.
+const EDITOR_SPLIT: f32 = 0.5;
+
+/// Opens `tab`, which is closed.
+///
+/// The Editor opens in a leaf of its own to the right of the Viewport's leaf, and the Viewport comes to the front of its
+/// leaf, so the run stays in view while its code is edited. Any other tab, and the Editor while the Viewport is
+/// closed, joins the focused leaf.
+fn open_tab(dock: &mut DockState<Tab>, tab: Tab) {
+    if tab == Tab::Editor
+        && let Some(viewport) = dock.find_tab(&Tab::Viewport)
+    {
+        if let Err(error) = dock.set_active_tab(viewport) {
+            log::warn!("Could not bring {:?} to the front: {error}", Tab::Viewport);
+        }
+        let parent = viewport.node_path();
+        let [_, editor] = dock.split(parent, Split::Right, EDITOR_SPLIT, Node::leaf(tab));
+        dock.set_focused_node_and_surface(NodePath {
+            surface: parent.surface,
+            node: editor,
+        });
+        return;
+    }
+    dock.push_to_focused_leaf(tab);
 }
 
 #[cfg(test)]
 mod tests {
+    use egui_dock::Node;
+
     use super::{Tab, default_dock_state, focus_tab, toggle_tab};
 
+    /// Tabs the default layout leaves closed.
+    const CLOSED_BY_DEFAULT: [Tab; 1] = [Tab::Editor];
+
     #[test]
-    fn default_layout_contains_every_tab() {
+    fn default_layout_contains_every_tab_but_the_editor() {
         let dock = default_dock_state();
         for tab in Tab::ALL {
-            assert!(dock.find_tab(&tab).is_some(), "{tab:?} missing from default layout");
+            let closed = CLOSED_BY_DEFAULT.contains(&tab);
+            assert_eq!(
+                dock.find_tab(&tab).is_some(),
+                !closed,
+                "{tab:?} is open or closed against the default layout"
+            );
         }
+        assert!(dock.find_tab(&Tab::Editor).is_none(), "the Editor starts closed");
     }
 
     /// Tabs that share a leaf in the default layout, with the front tab first.
@@ -190,8 +236,8 @@ mod tests {
 
         assert_eq!(
             leaves.len(),
-            Tab::ALL.len() - hidden,
-            "expected one leaf per tab, bar the stacked ones"
+            Tab::ALL.len() - CLOSED_BY_DEFAULT.len() - hidden,
+            "expected one leaf per open tab, bar the stacked ones"
         );
         for (_, leaf) in leaves {
             assert!(
@@ -235,6 +281,51 @@ mod tests {
         }
     }
 
+    /// The Editor never stacks onto the Viewport, which would hide the run while its code is edited, and opens with the
+    /// Viewport in front of the tabs stacked behind it.
+    #[test]
+    fn the_editor_opens_beside_the_viewport() {
+        for open in [focus_tab, toggle_tab] {
+            let mut dock = default_dock_state();
+            focus_tab(&mut dock, Tab::Sweep);
+            open(&mut dock, Tab::Editor);
+            let editor = dock.find_tab(&Tab::Editor).expect("the Editor opened");
+            let viewport = dock
+                .find_tab(&Tab::Viewport)
+                .expect("Viewport is in the default layout");
+            let (_, leaf) = dock
+                .iter_leaves()
+                .find(|(_, leaf)| leaf.tabs.contains(&Tab::Editor))
+                .expect("the Editor is in a leaf");
+            assert_eq!(leaf.tabs, [Tab::Editor], "the Editor shares a leaf");
+            let (_, leaf) = dock
+                .iter_leaves()
+                .find(|(_, leaf)| leaf.tabs.contains(&Tab::Viewport))
+                .expect("the Viewport is in a leaf");
+            assert_eq!(leaf.tabs, STACKED[0], "the Viewport's stack changed");
+            assert_eq!(
+                leaf.active, viewport.tab,
+                "the Sweep tab stayed in front of the Viewport"
+            );
+
+            let parent = viewport.node.parent().expect("the Viewport's leaf was split");
+            assert_eq!(viewport.node, parent.left(), "the Viewport is not the left half");
+            assert_eq!(editor.node, parent.right(), "the Editor is not the right half");
+            assert!(
+                matches!(dock.main_surface()[parent], Node::Horizontal(_)),
+                "the halves are not side by side"
+            );
+        }
+
+        let mut dock = default_dock_state();
+        toggle_tab(&mut dock, Tab::Viewport);
+        focus_tab(&mut dock, Tab::Editor);
+        assert!(
+            dock.find_tab(&Tab::Editor).is_some(),
+            "the Editor stayed closed without a Viewport"
+        );
+    }
+
     #[test]
     fn focusing_a_tab_brings_it_in_front_of_its_siblings() {
         let mut dock = default_dock_state();
@@ -258,6 +349,7 @@ mod tests {
     fn toggling_every_tab_off_and_on_is_a_round_trip() {
         // Removing a tab can collapse its leaf and shift sibling indices.
         let mut dock = default_dock_state();
+        toggle_tab(&mut dock, Tab::Editor);
 
         for tab in Tab::ALL {
             toggle_tab(&mut dock, tab);

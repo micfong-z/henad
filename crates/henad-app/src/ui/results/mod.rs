@@ -231,10 +231,6 @@ impl ResultsPanel {
 
     /// Compares the held results of model `id` with `entry`, the entry that has replaced the set's entry under that
     /// id, or `None` when the app cannot run the model. Results of another model are left alone.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "nothing in the app installs a model set yet, and the tests do")
-    )]
     pub fn model_replaced(&mut self, id: &str, entry: Option<&ModelEntry>) {
         if let Some(store) = &mut self.store
             && store.model_id == id

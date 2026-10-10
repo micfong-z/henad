@@ -4,7 +4,7 @@ use egui::{Context, Id, Modal, RichText, ScrollArea};
 
 use crate::icons::material_design_icons::{MDI_ALERT_CIRCLE_OUTLINE, MDI_CONTENT_COPY};
 use crate::state::AppState;
-use henad_compute::fault::{BUILDING, FaultKind};
+use henad_compute::fault::{BUILDING, Fault, FaultKind};
 
 /// Height in points past which a long message scrolls, to keep the buttons in the modal.
 const MAX_MESSAGE_HEIGHT: f32 = 220.0;
@@ -30,12 +30,7 @@ pub fn fault_modal(ctx: &Context, app: &mut AppState) {
         FaultKind::DeviceLost => format!("GPU device was lost while {} for {subject}.", fault.during),
         _ => format!("GPU reported an error while {} for {subject}.", fault.during),
     };
-    let detail = match &fault.kind {
-        FaultKind::Device(error) => error.to_string(),
-        FaultKind::Poll(error) => error.to_string(),
-        FaultKind::Panic { message, .. } | FaultKind::Refused(message) => message.clone(),
-        _ => fault.to_string(),
-    };
+    let detail = detail(fault);
 
     let mut dismissed = false;
     let response = Modal::new(Id::new("henad_fault_modal")).show(ctx, |ui| {
@@ -75,5 +70,15 @@ pub fn fault_modal(ctx: &Context, app: &mut AppState) {
 
     if dismissed || response.should_close() {
         app.fault = None;
+    }
+}
+
+/// Returns the message that `fault` carries, as the modal shows it under its lead line.
+pub fn detail(fault: &Fault) -> String {
+    match &fault.kind {
+        FaultKind::Device(error) => error.to_string(),
+        FaultKind::Poll(error) => error.to_string(),
+        FaultKind::Panic { message, .. } | FaultKind::Refused(message) => message.clone(),
+        _ => fault.to_string(),
     }
 }

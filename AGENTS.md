@@ -835,9 +835,9 @@ cargo builds a primary package with a static std, and every member linking it wo
   whose builds and demand share it and which boxes the engine itself, as a grid rule's entry does.
   `GpuGridState<M>` is the adapter a test or a host builds directly.
   henad-compute instantiates no model outside its own tests.
-  `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for henad-explore's test harnesses
-  alone. The hidden `ModelEntry::__into_plugin` marks an entry as a plugin's, and only tests call
-  it. The hidden `__with_code` gives a test's entry a runtime source labelled with its id.
+  `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for other crates' tests alone. The
+  hidden `ModelEntry::__into_plugin` marks an entry as a plugin's, and only tests call it. The hidden
+  `__with_code` gives a test's entry a runtime source labelled with its id.
   `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU ports
   share. `simulation.rs` is the programmatic API over an entry. `RunSetup`
   (`ModelEntry::setup`) holds values by id, a seed and scheduled actions, each checked when set
@@ -1348,14 +1348,19 @@ cargo builds a primary package with a static std, and every member linking it wo
   and a browser keeps eframe's one key per origin. `ui/` has one file per panel or window
   (`menu_bar.rs`, `model.rs`, `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
   `charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `rebuild.rs`, `about.rs`). The Export tab
-  lives in a directory, `export/`. Its `mod.rs` draws the tab and writes the stat series and final
-  state, `image.rs` captures the viewport and `metadata.rs` builds the run details. `files/` holds
-  the file dialogs: `save.rs` hands bytes to a save dialog (several files go into one picked folder
-  on native and download one by one in a browser), and `open.rs` reads picked files, or takes a
-  picked folder on native. Each outcome carries a `SaveTarget` or `OpenTarget`, and
-  `AppState::poll_saves` and `poll_opens` route it to the panel that asked. `dock.rs` holds the tab
-  definitions, the default layout and the dispatch to each panel. Sweep and Results stack behind
-  Viewport.
+  and the Editor live in directories, `export/` and `editor/`. The Export tab's `mod.rs` draws the
+  tab and writes the stat series and final state, `image.rs` captures the viewport and
+  `metadata.rs` builds the run details. `files/` holds the file dialogs: `save.rs` hands bytes to a
+  save dialog (several files go into one picked folder on native and download one by one in a
+  browser), and `open.rs` reads picked files, or takes a picked folder on native. Each outcome
+  carries a `SaveTarget` or `OpenTarget`, and `AppState::poll_saves` and `poll_opens` route it to
+  the panel that asked. `dock.rs` holds the tab definitions, the default layout and the dispatch to
+  each panel. Sweep and Results stack behind Viewport. `Tab::Editor` is the last variant, since
+  egui keys a tab's stored state on the discriminant, and sits after Parameters in `Tab::ALL`, the
+  View menu's order. The default layout leaves it closed, and `focus_tab` and `toggle_tab` open it
+  through `open_tab`, in a leaf of its own split to the right of the Viewport's leaf, with the
+  Viewport brought to the front of its stack. The menu bar's File menu holds New grid rule, Open
+  model and Save model.
   `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
   and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
   bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
@@ -1487,8 +1492,8 @@ cargo builds a primary package with a static std, and every member linking it wo
   pinned entry, and the Parameters banner (`notice_content`, a `ParamsNotice`) reads "Model code
   changed. Press Build to apply.", and Run's disabled reason names the change too. `KeptDraft` keeps
   the entry its session started with, a session's Save spec writes against it, and Edit sweep
-  restores the kept values only while the declarations match. No caller in the app installs a set
-  yet, and the module, `forget_model` and `model_replaced` carry `expect(dead_code)` outside tests.
+  restores the kept values only while the declarations match. The Editor's Apply is the caller in
+  the app.
   `src/tests/install.rs` holds `the_panels_describe_the_running_entry`,
   `an_opened_run_is_modified_after_its_source_changes`,
   `install_keeps_values_when_the_schema_matches`,
@@ -1498,6 +1503,55 @@ cargo builds a primary package with a static std, and every member linking it wo
   `a_rebuild_the_new_code_refuses_leaves_the_old_run_alone`, the Sweep tab's test
   `install_forgets_the_sweep_tab_columns_of_the_model`, and the store's
   `a_folder_store_compares_its_runs_with_a_replaced_entry`. Keep them.
+  `ui/editor/` is the Editor tab, the in-app editor of a grid rule's model file, a test harness
+  that #37's node editor replaces. `mod.rs` holds `EditorPanel` (`AppState::editor`: the text as
+  typed, the file name, the `ApplyOutcome` of the last Apply, the open and save status, and the
+  `ModelSource` applied last) and `editor_ui`: a header of New grid rule, Open model, Save model and
+  Apply, the code, and a list of the outcome and each `CodeDiagnostic` as a selectable `Label`
+  reading `<line>:<column> <message>`, whose press moves the cursor there (`move_cursor_to`).
+  `code_view.rs` draws one `TextEdit::multiline(..).code_editor()` with a layouter that never wraps,
+  in one `ScrollArea::both`, beside a gutter outside it. The gutter's numbers come from the galley's
+  rows (`gutter_numbers`) and follow them up and down, and stay in place while a long line scrolls
+  sideways. No syntax highlighting, and the check runs on Apply alone. `editor::apply` reads the
+  text through `ModelFile::parse` and `entry`, which leave the set and the run alone on a refusal,
+  then installs a one-entry set through `install_models` and selects the model. With no run, or a
+  run at tick 0 (`run_at_start`, also true during a build unless a run to a tick waits for it), it
+  starts a build as Build does, on the build thread on native, and a build of another model is
+  abandoned for it. A run of the same id past tick 0 waits on the Rebuild model modal
+  (`ApplyOutcome::AwaitingRebuild`, "Model applied. Press Rebuild to run it from tick 0."), and
+  Apply calls `settle_loaded` itself when `install_models` passes over an entry the set already
+  holds while the run differs, so the modal opens again after Cancel. A run of another model past
+  tick 0 keeps going, as does the run after Cancel (`ApplyOutcome::Installed`, "Model applied.
+  Press Build to run it."). `EditorPanel::settle_outcome` moves between the two, to `Applied` once
+  the loaded model runs the applied source, and from `Applied` to `Installed` once nothing is
+  loaded, as after Cancel of a build or Offload. `load` commits the loaded entry when the build
+  starts, and the outcome reads `Applied` from then on. New grid rule
+  loads `life_starter()`, the canonical text of `GridRule::life()`, and Edit model, shown for a
+  runtime entry whose code is in `GridRule::CODE_FORMAT` (`editable_text`), its canonical text.
+  Open model and Save model go through `OpenTarget::Model` and `SaveTarget::Model`, a `.toml` file
+  on native and a picked file or a download in a browser. Opening loads the text and applies
+  nothing. `AppState::show_fault` gives a fault to the Editor (`EditorPanel::claims`) when it
+  belongs to a run built from the applied source that has not passed tick 0, in place of the
+  fault modal. A lost device, a failed poll and a device out of memory stay with the modal, since
+  no edit of the code fixes them. `PendingBuild` keeps the entry it builds, and `finish_build`
+  passes it to `show_fault`, so a fault the build thread returns reaches the Editor on the frame
+  `poll_build` takes it. `show_fault_in_modal` passes the Editor over: a build thread that did not
+  start or ended without a result, and on native a fault `report_fault` takes from a sink while a
+  build runs. That fault comes from a detached run or from rendering. Apply returns before
+  `poll_build`'s frame, and ends early only when the Editor claims a fault during the call, as it
+  can for a browser's inline build. In a browser `catching_on` pushes no scopes, and the device
+  reports a refused rule through the `FaultSink` a frame or more after the build. Without compute,
+  Apply is disabled and the tab reads `NO_COMPUTE`. `src/tests/editor.rs` holds
+  `new_grid_rule_starts_from_the_life_starter`,
+  `applying_an_edit_installs_and_rebuilds_from_tick_zero`,
+  `applying_beside_another_run_past_tick_zero_waits_for_build`,
+  `applying_again_after_cancel_asks_to_rebuild_again`,
+  `applying_during_another_build_replaces_it_and_cancel_waits_for_build`,
+  `a_code_edit_that_fails_validation_keeps_the_running_model`,
+  `a_fault_in_the_apply_window_is_shown_in_the_editor`,
+  `a_build_fault_of_the_applied_code_reaches_the_editor_from_the_build_thread`,
+  `a_diagnostic_moves_the_cursor_to_its_line` and `edit_model_shows_the_code_the_rule_runs`. Keep
+  them.
   `export/metadata.rs` writes `loaded_values` as `params`, the loaded `seed` (null for the default),
   `scheduled_actions`, the `host` build from `AppState::product` and the `model_source` build, and
   reads `engine_version` from `ENGINE_BUILD`. A sweep's manifest records the product's host build as
