@@ -3,9 +3,11 @@
 //! `wasm32-unknown-unknown` cannot spawn a thread even with atomics. The loop runs inline, and the driver stops pumping
 //! once a frame has spent [`PUMP_BUDGET_MS`].
 
+use std::time::Duration;
+
 use web_time::Instant;
 
-use super::{PUMP_BUDGET_MS, Pace, SimLoop};
+use super::{PUMP_BUDGET_MS, Pace, RunnerShutdown, SimLoop};
 use crate::fault::Fault;
 
 /// Handle on a [`SimLoop`] pumped from the host's frame loop.
@@ -80,9 +82,13 @@ impl<L: SimLoop> Driver<L> {
         }
     }
 
-    /// Sends `cmd`, the loop's stop command. No thread is joined, and the loop is dropped with the driver.
-    pub fn shutdown(&mut self, cmd: L::Command) {
+    /// Sends `cmd`, the loop's stop command, and returns [`RunnerShutdown::Joined`].
+    ///
+    /// The loop handles the command at once, between two pumps. No thread is joined, `timeout` is unread, and the
+    /// loop is dropped with the driver.
+    pub fn shutdown(&mut self, cmd: L::Command, _timeout: Duration) -> RunnerShutdown {
         self.send(cmd);
+        RunnerShutdown::Joined
     }
 }
 
@@ -138,7 +144,10 @@ mod tests {
     #[test]
     fn shutdown_stops_the_pumping() {
         let mut driver = driver();
-        driver.shutdown(true);
+        assert!(matches!(
+            driver.shutdown(true, Duration::ZERO),
+            crate::runner::RunnerShutdown::Joined
+        ));
         driver.update(0.0);
         assert_eq!(driver.sim.pumps, 0);
         assert_eq!(driver.sim.commands, 1);

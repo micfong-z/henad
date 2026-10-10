@@ -1,7 +1,8 @@
 use crate::icons::material_design_icons::{
-    MDI_ALERT, MDI_FAST_FORWARD, MDI_FLASK_OUTLINE, MDI_PAUSE, MDI_PLAY, MDI_RESTART, MDI_SKIP_NEXT, MDI_TRAY_REMOVE,
+    MDI_ALERT, MDI_FAST_FORWARD, MDI_FLASK_OUTLINE, MDI_INFORMATION, MDI_PAUSE, MDI_PLAY, MDI_RESTART, MDI_SKIP_NEXT,
+    MDI_TRAY_REMOVE,
 };
-use crate::state::AppState;
+use crate::state::{AppState, BUILDING_MODEL, DID_NOT_STOP};
 use crate::ui::results::table::INEXACT_REPLAY;
 use crate::ui::{add_progress_bar, mcs};
 
@@ -37,9 +38,17 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     });
 
-    let build_disabled_reason = app.build_refusal();
+    let build_disabled_reason = if app.is_building() {
+        Some(BUILD_RUNNING.to_owned())
+    } else {
+        app.build_refusal()
+    };
 
-    run_to_row(ui, app, build_disabled_reason.as_deref());
+    if app.is_building() {
+        building_row(ui, app);
+    } else {
+        run_to_row(ui, app, build_disabled_reason.as_deref());
+    }
 
     ui.separator();
 
@@ -68,7 +77,38 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     });
 
+    stopping_line(ui, app);
     opened_run_line(ui, app);
+}
+
+/// Reason shown for the disabled Build button while a build runs.
+const BUILD_RUNNING: &str = "Building model. Press Cancel first.";
+
+/// Draws the status of a build on its own thread, with its Cancel button.
+fn building_row(ui: &mut egui::Ui, app: &mut AppState) {
+    let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    // Right to left, so Cancel stays at the end of the row as in the Run to row.
+    ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if ui.button("Cancel").on_hover_text("Stop waiting for build").clicked() {
+            app.offload_simulation();
+        }
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.add(egui::Spinner::new());
+            ui.label(BUILDING_MODEL);
+        });
+    });
+}
+
+/// Draws the status of a run or a build that did not stop when the app stopped it.
+fn stopping_line(ui: &mut egui::Ui, app: &AppState) {
+    let Some(status) = app.stopping_status() else {
+        return;
+    };
+    if status == DID_NOT_STOP {
+        ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {status}"));
+    } else {
+        ui.weak(format!("{MDI_INFORMATION} {status}"));
+    }
 }
 
 /// Draws the Run to tick row, or the progress of a pending run to a tick with its Cancel button.
@@ -79,11 +119,8 @@ fn run_to_row(ui: &mut egui::Ui, app: &mut AppState, build_disabled_reason: Opti
         let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
         // Right to left, so the bar takes the width Cancel leaves.
         ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Cancel").on_hover_text("Stop at current tick").clicked()
-                && let Some(thread) = &mut app.sim_thread
-            {
-                thread.pause();
-                app.run_to_target = None;
+            if ui.button("Cancel").on_hover_text("Stop at current tick").clicked() {
+                app.pause_simulation();
             }
             let progress = if target == 0 {
                 1.0
@@ -220,6 +257,7 @@ mod tests {
             replay: boids,
             open_at: OpenAt::Start,
         });
+        app.wait_for_build();
         assert!(app.opened_run.is_some());
         assert_eq!(opened_run_warning(&app), None);
 
@@ -227,6 +265,7 @@ mod tests {
             replay: gpu_boids,
             open_at: OpenAt::Start,
         });
+        app.wait_for_build();
         assert!(app.opened_run.is_some(), "the GPU run opened");
         assert_eq!(opened_run_warning(&app), Some(INEXACT_REPLAY));
     }

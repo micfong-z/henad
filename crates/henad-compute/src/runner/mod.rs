@@ -2,6 +2,10 @@
 //!
 //! A loop says what work is due and when it next wants calling. A [`Driver`] decides how to wait:
 //! its own thread on native, the host's frame loop in a browser.
+//!
+//! A runner stops within a timeout. A loop handles its stop command only between two pumps, and a model step that
+//! never returns would hold the stopping thread for good. A thread that does not stop in time is detached, and
+//! [`RunnerShutdown::Detached`] returns its handle.
 
 use std::time::Duration;
 
@@ -41,6 +45,36 @@ pub const MAX_VIEW_BUDGET_MS: f32 = PUMP_BUDGET_MS as f32;
 /// Longest time one publish may spend preparing its view, including a network's layout.
 #[cfg(not(target_arch = "wasm32"))]
 pub const MAX_VIEW_BUDGET_MS: f32 = f32::INFINITY;
+
+/// Time a runner's drop waits for its thread to stop before it detaches the thread.
+///
+/// A stop waits for the pump in progress, one batch of steps. A batch longer than this is rare at interactive
+/// scale.
+pub const DEFAULT_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Outcome of stopping a runner within a timeout.
+#[derive(Debug)]
+pub enum RunnerShutdown {
+    /// The loop stopped, and its thread, where it has one, was joined.
+    Joined,
+    /// The thread did not stop within the timeout. It runs on, detached, and stops once its pump returns.
+    Detached(DetachedRunner),
+}
+
+/// Thread of a runner that did not stop within its timeout.
+///
+/// Dropping it leaves the thread running. The browser's frame driver has no thread, and never returns one.
+#[derive(Debug)]
+pub struct DetachedRunner {
+    handle: std::thread::JoinHandle<()>,
+}
+
+impl DetachedRunner {
+    /// Returns whether the thread has finished since it was detached.
+    pub fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+}
 
 /// Next pump that a loop requests after one [`SimLoop::pump`].
 #[derive(Debug)]

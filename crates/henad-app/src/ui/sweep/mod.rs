@@ -36,7 +36,7 @@ use henad_explore::spec_file::SpecFile;
 use serde::Deserialize;
 
 use crate::icons::material_design_icons::MDI_FLASK_OUTLINE;
-use crate::state::{AppState, lookup_message};
+use crate::state::{AppState, ModelPool, lookup_message};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
 use crate::ui::plural;
@@ -89,6 +89,8 @@ pub struct SweepPanel {
     column_builds: BTreeMap<String, ColumnsBuild>,
     /// Program that the tab's advice refers to, `None` when the product has no command-line program.
     pub cli_command: Option<String>,
+    /// Pool the column builds run in, the app's [`AppState::model_pool`].
+    pub model_pool: ModelPool,
 }
 
 /// Build of a model at its default values, for the stat columns of its sample at tick 0.
@@ -103,18 +105,20 @@ enum ColumnsBuild {
 impl ColumnsBuild {
     /// Starts a build of `entry`'s model.
     ///
-    /// On native the model builds on its own thread, and `wake` runs once the build reports. A GPU model builds
-    /// on its own device, as a sweep does, so a fault in the build never reaches the live model. A browser builds
-    /// a CPU model at once and never builds a GPU model. A GPU sample blocks, and a browser cannot block.
+    /// On native the model builds on its own thread, on a worker of `pool`, and `wake` runs once the build reports. A
+    /// GPU model builds on its own device, as a sweep does, so a fault in the build never reaches the live model. A
+    /// browser builds a CPU model at once and never builds a GPU model. A GPU sample blocks, and a browser cannot
+    /// block.
     #[cfg(not(target_arch = "wasm32"))]
-    fn start(entry: &ModelEntry, wake: &WakeFn) -> Self {
+    fn start(entry: &ModelEntry, wake: &WakeFn, pool: &ModelPool) -> Self {
         let (sender, receiver) = flume::bounded(1);
         let entry = entry.clone();
         let wake = Arc::clone(wake);
+        let pool = pool.clone();
         let spawned = std::thread::Builder::new()
             .name("henad-stat-columns".to_owned())
             .spawn(move || {
-                let columns = default_stat_columns(&entry);
+                let columns = default_stat_columns(&entry, &pool);
                 // The receiver is gone once the app is closing, and nothing is left to report to.
                 drop(sender.send(columns));
                 wake();
@@ -126,7 +130,7 @@ impl ColumnsBuild {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn start(entry: &ModelEntry, _wake: &WakeFn) -> Self {
+    fn start(entry: &ModelEntry, _wake: &WakeFn, _pool: &ModelPool) -> Self {
         Self::Sampled(match entry.metadata().backend {
             Backend::Cpu => sampled_stat_columns(entry, None),
             Backend::Gpu => None,
@@ -261,7 +265,7 @@ impl SweepPanel {
         let build = self
             .column_builds
             .entry(entry.id().to_owned())
-            .or_insert_with(|| ColumnsBuild::start(entry, wake));
+            .or_insert_with(|| ColumnsBuild::start(entry, wake, &self.model_pool));
         #[cfg(not(target_arch = "wasm32"))]
         build.poll();
         let draft = self
@@ -334,14 +338,14 @@ impl SweepPanel {
 /// Returns the stat columns of `entry`'s model at its default values, `None` when the build fails or no GPU device
 /// can be acquired for a GPU model.
 ///
-/// A GPU model builds on a device sized to its own needs.
+/// The model builds on a worker of `pool`, and a GPU model on a device sized to its own needs.
 #[cfg(not(target_arch = "wasm32"))]
-fn default_stat_columns(entry: &ModelEntry) -> Option<StatColumns> {
+fn default_stat_columns(entry: &ModelEntry, pool: &ModelPool) -> Option<StatColumns> {
     let gpu = match entry.gpu_needs() {
         Some(needs) => Some(henad_explore::device::acquire_headless(needs).ok()?),
         None => None,
     };
-    sampled_stat_columns(entry, gpu.as_ref())
+    pool.install(|| sampled_stat_columns(entry, gpu.as_ref()))
 }
 
 /// Returns the stat columns of a build of `entry`'s model at its default values, `None` when the build fails.

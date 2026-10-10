@@ -16,6 +16,8 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - henad-cli `--model-file PATH` (repeatable): a model file's model added to the set, replacing a model of its id with a note on stderr (text mode); with `--spec`, `--resume`, `--list`, `--params` and `--dry-run`, not `--merge`; problems at `path:line:column`, exit 1; `MODEL` optional with one file, required with two (exit 2). Model files reference page.
 - `CodeDiagnostic` and `DiagnosticSeverity` (henad-core, facade root): span, 1-based line and character column, notes.
 - `helpers::check_choice_options` (`henad::authoring`): the option-name check of `choice_param`, without the panic.
+- `SimThread::new_in`, `GpuSimThread::new_in`, `runner::Driver::spawn_in` (native): a runner whose start, pumps and commands (and, on the CPU, first snapshot) run in a given rayon pool.
+- App builds a model on its own thread: Building model… with Cancel in Playback, commands sent meanwhile queued for the new run; a run or build that does not stop within 250 ms is detached and reported (Previous run is still stopping; did not stop after 2 s); the next build waits up to 2 s for it; past 2 s the app's CPU work (builds, runners, viewport uploads, Sweep tab column builds) moves to a fresh pool.
 
 ### Changed
 
@@ -28,6 +30,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - henad-app and henad-cli turn on henad-explore's `model-files`.
 - henad-cli reads `--model-file` and `--spec` before it acquires the GPU device, which is sized to the files' models too.
 - Breaking: `RecordedBuild` is `#[non_exhaustive]`, with `origin` and `code_hash` (build through `From<&BuildInfo>`, `From<&ModelSource>` or `engine()`); `ManifestModel` gains `code` (`None` for compiled models); `ModelSource` compares its origin and code; `same_build` compares code identity alone when either build has an origin.
+- Breaking: dropping a `SimThread` or `GpuSimThread` waits at most `DEFAULT_STOP_TIMEOUT` (2 s) for its thread, then detaches it and logs (was: joined); `stop(timeout)` returns `RunnerShutdown` (`Joined`, `Detached(DetachedRunner)`); `runner::Driver::shutdown` takes a timeout and returns it.
 
 ## [0.3.0] - 2026-10-10
 

@@ -8,7 +8,9 @@ use henad_core::action::Schedule;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 
-use crate::runner::{Driver, Pace, RUN_TO_PUBLISH_INTERVAL, SharedSlot, SimLoop, SnapshotSlot};
+use crate::runner::{
+    DEFAULT_STOP_TIMEOUT, Driver, Pace, RUN_TO_PUBLISH_INTERVAL, RunnerShutdown, SharedSlot, SimLoop, SnapshotSlot,
+};
 use crate::snapshot::{CpuLayers, GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
 use std::time::Duration;
 use web_time::Instant;
@@ -81,7 +83,7 @@ pub enum SimCommand {
     ///
     /// `Play`, `Pause` and `StepOnce` cancel it. A tick at or behind the current one pauses at once.
     RunTo(u64),
-    /// Stop the loop. A runner sends it when dropped.
+    /// Stop the loop. A runner sends it when stopped or dropped.
     Shutdown,
 }
 
@@ -273,6 +275,35 @@ impl SimLoop for Loop {
 }
 
 impl Loop {
+    /// Returns a paused loop over `state`, capped at `target_tps`, and the slot holding `first` as its first publish.
+    fn new(state: Box<dyn SimState>, first: Snapshot, target_tps: f64, wake: Option<WakeFn>) -> (Self, SharedSlot) {
+        let slot = SnapshotSlot::with_initial(first);
+        let now = Instant::now();
+        let sim = Self {
+            state,
+            slot: SharedSlot::clone(&slot),
+            wake,
+            running: false,
+            target_tps,
+            uncapped: false,
+            ticks_per_snapshot: 1,
+            step_count: 0,
+            tps_timer: now,
+            actual_tps: 0.0,
+            last_publish: now,
+            serial: 0,
+            layout_on: false,
+            relax_paused: false,
+            ticked: false,
+            engine_ms: None,
+            next_step_at: now,
+            schedule: Schedule::default(),
+            fired_through: None,
+            run_to_target: None,
+        };
+        (sim, slot)
+    }
+
     /// Keeps publishing while paused, so the layout can keep relaxing if requested. Otherwise returns [`Pace::Idle`].
     fn relax_while_paused(&mut self) -> Pace {
         if !(self.layout_on && self.relax_paused) {
@@ -418,39 +449,47 @@ impl SimThread {
     /// A panic out of the loop is stored in `faults`. The GPU runner reads the same sink off its `GpuContext`.
     pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
         // The first snapshot gives the UI something to draw before play is pressed.
-        let slot = SnapshotSlot::with_initial(build_snapshot(None, &mut *state, 0.0, 0.0, 0, false));
-        let now = Instant::now();
-        let sim = Loop {
-            state,
-            slot: SharedSlot::clone(&slot),
-            wake: wake.clone(),
-            running: false,
-            target_tps,
-            uncapped: false,
-            ticks_per_snapshot: 1,
-            step_count: 0,
-            tps_timer: now,
-            actual_tps: 0.0,
-            last_publish: now,
-            serial: 0,
-            layout_on: false,
-            relax_paused: false,
-            ticked: false,
-            engine_ms: None,
-            next_step_at: now,
-            schedule: Schedule::default(),
-            fired_through: None,
-            run_to_target: None,
-        };
-
+        let first = build_snapshot(None, &mut *state, 0.0, 0.0, 0, false);
+        let (sim, slot) = Loop::new(state, first, target_tps, wake.clone());
         let driver = Driver::spawn(sim, move |fault| {
             faults.set_once(fault);
             if let Some(wake) = &wake {
                 wake();
             }
         });
-
         Self { driver, slot }
+    }
+
+    /// Starts a paused runner over `state` in `pool`, capped at `target_tps` ticks per second.
+    ///
+    /// The first snapshot, the loop's start, each pump and each command run on a worker of `pool`. A model step that
+    /// never returns then holds workers of `pool` alone, and the global pool stays whole. `wake` and `faults` are as
+    /// for [`Self::new`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_in(
+        pool: std::sync::Arc<rayon::ThreadPool>,
+        mut state: Box<dyn SimState>,
+        target_tps: f64,
+        wake: Option<WakeFn>,
+        faults: FaultSink,
+    ) -> Self {
+        let first = pool.install(|| build_snapshot(None, &mut *state, 0.0, 0.0, 0, false));
+        let (sim, slot) = Loop::new(state, first, target_tps, wake.clone());
+        let driver = Driver::spawn_in(pool, sim, move |fault| {
+            faults.set_once(fault);
+            if let Some(wake) = &wake {
+                wake();
+            }
+        });
+        Self { driver, slot }
+    }
+
+    /// Stops the loop, and joins its thread once it stops or detaches the thread after `timeout`.
+    ///
+    /// The loop stops between two pumps. A model step that never returns keeps the detached thread running, and
+    /// [`RunnerShutdown::Detached`] returns its handle.
+    pub fn stop(mut self, timeout: Duration) -> RunnerShutdown {
+        self.driver.shutdown(SimCommand::Shutdown, timeout)
     }
 
     /// Sends a command to the loop.
@@ -502,9 +541,15 @@ impl SimThread {
     }
 }
 
+/// Stops the loop as [`SimThread::stop`] does with [`DEFAULT_STOP_TIMEOUT`], and logs a detached thread.
 impl Drop for SimThread {
     fn drop(&mut self) {
-        self.driver.shutdown(SimCommand::Shutdown);
+        if let RunnerShutdown::Detached(_) = self.driver.shutdown(SimCommand::Shutdown, DEFAULT_STOP_TIMEOUT) {
+            log::warn!(
+                "The simulation thread did not stop within {} s, and runs on detached",
+                DEFAULT_STOP_TIMEOUT.as_secs_f64()
+            );
+        }
     }
 }
 
@@ -1177,6 +1222,234 @@ mod pacing_timing_tests {
         let playing = snapshot_where(&mut thread, |snap| snap.actual_tps > 0.0 && snap.actual_tps <= 60.0);
         thread.pause();
         assert!(playing.is_some(), "Play never brought the sim back to its 20 TPS cap");
+    }
+}
+
+/// Tests of a runner whose step blocks until the test releases it, as a model step that never returns would.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod stop_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::time::{Duration, Instant};
+
+    use henad_core::model::SimState;
+    use henad_core::params::ParamValue;
+    use henad_core::view::StatEntry;
+
+    use super::SimThread;
+    use crate::fault::FaultSink;
+    use crate::runner::{DEFAULT_STOP_TIMEOUT, RunnerShutdown};
+
+    /// Longest time a test waits for a thread to reach the state it expects.
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    /// Time a stop may take past its timeout, for the scheduler.
+    const SLACK: Duration = Duration::from_secs(1);
+
+    /// Polls `condition` until it holds, and returns whether it held before [`DEADLINE`].
+    fn wait_until(condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + DEADLINE;
+        while !condition() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        true
+    }
+
+    /// State whose step blocks until its gate receives, or the sender is dropped.
+    struct Gated {
+        gate: Receiver<()>,
+        tick: u64,
+        /// Set when a step starts.
+        entered: Arc<AtomicBool>,
+        /// Set when the state is dropped. The loop drops it on its thread as it ends.
+        dropped: Arc<AtomicBool>,
+    }
+
+    /// Flags a test reads from a [`Gated`] state on its thread.
+    struct GatedFlags {
+        entered: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    /// Returns a gated state, the sender that releases its step, and its flags.
+    fn gated() -> (Gated, Sender<()>, GatedFlags) {
+        let (release, gate) = mpsc::channel();
+        let flags = GatedFlags {
+            entered: Arc::new(AtomicBool::new(false)),
+            dropped: Arc::new(AtomicBool::new(false)),
+        };
+        let state = Gated {
+            gate,
+            tick: 0,
+            entered: Arc::clone(&flags.entered),
+            dropped: Arc::clone(&flags.dropped),
+        };
+        (state, release, flags)
+    }
+
+    impl Drop for Gated {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl SimState for Gated {
+        fn step(&mut self) {
+            self.entered.store(true, Ordering::SeqCst);
+            // A dropped sender releases the step too.
+            self.gate.recv().unwrap_or_default();
+            self.tick += 1;
+        }
+        fn tick(&self) -> u64 {
+            self.tick
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    /// Returns a runner over a gated state, stepping its first step, with the step's sender and flags.
+    fn blocked_runner() -> (SimThread, Sender<()>, GatedFlags) {
+        let (state, release, flags) = gated();
+        let mut thread = SimThread::new(Box::new(state), 60.0, None, FaultSink::new());
+        thread.step_once();
+        assert!(
+            wait_until(|| flags.entered.load(Ordering::SeqCst)),
+            "the step never started"
+        );
+        (thread, release, flags)
+    }
+
+    #[test]
+    fn a_runner_that_never_returns_is_detached_within_the_timeout() {
+        let (thread, release, flags) = blocked_runner();
+        let timeout = Duration::from_millis(200);
+
+        let start = Instant::now();
+        let RunnerShutdown::Detached(detached) = thread.stop(timeout) else {
+            panic!("a runner blocked in its step was joined");
+        };
+        let elapsed = start.elapsed();
+        assert!(elapsed >= timeout, "detached after {elapsed:?}, before the timeout");
+        assert!(elapsed < timeout + SLACK, "the stop waited {elapsed:?}");
+        assert!(!detached.is_finished(), "the blocked thread finished");
+
+        // Released, the step returns and the loop reads the stop command it was sent.
+        release.send(()).expect("the step holds the gate");
+        assert!(
+            wait_until(|| detached.is_finished()),
+            "the released thread never finished"
+        );
+        assert!(flags.dropped.load(Ordering::SeqCst), "the state outlived its loop");
+    }
+
+    #[test]
+    fn dropping_a_runaway_runner_returns_within_the_timeout() {
+        let (thread, release, flags) = blocked_runner();
+
+        let start = Instant::now();
+        drop(thread);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= DEFAULT_STOP_TIMEOUT,
+            "the drop returned after {elapsed:?}, before the timeout"
+        );
+        assert!(elapsed < DEFAULT_STOP_TIMEOUT + SLACK, "the drop waited {elapsed:?}");
+
+        drop(release);
+        assert!(
+            wait_until(|| flags.dropped.load(Ordering::SeqCst)),
+            "the released thread never ended"
+        );
+    }
+
+    /// A runner whose step returns stops at once, without the timeout.
+    #[test]
+    fn a_runner_that_stops_is_joined() {
+        let (state, release, flags) = gated();
+        drop(release);
+        let thread = SimThread::new(Box::new(state), 60.0, None, FaultSink::new());
+
+        let start = Instant::now();
+        assert!(matches!(thread.stop(DEFAULT_STOP_TIMEOUT), RunnerShutdown::Joined));
+        assert!(start.elapsed() < SLACK, "the stop waited {:?}", start.elapsed());
+        assert!(flags.dropped.load(Ordering::SeqCst), "the joined loop kept its state");
+    }
+
+    /// State that records the width of the pool its step and its view preparation run on.
+    struct PoolWidth {
+        tick: u64,
+        step_width: Arc<AtomicUsize>,
+        view_width: Arc<AtomicUsize>,
+    }
+
+    impl SimState for PoolWidth {
+        fn step(&mut self) {
+            assert!(rayon::current_thread_index().is_some(), "the step ran outside a pool");
+            self.step_width.store(rayon::current_num_threads(), Ordering::SeqCst);
+            self.tick += 1;
+        }
+        fn tick(&self) -> u64 {
+            self.tick
+        }
+        fn prepare_view(&mut self) {
+            self.view_width.store(rayon::current_num_threads(), Ordering::SeqCst);
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    /// The first snapshot and every step of a runner started in a pool run on that pool, and the global pool runs
+    /// none of it.
+    #[test]
+    fn a_runner_in_a_pool_steps_on_its_workers() {
+        let width = rayon::current_num_threads() + 1;
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(width)
+                .build()
+                .expect("a pool of a few threads"),
+        );
+        let step_width = Arc::new(AtomicUsize::new(0));
+        let view_width = Arc::new(AtomicUsize::new(0));
+        let state = PoolWidth {
+            tick: 0,
+            step_width: Arc::clone(&step_width),
+            view_width: Arc::clone(&view_width),
+        };
+
+        let mut thread = SimThread::new_in(pool, Box::new(state), 60.0, None, FaultSink::new());
+        assert_eq!(view_width.load(Ordering::SeqCst), width, "the first snapshot");
+        thread.step_once();
+        assert!(
+            wait_until(|| step_width.load(Ordering::SeqCst) != 0),
+            "the step never ran"
+        );
+        assert_eq!(step_width.load(Ordering::SeqCst), width);
+        assert!(matches!(thread.stop(DEFAULT_STOP_TIMEOUT), RunnerShutdown::Joined));
     }
 }
 

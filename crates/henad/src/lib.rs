@@ -92,6 +92,7 @@ pub mod runner {
     pub use henad_compute::gpu::{
         GpuAgents, GpuDisplay, GpuSimState, GpuSimThread, GpuStats, MAX_STEPS_PER_SUBMISSION, StatsPoll,
     };
+    pub use henad_compute::runner::{DEFAULT_STOP_TIMEOUT, DetachedRunner, RunnerShutdown};
     pub use henad_compute::snapshot::{
         CpuLayers, EdgeSnapshot, GpuSnapshot, GridSnapshot, PointSnapshot, Snapshot, SnapshotView,
     };

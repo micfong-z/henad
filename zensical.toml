@@ -139,6 +139,7 @@ nav = [
             { "#53, 2026-10-10" = "developing/agent-record/20261010-53-runtime-grid-rules.md" },
             { "#54, 2026-10-10" = "developing/agent-record/20261010-54-app-install-path.md" },
             { "#56, 2026-10-10" = "developing/agent-record/20261010-56-cli-model-files.md" },
+            { "#57, 2026-10-10" = "developing/agent-record/20261010-57-runaway-rails.md" },
         ] },
     ] },
 ]

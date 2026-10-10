@@ -815,8 +815,9 @@ cargo builds a primary package with a static std, and every member linking it wo
   and `primitives/` (shared building blocks). `snapshot.rs`, `runtime_info.rs` and
   `display_scale.rs` sit above both, since either backend publishes through them. So does `runner/`,
   which owns how a sim loop gets driven and the one place the two ways of driving one differ:
-  `runner/mod.rs` holds the `SimLoop` trait, `Pace` and the `SnapshotSlot`, with `runner/thread.rs`
-  the native driver and `runner/frame.rs` the wasm one. `entry/` type-erases a model for a host:
+  `runner/mod.rs` holds the `SimLoop` trait, `Pace`, the `SnapshotSlot` and the bounded stop
+  (`DEFAULT_STOP_TIMEOUT`, `RunnerShutdown`, `DetachedRunner`), with `runner/thread.rs` the native
+  driver and `runner/frame.rs` the wasm one. `entry/` type-erases a model for a host:
   `ModelEntry` (declarations behind accessors and an `Arc`, and a factory that takes the device at
   `build`), `ModelState`, the five `register_*` generics, and `ModelSet` (`entry/set.rs`). An entry
   holds no device from its registration. The five `register_*` functions fill a crate-private
@@ -1384,10 +1385,52 @@ cargo builds a primary package with a static std, and every member linking it wo
   returns Build's disabled reason, which Playback shows. It shows a `SetupError` through
   `setup_message`, as it shows `INVALID_SEED` and a shortfall through `too_large_message`.
   `reset_simulation` builds nothing while the check fails, and `open_run` refuses a replay
-  `RunSetup::from_replay` refuses. `build_runner` builds the checked setup, and `reset_simulation`
-  builds it through the private `load`, which sends `SimCommand::SetSchedule` to the new runner when
-  the schedule is not empty, then pins the setup's entry and records `loaded_values`, `loaded_seed`
-  and `loaded_schedule`.
+  `RunSetup::from_replay` refuses. `reset_simulation` builds the checked setup through the private
+  `load`, which tears the old run down, pins the setup's entry, records `loaded_values`,
+  `loaded_seed` and `loaded_schedule`, starts the build and sends `SimCommand::SetSchedule` when the
+  schedule is not empty. The loaded fields are the setup's from the start of the build.
+  `state/build.rs` holds the build and the teardown, and `state/pool.rs` the `ModelPool`, a shared
+  slot holding the pool the app's CPU work runs in (`None` for rayon's global pool) and its
+  generation. On native `start_build` runs a `BuildJob` on a thread named `henad-model-build`. The
+  job first waits (`settle`) until each detached thread in `stopping` has ended, or has run past
+  `DEFAULT_STOP_TIMEOUT` since its stop and retired its pool through `ModelPool::retire`, which puts
+  a fresh pool at the global width in place, its threads named `henad-pool-N`. The old run then
+  frees its memory before the new model allocates. The job builds inside the current pool:
+  `entry.build`, then `SimThread::new_in` or `GpuSimThread::new_in` (`new` in the global pool). A
+  GPU build runs whole inside `catching_on` on the thread that builds it, since error scopes are
+  thread-local. The thread sends the runner or the fault back over a channel with the pool's
+  generation and wakes the UI, and `HenadApp::logic` calls `poll_build` each frame, which installs
+  the runner, applies the Pacing tab's GPU batch settings and sends it the `PendingBuild`'s queue.
+  Every command goes through `AppState::send_command`, which queues it while a build runs: the
+  `SetSchedule` of `load`, the `RunTo` of `run_to`, `open_run` and `open_setup`, live edits, action
+  presses and pacing. `has_simulation` holds for a runner or a build, `is_building` for a build, and
+  `is_gpu` reads the loaded entry during a build. Playback shows `BUILDING_MODEL` with Cancel in
+  place of the Run to tick row and disables Build. Cancel is `offload_simulation`. A build started
+  while one runs abandons it. A browser builds inline through the same `finish_build`. Every
+  teardown (`load`, `offload_simulation`, a fault, and the app's drop as it quits) goes through
+  `stop_simulation`, which stops the runner with `STOP_WAIT` (250 ms) and abandons a build. A
+  build's `phase` moves from waiting to building to done by compare and swap, and an abandon swaps
+  in cancelled: a waiting build ends without building, a building one is detached and drops its
+  runner on its own thread, and a done one hands its runner over to be stopped. A runner still
+  running and an abandoned build are detached into `stopping` with their pool's generation, and
+  `poll_stopping` drops each once its thread ends and retires the pool of each past
+  `DEFAULT_STOP_TIMEOUT`. Playback reads `stopping_status`: `STILL_STOPPING` ("Previous run is still
+  stopping.") and, once one has run past `DEFAULT_STOP_TIMEOUT` since the stop, `DID_NOT_STOP`
+  ("Previous run did not stop. It will keep running until the app quits."). The viewport's uploads
+  (the grid, the density map, the agent and edge layers), the export's grid pixels and the Sweep
+  tab's column builds run through `ModelPool::install`, so a stuck run in a retired pool never
+  stalls them. A CPU runner reports into `AppState::sim_faults`, which each teardown replaces, so a
+  detached runner's late fault reaches no later run. `src/tests/runaway.rs` holds
+  `a_cpu_build_after_a_detach_runs_on_a_fresh_pool`,
+  `a_slow_runner_is_waited_for_and_keeps_the_pool`,
+  `a_viewport_frame_after_a_detach_runs_on_the_fresh_pool`,
+  `a_build_that_never_returns_leaves_the_ui_responsive`,
+  `commands_sent_during_a_build_reach_the_new_runner`,
+  `offload_and_quit_do_not_wait_for_a_runaway_runner` and
+  `a_gpu_build_on_the_build_thread_reports_a_validation_error_as_a_fault`, over the `held` entries
+  of `support.rs`, whose first build waits on a `Gate` and whose first run's steps a `StepHold`
+  holds, on the step's thread or on every worker of its pool. Keep them. A test that builds calls
+  `AppState::wait_for_build` before it reads the runner.
   `seed_pending` and `schedule_pending` compare each with its loaded copy, and the Reload needed
   notice counts both. A `None` seed is the model's default, the constant `henad-cli` uses without
   `--seed`. The engines take `seed.map_or(CONST, mix_seed)`, and the field keeps `None` as a state
@@ -1950,11 +1993,12 @@ available, that a GPU entry builds on a baseline device and runs a full submissi
 ### Performance-critical paths — read before touching
 
 - **A parallel pass costs a wake-up per worker, and stepping from outside the pool costs an inject
-  on top.** `runner/thread.rs` pumps inside `rayon::scope` and `henad-cli` steps inside one, so the
-  passes a kernel runs are injected from a worker rather than from a thread that has to be parked
-  and woken for each. `ca.rs::rows_per_leaf` is the other half: one row per rayon leaf handed 48
-  workers a 64 by 64 grid as 64 jobs of 64 cells, and the floor turns that into one job. Measured
-  together at 13x on the smallest grid rungs.
+  on top.** `runner/thread.rs` pumps inside `rayon::scope` (or inside `pool.install` for a runner
+  from `SimThread::new_in`) and `henad-cli` steps inside one, so the passes a kernel runs are
+  injected from a worker rather than from a thread that has to be parked and woken for each.
+  `ca.rs::rows_per_leaf` is the other half: one row per rayon leaf handed 48 workers a 64 by 64
+  grid as 64 jobs of 64 cells, and the floor turns that into one job. Measured together at 13x on
+  the smallest grid rungs.
 - `henad-compute/src/cpu/field/ca.rs::step_row_moore`/`step_row_vn` and
   `henad-models/src/*/step.rs` (the agent and node kernels) are the hot inner loops. The x-wrap is
   peeled off both row loops so the interior runs without a per-cell modulo; keep that shape,
@@ -2163,8 +2207,32 @@ even with atomics, hence the second driver.
 
 The `#[cfg(target_arch = "wasm32")]` choosing between the two sits in `runner/mod.rs` and nowhere
 else, so stepping is written once. `SimThread`'s API (`play`/`pause`/`step_once`/`run_to`/
-`set_schedule`/`send`/`update`) is the same either way and `henad-app` never learns which driver it
-holds. `gpu/sim_thread.rs` is driven the same way.
+`set_schedule`/`send`/`update`/`stop`) is the same either way and `henad-app` never learns which
+driver it holds. `gpu/sim_thread.rs` is driven the same way.
+
+A loop handles its stop command only between two pumps, and a step that never returns cannot be
+interrupted. `Driver::shutdown(cmd, timeout)` sends the stop command and polls
+`JoinHandle::is_finished` until the timeout, then joins the thread (`RunnerShutdown::Joined`) or
+hands it back unjoined (`RunnerShutdown::Detached(DetachedRunner)`). `SimThread::stop` and
+`GpuSimThread::stop` take the timeout, and both drops stop with `DEFAULT_STOP_TIMEOUT` (2 s) and log
+a detach. Nothing joins a thread without a bound. The frame driver stops at once and never detaches.
+`SimThread::new_in(pool, ..)` (native) builds the first snapshot inside `pool` and runs the loop's
+start, each pump and each command through `pool.install`, through `Driver::spawn_in`. A stuck
+kernel then holds workers of that pool alone. `SimThread::new` keeps the shape above: commands on
+the runner thread, and each pump in `rayon::scope`. `GpuSimThread::new_in` runs its loop in a pool
+the same way, and a GPU pump then never waits for a worker of a pool a stuck CPU step holds.
+`stop_tests` in `cpu/sim_thread.rs` holds
+`a_runner_that_never_returns_is_detached_within_the_timeout`,
+`dropping_a_runaway_runner_returns_within_the_timeout`, `a_runner_that_stops_is_joined` and
+`a_runner_in_a_pool_steps_on_its_workers`, and `gpu/sim_thread.rs`
+`a_gpu_runner_in_a_pool_pumps_on_its_workers`. Keep them.
+
+On native the app never builds or tears down on the UI thread without a bound. It builds on the
+`henad-model-build` thread, queues the commands sent meanwhile, stops a runner within `STOP_WAIT`,
+and keeps a detached runner or build until it ends. The next build waits for it, and once it has
+run past `DEFAULT_STOP_TIMEOUT` the app's CPU work moves to a fresh pool. In a browser the build
+runs inline, and a step that never returns freezes the page. The henad-app paragraph above has the
+details.
 
 `SimCommand::SetSchedule` replaces the loop's `Schedule`, fires the entries due at the current tick
 unless that tick has fired, and publishes. Both loops keep `fired_through`, the highest tick whose
