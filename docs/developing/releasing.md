@@ -209,8 +209,8 @@ A **patch release** goes from 0.x.y to 0.x.(y+1) and stays compatible, as Cargo'
   Each break goes under Changed or Removed with a leading "Breaking:" and a migration note.
 - A replacement ships at least one breaking release before the item that it replaces is removed, with `#[deprecated(since, note)]` in between.
 - Items under `#[doc(hidden)]` sit outside the documented surface, and serve only Henad's own crates.
-  Among them are `__shader_support`, `__macro_support`, the `build_info!` constructor, `__COMPUTE_BUILD`, the hidden version consts, the `__indices!` and `__buffer_flags!` macros, henad-build's `stamp_engine_commit` and `stamp_source_hash`, `ModelEntry::wrap_factory` with its `Factory` trait, and `AppOptions::__official`.
-  henad-compute calls the graph maintenance methods of henad-core's `Network` (`spawn`, `retire`, `set_directed`, `should_repack`, `repack` and `rebuild`) and the two hidden constructors of `ModelSource`, `__from_type_path` and `__with_build`.
+  Among them are `__shader_support`, `__macro_support`, the `build_info!` constructor, `__COMPUTE_BUILD`, the hidden version consts, the `__indices!` and `__buffer_flags!` macros, henad-build's `stamp_engine_commit` and `stamp_source_hash`, `ModelEntry::wrap_factory` with its `Factory` trait, `ModelEntry::__into_plugin` and `__with_code`, and `AppOptions::__official`.
+  henad-compute calls the graph maintenance methods of henad-core's `Network` (`spawn`, `retire`, `set_directed`, `should_repack`, `repack` and `rebuild`) and the three hidden methods of `ModelSource`, `__from_type_path`, `__with_build` and `__into_plugin`.
   Under caret requirements, Henad's crates can resolve to different patch releases in one build.
   Within one 0.x no crate therefore removes or changes a hidden item that another Henad crate of that 0.x uses, a `HENAD_BUILD_*` variable name, or the shape of henad-build's generated code.
   `wrap_factory` and `Factory` stay fully exempt, since only Henad's tests call them.

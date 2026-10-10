@@ -7,13 +7,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use henad_compute::entry::ModelEntry;
+use henad_compute::entry::{ModelEntry, ModelState};
+use henad_compute::fault::{Fault, catching};
 use henad_compute::gpu::GpuContext;
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::Plan;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::export::csv::parse_records;
+use henad_core::params::ParamValue;
 use henad_models::example_models;
 
 use henad_compute::fault::install_panic_hook;
@@ -58,6 +60,19 @@ pub fn entry(id: &str, gpu: Option<&GpuContext>) -> ModelEntry {
         .lookup(id, gpu)
         .cloned()
         .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Returns `entry` with a build that faults every time, for a test that checks the model is refused before any build.
+pub fn unbuildable(entry: ModelEntry) -> ModelEntry {
+    entry.wrap_factory(|_| {
+        Arc::new(
+            |_params: &[ParamValue], _seed: Option<u64>, _gpu: Option<&GpuContext>| -> Result<ModelState, Fault> {
+                catching("building a model that is never built", || -> ModelState {
+                    panic!("the model was built")
+                })
+            },
+        )
+    })
 }
 
 /// Path under the system's temporary directory, unique to one test, removed with its contents on drop.

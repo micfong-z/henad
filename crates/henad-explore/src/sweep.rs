@@ -35,12 +35,12 @@ use crate::handle::SweepOutput;
 use crate::output::OutputWriter;
 use crate::output::manifest::{
     BuildRole, FORMAT, FORMAT_VERSION, Manifest, ManifestBlock, ManifestColumns, ManifestDesignTable,
-    ManifestExecution, ManifestMode, ManifestModel, ManifestPlan, ManifestRuntime, ManifestSearch, ManifestSeeds,
-    ManifestSession, ManifestSpecSource, ManifestStatus, ManifestTimestamps, RecordedBuild, ResultCounts, now_unix_ms,
-    rfc3339,
+    ManifestExecution, ManifestMode, ManifestModel, ManifestModelCode, ManifestPlan, ManifestRuntime, ManifestSearch,
+    ManifestSeeds, ManifestSession, ManifestSpecSource, ManifestStatus, ManifestTimestamps, RecordedBuild,
+    ResultCounts, now_unix_ms, rfc3339,
 };
 use crate::output::memory::SweepFiles;
-use crate::output::resume::{ResumeError, ResumeScan};
+use crate::output::resume::{ResumeError, ResumeScan, check_directory_code};
 use crate::output::runs_csv::column_names;
 use crate::output::{OutputDir, OutputError, runs_csv, series_csv};
 use crate::probe::{CapacityError, ProbeError, ProbeReport, TimedProbe, check_capacity};
@@ -834,6 +834,9 @@ impl SweepPreparation {
             (Some(output_dir), _) if !inputs.dry_run => Some(OutputDir::open(output_dir)?),
             _ => None,
         };
+        if let Some(output_dir) = resume_dir {
+            check_directory_code(output_dir, ManifestMode::Sweep, plan.model(), entry.source())?;
+        }
         if let Some(ctx) = gpu {
             check_capacity(entry, &plan, &ctx.device.limits())?;
         }
@@ -848,6 +851,7 @@ impl SweepPreparation {
                 ResumeScan::read(
                     output_dir,
                     &plan,
+                    entry.source(),
                     options.shard,
                     options.retry_failed,
                     &runs_csv::header_line(&columns),
@@ -1249,6 +1253,7 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
             schema_hash: hex(parts.plan.schema_hash()),
             schema: schema_json(entry, Some(parts.probe)),
             replays_exactly: entry.metadata().replays_exactly,
+            code: entry.source().code().map(ManifestModelCode::from),
         },
         spec,
         spec_source: inputs.source.into(),

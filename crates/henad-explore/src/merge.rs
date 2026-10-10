@@ -12,7 +12,7 @@ use henad_core::explore::plan::Shard;
 
 use crate::output::manifest::{
     BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, ManifestTimestamps, RecordedBuild, ResultCounts,
-    now_unix_ms, rfc3339,
+    code_text, codes_differ, now_unix_ms, rfc3339,
 };
 use crate::output::read::{ReadError, RunRecord, RunsCsv, SeriesScan, SeriesSegment, merge_series};
 use crate::output::runs_csv::header_line;
@@ -57,7 +57,8 @@ struct ShardInput {
 ///
 /// Returns [`MergeError`] when there are no inputs, an input cannot be read, the inputs hold different plans,
 /// replicate counts, shard counts or columns, two inputs hold the same shard, a run's id does not match its config and
-/// replicate, or the merged directory cannot be written.
+/// replicate, or the merged directory cannot be written. Returns [`MergeError::CodeChanged`] when two shards ran
+/// different model code, and either code is runtime or plugin code.
 pub fn merge(
     shard_dirs: &[PathBuf],
     output_dir: &Path,
@@ -256,7 +257,12 @@ fn read_input(dir: &Path) -> Result<ShardInput, MergeError> {
     })
 }
 
-/// Checks that `shards`, sorted by shard index, are distinct shards of one plan with one replicate count.
+/// Checks that `shards`, sorted by shard index, are distinct shards of one model, one model code, one plan and one
+/// replicate count.
+///
+/// The model and its code are compared before the plan, as a resume compares them. A runtime model's edit can change
+/// its declarations as well, and the changed code is then the error reported. A shard of another model differs in its
+/// plan.
 fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
     let Some(first) = shards.first() else {
         return Err(MergeError::NoInputs);
@@ -270,6 +276,16 @@ fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
             });
         }
     }
+    if let Some(input) = shards
+        .iter()
+        .find(|input| input.manifest.model.id != first.manifest.model.id)
+    {
+        return Err(MergeError::PlanDiffers {
+            dir: input.dir.clone(),
+            first: first.dir.clone(),
+        });
+    }
+    check_code(shards)?;
     for input in shards {
         let (plan, expected) = (&input.manifest.plan, &first.manifest.plan);
         if plan.plan_hash != expected.plan_hash
@@ -287,6 +303,37 @@ fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
                 dir: input.dir.clone(),
                 first: first.dir.clone(),
             });
+        }
+    }
+    Ok(())
+}
+
+/// Checks that the sessions of `shards`, sorted by shard index, ran one model code wherever either of two codes is
+/// runtime or plugin code.
+///
+/// Each model build of a session that wrote runs is compared with every build of each lower shard. Note that a
+/// comparison with the lowest shard alone misses a pair. A compiled shard of sources `X`, a plugin shard of `X` and a
+/// compiled shard of `Y` each match the first shard, and the plugin shard and the last shard differ.
+fn check_code(shards: &[ShardInput]) -> Result<(), MergeError> {
+    let listed: Vec<(&ShardInput, Vec<Option<RecordedBuild>>)> = shards
+        .iter()
+        .map(|input| (input, input.manifest.run_model_builds()))
+        .collect();
+    for (position, (input, builds)) in listed.iter().enumerate() {
+        for (lower_input, lower_builds) in &listed[..position] {
+            for build in builds {
+                if let Some(recorded) = lower_builds
+                    .iter()
+                    .find(|recorded| codes_differ(recorded.as_ref(), build.as_ref()))
+                {
+                    return Err(MergeError::CodeChanged {
+                        dir: input.dir.clone(),
+                        lower_dir: lower_input.dir.clone(),
+                        recorded: code_text(recorded.as_ref()),
+                        current: code_text(build.as_ref()),
+                    });
+                }
+            }
         }
     }
     Ok(())
@@ -391,6 +438,17 @@ pub enum MergeError {
         /// Path of the input directory with the lowest shard index.
         first: PathBuf,
     },
+    /// Input `dir` ran other model code than input `lower_dir`, and either code is runtime or plugin code.
+    CodeChanged {
+        /// Path of the input directory that differs.
+        dir: PathBuf,
+        /// Path of an input directory with a lower shard index.
+        lower_dir: PathBuf,
+        /// Code that a session of `lower_dir` ran, as text naming its origin and its hash.
+        recorded: String,
+        /// Code that a session of `dir` ran, as text naming its origin and its hash.
+        current: String,
+    },
     /// Input `dir` splits the plan into a different number of shards than input `first`.
     ShardCountDiffers {
         /// Path of the input directory that differs.
@@ -463,6 +521,18 @@ impl fmt::Display for MergeError {
                 dir.display(),
                 first.display()
             ),
+            Self::CodeChanged {
+                dir,
+                lower_dir,
+                recorded,
+                current,
+            } => write!(
+                f,
+                "'{}' ran different model code ({current}) from '{}' ({recorded}). Shards of a model composed at run \
+                 time or loaded from a plugin merge only when they ran the same code",
+                dir.display(),
+                lower_dir.display()
+            ),
             Self::ShardCountDiffers { dir, first } => write!(
                 f,
                 "'{}' has a different shard count from '{}'",
@@ -515,6 +585,7 @@ impl std::error::Error for MergeError {
             | Self::BadShard { .. }
             | Self::NoTables
             | Self::PlanDiffers { .. }
+            | Self::CodeChanged { .. }
             | Self::ShardCountDiffers { .. }
             | Self::SameShard { .. }
             | Self::ColumnsDiffer { .. }

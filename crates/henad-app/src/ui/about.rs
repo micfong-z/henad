@@ -2,7 +2,7 @@
 
 use egui::{ColorImage, Context, Id, Label, Modal, ScrollArea, TextureHandle, TextureOptions, Vec2};
 use henad_compute::entry::ModelSet;
-use henad_core::provenance::BuildInfo;
+use henad_core::provenance::{BuildInfo, CodeOrigin};
 
 use crate::icons::material_design_icons::MDI_CONTENT_COPY;
 use crate::options::Product;
@@ -126,7 +126,7 @@ fn decode_png(png: &[u8]) -> Option<ColorImage> {
 }
 
 /// Returns the rows of the About window: the product's build, the Henad it is built on unless it is Henad's own app,
-/// and one row per crate that registered models.
+/// one row per crate that registered models, and one row per model composed at run time.
 fn build_info(product: &Product, models: &ModelSet) -> Vec<InfoRow> {
     let host = &product.host;
     let mut rows = vec![
@@ -154,12 +154,18 @@ fn build_info(product: &Product, models: &ModelSet) -> Vec<InfoRow> {
     let mut sources: Vec<String> = Vec::new();
     for entry in models {
         let source = entry.source();
-        let text = format!(
-            "{} {} ({})",
-            source.package(),
-            source.version(),
-            build_text(source.commit(), source.dirty(), source.source_hash())
-        );
+        let build = build_text(source.commit(), source.dirty(), source.source_hash());
+        let text = match source.origin() {
+            CodeOrigin::Runtime => format!(
+                "{} (runtime code {})",
+                entry.id(),
+                source
+                    .code_hash()
+                    .map_or_else(|| "unknown".to_owned(), |hash| format!("{hash:016x}"))
+            ),
+            CodeOrigin::Plugin => format!("{} {} (plugin, {build})", source.package(), source.version()),
+            _ => format!("{} {} ({build})", source.package(), source.version()),
+        };
         if !sources.contains(&text) {
             sources.push(text);
         }
@@ -221,6 +227,7 @@ fn clipboard_text(product: &str, info: &[InfoRow]) -> String {
 #[cfg(test)]
 mod tests {
     use henad_compute::entry::ModelSet;
+    use henad_core::provenance::ModelCode;
 
     use super::{LOGO_PNG, build_info, clipboard_text, decode_png};
     use crate::options::AppOptions;
@@ -275,5 +282,34 @@ mod tests {
         let info = build_info(&other.product, &ModelSet::new(henad_core::build_info!()));
         assert_eq!(labels(&info), ["Version", "Commit", "Sources", "Build", "Built on"]);
         assert!(info[4].1.starts_with("Henad "), "{}", info[4].1);
+    }
+
+    /// A model composed at run time shows its code, and a model loaded from a plugin shows its origin beside its
+    /// crate's build.
+    #[test]
+    fn runtime_and_plugin_models_name_their_code() {
+        let examples = henad_models::example_models();
+        let life = examples
+            .get("game_of_life")
+            .expect("game_of_life is registered")
+            .clone();
+        let sir = examples.get("sir").expect("sir is registered").clone();
+        let code = ModelCode::new("test-rule/1", "life");
+        let mut models = ModelSet::new(henad_core::build_info!());
+        models.insert(life.__with_code(code.clone())).expect("a fresh id");
+        models.insert(sir.__into_plugin()).expect("a fresh id");
+        let official = AppOptions::new(models.clone(), "Henad", henad_core::build_info!()).__official();
+        let rows: Vec<String> = build_info(&official.product, &models)
+            .into_iter()
+            .filter(|(label, _)| *label == "Models")
+            .map(|(_, text)| text)
+            .collect();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0], format!("game_of_life (runtime code {:016x})", code.hash()));
+        assert!(
+            rows[1].starts_with("henad-models ") && rows[1].contains("(plugin, "),
+            "{}",
+            rows[1]
+        );
     }
 }

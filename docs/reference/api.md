@@ -45,7 +45,7 @@ No feature is on by default, and no feature changes a result.
 
 | Path | Holds |
 |---|---|
-| `henad` | `ModelEntry`, `ModelSet`, `RunSetup`, `Simulation`, `StatSample`, `Fault`, `install_panic_hook`, `BuildInfo`, `ModelSource`, `ModelMetadata`, and the macros `params!`, `actions!`, `agent_lanes!`, `for_each_chunk_mut!`, `buffers!`, `build_info!` and `include_shaders!` |
+| `henad` | `ModelEntry`, `ModelSet`, `RunSetup`, `Simulation`, `StatSample`, `Fault`, `install_panic_hook`, `BuildInfo`, `ModelSource`, `CodeOrigin`, `ModelCode`, `ModelMetadata`, and the macros `params!`, `actions!`, `agent_lanes!`, `for_each_chunk_mut!`, `buffers!`, `build_info!` and `include_shaders!` |
 | `henad::prelude` | The names a program imports whole to build, run and sweep models |
 | `henad::authoring` | Everything a model is written against: the five model traits and their types, the `register_*` functions, the helpers, `Grid2D`, `Network`, `SpatialHash` and the engine constants |
 | `henad::authoring::prelude` | The names a model's source file imports whole |

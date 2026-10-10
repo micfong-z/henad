@@ -8,6 +8,8 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 ### Added
 
 - Descriptors that own their strings, for models read at run time: `ParamDescriptor::new`, `StatDescriptor::owned`, `ActionDescriptor::owned`, `StatEntry::new`, `ChoiceOptions` (`from_static`, `new`; `henad::params::ChoiceOptions`); `StatDescriptor::entry`.
+- `ModelSet::replace`: an entry in place of the one with its id, at its position, or appended.
+- Code identity: `CodeOrigin` (`Compiled`, `Runtime`, `Plugin`), `ModelCode` (FNV-1a over format and canonical text), `ModelSource::runtime`, `origin`, `code`, `code_hash`; manifests record a model's `origin` and `code_hash`, and a runtime model's text as `model.code` (format version stays 1); `ResultSet::code_matches`.
 
 ### Changed
 
@@ -16,6 +18,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Breaking: `GridView`, `PointView` and `EdgeView` borrow their palettes for `'a`; snapshots own theirs as `Vec<[u8; 4]>`.
 - Breaking: `ModelMetadata` and `Structure` are `#[non_exhaustive]`; `ModelMetadata` built through `new`, `palette` and `replays_exactly`, its palette a `Cow`.
 - GPU grid engine non-generic, built from a private spec of the model's declarations; `GpuGridState<M>` an adapter over it, its API unchanged. Workgroup counts and buffer sizes cached at construction.
+- Breaking: `RecordedBuild` is `#[non_exhaustive]`, with `origin` and `code_hash` (build through `From<&BuildInfo>`, `From<&ModelSource>` or `engine()`); `ManifestModel` gains `code` (`None` for compiled models); `ModelSource` compares its origin and code; `same_build` compares code identity alone when either build has an origin.
 
 ## [0.3.0] - 2026-10-10
 

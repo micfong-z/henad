@@ -21,8 +21,11 @@ use henad_core::explore::search::SearchSpecError;
 use henad_core::explore::spec::SweepSpec;
 
 use henad_core::explore::value::parse_value;
+use henad_core::provenance::ModelSource;
 
-use crate::output::manifest::{BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, RecordedBuild};
+use crate::output::manifest::{
+    BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, RecordedBuild, codes_differ,
+};
 use crate::output::read::{ReadError, parse_one, record_ends};
 use crate::output::runs_csv::{ID_COLUMNS, NOTE_COLUMN, OUTCOME_COLUMNS};
 use crate::output::search_tables::{
@@ -354,6 +357,19 @@ impl ResultSet {
     /// `entry.schema()` for a [`ModelEntry`](henad_compute::entry::ModelEntry).
     pub fn schema_matches(&self, schema: ModelSchema<'_>) -> bool {
         schema.id == self.manifest.model.id && hex(schema_hash(&schema)) == self.manifest.model.schema_hash
+    }
+
+    /// Returns whether `source` runs the code that every session of the folder ran its runs with, the condition a
+    /// resume of the folder sets when either code is runtime or plugin code.
+    ///
+    /// Always `true` while the folder and `source` hold compiled code alone. A compiled build that changed shows in
+    /// [`Self::recorded_builds`] instead.
+    pub fn code_matches(&self, source: &ModelSource) -> bool {
+        let current = RecordedBuild::from(source);
+        self.manifest
+            .run_model_builds()
+            .iter()
+            .all(|build| !codes_differ(build.as_ref(), Some(&current)))
     }
 
     /// Plans the recorded spec against `schema`.

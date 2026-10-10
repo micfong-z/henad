@@ -574,6 +574,13 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   entry's type path and the build of the crate that registered it. A build script stamps the
   commit, the dirty flag and the source hash through henad-build, and they read as unknown in a
   crate whose script does not. `__VERSION` is henad-core's version, which has no build script.
+  A `ModelSource` also holds a `CodeOrigin` (`Compiled`, `Runtime` or `Plugin`, non-exhaustive).
+  `ModelSource::runtime(label, code)` is a model composed at run time, typed `runtime:<label>`, with
+  no build, and its `ModelCode` holds a format, the canonical text and the FNV-1a hash of the tag
+  `henad.model-code.1`, the format and the text (`model_code_hash_is_pinned`, keep it).
+  `code_hash()` is that hash for runtime code and the registering crate's source hash for compiled
+  and plugin code. The hidden `__into_plugin` marks a compiled source as a plugin's. Equality
+  covers the origin and the code.
   Also the `Grid2D<T>`
   double-buffered SoA grid (`grid.rs`),
   the counting-sort `SpatialHash` and the `HashGrid` cell geometry both backends share
@@ -738,15 +745,23 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   the native driver and `runner/frame.rs` the wasm one. `entry/` type-erases a model for a host:
   `ModelEntry` (declarations behind accessors and an `Arc`, and a factory that takes the device at
   `build`), `ModelState`, the five `register_*` generics, and `ModelSet` (`entry/set.rs`). An entry
-  holds no device from its registration. A set refuses a duplicate id or one outside the grammar,
-  records its `BuildInfo` on an entry that has none, and merges the entries' `GpuNeeds` for the
-  device request. The `register_*` functions are generic, and the engines and kernels monomorphise
+  holds no device from its registration. The five `register_*` functions fill a crate-private
+  `EntryDeclarations` and call the crate-private `ModelEntry::new_cpu` or `new_gpu`, which wrap the
+  build in `catching` or `catching_on` (a GPU build with no device is refused) and derive the
+  metadata's backend. `an_entry_from_values_reads_like_the_registered_one` holds the two paths
+  equal. Keep it. A set refuses a duplicate id or one outside the grammar, records its `BuildInfo`
+  on an entry that has none unless its source is runtime or plugin code, and merges the entries'
+  `GpuNeeds` for the device request. `ModelSet::replace` puts an entry in place of the one with its
+  id, at its position, and returns it, or appends the entry and returns `None`, stamping as
+  `insert` does. The `register_*` functions are generic, and the engines and kernels monomorphise
   in the crate that calls them. The GPU grid engine is the exception. henad-compute compiles it
   once, and only `GpuGridState<M>`'s forwarders and the model's hooks monomorphise in the caller.
   henad-compute instantiates no model outside its own tests.
   `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for henad-explore's test harnesses
-  alone. `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU
-  ports share. `simulation.rs` is the programmatic API over an entry. `RunSetup`
+  alone. The hidden `ModelEntry::__into_plugin` marks an entry as a plugin's, and only tests call
+  it. The hidden `__with_code` gives a test's entry a runtime source labelled with its id.
+  `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU ports
+  share. `simulation.rs` is the programmatic API over an entry. `RunSetup`
   (`ModelEntry::setup`) holds values by id, a seed and scheduled actions, each checked when set
   (`set` through `check_value`, `set_text` through `parse_value`, `from_parts` and `from_replay`
   for positional values). `RunSetup::build` fires tick 0's actions before it returns, and a
@@ -959,6 +974,32 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   procedure in its `README.md`, and `a_0_2_0_manifest_still_replays_and_merges` replays and merges
   it. Both fail when the folder is missing. `src/tests/provenance.rs` holds the comparisons. Keep
   them.
+  Code identity: a model build records `origin` (`runtime` or `plugin`, absent for compiled code)
+  and `code_hash`, both optional and left out when absent, and `ManifestModel.code`
+  (`ManifestModelCode`) carries a runtime model's text inline. `FORMAT_VERSION` stays 1.
+  `RecordedBuild` is `#[non_exhaustive]`. When either build records an origin, `same_build`
+  compares the code identity alone: `runtime` and the code hash, or `rust` and the source hash for
+  compiled and plugin code, both known. `is_identified` and `describe` account for it, and
+  `reads_as` lists a plugin apart from the compiled build of its sources. The crate-private
+  `code_differs` is the rejection rule: either build has an origin and the two are not the same
+  build. `check_code` (`output/resume.rs`) applies it after the model id and before the schema hash
+  for a sweep resume (`ResumeScan::read` takes the `ModelSource`) and a search resume, against
+  every session that wrote runs (`Manifest::run_model_builds`), a session with no model build
+  counting as other code, and returns `ResumeError::CodeChanged`. Both resumes also call
+  `check_directory_code` before their probe build, which then never builds changed code. A merge
+  compares every shard's builds with those of each lower shard, after the model id and before the
+  plan checks (`MergeError::CodeChanged`). One reference shard misses a plugin shard between two
+  compiled shards of other sources. Compiled against compiled keeps `BuildChanged`. `schema_json`
+  writes `origin` and `code_hash` only for a model that is not compiled, and
+  `ResultSet::code_matches` answers the rule for a host.
+  `a_value_built_entry_sweeps_byte_identically_to_the_registered_one`,
+  `a_resume_refuses_runtime_code_that_changed`,
+  `a_resume_refuses_a_plugin_whose_sources_changed`,
+  `a_plugin_with_unchanged_sources_resumes_a_compiled_folder`,
+  `a_compiled_build_change_still_only_warns`, `a_merge_refuses_shards_of_two_codes`,
+  `a_manifest_carries_runtime_code_inline` and `two_codes_under_one_label_are_listed_apart`
+  (`src/tests/provenance.rs`), `a_search_resume_refuses_changed_code` (`src/tests/search.rs`) and
+  `schema_json_names_code_only_for_runtime_models` (`schema.rs`) hold it. Keep them.
   `progress.rs` is the `Progress` trait the host renders. The library never prints. `device.rs`
   (`acquire_headless`) acquires a GPU device with no window or surface, at the WebGPU baseline
   raised by `gpu::limits::raise`. An adapter below the baseline, as a GL adapter can be, gets
@@ -1193,7 +1234,8 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   otherwise (decoded once into the `OnceCell` `logo_texture`, a failed decode included), a Built on
   row from `ENGINE_BUILD` (with henad-core's version when it differs) for any other product, and one
   Models row per distinct `ModelSource` build, showing the hash of its sources when the build stamps
-  no commit. Copy copies the name and every row. The menu entry reads "About" and the product name.
+  no commit, `plugin` beside a plugin's build, and the code hash of a runtime model under its id.
+  Copy copies the name and every row. The menu entry reads "About" and the product name.
   The runs table's Copy command builds `ResultsStore::cli_command(program, run_id)` from the
   product's `cli_command` and is hidden without one, and the Sweep tab's advice names it through
   `options::cli_phrase`, or "on the command line" without one.

@@ -166,6 +166,9 @@ mod named_only {
         henad::explore::design_rng::DesignRng,
         henad::action::RefusedActions<'static>,
         henad::params::ChoiceOptions,
+        henad::CodeOrigin,
+        henad::ModelCode,
+        henad::explore::ManifestModelCode,
     );
 
     /// Number of steps that one command buffer of a GPU state may hold, for a host that encodes its own command

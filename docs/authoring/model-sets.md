@@ -49,6 +49,20 @@ A set holds each id once.
 `insert` rejects an id that the set already holds, and an id outside the grammar: a lowercase ASCII letter, then lowercase letters, digits and underscores.
 An id identifies the model on the command line, in a spec file and in every results folder, so keep it once a sweep has used it.
 
+`ModelSet::replace` puts an entry in place of the entry with its id, at the same position in the list, and returns the entry it replaced.
+When the set holds no entry with that id, `replace` adds the entry at the end and returns `None`.
+It rejects an id outside the grammar, as `insert` does.
+
+```rust
+let mut models = henad::ModelSet::new(henad::build_info!());
+models.extend(henad::models::example_models())?;
+let example_sir = models.replace(register_grid_model::<MySir>())?;
+```
+
+Here `MySir` declares the id `sir`, takes the example model's place in the list, and records the project's build.
+A host also replaces an entry when the code behind an id changes while it runs.
+A sweep or a simulation holds its own clone of the entry, and keeps running the code it started with.
+
 ## Sources
 
 Every entry records its **source**: the type path of the model, and the build of the crate that registered it.
@@ -73,6 +87,29 @@ models.extend(my_model::models()?)?;
 ```
 
 `extend` checks every id before it adds any entry, and leaves the set unchanged when two ids clash.
+
+### Origins
+
+A source also records how the model's code reached the process, as a `CodeOrigin`:
+
+| Origin | Code | Identified by |
+|---|---|---|
+| `Compiled` | Compiled into the host from a crate it links, as every `register_*` entry is | The crate's source hash |
+| `Runtime` | Composed at run time from text, such as a grid rule from a model file | The hash of its text |
+| `Plugin` | Compiled from a crate into a library that a dev host loaded while it ran | The crate's source hash |
+
+`ModelSource::origin` returns the origin, and `ModelSource::code_hash` the hash that identifies the code.
+A runtime source holds its text as a `ModelCode`, the canonical text and the name and version of its format, and `ModelSource::code` returns it.
+`ModelSource::runtime` builds such a source, and its type path reads `runtime:` and the label it was given.
+A set never records its build on a runtime source.
+The text identifies the code, and the host's build says nothing about it.
+A plugin's source keeps the build of the plugin's crate, and a set records none on it either.
+
+A runtime or plugin model can take the id of a compiled model, and the results folder records that its code differs.
+A results folder records each model's origin and code hash, and a runtime model's text in the manifest.
+A changed compiled build raises a warning on a resume or a merge.
+Changed runtime or plugin code makes a resume or a merge reject the folder, as [Sweeps](../guide/sweeps.md#resuming-a-sweep) describes.
+A plugin built from unchanged sources is the same code as the compiled crate, and resumes its folder.
 
 ## The example models
 
