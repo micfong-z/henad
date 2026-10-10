@@ -218,6 +218,7 @@ impl SweepOptions {
 
     /// Runs `build` on the calling thread, in rayon's global pool.
     #[cfg(target_arch = "wasm32")]
+    #[expect(clippy::unused_self, reason = "a browser builds no pool")]
     pub(crate) fn in_build_pool<R>(&self, build: impl FnOnce() -> R) -> R {
         build()
     }
