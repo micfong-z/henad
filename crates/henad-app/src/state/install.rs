@@ -72,7 +72,12 @@ impl AppState {
             let id = entry.id().to_owned();
             let previous = match self.models.replace(entry.clone()) {
                 Ok(Some(previous)) => previous,
-                Ok(None) => continue,
+                // Results read while the set lacked the id compare their runs with the new entry.
+                Ok(None) => {
+                    let model = self.lookup(&id).cloned();
+                    self.results.model_replaced(&id, model.as_ref());
+                    continue;
+                }
                 // Every entry of a set has passed the id check that `replace` makes.
                 Err(error) => {
                     log::error!("Model not installed: {error}");
@@ -82,16 +87,16 @@ impl AppState {
             let Some(current) = self.models.get(&id).cloned() else {
                 continue;
             };
-            let declarations_changed = schema_hash(&previous.schema()) != schema_hash(&current.schema());
-            if previous.source() == current.source() && !declarations_changed {
+            if same_code(&previous, &current) {
                 continue;
             }
+            let declarations_changed = schema_hash(&previous.schema()) != schema_hash(&current.schema());
             if self.selected_model.as_deref() == Some(id.as_str()) && declarations_changed {
                 self.remap_selection(&previous, &current);
             }
             self.sweep.forget_model(&id, declarations_changed);
-            let runnable = self.lookup(&id).ok().cloned();
-            self.results.model_replaced(&id, runnable.as_ref());
+            let model = self.lookup(&id).cloned();
+            self.results.model_replaced(&id, model.as_ref());
             loaded_replaced |= self.loaded_id() == Some(id.as_str());
         }
         if loaded_replaced {
@@ -228,6 +233,13 @@ impl AppState {
             Err(error) => log::warn!("Rebuild refused: {}", setup_message(&error)),
         }
     }
+}
+
+/// Returns whether `held` and `current`, two entries of one model id, run the same code with the same declarations.
+///
+/// Two entries with equal sources run the same code when they also declare the same parameters, stats and actions.
+pub fn same_code(held: &ModelEntry, current: &ModelEntry) -> bool {
+    held.source() == current.source() && schema_hash(&held.schema()) == schema_hash(&current.schema())
 }
 
 /// Returns `values`, one per parameter of `previous` in its order, carried to the parameters of `current` by

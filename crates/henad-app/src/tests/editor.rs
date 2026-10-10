@@ -580,3 +580,30 @@ fn edit_model_shows_the_code_the_rule_runs() {
         Some("Open failed: binary.toml is not UTF-8 text")
     );
 }
+
+#[test]
+fn an_apply_the_device_cannot_hold_builds_nothing() {
+    let Some(mut app) = app_with_starter() else {
+        return;
+    };
+    // A device whose buffers cannot hold one row of the starter's grid.
+    app.runtime.granted.max_storage_buffer_binding_size = 512;
+    app.runtime.granted.max_buffer_size = 512;
+    apply(&mut app);
+    match &app.editor.outcome {
+        Some(ApplyOutcome::Faulted(problems)) => {
+            assert_eq!(problems.len(), 1, "{problems:?}");
+            assert!(
+                problems[0].message.starts_with("Too large for this device: "),
+                "{problems:?}"
+            );
+        }
+        other => panic!("the size refusal is not the edit's: {other:?}"),
+    }
+    assert!(app.models.get("life_rule").is_some(), "the rule was installed");
+    assert!(!app.has_simulation(), "a build started");
+    assert!(app.fault.is_none());
+
+    app.reset_simulation();
+    assert!(!app.has_simulation(), "Build built a model the device cannot hold");
+}

@@ -1,10 +1,9 @@
 //! Diagnostics about code a program reads while it runs, such as the WGSL of a grid rule or a model file.
 //!
 //! A [`CodeDiagnostic`] names its file and its place in the file twice: as a byte span, which an editor marks, and as
-//! a line and a column, which a person reads. Lines and columns count from 1, and a column counts characters, not
-//! bytes.
+//! a line and a column, which a person reads. Lines and columns count from 1, and a column counts characters.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::ops::Range;
 
 /// Severity of a [`CodeDiagnostic`].
@@ -97,8 +96,8 @@ impl CodeDiagnostic {
     /// Returns the diagnostic placed at `span` of `text`, with the line and column of the span's start read from
     /// `text`.
     ///
-    /// A line ends at `\n`, `\r\n` or a lone `\r`. A span past the end of `text` is cut at the end, and a start inside
-    /// a character moves to the character's start.
+    /// A line ends at `\n`, and a `\r` counts as a character of its line. A span past the end of `text` is cut at the
+    /// end, and a start inside a character moves to the character's start.
     pub fn at(self, text: &str, span: Range<usize>) -> Self {
         let mut start = span.start.min(text.len());
         while !text.is_char_boundary(start) {
@@ -109,8 +108,7 @@ impl CodeDiagnostic {
         let mut line = 1u32;
         let mut line_start = 0;
         for (index, &byte) in bytes[..start].iter().enumerate() {
-            let ends_line = byte == b'\n' || (byte == b'\r' && bytes.get(index + 1) != Some(&b'\n'));
-            if ends_line {
+            if byte == b'\n' {
                 line = line.saturating_add(1);
                 line_start = index + 1;
             }
@@ -128,10 +126,15 @@ impl CodeDiagnostic {
 
 /// Writes `file:line:column: severity: message`, leaving out the parts the diagnostic lacks, then each note on a line
 /// of its own.
+///
+/// A control character in the file, the message or a note is written escaped, as `\u{1b}` or `\n`. A message that
+/// quotes text from a file, such as a key or a label, then prints on one line and writes no control sequence to a
+/// terminal.
 impl fmt::Display for CodeDiagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(file) = &self.file {
-            write!(f, "{file}:")?;
+            write_escaped(f, file)?;
+            f.write_str(":")?;
         }
         if let Some(line) = self.line {
             write!(f, "{line}:")?;
@@ -142,12 +145,26 @@ impl fmt::Display for CodeDiagnostic {
         if self.file.is_some() || self.line.is_some() {
             f.write_str(" ")?;
         }
-        write!(f, "{}: {}", self.severity.as_str(), self.message)?;
+        write!(f, "{}: ", self.severity.as_str())?;
+        write_escaped(f, &self.message)?;
         for note in &self.notes {
-            write!(f, "\n  note: {note}")?;
+            f.write_str("\n  note: ")?;
+            write_escaped(f, note)?;
         }
         Ok(())
     }
+}
+
+/// Writes `text` with each control character escaped as [`char::escape_default`] escapes it.
+fn write_escaped(f: &mut fmt::Formatter<'_>, text: &str) -> fmt::Result {
+    for character in text.chars() {
+        if character.is_control() {
+            write!(f, "{}", character.escape_default())?;
+        } else {
+            f.write_char(character)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -158,10 +175,10 @@ mod tests {
     fn a_place_reads_its_line_and_character_column_from_the_text() {
         let text = "one\r\ntwo\rthé x\n";
         let placed = CodeDiagnostic::error("bad").at(text, 14..15);
-        assert_eq!((placed.line, placed.column), (Some(3), Some(5)));
+        assert_eq!((placed.line, placed.column), (Some(2), Some(9)));
         assert_eq!(placed.span, Some(14..15));
         let past = CodeDiagnostic::error("bad").at(text, 40..50);
-        assert_eq!((past.line, past.span), (Some(4), Some(text.len()..text.len())));
+        assert_eq!((past.line, past.span), (Some(3), Some(text.len()..text.len())));
     }
 
     #[test]
@@ -175,5 +192,17 @@ mod tests {
             CodeDiagnostic::error("bad").with_span(3..4, 2, 1).to_string(),
             "2:1: error: bad"
         );
+    }
+
+    #[test]
+    fn a_diagnostic_prints_control_characters_escaped() {
+        let diagnostic = CodeDiagnostic::error("rule id '\u{1b}]52;c;x\u{7}' is wrong\r")
+            .with_file("evil\u{9b}.toml")
+            .with_note("state 'a\nb'");
+        assert_eq!(
+            diagnostic.to_string(),
+            "evil\\u{9b}.toml: error: rule id '\\u{1b}]52;c;x\\u{7}' is wrong\\r\n  note: state 'a\\nb'"
+        );
+        assert_eq!(CodeDiagnostic::error("état « x »").to_string(), "error: état « x »");
     }
 }

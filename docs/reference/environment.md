@@ -15,7 +15,8 @@ icon: material/variable
 `HENAD_DUMP_WGSL=<dir>`
 
 :   Writes every shader the engine compiles to `<dir>/<label>.wgsl`.
-    Shared WGSL reaches the compiler through `#import` and resolves at build time, and a dumped file therefore shows the assembled source behind a validation error.
+    Shared WGSL reaches the compiler through `#import`, resolved at build time for a compiled shader and at run time for a grid rule's shaders.
+    A dumped file therefore shows the assembled source behind a validation error.
 
 `EGUI_INSPECTION=1`
 

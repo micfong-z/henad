@@ -15,7 +15,7 @@ use crate::gpu::compose::split_span;
 use crate::gpu::grid_spec::GridHooks as _;
 use crate::gpu::runtime_grid::test_support::{
     DISPLAY_BINDINGS, MAX_FUNCTION_BYTES, MAX_PRIVATE_BYTES, MAX_STEP_COST, REDUCE_BINDINGS, STEP_BINDINGS, composed,
-    costs,
+    costs, module_problems,
 };
 use crate::gpu::runtime_grid::{GridRule, MAX_STEP_BYTES, RuleDeclaration, RuleState};
 
@@ -55,8 +55,8 @@ fn assert_problem_at(problems: &[CodeDiagnostic], line: u32, text: &str) {
 
 const STEP_HEAD: &str = "fn step_cell(cell: u32, rng: ptr<function, u32>) -> u32 {\n";
 
-/// `naga_oil` puts a module's index above bit 21 of each span, and the entry's text behind a header. The masked index of
-/// an imported function names its module, and the place of each item of the rule's text is its place as written.
+/// `naga_oil` puts a module's index above bit 21 of each span, and the entry's text behind a header. The masked index
+/// of an imported function names its module, and the place of each item of the rule's text is its place as written.
 #[test]
 fn naga_oil_span_encoding_is_unchanged() {
     // Imported names on the lines in front of `step_cell` lengthen those lines in the text naga parses.
@@ -118,7 +118,7 @@ fn a_syntax_error_points_at_the_user_line_and_column() {
     );
     assert_eq!(problem.file, None);
 
-    // A validation error is placed at the expression at fault, not at the start of its function.
+    // A validation error is placed at the expression at fault.
     let step = format!("{STEP_HEAD}    let a = 1u;\n    let wide = i64(cell);\n    return cell;\n}}\n");
     let problems = refusals(&life_with(&step));
     assert_eq!(places(&problems), [(Some(3), Some(16))], "{problems:#?}");
@@ -216,6 +216,38 @@ fn bindings_and_foreign_directives_in_user_text_are_refused() {
     assert!(life_with(&step).compile().is_ok());
 }
 
+/// naga ends a `//` comment at a vertical tab, a form feed, U+0085, U+2028 and U+2029, and the checks of the text end
+/// one at a line feed or a carriage return alone. Each of the five is refused at its line and column. Otherwise a
+/// `fn min` behind one would take the place of the built-in that clamps the step's result.
+#[test]
+fn a_line_break_only_wgsl_reads_is_refused() {
+    for character in ['\u{000B}', '\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}'] {
+        let code = format!("U+{:04X}", u32::from(character));
+        let step = format!(
+            "// x{character}fn min(a: u32, b: u32) -> u32 {{ return a; }}\n{STEP_HEAD}    return cell + 1u;\n}}\n"
+        );
+        let problems = refusals(&life_with(&step));
+        assert_eq!(places(&problems), [(Some(1), Some(5))], "{code}: {problems:#?}");
+        assert!(problems[0].message.contains(&code), "{code}: {problems:#?}");
+    }
+}
+
+/// The checks of the composed module refuse a module-scope item of the rule named as a WGSL built-in, which the checks
+/// of the text refuse first.
+#[test]
+fn the_module_check_refuses_a_builtin_name() {
+    let step = format!(
+        "fn min(a: u32, b: u32) -> u32 {{\n    return a;\n}}\nvar<private> max: u32;\nconst clamp: u32 = 1u;\n\
+         {STEP_HEAD}    return cell + clamp + max;\n}}\n"
+    );
+    let problems = module_problems(&life_with(&step));
+    assert_problem_at(&problems, 1, "`min` is a predeclared name");
+    assert_problem_at(&problems, 4, "`max` is a predeclared name");
+    assert_problem_at(&problems, 5, "`clamp` is a predeclared name");
+    assert_eq!(problems.len(), 3, "{problems:#?}");
+    assert!(module_problems(&GridRule::life()).is_empty());
+}
+
 #[test]
 fn shared_writes_and_barriers_are_refused() {
     let step = format!(
@@ -237,6 +269,26 @@ fn shared_writes_and_barriers_are_refused() {
         problems.iter().filter(|problem| problem.line == Some(5)).count(),
         1,
         "one problem per write to an engine buffer: {problems:#?}"
+    );
+
+    // A pointer to the template's `henad_cell`, passed to a function that writes through it, is refused at the call.
+    let step = format!(
+        "fn poke(p: ptr<private, vec2<u32>>) {{\n    (*p) = vec2<u32>(0u, 0u);\n}}\n{STEP_HEAD}    \
+         poke(&henad_cell);\n    return neighbor(0, 0);\n}}\n"
+    );
+    let problems = refusals(&life_with(&step));
+    assert_problem_at(&problems, 5, "passes a pointer to `henad_cell`");
+    assert_eq!(problems.len(), 1, "{problems:#?}");
+    // A pointer to a local or to the rule's own `private` variable is allowed.
+    let step = format!(
+        "var<private> mine: vec2<u32>;\nfn poke(p: ptr<private, vec2<u32>>) {{\n    (*p).x = 1u;\n}}\n\
+         fn bump(p: ptr<function, u32>) {{\n    *p += 1u;\n}}\n{STEP_HEAD}    var count = cell;\n    \
+         poke(&mine);\n    bump(&count);\n    return (count + mine.x) % NUM_STATES;\n}}\n"
+    );
+    assert!(
+        life_with(&step).compile().is_ok(),
+        "{:#?}",
+        life_with(&step).compile().err()
     );
 
     // Reading a buffer that other cells write in the same pass, or the cells by index, is refused as well.
@@ -617,9 +669,9 @@ fn a_result_past_the_last_state_is_clamped() {
     assert_eq!(state.tick(), 2);
 }
 
-/// A rule that draws every cell's state afresh each tick draws from `pcg_hash(seed ^ pcg_hash(index ^ pcg_hash(tick)))`,
-/// so the tick buffer advances and the stream differs from tick to tick. The Alive count of each tick equals the count
-/// recomputed on the CPU from the seed word of the uniform block.
+/// A rule that draws every cell's state afresh each tick draws from
+/// `pcg_hash(seed ^ pcg_hash(index ^ pcg_hash(tick)))`, so the tick buffer advances and the stream differs from tick to
+/// tick. The Alive count of each tick equals the count recomputed on the CPU from the seed word of the uniform block.
 #[test]
 fn a_random_rule_draws_a_fresh_stream_each_tick() {
     let Some(ctx) = headless_context("henad_runtime_grid_random", wgpu::Features::empty()) else {

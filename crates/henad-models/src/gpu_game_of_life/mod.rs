@@ -471,7 +471,8 @@ mod runner_tests {
 
         let (width, height) = (128u32, 128u32);
         let state = GpuGridState::<GpuGameOfLife>::new(&ctx, &params(width, height, 0.3));
-        let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default(), None);
+        let faults = ctx.faults.clone();
+        let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default(), None, faults);
 
         // The thread publishes an initial snapshot before anything runs, and the viewport shows the
         // seeded grid before Play.
@@ -518,7 +519,8 @@ mod runner_tests {
 
         for round in 0..3 {
             let state = GpuGridState::<GpuGameOfLife>::new(&ctx, &params(64, 64, 0.3));
-            let mut thread = GpuSimThread::new(ctx.clone(), Box::new(state), GpuBatchSettings::default(), None);
+            let faults = ctx.faults.clone();
+            let mut thread = GpuSimThread::new(ctx.clone(), Box::new(state), GpuBatchSettings::default(), None, faults);
             thread.play();
             let snap = wait_for(&mut thread, Duration::from_secs(5), |s| s.tick > 0)
                 .unwrap_or_else(|| panic!("round {round}: a respawned GPU thread must step"));

@@ -8,11 +8,15 @@ use henad_compute::cpu::sim_thread::SimCommand;
 use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{BUILDING, Fault, FaultKind};
 use henad_compute::gpu::GpuContext;
+use henad_compute::runner::DEFAULT_STOP_TIMEOUT;
+use henad_core::explore::spec::SweepSpec;
 use henad_core::params::ParamValue;
 
 use crate::state::{AppState, BUILDING_MODEL, DID_NOT_STOP, OpenAt, STILL_STOPPING, STOP_WAIT};
 use crate::tests::support::{Gate, OpenOnDrop, Probe, StepHold, accessible_texts, held, set_of};
 use crate::ui::playback::playback_ui;
+use crate::ui::results::ResultsPanel;
+use crate::ui::sweep::session::{SessionExecution, SessionState, SweepSession};
 use crate::ui::viewport::viewport_ui;
 
 /// Time a call that must not wait on a stuck thread may take past [`STOP_WAIT`], for the scheduler.
@@ -68,6 +72,17 @@ fn stopped(app: &mut AppState) -> bool {
 /// Returns whether `name` names a worker of the pool that replaces the global pool after a detach.
 fn in_fresh_pool(name: &Option<String>) -> bool {
     name.as_deref().is_some_and(|name| name.starts_with("henad-pool-"))
+}
+
+/// Returns one run of SIR on a 16 by 16 grid, of 4 steps.
+fn sir_spec() -> SweepSpec {
+    let mut spec = SweepSpec::new("sir");
+    spec.fixed = vec![
+        ("grid_width".to_owned(), "16".to_owned()),
+        ("grid_height".to_owned(), "16".to_owned()),
+    ];
+    spec.run.steps = 4;
+    spec
 }
 
 /// Returns the generation of the app's pool, and whether it is rayon's global pool.
@@ -218,6 +233,61 @@ fn a_viewport_frame_after_a_detach_runs_on_the_fresh_pool() {
     watchdog.join().expect("the watchdog never panics");
     gate.open();
     wait_until("the end of the detached run", || stopped(&mut app));
+}
+
+#[test]
+fn a_viewport_frame_beside_a_run_that_holds_its_pool_returns() {
+    /// Time after which the watchdog releases the held pool, and the test fails.
+    const WATCHDOG: Duration = Duration::from_secs(20);
+
+    let probe = Arc::new(Probe::default());
+    let gate = Gate::default();
+    let _release = OpenOnDrop(gate.clone());
+    let Some(mut app) = app_over(held(&sir(), &probe, None, Some(StepHold::Pool(gate.clone())))) else {
+        return;
+    };
+    app.reset_simulation();
+    app.wait_for_build();
+    let thread = app.sim_thread.as_mut().expect("the run");
+    let mut first = None;
+    wait_until("the first snapshot", || {
+        first = thread.take_snapshot();
+        first.is_some()
+    });
+    // A step right after a publish holds every worker of the run's pool, and nothing stops the run.
+    thread.step_once();
+    let workers = rayon::current_num_threads();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while probe.held_workers.load(Ordering::SeqCst) < workers && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(pool_of(&app), (0, true), "the run holds the global pool");
+
+    let fired = Arc::new(AtomicBool::new(false));
+    let (stop_watchdog, watchdog) = std::sync::mpsc::channel::<()>();
+    let watchdog_gate = gate.clone();
+    let watchdog_fired = Arc::clone(&fired);
+    let watchdog = std::thread::spawn(move || {
+        if watchdog.recv_timeout(WATCHDOG).is_err() {
+            watchdog_fired.store(true, Ordering::SeqCst);
+            watchdog_gate.open();
+        }
+    });
+    app.snapshot = first;
+    egui::Context::default()
+        .run_ui(egui::RawInput::default(), |ui| viewport_ui(ui, &mut app))
+        .drop_without_applying_deltas();
+    assert!(
+        !fired.load(Ordering::SeqCst),
+        "the viewport frame waited for the pool the run holds"
+    );
+    assert!(app.grid_texture.is_some(), "the frame uploaded the grid");
+
+    drop(stop_watchdog);
+    watchdog.join().expect("the watchdog never panics");
+    gate.open();
+    app.offload_simulation();
+    wait_until("the end of the run", || stopped(&mut app));
 }
 
 #[test]
@@ -402,4 +472,65 @@ fn a_gpu_build_on_the_build_thread_reports_a_validation_error_as_a_fault() {
         app.render_ctx.faults.take().is_none(),
         "the error escaped the build's scopes to the device's handler"
     );
+}
+
+#[test]
+fn a_sweep_after_a_detach_probes_in_the_fresh_pool() {
+    let probe = Arc::new(Probe::default());
+    let Some(mut app) = app_over(held(&sir(), &probe, None, None)) else {
+        return;
+    };
+    // A run past the timeout retires the global pool.
+    app.model_pool().retire(0);
+    assert_eq!(pool_of(&app), (1, false), "a fresh pool");
+
+    let mut session =
+        SweepSession::start(&mut app, sir_spec(), SessionExecution::default(), None).expect("the sweep starts");
+    let mut results = ResultsPanel::default();
+    wait_until("the end of the sweep", || {
+        session.update(0.0, &mut results);
+        !session.is_running()
+    });
+    assert_eq!(
+        session.state(&session.progress()),
+        SessionState::Finished,
+        "the sweep failed: {:?}",
+        session.failure
+    );
+    let probe_threads = Probe::of(&probe.build_threads, 1);
+    assert!(probe_threads.iter().all(in_fresh_pool), "probed on {probe_threads:?}");
+    let run_threads = Probe::of(&probe.build_threads, 2);
+    assert!(
+        run_threads
+            .iter()
+            .all(|name| name.as_deref().is_some_and(|name| name.starts_with("henad-lane-"))),
+        "the run builds in its lane, on {run_threads:?}"
+    );
+}
+
+#[test]
+fn quitting_does_not_wait_for_a_sweep_held_in_its_model() {
+    let probe = Arc::new(Probe::default());
+    let gate = Gate::default();
+    let _release = OpenOnDrop(gate.clone());
+    let Some(mut app) = app_over(held(&sir(), &probe, Some(gate.clone()), None)) else {
+        return;
+    };
+    let session =
+        SweepSession::start(&mut app, sir_spec(), SessionExecution::default(), None).expect("the sweep starts");
+    app.sweep.session = Some(session);
+    wait_until("the start of the probe", || probe.builds.load(Ordering::SeqCst) == 1);
+
+    let start = Instant::now();
+    drop(app);
+    assert!(
+        start.elapsed() < STOP_WAIT + DEFAULT_STOP_TIMEOUT + SLACK,
+        "quitting waited {:?}",
+        start.elapsed()
+    );
+
+    gate.open();
+    wait_until("the end of the probe the quit detached", || {
+        probe.built.lock().expect("the probe").contains(&1)
+    });
 }

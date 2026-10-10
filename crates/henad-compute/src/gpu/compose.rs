@@ -10,6 +10,8 @@
 //! It refuses every other `#` line, a `#`, `::` or `"` elsewhere in code, the directives `enable`, `requires` and
 //! `diagnostic`, the words `virtual` and `override`, `@binding(auto)`, and `naga_oil`'s own name decoration. `naga_oil`
 //! acts on each of these before naga sees the text, and one of its paths panics on a decorated name it cannot decode.
+//! The check also refuses a line break that naga reads and `naga_oil` does not, such as U+2028. naga ends a `//`
+//! comment there, and the text after it would be code that the check read as a comment.
 //!
 //! Diagnostics point into the files as the caller passed them. `naga_oil` keeps the lines of a file but writes each
 //! imported name with a longer decorated name, so a column is mapped back by aligning the tokens of the line naga read
@@ -49,8 +51,29 @@ const DECORATION: &str = "X_naga_oil_mod_X";
 /// Infix that `naga_oil` adds to the name of an overriding function.
 const OVERRIDE_DECORATION: &str = "X_naga_oil_vrt_X";
 
-/// Note on a diagnostic about the text in front of the caller's own, which a grid rule's template is.
+/// Note on a diagnostic about the text in front of the caller's text, such as a grid rule's template.
 pub(crate) const BEFORE_TEXT_NOTE: &str = "the problem is in the engine's template, at no line of the rule's text";
+
+/// Characters that end a line for naga but not for `naga_oil` and the directive check: a vertical tab, a form feed,
+/// U+0085, U+2028 and U+2029.
+///
+/// A `//` comment ends at any of them for naga. Text after one is code that no check of the text reads.
+const WGSL_ONLY_LINE_BREAKS: &[char] = &['\u{000B}', '\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}'];
+
+/// Returns the byte offset and the character of the first line break in `text` that naga reads and `naga_oil` does
+/// not, or `None` when the text holds none.
+pub(crate) fn find_wgsl_only_line_break(text: &str) -> Option<(usize, char)> {
+    text.char_indices()
+        .find(|(_, character)| WGSL_ONLY_LINE_BREAKS.contains(character))
+}
+
+/// Returns the message of a diagnostic about `character`, a line break that naga reads and `naga_oil` does not.
+pub(crate) fn wgsl_only_line_break_message(character: char) -> String {
+    format!(
+        "U+{:04X} ends a line in WGSL and not in the composer. End each line with a line feed",
+        u32::from(character)
+    )
+}
 
 /// A WGSL file a caller passes to [`compose_wgsl`].
 #[derive(Clone, Copy)]
@@ -89,7 +112,7 @@ impl ComposedWgsl {
     }
 }
 
-/// Prints the byte length of the text, which runs to kilobytes.
+/// Prints the byte length of the text. The text can run to many kilobytes.
 impl fmt::Debug for ComposedWgsl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ComposedWgsl")
@@ -100,7 +123,7 @@ impl fmt::Debug for ComposedWgsl {
 
 /// Composes `entry` against the shared modules and `modules`, validates the result, and writes it back as WGSL.
 ///
-/// The shared modules of henad-core are added first, in `SHARED_WGSL_MODULES` order, then each of `modules`, which
+/// The shared modules of henad-core are added first, in [`SHARED_WGSL_MODULES`] order, then each of `modules`, which
 /// declare their own `#define_import_path` and come in dependency order. The module is validated with every flag and
 /// every capability and written with naga's WGSL writer and no flags, the steps `wgsl_bindgen` 0.23.3 takes for an
 /// embedded shader.
@@ -124,7 +147,7 @@ pub(crate) struct Composition {
     pub(crate) info: naga::valid::ModuleInfo,
     /// The entry as the caller wrote it.
     entry: FileInfo,
-    /// The entry as `naga_oil` handed it to naga, after its own preprocessing and before the import header.
+    /// The entry as `naga_oil` passed it to naga, after its own preprocessing and before the import header.
     preprocessed: SourceLines,
 }
 
@@ -146,9 +169,10 @@ impl Composition {
 
     /// Returns the byte offset at which the entry's text starts in the spans of [`Self::module`].
     ///
-    /// `naga_oil` parses the entry behind an import header whose length it keeps to itself. The offset is read back from
-    /// `anchor`, a function of the entry with no attribute, whose `fn` keyword starts at byte `anchor_offset` of the
-    /// entry's text and on a line that `naga_oil` leaves as it is. `None` when the anchor is missing or its line changed.
+    /// `naga_oil` parses the entry behind an import header whose length it keeps to itself. The offset is read back
+    /// from `anchor`, a function of the entry with no attribute, whose `fn` keyword starts at byte `anchor_offset` of
+    /// the entry's text and on a line that `naga_oil` leaves as it is.
+    /// `None` when the anchor is missing or its line changed.
     pub(crate) fn entry_start_offset(&self, anchor: &str, anchor_offset: usize) -> Option<usize> {
         let (handle, _) = self
             .module
@@ -171,8 +195,8 @@ impl Composition {
     /// Returns the place in the caller's text of `span`, a span of [`Self::module`] in the entry, given the
     /// `start_offset` that [`Self::entry_start_offset`] returned.
     ///
-    /// `None` for a span of an imported module, of the import header, of the text in front of the caller's, or with
-    /// no place.
+    /// `None` for a span of an imported module, of the import header, of the text in front of the caller's text, or
+    /// with no place.
     pub(crate) fn locate_in_entry(&self, span: naga::Span, start_offset: usize) -> Option<Located> {
         let (index, range) = split_span(span)?;
         if index != 0 {
@@ -496,6 +520,15 @@ fn check_directives(text: &str, is_module: bool, known: &[String], file: &FileIn
         });
     };
     for (line, (_, raw)) in code_lines(text).iter().zip(split_lines(text)) {
+        if let Some((column, character)) = find_wgsl_only_line_break(raw) {
+            problem(
+                line,
+                column,
+                character.len_utf8(),
+                wgsl_only_line_break_message(character),
+            );
+            continue;
+        }
         if let Some(column) = raw.find(DECORATION).or_else(|| raw.find(OVERRIDE_DECORATION)) {
             problem(
                 line,
@@ -801,7 +834,7 @@ fn diagnose(composer: &Composer, error: &ComposerError, files: &[FileInfo]) -> C
     };
     let (labels, notes) = labels_and_notes(&error.inner);
     let Some((position, module_index)) = found else {
-        // An error inside a shared module is one of Henad's, and has no place in the caller's files.
+        // An error inside a shared module is an error in Henad's own WGSL, and has no place in the caller's files.
         let name = match &error.source {
             ErrSource::Constructing { path, .. } => path,
             ErrSource::Module { name, .. } => name,
@@ -967,5 +1000,29 @@ mod tests {
         .unwrap_or_default();
         let lines: Vec<Option<u32>> = problems.iter().map(|problem| problem.line).collect();
         assert_eq!(lines, [Some(1), Some(3), Some(4)], "{problems:#?}");
+    }
+
+    /// A line break that naga reads and `naga_oil` does not is refused at its column in a module, as in an entry.
+    #[test]
+    fn a_line_break_only_naga_reads_is_refused_in_a_module() {
+        let module = "#define_import_path mine\n// note\u{2028}fn helper() -> u32 { return 1u; }\n";
+        let problems = compose_wgsl(
+            WgslFile {
+                path: "e.wgsl",
+                text: "#import mine::{helper}\nfn b() -> u32 { return helper(); }\n",
+            },
+            &[WgslFile {
+                path: "m.wgsl",
+                text: module,
+            }],
+        )
+        .err()
+        .unwrap_or_default();
+        let places: Vec<(Option<&str>, Option<u32>, Option<u32>)> = problems
+            .iter()
+            .map(|problem| (problem.file.as_deref(), problem.line, problem.column))
+            .collect();
+        assert_eq!(places, [(Some("m.wgsl"), Some(2), Some(8))], "{problems:#?}");
+        assert!(problems[0].message.contains("U+2028"), "{problems:#?}");
     }
 }

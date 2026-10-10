@@ -244,7 +244,7 @@ mod tests {
     use crate::helpers::{bool_param, choice_param, f32_param, u32_param};
     use crate::params::{ParamDescriptor, ParamValue};
 
-    const NEIGHBORHOODS: &[&str] = &["moore", "von neumann, wide"];
+    const NEIGHBORHOODS: &[&str] = &["moore", "von \"neumann\" wide"];
 
     fn params() -> Vec<ParamDescriptor> {
         vec![
@@ -314,14 +314,14 @@ mod tests {
     fn a_design_table_round_trips() {
         let text = "rate,neighborhood,action.seed_outbreak,wrap\n\
                     0.1,moore,10,true\n\
-                    0.30000001,\"von neumann, wide\",0,false\n\
+                    0.30000001,\"von \"\"neumann\"\" wide\",0,false\n\
                     1,1,18446744073709551615,true\n";
         let first = configs(text).expect("a valid table");
         assert_eq!(first[1].params[0], ParamValue::F32(0.3));
         assert_eq!(
             first[1].params[3],
             ParamValue::Choice(1),
-            "a quoted option keeps its comma"
+            "a quoted option keeps its quotes"
         );
         assert_eq!(first[2].params[3], ParamValue::Choice(1), "an option by index");
         assert_eq!(first[2].action_ticks, [u64::MAX]);

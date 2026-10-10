@@ -73,7 +73,7 @@ pub const LIFE_STEP: &str = include_str!("life_step.wgsl");
 /// Domain separator of a rule's random stream, so the step and the cell seeding do not start correlated.
 const STEP_SEED: u64 = GRID_INIT_SEED ^ 0x0F5E_ED0F_5EED_0F5E;
 
-/// Number of grid parameters the engine puts in front of a rule's own.
+/// Number of grid parameters the engine puts in front of a rule's own parameters.
 const GRID_PARAMS: usize = 2;
 
 /// A GPU grid model held as data, with a step written in WGSL.
@@ -199,16 +199,16 @@ impl GridRule {
             description: "Conway's Game of Life, written as a grid rule".to_owned(),
             params: vec![f32_param("density", "Initial Density", 0.3, 0.0, 1.0, Some(0.01))],
             states: vec![
-                RuleState::new("Dead", [0x15, 0x15, 0x15, 0xFF]),
+                RuleState::new("Dead", [0x61, 0x61, 0x61, 0xFF]),
                 RuleState::new("Alive", [0x00, 0xE6, 0x76, 0xFF]).with_initial("density"),
             ],
             ..Self::new("life_rule", LIFE_STEP)
         }
     }
 
-    /// Returns every parameter of the model the rule builds: `grid_width` and `grid_height`, then the rule's own,
-    /// each applying on reload.
-    pub fn param_descriptors(&self) -> Vec<ParamDescriptor> {
+    /// Returns every parameter of the model the rule builds: `grid_width` and `grid_height`, then the rule's own
+    /// parameters, each applying on reload.
+    fn param_descriptors(&self) -> Vec<ParamDescriptor> {
         let mut params = vec![
             u32_param("grid_width", "Grid Width", self.width, 1, MAX_GRID_SIDE).on_reload(),
             u32_param("grid_height", "Grid Height", self.height, 1, MAX_GRID_SIDE).on_reload(),
@@ -217,7 +217,9 @@ impl GridRule {
         params
     }
 
-    /// Checks the rule's declarations: its id, its grid's size, its states and its parameters.
+    /// Checks the rule's declarations: its id, name and description, its grid's size, its states and its parameters.
+    ///
+    /// A name, a description, a state's label, a parameter's label and an option hold no control character.
     ///
     /// [`Self::compile`] runs the same checks first. A caller that holds the declarations' places, as a model file
     /// does, places each problem by its [`RuleDeclaration`].
@@ -267,7 +269,8 @@ impl GridRule {
                 problems
                     .into_iter()
                     .map(|mut problem| {
-                        // The engine's text is no file of the rule's, and a place in it would read as one.
+                        // The engine's text is not part of the rule's file. A location left set would point into the
+                        // rule's file.
                         problem.file = None;
                         problem.span = None;
                         problem.line = None;
@@ -367,17 +370,12 @@ impl fmt::Debug for CompiledGridRule {
 }
 
 impl CompiledGridRule {
-    /// Rule the shaders were composed from.
-    pub fn rule(&self) -> &GridRule {
-        &self.parts.rule
-    }
-
     /// Composed step shader, the template and the rule's text, as naga writes it back.
     pub fn step_wgsl(&self) -> &str {
         &self.parts.step
     }
 
-    /// Returns an entry that builds the rule on any device it is handed.
+    /// Returns an entry that builds the rule on any device passed to its build.
     ///
     /// `code` identifies the rule's code in a results folder: its canonical text, as
     /// `henad_explore::model_file::ModelFile::code` returns it. The entry's source is a runtime source labelled with
@@ -452,7 +450,9 @@ pub(crate) struct RuleHooks {
 }
 
 impl RuleHooks {
-    /// Returns the value of the rule's parameter at `position` among its own, or its default when `params` lacks it.
+    /// Returns the value of the rule's parameter at `position` among the rule's own parameters.
+    ///
+    /// The value is the parameter's default when `params` lacks it.
     fn value(&self, params: &[ParamValue], position: usize) -> ParamValue {
         params
             .get(GRID_PARAMS + position)
@@ -460,9 +460,9 @@ impl RuleHooks {
             .unwrap_or_else(|| self.params[position].kind().default_value())
     }
 
-    /// Returns the initial state of each cell, drawn in row-major order from `grid_init_rng(seed)`.
+    /// Returns the initial state of each cell, drawn in row-major order from [`grid_init_rng`] with `seed`.
     ///
-    /// Each cell draws one word with `next_bits`. The states with an initial share take the low ranges of the words
+    /// Each cell draws one word with [`next_bits`]. The states with an initial share take the low ranges of the words
     /// in declaration order, the upper bound of each the running total of the shares, summed in `f32`, times
     /// `u32::MAX`. A word below a bound takes that state, and a word below none takes the rest state.
     fn seed_cells(&self, width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<u32> {
@@ -582,5 +582,14 @@ pub(crate) mod test_support {
         let declared = checks::check_declarations(rule)
             .map_err(|problems| problems.into_iter().map(|(_, problem)| problem).collect::<Vec<_>>())?;
         rule.compose_step(&declared)
+    }
+
+    /// Returns the problems the checks of the composed module find in `rule`, without the checks of its text, or the
+    /// problems of its declarations or composition.
+    pub(crate) fn module_problems(rule: &GridRule) -> Vec<CodeDiagnostic> {
+        match composed(rule) {
+            Ok((composition, start_offset)) => checks::check_module(&composition, start_offset),
+            Err(problems) => problems,
+        }
     }
 }

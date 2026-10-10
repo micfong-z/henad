@@ -123,7 +123,8 @@ impl SweepSession {
     /// Starts a sweep of `spec` on the model that `spec` refers to, and pauses the live simulation.
     ///
     /// The results go to `output_dir`, or stay in memory when it is `None`. A GPU model runs on the sweep's
-    /// own device. Planning happens before this returns, and the runs after it.
+    /// own device. Planning happens before this returns, and the runs after it. The probes, and the runs of a GPU
+    /// model, are built in the app's [`ModelPool`](crate::state::ModelPool).
     ///
     /// # Errors
     ///
@@ -148,6 +149,10 @@ impl SweepSession {
         options.memory_budget = execution.memory_budget;
         options.gpu_memory_budget = execution.gpu_memory_budget;
         options.wake = Some(app.repaint_waker());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            options.build_pool = app.model_pool().current().1;
+        }
         let run = SweepRun::start(entry, None, spec, output, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
         Ok(Self {
@@ -186,6 +191,7 @@ impl SweepSession {
         options.memory_budget = execution.memory_budget;
         options.gpu_memory_budget = execution.gpu_memory_budget;
         options.wake = Some(app.repaint_waker());
+        options.build_pool = app.model_pool().current().1;
         let run = SweepRun::resume_directory(entry, None, &folder, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
         Ok(Self {
@@ -207,6 +213,14 @@ impl SweepSession {
     /// Plan of the sweep's configs and runs, or of a search's fixed values and actions alone.
     pub fn plan(&self) -> &Arc<Plan> {
         self.run.plan()
+    }
+
+    /// Aborts the sweep, and waits up to `timeout` for its thread to end. Returns whether the thread ended in time.
+    ///
+    /// A thread still running then is detached, and ends with the process.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn stop(self, timeout: std::time::Duration) -> bool {
+        self.run.stop(timeout)
     }
 
     /// Plan of a search, `None` for a sweep.

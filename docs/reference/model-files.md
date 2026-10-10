@@ -11,8 +11,10 @@ TOML declares the model's grid, states and parameters, and a WGSL function gives
 Henad reads the file while the program runs, composes the step after an engine template, checks it, and runs it on the same GPU grid engine as a compiled GPU grid model.
 Nothing is built with cargo.
 
-A model file holds data and WGSL alone.
-The WGSL runs on the GPU inside the checks of naga and wgpu, and the checks below keep its work bounded, so a model file is safe to share as source.
+A model file holds data and WGSL alone, and runs no native code.
+The WGSL runs on the GPU inside the checks of naga and wgpu.
+The checks below refuse loops and bound the work of one cell, so every step ends.
+A heavy step on a large grid can still take long enough per tick to lose the GPU device, as [Limits](#limits) describes.
 
 !!! info "Henad 0.4"
 
@@ -46,6 +48,8 @@ Line ends can be `\n` or `\r\n`.
 | `id` | Model id, a lowercase ASCII letter, then lowercase letters, digits and underscores. The command line's `MODEL`, a spec's `model`, `--list` and results folders name the model by it |
 | `name` | Name the app and `--list` show. The id when left out |
 | `description` | One line about the model. Empty when left out |
+
+The name and the description hold no control character, such as a tab or an escape, and neither do a state's label, a parameter's label or an option name.
 
 The three header keys are read before anything else.
 A file of another format, version or kind is refused at that key, even when it holds keys this version does not know.
@@ -94,7 +98,8 @@ One table per parameter, at most 64, in the vocabulary of [`--params --json`](cl
 | `format` | `"percent"` to show an `f32` fraction as a percentage, or `"plain"`. `"plain"` when left out |
 
 A key that does not fit the parameter's kind is refused, such as `step` on a `u32` or `options` on an `f32`.
-The default has to lie within the bounds, and a choice's option names follow the rules of `choice_param`: no empty name, no name that reads as an index, and no name twice.
+The default has to lie within the bounds, and a choice's option names follow the rules of `choice_param`: no empty name, no name that reads as an index, no comma or colon in a name, no name `all`, and no name twice.
+A sweep's level text splits at a comma, reads a colon as a range and `all` as every option, and could not list such a name.
 An id cannot be `width`, `height`, `seed`, `tick`, `grid_width` or `grid_height`, start with `henad_`, or be a reserved word of WGSL.
 Every parameter of a grid rule applies when the model is built.
 
@@ -179,10 +184,11 @@ The checks run when the file is loaded, before anything is built, and each probl
 | An entry point (`@compute`, `@vertex`, `@fragment`) | The template's `main` runs the step |
 | Atomics, barriers and module-scope variables outside `private` | Each cell runs on its own, and shares no memory with other cells |
 | Any use of `state_in`, `state_out`, `tick_in` or `tick_out` | Other cells write the outputs in the same pass, and a read of the input by index can fall outside the grid. `neighbor` reads the input safely |
-| A write through a pointer into memory the cell does not own | A cell writes only its own result, its locals and the step's `private` variables |
+| A write through a pointer, or a pointer passed to a function, into memory the cell does not own | A cell writes only its own result, its locals and the step's `private` variables |
 | A name the template declares, or one that starts with `henad_` | The template's own lines use them |
 | A module-scope item named as a WGSL built-in, such as `fn min` | The template's own lines call the built-in |
 | A `#` line other than `#import`, a line that opens with `enable`, `requires` or `diagnostic`, `override`, `virtual`, and a `::` path outside an `#import` | Henad composes the step itself, and would otherwise read these differently from WGSL |
+| A vertical tab, a form feed, U+0085, U+2028 or U+2029 | WGSL ends a line at each of them, and Henad's composer and checks end a line only at a line feed or a carriage return |
 | `f16` and `f64` | A step keeps to the capabilities of the WebGPU baseline. Browsers offer no more |
 
 A problem in the template has no line in the file.

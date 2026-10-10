@@ -29,7 +29,9 @@ use henad_compute::simulation::RunSetup;
 use henad_core::metadata::Backend;
 
 use super::AppState;
+#[cfg(not(target_arch = "wasm32"))]
 use super::pool::ModelPool;
+use super::pool::UiPool;
 use crate::sim_runner::SimRunner;
 
 /// Longest time a teardown waits on the UI thread for the runner to stop. A runner still running after it is detached.
@@ -57,7 +59,7 @@ const STOPPED_REPAINT: Duration = Duration::from_secs(1);
 const SETTLE_POLL: Duration = Duration::from_millis(5);
 
 // Phases of a build on its own thread, held in `PendingBuild::phase`. The build thread moves from one to the next by
-// compare and swap, and the app swaps in `PHASE_CANCELLED` when it abandons the build.
+// compare and swap, and the app swaps in `PHASE_CANCELED` when it abandons the build.
 
 /// The build waits for the threads stopped before it.
 #[cfg(not(target_arch = "wasm32"))]
@@ -67,7 +69,7 @@ const PHASE_BUILDING: u8 = 1;
 /// The build has sent its result, or is about to.
 const PHASE_DONE: u8 = 2;
 /// The app abandoned the build. A build that sees it builds nothing, or drops what it built on its own thread.
-const PHASE_CANCELLED: u8 = 3;
+const PHASE_CANCELED: u8 = 3;
 
 /// Runner a build returns, or the build's fault, with the generation of the pool the runner runs in.
 struct Built {
@@ -80,7 +82,7 @@ pub struct PendingBuild {
     /// Channel the build thread returns its result on.
     built: Receiver<Built>,
     thread: JoinHandle<()>,
-    /// Phase of the build, one of [`PHASE_WAITING`], [`PHASE_BUILDING`], [`PHASE_DONE`] and [`PHASE_CANCELLED`].
+    /// Phase of the build, one of [`PHASE_WAITING`], [`PHASE_BUILDING`], [`PHASE_DONE`] and [`PHASE_CANCELED`].
     phase: Arc<AtomicU8>,
     /// Entry of the model being built. A fault of the build names it in the fault modal, and the Editor claims a
     /// fault of the code the Editor applied.
@@ -147,7 +149,7 @@ impl BuildJob {
     #[cfg(not(target_arch = "wasm32"))]
     fn settle(&self) -> Option<(u64, Option<Arc<rayon::ThreadPool>>)> {
         loop {
-            if self.phase.load(Ordering::SeqCst) == PHASE_CANCELLED {
+            if self.phase.load(Ordering::SeqCst) == PHASE_CANCELED {
                 return None;
             }
             let now = Instant::now();
@@ -194,8 +196,8 @@ impl BuildJob {
     /// Builds the model and its runner on the calling thread. The runner runs in `pool`, or in rayon's global pool for
     /// `None`.
     ///
-    /// A GPU build runs inside error scopes pushed on the calling thread, the thread that makes every device call of the
-    /// build. Scopes are thread-local, and scopes on another thread would leave a device error to the device's
+    /// A GPU build runs inside error scopes pushed on the calling thread, the thread that makes every device call of
+    /// the build. Scopes are thread-local, and scopes on another thread would leave a device error to the device's
     /// handler.
     fn run_here(self, pool: Option<Arc<rayon::ThreadPool>>) -> Result<SimRunner, Fault> {
         let gpu_ctx = self.gpu_ctx.clone();
@@ -249,13 +251,13 @@ impl BuildJob {
                 // `run_here` holds the error scopes and the panic catch around the whole build.
                 #[cfg(not(target_arch = "wasm32"))]
                 let thread = match pool {
-                    Some(pool) => GpuSimThread::new_in(pool, ctx, state, gpu_settings, Some(wake)),
-                    None => GpuSimThread::new(ctx, state, gpu_settings, Some(wake)),
+                    Some(pool) => GpuSimThread::new_in(pool, ctx, state, gpu_settings, Some(wake), faults),
+                    None => GpuSimThread::new(ctx, state, gpu_settings, Some(wake), faults),
                 };
                 #[cfg(target_arch = "wasm32")]
                 let thread = {
                     drop(pool);
-                    GpuSimThread::new(ctx, state, gpu_settings, Some(wake))
+                    GpuSimThread::new(ctx, state, gpu_settings, Some(wake), faults)
                 };
                 Ok(SimRunner::Gpu(thread))
             }
@@ -426,19 +428,25 @@ impl AppState {
         }
     }
 
-    /// Pool the app's CPU work runs in.
+    /// Pool the app's model code runs in.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn model_pool(&self) -> &ModelPool {
         &self.pools
+    }
+
+    /// Pool the UI thread's parallel work runs in, such as the viewport's uploads. No model code runs in it.
+    pub fn ui_pool(&self) -> &UiPool {
+        &self.ui_pool
     }
 
     /// Stops the live simulation within [`STOP_WAIT`], and abandons a build that runs.
     ///
     /// A runner that does not stop in time and a build thread abandoned while it builds are detached, kept until they
     /// end, and counted by [`Self::stopping_status`]. A build still waiting for older threads ends without building.
-    /// The sink of the CPU runner is replaced, so a detached runner's late fault reaches no later run.
+    /// The sink of the runner's panics is replaced, so a detached runner's late panic reaches no later run.
     pub(super) fn stop_simulation(&mut self) {
         if let Some(build) = self.building.take() {
-            match build.phase.swap(PHASE_CANCELLED, Ordering::SeqCst) {
+            match build.phase.swap(PHASE_CANCELED, Ordering::SeqCst) {
                 PHASE_BUILDING => {
                     log::warn!("Build of {} abandoned before it returned", build.model.name());
                     // The build took the current pool once every thread before it had ended or retired its pool, and
@@ -519,13 +527,20 @@ impl AppState {
     }
 }
 
-/// Stops the live simulation and abandons a build without waiting past [`STOP_WAIT`], as the app quits.
+/// Stops the live simulation and abandons a build without waiting past [`STOP_WAIT`], as the app quits. Then aborts a
+/// sweep of the Sweep tab and waits for it up to [`DEFAULT_STOP_TIMEOUT`], for a sweep that stops to write its files.
 ///
 /// The detached threads are dropped with the app and end with the process. Otherwise the runner's own drop would wait
-/// [`DEFAULT_STOP_TIMEOUT`].
+/// [`DEFAULT_STOP_TIMEOUT`], and the sweep's drop would wait for a run held in its step for good.
 impl Drop for AppState {
     fn drop(&mut self) {
         self.stop_simulation();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(session) = self.sweep.session.take()
+            && !session.stop(DEFAULT_STOP_TIMEOUT)
+        {
+            log::warn!("The sweep did not stop within {} s", DEFAULT_STOP_TIMEOUT.as_secs_f64());
+        }
     }
 }
 

@@ -27,6 +27,7 @@ use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason
 
 use super::{
     BatchEnd, ExecutionError, Executor, GpuTrackDepth, ReorderBuffer, RunRequest, RunSink, RunWatch, gpu_memory_budget,
+    run_in_build_pool,
 };
 use crate::cursor::{OutcomeParts, RunEnd, RunFailure, failed_build_outcome, milliseconds, refusal_note, run_outcome};
 
@@ -417,10 +418,10 @@ impl GpuTrack {
             .as_ref()
             .map(|active_runs| active_runs.watch(request.run, executor.measure.total()));
         let started = Instant::now();
-        let built = executor
-            .entry
-            .build(request.params, Some(request.run.seed), executor.gpu)
-            .and_then(gpu_state);
+        let (entry, gpu, seed) = (executor.entry, executor.gpu, request.run.seed);
+        let built = run_in_build_pool(executor.build_pool.as_deref(), || {
+            entry.build(request.params, Some(seed), gpu).and_then(gpu_state)
+        });
         let build_ms = milliseconds(started.elapsed());
         let state = match built {
             Ok(state) => state,

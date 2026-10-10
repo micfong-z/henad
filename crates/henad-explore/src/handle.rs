@@ -80,12 +80,18 @@ pub struct SweepRunOptions {
     pub provenance: Provenance,
     /// Called after each event, so that an idle host wakes up to collect it. It must not block.
     pub wake: Option<WakeFn>,
+    /// Thread pool the sweep's probes and the runs of a GPU model are built in, `None` for rayon's global pool.
+    ///
+    /// The runs of a CPU model are built and stepped in pools of their own either way.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub build_pool: Option<Arc<rayon::ThreadPool>>,
 }
 
 /// Prints whether a wake callback is set, instead of the callback.
 impl std::fmt::Debug for SweepRunOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SweepRunOptions")
+        let mut debug = f.debug_struct("SweepRunOptions");
+        debug
             .field("concurrency", &self.concurrency)
             .field("memory_budget", &self.memory_budget)
             .field("gpu_memory_budget", &self.gpu_memory_budget)
@@ -93,8 +99,10 @@ impl std::fmt::Debug for SweepRunOptions {
             .field("series_budget", &self.series_budget)
             .field("spec_source", &self.spec_source)
             .field("provenance", &self.provenance)
-            .field("wake", &self.wake.is_some())
-            .finish_non_exhaustive()
+            .field("wake", &self.wake.is_some());
+        #[cfg(not(target_arch = "wasm32"))]
+        debug.field("build_pool", &self.build_pool);
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -110,6 +118,8 @@ impl SweepRunOptions {
             spec_source: SpecSource::default(),
             provenance,
             wake: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            build_pool: None,
         }
     }
 }
@@ -243,7 +253,8 @@ impl std::error::Error for SweepStartError {
 
 /// Handle on a running sweep or search.
 ///
-/// Dropping the handle aborts the sweep. On native it then waits for the sweep's thread to write its files.
+/// Dropping the handle aborts the sweep. On native it then waits for the sweep's thread to write its files, and
+/// [`Self::stop`] waits within a timeout instead.
 #[derive(Debug)]
 pub struct SweepRun {
     plan: Arc<Plan>,
@@ -408,6 +419,30 @@ impl SweepRun {
         self.driver.send(SweepCommand::Abort);
     }
 
+    /// Aborts the sweep, and joins its thread once the thread ends, or leaves it detached after `timeout`. Returns
+    /// whether the thread ended in time.
+    ///
+    /// The sweep reads the abort between two slices of steps. A run held in a step that never returns holds the thread
+    /// past any timeout, and the detached thread ends with the process.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn stop(mut self, timeout: Duration) -> bool {
+        self.abort();
+        let Some(thread) = self.thread.take() else {
+            return true;
+        };
+        let deadline = Instant::now() + timeout;
+        while !thread.is_finished() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            std::thread::sleep(left.min(STOP_POLL));
+        }
+        // Already finished. This never actually waits.
+        drop(thread.join());
+        true
+    }
+
     /// Returns whether the sweep is paused.
     pub fn is_paused(&self) -> bool {
         self.control.is_paused()
@@ -500,6 +535,7 @@ impl SweepRun {
         sweep_options.retry_failed = launch.options.retry_failed;
         sweep_options.active_runs = Some(active_runs.clone());
         sweep_options.spec_source = launch.options.spec_source.clone();
+        sweep_options.build_pool = launch.options.build_pool.clone();
         let thread = std::thread::Builder::new()
             .name("henad-sweep".to_owned())
             .spawn(move || {
@@ -599,6 +635,10 @@ impl Drop for SweepRun {
         }
     }
 }
+
+/// Interval at which [`SweepRun::stop`] checks whether the sweep's thread has ended.
+#[cfg(not(target_arch = "wasm32"))]
+const STOP_POLL: Duration = Duration::from_millis(5);
 
 /// Task that a panic outside any run reports as its `during`.
 #[cfg(not(target_arch = "wasm32"))]

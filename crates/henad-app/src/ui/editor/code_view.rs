@@ -9,7 +9,9 @@
 use std::sync::Arc;
 
 use egui::text::{CCursor, CCursorRange, LayoutJob};
-use egui::{Align, Align2, Color32, FontId, Galley, Id, ScrollArea, Sense, TextBuffer, TextEdit, TextStyle, Ui, vec2};
+use egui::{
+    Align, Align2, Color32, FontId, Galley, Id, ScrollArea, Sense, TextBuffer, TextEdit, TextStyle, Ui, Vec2, vec2,
+};
 
 /// Salt of the code field's id. A press on a diagnostic moves the field's cursor through it.
 const CODE_ID_SALT: &str = "henad_editor_code";
@@ -25,12 +27,27 @@ pub fn code_id() -> Id {
     Id::new(CODE_ID_SALT)
 }
 
+/// Resets of the code view on one frame, after its text was replaced from outside the field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ViewReset {
+    /// Whether the field's undo history is cleared. Otherwise an undo would put back the text that was replaced.
+    pub history: bool,
+    /// Whether the view returns to the top left. The view keeps its offset across frames and sessions otherwise.
+    pub scroll: bool,
+}
+
 /// Draws the code field over `text` beside its gutter, filling the space left in `ui`, and returns the field's
 /// response.
 ///
 /// The number of each line in `marked_lines`, counted from 1, is drawn in the error colour. `scroll_to` is a
-/// character of `text` the view scrolls to.
-pub fn code_view(ui: &mut Ui, text: &mut String, marked_lines: &[u32], scroll_to: Option<usize>) -> egui::Response {
+/// character of `text` the view scrolls to, after `reset` applies.
+pub fn code_view(
+    ui: &mut Ui,
+    text: &mut String,
+    marked_lines: &[u32],
+    scroll_to: Option<usize>,
+    reset: ViewReset,
+) -> egui::Response {
     let font_id = TextStyle::Monospace.resolve(ui.style());
     let line_height = ui.fonts_mut(|fonts| fonts.row_height(&font_id)) + ui.spacing().extra_text_line_spacing;
     let color = ui.visuals().text_color();
@@ -43,15 +60,22 @@ pub fn code_view(ui: &mut Ui, text: &mut String, marked_lines: &[u32], scroll_to
     let gutter_width = digit_count(lines) as f32 * digit_width + GUTTER_PADDING;
     let text_width = layouter(ui, &*text, f32::INFINITY).size().x;
 
+    if reset.history {
+        clear_history(ui.ctx());
+    }
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let (gutter, _) = ui.allocate_exact_size(vec2(gutter_width, ui.available_height()), Sense::hover());
-        let output = ScrollArea::both()
+        let mut area = ScrollArea::both()
             .id_salt("henad_editor_code_scroll")
-            .auto_shrink([false; 2])
+            .auto_shrink([false; 2]);
+        if reset.scroll {
+            area = area.scroll_offset(Vec2::ZERO);
+        }
+        let output = area
             .show(ui, |ui| {
-                // As wide as the longest line, so a long line scrolls into view where a narrower field would clip it,
-                // and as tall as the view, so a press below the last line still focuses the field.
+                // The field is as wide as the longest line. A narrower field would clip a long line instead of
+                // scrolling it into view. It is as tall as the view, to focus the field on a press below the last line.
                 let width = (text_width + LINE_END_SLACK).max(ui.available_width());
                 let height = ui.available_height();
                 let output = ui
@@ -161,6 +185,13 @@ pub fn char_index_at(text: &str, line: u32, column: u32) -> usize {
     index + column.min(target.trim_end_matches('\r').chars().count())
 }
 
+/// Clears the undo history of the code field. The cursor stays.
+pub fn clear_history(ctx: &egui::Context) {
+    let mut state = TextEdit::load_state(ctx, code_id()).unwrap_or_default();
+    state.clear_undoer();
+    TextEdit::store_state(ctx, code_id(), state);
+}
+
 /// Moves the cursor of the code field to character `index`, and focuses the field.
 pub fn move_cursor(ctx: &egui::Context, index: usize) {
     let id = code_id();
@@ -183,7 +214,54 @@ pub fn cursor_index(ctx: &egui::Context) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{char_index_at, digit_count, gutter_numbers, unwrapped_job};
+    use super::{ViewReset, char_index_at, code_view, digit_count, gutter_numbers, move_cursor, unwrapped_job};
+
+    /// Draws the code view over `text` in one frame at `time` in seconds, with `events` as the frame's input.
+    fn frame(ctx: &egui::Context, text: &mut String, time: f64, events: Vec<egui::Event>, reset: ViewReset) {
+        let input = egui::RawInput {
+            time: Some(time),
+            events,
+            ..egui::RawInput::default()
+        };
+        let output = ctx.run_ui(input, |ui| {
+            code_view(ui, text, &[], None, reset);
+        });
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn an_undo_after_a_replaced_text_keeps_it() {
+        let ctx = egui::Context::default();
+        let mut text = "first file".to_owned();
+        move_cursor(&ctx, 0);
+        frame(&ctx, &mut text, 0.0, Vec::new(), ViewReset::default());
+        frame(
+            &ctx,
+            &mut text,
+            1.0,
+            vec![egui::Event::Text("x".to_owned())],
+            ViewReset::default(),
+        );
+        // A second later the edit is an undo point of its own.
+        frame(&ctx, &mut text, 3.0, Vec::new(), ViewReset::default());
+        assert_eq!(text, "xfirst file");
+
+        text = "second file".to_owned();
+        let reset = ViewReset {
+            history: true,
+            scroll: true,
+        };
+        frame(&ctx, &mut text, 4.0, Vec::new(), reset);
+        let undo = egui::Event::Key {
+            key: egui::Key::Z,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        frame(&ctx, &mut text, 5.0, vec![undo], ViewReset::default());
+        assert_eq!(text, "second file", "an undo put back the text of another file");
+    }
 
     #[test]
     fn gutter_numbers_follow_galley_rows() {

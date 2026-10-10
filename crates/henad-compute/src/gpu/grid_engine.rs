@@ -120,7 +120,7 @@ impl GpuGridEngine {
     ///
     /// Panics if the device cannot hold the model, or if [`GpuGridSpec::assert_contracts`] panics. Also panics if
     /// the hooks return lengths or seeds for another number of buffers than [`GpuGridSpec::buffers`] holds, or a
-    /// seed whose length differs from its buffer's.
+    /// seed whose length differs from the length of its buffer.
     #[expect(clippy::too_many_lines)]
     pub(crate) fn new(ctx: &GpuContext, spec: Arc<GpuGridSpec>, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;

@@ -445,8 +445,8 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
 ///
 /// # Errors
 ///
-/// Returns an error when a file cannot be read, does not hold a model file, or holds a model that does not compile, with
-/// each problem at its line and column in the file, and when two files declare the same id.
+/// Returns an error when a file cannot be read, does not hold a model file, or holds a model that does not compile,
+/// with each problem at its line and column in the file, and when two files declare the same id.
 fn with_model_files<'a>(
     models: &'a ModelSet,
     paths: &[PathBuf],

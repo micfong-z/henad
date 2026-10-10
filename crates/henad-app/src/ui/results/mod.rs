@@ -229,13 +229,13 @@ impl ResultsPanel {
         }
     }
 
-    /// Compares the held results of model `id` with `entry`, the entry that has replaced the set's entry under that
-    /// id, or `None` when the app cannot run the model. Results of another model are left alone.
-    pub fn model_replaced(&mut self, id: &str, entry: Option<&ModelEntry>) {
+    /// Compares the held results of model `id` with `model`, the app's lookup of the entry that has replaced the set's
+    /// entry under that id, or of an id the set no longer holds. Results of another model are left alone.
+    pub fn model_replaced(&mut self, id: &str, model: Result<&ModelEntry, &ModelLookupError>) {
         if let Some(store) = &mut self.store
             && store.model_id == id
         {
-            store.model_changed(entry);
+            store.model_changed(model);
         }
     }
 
@@ -474,8 +474,8 @@ fn poll_folder_load(app: &mut AppState) {
     match read {
         Ok(mut read) => {
             // The set's entry might have been replaced while the thread read the folder.
-            let entry = app.lookup(&read.store.model_id).ok();
-            read.store.model_changed(entry);
+            let model = app.lookup(&read.store.model_id);
+            read.store.model_changed(model.as_ref().copied());
             show_results(app, read);
         }
         Err(message) => app.results.status = Some(format!("Open failed: {message}")),
@@ -1377,5 +1377,53 @@ mod tests {
             [2, 3].into(),
             "run 1 is never loaded again"
         );
+    }
+
+    /// Results read while the set lacked their model take the entry that joins the set.
+    #[test]
+    fn results_of_a_missing_model_replay_once_the_model_joins_the_set() {
+        use henad_compute::entry::ModelSet;
+        use henad_explore::progress::NoProgress;
+        use henad_explore::sweep::{SweepOptions, run_spec};
+
+        use crate::state::AppState;
+        use crate::tests::support::set_of;
+
+        let sir = sir();
+        let mut without_sir = ModelSet::new(henad_core::build_info!());
+        for entry in &example_models() {
+            if entry.id() != "sir" {
+                without_sir.insert(entry.clone()).expect("example ids are unique");
+            }
+        }
+        let Some(mut app) = AppState::headless(without_sir, false) else {
+            return;
+        };
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = [("grid_width", "8"), ("grid_height", "8")]
+            .map(|(id, value)| (id.to_owned(), value.to_owned()))
+            .to_vec();
+        spec.run.steps = 3;
+        let options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
+        let record =
+            run_spec(&sir, None, &spec, SweepOutput::Memory, &options, &mut NoProgress).expect("the sweep runs");
+        let files = record.files.expect("a sweep in memory returns its files");
+        let named = files
+            .entries()
+            .into_iter()
+            .map(|(name, bytes)| (name.to_owned(), bytes.to_vec()))
+            .collect();
+        let set = ResultSet::from_files(named, usize::MAX).expect("the files read");
+        let read = ReadResults::new(set, ResultsSource::Files(Vec::new()), app.lookup("sir"));
+        app.results.show_read_results(read);
+        let store = app.results.store().expect("the results are shown");
+        assert_eq!(store.replay_refusal(), Some("This build does not include model 'sir'"));
+        assert!(!store.code_matches);
+
+        app.install_models(&set_of(sir));
+        let store = app.results.store().expect("the results are shown");
+        assert_eq!(store.replay_refusal(), None);
+        assert!(store.code_matches);
+        assert!(store.replay(0).is_ok(), "the run replays");
     }
 }

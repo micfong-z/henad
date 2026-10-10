@@ -142,7 +142,7 @@ use std::sync::{Arc, Mutex};
 use web_time::Instant;
 
 use crate::cpu::sim_thread::{SimCommand, WakeFn};
-use crate::fault::Fault;
+use crate::fault::{Fault, FaultSink};
 use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms, tps_over};
 use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
 use crate::runner::{
@@ -713,9 +713,17 @@ impl std::fmt::Debug for GpuSimThread {
 impl GpuSimThread {
     /// Starts a paused runner over `state` on `ctx`, in the batch mode that `settings` specifies.
     ///
-    /// A panic out of the loop is stored in `ctx.faults`.
-    pub fn new(ctx: GpuContext, state: Box<dyn GpuSimState>, settings: GpuBatchSettings, wake: Option<WakeFn>) -> Self {
-        let (sim, slot, gpu_stats, on_fault) = Self::parts(ctx, state, &settings, wake);
+    /// A panic out of the loop is stored in `faults`, as for
+    /// [`SimThread::new`](crate::cpu::sim_thread::SimThread::new). A device error goes to `ctx.faults`, and the
+    /// loop stops stepping once that sink holds a fault.
+    pub fn new(
+        ctx: GpuContext,
+        state: Box<dyn GpuSimState>,
+        settings: GpuBatchSettings,
+        wake: Option<WakeFn>,
+        faults: FaultSink,
+    ) -> Self {
+        let (sim, slot, gpu_stats, on_fault) = Self::parts(ctx, state, &settings, wake, faults);
         Self {
             driver: Driver::spawn(sim, on_fault),
             slot,
@@ -727,7 +735,7 @@ impl GpuSimThread {
     ///
     /// The loop's start, each pump and each command run on a worker of `pool`, as for
     /// [`SimThread::new_in`](crate::cpu::sim_thread::SimThread::new_in). A pump then never waits for a worker of the
-    /// global pool, which a CPU step that never returns can hold. A panic out of the loop is stored in `ctx.faults`.
+    /// global pool. A CPU step that never returns can hold such a worker. `faults` is as for [`Self::new`].
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new_in(
         pool: Arc<rayon::ThreadPool>,
@@ -735,8 +743,9 @@ impl GpuSimThread {
         state: Box<dyn GpuSimState>,
         settings: GpuBatchSettings,
         wake: Option<WakeFn>,
+        faults: FaultSink,
     ) -> Self {
-        let (sim, slot, gpu_stats, on_fault) = Self::parts(ctx, state, &settings, wake);
+        let (sim, slot, gpu_stats, on_fault) = Self::parts(ctx, state, &settings, wake, faults);
         Self {
             driver: Driver::spawn_in(pool, sim, on_fault),
             slot,
@@ -744,12 +753,14 @@ impl GpuSimThread {
         }
     }
 
-    /// Returns the loop over `state`, the slot it publishes to, its GPU numbers and the handler of a panic out of it.
+    /// Returns the loop over `state`, the slot it publishes to, its GPU numbers and the handler that stores a panic
+    /// out of the loop in `faults`.
     fn parts(
         ctx: GpuContext,
         state: Box<dyn GpuSimState>,
         settings: &GpuBatchSettings,
         wake: Option<WakeFn>,
+        faults: FaultSink,
     ) -> (
         Loop,
         SharedSlot,
@@ -765,7 +776,6 @@ impl GpuSimThread {
         // The slot starts empty. `start` publishes the first snapshot after a blocking readback, and
         // anything built here would report stats the GPU has not produced yet.
         let slot = SnapshotSlot::empty();
-        let faults = ctx.faults.clone();
         let sim = Loop::new(
             ctx,
             state,
@@ -951,7 +961,8 @@ mod tests {
             polls_left: 2,
             population: 0,
         };
-        let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default(), None);
+        let faults = ctx.faults.clone();
+        let mut thread = GpuSimThread::new(ctx, Box::new(state), GpuBatchSettings::default(), None, faults);
 
         let mut seen = None;
         for _ in 0..200 {
@@ -1151,7 +1162,12 @@ mod tests {
             batch_size: 100,
             ..GpuBatchSettings::default()
         };
-        (GpuSimThread::new(ctx, Box::new(state), settings, None), ticks, fired)
+        let faults = ctx.faults.clone();
+        (
+            GpuSimThread::new(ctx, Box::new(state), settings, None, faults),
+            ticks,
+            fired,
+        )
     }
 
     /// Takes snapshots until one reports `tick`, or gives up after five seconds, and returns it with the highest
@@ -1345,7 +1361,8 @@ mod tests {
             ticks: 0,
             encode_width: Arc::clone(&encode_width),
         };
-        let mut thread = GpuSimThread::new_in(pool, ctx, Box::new(state), GpuBatchSettings::default(), None);
+        let faults = ctx.faults.clone();
+        let mut thread = GpuSimThread::new_in(pool, ctx, Box::new(state), GpuBatchSettings::default(), None, faults);
         thread.run_to(10);
         assert!(
             snapshot_at(&mut thread, 10).0.is_some(),

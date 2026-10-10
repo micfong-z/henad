@@ -90,7 +90,7 @@ pub fn start(app: &AppState, name: String) -> Result<PendingCapture, String> {
     if let SnapshotView::Cpu(layers) = &snapshot.view
         && let Some(grid) = &layers.grid
     {
-        let pixels = app.model_pool().install(|| grid_pixels(grid, width, height, format));
+        let pixels = app.ui_pool().install(|| grid_pixels(grid, width, height, format));
         write_grid(ctx, &target, &pixels, width, height);
     }
 

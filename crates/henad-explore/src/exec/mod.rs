@@ -533,6 +533,9 @@ pub struct Executor<'a> {
     gpu_memory_budget: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
     track_depth: GpuTrackDepth,
+    /// Thread pool each run of a GPU model is built in, `None` for rayon's global pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    build_pool: Option<Arc<rayon::ThreadPool>>,
 }
 
 impl<'a> Executor<'a> {
@@ -587,6 +590,8 @@ impl<'a> Executor<'a> {
             pools,
             gpu_memory_budget: None,
             track_depth: GpuTrackDepth::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            build_pool: None,
         })
     }
 
@@ -597,6 +602,17 @@ impl<'a> Executor<'a> {
     /// left out.
     pub fn with_timeout(self, timeout: Option<Duration>) -> Self {
         Self { timeout, ..self }
+    }
+
+    /// Returns the executor with each run of a GPU model built in `pool`, or in rayon's global pool for `None`.
+    ///
+    /// The runs of a CPU model are built in the pools of their lanes either way.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with_build_pool(self, pool: Option<Arc<rayon::ThreadPool>>) -> Self {
+        Self {
+            build_pool: pool,
+            ..self
+        }
     }
 
     /// Returns the executor with each run listed in `active_runs` from its build to its end.
@@ -746,6 +762,15 @@ impl<'a> Executor<'a> {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_in_pool<R: Send>(pool: &rayon::ThreadPool, task: impl FnOnce() -> R + Send) -> R {
     pool.install(task)
+}
+
+/// Runs `build` on a worker of `pool`, or on the calling thread when `pool` is `None`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn run_in_build_pool<R: Send>(pool: Option<&rayon::ThreadPool>, build: impl FnOnce() -> R + Send) -> R {
+    match pool {
+        Some(pool) => run_in_pool(pool, build),
+        None => build(),
+    }
 }
 
 /// Runs `task` on the calling thread. A browser cannot start a lane's thread, so no lane pool is built there.

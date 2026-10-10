@@ -278,7 +278,7 @@ fn upload_grid(ctx: &egui::Context, app: &mut AppState, grid: &GridSnapshot) {
     let device_max = app.render_ctx.device.limits().max_texture_dimension_2d;
     let (tex_w, tex_h) = display_dims(grid.width, grid.height, device_max);
 
-    let pixels = app.model_pool().install(|| {
+    let pixels = app.ui_pool().install(|| {
         if (tex_w, tex_h) == (grid.width, grid.height) {
             expand_grid(grid)
         } else {
@@ -308,7 +308,7 @@ fn ensure_agent_layer(app: &mut AppState) {
 
 fn upload_agents(app: &mut AppState, points: &PointSnapshot, edges: Option<&EdgeSnapshot>) {
     ensure_agent_layer(app);
-    let pool = app.model_pool().clone();
+    let pool = app.ui_pool().clone();
     if let Some(layer) = &mut app.agent_layer {
         layer.upload(points, &pool);
         layer.upload_edges(edges, &pool);
@@ -358,7 +358,7 @@ fn render_density_heatmap(
     let inv_world_w = DENSITY_W as f32 / world_w;
     let inv_world_h = DENSITY_H as f32 / world_h;
 
-    let density = app.model_pool().install(|| {
+    let density = app.ui_pool().install(|| {
         use rayon::prelude::*;
 
         let n_threads = rayon::current_num_threads().max(1);

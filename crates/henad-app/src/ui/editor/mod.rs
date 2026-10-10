@@ -25,7 +25,7 @@ use henad_explore::model_file::ModelFile;
 use crate::icons::material_design_icons::{
     MDI_ALERT, MDI_CHECK, MDI_FILE_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE, MDI_TRAY_ARROW_DOWN,
 };
-use crate::state::AppState;
+use crate::state::{AppState, too_large_message};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
 use crate::ui::sweep::layout::add_button;
@@ -58,6 +58,11 @@ pub struct EditorPanel {
     applied: Option<ModelSource>,
     /// Character of the text the code view scrolls to on its next frame, after a press on a diagnostic.
     scroll_to: Option<usize>,
+    /// Whether the code field's undo history is cleared on its next frame, after the text was replaced from outside
+    /// the field.
+    reset_history: bool,
+    /// Whether the code view returns to the top left on its next frame, after another file's text replaced the text.
+    reset_scroll: bool,
 }
 
 /// Outcome of a press on Apply.
@@ -74,7 +79,8 @@ pub enum ApplyOutcome {
     Unchanged,
     /// The text was refused, with every problem found.
     Refused(Vec<CodeDiagnostic>),
-    /// The model was installed, and the device or the engine refused it when it was built.
+    /// The model was installed, and the device or the engine refused it when it was built, or the device cannot hold
+    /// it at the values of the next build.
     Faulted(Vec<CodeDiagnostic>),
 }
 
@@ -132,6 +138,14 @@ impl EditorPanel {
         self.outcome = None;
         self.applied = None;
         self.scroll_to = None;
+        self.replace_view();
+    }
+
+    /// Clears the code field's undo history and returns the view to the top left on the field's next frame, after
+    /// the text of another file replaced the text.
+    fn replace_view(&mut self) {
+        self.reset_history = true;
+        self.reset_scroll = true;
     }
 
     /// Brings an outcome that waited up to date. `loaded` is the source of the loaded model, and `rebuild_pending`
@@ -220,8 +234,12 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         })
         .unwrap_or_default();
     let scroll_to = panel.scroll_to.take();
+    let reset = code_view::ViewReset {
+        history: std::mem::take(&mut panel.reset_history),
+        scroll: std::mem::take(&mut panel.reset_scroll),
+    };
     CentralPanel::no_frame().show(ui, |ui| {
-        code_view::code_view(ui, &mut panel.text, &marked, scroll_to);
+        code_view::code_view(ui, &mut panel.text, &marked, scroll_to, reset);
     });
 
     if let Some(request) = request {
@@ -454,7 +472,8 @@ pub fn receive_open(app: &mut AppState, result: OpenResult) {
 ///   [`AppState::install_models`] leaves it, and a run of the model at tick 0 is rebuilt at once. The dialog opens
 ///   again for a run whose code differs from the set's entry, as after a canceled dialog.
 /// - with no run, a run of another model still at tick 0, or a build of another model that no run to a tick waits
-///   for, the model is built as Build builds it.
+///   for, the model is built as Build builds it. A model the device cannot hold at the values of the next build is
+///   not built, and the Editor names the sizes the device lacks.
 /// - a run of another model past tick 0 keeps going, and the model waits for Build.
 ///
 /// A build runs on the app's build thread on native, and the outcome reads as applied from its start. A fault of the
@@ -500,6 +519,13 @@ pub fn apply(app: &mut AppState) {
         return;
     }
     if !runs_source(app) && app.pending_rebuild.is_none() && app.run_at_start() {
+        // Build is disabled for the same reason. In a browser the engine's own check would end the page.
+        let shortfalls = app.selection_shortfalls();
+        if !shortfalls.is_empty() {
+            let problem = CodeDiagnostic::error(too_large_message(&shortfalls));
+            app.editor.outcome = Some(ApplyOutcome::Faulted(vec![problem]));
+            return;
+        }
         app.reset_simulation();
         if app.editor.outcome.is_some() {
             return;

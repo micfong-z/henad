@@ -15,7 +15,7 @@ boundary = "torus"
 # States are numbered in this order, and the step names them `DEAD` and `ALIVE`.
 [[state]]
 label = "Dead"
-color = [21, 21, 21, 255]
+color = [97, 97, 97, 255]
 
 [[state]]
 label = "Alive"

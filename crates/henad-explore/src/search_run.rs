@@ -1122,7 +1122,7 @@ impl SearchPreparation {
         }
         let probe = match probe {
             Some(probe) => probe,
-            None => ProbeReport::for_plan(entry, gpu, base)?,
+            None => options.in_build_pool(|| ProbeReport::for_plan(entry, gpu, base))?,
         };
         let measure = MeasurePlan::new(base.run_settings(), base.measure_settings(), probe.columns.clone())?;
         let watched_reducers = plan.watched_reducers(&measure)?;
@@ -1415,7 +1415,8 @@ impl SearchPreparation {
         Ok(executor
             .with_timeout(self.plan.base.run_settings().timeout)
             .with_active_runs(options.active_runs.clone())
-            .with_gpu_memory_budget(options.gpu_memory_budget))
+            .with_gpu_memory_budget(options.gpu_memory_budget)
+            .with_build_pool(options.build_pool.clone()))
     }
 
     /// Runs batches on `executor` until the budget is spent or its control aborts, writing each run and each batch to

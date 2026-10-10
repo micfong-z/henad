@@ -142,6 +142,7 @@ nav = [
             { "#55, 2026-10-10" = "developing/agent-record/20261010-55-editor-tab.md" },
             { "#56, 2026-10-10" = "developing/agent-record/20261010-56-cli-model-files.md" },
             { "#57, 2026-10-10" = "developing/agent-record/20261010-57-runaway-rails.md" },
+            { "#58, 2026-10-10" = "developing/agent-record/20261010-58-branch-review.md" },
         ] },
     ] },
 ]

@@ -23,10 +23,11 @@ use henad_core::explore::plan::{Config, Plan};
 use henad_core::explore::reducer::ReducerKind;
 use henad_core::explore::replay::Replay;
 use henad_core::explore::search::SearchSpec;
-use henad_core::explore::spec::{ACTION_COLUMN_PREFIX, ActionSpec};
+use henad_core::explore::spec::{ACTION_COLUMN_PREFIX, ActionSpec, SweepSpec};
 use henad_core::explore::summary::{ReplicateSummary, RunningMoments};
 use henad_core::explore::value::{format_value, parse_value};
 use henad_core::params::ParamDescriptor;
+use henad_core::provenance::CodeOrigin;
 use henad_explore::output::manifest::{BuildRole, Manifest, RecordedBuild};
 use henad_explore::output::search_tables::SearchHistory;
 use henad_explore::result_set::ResultSet;
@@ -42,6 +43,10 @@ const NO_LEVEL_ID: usize = usize::MAX;
 /// Maximum number of configs a folder's manifest can record for the app to plan its sweep. The configs of a larger
 /// sweep are listed from `runs.csv` alone.
 const MAX_PLANNED_CONFIGS: u64 = 1 << 20;
+
+/// Reason no command line replays the runs of a model file.
+pub const MODEL_FILE_COMMAND: &str =
+    "Runs of a model file replay on the command line with --model-file PATH. Save the model file to replay them there.";
 
 /// Source the results come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -582,6 +587,20 @@ fn known_change(recorded: &RecordedBuild, current: &RecordedBuild) -> bool {
         || (recorded.is_identified() && current.is_identified())
 }
 
+/// Spec of a sweep read from files, which the store plans again against an entry that replaces the sweep's model.
+#[derive(Debug, Clone)]
+struct RecordedSpec {
+    spec: SweepSpec,
+    /// Whether the files hold a search.
+    is_search: bool,
+    /// Number of configs the manifest records, 0 when it records none.
+    configs: u64,
+    /// Largest number of configs the store plans, and lists from a plan.
+    max_planned: u64,
+    /// Hash of the declarations of the entry the plan was made against, `None` for a plan made without an entry.
+    planned_with: Option<u64>,
+}
+
 /// Runs, configs and series of one sweep.
 #[derive(Debug)]
 pub struct ResultsStore {
@@ -617,6 +636,9 @@ pub struct ResultsStore {
     /// Plan used to replay the runs, or the reason they cannot replay: this device lacks the model, or the model
     /// rejects the spec.
     plan: Result<ReplayPlan, String>,
+    /// Spec of a sweep read from files, `None` for a sweep run in this app. The plan of a sweep run in this app was
+    /// made against the entry that ran it.
+    recorded_spec: Option<RecordedSpec>,
     /// Search the results come from, `None` for a sweep.
     search: Option<SearchLog>,
     /// Parameters of the model, empty when this device lacks it.
@@ -668,6 +690,7 @@ impl ResultsStore {
             folder,
             action_labels: action_labels(plan.actions(), entry),
             plan: Ok(ReplayPlan::Sweep(plan)),
+            recorded_spec: None,
             search: None,
             descriptors: entry.param_descriptors().to_vec(),
             value_columns,
@@ -734,6 +757,7 @@ impl ResultsStore {
     ) -> Self {
         let recorded = &set.manifest().model;
         let (model_id, model_name) = (recorded.id.clone(), recorded.name.clone());
+        let model = model.map_err(|error| lookup_message(&error));
         let entry = model.as_ref().ok().copied();
         let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry.schema()));
         let recorded_model = RecordedModel::of_result_set(&set);
@@ -757,35 +781,15 @@ impl ResultsStore {
                     table_error: Some(describe_error(&error)),
                 },
             });
-        let recorded_configs = set.manifest().plan.configs.unwrap_or(0);
-        let plan = match model {
-            Err(error) => Err(lookup_message(&error)),
-            Ok(entry) if search.is_some() => SearchPlan::new(set.spec(), &entry.schema())
-                .map(|search_plan| ReplayPlan::Search(Arc::new(search_plan)))
-                .map_err(|error| {
-                    format!(
-                        "{} refuses this search's spec: {}",
-                        entry.name(),
-                        describe_error(&error)
-                    )
-                }),
-            Ok(_) if recorded_configs > max_planned => Err(format!(
-                "Sweep has {recorded_configs} configurations, too many to replay in the app"
-            )),
-            Ok(entry) => set
-                .plan(entry.schema())
-                .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
-                .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error))),
+        let recorded_spec = RecordedSpec {
+            spec: set.spec().clone(),
+            is_search: search.is_some(),
+            configs: set.manifest().plan.configs.unwrap_or(0),
+            max_planned,
+            planned_with: entry.map(|entry| schema_hash(&entry.schema())),
         };
-        // Configs missing from `runs.csv` are listed from the plan, unless the plan holds too many to list.
-        let mut texts = match (&plan, entry) {
-            (Ok(ReplayPlan::Sweep(plan)), Some(entry))
-                if schema_matches && plan.configs().len() as u64 <= max_planned =>
-            {
-                plan_texts(plan, entry.param_descriptors())
-            }
-            _ => BTreeMap::new(),
-        };
+        let plan = replay_plan(&recorded_spec, model);
+        let mut texts = planned_texts(&plan, entry, schema_matches, max_planned);
         let mut store = Self {
             source,
             model_id,
@@ -800,6 +804,7 @@ impl ResultsStore {
             recorded_execution: Some(SessionExecution::recorded(&set.manifest().execution)),
             folder: set.dir().map(Path::to_path_buf),
             plan,
+            recorded_spec: Some(recorded_spec),
             search,
             descriptors: entry
                 .map(|entry| entry.param_descriptors().to_vec())
@@ -1519,12 +1524,15 @@ impl ResultsStore {
         }
     }
 
-    /// Compares the declarations and builds the sweep recorded with `entry`, the app's entry under the sweep's model id
-    /// after the set's entry was replaced, or `None` when the app cannot run the model.
+    /// Compares the declarations and builds the sweep recorded with `model`, the app's lookup of the sweep's model id
+    /// after the set's entry was replaced, or the reason the app cannot run the model.
     ///
     /// A replay of a run of other code then carries the warning that the replay might differ, and a folder of runtime
-    /// or plugin code that differs from `entry` cannot be resumed.
-    pub fn model_changed(&mut self, entry: Option<&ModelEntry>) {
+    /// or plugin code that differs from the entry cannot be resumed. Results read from files plan their spec again
+    /// against an entry whose declarations differ from those of the plan they hold, and take the entry's parameters
+    /// and action labels. A sweep run in this app keeps the plan of its session.
+    pub fn model_changed(&mut self, model: Result<&ModelEntry, &ModelLookupError>) {
+        let entry = model.ok();
         self.schema_matches = entry.is_some_and(|entry| {
             entry.id() == self.model_id && self.recorded.schema_hash == Some(schema_hash(&entry.schema()))
         });
@@ -1533,6 +1541,26 @@ impl ResultsStore {
         self.replays_exactly =
             self.recorded.replays_exactly && entry.is_none_or(|entry| entry.metadata().replays_exactly);
         self.code_matches = self.recorded.code_matches(entry);
+        if let Some(mut recorded) = self.recorded_spec.take() {
+            self.descriptors = entry
+                .map(|entry| entry.param_descriptors().to_vec())
+                .unwrap_or_default();
+            self.action_labels = entry.map_or_else(BTreeMap::new, |entry| action_labels(&recorded.spec.actions, entry));
+            let declarations = entry.map(|entry| schema_hash(&entry.schema()));
+            if declarations.is_none() || declarations != recorded.planned_with {
+                recorded.planned_with = declarations;
+                self.plan = replay_plan(&recorded, model.map_err(lookup_message));
+                let planned = planned_texts(&self.plan, entry, self.schema_matches, recorded.max_planned);
+                self.rebuild_configs(planned);
+            } else {
+                let labels: Vec<String> = self.axes.iter().map(|axis| self.column_label(axis.column)).collect();
+                for (axis, label) in self.axes.iter_mut().zip(labels) {
+                    axis.label = label;
+                }
+            }
+            self.recorded_spec = Some(recorded);
+        }
+        self.revision += 1;
     }
 
     /// Reason the runs cannot replay, `None` when they can.
@@ -1630,6 +1658,18 @@ impl ResultsStore {
         Ok(search_plan.replay(&outcome.run, &config))
     }
 
+    /// Returns the reason no command line replays the runs, `None` when [`Self::cli_command`] can write one.
+    ///
+    /// A run of a model file needs the file on the command line, and the results hold no path to it.
+    pub fn command_refusal(&self) -> Option<&'static str> {
+        let runtime = |build: &RecordedBuild| build.origin.as_deref() == Some(CodeOrigin::Runtime.as_str());
+        self.recorded
+            .model_builds
+            .iter()
+            .any(runtime)
+            .then_some(MODEL_FILE_COMMAND)
+    }
+
     /// Returns a command line of `program`, a host's equivalent of `henad-cli`, that steps run `run_id` to the tick it
     /// ended on and writes its stats.
     ///
@@ -1637,8 +1677,12 @@ impl ResultsStore {
     ///
     /// # Errors
     ///
-    /// Returns the message of [`Self::replay`] for a run that does not replay.
+    /// Returns [`Self::command_refusal`] for the runs of a model file, and the message of [`Self::replay`] for a run
+    /// that does not replay.
     pub fn cli_command(&self, program: &str, run_id: u64) -> Result<String, String> {
+        if let Some(reason) = self.command_refusal() {
+            return Err(reason.to_owned());
+        }
         let replay = self.replay(run_id)?;
         let (Ok(plan), Some(outcome)) = (&self.plan, self.run(run_id)) else {
             return Err(format!("No run {run_id} in these results"));
@@ -1728,6 +1772,52 @@ impl ResultsStore {
         }
         self.revision += 1;
         held
+    }
+}
+
+/// Returns the plan that replays the runs of `recorded`, the spec of a sweep read from files, through `model`, the
+/// app's entry for the sweep's model or the reason the app has none, or the reason the runs cannot replay.
+///
+/// A sweep whose manifest records more than `recorded.max_planned` configs is never planned.
+fn replay_plan(recorded: &RecordedSpec, model: Result<&ModelEntry, String>) -> Result<ReplayPlan, String> {
+    let entry = model?;
+    if recorded.is_search {
+        return SearchPlan::new(&recorded.spec, &entry.schema())
+            .map(|search_plan| ReplayPlan::Search(Arc::new(search_plan)))
+            .map_err(|error| {
+                format!(
+                    "{} refuses this search's spec: {}",
+                    entry.name(),
+                    describe_error(&error)
+                )
+            });
+    }
+    if recorded.configs > recorded.max_planned {
+        return Err(format!(
+            "Sweep has {} configurations, too many to replay in the app",
+            recorded.configs
+        ));
+    }
+    recorded
+        .spec
+        .plan(&entry.schema())
+        .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
+        .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error)))
+}
+
+/// Returns the configs of `plan`, a sweep's plan through `entry`, to list beside the configs of `runs.csv`, or none
+/// unless the entry declares what the sweep ran with (`schema_matches`) and the plan holds at most `max_planned`.
+fn planned_texts(
+    plan: &Result<ReplayPlan, String>,
+    entry: Option<&ModelEntry>,
+    schema_matches: bool,
+    max_planned: u64,
+) -> BTreeMap<u64, ConfigTexts> {
+    match (plan, entry) {
+        (Ok(ReplayPlan::Sweep(plan)), Some(entry)) if schema_matches && plan.configs().len() as u64 <= max_planned => {
+            plan_texts(plan, entry.param_descriptors())
+        }
+        _ => BTreeMap::new(),
     }
 }
 
@@ -1921,7 +2011,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
-    use henad_compute::entry::ModelEntry;
+    use henad_compute::entry::{ModelEntry, ModelLookupError};
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::SeriesBuffer;
@@ -3253,19 +3343,18 @@ mod tests {
             .into_iter()
             .map(|(name, bytes)| (name.to_owned(), bytes.to_vec()))
             .collect();
-        let set = ResultSet::from_files(named, usize::MAX).expect("the files read");
-        let mut store = ResultsStore::from_result_set(
-            set,
-            ResultsSource::Files(Vec::new()),
-            models.lookup("sir", None),
-            usize::MAX,
-        );
+        let named: Vec<(String, Vec<u8>)> = named;
+        let read = |model: Result<&ModelEntry, ModelLookupError>| {
+            let set = ResultSet::from_files(named.clone(), usize::MAX).expect("the files read");
+            ResultsStore::from_result_set(set, ResultsSource::Files(Vec::new()), model, usize::MAX)
+        };
+        let mut store = read(models.lookup("sir", None));
         assert!(store.schema_matches);
         assert_eq!(store.changed_builds, []);
         assert!(store.code_matches);
 
         let recoded = sir.clone().__with_code(ModelCode::new("henad-app-test", "edited sir"));
-        store.model_changed(Some(&recoded));
+        store.model_changed(Ok(&recoded));
         assert!(store.schema_matches);
         assert_eq!(store.changed_builds, [BuildRole::Model]);
         assert!(
@@ -3277,21 +3366,75 @@ mod tests {
             Some("Model code changed since this sweep ran")
         );
 
-        store.model_changed(Some(&edited_sir()));
+        store.model_changed(Ok(&edited_sir()));
         assert!(!store.schema_matches, "the edit declares other parameters");
         assert!(store.code_matches, "a compiled change is a warning alone");
 
-        store.model_changed(None);
+        let missing = ModelLookupError::NotInSet { id: "sir".to_owned() };
+        store.model_changed(Err(&missing));
         assert!(!store.schema_matches);
         assert_eq!(store.changed_builds, [], "no entry to compare with");
         assert!(!store.code_matches);
+        assert_eq!(store.replay_refusal(), Some("This build does not include model 'sir'"));
 
-        store.model_changed(Some(sir));
+        store.model_changed(Ok(sir));
         assert!(store.schema_matches);
         assert_eq!(store.changed_builds, [], "the sweep's own code again");
         assert!(store.replays_exactly);
         assert!(store.code_matches);
         assert_eq!(super::super::code_refusal(Some(&store), "sweep"), None);
+        assert_eq!(store.replay_refusal(), None);
+        assert!(store.replay(0).is_ok(), "the run replays under its own code");
+
+        // Files read while the set held other declarations, or no entry, plan their spec again for the sweep's own
+        // code. A plan of the other declarations would give the run another key than its row.
+        let mut edited = read(Ok(&edited_sir()));
+        assert!(!edited.schema_matches);
+        edited.model_changed(Ok(sir));
+        assert!(edited.schema_matches);
+        assert!(edited.replay(0).is_ok(), "the run replays under its own code");
+        let mut absent = read(Err(missing));
+        assert!(absent.replay_refusal().is_some() && !absent.code_matches);
+        absent.model_changed(Ok(sir));
+        assert_eq!(absent.replay_refusal(), None);
+        assert!(absent.code_matches);
+        assert!(absent.replay(0).is_ok(), "the run replays once the model joins the set");
+    }
+
+    #[test]
+    fn a_model_file_run_copies_no_command() {
+        use henad_core::provenance::ModelCode;
+        use henad_explore::model_file::ModelFile;
+
+        use super::MODEL_FILE_COMMAND;
+
+        let starter = crate::ui::editor::life_starter();
+        assert!(starter.contains("id = \"life_rule\""));
+        for id in ["life_rule", "gpu_game_of_life"] {
+            let text = starter.replace("id = \"life_rule\"", &format!("id = \"{id}\""));
+            let entry = ModelFile::parse(&text)
+                .and_then(|file| file.entry())
+                .expect("the rule compiles");
+            assert_eq!(entry.id(), id);
+            let mut spec = SweepSpec::new(id);
+            spec.run.steps = 3;
+            let plan = Arc::new(spec.plan(&entry.schema()).expect("a valid spec"));
+            let store = ResultsStore::for_sweep(plan, &entry, None, usize::MAX);
+            assert_eq!(store.command_refusal(), Some(MODEL_FILE_COMMAND), "{id}");
+            assert_eq!(
+                store.cli_command("henad-cli", 0),
+                Err(MODEL_FILE_COMMAND.to_owned()),
+                "{id}"
+            );
+        }
+        let sir = sir();
+        let recoded = sir
+            .clone()
+            .__with_code(ModelCode::new("henad-app-test", "a rule under SIR's id"));
+        let runtime = store(&recoded, plan(&sir, Vec::new(), 1), usize::MAX);
+        assert_eq!(runtime.command_refusal(), Some(MODEL_FILE_COMMAND));
+        let compiled = store(&sir, plan(&sir, Vec::new(), 1), usize::MAX);
+        assert_eq!(compiled.command_refusal(), None);
     }
 
     /// A sweep whose manifest records more configs than the bound is never planned. It lists the configs `runs.csv`

@@ -270,7 +270,7 @@ pub mod rules {
         CompiledGridRule, GridRule, LIFE_STEP, MAX_GRID_SIDE, MAX_PARAMS, MAX_STATES, MAX_STEP_BYTES, RuleDeclaration,
         RuleState,
     };
-    pub use henad_explore::model_file::{FORMAT, FORMAT_VERSION, KIND_GPU_GRID, ModelFile, ModelFileError};
+    pub use henad_explore::model_file::{ModelFile, ModelFileError};
 }
 
 /// The app, opened over a host's own model set.
