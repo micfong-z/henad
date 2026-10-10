@@ -71,6 +71,7 @@ A bare `use henad::...` there is ambiguous between the crate and the generated m
 ## Shared WGSL
 
 The shared modules ship with henad-core, in `henad-core/src/authoring/primitives/wgsl/`, and a shader imports them with `#import henad::<module>`, resolved at build time.
+A grid rule's step is composed while the program runs, by `henad::rules::compose_wgsl` under the `model-files` feature, and imports them the same way, one `#import` line of the item form below each.
 
 ```wgsl
 #import henad::dispatch::linear_index

@@ -54,29 +54,15 @@ pub fn bool_param(id: &'static str, label: &'static str, default: bool) -> Param
 ///
 /// # Panics
 ///
-/// Panics when two options share a name, a name is empty or has spaces at either end, or a name parses as an unsigned
-/// integer. Text that selects a choice is trimmed, then matched against the option names, then parsed as an index. The
-/// second of two equal names would resolve to the first option, a name with spaces at an end would never match, and a
-/// name that is an unsigned integer would shadow the index it spells.
+/// Panics when [`check_choice_options`] refuses `options`.
 pub fn choice_param(
     id: &'static str,
     label: &'static str,
     options: &'static [&'static str],
     default: usize,
 ) -> ParamDescriptor {
-    for (position, option) in options.iter().enumerate() {
-        assert!(
-            !option.is_empty() && option.trim() == *option,
-            "option '{option}' of choice '{id}' is empty or has spaces at an end"
-        );
-        assert!(
-            option.parse::<usize>().is_err(),
-            "option '{option}' of choice '{id}' reads as an index"
-        );
-        assert!(
-            !options[..position].contains(option),
-            "choice '{id}' has option '{option}' twice"
-        );
+    if let Err(reason) = check_choice_options(options) {
+        panic!("choice '{id}': {reason}");
     }
     ParamDescriptor::new(
         id,
@@ -86,6 +72,32 @@ pub fn choice_param(
             default,
         },
     )
+}
+
+/// Checks the option names of a choice.
+///
+/// Text that selects a choice is trimmed, then matched against the option names, then parsed as an index. The second
+/// of two equal names would resolve to the first option, a name with spaces at an end would never match, and a name
+/// that is an unsigned integer would shadow the index it spells.
+///
+/// # Errors
+///
+/// Returns a sentence naming the first option that is empty, has spaces at either end, parses as an unsigned integer,
+/// or repeats an earlier name.
+pub fn check_choice_options<S: AsRef<str>>(options: &[S]) -> Result<(), String> {
+    for (position, option) in options.iter().enumerate() {
+        let option = option.as_ref();
+        if option.is_empty() || option.trim() != option {
+            return Err(format!("option '{option}' is empty or has spaces at an end"));
+        }
+        if option.parse::<usize>().is_ok() {
+            return Err(format!("option '{option}' reads as an index"));
+        }
+        if options[..position].iter().any(|earlier| earlier.as_ref() == option) {
+            return Err(format!("option '{option}' appears twice"));
+        }
+    }
+    Ok(())
 }
 
 // Parameter value readers.
@@ -161,19 +173,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "option '2' of choice 'level' reads as an index")]
+    #[should_panic(expected = "choice 'level': option '2' reads as an index")]
     fn choice_builder_refuses_an_option_named_as_an_index() {
         choice_param("level", "Level", &["low", "2"], 0);
     }
 
     #[test]
-    #[should_panic(expected = "option 'Random ' of choice 'network' is empty or has spaces at an end")]
+    #[should_panic(expected = "choice 'network': option 'Random ' is empty or has spaces at an end")]
     fn choice_builder_refuses_an_option_with_trailing_spaces() {
         choice_param("network", "Network", &["Random ", "Geometric"], 0);
     }
 
     #[test]
-    #[should_panic(expected = "choice 'shape' has option 'square' twice")]
+    #[should_panic(expected = "choice 'shape': option 'square' appears twice")]
     fn choice_builder_refuses_a_repeated_option() {
         choice_param("shape", "Shape", &["square", "hexagon", "square"], 0);
     }

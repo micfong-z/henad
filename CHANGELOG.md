@@ -10,6 +10,11 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Descriptors that own their strings, for models read at run time: `ParamDescriptor::new`, `StatDescriptor::owned`, `ActionDescriptor::owned`, `StatEntry::new`, `ChoiceOptions` (`from_static`, `new`; `henad::params::ChoiceOptions`); `StatDescriptor::entry`.
 - `ModelSet::replace`: an entry in place of the one with its id, at its position, or appended.
 - Code identity: `CodeOrigin` (`Compiled`, `Runtime`, `Plugin`), `ModelCode` (FNV-1a over format and canonical text), `ModelSource::runtime`, `origin`, `code`, `code_hash`; manifests record a model's `origin` and `code_hash`, and a runtime model's text as `model.code` (format version stays 1); `ResultSet::code_matches`.
+- Grid rules (henad-compute `runtime-wgsl`, henad-explore and facade `model-files`, at `henad::rules`): `GridRule`, `RuleState`, `RuleDeclaration`, `GridRule::check_declarations`, `CompiledGridRule::entry`, `GridRule::life()`; a WGSL `step_cell` composed at run time after an engine template, refused at its line for loops, bindings, entry points, atomics, barriers, shared writes, engine buffers but `params`, built-in names at module scope, template names, variables past WGSL's 8192-byte limits, and a call past 65536 expressions and statements.
+- `compose_wgsl`: run-time WGSL composition over naga_oil 0.23, byte-equal to henad-build's for every stock shader; a directive check refuses what naga_oil would rewrite or panic on.
+- Model files (`ModelFile`, `ModelFileError`): a grid rule as one TOML file (`format = "henad-model"`, version 1, `kind = "gpu_grid"`), canonical text as its code identity, declaration and step problems at their file line; `specs/models/life_rule.toml`.
+- `CodeDiagnostic` and `DiagnosticSeverity` (henad-core, facade root): span, 1-based line and character column, notes.
+- `helpers::check_choice_options` (`henad::authoring`): the option-name check of `choice_param`, without the panic.
 
 ### Changed
 
@@ -18,6 +23,8 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Breaking: `GridView`, `PointView` and `EdgeView` borrow their palettes for `'a`; snapshots own theirs as `Vec<[u8; 4]>`.
 - Breaking: `ModelMetadata` and `Structure` are `#[non_exhaustive]`; `ModelMetadata` built through `new`, `palette` and `replays_exactly`, its palette a `Cow`.
 - GPU grid engine non-generic, built from a private spec of the model's declarations; `GpuGridState<M>` an adapter over it, its API unchanged. Workgroup counts and buffer sizes cached at construction.
+- `register_gpu_grid_model` builds one spec per entry, shared by its builds and its demand.
+- henad-app and henad-cli turn on henad-explore's `model-files`.
 - Breaking: `RecordedBuild` is `#[non_exhaustive]`, with `origin` and `code_hash` (build through `From<&BuildInfo>`, `From<&ModelSource>` or `engine()`); `ManifestModel` gains `code` (`None` for compiled models); `ModelSource` compares its origin and code; `same_build` compares code identity alone when either build has an origin.
 
 ## [0.3.0] - 2026-10-10

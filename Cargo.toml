@@ -60,6 +60,11 @@ rfd = "0.17"
 # generated code henad-compute expects. A patch moves only with a Henad release.
 wgsl_bindgen = { version = "=0.23.3", default-features = false }
 heck = "0.5"
+# henad-compute's `runtime-wgsl` alone, which composes and validates a grid rule's WGSL while the program runs. The
+# version is wgpu's. naga_oil's default features add GLSL and a test shader. wgsl_bindgen's build-time copy is a build
+# dependency, outside this graph.
+naga = { version = "30.0.0", features = ["wgsl-in", "wgsl-out"] }
+naga_oil = { version = "0.23.0", default-features = false }
 egui_plot = "0.37"
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"

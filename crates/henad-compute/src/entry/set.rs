@@ -191,21 +191,23 @@ impl FusedIterator for ModelSetIter<'_> {}
 
 /// Returns an error when `id` is outside the model id grammar.
 fn check_id(id: &str) -> Result<(), ModelSetError> {
-    let invalid = |reason| {
-        Err(ModelSetError::InvalidId {
-            id: id.to_owned(),
-            reason,
-        })
-    };
+    check_id_grammar(id).map_err(|reason| ModelSetError::InvalidId {
+        id: id.to_owned(),
+        reason,
+    })
+}
+
+/// Returns the clause saying how `id` breaks the model id grammar, such as "is empty", or `Ok` for an id inside it.
+pub(crate) fn check_id_grammar(id: &str) -> Result<(), &'static str> {
     let mut chars = id.chars();
     match chars.next() {
-        None => invalid("is empty"),
-        Some(first) if !first.is_ascii_lowercase() => invalid("does not start with a lowercase ASCII letter"),
+        None => Err("is empty"),
+        Some(first) if !first.is_ascii_lowercase() => Err("does not start with a lowercase ASCII letter"),
         Some(_)
             if !chars
                 .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_') =>
         {
-            invalid("holds a character other than a lowercase ASCII letter, a digit or an underscore")
+            Err("holds a character other than a lowercase ASCII letter, a digit or an underscore")
         }
         Some(_) => Ok(()),
     }

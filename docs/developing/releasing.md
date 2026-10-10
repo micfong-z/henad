@@ -36,7 +36,7 @@ Copy the checklist into an issue titled "Release 0.x.y" for each release, and ti
 - [ ] Verified packaging, default features, in a fresh target directory:
       `CARGO_TARGET_DIR="$(mktemp -d)" cargo package --workspace --exclude henad-tutorial --locked`
 - [ ] Verified packaging of the facade's features, in a fresh target directory of its own:
-      `CARGO_TARGET_DIR="$(mktemp -d)" cargo package --workspace --exclude henad-tutorial --locked --features henad/example-models,henad/app,henad/cli,henad/testing`
+      `CARGO_TARGET_DIR="$(mktemp -d)" cargo package --workspace --exclude henad-tutorial --locked --features henad/example-models,henad/app,henad/cli,henad/testing,henad/model-files`
 - [ ] The dispatched run passes on this commit, its `downstream`, `msrv`, `features` and `docs` jobs included: `gh workflow run ci.yml --ref <branch>`
 - [ ] A native check on the pinned nightly prints no future-incompatibility warning for a Henad crate, since docs.rs builds on nightly, and CI runs that nightly only to lint wasm32 and to build each crate's documentation through `scripts/docs_rs.py`:
       `CARGO_TARGET_DIR="$(mktemp -d)" cargo +"$(cat templates/model-project/scripts/web-toolchain)" check --workspace --all-targets --all-features`

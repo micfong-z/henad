@@ -107,7 +107,7 @@ write it, using only its documented API, since the engine is being measured as i
 And no engine's stock flocking or foraging example is used: that would compare two simulations, not
 two engines. `benchmarks/krabmaga` is outside the cargo workspace (`exclude` in the root
 `Cargo.toml`), so `./check.sh` never builds it. `templates/model-project` sits in the same
-`exclude`.
+`exclude`, as do `crates/henad-dylib` and `examples/hot-host`, which `scripts/check_hot.sh` builds.
 
 ## Writing style
 
@@ -349,6 +349,9 @@ cargo check --workspace --all-targets
 cargo check -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features \
   --lib --target wasm32-unknown-unknown    # without atomics, henad-app without its thread pool
 cargo fmt --all -- --check
+cargo fmt --manifest-path crates/henad-dylib/Cargo.toml -- --check   # the packages outside the
+cargo fmt --manifest-path examples/hot-host/Cargo.toml -- --check    # workspace, and hot-host's
+cargo fmt --manifest-path examples/hot-host/generation/Cargo.toml -- --check   # generation crate
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
 cargo test --workspace --all-targets --all-features
 cargo test --workspace --doc
@@ -359,6 +362,12 @@ cargo test -p henad --doc --features example-models,app      # compiles the READ
 ./scripts/check_packaging.sh  # workspace versions, licence copies, paths that climb out of a crate,
                               # the template's [profile.release] held equal to the root's, and its
                               # requirements and the facade README's to the workspace's major and minor
+                              # henad-dylib's fields and `henad = "=X.Y.Z"`, no member on
+                              # henad-dylib, the one [profile.hot] of hot-host and the template,
+                              # and hot-host's lock
+HENAD_REQUIRE_GPU=1 ./scripts/check_hot.sh   # the dev host: lints henad-dylib and hot-host,
+                              # builds hot-host under [profile.hot], runs its app's self-check
+                              # (HENAD_HOT_CHECK=1) and `hot-check`, then `hot-check relink`
 cargo deny --locked check     # advisories, licences, bans and sources, every feature on (deny.toml)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 python3 -m unittest discover -s scripts -p 'test_*.py'   # the scripts' own tests
@@ -366,37 +375,52 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
   --component rust-src,clippy --target wasm32-unknown-unknown   # the pinned nightly the web build needs
 ```
 
-`./check.sh` runs every line above but the install, and skips `cargo deny` where cargo-deny is not
-installed. CI alone runs `cargo package --workspace --exclude henad-tutorial --no-verify --locked`
-(the `package` job, on manifest changes), `cargo +1.95 check --workspace --locked` and the facade
-with all four features on 1.95 (`msrv`), `cargo check -p henad` with no features and then with
-each feature alone (`features`), clippy on the pinned nightly for wasm32 with
-`RUSTFLAGS="-C target-feature=+atomics,+bulk-memory"` and a `CARGO_TARGET_DIR` of its own, over
-`-p henad-app` and over `-p henad --features app,example-models` (`lint`), `actionlint` over
-`templates/model-project/.github/workflows/*.yml` (`lint`), and every published crate's docs as
-docs.rs builds them, through `scripts/docs_rs.py` from each crate's `[package.metadata.docs.rs]`
-table on the pinned nightly (`docs`). `msrv`, `features` and `docs` run on a pull request and on a
-dispatch, and `package` on a pull request alone. The `downstream` job runs on `workflow_dispatch`
-alone, with `CARGO_TERM_COLOR=never`, and the release checklist starts it. It runs the verified
-packaging in two fresh target directories and deletes both builds, copies the template outside the
-checkout, pins `henad` and `henad-build` to `=<version>`, patches every crate
-it uses to the unpacked tarballs under the verify directory's `package/`, and generates a lock.
-Then, in order: both `henad` and `henad-build` resolve with a null `source`, henad-models is
-absent, strict clippy (`-D unreachable_pub -D unused_qualifications`), `scripts/ci.sh test` under
-`HENAD_REQUIRE_GPU=1`, a second `cargo build -v` with nothing `Dirty`, `Compiling` or `Running`, a
-stable wasm32 check of the library with `--no-default-features` and `RUSTFLAGS=""`, `ci.sh
-lint-web`, `build_web.sh` refusing `RUSTFLAGS`, `ci.sh web`, a comment appended to `src/vote.rs`
-recompiling no henad crate, an unreferenced shader added under `src/probe/` compiling under
-`-D warnings`, the CLI's dry run of `specs/vote.toml`, and the CPU-only crate (`gpu_vote`, its
-lines and the `ShaderBuild` line removed) sweeping and resuming with no `build_changed` warning.
-The wasm32 steps run before any step changes the copy. To run it by hand, run each step's script
-from `ci.yml` with `RUNNER_TEMP` set to a directory outside any git work tree and
-`CARGO_TERM_COLOR=never`, and pass `--allow-dirty` to `cargo package` on an uncommitted tree.
+`./check.sh` runs every line above but the install and `check_hot.sh`, and skips `cargo deny` where
+cargo-deny is not installed. CI alone runs `cargo package --workspace --exclude henad-tutorial
+--no-verify --locked`, then henad-dylib's `cargo package --manifest-path` with the facade patched to
+the workspace's through `--config` (the `package` job, on manifest changes), `cargo +1.95 check
+--workspace --locked` and the facade with all five features on 1.95 (`msrv`), `cargo check -p henad`
+with no features and then with each feature alone (`features`), `scripts/check_hot.sh` under
+`HENAD_REQUIRE_GPU=1` on Linux (lavapipe), macOS and Windows, then the template's `ci.sh hot` in a
+copy outside the checkout, locked to the root's versions and patched by path, with the export count
+of `henad_dylib.dll` printed and failed above 60,000 on Windows (`hot`, 90 minutes at most, on a
+dispatch, or on a push or pull request that changes a file the dev host or the template builds, as
+the one-runner `hot-changes` job finds),
+clippy on the pinned nightly for wasm32 with `RUSTFLAGS="-C target-feature=+atomics,+bulk-memory"`
+and a `CARGO_TARGET_DIR` of its own, over `-p henad-app` and over `-p henad --features
+app,example-models` (`lint`), `actionlint` over `templates/model-project/.github/workflows/*.yml`
+(`lint`), and every published workspace crate's docs as docs.rs builds them, through
+`scripts/docs_rs.py` from each crate's `[package.metadata.docs.rs]` table on the pinned nightly
+(`docs`). `msrv`, `features` and `docs` run on a pull request and on a dispatch, and `package` on a
+pull request alone. The `downstream` job runs on `workflow_dispatch` alone, with
+`CARGO_TERM_COLOR=never`, and the release checklist starts it. It runs the verified packaging in two
+fresh target directories, the second with the facade's features, and deletes both builds. It
+packages henad-dylib with `--no-verify`, every Henad crate it reaches patched to the unpacked
+tarballs, and unpacks it beside them. It copies the template outside the checkout, pins `henad`,
+`henad-build` and `henad-dylib` to `=<version>` (four lines), patches every crate it uses, henad-hot
+and henad-dylib among them, to the unpacked tarballs under the verify directory's `package/`, and
+generates a lock.
+Then, in order: `henad`, `henad-build`, `henad-hot` and `henad-dylib` resolve with a null `source`
+and henad-models is absent, both with every feature on, strict clippy with every feature (`-D
+unreachable_pub -D unused_qualifications`), `scripts/ci.sh test` under `HENAD_REQUIRE_GPU=1`, `ci.sh
+hot` (the dev host's self-check, its `target/hot` removed after), a second `cargo build -v` with
+nothing `Dirty`, `Compiling` or `Running`, a stable wasm32 check of the library with
+`--no-default-features` and `RUSTFLAGS=""`, `ci.sh lint-web`, `build_web.sh` refusing `RUSTFLAGS`,
+`ci.sh web`, a comment appended to `src/vote.rs` recompiling no henad crate, an unreferenced shader
+added under `src/probe/` compiling under `-D warnings`, the CLI's dry run of `specs/vote.toml`, and
+the CPU-only crate (`gpu_vote`, its lines and the `ShaderBuild` line removed) sweeping and resuming
+with no `build_changed` warning. The wasm32 steps run before any step changes the copy. To run it by
+hand, run each step's script from `ci.yml` with `RUNNER_TEMP` set to a directory outside any git
+work tree and `CARGO_TERM_COLOR=never`, and pass `--allow-dirty` to `cargo package` on an
+uncommitted tree.
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
 Run desktop app: `cargo run -p henad-app` (`-- --open DIR` opens a folder a sweep wrote in the
 Results tab)
+Run Henad's own dev host: `cargo run --manifest-path examples/hot-host/Cargo.toml --profile hot
+--features hot` (through `cargo run` alone, which sets the library path; `HENAD_HOT_CHECK=1` checks
+the dev host and opens no window)
 Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` + `index.html`)
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
@@ -423,17 +447,20 @@ Build the docs as docs.rs does: `python3 scripts/docs_rs.py` (crate names to nar
 a machine that is no x86_64 Linux)
 Preview a release's notes: `python3 scripts/changelog_section.py 0.1.0` (what the tag build puts in
 the release body; it refuses a section with no date)
-Cut a release: `docs/developing/releasing.md` holds the order (bump the version, every requirement
-and the template's three, and on a breaking release the facade README's line, the guide's
-admonitions and its typed dependency snippets, regenerate `docs/license.html`, `cargo update
---workspace`, date the CHANGELOG, commit and push, run the checklist on that commit, then tag), the
-checklist the maintainer copies into an issue per release (both verified packaging passes in a fresh
-`CARGO_TARGET_DIR`, `gh workflow run ci.yml --ref <branch>` for the `downstream`, `msrv`, `features`
-and `docs` jobs, a native check on the pinned nightly, `cargo semver-checks`, a WGSL diff and a
-review of the hidden items another crate calls on a patch release, `cargo publish --workspace
---dry-run --locked` in a fresh `CARGO_TARGET_DIR`),
-the paced publish and the stability policy. The maintainer runs every publish by hand. Never tag,
-publish or bump the version unasked.
+Cut a release: `docs/developing/releasing.md` holds the order (bump the version, every requirement,
+henad-dylib's version and its `=` requirement on the facade, and the template's four, and on a
+breaking release the facade README's line, the guide's admonitions and its typed dependency
+snippets, regenerate `docs/license.html`, `cargo update --workspace` at the root and for
+`examples/hot-host`, date the CHANGELOG, commit and push, run the checklist on that commit, then
+tag), the checklist the maintainer copies into an issue per release (both verified packaging passes
+in a fresh `CARGO_TARGET_DIR`, the second with the facade's features, `gh workflow run ci.yml --ref
+<branch>` for the `downstream`, `msrv`, `features`, `docs` and `hot` jobs, a native check on the
+pinned nightly, `cargo semver-checks`, a WGSL diff and a review of the hidden items another crate
+calls on a patch release, `cargo publish --workspace --dry-run --locked` in a fresh
+`CARGO_TARGET_DIR`), the
+paced publish (henad-hot before henad-app and the facade, and henad-dylib last, from outside the
+workspace on a copy of the root lock) and the stability policy. The maintainer runs every publish
+by hand. Never tag, publish or bump the version unasked.
 Regenerate the third-party licence page: `cargo about generate about.hbs -o docs/license.html`
 (needs `cargo-about`, pinned to 0.9.1 in CI; the `lint` job fails when the committed page and the
 dependency tree disagree). A crate shipping two files under one licence gets a `clarify` entry in
@@ -462,9 +489,16 @@ would otherwise outrank the `RUSTFLAGS` it sets.
 - `HENAD_REQUIRE_GPU=1` turns "no adapter on this machine" from a silent test skip into a failure.
   CI sets it on all three platforms, so run the GPU tests with it before calling them green. The
   Linux runner gets lavapipe from `templates/model-project/scripts/install-lavapipe.sh`.
+  `hot-check` reads it too, and without it skips the GPU halves of its checks on a machine with no
+  adapter.
 - `HENAD_DUMP_WGSL=<dir>` writes every shader the engine compiles to `<dir>/<label>.wgsl`. Each
   file holds the module composed from a shader's `#import`s and re-emitted by naga. A validation
   error quotes that text, and its line numbers do not match the shader as written.
+- `HENAD_HOT_CHECK=1` makes `run_native` of an app built with henad-app's `hot` feature run the
+  self-check of the dev host its options hold, and return before any window opens: warm-up, one
+  rebuild and load, and the plugin's ids compared with the set's. Set to anything but empty or `0`,
+  as `HENAD_REQUIRE_GPU` is. Options without a dev host fail it. `check_hot.sh` runs hot-host's app
+  with it, and the template's `scripts/ci.sh hot` sets it.
 - `EGUI_INSPECTION=1` with `--features inspection` opens the app's inspection port on 5719, which
   the egui MCP server drives.
 
@@ -476,23 +510,37 @@ flat `Vec`s, rayon), not from unsafe tricks. The workspace `Cargo.toml` also ena
 `clippy::` lint set (`unwrap_used`, `indexing_slicing = "allow"` is a deliberate exception,
 `missing_errors_doc`, etc.) — run `./check.sh` rather than guessing whether something will pass CI.
 
-The eight published crates set `#![warn(missing_docs)]` at the top of `lib.rs`, after the `doc_cfg`
-attribute, and clippy's `-D warnings` makes it an error. Every public item of a published crate
-takes a doc comment, fields and enum variants included. The tutorial, the template and the binaries
-are outside the lint. On wasm32 only CI's clippy over henad-app and the facade fails on it, and the
-wasm32 typecheck of `./check.sh` prints a web-only item of another crate as a warning.
+Beside the generated shader bindings, `unsafe` code sits in two places, and nowhere else.
+henad-hot's `load.rs`, the dev host's loader, is declared under `#[expect(unsafe_code, reason =
+..)]` and holds exactly three `unsafe` blocks: `Library::new`, the `extern "C"` header symbol and
+the Rust-ABI models symbol. Each carries a `// SAFETY:` note naming the guard that ran before it,
+and a loaded library is leaked with `Box::leak`, never unloaded (`mem_forget` is linted). The other
+is the expansion of `export_models!` in a model crate: two `#[unsafe(no_mangle)]` functions,
+`__henad_plugin_header_v1` and `__henad_plugin_models_v1`, each under an item-level
+`#[allow(unsafe_code)]`, as `include_shaders!` allows the lint over the bindings. Their names end in
+`PluginHeader::ABI`, and a `const` assertion in `load.rs` holds the two to it. A crate under
+`#![forbid(unsafe_code)]` rejects both functions.
+
+The nine published workspace crates set `#![warn(missing_docs)]` at the top of `lib.rs`, after the
+`doc_cfg` attribute, and clippy's `-D warnings` makes it an error. henad-dylib, published from
+outside the workspace, sets it in its manifest's `[lints.rust]`. Every public item of a published
+crate takes a doc comment, fields and enum variants included. The tutorial, the template,
+`examples/hot-host` and the binaries are outside the lint. On wasm32 only CI's clippy over
+henad-app and the facade fails on it, and the wasm32 typecheck of `./check.sh` prints a web-only
+item of another crate as a warning.
 
 henad-compute, henad-explore, henad-app, henad-models, the tutorial (its `lib.rs` and
-`tests/parity.rs`), the template's `src/lib.rs` and the facade's `tests/facade_paths.rs` set
-`#![recursion_limit = "256"]`. Proving a type that holds wgpu handles `Send` there overflows the
-default 128, which the pinned nightly reports as the future-incompatible
+`tests/parity.rs`), the template's `src/lib.rs`, `examples/hot-host/src/lib.rs` and the facade's
+`tests/facade_paths.rs` set `#![recursion_limit = "256"]`. Proving a type that holds wgpu handles
+`Send` there overflows the default 128, which the pinned nightly reports as the future-incompatible
 `recursion_depth_exceeding_limit`. A new crate root or test that proves a GPU state `Send` takes
 the same line. The release checklist's native check on that nightly finds one that lacks it, and
 the tutorial's `tests/snippets.rs` holds the template's line to the tutorial's.
 
 Two rules no lint enforces. Every public type of henad-core, henad-compute, henad-models,
-henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait object, a
-model's associated types or a whole graph writes its own impl ending in `finish_non_exhaustive`, as
+henad-explore, henad-app and henad-hot implements `Debug`. A type that holds a closure, a trait
+object, a model's associated types or a whole graph writes its own impl ending in
+`finish_non_exhaustive`, as
 `ModelEntry`, `Network` and the engine states do. So does a type holding a payload, such as cells,
 lanes, positions or a shader's source, and it prints sizes and labels in their place, as `Grid2D`,
 `PassSpec` and `PointSnapshot` do. `cargo clippy -- -W missing_debug_implementations`
@@ -504,23 +552,28 @@ crate that has shadowed them.
 
 ## Architecture
 
-The workspace has 8 crates, and the tutorial crate beside them:
+The workspace has 9 crates, and the tutorial crate beside them. Two packages sit outside it:
 
 ```
 henad-core ─┬─ henad-build      (build dependency of every crate with WGSL or a stamp)
-            └─ henad-compute ─┬─ henad-models
-                              └─ henad-explore ─┬─ henad-cli
-                                                └─ henad-app
-henad (facade): core, compute and explore, plus models, app and cli behind features
+            ├─ henad-compute ─┬─ henad-models
+            │                 └─ henad-explore ─┬─ henad-cli
+            │                                   └─ henad-app
+            └─ henad-hot        (on henad-core and henad-compute, native only, behind hot)
+henad (facade): core, compute and explore, plus models, app, cli and hot behind features
 henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
-henad-compute  engines, runners, model entries and sets, include_shaders!
+henad-compute  engines, runners, model entries and sets, include_shaders!, grid rules
 henad-models   the ten example models, and a path dev-dependency of henad-explore
-henad-explore  sweeps, searches and the testing kit
+henad-explore  sweeps, searches, the testing kit and model files
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models
+henad-hot      the dev host: plugin header, export and dev-host macros, cargo driver, guard, loader
 henad          the facade, one module tree over the others, the crate a program depends on
 henad-tutorial the first-model guide's finished code, in examples/tutorial, on the facade alone
+
+henad-dylib    (excluded, published) Henad as one Rust dylib, `pub use henad;` with `hot`
+hot-host       (excluded, unpublished, examples/hot-host) Henad's own dev host, and its test bed
 ```
 
 The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
@@ -538,13 +591,23 @@ and `cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Ever
 between Henad crates that the normal graph does not hold is named here: today the one from
 henad-explore to henad-models, for its tests, the one from henad-models to henad-explore with its
 `testing` feature, for the kit over the example models, and the ones from henad-cli and henad-app
-to henad-models, for their unit tests without the feature. The pair between henad-models and
+to henad-models, for their unit tests without the feature. henad-models also takes henad-compute
+again as a dev-dependency, with `runtime-wgsl`, a feature on an edge the normal graph holds.
+henad-app and henad-cli take henad-explore with `model-files`. The pair between henad-models and
 henad-explore is the one dev-only edge against the dependency direction. Neither normal graph
 reaches the other, each crate compiles once, and packaging strips both edges. Neither package's
 own tests then build from its tarball. henad-explore reaching
 an example model outside its tests needs the maintainer's approval as a new edge. henad-tutorial
 depends on the facade and, to build, on henad-build. Its tests take the facade again with
-`example-models` and `testing`, and it names no other Henad crate.
+`example-models` and `testing`, and it names no other Henad crate. henad-hot depends on
+henad-core and henad-compute. henad-app takes it behind its own `hot` feature, an edge #49 approved,
+and the facade behind `hot`, each in its native target table. The facade's `hot` turns on `app` and
+henad-app's `hot`. Outside the workspace, henad-dylib depends on the facade alone, at `=X.Y.Z` with
+`hot`, and hot-host on the facade, henad-models, henad-dylib and henad-build by path, and under
+`check` on its own `generation` crate. No workspace member depends on henad-dylib, as
+`scripts/check_packaging.sh` checks. A `--workspace` build would select it as a primary package,
+cargo builds a primary package with a static std, and every member linking it would fail with
+"cannot satisfy dependencies so `std` only shows up once".
 
 - **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
   GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
@@ -581,6 +644,12 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `code_hash()` is that hash for runtime code and the registering crate's source hash for compiled
   and plugin code. The hidden `__into_plugin` marks a compiled source as a plugin's. Equality
   covers the origin and the code.
+  `diagnostic.rs` holds `CodeDiagnostic` (severity, message, file, byte span, line and character
+  column counted from 1, and notes), `#[non_exhaustive]` and built through `error` and the `with_`
+  methods, with `at(text, span)` reading the line and column from a text, and the
+  `#[non_exhaustive]` `DiagnosticSeverity`, whose one variant is `Error`. Its `Display` writes
+  `file:line:column: severity: message`. `helpers::check_choice_options` is the option-name check
+  `choice_param` panics on, for options read at run time.
   Also the `Grid2D<T>`
   double-buffered SoA grid (`grid.rs`),
   the counting-sort `SpatialHash` and the `HashGrid` cell geometry both backends share
@@ -707,7 +776,10 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   copies, the files the entry points import (`imported_files`, through `wgsl_bindgen`'s
   `DependencyTree`), the stamp and the two generated files. `stamp/` holds the build stamps:
   `stamp_commit` for a host or model crate, and the hidden `stamp_engine_commit` (henad-explore)
-  and `stamp_source_hash` (henad-compute, henad-models). `stamp/mod.rs` picks the source of a
+  and `stamp_source_hash` (henad-compute, henad-models). `stamp_commit` alone also sets
+  `HENAD_BUILD_FEATURES` from `CARGO_CFG_FEATURE` (Cargo 1.85 and later), the package's features
+  comma-separated, which `dev_host!` reads to build a plugin with the host's features. A Cargo
+  without the variable sets none. `stamp/mod.rs` picks the source of a
   stamp by `StampScope`: a package's `.cargo_vcs_info.json` first, then git when
   `git ls-files --error-unmatch Cargo.toml` succeeds, and for the engine only when `--show-prefix`
   is `crates/henad-explore/`. `stamp/files.rs` lists and hashes the files under `src` and the
@@ -755,7 +827,10 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   id, at its position, and returns it, or appends the entry and returns `None`, stamping as
   `insert` does. The `register_*` functions are generic, and the engines and kernels monomorphise
   in the crate that calls them. The GPU grid engine is the exception. henad-compute compiles it
-  once, and only `GpuGridState<M>`'s forwarders and the model's hooks monomorphise in the caller.
+  once, and only the model's hooks monomorphise in the caller. `register_gpu_grid_model` reads one
+  `Arc<GpuGridSpec>` from the model and passes it to the crate-private `ModelEntry::from_grid_spec`,
+  whose builds and demand share it and which boxes the engine itself, as a grid rule's entry does.
+  `GpuGridState<M>` is the adapter a test or a host builds directly.
   henad-compute instantiates no model outside its own tests.
   `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for henad-explore's test harnesses
   alone. The hidden `ModelEntry::__into_plugin` marks an entry as a plugin's, and only tests call
@@ -808,7 +883,8 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
     reads a spec from `M` and forwards every call. `GpuGridSpec` and `GpuGridEngine` are
     `pub(crate)`. `demand`, `max_storage_bindings` and the contract asserts read the spec. The
     engine computes each pass's workgroups and its buffer bytes at construction, and a step calls
-    no hook.
+    no hook. `GridHooks::step_params_bytes` takes the run's seed, which a model type ignores and a
+    grid rule writes into its uniform block.
     `gpu/tests/parity.wgsl` is the parity test's shader, with a `CODES` array that references
     each boundary and table code the test reads.
     `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`
@@ -832,6 +908,79 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
     and `gpu/primitives/` are engine internals and are counterparts of each other, while
     `henad-core/src/authoring/primitives/` is the model-author-facing vocabulary and is a
     counterpart of its own `wgsl/` directory instead.
+  - Behind the `runtime-wgsl` feature (naga 30 and naga_oil 0.23 with `default-features = false`,
+    native and wasm32), `gpu/compose.rs` is the one module that calls naga_oil, decision 9 of #49.
+    `compose_wgsl` adds the shared modules in `SHARED_WGSL_MODULES` order and then the caller's
+    `#define_import_path` modules, composes with `make_naga_module`, validates with every flag and
+    capability and writes with `WriterFlags::empty()`, the steps of `wgsl_bindgen` 0.23.3's
+    `EmbedSource`. A stock shader composes to its `SHADER_STRING`, whose raw-string literal opens
+    with one extra `\n`. A directive check reads every file first. It accepts a one-line item
+    `#import` of a known module and a module's `#define_import_path`, and refuses every other `#`
+    line, a `#`, `::` or `"` elsewhere in code, `enable`, `requires` and `diagnostic`, `virtual` and
+    `override`, `@binding(auto)` and naga_oil's own name decoration. naga_oil panics decoding a
+    decoration it did not write, as on `override fn pcg_hashX_naga_oil_mod_X1X(`. The call into
+    naga_oil also runs inside `catching`, a backstop on native. Diagnostics point into the caller's
+    text (see the GPU traps). `runtime_composition_matches_build_time_shader_strings`
+    (`gpu/tests/compose.rs`, henad-compute's seven entries) and henad-models'
+    `runtime_composition_matches_every_stock_shader` and
+    `compose_never_panics_on_the_mutation_corpus` (`src/tests/runtime_parity.rs`, 3600 edits) hold
+    it. Keep them.
+  - `gpu/runtime_grid/` is the grid rule. `GridRule` (`#[non_exhaustive]`, public fields: id, name,
+    description, params, `RuleState`s with a label, a colour and an optional `initial` f32 parameter
+    id, `Boundary`, default width and height, step text) compiles into a `CompiledGridRule`.
+    `GridRule::life()` returns `LIFE_STEP` (`life_step.wgsl`, outside `ENTRY_POINTS`) with Dead,
+    then Alive at the share `density`. `compile` checks the declarations first (`checks.rs`, public
+    as `check_declarations`, each problem with the `RuleDeclaration` it is about: the id grammar,
+    sides up to `MAX_GRID_SIDE`, `MAX_STATES`, `MAX_PARAMS`, parameter ids outside WGSL's reserved
+    words, `width`, `height`, `seed`, `tick`, the grid's two and `henad_`, a default within its
+    bounds, a positive finite step, choice options that `check_choice_options` passes, percent on
+    an f32 alone, one constant per state outside the template's names and WGSL's reserved words,
+    an f32 `initial`, one state without a share). Then the text (`MAX_STEP_BYTES`, a template name
+    or a `henad_` name declared again, a WGSL predeclared name
+    (`naga::keywords::wgsl::BUILTIN_IDENTIFIERS`) declared at module scope, where it would replace
+    the built-in in the template's own lines, `@group`, `@binding` and an entry point, blanks or a
+    comment after the `@` included, and a `step_cell`). It composes the text after the template
+    (`template.rs`) through `compose`, whose base is the template's length, reads naga_oil's header
+    offset back from the template's `neighbor`, and walks the IR of every function of the text, and
+    once each imported function it calls. The walk refuses a loop, an atomic, a barrier and any
+    other statement but `if`, `switch`, a store and a call, a store outside the function's locals, a
+    pointer argument and the text's own `private` variables, and a reference to an engine buffer
+    other than `params`. A read of `state_out` or `tick_out` races the other cells, and one of
+    `state_in` by index reads past the grid as the backend's bounds policy decides. It also refuses
+    a module-scope variable outside `private`, a binding, an entry point other than `main`, a
+    function whose locals pass `MAX_FUNCTION_BYTES` (8192), the shader's `private` variables past
+    `MAX_PRIVATE_BYTES` (8192, the template's `henad_cell` included), a value or constant past 8192
+    bytes, and a `step_cell` whose one call runs more than `MAX_STEP_COST` (65536) expressions and
+    statements, each callee's body counted once per call (`function_costs`, in handle order, since
+    naga puts a callee before its caller). Without that limit, a chain of helpers each calling the
+    one before twice holds no loop and runs 2^60 calls. The template comes first, so the text's
+    lines keep their numbers after the template's. It imports `pcg_hash`, `offset_cell`, `TORUS` and
+    `BOUNDED` under `henad_` and `HENAD_` aliases, and declares `Params` (`width`, `height`, `seed`,
+    then one 4-byte field per parameter, `f32` for an F32 and `u32` otherwise), the five bindings
+    (`state` and the one-word `tick` ping-pong, `params` is a uniform), `NUM_STATES`, one
+    upper-snake constant per state, `neighbor` (state 0 past a bounded edge), `moore_count`,
+    `von_neumann_count`, and `main`, which seeds the cell's `rng` from `pcg_hash(seed ^
+    pcg_hash(index ^ pcg_hash(tick)))`, clamps the result below `NUM_STATES` and advances the tick.
+    The engine owns the display shader (a palette const) and the reduce shader (one count per state,
+    one stat per state), and a problem in either has no place. `CompiledGridRule::entry(code)`
+    builds a `GpuGridSpec` with `RuleHooks` and calls `ModelEntry::from_grid_spec` with
+    `ModelSource::runtime`. The hooks seed the cells on the CPU from `grid_init_rng`, the states
+    with a share taking the low words in order below the running f32 total times `u32::MAX`, so the
+    Life rule starts from `game_of_life::init`'s cells, and pad the uniform block to 16 bytes.
+    `GridRule::CODE_FORMAT` (`henad-grid-rule/1`) is the code's format, and goes up with any change
+    to what a rule's text does. `gpu/tests/runtime_grid.rs` holds
+    `naga_oil_span_encoding_is_unchanged`, `a_syntax_error_points_at_the_user_line_and_column`,
+    `an_error_inside_the_template_has_no_user_line`, `a_loop_in_user_code_is_refused_at_its_line`,
+    `bindings_and_foreign_directives_in_user_text_are_refused`,
+    `shared_writes_and_barriers_are_refused`, `oversized_arrays_and_text_are_refused`,
+    `a_call_chain_past_the_work_limit_is_refused`, `a_param_named_seed_is_refused`,
+    `a_parameter_its_kind_cannot_hold_is_refused`, `two_states_with_one_constant_name_are_refused`,
+    `the_params_block_matches_the_naga_layout`, `a_grid_rule_binds_at_most_five_storage_buffers`,
+    `a_result_past_the_last_state_is_clamped` and `a_random_rule_draws_a_fresh_stream_each_tick`
+    (each tick's Alive count against the stream recomputed on the CPU), and henad-models holds
+    `the_life_starter_matches_game_of_life` (128 by 128, 64 ticks, the Alive count every tick and
+    the cells every 8, read back through the display) and `a_grid_rule_conforms` (the Life starter
+    and a rule that draws every cell afresh each tick). Keep them.
 
 - **henad-models**: concrete simulations — `sir.rs` and `game_of_life.rs` (`GridModel`), `boids/`
   (`AgentModel` over `NoField`), `ants/` (`AgentModel` over `ScalarField`, the one composite
@@ -1000,6 +1149,26 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `a_manifest_carries_runtime_code_inline` and `two_codes_under_one_label_are_listed_apart`
   (`src/tests/provenance.rs`), `a_search_resume_refuses_changed_code` (`src/tests/search.rs`) and
   `schema_json_names_code_only_for_runtime_models` (`schema.rs`) hold it. Keep them.
+  Behind the `model-files` feature, which turns on henad-compute's `runtime-wgsl`, `model_file.rs`
+  holds `ModelFile`, a grid rule as one TOML file. `parse` reads line ends as `\n` and maps every
+  span back to the text as passed (`LineEnds`). It reads the header keys first, ignoring the rest,
+  so a later version or another kind reads as one before an unknown key is refused, then refuses
+  an unknown key in every table. The file holds `format = "henad-model"`, `format_version = 1` and
+  `kind = "gpu_grid"`, then `id`, `name` and `description`, `[grid]` (width, height, boundary),
+  `[[state]]` (label, a colour of 3 or 4 bytes, `initial`), `[[param]]` in the `--params --json`
+  vocabulary, and `[step] wgsl`, a string the file holds verbatim, as a `'''` literal does. A step
+  holding `'''` is refused by `parse` and `from_rule` alike, since the canonical text could not
+  hold it. `from_rule` (which reads its canonical text back through `parse`), `from_code`, `rule`,
+  `to_toml` (the canonical text: keys in a fixed order, one form per value, the step verbatim),
+  `code` (a `ModelCode` of `GridRule::CODE_FORMAT` over the canonical text) and `entry`, which runs
+  `GridRule::check_declarations` and places each problem at its table or key, then compiles and
+  places each problem of the step at its file line by the string's start offset. `ModelFileError`
+  is `Toml`, `Format` or `Rule`, each of `CodeDiagnostic`s. `specs/models/` holds the example model
+  files, which the spec tests, reading the top level of `specs/`, leave alone.
+  `src/tests/model_file.rs` holds `a_model_file_round_trips_through_to_toml`,
+  `unknown_keys_are_refused`, `a_declaration_error_points_at_its_table`,
+  `the_canonical_code_ignores_formatting`, `a_wgsl_error_points_at_its_file_line` and
+  `every_example_model_file_loads`. Keep them.
   `progress.rs` is the `Progress` trait the host renders. The library never prints. `device.rs`
   (`acquire_headless`) acquires a GPU device with no window or surface, at the WebGPU baseline
   raised by `gpu::limits::raise`. An adapter below the baseline, as a GL adapter can be, gets
@@ -1156,8 +1325,18 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `RunSetup::from_replay`, and a setup's entry has to declare the same `schema_hash`. `AppError` is
   native only and `WebStartError` wasm only. henad-app re-exports no eframe item. `state`, `ui`, `HenadApp` and
   `wgpu_configuration` are private. `HenadApp` (`lib.rs`) owns the `SimThread` and polls snapshots each frame.
-  `HenadApp::new` takes the options and hands the opening to `AppState::open`, and `wgpu_configuration` takes the set's
-  `GpuNeeds` for the device request. henad-models and the binary's env_logger are optional behind the default
+  `HenadApp::new` takes the options and hands the opening to `AppState::open`, and
+  `wgpu_configuration` takes `AppOptions::gpu_needs`, the set's `GpuNeeds`, for the device request.
+  `hot.rs`, behind the native-only `hot` feature, holds `HotHost`. `AppOptions::hot_reload(DevHost)`
+  makes `HenadApp::new` start the dev host's warm-up on the thread `henad-plugin-build`, `logic`
+  polls it, the System tab's Dev host section shows its `HotStatus` (Building, Ready, Failed with
+  the reason) and, once the warm-up has returned the dev host, its package and features, and its
+  drop cancels and joins a build still running. Options with a dev host merge
+  `GpuNeeds::ADAPTER_MAXIMUM` into the request. With `HENAD_HOT_CHECK` set, `run_native` runs
+  `hot::self_check` (`DevHost::check` against the set) first and returns its outcome, an `AppError`
+  for a failure or for options without a dev host, before any window. `From<HotError> for AppError`
+  lets a `main` write `henad::dev_host!()?`.
+  henad-models and the binary's env_logger are optional behind the default
   `example-models` feature, which the `[[bin]]` requires, and `main.rs` builds the official options over
   `example_models()`: "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and `__official()`. The
   eframe app name "Henad" names the native storage folder, which left 0.2.0's `Henad-Engine` behind,
@@ -1416,9 +1595,11 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   nothing but the `params!` forward and its hidden `__macro_support`: the root items and macros,
   `params`, `stats`, `views`, `action`, `gpu`, `runner`, `engine`, `explore`, `benchmark`
   (native), `authoring` with its `primitives` and `prelude`, the
-  gated `models` (`example-models`), `app` (`app`), `cli` (`cli`) and `testing` (`testing`), and
-  `henad::prelude`. Each re-export fixes its item's one documented path, and the guides name items
-  by these paths alone. `henad::explore` keeps henad-core's planning modules as modules (`spec`,
+  gated `models` (`example-models`), `app` (`app`), `cli` (`cli`), `testing` (`testing`), `rules`
+  (`model-files`: the grid rules, the model files and `compose_wgsl`) and `hot` with the
+  `export_models!` and `dev_host!` macros (`hot`), and `henad::prelude`. Each
+  re-export fixes its item's one documented path, and the guides name items by these paths alone.
+  `henad::explore` keeps henad-core's planning modules as modules (`spec`,
   `plan`, `search` and the rest), and `henad::authoring` globs henad-core's `authoring::model`
   modules flat, under `#![deny(ambiguous_glob_reexports)]`, so a name two of them share fails the
   build. `binding` is the exception. The facade names its `BindingDecl` and `BindingKind`, as it
@@ -1426,8 +1607,10 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `fmt_bytes` out. `params!` is a macro of the facade's own that forwards to henad-core's through
   the hidden `__macro_support`. A `use` of henad-core's would bring its `params` module along, and
   docs.rs would show that module at `henad::params`. The other root macros are plain re-exports.
-  henad-cli sits under a native target table, and `cli` adds nothing on wasm32. docs.rs builds the
-  facade for wasm32 too, without atomics, for the app's web entry point. No feature changes a bound,
+  henad-cli and henad-hot sit under a native target table, and `cli` adds nothing on wasm32. `hot`
+  turns on `app` and henad-app's `hot`, and adds nothing else on wasm32. docs.rs builds the facade
+  for wasm32 too, without atomics, for the app's web entry point.
+  No feature changes a bound,
   a layout or a result. `examples/complete.rs` is the program a newcomer reads first, and
   `README.md`, which the crate doc includes with `app` and `example-models` both on, holds a copy in
   a `rust,no_run` fence.
@@ -1443,8 +1626,9 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   names. It defines no model, needs no build script and never builds on a device, and its parts
   that need an entry compile in a module no test calls. That module also holds the `gpu_build`
   and `scoped_steps` regions `guide/library.md` includes, the second through a `rayon`
-  dev-dependency. Its `named_only` module names items whose path is the whole check. Keep all
-  three.
+  dev-dependency. Its `named_only` module names items whose path is the whole check, the grid rule
+  items under `model-files` among them, and under `hot` expands `export_models!` under the
+  workspace's `deny(unsafe_code)`. Keep all three.
 - **henad-tutorial** (`examples/tutorial`, `publish = false`): the finished code of the five pages
   under `docs/guide/first-model/`, which include each file whole. `life.rs`, `foraging/`,
   `virus.rs`, `gpu_life/` and `gpu_foraging/` hold the models `life`, `foraging`, `virus`,
@@ -1470,11 +1654,118 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   `package` job excludes it,
   `scripts/check_packaging.sh` reads `crates/` alone, and `about.toml`'s `[private] ignore` keeps
   it off the licence page. Keep the five test files.
+- **henad-hot**: the dev host, native only. On wasm32 it holds only the plugin header and the two
+  macros. A project's app built with its `hot` feature under `[profile.hot]` links Henad dynamically
+  through henad-dylib, and its own library statically. `DevHost::rebuild` builds that library again
+  as a Rust `dylib`, the plugin. The plugin links the henad-dylib the app runs: one std, rayon, wgpu
+  and Henad serve both, a plugin panic unwinds into the app's `catching`, and a plugin GPU model
+  builds on the app's device. `header.rs` holds `PluginHeader` (`#[repr(C)]`: magic, ABI version,
+  henad-hot's version, the FNV-1a of `rustc -vV` its `build.rs` records, and an anchor address) and
+  `anchor()`, the address of a static. `lib.rs` holds `export_models!` (an `extern "C"` header
+  function, whose header is a `const` evaluated in the plugin, and a Rust-ABI models function, both
+  named with `_v1`), `dev_host!` (manifest directory, package and `HENAD_BUILD_FEATURES`) and
+  `__macro_support`. `cargo.rs` runs `cargo rustc --manifest-path .. --package .. --lib --crate-type
+  dylib --profile <profile> --no-default-features --features <host's> --message-format json --color
+  never` with `RUSTUP_AUTO_INSTALL=0`, the cargo `CARGO` names, else `cargo`, in the working
+  directory the process had when the dev host was created. It reads `compiler-artifact` and
+  `compiler-message` lines into `Artifact`s and `BuildDiagnostic`s, drains standard error on a
+  thread of its own into a 40-line tail and reports `HotProgress::WaitingForLock` once.
+  `package_dylib` picks the plugin among the artifacts, which cargo reports at their uplifted paths
+  (`target/hot/libhot_host.dylib`), and its tests read lines recorded from cargo 1.97. A
+  `BuildCancel` ends the build: the process group on Unix (rustix, `process_group(0)`), cargo's job
+  object on Windows. A cancel before cargo starts or before the load stops the call too, and the
+  next `warm_up`, `rebuild` or `check` clears it. `guard.rs` refuses before each build a `rustc -vV`
+  other than at the start or than the one that built henad-hot, and a changed Cargo configuration
+  file (`.cargo/config.toml` and `.cargo/config` up the tree from the working directory and in
+  Cargo's home, `GuardRefusal::CargoConfigChanged`). `RUSTFLAGS` in the environment stays fixed for
+  the process. After the build it refuses a henad-dylib cargo did not report fresh, one outside the
+  profile directory of the host's executable (its own directory, or the parent of a test's `deps` or
+  an example's `examples`) and that directory's `deps` (`HenadDylibElsewhere`, another profile,
+  target or target directory), one whose file (path, length and FNV-1a) differs from the warm-up's,
+  and at the warm-up one modified after the earlier of the executable's modification and the dev
+  host's creation. On Linux it also reads `/proc/self/maps` and refuses a henad-dylib that is not
+  the file the process maps (`HenadDylibChanged`, or `HenadDylibNotLoaded` for a host that runs
+  none), since glibc binds a plugin to a loaded library by soname. macOS and Windows show no such
+  mapping without `unsafe` code, and there the guard rests on `dev_host!` running first in `main`.
+  After the load it checks the header, the anchor included (`GuardRefusal::SecondImage`). `load.rs`
+  is the loader (see Lints). It reads the plugin's bytes, refuses a plugin whose symbol table
+  defines the allocator shim (`GlobalAllocator`, a defined symbol ending in `__rust_alloc`, as rustc
+  1.97 mangles it, or `__rg_alloc`, and `UnreadableLibrary` for a file the reader cannot parse),
+  writes the bytes into a fresh file and reads the copy back (`CopyDiffers` when its length or
+  FNV-1a differs, since `fs::copy` clones on APFS and evcxr saw a clone go stale), then opens the
+  copy, checks the header and calls the models function under `catching`. `symbols.rs` reads the
+  defined symbols of a 64-bit little-endian Mach-O (`LC_SYMTAB`, `N_SECT` entries), ELF (`.symtab`
+  and `.dynsym`, entries not `SHN_UNDEF`) or PE32+ file (export names), with no new dependency.
+  `dev_host.rs` holds `DevHost` (`new`, `profile`, `package`, `features`, `cancel_handle`,
+  `warm_up`, `rebuild`, `check`) and `HotProgress`, whose `Loading` names the copy and the file
+  cargo built. A load writes the plugin to `henad-plugin-<package>-<pid>-<n>.<ext>` in a directory
+  of its own, `<profile directory>/henad-plugins/<package>-<pid>-<n>/`. The warm-up removes the
+  directories of ended processes (`remove_stale_loads`): a name that reads `<package>-<pid>-<n>`
+  exactly, another pid, and on Unix a pid that no longer runs. `rebuild` refuses an entry whose
+  build records no source hash.
+  The host and the plugin find henad-dylib and std through the library path `cargo run` sets, and a
+  dev host starts through `cargo run` alone. Its tests sit in `src/tests/`, among them a scripted
+  cargo on Unix (`a_cancel_ends_the_build_and_its_children`,
+  `a_cancel_before_the_build_starts_is_kept`) and the symbol reader on the test binary itself
+  (`a_definition_is_found_and_a_reference_is_not`).
+- **henad-dylib** (`crates/henad-dylib`, outside the workspace with a `[workspace]` of its own,
+  published): `crate-type = ["dylib"]`, a `lib.rs` of `pub use henad;`, and `henad = "=X.Y.Z"` with
+  `hot`. Cargo builds a dylib with `-C prefer-dynamic` only as a non-primary package, so a host
+  and its plugins reach it as a dependency and share the toolchain's libstd. It inherits nothing,
+  and `check_packaging.sh` holds its package fields and requirement to the workspace's.
+  `scripts/check_hot.sh` lints it on a copy of the root lock.
+- **hot-host** (`examples/hot-host`, `publish = false`, outside the workspace with a `[workspace]`
+  and a lock of its own, the lock the root's pruned): Henad's own dev host and the test bed of
+  henad-hot. `models()` (`src/lib.rs`) returns `example_models()`, and under `check` the fixtures of
+  `src/tests/fixture.rs` after them: `fixture_grid`, whose kernel copies its cell, panics or writes
+  `rayon::current_num_threads()` and whose live cells hold the generation, and `fixture_gpu`,
+  `GpuGameOfLife` with a `poison` parameter that shortens its uniform block. The generation comes
+  from `generation/` (package `hot-host-generation`, a member of hot-host's workspace), a
+  never-inlined function that host and plugin each link outside henad-dylib, as they link
+  henad-models. Under `hot` the library names henad-dylib (`use henad_dylib as _;`) and calls
+  `export_models!`. It takes the facade with `app` and `cli`, as a real dev host does, and
+  henad-models by path outside henad-dylib, so an edit to an example model reaches the next plugin.
+  `[profile.hot]` is `inherits = "release"`, the root's opt-level, `incremental` and `strip =
+  "none"`, with no `rpath`, equal to the template's (`check_packaging.sh`): Apple's linker refuses
+  to link against a stripped Rust dylib ("mis-aligned LINKEDIT string pool"), and a relative rpath
+  points one directory off for the binary cargo copies up. `src/main.rs` is the app binary
+  `hot-host`, the default run: the example models under "Henad Dev Host" with the official icon,
+  links and licence and `cli_command("hot-cli")`, and under `hot` `hot_reload(henad::dev_host!()?)`,
+  the dev host created first in `main`. `check_hot.sh` runs it with `HENAD_HOT_CHECK=1` and
+  `hot,check`, so a binary that links eframe and winit through henad-dylib links on arm64 macOS
+  (bevy#11779) and passes its self-check. `src/bin/hot-check.rs` runs as a `[[bin]]` with `hot` and
+  `check`, since a test binary resolves dev-dependency features, and `check_hot.sh` starts it twice
+  through `cargo run`.
+  The first run checks, in order, `a_plugin_build_uses_the_host_features`,
+  `a_plugin_build_from_the_running_host_keeps_henad_dylib_fresh`,
+  `the_plugin_binds_to_the_host_image`,
+  `every_example_model_from_the_plugin_steps_like_the_static_one` (50 ticks, stats every ten and a
+  CPU model's state, ticks and population alone for a model that does not replay exactly),
+  `a_plugin_panic_is_a_located_fault`, `a_plugin_pass_honours_the_lane_pool_width`,
+  `a_plugin_gpu_model_builds_on_the_host_device`, `the_kit_passes_on_plugin_entries`,
+  `a_plugin_with_a_global_allocator_is_refused` (a `#[global_allocator]` appended to
+  `generation/src/lib.rs`, refused before any load), `a_failed_build_is_reported_at_its_line` (a
+  type error in `generation/src/lib.rs`, then a load) and
+  `an_edit_outside_henad_dylib_reaches_the_next_load` (20 edits of the generation, restored after,
+  each read from the plugin's copy and not the host's, each copy in a directory of its own and
+  hashing as cargo's output, with the resident memory printed per load). The second, `hot-check
+  relink`, loads a plugin, sets the modification time of
+  `crates/henad-dylib/src/lib.rs` to now and runs `a_changed_henad_build_is_refused_before_loading`:
+  the build that rebuilds henad-dylib under the running host is refused before any load
+  (`HenadDylibRebuilt`, or on Windows a failed link naming henad-dylib), the loaded plugin and a
+  linked model step on, and the next build is refused again or, on macOS where the relink can write
+  the same bytes, loads. It runs last, and the next `cargo run` relinks the binary. Keep them.
 - **The template** (`templates/model-project`, package `my-model`, `publish = false`): the project
   a user fetches from a release tag and builds on the published crates, outside the workspace
-  through the root `exclude`. It depends on `henad` and `henad-build` alone, at the workspace's
-  major and minor (`"0.3"`), with the app and the CLI behind its own default
-  features `app` and `cli`. `src/vote.rs` (`Vote`, a `GridModel`) and `src/gpu_vote/` (`GpuVote`,
+  through the root `exclude`. It depends on `henad` and `henad-build`, and on `henad-dylib` in its
+  native target table behind its `hot` feature, all at the workspace's major and minor (`"0.3"`),
+  with the app and the CLI behind its own default features `app` and `cli`. `hot = ["app",
+  "henad/hot", "dep:henad-dylib"]` is the dev host, run as `cargo run --profile hot --features hot`.
+  `src/hot.rs` (`use henad_dylib as _;` and `henad::export_models!(crate::models);`) sits behind one
+  `#[cfg(all(feature = "hot", not(target_arch = "wasm32")))] mod hot;` line in `src/lib.rs`, and
+  `src/main.rs` creates the dev host first in `main` and passes it to `hot_reload` under the
+  feature, and a `hot` build keeps its console window on Windows. `[profile.hot]` (region `hot`)
+  equals hot-host's. `src/vote.rs` (`Vote`, a `GridModel`) and `src/gpu_vote/` (`GpuVote`,
   its `GpuGridModel` port seeded through `Vote::init`) follow the tutorial's import shape, and
   `models()` (`src/lib.rs`) inserts each on a line of its own. The test at the foot of `lib.rs`
   runs `assert_set_conforms` over `models()` and names no model. `src/main.rs` and
@@ -1483,15 +1774,20 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   and ends in `Ok(())`, so a crate without shaders deletes one line. `.cargo/config.toml` holds the
   wasm32 rustflags. `scripts/web-checks.sh`, which `scripts/build_web.sh` and the `lint-web` stage
   source, refuses an inherited `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` rather than drop them, and
-  prints the install line of a missing nightly. `scripts/ci.sh` runs the stages `lint`,
-  `lint-web`, `test` and `web` (all four without an argument), with `--locked` once a lock exists,
-  and `.github/workflows/ci.yml` runs them through `bash`, since a checkout from Windows keeps no
-  executable bit, under `HENAD_REQUIRE_GPU=1` on lavapipe. `.gitattributes` keeps the scripts and
-  the pins at LF line ends.
+  prints the install line of a missing nightly. `scripts/ci.sh` runs the stages `lint`, `lint-web`,
+  `test` and `web` (all four without an argument), and `hot` (`HENAD_HOT_CHECK=1 cargo run --profile
+  hot --features hot`) only when named. `lint`, `lint-web` and `test` take the features in its
+  `features` array, every feature but `hot`, so they build Henad linked as it ships. Each stage
+  passes `--locked` once a lock exists, and `.github/workflows/ci.yml` runs them through `bash`,
+  since a checkout from Windows keeps no executable bit, under `HENAD_REQUIRE_GPU=1` on lavapipe.
+  `.gitattributes` keeps the scripts and the pins at LF line ends.
   `scripts/install-lavapipe.sh` holds the Mesa and gfx-rs/ci-build pins, and Henad's own `test`
-  job calls it. `.github/dependabot.yml` groups `henad` and `henad-build`. `README.md` holds the
-  `fetch`, `rename`, `run` and `update` regions, `Cargo.toml` the `profile` region, and
-  `guide/your-project.md` and `guide/library.md` include them. The template ships no `Cargo.lock`,
+  job calls it. `.github/dependabot.yml` groups `henad`, `henad-build` and `henad-dylib`.
+  `README.md` holds the `fetch`, `rename`, `run`, `dev-host` and `update` regions, `Cargo.toml` the
+  `profile` and `hot` regions, and `guide/your-project.md`, `guide/library.md` and
+  `guide/hot-reload.md` include them. `cargo update -p henad -p henad-dylib` moves the Henad crates:
+  henad-dylib's exact requirement holds the facade back under `-p henad` alone, which then moves
+  nothing. The template ships no `Cargo.lock`,
   and its `.gitignore` never lists one.
   `rustfmt.toml` sets the 120 columns Henad formats at. Its `[profile.release]` equals the root's,
   which `scripts/check_packaging.sh` checks, and `./check.sh` never builds it.
@@ -1668,7 +1964,10 @@ is about not undoing them.
   own from its pass list — no constant, because wgpu's own advice is to request only what you need
   and a constant would be either short of a future model or dead headroom. For the example models
   it comes to 8, since `gpu_ants`'s step pass sits at exactly 8. `raise` takes the needs rather
-  than knowing them: henad-compute cannot see which models a host offers.
+  than knowing them: henad-compute cannot see which models a host offers. A dev host alone requests
+  `GpuNeeds::ADAPTER_MAXIMUM`, the adapter's own count, which henad-app merges in for options with a
+  dev host and `raise` clamps without its warning. A plugin's GPU model can bind more than the
+  models the app started with.
   The kit's `BaselineBuild`, run by the registry tests on a `Limits::default()` device from
   `headless_test_device`, holds the line, and asserts in the same breath that `capacity.rs` agrees.
   Build and declared demand pin each other, and an over-reported pass count fails there.
@@ -1725,6 +2024,16 @@ is about not undoing them.
   and `stepping::sample_stats` return `FaultKind::DeviceLost` once it is set, and a `Simulation`
   returns it in place of the errors the loss caused. Otherwise `--export-stats` and the benchmark
   step on a lost device and report the last stats it read.
+- **A naga span of a composed module is not a place in the file.** naga_oil keeps a module's index
+  above bit 21 of every span (`SPAN_SHIFT`, private in naga_oil, copied in `gpu/compose.rs`), and
+  parses each file behind an import header whose length it keeps to itself. It keeps each line but
+  writes every imported name decorated, so a column after one is off. `compose.rs` masks the index,
+  reads the header's length back from an anchor function whose line naga_oil leaves alone,
+  recomputes naga_oil's preprocessed text through its public `Preprocessor`, and maps a column by
+  aligning the tokens of the line naga read with the line as written, through naga_oil's
+  `Tokenizer`. A column counts characters. A validation error lists its spans from the function to
+  the expression at fault, and is placed by the last. `naga_oil_span_encoding_is_unchanged` and the
+  place tests of `gpu/tests/runtime_grid.rs` fail when naga_oil changes any of it.
 - **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
   henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
   `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as

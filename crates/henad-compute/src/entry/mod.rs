@@ -13,6 +13,8 @@
 
 mod set;
 
+#[cfg(feature = "runtime-wgsl")]
+pub(crate) use set::check_id_grammar;
 pub use set::{ModelLookupError, ModelSet, ModelSetError, ModelSetIter};
 
 use std::any::type_name;
@@ -43,7 +45,8 @@ use crate::fault::{BUILDING, Fault, catching};
 use crate::gpu::agent_engine::GpuAgentState;
 use crate::gpu::capacity::Demand;
 use crate::gpu::fault::catching_on;
-use crate::gpu::grid_engine::GpuGridState;
+use crate::gpu::grid_engine::GpuGridEngine;
+use crate::gpu::grid_spec::GpuGridSpec;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::{GpuContext, GpuNeeds};
 use crate::simulation::RunSetup;
@@ -353,6 +356,21 @@ impl ModelEntry {
         )
     }
 
+    /// Returns the entry of a GPU grid model with `declarations` and `source`, whose builds and demand share `spec`.
+    pub(crate) fn from_grid_spec(declarations: EntryDeclarations, source: ModelSource, spec: Arc<GpuGridSpec>) -> Self {
+        let needs = GpuNeeds::with_storage_buffers(spec.max_storage_bindings());
+        let build_spec = Arc::clone(&spec);
+        Self::new_gpu(
+            declarations,
+            source,
+            needs,
+            move |ctx, params, seed| -> Box<dyn GpuSimState> {
+                Box::new(GpuGridEngine::new(ctx, Arc::clone(&build_spec), params, seed))
+            },
+            move |params, limits| spec.demand(params, limits),
+        )
+    }
+
     /// Returns the entry that holds `declarations`, with the metadata of a model on `backend`.
     fn from_declarations(
         declarations: EntryDeclarations,
@@ -505,14 +523,7 @@ pub fn register_gpu_grid_model<M: GpuGridModel>() -> ModelEntry {
         replays_exactly: M::REPLAYS_EXACTLY,
     };
     let source = ModelSource::__from_type_path(type_name::<M>());
-    let needs = GpuNeeds::with_storage_buffers(GpuGridState::<M>::max_storage_bindings());
-    ModelEntry::new_gpu(
-        declarations,
-        source,
-        needs,
-        |ctx, params, seed| Box::new(GpuGridState::<M>::new_seeded(ctx, params, seed)),
-        GpuGridState::<M>::demand,
-    )
+    ModelEntry::from_grid_spec(declarations, source, Arc::new(GpuGridSpec::from_model::<M>()))
 }
 
 /// Returns an entry for the GPU agent model `M`.

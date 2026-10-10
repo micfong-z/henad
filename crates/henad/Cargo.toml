@@ -22,6 +22,8 @@ app = ["dep:henad-app"]
 cli = ["dep:henad-cli"]
 # The checks a model's tests run against its entry, at `henad::testing`.
 testing = ["henad-explore/testing"]
+# Grid rules, the model files that hold them, and the composer of their WGSL, at `henad::rules`.
+model-files = ["henad-explore/model-files"]
 
 [dependencies]
 henad-core = { workspace = true }
@@ -53,6 +55,6 @@ workspace = true
 
 # The wasm32 docs show the app's web entry point. They build without atomics, as henad-app's do.
 [package.metadata.docs.rs]
-features = ["example-models", "cli", "app", "testing"]
+features = ["example-models", "cli", "app", "testing", "model-files"]
 targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 rustdoc-args = ["--cfg", "docsrs"]

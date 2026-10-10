@@ -44,11 +44,11 @@ example-models = ["dep:henad-models"]
 
 [dependencies]
 # henad-compute gives the model set, `Simulation` for the exports, `GpuContext` and the panic hook. henad-explore
-# gives the benchmark, the headless device and the sweeps.
+# gives the benchmark, the headless device, the sweeps and the model files.
 henad-core = { workspace = true }
 henad-compute = { workspace = true }
 henad-models = { workspace = true, optional = true }
-henad-explore = { workspace = true }
+henad-explore = { workspace = true, features = ["model-files"] }
 # `string` sets the command name at run time, from `CliOptions`.
 clap = { workspace = true, features = ["string"] }
 anyhow = { workspace = true }

@@ -56,8 +56,10 @@ pub(crate) trait GridHooks: Send + Sync {
     /// Returns the initial contents of each ping-ponged buffer, one vector per label.
     fn seed_buffers(&self, width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>>;
 
-    /// Returns the step shader's uniform block as raw bytes.
-    fn step_params_bytes(&self, width: u32, height: u32, params: &[ParamValue]) -> Vec<u8>;
+    /// Returns the step shader's uniform block as raw bytes, for a run seeded with `seed`.
+    ///
+    /// A model type's block depends on the parameters alone, and a grid rule's holds a word of the seed.
+    fn step_params_bytes(&self, width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<u8>;
 
     /// Returns the uniform block of action `action` as raw bytes, for a press drawn from `seed`.
     fn action_params_bytes(&self, action: usize, width: u32, height: u32, params: &[ParamValue], seed: u32) -> Vec<u8>;
@@ -86,7 +88,7 @@ impl<M: GpuGridModel> GridHooks for ModelHooks<M> {
         M::seed_buffers(width, height, params, seed)
     }
 
-    fn step_params_bytes(&self, width: u32, height: u32, params: &[ParamValue]) -> Vec<u8> {
+    fn step_params_bytes(&self, width: u32, height: u32, params: &[ParamValue], _seed: Option<u64>) -> Vec<u8> {
         M::step_params_bytes(width, height, params)
     }
 
@@ -365,7 +367,7 @@ mod tests {
             spec.hooks.seed_buffers(12, 10, &params, Some(7)),
             vec![vec![12], vec![7]]
         );
-        assert_eq!(spec.hooks.step_params_bytes(12, 10, &params), vec![12, 10]);
+        assert_eq!(spec.hooks.step_params_bytes(12, 10, &params, Some(7)), vec![12, 10]);
         assert_eq!(spec.hooks.action_params_bytes(0, 12, 10, &params, 9), vec![0, 9]);
         let values: Vec<f64> = spec
             .hooks

@@ -282,7 +282,7 @@ jobs:
         run: |
           CARGO_TARGET_DIR="$RUNNER_TEMP/verify" cargo package --workspace --exclude henad-tutorial --locked
           CARGO_TARGET_DIR="$RUNNER_TEMP/verify-features" cargo package --workspace --exclude henad-tutorial --locked \
-            --features henad/example-models,henad/app,henad/cli,henad/testing
+            --features henad/example-models,henad/app,henad/cli,henad/testing,henad/model-files
           # The later steps read only the unpacked crates under `verify/package`. The two builds would hold several
           # gigabytes of the runner's disk while the template builds.
           rm -rf "$RUNNER_TEMP/verify/debug" "$RUNNER_TEMP/verify-features"
@@ -473,7 +473,7 @@ jobs:
       - name: Check
         run: |
           cargo check --locked -p henad
-          for feature in example-models app cli testing; do
+          for feature in example-models app cli testing model-files; do
             cargo check --locked -p henad --features "$feature"
           done
 
@@ -502,7 +502,7 @@ jobs:
       - name: Check
         run: |
           cargo +1.95 check --workspace --locked
-          cargo +1.95 check --locked -p henad --features example-models,app,cli,testing
+          cargo +1.95 check --locked -p henad --features example-models,app,cli,testing,model-files
 
   # The workspace's documentation, and every published crate's as docs.rs builds it. A pull request and the release
   # checklist's dispatch run it.

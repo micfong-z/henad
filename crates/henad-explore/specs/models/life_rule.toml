@@ -1,0 +1,45 @@
+# Conway's Game of Life as a grid rule, the rule `GridRule::life` returns.
+# At the same size, density and seed it steps through the cells of the example model `game_of_life`.
+format = "henad-model"
+format_version = 1
+kind = "gpu_grid"
+id = "life_rule"
+name = "Life rule"
+description = "Conway's Game of Life, written as a grid rule"
+
+[grid]
+width = 256
+height = 256
+boundary = "torus"
+
+# States are numbered in this order, and the step names them `DEAD` and `ALIVE`.
+[[state]]
+label = "Dead"
+color = [21, 21, 21, 255]
+
+[[state]]
+label = "Alive"
+color = [0, 230, 118, 255]
+initial = "density"
+
+[[param]]
+id = "density"
+label = "Initial Density"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.3
+step = 0.01
+
+[step]
+wgsl = '''
+// Conway's Game of Life. A live cell with two or three live neighbours stays alive, and a dead cell with exactly
+// three comes alive.
+fn step_cell(cell: u32, rng: ptr<function, u32>) -> u32 {
+    let alive = moore_count(ALIVE);
+    if (alive == 3u || (cell == ALIVE && alive == 2u)) {
+        return ALIVE;
+    }
+    return DEAD;
+}
+'''

@@ -16,6 +16,8 @@ mod handle;
 mod kit;
 #[cfg(not(target_arch = "wasm32"))]
 mod manifest_floats;
+#[cfg(all(feature = "model-files", not(target_arch = "wasm32")))]
+mod model_file;
 #[cfg(not(target_arch = "wasm32"))]
 mod provenance;
 #[cfg(not(target_arch = "wasm32"))]
