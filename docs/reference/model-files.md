@@ -94,7 +94,8 @@ One table per parameter, at most 64, in the vocabulary of [`--params --json`](cl
 | `format` | `"percent"` to show an `f32` fraction as a percentage, or `"plain"`. `"plain"` when left out |
 
 A key that does not fit the parameter's kind is refused, such as `step` on a `u32` or `options` on an `f32`.
-The default has to lie within the bounds, and a choice's option names follow the rules of `choice_param`: no empty name, no name that reads as an index, and no name twice.
+The default has to lie within the bounds, and a choice's option names follow the rules of `choice_param`: no empty name, no name that reads as an index, no comma or colon in a name, no name `all`, and no name twice.
+A sweep's level text splits at a comma, reads a colon as a range and `all` as every option, and could not list such a name.
 An id cannot be `width`, `height`, `seed`, `tick`, `grid_width` or `grid_height`, start with `henad_`, or be a reserved word of WGSL.
 Every parameter of a grid rule applies when the model is built.
 

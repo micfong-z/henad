@@ -79,6 +79,19 @@ fn a_model_file_round_trips_through_to_toml() {
         .err()
         .unwrap_or_else(|| panic!("a repeated option was read"));
     assert!(error.to_string().contains("option 'calm' appears twice"), "{error}");
+
+    // So is an option that the level text of a sweep could not list.
+    let every = text.replace("options = [\"calm\", \"wild\"]", "options = [\"all\", \"some\"]");
+    assert_ne!(every, text);
+    let error = ModelFile::parse(&every)
+        .err()
+        .unwrap_or_else(|| panic!("an option named 'all' was read"));
+    assert!(
+        error
+            .to_string()
+            .contains("option 'all' cannot be listed in a sweep's levels"),
+        "{error}"
+    );
 }
 
 #[test]

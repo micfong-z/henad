@@ -227,7 +227,7 @@ impl fmt::Debug for ModelCode {
             .field("format", &self.format)
             .field("text_bytes", &self.text.len())
             .field("hash", &format_args!("{:016x}", self.hash))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

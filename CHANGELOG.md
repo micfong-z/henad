@@ -19,6 +19,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - `SimThread::new_in`, `GpuSimThread::new_in`, `runner::Driver::spawn_in` (native): a runner whose start, pumps and commands (and, on the CPU, first snapshot) run in a given rayon pool.
 - App builds a model on its own thread: Building model… with Cancel in Playback, commands sent meanwhile queued for the new run; a run or build that does not stop within 250 ms is detached and reported (Previous run is still stopping; did not stop after 2 s); the next build waits up to 2 s for it; past 2 s the app's CPU work (builds, runners, viewport uploads, Sweep tab column builds) moves to a fresh pool.
 - App Editor tab for grid rules (closed by default, opens beside the Viewport): one model file as text with a line-number gutter; Apply checks, installs and selects the rule, rebuilt at tick 0 or after the Rebuild model dialog, a refused text leaving the run alone; problems listed at line and column, pressed to move the cursor; New grid rule (the Life starter), Edit model, Open model and Save model, also in a new File menu (a download in a browser); a device fault of the applied rule before its run passes tick 0 shown in the Editor.
+- `ModelSet::remove`.
 
 ### Changed
 
@@ -31,7 +32,17 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - henad-app and henad-cli turn on henad-explore's `model-files`.
 - henad-cli reads `--model-file` and `--spec` before it acquires the GPU device, which is sized to the files' models too.
 - Breaking: `RecordedBuild` is `#[non_exhaustive]`, with `origin` and `code_hash` (build through `From<&BuildInfo>`, `From<&ModelSource>` or `engine()`); `ManifestModel` gains `code` (`None` for compiled models); `ModelSource` compares its origin and code; `same_build` compares code identity alone when either build has an origin.
+- Breaking: `choice_param` panics on, and `check_choice_options` refuses, an option name holding `,` or `:` or named `all`, which `--vary` and Sweep tab level text cannot list.
 - Breaking: dropping a `SimThread` or `GpuSimThread` waits at most `DEFAULT_STOP_TIMEOUT` (2 s) for its thread, then detaches it and logs (was: joined); `stop(timeout)` returns `RunnerShutdown` (`Joined`, `Detached(DetachedRunner)`); `runner::Driver::shutdown` takes a timeout and returns it.
+
+### Migrating to 0.4
+
+- Models: a model built through the authoring traits and helpers compiles unchanged, as the tutorial's and the template's do; rename a choice option holding `,` or `:` or named `all`.
+- Descriptors: read fields through accessors (`descriptor.id()`, `.label()`, `.kind()`, ...); build them through the helpers, `ParamDescriptor::new`, `StatDescriptor::owned` or `ActionDescriptor::owned` (struct literals no longer compile); clone an `ActionDescriptor` where it was copied; a choice's options are `ChoiceOptions` (`get`, `iter`, `position`); pass `&[StatDescriptor]` to `stat_entries`; `known` lists and `ValueError::UnknownOption.options` are `Vec<String>`.
+- Views: `GridView`, `PointView` and `EdgeView` borrow their palettes for `'a`; a snapshot's palette is a `Vec<[u8; 4]>`.
+- Metadata: build `ModelMetadata` with `ModelMetadata::new(backend, structure).palette(..).replays_exactly(..)`; add a wildcard arm to matches on `Structure`.
+- Results: add arms for `ResumeError::CodeChanged` and `MergeError::CodeChanged`; build a `RecordedBuild` through `From`; pass `entry.source()` to `ResumeScan::read`.
+- Runners: a drop no longer waits for a stuck thread; call `stop(timeout)` and match `RunnerShutdown` where the thread has to be gone; `runner::Driver::shutdown` takes a timeout and returns `RunnerShutdown`.
 
 ## [0.3.0] - 2026-10-10
 

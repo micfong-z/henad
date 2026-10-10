@@ -80,10 +80,13 @@ pub fn choice_param(
 /// of two equal names would resolve to the first option, a name with spaces at an end would never match, and a name
 /// that is an unsigned integer would shadow the index it spells.
 ///
+/// The level text of `--vary` and the app's Sweep tab splits at each comma, reads as a range when it holds a colon, and
+/// reads `all` as every option. A name holding a comma or a colon, or the name `all`, cannot be listed in it.
+///
 /// # Errors
 ///
 /// Returns a sentence naming the first option that is empty, has spaces at either end, parses as an unsigned integer,
-/// or repeats an earlier name.
+/// holds a comma or a colon, is `all`, or repeats an earlier name.
 pub fn check_choice_options<S: AsRef<str>>(options: &[S]) -> Result<(), String> {
     for (position, option) in options.iter().enumerate() {
         let option = option.as_ref();
@@ -92,6 +95,9 @@ pub fn check_choice_options<S: AsRef<str>>(options: &[S]) -> Result<(), String> 
         }
         if option.parse::<usize>().is_ok() {
             return Err(format!("option '{option}' reads as an index"));
+        }
+        if option.contains([',', ':']) || option == "all" {
+            return Err(format!("option '{option}' cannot be listed in a sweep's levels"));
         }
         if options[..position].iter().any(|earlier| earlier.as_ref() == option) {
             return Err(format!("option '{option}' appears twice"));
@@ -182,6 +188,25 @@ mod tests {
     #[should_panic(expected = "choice 'network': option 'Random ' is empty or has spaces at an end")]
     fn choice_builder_refuses_an_option_with_trailing_spaces() {
         choice_param("network", "Network", &["Random ", "Geometric"], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "choice 'mode': option 'S,I' cannot be listed in a sweep's levels")]
+    fn choice_builder_refuses_an_option_holding_a_comma() {
+        choice_param("mode", "Mode", &["S,I", "R"], 0);
+    }
+
+    #[test]
+    fn option_names_that_level_text_cannot_list_are_refused() {
+        for options in [["S,I", "R"], ["1:2", "2:1"], ["all", "some"]] {
+            let reason = check_choice_options(&options).err();
+            assert_eq!(
+                reason,
+                Some(format!("option '{}' cannot be listed in a sweep's levels", options[0])),
+                "{options:?}"
+            );
+        }
+        assert_eq!(check_choice_options(&["All", "a.b", "a-b", "a b"]), Ok(()));
     }
 
     #[test]

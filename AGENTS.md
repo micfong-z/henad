@@ -681,7 +681,8 @@ cargo builds a primary package with a static std, and every member linking it wo
   crate. `value.rs` reads a param value written as text and checks it against its descriptor
   (`parse_value`, `resolve_params`, `parse_overrides`), and `format_value` writes one back. `--set`
   goes through it. A choice reads an option's name before its index, and `helpers::choice_param`
-  panics on an option name that reads as an unsigned integer or appears twice. `spec.rs` is a
+  panics on an option name that reads as an unsigned integer, appears twice, holds a comma or a
+  colon, or is `all`, since `--vary` level text could not list it. `spec.rs` is a
   sweep as written, a `SweepSpec` of `BlockSpec`s with its
   `RunSettings`, `MeasureSettings`, `SeedSettings` and `ActionSpec`s. `SweepSpec::plan` (`plan.rs`)
   checks it against a `ModelSchema` and lists every `Config`, its param values and one tick per
