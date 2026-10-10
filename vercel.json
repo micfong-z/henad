@@ -2,6 +2,7 @@
   "installCommand": "rustup toolchain install \"$(cat templates/model-project/scripts/web-toolchain)\" --profile minimal --component rust-src --target wasm32-unknown-unknown && cargo install --locked trunk --version \"$(cat templates/model-project/scripts/trunk-version)\"",
   "buildCommand": "./scripts/build_web.sh build --release",
   "outputDirectory": "dist",
+  "ignoreCommand": "if [ -n \"$VERCEL_GIT_PREVIOUS_SHA\" ] && git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" HEAD -- . ':(exclude)README.md'; then exit 0; else exit 1; fi",
   "headers": [
     {
       "source": "/(.*)",

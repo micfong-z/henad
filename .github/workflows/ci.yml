@@ -1,9 +1,12 @@
 name: CI
 
+# No job reads the root README. The facade's README is compiled, and the guide includes the template's.
 on:
   push:
     branches: [master]
+    paths-ignore: [README.md]
   pull_request:
+    paths-ignore: [README.md]
   workflow_dispatch:
 
 # Each event takes a group of its own. A push to `master` and the release checklist's dispatch on it would otherwise

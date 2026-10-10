@@ -1,5 +1,9 @@
 <img width="100%" alt="banner" src="https://github.com/user-attachments/assets/9d277d98-19ba-457d-b51c-8560a1251818" />
 
+<a href="https://crates.io/crates/henad"><img alt="crates.io" src="https://img.shields.io/crates/v/henad"></a>
+<a href="https://docs.rs/henad"><img alt="docs.rs" src="https://img.shields.io/docsrs/henad"></a>
+<a href="https://github.com/micfong-z/henad/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/micfong-z/henad/ci.yml?branch=master&label=CI"></a>
+
 ---
 
 **Henad** is a very fast agent-based modelling engine that aims to be the most powerful and flexible ABM engine on personal computers.
