@@ -232,7 +232,8 @@ fn size_for_jobs(
     let (param_id, chunk) = match &entry.metadata().structure {
         Structure::Agents { chunk, .. } | Structure::Network { chunk, .. } => ("num_agents", Some(*chunk)),
         Structure::Grid { .. } => ("grid_height", None),
-        Structure::GpuGrid { .. } | Structure::GpuAgents { .. } => return Ok(None),
+        // A GPU model has no thread count, and a structure this crate does not know has no size the check can set.
+        _ => return Ok(None),
     };
     if settings.overrides(entry, param_id) {
         return Ok(Some(param_id));
@@ -240,7 +241,7 @@ fn size_for_jobs(
     let Some(index) = entry.param_index(param_id) else {
         return Ok(None);
     };
-    let ParamKind::U32 { min, max, .. } = entry.param_descriptors()[index].kind else {
+    let ParamKind::U32 { min, max, .. } = *entry.param_descriptors()[index].kind() else {
         return Ok(None);
     };
     let within = |size: usize| u32::try_from(size).unwrap_or(u32::MAX).clamp(min, max);

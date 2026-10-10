@@ -197,12 +197,15 @@ impl ModelEntry {
 
     /// Returns the position of parameter `id` in [`Self::param_descriptors`].
     pub fn param_index(&self, id: &str) -> Option<usize> {
-        self.parts.param_descriptors.iter().position(|desc| desc.id == id)
+        self.parts.param_descriptors.iter().position(|desc| desc.id() == id)
     }
 
     /// Returns the position of action `id` in [`Self::action_descriptors`].
     pub fn action_index(&self, id: &str) -> Option<usize> {
-        self.parts.action_descriptors.iter().position(|action| action.id == id)
+        self.parts
+            .action_descriptors
+            .iter()
+            .position(|action| action.id() == id)
     }
 
     /// Returns a setup at the declared defaults, the default seed and no actions.
@@ -273,14 +276,13 @@ pub fn register_grid_model<M: GridModel>() -> ModelEntry {
             stat_descriptors: M::STATS.to_vec(),
             action_descriptors: M::ACTIONS.to_vec(),
             topology_hint: TopologyHint::GRID,
-            metadata: ModelMetadata {
-                backend: Backend::Cpu,
-                palette: Some(M::PALETTE),
-                structure: Structure::Grid {
+            metadata: ModelMetadata::new(
+                Backend::Cpu,
+                Structure::Grid {
                     neighborhood: M::NEIGHBORHOOD,
                 },
-                replays_exactly: true,
-            },
+            )
+            .palette(M::PALETTE),
             gpu_needs: None,
             source: ModelSource::__from_type_path(type_name::<M>()),
             factory: Arc::new(|params: &[ParamValue], seed: Option<u64>, _gpu: Option<&GpuContext>| {
@@ -308,17 +310,16 @@ pub fn register_agent_model<A: AgentModel>() -> ModelEntry {
                 agents: true,
                 edges: false,
             },
-            metadata: ModelMetadata {
-                backend: Backend::Cpu,
-                palette: Some(A::PALETTE),
-                structure: Structure::Agents {
+            metadata: ModelMetadata::new(
+                Backend::Cpu,
+                Structure::Agents {
                     chunk: A::CHUNK,
                     lanes: <A::Lanes as AgentLanes>::LANES,
                     index: <A::Index as NeighborIndex>::KIND,
                     field: <A::Field as FieldLayer>::KIND,
                 },
-                replays_exactly: true,
-            },
+            )
+            .palette(A::PALETTE),
             gpu_needs: None,
             source: ModelSource::__from_type_path(type_name::<A>()),
             factory: Arc::new(|params: &[ParamValue], seed: Option<u64>, _gpu: Option<&GpuContext>| {
@@ -342,16 +343,15 @@ pub fn register_network_model<N: NetworkModel>() -> ModelEntry {
             stat_descriptors: N::STATS.to_vec(),
             action_descriptors: N::ACTIONS.to_vec(),
             topology_hint: TopologyHint::NETWORK,
-            metadata: ModelMetadata {
-                backend: Backend::Cpu,
-                palette: Some(N::PALETTE),
-                structure: Structure::Network {
+            metadata: ModelMetadata::new(
+                Backend::Cpu,
+                Structure::Network {
                     chunk: N::CHUNK,
                     lanes: <N::Lanes as AgentLanes>::LANES,
                     edge_palette: N::EDGE_PALETTE,
                 },
-                replays_exactly: true,
-            },
+            )
+            .palette(N::PALETTE),
             gpu_needs: None,
             source: ModelSource::__from_type_path(type_name::<N>()),
             factory: Arc::new(|params: &[ParamValue], seed: Option<u64>, _gpu: Option<&GpuContext>| {
@@ -378,18 +378,18 @@ pub fn register_gpu_grid_model<M: GpuGridModel>() -> ModelEntry {
                 .map(ParamDescriptor::on_reload)
                 .collect(),
             stat_descriptors: M::STATS.to_vec(),
-            action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
+            action_descriptors: M::ACTIONS.iter().map(|action| action.desc.clone()).collect(),
             // The grid reaches the view as a texture instead of a cell buffer.
             topology_hint: TopologyHint::GRID,
-            metadata: ModelMetadata {
-                backend: Backend::Gpu,
-                palette: Some(M::PALETTE),
-                structure: Structure::GpuGrid {
+            metadata: ModelMetadata::new(
+                Backend::Gpu,
+                Structure::GpuGrid {
                     buffers: M::BUFFERS,
                     workgroup: M::WORKGROUP_SIZE,
                 },
-                replays_exactly: M::REPLAYS_EXACTLY,
-            },
+            )
+            .palette(M::PALETTE)
+            .replays_exactly(M::REPLAYS_EXACTLY),
             gpu_needs: Some(GpuNeeds::with_storage_buffers(GpuGridState::<M>::max_storage_bindings())),
             source: ModelSource::__from_type_path(type_name::<M>()),
             factory: Arc::new(|params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| {
@@ -417,26 +417,25 @@ pub fn register_gpu_agent_model<M: GpuAgentModel>() -> ModelEntry {
                 .map(ParamDescriptor::on_reload)
                 .collect(),
             stat_descriptors: M::STATS.to_vec(),
-            action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
+            action_descriptors: M::ACTIONS.iter().map(|action| action.desc.clone()).collect(),
             // A model that declares a display pass draws a grid layer under its agents.
             topology_hint: TopologyHint {
                 grid: M::DISPLAY.is_some(),
                 agents: true,
                 edges: false,
             },
-            metadata: ModelMetadata {
-                backend: Backend::Gpu,
-                // A GPU agent model's shaders write RGBA themselves.
-                palette: None,
-                structure: Structure::GpuAgents {
+            // No palette. A GPU agent model's shaders write RGBA themselves.
+            metadata: ModelMetadata::new(
+                Backend::Gpu,
+                Structure::GpuAgents {
                     buffers: M::BUFFERS,
                     passes: M::STEP_PASSES,
                     index: M::INDEX,
                     display: M::DISPLAY.is_some(),
                     counters: M::COUNTERS,
                 },
-                replays_exactly: M::REPLAYS_EXACTLY,
-            },
+            )
+            .replays_exactly(M::REPLAYS_EXACTLY),
             gpu_needs: Some(GpuNeeds::with_storage_buffers(
                 GpuAgentState::<M>::max_storage_bindings(),
             )),

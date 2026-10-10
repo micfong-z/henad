@@ -1,5 +1,7 @@
 //! Model metadata the engine derives from a model's declarations.
 
+use std::borrow::Cow;
+
 use crate::authoring::model::gpu_agent_model::{BufferSpec, PassSpec};
 use crate::topology::NeighborhoodKind;
 
@@ -37,6 +39,7 @@ pub struct LaneSpec {
 
 /// Storage layout of a model, by backend and topology.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Structure {
     /// A CPU grid model.
     Grid {
@@ -86,15 +89,47 @@ pub enum Structure {
 }
 
 /// Model metadata that the UI displays.
+///
+/// [`Self::new`] creates one with no palette that replays exactly. [`Self::palette()`] sets a palette, and
+/// [`Self::replays_exactly()`] sets the replay flag.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ModelMetadata {
     /// Backend the model steps on.
     pub backend: Backend,
     /// Colours that the display layer or the agent population draws from. `None` for a GPU agent
     /// model, whose shaders write RGBA directly and declare no palette.
-    pub palette: Option<&'static [[u8; 4]]>,
+    pub palette: Option<Cow<'static, [[u8; 4]]>>,
     /// Storage layout of the model.
     pub structure: Structure,
     /// Whether two builds on one seed step through identical states. `true` for every CPU model.
     pub replays_exactly: bool,
+}
+
+impl ModelMetadata {
+    /// Creates the metadata of a model that steps on `backend` with the storage layout `structure`.
+    ///
+    /// The metadata has no palette and replays exactly.
+    pub fn new(backend: Backend, structure: Structure) -> Self {
+        Self {
+            backend,
+            palette: None,
+            structure,
+            replays_exactly: true,
+        }
+    }
+
+    /// Sets the colours that the display layer or the agent population draws from.
+    ///
+    /// `palette` takes a `&'static [[u8; 4]]` or a `Vec<[u8; 4]>`.
+    pub fn palette(mut self, palette: impl Into<Cow<'static, [[u8; 4]]>>) -> Self {
+        self.palette = Some(palette.into());
+        self
+    }
+
+    /// Sets whether two builds on one seed step through identical states.
+    pub fn replays_exactly(mut self, replays_exactly: bool) -> Self {
+        self.replays_exactly = replays_exactly;
+        self
+    }
 }

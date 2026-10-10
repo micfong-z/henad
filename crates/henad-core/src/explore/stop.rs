@@ -225,7 +225,7 @@ impl StopSpec {
         } else {
             Err(StopError::UnknownColumn {
                 column: self.column.clone(),
-                known: stats.iter().map(|stat| stat.label.to_owned()).collect(),
+                known: stats.iter().map(|stat| stat.label().to_owned()).collect(),
             })
         }
     }

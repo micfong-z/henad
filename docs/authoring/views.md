@@ -44,6 +44,8 @@ A model publishes up to two of them.
     Each endpoint is an index into the `PointView`'s positions.
     Only a `NetworkModel` publishes an edge view.
 
+Each view borrows its palette from the state, and a publish copies it into the snapshot.
+
 The grid and the points stretch to the same rect.
 The engine owns the extent, and neither layer supplies its own extent, so an agent layer and a field layer cannot disagree about how big the world is.
 Edges carry no coordinates at all.

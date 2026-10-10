@@ -467,7 +467,7 @@ mod tests {
         let rate = sir
             .param_descriptors()
             .iter()
-            .position(|descriptor| descriptor.id == "infection_rate")
+            .position(|descriptor| descriptor.id() == "infection_rate")
             .expect("sir declares infection_rate");
         let mut out_of_bounds = defaults.clone();
         out_of_bounds[rate] = ParamValue::F32(2.0);

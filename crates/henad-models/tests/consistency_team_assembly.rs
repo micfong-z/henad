@@ -31,15 +31,15 @@ use ParamValue::{F32, U32};
 fn params(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
     let descs = network_model_param_descriptors::<TeamAssembly>();
     for (id, _) in overrides {
-        assert!(descs.iter().any(|d| d.id == *id), "no parameter '{id}'");
+        assert!(descs.iter().any(|d| d.id() == *id), "no parameter '{id}'");
     }
     descs
         .iter()
         .map(|d| {
             overrides
                 .iter()
-                .find(|(id, _)| *id == d.id)
-                .map_or_else(|| d.kind.default_value(), |(_, v)| v.clone())
+                .find(|(id, _)| *id == d.id())
+                .map_or_else(|| d.kind().default_value(), |(_, v)| v.clone())
         })
         .collect()
 }
@@ -47,7 +47,7 @@ fn params(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
 fn index(id: &str) -> usize {
     network_model_param_descriptors::<TeamAssembly>()
         .iter()
-        .position(|d| d.id == id)
+        .position(|d| d.id() == id)
         .unwrap_or_else(|| panic!("no parameter '{id}'"))
 }
 
@@ -94,7 +94,7 @@ fn retirement_key(team_tick: u64) -> u64 {
 
 fn stat_values(state: &mut State) -> Vec<f64> {
     state.prepare_view();
-    state.stats().iter().map(|entry| entry.value.scalar()).collect()
+    state.stats().iter().map(|entry| entry.value().scalar()).collect()
 }
 
 /// Every team has exactly `team_size` distinct members, each linked to every other member.

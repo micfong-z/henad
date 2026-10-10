@@ -126,7 +126,7 @@ pub fn params(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Value {
     let defaults: Vec<ParamValue> = entry
         .param_descriptors()
         .iter()
-        .map(|descriptor| descriptor.kind.default_value())
+        .map(|descriptor| descriptor.kind().default_value())
         .collect();
     let probe = match ProbeReport::build(entry, gpu, &defaults, None) {
         Ok(probe) => Some(probe),

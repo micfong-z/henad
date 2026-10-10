@@ -436,7 +436,7 @@ mod tests {
         let mut params: Vec<ParamValue> = entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         params[0] = ParamValue::U32(width);
         params[1] = ParamValue::U32(width);

@@ -117,7 +117,7 @@ fn a_result_set_reads_back_every_run_of_a_directory() {
     let mut value_columns: Vec<String> = sir
         .param_descriptors()
         .iter()
-        .map(|param| param.id.to_owned())
+        .map(|param| param.id().to_owned())
         .collect();
     value_columns.push("action.wave".to_owned());
     assert_eq!(set.value_columns(), value_columns);

@@ -415,7 +415,7 @@ impl ResultSet {
             params: schema
                 .params
                 .iter()
-                .map(|descriptor| parse_value(&descriptor.kind, value_of(descriptor.id)?).ok())
+                .map(|descriptor| parse_value(descriptor.kind(), value_of(descriptor.id())?).ok())
                 .collect::<Option<_>>()
                 .ok_or_else(mismatch)?,
             action_ticks: actions
@@ -970,7 +970,7 @@ mod tests {
     fn value_of(replay: &Replay, params: &[ParamDescriptor], id: &str) -> ParamValue {
         let position = params
             .iter()
-            .position(|param| param.id == id)
+            .position(|param| param.id() == id)
             .expect("the schema has the parameter");
         replay.params[position].clone()
     }
@@ -1017,7 +1017,12 @@ mod tests {
 
         // A later version of the model lists its two rates the other way round.
         let mut params = schema.params.to_vec();
-        let position = |id: &str| params.iter().position(|param| param.id == id).expect("a SIR parameter");
+        let position = |id: &str| {
+            params
+                .iter()
+                .position(|param| param.id() == id)
+                .expect("a SIR parameter")
+        };
         let (infection, recovery) = (position("infection_rate"), position("recovery_rate"));
         params.swap(infection, recovery);
         let reordered = ModelSchema {

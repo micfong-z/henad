@@ -37,7 +37,7 @@ pub const NOTE_COLUMN: &str = "note";
 /// columns named `reducers`, before CSV escaping.
 pub(crate) fn column_names(params: &[ParamDescriptor], actions: &[ActionSpec], reducers: &[String]) -> Vec<String> {
     let mut names: Vec<String> = ID_COLUMNS.iter().map(|&column| column.to_owned()).collect();
-    names.extend(params.iter().map(|param| param.id.to_owned()));
+    names.extend(params.iter().map(|param| param.id().to_owned()));
     names.extend(actions.iter().map(ActionSpec::column_name));
     names.extend(OUTCOME_COLUMNS.iter().map(|&column| column.to_owned()));
     names.extend(reducers.iter().cloned());
@@ -86,7 +86,7 @@ impl<W: Write> RunsWriter<W> {
     pub fn appending(dest: W, params: &[ParamDescriptor]) -> Self {
         Self {
             dest,
-            kinds: params.iter().map(|param| param.kind.clone()).collect(),
+            kinds: params.iter().map(|param| param.kind().clone()).collect(),
         }
     }
 

@@ -167,7 +167,7 @@ mod tests {
     }
 
     fn reported_alive(state: &State) -> u64 {
-        match state.stats().first().map(|s| s.value.clone()) {
+        match state.stats().first().map(|s| s.value().clone()) {
             Some(StatValue::Scalar(v)) => v as u64,
             other => panic!("expected a scalar Alive stat, got {other:?}"),
         }
@@ -262,7 +262,7 @@ mod tests {
         let mut cpu = GridModelState::<GameOfLifeModel>::from_params(&p);
 
         let cpu_alive = |cpu: &GridModelState<GameOfLifeModel>| -> u64 {
-            match cpu.stats().first().map(|s| s.value.clone()) {
+            match cpu.stats().first().map(|s| s.value().clone()) {
                 Some(StatValue::Scalar(v)) => v as u64,
                 other => panic!("expected a scalar Alive stat, got {other:?}"),
             }
@@ -453,7 +453,7 @@ mod runner_tests {
     }
 
     fn alive(snap: &Snapshot) -> u64 {
-        match snap.stats.first().map(|s| s.value.clone()) {
+        match snap.stats.first().map(|s| s.value().clone()) {
             Some(StatValue::Scalar(v)) => v as u64,
             other => panic!("expected a scalar Alive stat, got {other:?}"),
         }

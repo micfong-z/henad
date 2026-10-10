@@ -243,6 +243,8 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
                 row(ui, rows, "Counters", counters.to_string());
             }
         }
+        // A structure this build does not know has no rows to show.
+        _ => {}
     }
 }
 
@@ -254,12 +256,12 @@ fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) 
     ui.label("Statistics");
     ui.horizontal(|ui| {
         ui.label(entry.stat_descriptors().len().to_string());
-        swatches(ui, entry.stat_descriptors().iter().map(|stat| stat.color));
+        swatches(ui, entry.stat_descriptors().iter().map(|stat| stat.color()));
     });
     rows.end_row(ui);
 
     ui.label("Palette");
-    match entry.metadata().palette {
+    match &entry.metadata().palette {
         Some(palette) => {
             ui.horizontal(|ui| {
                 ui.label(palette.len().to_string());

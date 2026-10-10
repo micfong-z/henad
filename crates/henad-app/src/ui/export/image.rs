@@ -302,7 +302,7 @@ fn grid_pixels(grid: &GridSnapshot, width: u32, height: u32, format: wgpu::Textu
     use rayon::prelude::*;
 
     let src_width = grid.width as usize;
-    let colors = padded_palette(grid.palette);
+    let colors = padded_palette(&grid.palette);
     let row = |y: u32| {
         let sy = henad_compute::display_scale::source_row(y, grid.height, height) as usize;
         let cells = &grid.cells[sy * src_width..(sy + 1) * src_width];
@@ -349,7 +349,7 @@ mod tests {
             width: 4,
             height: 1,
             cells: vec![0, 1, 2, 255],
-            palette: &[[1, 2, 3, 4], [5, 6, 7, 8]],
+            palette: vec![[1, 2, 3, 4], [5, 6, 7, 8]],
         };
         let pixels = grid_pixels(&grid, 4, 1, wgpu::TextureFormat::Rgba8Unorm);
         assert_eq!(pixels, [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 1, 2, 3, 4]);

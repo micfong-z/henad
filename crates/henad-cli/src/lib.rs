@@ -535,18 +535,21 @@ fn print_models<'a>(entries: impl Iterator<Item = &'a ModelEntry>) {
 fn params_text(entry: &ModelEntry) -> String {
     let mut text = format!("parameters for {} ({}):\n", entry.id(), entry.name());
     for (index, desc) in entry.param_descriptors().iter().enumerate() {
-        let (id, label) = (desc.id, desc.label);
+        let (id, label) = (desc.id(), desc.label());
         let apply = if desc.is_live() { "live" } else { "reload" };
-        let kind = match &desc.kind {
+        let kind = match desc.kind() {
             ParamKind::F32 { min, max, default, .. } => format!("kind=f32 default={default} min={min} max={max}"),
             ParamKind::U32 { min, max, default } => format!("kind=u32 default={default} min={min} max={max}"),
             ParamKind::Bool { default } => format!("kind=bool default={default}"),
             ParamKind::Choice { options, default } => {
-                format!("kind=choice default={default} options={}", options.join("|"))
+                format!(
+                    "kind=choice default={default} options={}",
+                    options.iter().collect::<Vec<_>>().join("|")
+                )
             }
         };
         // Values are always fractions, whatever the panel shows, so `format` only describes how to read a value.
-        let format = match desc.format {
+        let format = match desc.format() {
             ParamFormat::Plain => "",
             ParamFormat::Percent => " format=percent",
         };
@@ -1220,7 +1223,7 @@ parameters for virus_network (Virus on a Network):
             assert_eq!(line["model"], json!(entry.id()));
             let params = line["params"].as_array().expect("params is a list");
             let ids: Vec<&str> = params.iter().filter_map(|param| param["id"].as_str()).collect();
-            let declared: Vec<&str> = entry.param_descriptors().iter().map(|d| d.id).collect();
+            let declared: Vec<&str> = entry.param_descriptors().iter().map(|d| d.id()).collect();
             assert_eq!(ids, declared, "{}", entry.id());
             for param in params {
                 assert!(param["kind"].is_string() && !param["default"].is_null(), "{param}");

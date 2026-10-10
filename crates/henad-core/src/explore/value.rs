@@ -46,14 +46,14 @@ pub enum ValueError {
         /// Text as given, or the index as text.
         raw: String,
         /// Options of the parameter.
-        options: &'static [&'static str],
+        options: Vec<String>,
     },
     /// An id no descriptor has.
     UnknownParam {
         /// Id as given.
         id: String,
         /// Ids the descriptors have.
-        known: Vec<&'static str>,
+        known: Vec<String>,
     },
     /// An override with no `=` between the id and the value.
     BadOverride {
@@ -169,18 +169,21 @@ pub fn resolve_params(
 ) -> Result<Vec<ParamValue>, ValueError> {
     let mut values: Vec<ParamValue> = descriptors
         .iter()
-        .map(|descriptor| descriptor.kind.default_value())
+        .map(|descriptor| descriptor.kind().default_value())
         .collect();
 
     for (id, raw) in overrides {
         let index = descriptors
             .iter()
-            .position(|descriptor| descriptor.id == *id)
+            .position(|descriptor| descriptor.id() == id)
             .ok_or_else(|| ValueError::UnknownParam {
                 id: id.clone(),
-                known: descriptors.iter().map(|descriptor| descriptor.id).collect(),
+                known: descriptors
+                    .iter()
+                    .map(|descriptor| descriptor.id().to_owned())
+                    .collect(),
             })?;
-        values[index] = parse_value(&descriptors[index].kind, raw).map_err(|error| ValueError::Param {
+        values[index] = parse_value(descriptors[index].kind(), raw).map_err(|error| ValueError::Param {
             id: id.clone(),
             source: Box::new(error),
         })?;
@@ -212,12 +215,11 @@ pub fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue, ValueError
         })?),
         ParamKind::Choice { options, .. } => {
             let index = options
-                .iter()
-                .position(|option| *option == raw)
+                .position(raw)
                 .or_else(|| raw.parse::<usize>().ok())
                 .ok_or_else(|| ValueError::UnknownOption {
                     raw: raw.to_owned(),
-                    options,
+                    options: options.iter().map(str::to_owned).collect(),
                 })?;
             ParamValue::Choice(index)
         }
@@ -260,7 +262,7 @@ pub fn check_value(kind: &ParamKind, value: &ParamValue) -> Result<(), ValueErro
         (ParamKind::Choice { options, .. }, ParamValue::Choice(index)) if *index < options.len() => Ok(()),
         (ParamKind::Choice { options, .. }, ParamValue::Choice(index)) => Err(ValueError::UnknownOption {
             raw: index.to_string(),
-            options,
+            options: options.iter().map(str::to_owned).collect(),
         }),
         (kind, other) => Err(ValueError::WrongKind {
             expected: param_kind(kind),
@@ -295,9 +297,9 @@ fn value_kind(value: &ParamValue) -> ValueKind {
 /// A number is written in its shortest round-trip form, and a choice as its option name.
 pub fn format_value(kind: &ParamKind, value: &ParamValue) -> String {
     match (kind, value) {
-        (ParamKind::Choice { options, .. }, ParamValue::Choice(index)) => options
-            .get(*index)
-            .map_or_else(|| index.to_string(), |&name| name.to_owned()),
+        (ParamKind::Choice { options, .. }, ParamValue::Choice(index)) => {
+            options.get(*index).map_or_else(|| index.to_string(), str::to_owned)
+        }
         _ => plain_text(value),
     }
 }
@@ -316,7 +318,7 @@ fn plain_text(value: &ParamValue) -> String {
 mod tests {
     use super::{ValueError, ValueKind, check_value, format_value, parse_overrides, parse_value, resolve_params};
     use crate::helpers::{bool_param, f32_param, u32_param};
-    use crate::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+    use crate::params::{ChoiceOptions, ParamDescriptor, ParamKind, ParamValue};
 
     const OPTIONS: &[&str] = &["moore", "von_neumann"];
 
@@ -324,16 +326,14 @@ mod tests {
         vec![
             u32_param("num_agents", "Agents", 1000, 1, 5_000_000),
             f32_param("cohesion", "Cohesion", 0.5, 0.0, 1.0, None),
-            ParamDescriptor {
-                id: "neighborhood",
-                label: "Neighborhood",
-                kind: ParamKind::Choice {
-                    options: OPTIONS,
+            ParamDescriptor::new(
+                "neighborhood",
+                "Neighborhood",
+                ParamKind::Choice {
+                    options: ChoiceOptions::from_static(OPTIONS),
                     default: 0,
                 },
-                apply: ParamApply::Live,
-                format: ParamFormat::Plain,
-            },
+            ),
         ]
     }
 
@@ -445,12 +445,12 @@ mod tests {
             (3, ParamValue::Bool(true)),
         ];
         for (index, value) in cases {
-            let kind = &descriptors[index].kind;
+            let kind = descriptors[index].kind();
             let text = format_value(kind, &value);
             assert_eq!(parse_value(kind, &text), Ok(value), "{text}");
         }
         assert_eq!(
-            format_value(&descriptors[2].kind, &ParamValue::Choice(1)),
+            format_value(descriptors[2].kind(), &ParamValue::Choice(1)),
             "von_neumann"
         );
     }
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     fn a_choice_reads_an_option_name_before_an_index() {
         let kind = ParamKind::Choice {
-            options: &["low", "0"],
+            options: ChoiceOptions::from_static(&["low", "0"]),
             default: 0,
         };
         assert_eq!(parse_value(&kind, "0"), Ok(ParamValue::Choice(1)), "the name wins");
@@ -470,7 +470,7 @@ mod tests {
             "an index still reads"
         );
         let kind = ParamKind::Choice {
-            options: &["low", "2"],
+            options: ChoiceOptions::from_static(&["low", "2"]),
             default: 0,
         };
         for index in 0..2 {
@@ -479,21 +479,67 @@ mod tests {
         }
     }
 
+    /// A choice that owns its option names reads and writes them as a borrowed one does.
+    #[test]
+    fn a_choice_with_owned_options_parses_by_name() {
+        let names = ["moore", "von_neumann", "hexagonal"].map(str::to_owned);
+        let owned = ParamDescriptor::new(
+            "neighborhood".to_owned(),
+            "Neighborhood".to_owned(),
+            ParamKind::Choice {
+                options: ChoiceOptions::new(names.to_vec()),
+                default: 0,
+            },
+        );
+        let kind = owned.kind();
+        assert_eq!(parse_value(kind, "hexagonal"), Ok(ParamValue::Choice(2)));
+        assert_eq!(
+            parse_value(kind, "1"),
+            Ok(ParamValue::Choice(1)),
+            "an index still reads"
+        );
+        assert_eq!(format_value(kind, &ParamValue::Choice(1)), "von_neumann");
+        let error = parse_value(kind, "triangle").expect_err("no such option");
+        assert_eq!(
+            error,
+            ValueError::UnknownOption {
+                raw: "triangle".to_owned(),
+                options: names.to_vec(),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            r#"'triangle' is not one of ["moore", "von_neumann", "hexagonal"]"#
+        );
+
+        let overrides = parse_overrides(&["neighborhood=von_neumann".to_owned()]).expect("one pair");
+        let values = resolve_params(std::slice::from_ref(&owned), &overrides).expect("a declared option");
+        assert_eq!(values, [ParamValue::Choice(1)]);
+        let error = resolve_params(&[owned], &[("shape".to_owned(), "1".to_owned())]).expect_err("no such id");
+        assert_eq!(
+            error,
+            ValueError::UnknownParam {
+                id: "shape".to_owned(),
+                known: vec!["neighborhood".to_owned()],
+            }
+        );
+    }
+
     #[test]
     fn a_value_that_does_not_fit_its_kind_is_refused() {
         let descriptors = descriptors();
-        assert!(check_value(&descriptors[0].kind, &ParamValue::F32(10.0)).is_err());
-        assert!(check_value(&descriptors[1].kind, &ParamValue::U32(0)).is_err());
-        assert!(check_value(&descriptors[1].kind, &ParamValue::F32(f32::INFINITY)).is_err());
-        assert!(check_value(&descriptors[2].kind, &ParamValue::Choice(2)).is_err());
-        assert_eq!(check_value(&descriptors[2].kind, &ParamValue::Choice(1)), Ok(()));
+        assert!(check_value(descriptors[0].kind(), &ParamValue::F32(10.0)).is_err());
+        assert!(check_value(descriptors[1].kind(), &ParamValue::U32(0)).is_err());
+        assert!(check_value(descriptors[1].kind(), &ParamValue::F32(f32::INFINITY)).is_err());
+        assert!(check_value(descriptors[2].kind(), &ParamValue::Choice(2)).is_err());
+        assert_eq!(check_value(descriptors[2].kind(), &ParamValue::Choice(1)), Ok(()));
     }
 
     /// The message for a value of another kind includes the literal that fits.
     #[test]
     fn a_value_of_another_kind_names_both_kinds() {
         let descriptors = descriptors();
-        let error = check_value(&descriptors[1].kind, &ParamValue::U32(1)).expect_err("a u32 for an f32");
+        let error = check_value(descriptors[1].kind(), &ParamValue::U32(1)).expect_err("a u32 for an f32");
         assert_eq!(
             error,
             ValueError::WrongKind {
@@ -506,12 +552,12 @@ mod tests {
             error.to_string(),
             "expected an f32 value such as 1.0f32, found the u32 1"
         );
-        let error = check_value(&descriptors[0].kind, &ParamValue::F32(256.0)).expect_err("an f32 for a u32");
+        let error = check_value(descriptors[0].kind(), &ParamValue::F32(256.0)).expect_err("an f32 for a u32");
         assert_eq!(
             error.to_string(),
             "expected a u32 value such as 1u32, found the f32 256"
         );
-        let error = check_value(&descriptors[2].kind, &ParamValue::U32(1)).expect_err("a u32 for a choice");
+        let error = check_value(descriptors[2].kind(), &ParamValue::U32(1)).expect_err("a u32 for a choice");
         assert!(
             matches!(
                 error,
@@ -528,7 +574,7 @@ mod tests {
             "expected a choice such as ParamValue::Choice(0), found the u32 1"
         );
         let wrap = bool_param("wrap", "Wrap", true);
-        let error = check_value(&wrap.kind, &ParamValue::Choice(0)).expect_err("a choice for a bool");
+        let error = check_value(wrap.kind(), &ParamValue::Choice(0)).expect_err("a choice for a bool");
         assert_eq!(error.to_string(), "expected a bool value, found the choice 0");
     }
 }

@@ -861,8 +861,8 @@ impl ResultsStore {
         }
         self.descriptors
             .iter()
-            .find(|descriptor| descriptor.id == name)
-            .map_or_else(|| name.clone(), |descriptor| descriptor.label.to_owned())
+            .find(|descriptor| descriptor.id() == name)
+            .map_or_else(|| name.clone(), |descriptor| descriptor.label().to_owned())
     }
 
     /// Sets the stat and reducer columns of a sweep that has planned its runs, unless the store knows them already.
@@ -1517,7 +1517,7 @@ impl ResultsStore {
         let names_params = columns
             .iter()
             .zip(&self.descriptors)
-            .all(|(column, descriptor)| column == descriptor.id);
+            .all(|(column, descriptor)| column == descriptor.id());
         let column_count = param_count + search_plan.base().actions().len();
         if !names_params || columns.len() != column_count || config.texts.len() != column_count {
             return Err(mismatch());
@@ -1527,7 +1527,7 @@ impl ResultsStore {
             .descriptors
             .iter()
             .zip(param_texts)
-            .map(|(descriptor, text)| parse_value(&descriptor.kind, text).ok())
+            .map(|(descriptor, text)| parse_value(descriptor.kind(), text).ok())
             .collect::<Option<Vec<_>>>()
             .ok_or_else(mismatch)?;
         let action_ticks = tick_texts
@@ -1567,8 +1567,8 @@ impl ResultsStore {
             replay.seed.to_string(),
         ];
         for (descriptor, value) in self.descriptors.iter().zip(&replay.params) {
-            if *value != descriptor.kind.default_value() {
-                let assignment = format!("{}={}", descriptor.id, format_value(&descriptor.kind, value));
+            if *value != descriptor.kind().default_value() {
+                let assignment = format!("{}={}", descriptor.id(), format_value(descriptor.kind(), value));
                 words.extend(["--set".to_owned(), shell_word(&assignment)]);
             }
         }
@@ -1698,8 +1698,8 @@ fn action_labels(actions: &[ActionSpec], entry: &ModelEntry) -> BTreeMap<String,
             let declared = entry
                 .action_descriptors()
                 .iter()
-                .find(|declared| declared.id == action.id)?;
-            let label = action_label(declared.label, &action.id, &action.name);
+                .find(|declared| declared.id() == action.id)?;
+            let label = action_label(declared.label(), &action.id, &action.name);
             Some((action.name.clone(), label))
         })
         .collect()
@@ -1726,7 +1726,11 @@ pub fn action_label(declared_label: &str, id: &str, name: &str) -> String {
 /// Returns the names of the value columns of `plan`: each parameter of `params`, then each action's tick.
 fn plan_value_columns(plan: &Plan, params: &[ParamDescriptor]) -> Vec<String> {
     let actions = plan.actions().iter().map(|action| action.column_name());
-    params.iter().map(|param| param.id.to_owned()).chain(actions).collect()
+    params
+        .iter()
+        .map(|param| param.id().to_owned())
+        .chain(actions)
+        .collect()
 }
 
 /// Returns the block and values of every config of `plan` by id, as `runs.csv` writes them for the parameters
@@ -1744,7 +1748,7 @@ fn config_texts(config: &Config, params: &[ParamDescriptor]) -> ConfigTexts {
     let values = params
         .iter()
         .zip(&config.params)
-        .map(|(param, value)| format_value(&param.kind, value));
+        .map(|(param, value)| format_value(param.kind(), value));
     let ticks = config.action_ticks.iter().map(u64::to_string);
     ConfigTexts {
         block: config.block,
@@ -2112,7 +2116,7 @@ mod tests {
         let mut params: Vec<ParamValue> = sir
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         params[2] = ParamValue::F32(0.25);
         let config = Config {
@@ -2156,10 +2160,10 @@ mod tests {
             .param_descriptors()
             .iter()
             .map(|descriptor| {
-                let fixed = descriptor.id == "gain_resistance_chance"
-                    || (descriptor.id == "initial_outbreak_size" && candidate_id < 2000);
-                match descriptor.kind {
-                    _ if fixed => descriptor.kind.default_value(),
+                let fixed = descriptor.id() == "gain_resistance_chance"
+                    || (descriptor.id() == "initial_outbreak_size" && candidate_id < 2000);
+                match descriptor.kind() {
+                    _ if fixed => descriptor.kind().default_value(),
                     ParamKind::F32 { min, max, .. } => {
                         ParamValue::F32(min + (max - min) * draw(state, 1000) as f32 / 1000.0)
                     }
@@ -2566,10 +2570,16 @@ mod tests {
         let mut params = entry.param_descriptors().to_vec();
         let recovery = params
             .iter_mut()
-            .find(|param| param.id == "recovery_rate")
+            .find(|param| param.id() == "recovery_rate")
             .expect("SIR declares a recovery rate");
-        if let ParamKind::F32 { default, .. } = &mut recovery.kind {
-            *default = 0.1;
+        if let ParamKind::F32 { min, max, step, .. } = *recovery.kind() {
+            let kind = ParamKind::F32 {
+                min,
+                max,
+                default: 0.1,
+                step,
+            };
+            *recovery = ParamDescriptor::new(recovery.id().to_owned(), recovery.label().to_owned(), kind);
         }
         params
     }
@@ -2618,7 +2628,7 @@ mod tests {
         let recorded_plan = SearchPlan::new(&spec, &schema_with(&sir, &params)).expect("a valid search");
         let search_plan = SearchPlan::new(&spec, &sir.schema()).expect("a valid search");
         let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, None, usize::MAX);
-        let mut values: Vec<ParamValue> = params.iter().map(|param| param.kind.default_value()).collect();
+        let mut values: Vec<ParamValue> = params.iter().map(|param| param.kind().default_value()).collect();
         values[2] = ParamValue::F32(0.25);
         let config = Config {
             block: 0,

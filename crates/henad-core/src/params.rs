@@ -1,19 +1,20 @@
 //! Parameter descriptors, the values they describe, and the [`ParamStore`] a running state keeps the
 //! values in.
 
+use std::borrow::Cow;
+use std::fmt;
+
 /// A parameter a model declares.
+///
+/// A compiled model borrows its strings for `'static` through the builders in [`crate::helpers`]. A model read at
+/// run time owns them through [`Self::new`].
 #[derive(Debug, Clone)]
 pub struct ParamDescriptor {
-    /// Stable name that `--set` and a spec file match on, and that results record.
-    pub id: &'static str,
-    /// Name the Parameters panel shows.
-    pub label: &'static str,
-    /// Type, bounds and default.
-    pub kind: ParamKind,
-    /// Whether an edit reaches the running simulation or waits for a rebuild.
-    pub apply: ParamApply,
-    /// Display format of the value.
-    pub format: ParamFormat,
+    id: Cow<'static, str>,
+    label: Cow<'static, str>,
+    kind: ParamKind,
+    apply: ParamApply,
+    format: ParamFormat,
 }
 
 /// Display format of a parameter value. The stored value is the same either way.
@@ -40,6 +41,44 @@ pub enum ParamApply {
 }
 
 impl ParamDescriptor {
+    /// Creates a live parameter in the [`ParamFormat::Plain`] format.
+    ///
+    /// `id` and `label` take a `&'static str` or a `String`.
+    pub fn new(id: impl Into<Cow<'static, str>>, label: impl Into<Cow<'static, str>>, kind: ParamKind) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            kind,
+            apply: ParamApply::Live,
+            format: ParamFormat::Plain,
+        }
+    }
+
+    /// Stable name that `--set` and a spec file match on, and that results record.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Name the Parameters panel shows.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Type, bounds and default.
+    pub fn kind(&self) -> &ParamKind {
+        &self.kind
+    }
+
+    /// Point at which an edit reaches the simulation.
+    pub fn apply(&self) -> ParamApply {
+        self.apply
+    }
+
+    /// Display format of the value.
+    pub fn format(&self) -> ParamFormat {
+        self.format
+    }
+
     /// Marks the parameter [`ParamApply::OnReload`]. A parameter is live by default.
     pub fn on_reload(mut self) -> Self {
         self.apply = ParamApply::OnReload;
@@ -89,10 +128,98 @@ pub enum ParamKind {
     /// One of a list of named options, drawn as a dropdown.
     Choice {
         /// Option names, in index order.
-        options: &'static [&'static str],
+        options: ChoiceOptions,
         /// Index of the default option.
         default: usize,
     },
+}
+
+/// Option names of a [`ParamKind::Choice`], in index order.
+///
+/// A compiled model borrows a `'static` list through [`Self::from_static`]. A list built at run time is owned
+/// through [`Self::new`]. The two compare equal when they hold the same names.
+#[derive(Clone)]
+pub struct ChoiceOptions(ChoiceStorage);
+
+/// Storage behind [`ChoiceOptions`].
+#[derive(Clone)]
+enum ChoiceStorage {
+    Static(&'static [&'static str]),
+    Owned(Vec<String>),
+}
+
+impl ChoiceOptions {
+    /// Creates a list that borrows `options`.
+    pub const fn from_static(options: &'static [&'static str]) -> Self {
+        Self(ChoiceStorage::Static(options))
+    }
+
+    /// Creates a list that owns `options`.
+    pub fn new(options: Vec<String>) -> Self {
+        Self(ChoiceStorage::Owned(options))
+    }
+
+    /// Number of options.
+    pub fn len(&self) -> usize {
+        match &self.0 {
+            ChoiceStorage::Static(options) => options.len(),
+            ChoiceStorage::Owned(options) => options.len(),
+        }
+    }
+
+    /// Returns whether the list holds no option.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns the name of option `index`, or `None` past the end.
+    pub fn get(&self, index: usize) -> Option<&str> {
+        match &self.0 {
+            ChoiceStorage::Static(options) => options.get(index).copied(),
+            ChoiceStorage::Owned(options) => options.get(index).map(String::as_str),
+        }
+    }
+
+    /// Returns the option names in index order.
+    pub fn iter(&self) -> impl Iterator<Item = &str> + '_ {
+        let (borrowed, owned): (&[&str], &[String]) = match &self.0 {
+            ChoiceStorage::Static(options) => (options, &[]),
+            ChoiceStorage::Owned(options) => (&[], options),
+        };
+        borrowed.iter().copied().chain(owned.iter().map(String::as_str))
+    }
+
+    /// Returns the index of the option named `name`, the first one when two share it.
+    pub fn position(&self, name: &str) -> Option<usize> {
+        self.iter().position(|option| option == name)
+    }
+}
+
+/// Prints the option names as a list.
+impl fmt::Debug for ChoiceOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl PartialEq for ChoiceOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for ChoiceOptions {}
+
+impl From<&'static [&'static str]> for ChoiceOptions {
+    fn from(options: &'static [&'static str]) -> Self {
+        Self::from_static(options)
+    }
+}
+
+impl From<Vec<String>> for ChoiceOptions {
+    fn from(options: Vec<String>) -> Self {
+        Self::new(options)
+    }
 }
 
 /// Value of one parameter.
@@ -216,29 +343,26 @@ mod tests {
 
     fn descriptors() -> Vec<ParamDescriptor> {
         vec![
-            ParamDescriptor {
-                id: "live",
-                label: "Live",
-                kind: ParamKind::F32 {
+            ParamDescriptor::new(
+                "live",
+                "Live",
+                ParamKind::F32 {
                     min: 0.0,
                     max: 1.0,
                     default: 0.5,
                     step: None,
                 },
-                apply: ParamApply::Live,
-                format: ParamFormat::Plain,
-            },
-            ParamDescriptor {
-                id: "reload",
-                label: "Reload",
-                kind: ParamKind::U32 {
+            ),
+            ParamDescriptor::new(
+                "reload".to_owned(),
+                "Reload".to_owned(),
+                ParamKind::U32 {
                     min: 0,
                     max: 10,
                     default: 1,
                 },
-                apply: ParamApply::OnReload,
-                format: ParamFormat::Plain,
-            },
+            )
+            .on_reload(),
         ]
     }
 
@@ -290,9 +414,53 @@ mod tests {
         assert_eq!(b.default_value(), ParamValue::Bool(true));
 
         let c = ParamKind::Choice {
-            options: &["a", "b"],
+            options: ChoiceOptions::from_static(&["a", "b"]),
             default: 1,
         };
         assert_eq!(c.default_value(), ParamValue::Choice(1));
+    }
+
+    /// A model declares its stats, actions and choice options as consts, and the descriptors' constructors run in a
+    /// const context.
+    #[test]
+    fn descriptors_build_in_const_context() {
+        use crate::action::ActionDescriptor;
+        use crate::view::StatDescriptor;
+
+        const STATS: &[StatDescriptor] = &[StatDescriptor::new("Infected", [255, 0, 0, 255])];
+        const ACTIONS: &[ActionDescriptor] = &[ActionDescriptor::new("clear", "Clear")];
+        const SHAPE: ParamKind = ParamKind::Choice {
+            options: ChoiceOptions::from_static(&["square", "hexagon"]),
+            default: 1,
+        };
+
+        assert_eq!((STATS[0].label(), STATS[0].color()), ("Infected", [255, 0, 0, 255]));
+        assert_eq!(STATS[0], StatDescriptor::owned("Infected".to_owned(), [255, 0, 0, 255]));
+        assert_eq!((ACTIONS[0].id(), ACTIONS[0].label()), ("clear", "Clear"));
+        assert_eq!(
+            ACTIONS[0],
+            ActionDescriptor::owned("clear".to_owned(), "Clear".to_owned())
+        );
+        let ParamKind::Choice { options, default } = SHAPE else {
+            panic!("a choice");
+        };
+        assert_eq!((options.get(default), options.len()), (Some("hexagon"), 2));
+    }
+
+    #[test]
+    fn borrowed_and_owned_options_read_alike() {
+        let borrowed = ChoiceOptions::from_static(&["square", "hexagon", "square"]);
+        let owned = ChoiceOptions::new(vec!["square".to_owned(), "hexagon".to_owned(), "square".to_owned()]);
+        for options in [&borrowed, &owned] {
+            assert_eq!(options.len(), 3);
+            assert_eq!(options.get(1), Some("hexagon"));
+            assert_eq!(options.get(3), None);
+            assert_eq!(options.position("square"), Some(0), "the first of two equal names");
+            assert_eq!(options.position("triangle"), None);
+            assert_eq!(options.iter().collect::<Vec<_>>(), ["square", "hexagon", "square"]);
+        }
+        assert_eq!(borrowed, owned);
+        assert_eq!(format!("{borrowed:?}"), format!("{owned:?}"));
+        assert_ne!(borrowed, ChoiceOptions::from_static(&["square", "hexagon"]));
     }
 }

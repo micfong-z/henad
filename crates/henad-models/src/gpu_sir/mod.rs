@@ -195,7 +195,7 @@ mod tests {
 
     fn sir_counts(state: &State) -> (u64, u64, u64) {
         let stats = state.stats();
-        let scalar = |entry: &StatEntry| match &entry.value {
+        let scalar = |entry: &StatEntry| match entry.value() {
             StatValue::Scalar(v) => *v as u64,
             other => panic!("expected a scalar stat, got {other:?}"),
         };
@@ -328,7 +328,7 @@ mod tests {
         refresh_stats(&ctx, &mut gpu);
         let (gpu_s, gpu_i, gpu_r) = sir_counts(&gpu);
 
-        let cpu_scalar = |entry: &StatEntry| match &entry.value {
+        let cpu_scalar = |entry: &StatEntry| match entry.value() {
             StatValue::Scalar(v) => *v as u64,
             other => panic!("expected a scalar stat, got {other:?}"),
         };
@@ -393,7 +393,7 @@ mod runner_tests {
     }
 
     fn sir_counts(snap: &Snapshot) -> (u64, u64, u64) {
-        let scalar = |entry: &henad_core::view::StatEntry| match &entry.value {
+        let scalar = |entry: &henad_core::view::StatEntry| match entry.value() {
             StatValue::Scalar(v) => *v as u64,
             other => panic!("expected a scalar stat, got {other:?}"),
         };

@@ -1069,7 +1069,7 @@ mod tests {
 
         let mut params: Vec<ParamValue> = GpuForagingModel::param_descriptors() // (1)!
             .iter()
-            .map(|d| d.kind.default_value())
+            .map(|d| d.kind().default_value())
             .collect();
         params[NUM_AGENTS] = ParamValue::U32(4_000);
 

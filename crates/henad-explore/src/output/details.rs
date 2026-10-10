@@ -29,14 +29,14 @@ pub fn params_by_id_json(descriptors: &[ParamDescriptor], values: &[ParamValue],
             ParamValue::F32(number) => f32_json(number),
             ParamValue::U32(number) => json!(number),
             ParamValue::Bool(flag) => json!(flag),
-            ParamValue::Choice(index) => match (&descriptor.kind, choices) {
+            ParamValue::Choice(index) => match (descriptor.kind(), choices) {
                 (ParamKind::Choice { options, .. }, ChoiceForm::Name) => {
                     options.get(index).map_or_else(|| json!(index), |option| json!(option))
                 }
                 _ => json!(index),
             },
         };
-        map.insert(descriptor.id.to_owned(), value);
+        map.insert(descriptor.id().to_owned(), value);
     }
     Value::Object(map)
 }

@@ -91,11 +91,11 @@ impl ConfigColumns {
     pub fn new(params: &[ParamDescriptor], actions: &[ActionSpec]) -> Self {
         let headers = params
             .iter()
-            .map(|param| escape_field(param.id))
+            .map(|param| escape_field(param.id()))
             .chain(actions.iter().map(|action| escape_field(&action.column_name())))
             .collect();
         Self {
-            kinds: params.iter().map(|param| param.kind.clone()).collect(),
+            kinds: params.iter().map(|param| param.kind().clone()).collect(),
             headers,
         }
     }

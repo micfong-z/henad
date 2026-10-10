@@ -559,7 +559,7 @@ fn a_simulation_refuses_every_call_after_a_fault() {
 /// Returns the scalar of every stat `simulation` reports at its current tick.
 fn scalars(simulation: &mut henad_compute::simulation::Simulation) -> Vec<f64> {
     let sample = simulation.stats().expect("a sample");
-    sample.entries().iter().map(|entry| entry.value.scalar()).collect()
+    sample.entries().iter().map(|entry| entry.value().scalar()).collect()
 }
 
 /// Checks that a live edit reaches the parameter it specifies, with the same effect as setting that value before

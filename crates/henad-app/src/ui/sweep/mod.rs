@@ -333,7 +333,7 @@ fn sampled_stat_columns(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Option<
     let values: Vec<ParamValue> = entry
         .param_descriptors()
         .iter()
-        .map(|descriptor| descriptor.kind.default_value())
+        .map(|descriptor| descriptor.kind().default_value())
         .collect();
     ProbeReport::build(entry, gpu, &values, None)
         .ok()
@@ -1305,7 +1305,7 @@ mod tests {
         let panel_values: Vec<ParamValue> = sir
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         let mut panel = SweepPanel::default();
         panel.cached_check(&schema, &panel_values);
@@ -1325,7 +1325,7 @@ mod tests {
         let panel_values: Vec<ParamValue> = sir
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         let mut panel = SweepPanel::default();
         let draft = panel.draft_mut(&schema);
@@ -1353,7 +1353,7 @@ mod tests {
         let panel_values: Vec<ParamValue> = boids
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         let wake: WakeFn = Arc::new(|| {});
         let pending = [DraftIssue::missing(DraftSite::Outputs, COLUMNS_PENDING)];

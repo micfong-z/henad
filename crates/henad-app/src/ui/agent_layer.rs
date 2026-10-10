@@ -240,7 +240,7 @@ impl AgentLayer {
     /// `array_stride % 4 == 0`, and the storage-buffer alternative needs `VERTEX_STORAGE`, which
     /// WebGL2 lacks. Only this last hop widens. The snapshot copy stays one byte per agent.
     fn widen_colors(&mut self, points: &PointSnapshot, n: usize) {
-        let lut = palette_lut(points.palette);
+        let lut = palette_lut(&points.palette);
 
         if points.color.is_empty() {
             // A uniform population changes the buffer only when the palette or the count changes.

@@ -906,7 +906,7 @@ pub fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
     entry
         .param_descriptors()
         .iter()
-        .map(|descriptor| descriptor.kind.default_value())
+        .map(|descriptor| descriptor.kind().default_value())
         .collect()
 }
 
@@ -1091,7 +1091,7 @@ mod tests {
             .enumerate()
             .find(|(_, descriptor)| descriptor.is_live())
             .expect("sir has a live parameter");
-        let edited = match live.kind.default_value() {
+        let edited = match live.kind().default_value() {
             ParamValue::F32(_) => ParamValue::F32(0.25),
             other => other,
         };

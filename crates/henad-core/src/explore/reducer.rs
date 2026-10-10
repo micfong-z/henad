@@ -96,7 +96,7 @@ impl FromStr for ReducerKind {
 pub(crate) fn names_a_stat(column: &str, stats: &[StatDescriptor]) -> bool {
     stats.iter().any(|stat| {
         column
-            .strip_prefix(stat.label)
+            .strip_prefix(stat.label())
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
     })
 }
@@ -125,7 +125,7 @@ impl ReducerSpec {
         } else {
             Err(ReducerError::UnknownColumn {
                 column: self.column.clone(),
-                known: stats.iter().map(|stat| stat.label.to_owned()).collect(),
+                known: stats.iter().map(|stat| stat.label().to_owned()).collect(),
             })
         }
     }

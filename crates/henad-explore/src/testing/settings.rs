@@ -158,7 +158,7 @@ impl CheckSettings {
         let mut values = declared_defaults(entry);
         for (param_id, small) in SMALL_SIZES {
             if let Some(index) = entry.param_index(param_id) {
-                values[index] = shrunk(&entry.param_descriptors()[index].kind, small);
+                values[index] = shrunk(entry.param_descriptors()[index].kind(), small);
             }
         }
         self.apply_overrides(entry, values)
@@ -178,7 +178,7 @@ impl CheckSettings {
             let index = entry
                 .param_index(param_id)
                 .ok_or_else(|| format!("The settings set parameter '{param_id}', which the model does not declare."))?;
-            values[index] = parse_value(&entry.param_descriptors()[index].kind, text).map_err(|error| {
+            values[index] = parse_value(entry.param_descriptors()[index].kind(), text).map_err(|error| {
                 format!(
                     "The settings set parameter '{param_id}' to '{text}': {}.",
                     error_text(&error)

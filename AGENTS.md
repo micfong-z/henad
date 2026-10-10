@@ -583,6 +583,16 @@ depends on the facade and, to build, on henad-build. Its tests take the facade a
   stat/view types consumed by the UI (`view.rs`), and small shared
   helpers such as the param and stat builders (`helpers.rs`). `xorshift64` sits with the random
   draws in `authoring/primitives/rng.rs`. `Extent` is re-exported at the crate root.
+  `ParamDescriptor`, `StatDescriptor`, `StatEntry` and `ActionDescriptor` keep private fields over
+  `Cow<'static, str>`, read through accessors. The helpers and the `const fn new` of
+  `StatDescriptor` and `ActionDescriptor` borrow. `StatDescriptor::owned` and
+  `ActionDescriptor::owned` own, and `ParamDescriptor::new` takes either. `ParamKind::Choice` holds
+  a `ChoiceOptions` of either kind. Model code never changes with the storage. `ModelMetadata`
+  (built through `new`) and `Structure` are `#[non_exhaustive]`, and a match on `Structure` outside
+  henad-core takes a wildcard arm. The arms sit in the kit's `declared.rs` (`prepended_ids`, and
+  `metadata`, whose wildcard fails the check), `size_for_jobs` in `determinism.rs`, the app's
+  `structure_rows`, and a `matches!` in `benchmark.rs`, and a new variant takes an arm in each.
+  `LaneSpec`, `BufferSpec` and `PassSpec` stay `&'static`.
   `Network` keeps its adjacency rows in compressed sparse row (CSR) form with slack, beside an edge
   list the view draws. A full row relocates to the end, the engine repacks after a tick once
   `should_repack()` finds too much stale space, and a full `rebuild()` runs only when the graph
@@ -1765,7 +1775,8 @@ pause never changes a result. A run's trajectory depends on its seed and schedul
 The UI thread only ever reads the latest snapshot (`snapshot.rs`) and never touches the live
 `SimState` directly. Publishing goes through a `SnapshotSlot`, holding the `fresh` snapshot plus a
 `spare` the host hands back for its buffers. Recycling is only an optimisation. Dropping a snapshot
-instead means the next publish allocates.
+instead means the next publish allocates. A view borrows its palette from the state, and a CPU
+snapshot owns a copy, refilled into the recycled `Vec` like the cells and the lanes.
 
 `build_snapshot` calls `SimState::prepare_view` first, which is where a model turns state into
 something drawable — ants quantises its `f32` pheromone field into palette indices there. That

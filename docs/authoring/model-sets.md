@@ -105,6 +105,7 @@ Each clone keeps henad-models as its source.
 `register_network_model` assigns the entry the `TopologyHint::NETWORK` hint, for nodes drawn as agents with edges between them and no grid.
 The Model tab shows that topology as Network.
 The entry's metadata is a `Structure::Network` carrying the chunk size, the node lanes and the edge palette, and the Model tab lists all three.
+`ModelMetadata` and `Structure` are `#[non_exhaustive]`, and a host that matches on `entry.metadata().structure` takes a wildcard arm.
 
 ## GPU entries
 

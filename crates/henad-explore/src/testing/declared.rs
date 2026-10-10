@@ -19,7 +19,7 @@ pub(super) fn model_id(entry: &ModelEntry) -> Result<(), String> {
 
 /// Checks [`super::ModelCheck::ParamIds`].
 pub(super) fn param_ids(entry: &ModelEntry) -> Result<(), String> {
-    let ids = entry.param_descriptors().iter().map(|descriptor| descriptor.id);
+    let ids = entry.param_descriptors().iter().map(|descriptor| descriptor.id());
     let unnamed = unnameable(ids, |id| {
         id.starts_with(ACTION_COLUMN_PREFIX)
             .then_some("starts with 'action.', the prefix of an action's tick")
@@ -37,7 +37,7 @@ pub(super) fn param_ids(entry: &ModelEntry) -> Result<(), String> {
 
 /// Returns the sentences naming the parameter ids that `entry` declares more than once, `None` when no id repeats.
 fn repeated_param_ids(entry: &ModelEntry) -> Option<String> {
-    let repeated = repeated(entry.param_descriptors().iter().map(|descriptor| descriptor.id));
+    let repeated = repeated(entry.param_descriptors().iter().map(|descriptor| descriptor.id()));
     if repeated.is_empty() {
         return None;
     }
@@ -63,13 +63,14 @@ fn prepended_ids(structure: &Structure) -> &'static [&'static str] {
     match structure {
         Structure::Grid { .. } => &["grid_width", "grid_height"],
         Structure::Agents { .. } | Structure::Network { .. } => &["num_agents", "world_width", "world_height"],
-        Structure::GpuGrid { .. } | Structure::GpuAgents { .. } => &[],
+        // A GPU model declares every parameter itself, as does a structure this crate does not know.
+        _ => &[],
     }
 }
 
 /// Checks [`super::ModelCheck::StatLabels`].
 pub(super) fn stat_labels(entry: &ModelEntry) -> Result<(), String> {
-    let repeated = repeated(entry.stat_descriptors().iter().map(|descriptor| descriptor.label));
+    let repeated = repeated(entry.stat_descriptors().iter().map(|descriptor| descriptor.label()));
     if repeated.is_empty() {
         return Ok(());
     }
@@ -79,7 +80,7 @@ pub(super) fn stat_labels(entry: &ModelEntry) -> Result<(), String> {
 /// Checks [`super::ModelCheck::ActionIds`]. An id reaches the command line through `--act`, where duplicate ids are
 /// ambiguous. It also identifies the action in `--vary action.NAME=LEVELS` and a design table's `action.NAME` column.
 pub(super) fn action_ids(entry: &ModelEntry) -> Result<(), String> {
-    let ids = || entry.action_descriptors().iter().map(|action| action.id);
+    let ids = || entry.action_descriptors().iter().map(|action| action.id());
     let repeated = repeated(ids());
     let repeated = (!repeated.is_empty()).then(|| declared_twice("Action id", "Action ids", &repeated));
     let unnamed = unnameable(ids(), |_| None).map(|reasons| named_ids("action", &reasons));
@@ -128,8 +129,8 @@ fn named_ids(kind: &str, refused: &[(&str, &str)]) -> String {
 
 /// Checks [`super::ModelCheck::Palette`]. A view colours its cells or agents from the palette by index.
 pub(super) fn palette(entry: &ModelEntry) -> Result<(), String> {
-    match entry.metadata().palette {
-        Some([]) => Err("The declared palette holds no colors.".to_owned()),
+    match &entry.metadata().palette {
+        Some(palette) if palette.is_empty() => Err("The declared palette holds no colors.".to_owned()),
         _ => Ok(()),
     }
 }
@@ -159,14 +160,18 @@ pub(super) fn metadata(entry: &ModelEntry) -> Result<(), String> {
     }
     let hint = entry.topology_hint();
     let agrees = match &metadata.structure {
-        Structure::Grid { .. } | Structure::GpuGrid { .. } => hint == TopologyHint::GRID,
-        Structure::Agents { .. } | Structure::GpuAgents { .. } => hint.agents,
-        Structure::Network { .. } => hint.agents && hint.edges,
+        Structure::Grid { .. } | Structure::GpuGrid { .. } => Some(hint == TopologyHint::GRID),
+        Structure::Agents { .. } | Structure::GpuAgents { .. } => Some(hint.agents),
+        Structure::Network { .. } => Some(hint.agents && hint.edges),
+        // A structure added to henad-core after this arm fails the check until the kit compares it.
+        _ => None,
     };
-    if !agrees {
-        problems.push(format!(
+    match agrees {
+        Some(true) => {}
+        Some(false) => problems.push(format!(
             "declares a structure that the topology hint {hint:?} disagrees with"
-        ));
+        )),
+        None => problems.push("declares a structure that the testing kit does not check".to_owned()),
     }
     if gpu
         != matches!(

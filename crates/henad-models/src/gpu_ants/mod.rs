@@ -302,7 +302,7 @@ mod tests {
     fn params(num_agents: u32, world: f32) -> Vec<ParamValue> {
         let mut values: Vec<ParamValue> = GpuAnts::param_descriptors()
             .iter()
-            .map(|desc| desc.kind.default_value())
+            .map(|desc| desc.kind().default_value())
             .collect();
         values[NUM_AGENTS] = ParamValue::U32(num_agents);
         values[WORLD_WIDTH] = ParamValue::F32(world);
@@ -415,7 +415,7 @@ mod tests {
         state.refresh_stats();
 
         let stats = state.stats();
-        let scalar = |i: usize| match &stats[i].value {
+        let scalar = |i: usize| match stats[i].value() {
             StatValue::Scalar(v) => *v,
             other => panic!("ants report scalars, got {other:?}"),
         };
@@ -446,7 +446,7 @@ mod tests {
             .map(|&w| f64::from(f32::from_bits(w)))
             .sum();
 
-        let StatValue::Scalar(total) = state.stats()[2].value else {
+        let StatValue::Scalar(total) = *state.stats()[2].value() else {
             panic!("total pheromone is a scalar");
         };
         assert!(
@@ -512,7 +512,7 @@ mod tests {
         let mut values = params(1_000, 200.0);
         let Some(index) = GpuAnts::param_descriptors()
             .iter()
-            .position(|desc| desc.id == "evaporation")
+            .position(|desc| desc.id() == "evaporation")
         else {
             panic!("gpu_ants declares no evaporation parameter");
         };

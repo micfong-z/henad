@@ -194,7 +194,7 @@ fn build_refusal(build: impl FnOnce()) -> String {
 fn defaults(descriptors: &[ParamDescriptor]) -> Vec<ParamValue> {
     descriptors
         .iter()
-        .map(|descriptor| descriptor.kind.default_value())
+        .map(|descriptor| descriptor.kind().default_value())
         .collect()
 }
 

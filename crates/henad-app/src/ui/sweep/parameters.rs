@@ -213,7 +213,7 @@ pub fn parameters_section(
             panel_value: input.panel_values.get(index),
             in_table: table_columns
                 .as_ref()
-                .map(|columns| columns.iter().any(|column| column == descriptor.id)),
+                .map(|columns| columns.iter().any(|column| column == descriptor.id())),
             preview: input.summary.param_previews.get(index).and_then(Option::as_ref),
             issue: input.summary.issues_at(DraftSite::Factor(index)).next(),
         };
@@ -286,13 +286,13 @@ fn parameter_row(
     };
     let add_label = |ui: &mut egui::Ui, factor: &mut FactorDraft| match row.in_table {
         Some(true) => ui
-            .add(Label::new(format!("{MDI_TABLE_COLUMN} {}", descriptor.label)).truncate())
+            .add(Label::new(format!("{MDI_TABLE_COLUMN} {}", descriptor.label())).truncate())
             .on_hover_text("Set by design table"),
         Some(false) => ui
-            .add(Label::new(descriptor.label).truncate())
+            .add(Label::new(descriptor.label()).truncate())
             .on_hover_text("Not in design table. Uses value from the Parameters tab."),
         None => ui
-            .add(Checkbox::new(&mut factor.vary, descriptor.label))
+            .add(Checkbox::new(&mut factor.vary, descriptor.label()))
             .on_hover_text(vary_tooltip.as_str()),
     };
     let varied = row.in_table.is_none();
@@ -332,13 +332,13 @@ fn ticked(
     factor: &mut FactorDraft,
     label: &egui::Response,
 ) {
-    if !(label.changed() && factor.vary) || LevelNoun::of(&row.descriptor.kind) == LevelNoun::Option {
+    if !(label.changed() && factor.vary) || LevelNoun::of(row.descriptor.kind()) == LevelNoun::Option {
         return;
     }
     if context.search && factor.levels_text.trim().is_empty() {
-        factor.levels_text = whole_range_text(&row.descriptor.kind);
+        factor.levels_text = whole_range_text(row.descriptor.kind());
     } else if !context.search {
-        rows.focus_later(ui, values_field_id(row.model_id, row.descriptor.id));
+        rows.focus_later(ui, values_field_id(row.model_id, row.descriptor.id()));
     }
 }
 
@@ -367,9 +367,9 @@ fn values_cell(
             }
             return;
         }
-        let noun = LevelNoun::of(&row.descriptor.kind);
+        let noun = LevelNoun::of(row.descriptor.kind());
         let (control, text_len) = if noun == LevelNoun::Option {
-            let menu = options_menu(ui, &row.descriptor.kind, &mut factor.levels_text, width);
+            let menu = options_menu(ui, row.descriptor.kind(), &mut factor.levels_text, width);
             (menu.labelled_by(label.id), None)
         } else {
             let field = values_field(ui, context, row, &mut factor.levels_text, width);
@@ -402,9 +402,9 @@ fn values_field(
     text: &mut String,
     width: f32,
 ) -> egui::Response {
-    let integer = matches!(row.descriptor.kind, ParamKind::U32 { .. });
+    let integer = matches!(row.descriptor.kind(), ParamKind::U32 { .. });
     let (hint, tooltip) = if context.search {
-        (whole_range_text(&row.descriptor.kind), SEARCH_LEVELS_TOOLTIP)
+        (whole_range_text(row.descriptor.kind()), SEARCH_LEVELS_TOOLTIP)
     } else if context.draws_ranges {
         ("min:max or values".to_owned(), levels_tooltip(integer, true))
     } else {
@@ -415,15 +415,15 @@ fn values_field(
         let field = ui
             .add(
                 TextEdit::singleline(text)
-                    .id(values_field_id(row.model_id, row.descriptor.id))
+                    .id(values_field_id(row.model_id, row.descriptor.id()))
                     .hint_text(hint)
                     .desired_width(field_width),
             )
             .on_hover_text(tooltip);
-        let name = format!("Edit values of {}", row.descriptor.label);
+        let name = format!("Edit values of {}", row.descriptor.label());
         let button = icon_button(ui, MDI_TUNE_VERTICAL, &name, "Edit values");
         Popup::from_toggle_button_response(&button)
-            .id(values_editor_id(row.model_id, row.descriptor.id))
+            .id(values_editor_id(row.model_id, row.descriptor.id()))
             .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
             .width(EDITOR_WIDTH)
             .show(|ui| {
@@ -627,8 +627,8 @@ struct ValuesEditor<'a> {
 
 /// Draws the values editor of a number's row, writing each edit into `text` at once.
 fn values_editor(ui: &mut egui::Ui, editor: &ValuesEditor<'_>, text: &mut String) {
-    let kind = &editor.descriptor.kind;
-    ui.strong(editor.descriptor.label);
+    let kind = editor.descriptor.kind();
+    ui.strong(editor.descriptor.label());
     ui.weak(bounds_text(kind));
     let mut segment = EditorSegment::of(text, editor.draws_ranges);
     let drawn_label = if editor.search {
@@ -842,7 +842,7 @@ fn options_menu(ui: &mut egui::Ui, kind: &ParamKind, text: &mut String, width: f
 mod tests {
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
-    use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+    use henad_core::params::{ChoiceOptions, ParamDescriptor, ParamKind, ParamValue};
 
     use super::{
         EditorSegment, LevelNoun, RangeFields, around_fill, both_ends_fill, bounds_text, format_hint,
@@ -873,12 +873,12 @@ mod tests {
     };
 
     const NETWORK: ParamKind = ParamKind::Choice {
-        options: &["Random", "Geometric"],
+        options: ChoiceOptions::from_static(&["Random", "Geometric"]),
         default: 0,
     };
 
     const LAYOUT: ParamKind = ParamKind::Choice {
-        options: &["Random", "Geometric", "Lattice"],
+        options: ChoiceOptions::from_static(&["Random", "Geometric", "Lattice"]),
         default: 0,
     };
 
@@ -1019,13 +1019,7 @@ mod tests {
 
     /// Returns whether `henad-cli --vary` accepts `text` as the values of a parameter of `kind` in a factorial design.
     fn vary_takes(kind: &ParamKind, text: &str) -> bool {
-        let descriptor = ParamDescriptor {
-            id: "param",
-            label: "Param",
-            kind: kind.clone(),
-            apply: ParamApply::Live,
-            format: ParamFormat::Plain,
-        };
+        let descriptor = ParamDescriptor::new("param", "Param", kind.clone());
         LevelSpec::parse(text).is_ok_and(|levels| {
             FactorSpec::param("param", levels)
                 .resolve(&[descriptor], &[], &DesignKind::Factorial)

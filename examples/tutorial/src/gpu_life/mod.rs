@@ -99,7 +99,7 @@ mod tests {
     use crate::life::LifeModel;
 
     fn alive(stats: &[StatEntry]) -> u64 {
-        match stats.first().map(|s| s.value.clone()) {
+        match stats.first().map(|s| s.value().clone()) {
             Some(StatValue::Scalar(v)) => v as u64,
             other => panic!("expected a scalar Alive stat, got {other:?}"),
         }

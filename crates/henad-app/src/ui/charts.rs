@@ -53,7 +53,7 @@ fn stats_chart(ui: &mut egui::Ui, app: &AppState) {
         let filled = history.len();
 
         for (col, desc) in history.descriptors().iter().enumerate() {
-            let [r, g, b, _] = desc.color;
+            let [r, g, b, _] = desc.color();
             let color = egui::Color32::from_rgb(r, g, b);
 
             let points: Vec<[f64; 2]> = (0..filled)
@@ -63,19 +63,19 @@ fn stats_chart(ui: &mut egui::Ui, app: &AppState) {
                 })
                 .collect();
 
-            plot_ui.line(egui_plot::Line::new(desc.label, points).color(color).width(1.5));
+            plot_ui.line(egui_plot::Line::new(desc.label(), points).color(color).width(1.5));
         }
     });
 
     // The latest snapshot's vector and histogram stats get a plot each.
     if let Some(snap) = &app.snapshot {
         for stat in &snap.stats {
-            match &stat.value {
+            match stat.value() {
                 StatValue::Vector2D { x, y } => {
-                    vector_arrow_chart(ui, stat.label, *x, *y, stat.color);
+                    vector_arrow_chart(ui, stat.label(), *x, *y, stat.color());
                 }
                 StatValue::Histogram { edges, counts } => {
-                    histogram_chart(ui, stat.label, edges, counts, stat.color);
+                    histogram_chart(ui, stat.label(), edges, counts, stat.color());
                 }
                 StatValue::Scalar(_) => {}
             }

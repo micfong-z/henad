@@ -201,13 +201,13 @@ impl FactorSpec {
     ) -> Result<Factor, FactorError> {
         match &self.target {
             FactorTarget::Param(id) => {
-                let Some(index) = params.iter().position(|descriptor| descriptor.id == *id) else {
+                let Some(index) = params.iter().position(|descriptor| descriptor.id() == id) else {
                     return Err(FactorError::UnknownParam {
                         id: id.clone(),
-                        known: params.iter().map(|descriptor| descriptor.id).collect(),
+                        known: params.iter().map(|descriptor| descriptor.id().to_owned()).collect(),
                     });
                 };
-                let kind = &params[index].kind;
+                let kind = params[index].kind();
                 let domain = match &self.levels {
                     LevelSpec::Values(raw) => FactorDomain::Levels(parsed_levels(id, kind, raw)?),
                     &LevelSpec::Range { min, max, step } => range_domain(id, kind, min, max, step, sampled)?,
@@ -365,7 +365,7 @@ pub enum FactorError {
         /// Id as given.
         id: String,
         /// Ids the descriptors have.
-        known: Vec<&'static str>,
+        known: Vec<String>,
     },
     /// A name that no action of the spec has.
     UnknownAction {
@@ -689,7 +689,7 @@ fn whole_tick(name: &str, value: f64) -> Result<u64, FactorError> {
 fn every_level(id: &str, kind: &ParamKind) -> Result<Vec<FactorLevel>, FactorError> {
     let values = match kind {
         ParamKind::Bool { .. } => vec![ParamValue::Bool(false), ParamValue::Bool(true)],
-        ParamKind::Choice { options: [], .. } => {
+        ParamKind::Choice { options, .. } if options.is_empty() => {
             return Err(FactorError::NoLevels {
                 target: FactorTarget::Param(id.to_owned()),
             });

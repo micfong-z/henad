@@ -229,7 +229,7 @@ mod tests {
     fn params(num_agents: u32, world: f32) -> Vec<ParamValue> {
         let mut values: Vec<ParamValue> = GpuBoids::param_descriptors()
             .iter()
-            .map(|desc| desc.kind.default_value())
+            .map(|desc| desc.kind().default_value())
             .collect();
         values[NUM_AGENTS] = ParamValue::U32(num_agents);
         values[WORLD_WIDTH] = ParamValue::F32(world);
@@ -342,7 +342,7 @@ mod tests {
         state.refresh_stats();
 
         let stats = state.stats();
-        let StatValue::Scalar(avg_speed) = stats[0].value else {
+        let StatValue::Scalar(avg_speed) = *stats[0].value() else {
             panic!("average speed is a scalar");
         };
         assert!(

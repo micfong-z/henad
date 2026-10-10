@@ -32,7 +32,7 @@ pub enum ParamKind {
     F32 { min: f32, max: f32, default: f32, step: Option<f32> },
     U32 { min: u32, max: u32, default: u32 },
     Bool { default: bool },
-    Choice { options: &'static [&'static str], default: usize },
+    Choice { options: ChoiceOptions, default: usize },
 }
 ```
 
@@ -41,6 +41,9 @@ Both take an id, a label, a default, a minimum and a maximum, and `f32_param` ad
 
 The id is the machine-facing name, matched by `henad-cli --set` and recorded in the benchmark CSV output.
 The label is the human-facing name the app shows.
+A descriptor's fields are private, and `id()`, `label()`, `kind()`, `apply()` and `format()` read them.
+The helpers borrow their strings for `'static`.
+`ParamDescriptor::new` also takes a `String`, for a model whose declarations are read at run time.
 
 `bool_param` and `choice_param` cover the other two kinds.
 `bool_param` takes an id, a label and a default, and `choice_param` takes an id, a label, the option labels and the index of the default option.
@@ -51,6 +54,7 @@ Virus on a Network declares all four kinds.
 ```
 
 `NETWORKS` is `&["Random", "Geometric"]`, and `RANDOM` is 0.
+`choice_param` wraps the list in `ChoiceOptions::from_static`, and `ChoiceOptions::new` takes owned names instead.
 The Parameters tab draws a number as a slider, a bool as a checkbox and a choice as a dropdown.
 Each kind has a matching reader, `extract_f32`, `extract_u32`, `extract_bool` or `extract_choice`.
 All four readers take the slice, an index and a fallback, and return the fallback when that index is missing or holds another kind.

@@ -35,7 +35,7 @@ pub use henad_core::{actions, buffers, build_info};
 /// }
 ///
 /// assert_eq!(DENSITY, 0);
-/// assert_eq!(descriptors()[DENSITY].id, "density");
+/// assert_eq!(descriptors()[DENSITY].id(), "density");
 /// ```
 #[macro_export]
 macro_rules! params {
@@ -53,7 +53,7 @@ pub mod __macro_support {
 /// Parameter descriptors and values, and the text form that `--set` accepts.
 pub mod params {
     pub use henad_core::explore::value::{ValueError, ValueKind, format_value};
-    pub use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+    pub use henad_core::params::{ChoiceOptions, ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 }
 
 /// Statistic descriptors and values, and the CSV writer for stat series.

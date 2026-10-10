@@ -238,11 +238,11 @@ mod tests {
             u64::from(self.tick)
         }
         fn stats(&self) -> Vec<StatEntry> {
-            vec![StatEntry {
-                label: "Tick",
-                value: StatValue::Scalar(f64::from(self.readback.values()[0])),
-                color: [0; 4],
-            }]
+            vec![StatEntry::new(
+                "Tick",
+                StatValue::Scalar(f64::from(self.readback.values()[0])),
+                [0; 4],
+            )]
         }
         fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
             false
@@ -315,7 +315,7 @@ mod tests {
         );
         submit_steps(&mut state, &ctx, 4);
         let stats = sample_stats(&mut state, &ctx).expect("the sample lands");
-        assert_eq!(stats[0].value.scalar(), 7.0, "the sample reported the slice's tick");
+        assert_eq!(stats[0].value().scalar(), 7.0, "the sample reported the slice's tick");
         assert!(ctx.faults.take().is_none());
     }
 }

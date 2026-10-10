@@ -107,7 +107,7 @@ fn neighbourhood() -> (usize, ComponentStats) {
 #[test]
 fn a_gpu_action_is_built_from_a_pass() {
     let action = scatter_action();
-    assert_eq!(action.desc.id, "scatter", "the descriptor keeps its id");
+    assert_eq!(action.desc.id(), "scatter", "the descriptor keeps its id");
     assert!(action.pass.bindings.is_empty(), "the pass binds nothing");
 }
 
@@ -165,6 +165,7 @@ mod named_only {
         henad::explore::design_csv::DesignTableValueError,
         henad::explore::design_rng::DesignRng,
         henad::action::RefusedActions<'static>,
+        henad::params::ChoiceOptions,
     );
 
     /// Number of steps that one command buffer of a GPU state may hold, for a host that encodes its own command

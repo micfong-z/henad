@@ -521,8 +521,8 @@ fn varied_lines(
         return schema
             .params
             .iter()
-            .filter(|descriptor| columns.iter().any(|column| column == descriptor.id))
-            .map(|descriptor| (descriptor.label.to_owned(), "From design table".to_owned()))
+            .filter(|descriptor| columns.iter().any(|column| column == descriptor.id()))
+            .map(|descriptor| (descriptor.label().to_owned(), "From design table".to_owned()))
             .collect();
     }
     let params = schema
@@ -533,7 +533,7 @@ fn varied_lines(
         .filter(|((_, factor), _)| factor.vary)
         .map(|((descriptor, factor), count)| {
             (
-                descriptor.label.to_owned(),
+                descriptor.label().to_owned(),
                 levels_summary(&factor.levels_text, *count, search),
             )
         });
@@ -594,10 +594,10 @@ fn held_values(draft: &SweepDraft, schema: &ModelSchema<'_>, panel_values: &[Par
         .zip(&draft.factors)
         .zip(panel_values)
         .filter(|((descriptor, factor), _)| match &table_columns {
-            Some(columns) => !columns.iter().any(|column| column == descriptor.id),
+            Some(columns) => !columns.iter().any(|column| column == descriptor.id()),
             None => !factor.vary,
         })
-        .map(|((descriptor, _), value)| format!("{} {}", descriptor.label, display_value(descriptor, value)))
+        .map(|((descriptor, _), value)| format!("{} {}", descriptor.label(), display_value(descriptor, value)))
         .collect()
 }
 
@@ -709,7 +709,7 @@ mod tests {
         entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect()
     }
 
@@ -718,7 +718,7 @@ mod tests {
         let entry = sir();
         let schema = entry.schema();
         let panel_values = default_values(&entry);
-        let ids: Vec<&str> = schema.params.iter().map(|descriptor| descriptor.id).collect();
+        let ids: Vec<&str> = schema.params.iter().map(|descriptor| descriptor.id()).collect();
         let mut panel = SweepPanel::default();
         edit(panel.draft_mut(&schema), &ids);
         let check = panel.cached_check(&schema, &panel_values);

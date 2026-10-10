@@ -356,9 +356,9 @@ mod tests {
             let config = space.decode(genome, &base());
             for (descriptor, value) in params.iter().zip(&config.params) {
                 assert!(
-                    check_value(&descriptor.kind, value).is_ok(),
+                    check_value(descriptor.kind(), value).is_ok(),
                     "{value:?} for {}",
-                    descriptor.id
+                    descriptor.id()
                 );
             }
             let ParamValue::F32(rate) = config.params[0] else {
