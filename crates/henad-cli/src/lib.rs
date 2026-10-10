@@ -25,6 +25,10 @@
 //! device `--list` leaves the GPU models out, and a GPU model id on the command line is rejected. The benchmark is
 //! [`henad_explore::benchmark::run_benchmark`], and the two exports step a [`Simulation`].
 //!
+//! `--model-file` reads a model file, a grid rule as one TOML file, and adds its model to the set, in place of a model
+//! with the same id. The files and `--spec` are read before the device is acquired. The device is then sized to the
+//! files' models as well.
+//!
 //! ```text
 //! henad-cli --list
 //! henad-cli ants --params
@@ -35,6 +39,7 @@
 //! henad-cli gpu_game_of_life --set grid_width=4096 --set grid_height=4096 --steps 10000
 //! henad-cli sir --vary infection_rate=0.1:0.5:0.1 --reps 5 --steps 500 --out sir-sweep
 //! henad-cli --spec crates/henad-explore/specs/sir_sweep.toml --out sir-sweep
+//! henad-cli --model-file crates/henad-explore/specs/models/life_rule.toml --vary density=0.1:0.5:0.1 --out life-sweep
 //! henad-cli --merge shard-0 shard-1 --out sir-sweep
 //! ```
 //!
@@ -53,14 +58,16 @@
     reason = "henad-cli is a command line: stdout carries its results, stderr its progress log"
 )]
 
+use std::borrow::Cow;
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufWriter, Write as _};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use clap::error::ErrorKind;
 use clap::{ArgGroup, CommandFactory as _, FromArgMatches as _, Parser};
 
 use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet};
@@ -76,6 +83,7 @@ use henad_core::params::{ParamFormat, ParamKind};
 use henad_core::provenance::BuildInfo;
 use henad_explore::benchmark::{BenchmarkEvent, BenchmarkSettings, run_benchmark};
 use henad_explore::device::acquire_headless;
+use henad_explore::model_file::ModelFile;
 use henad_explore::spec_file::{LoadedSpec, SpecFileError};
 use henad_explore::sweep::Provenance;
 
@@ -169,7 +177,8 @@ pub fn run(options: CliOptions, arguments: impl IntoIterator<Item = OsString>) -
 ///
 /// # Errors
 ///
-/// Returns clap's error for a command line that does not parse, and for `--help` and `--version`.
+/// Returns clap's error for a command line that does not parse, for `--help` and `--version`, and for two model files
+/// or more with neither a model id nor a spec in a mode that needs a model.
 fn parse_args(
     name: String,
     version: &'static str,
@@ -182,7 +191,16 @@ fn parse_args(
         command = command.about(about);
     }
     let mut matches = command.try_get_matches_from_mut(arguments)?;
-    Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))
+    let args = Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))?;
+    // Clap accepts any number of model files in place of the model id. Only one of them can stand in for it.
+    let needs_model = !matches!(Mode::of(&args), Mode::List | Mode::Merge | Mode::InfoOnly);
+    if needs_model && args.model.is_none() && args.explore.spec.is_none() && args.model_file.len() > 1 {
+        return Err(command.error(
+            ErrorKind::MissingRequiredArgument,
+            "a model id is required with more than one --model-file",
+        ));
+    }
+    Ok(args)
 }
 
 /// Headless benchmark runner for Henad models.
@@ -197,9 +215,13 @@ fn parse_args(
 // A spec file needs one of these flags. Each flag puts the spec to a use.
 #[command(group(ArgGroup::new("spec_use").args(["out", "dry_run", "params"]).multiple(true)))]
 struct Args {
-    /// Model id to run (see `--list`). Optional with `--spec`.
-    #[arg(required_unless_present_any = ["list", "info", "spec", "merge"])]
+    /// Model id to run (see `--list`). Optional with `--spec`, and with one `--model-file`.
+    #[arg(required_unless_present_any = ["list", "info", "spec", "merge", "model_file"])]
     model: Option<String>,
+
+    /// Load a model file and add its model to this build's models, in place of a model with the same id. Repeatable.
+    #[arg(long = "model-file", value_name = "PATH")]
+    model_file: Vec<PathBuf>,
 
     /// Steps to run (and time) per rep, or per run of a sweep.
     #[arg(long, default_value_t = 1000)]
@@ -279,7 +301,7 @@ enum Mode {
     List,
     /// `--merge`. Joins a sweep's shard directories, with no model and no device.
     Merge,
-    /// `--info` with no model and no sweep. Prints the runtime and exits.
+    /// `--info` with no model and no sweep. Prints the runtime and exits. A single `--model-file` names a model.
     InfoOnly,
     Params,
     Explore,
@@ -295,7 +317,7 @@ impl Mode {
             Self::List
         } else if !args.explore.merge.is_empty() {
             Self::Merge
-        } else if args.info && args.model.is_none() && !args.explore.is_sweep() {
+        } else if args.info && args.model.is_none() && args.model_file.len() != 1 && !args.explore.is_sweep() {
             Self::InfoOnly
         } else if args.params {
             Self::Params
@@ -332,6 +354,12 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
     if mode == Mode::Merge {
         return explore::merge_shards(args);
     }
+
+    // The model files and the spec are read before the device is acquired, so the device is sized to every model the
+    // command line can name.
+    let (models, file_ids) = with_model_files(models, &args.model_file, !args.json)?;
+    let models = &*models;
+    let spec = args.explore.spec.as_deref().map(load_spec).transpose()?;
 
     // A device lets the GPU models be listed and run. Without a device, as on CI with no GPU, only the CPU models are
     // listed and run. A set without GPU models requests a device only under `--info`, to report its adapter.
@@ -381,14 +409,16 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         _ => {}
     }
 
-    let spec = args.explore.spec.as_deref().map(load_spec).transpose()?;
-    let model_id = match (args.model.as_deref(), spec.as_ref()) {
-        (Some(id), Some(loaded)) if id != loaded.spec.model => {
+    let model_id = match (args.model.as_deref(), spec.as_ref(), file_ids.as_slice()) {
+        (Some(id), Some(loaded), _) if id != loaded.spec.model => {
             bail!("model '{id}' does not match the spec's model '{}'", loaded.spec.model)
         }
-        (Some(id), _) => id,
-        (None, Some(loaded)) => &loaded.spec.model,
-        (None, None) => bail!("a model id is required (try --list)"),
+        (Some(id), _, _) => id,
+        (None, Some(loaded), _) => &loaded.spec.model,
+        (None, None, [id]) => id,
+        (None, None, []) => bail!("a model id is required (try --list)"),
+        // `parse_args` refuses this command line first.
+        (None, None, _) => bail!("a model id is required with more than one --model-file"),
     };
     let entry = models.lookup(model_id, gpu_ctx.as_ref()).map_err(|error| match error {
         ModelLookupError::NotInSet { .. } => anyhow!("{error} (try --list)"),
@@ -405,6 +435,65 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         _ => return run_single(entry, args, mode, gpu_ctx.as_ref(), runtime).map(|()| 0),
     }
     Ok(0)
+}
+
+/// Returns `models` with the model of each file in `paths` in place of the model with its id, or added after the
+/// others, and the id of each file's model in the order of `paths`.
+///
+/// When `notes` is set, a note on stderr names each model a file replaces. The set is cloned only when `paths` is not
+/// empty.
+///
+/// # Errors
+///
+/// Returns an error when a file cannot be read, does not hold a model file, or holds a model that does not compile, with
+/// each problem at its line and column in the file, and when two files declare the same id.
+fn with_model_files<'a>(
+    models: &'a ModelSet,
+    paths: &[PathBuf],
+    notes: bool,
+) -> Result<(Cow<'a, ModelSet>, Vec<String>)> {
+    if paths.is_empty() {
+        return Ok((Cow::Borrowed(models), Vec::new()));
+    }
+    let mut loaded = models.clone();
+    let mut ids: Vec<String> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let entry = load_model_file(path)?;
+        let id = entry.id().to_owned();
+        if let Some(earlier) = ids.iter().position(|earlier| *earlier == id) {
+            bail!(
+                "model files '{}' and '{}' both declare the model '{id}'",
+                paths[earlier].display(),
+                path.display()
+            );
+        }
+        if loaded.replace(entry)?.is_some() && notes {
+            eprintln!(
+                "note: model file '{}' replaces the model '{id}' of this build",
+                path.display()
+            );
+        }
+        ids.push(id);
+    }
+    Ok((Cow::Owned(loaded), ids))
+}
+
+/// Reads the model file at `path` and returns the entry of its model.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read, does not hold a model file, or holds a model that does not compile.
+/// The error lists each problem as `path:line:column: error: message`, with its notes on the lines below.
+fn load_model_file(path: &Path) -> Result<ModelEntry> {
+    let text = fs::read_to_string(path).with_context(|| format!("cannot read model file '{}'", path.display()))?;
+    ModelFile::parse(&text).and_then(|file| file.entry()).map_err(|error| {
+        let problems: Vec<String> = error
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.clone().with_file(path.display().to_string()).to_string())
+            .collect();
+        anyhow!(problems.join("\n")).context(format!("cannot load model file '{}'", path.display()))
+    })
 }
 
 /// Returns whether `models` holds a GPU model.

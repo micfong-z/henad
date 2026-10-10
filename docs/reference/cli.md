@@ -16,6 +16,7 @@ A project with its own models can [host the same command line](#hosting-the-comm
 !!! info "Henad 0.3"
 
     This page describes Henad 0.3.
+    `--model-file` and model files arrive in Henad 0.4.
 
 ```text
 henad-cli [OPTIONS] [MODEL]
@@ -25,6 +26,8 @@ henad-cli [OPTIONS] [MODEL]
 On a machine without a compute adapter `--list` leaves the GPU models out, and naming one is rejected with the message that it needs a GPU.
 An id the build does not include is rejected as well.
 A sweep or search read from `--spec` takes the model from the spec file, and `MODEL` can be left out.
+With one [`--model-file`](#model-files) and no spec, the file's model is the model, and `MODEL` can be left out too.
+With two files or more and no spec, `MODEL` is required, and a command line without it exits with status 2.
 
 !!! warning "Release mode"
 
@@ -39,6 +42,7 @@ A sweep or search read from `--spec` takes the model from the spec file, and `MO
 | `--params` | | Print the model's parameters, with kinds, defaults and ranges, and exit. With `--json`, print them as [one JSON line](#parameters-as-json) |
 | `--info` | | Print host and GPU details. Without a model or a sweep, prints and exits. Otherwise, prints as a provenance header |
 | `--json` | | Emit one JSON object per line instead of the human report, for a driver to parse |
+| `--model-file <PATH>` | | Load a [model file](#model-files) and add its model to the build's models, in place of a model with the same id. Repeatable |
 | `--threads <N>` | 0 | Worker threads for CPU models. 0 uses the rayon default, one per logical cpu |
 | `--set <ID=VALUE>` | | Override one parameter. Repeatable |
 | `--act <ID@TICK>` | | Run one of the model's actions at that tick. Repeatable. In a sweep, every run fires it |
@@ -159,6 +163,38 @@ For a CPU model, `--export-stats` prepares the model's view before each sample, 
 A stat computed during that preparation, such as Team Assembly's component stats, is then current in every row.
 Each sample also pays for the preparation, and `--stats-every` spaces the samples out.
 
+## Model files
+
+`--model-file` loads a [model file](model-files.md), a GPU grid model written as one TOML file, and adds its model to the models the build offers.
+Every mode takes it but `--merge`: a benchmark, the two exports, `--list`, `--params`, and a sweep or search from flags or from `--spec`, `--dry-run` and `--resume` included.
+
+```bash
+cargo run --release -p henad-cli -- life_rule \
+  --model-file crates/henad-explore/specs/models/life_rule.toml --params
+```
+
+The flag is repeatable, and two files cannot declare the same id.
+A file whose id names a model of the build replaces that model for the rest of the command line, and in text mode a note on stderr says so.
+`--list` then shows the file's model under that id, and `--params --json` adds the `origin` and `code_hash` of [its code](#parameters-as-json).
+
+The files and the spec are read before the GPU device is acquired, and the device is sized to the files' models as well as the build's.
+The step is checked while the file is read.
+A file that cannot be read, is no model file, or holds a model that does not compile stops the command line with exit status 1 before anything runs.
+Each problem prints at its place in the file, as `PATH:LINE:COLUMN: error: MESSAGE` with its notes below, where the column counts characters:
+
+```text
+Error: cannot load model file 'life_rule.toml'
+
+Caused by:
+    life_rule.toml:39:5: error: loops are not allowed in a grid rule. Without them a step's work is bounded
+```
+
+A sweep of a file's model records the file's canonical text in the manifest as `model.code`, and each session records the code's hash as the `code_hash` of its [`model_source`](#builds).
+A [resume](#resuming), a [search resume](#resuming-a-search) and a [merge](#shards-and-merging) then accept only that code.
+A resume passes the same `--model-file`, and a resume with an edited file is rejected before any run.
+Without the flag, the build has no model of that id, or holds a compiled model under it, and the resume is rejected as well.
+An edit that changes nothing but comments outside the step, the order of keys or the form of a number keeps the code, as [Code identity](model-files.md#code-identity) describes.
+
 ## Sweeps
 
 `--out`, `--spec` or `--dry-run` turns a command line into a sweep.
@@ -212,10 +248,11 @@ A dry run with `--out` checks the directory and still writes nothing.
 `--list`, `--export`, `--export-stats` and `--global-warmup` cannot be combined with a sweep, and `--params` cannot be combined with `--out` or `--dry-run`.
 `--merge` accepts `--out` and `--json`, and rejects every flag that plans or runs a sweep.
 
-`--spec` rejects every flag that changes a result, and the spec file is then the whole record of the sweep.
+`--spec` rejects every flag that changes a result, and the spec file, with any model file's code, is then the whole record of the sweep.
 The rejected flags are `--set`, `--act`, `--steps`, `--warmup`, `--reps`, `--seed`, `--stats-every`, `--vary`, `--zip`, `--sample`, `--design-seed`, `--design`, `--independent-seeds`, `--series-every`, `--stop`, `--reduce`, `--no-default-reducers` and `--timeout`.
 `--concurrent`, `--memory` and `--gpu-memory` override the keys `concurrent`, `memory` and `gpu_memory` of the spec's `[execution]` table.
 `--shard`, `--resume` and `--retry-failed` work with a spec as they do with flags.
+`--model-file` works with a spec, and the manifest records the file's code as `model.code` beside the spec.
 A `MODEL` given beside `--spec` has to match the spec's `model`.
 The guide describes [the spec file](../guide/sweeps.md#spec-files).
 
@@ -618,6 +655,7 @@ It rejects a directory that another process is [writing to](#output-directory), 
 The plan hash covers the model, the configs, the design seeds, the fixed values, the actions, the steps and warm-up, the sampling and series cadence, the stop condition, the reducers, and the seed root and scheme.
 It leaves out the replicate count and the timeout, and a resume can change both settings.
 A model composed at run time or loaded from a plugin also has to run the code of every session that wrote runs, by the rule under [Builds](#builds).
+For a [model file](#model-files), the resume passes the same `--model-file`, unedited.
 The code is compared before the schema and plan hashes, and before the model is built.
 A resume of other code is rejected, as is a resume of such a model into a folder that a compiled model of other sources wrote, or the reverse.
 A session that records no model build, as in a 0.2 folder, counts as other code.
@@ -651,6 +689,7 @@ With `--dry-run`, a resume prints how many runs it would skip and run, and chang
 Every shard plans the whole sweep, and needs the same command line or spec as the other shards.
 
 `--merge DIR... --out DIR` joins shard directories into a new directory.
+It takes no model, and no `--model-file`.
 It rejects inputs that differ in plan hash, schema hash, replicate count, shard count or columns, and two inputs that hold the same shard.
 It also rejects two shards whose sessions ran different model code, where either code is runtime or plugin code, by the rule under [Builds](#builds), and compares the code before the plan hash, as a resume does.
 It also rejects a row whose `run_id` is not `config_id * reps + rep` at the replicate count of its manifest.
@@ -718,7 +757,7 @@ None of these kinds is a benchmark kind, and one reader can read both streams.
 | Status | Meaning |
 |---|---|
 | 0 | Every run is `ok`, a dry run planned the sweep, or a merge holds every run and each is `ok` |
-| 1 | An error stopped the sweep or the merge, such as a spec the model rejects, a parameter or action the model does not declare, a directory that already holds results, a resume of another plan, or a lost GPU device |
+| 1 | An error stopped the sweep or the merge, such as a spec the model rejects, a model file that does not load, a parameter or action the model does not declare, a directory that already holds results, a resume of another plan, or a lost GPU device |
 | 2 | The command line itself was rejected before anything ran: an unknown flag, a missing or conflicting flag, or a value of the wrong form, such as a `--vary` without `=` |
 | 3 | The sweep ran to its end and some run is not `ok`, or a merge lacks some run or holds one that is not `ok` |
 

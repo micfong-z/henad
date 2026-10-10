@@ -171,8 +171,8 @@ pub struct ExploreArgs {
         num_args = 1..,
         requires = "out",
         conflicts_with_all = [
-            "model", "list", "info", "params", "set", "act", "steps", "warmup", "reps", "seed", "stats_every",
-            "spec", "dry_run", "vary", "zip", "sample", "design_seed", "design", "independent_seeds",
+            "model", "model_file", "list", "info", "params", "set", "act", "steps", "warmup", "reps", "seed",
+            "stats_every", "spec", "dry_run", "vary", "zip", "sample", "design_seed", "design", "independent_seeds",
             "series_every", "stop", "reduce", "no_default_reducers", "timeout", "concurrent", "memory", "gpu_memory",
             "shard", "resume", "retry_failed",
         ]

@@ -623,6 +623,7 @@ The error names the code that the folder's runs ran and the code that resumes.
 A runtime model's code is identified by the hash of its text, and a plugin's code by the source hash of its crate.
 A plugin built from unchanged sources therefore resumes a folder that the compiled crate wrote.
 Start a new folder for the edited model, or undo the edit.
+A [model file](#sweeping-a-model-file) resumes with the same `--model-file`.
 The [CLI reference](../reference/cli.md#builds) lists the fields and the rule that compares two builds.
 
 The resume then repairs what a cut-off write left behind.
@@ -714,6 +715,33 @@ When every task is done, merge the shards:
 ``` bash
 target/release/henad-cli --merge sir-sweep/shard-* --out sir-sweep/merged
 ```
+
+## Sweeping a model file
+
+A [model file](../reference/model-files.md) holds a GPU grid model as data, with the step of one cell written in WGSL, and runs without a build.
+`--model-file` loads one, and its model then sweeps like any other:
+
+``` bash
+cargo run --release -p henad-cli -- life_rule \
+  --model-file crates/henad-explore/specs/models/life_rule.toml \
+  --vary density=0.1:0.5:0.1 --reps 5 --steps 500 --out life-sweep
+```
+
+The model's id is the file's `id` key, here `life_rule`.
+With one `--model-file` and no spec, the id can be left out of the command line.
+A spec file names the model by the same id, and the command line passes the file beside the spec, as in `--spec life_sweep.toml --model-file life_rule.toml --out life-sweep`.
+A grid rule runs on the GPU, and its runs step on [GPU tracks](#gpu-tracks).
+
+The step is checked while the file is read, before anything runs.
+A problem stops the command with its place in the file, such as `life_rule.toml:39:5: error: loops are not allowed in a grid rule`.
+
+The manifest records the file's canonical text and the hash of that text, and a resume or a merge accepts only that code.
+Pass the same `--model-file` to every resume and to every shard.
+A resume with an edited step, or a merge of shards that ran two versions of the file, is rejected before it writes anything, and the error names both hashes.
+Start a new directory for the edited model, or undo the edit.
+Comments outside the step, the order of the keys and the form of a number are left out of the code, and changing them keeps the directory resumable.
+
+A file whose id is that of a model the CLI already offers, such as `gpu_game_of_life`, replaces that model for the one command, and a note on stderr says so.
 
 ## Reading the results
 
