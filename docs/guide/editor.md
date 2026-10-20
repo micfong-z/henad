@@ -109,7 +109,6 @@ A heavy step on a large grid can still take long enough per tick to lose the GPU
 - The text is not kept when the app closes.
   Save it first.
 - The shaders of the compiled GPU models cannot be edited here.
-  A [dev host](hot-reload.md) reloads the models of your own project.
 - A results folder of a grid rule cannot rebuild the rule in the app.
 - A grid rule needs a GPU with compute support.
   On a device without it, the Editor reads **Grid rules cannot run on this device. They need a GPU with compute support.**

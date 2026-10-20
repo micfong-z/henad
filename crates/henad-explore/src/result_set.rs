@@ -358,7 +358,7 @@ impl ResultSet {
     }
 
     /// Returns whether `source` runs the code that every session of the folder ran its runs with, the condition a
-    /// resume of the folder sets when either code is runtime or plugin code.
+    /// resume of the folder sets when either code is runtime code.
     ///
     /// Always `true` while the folder and `source` hold compiled code alone. A compiled build that changed shows in
     /// [`Self::recorded_builds`] instead. [`Manifest::code_matches`] makes the same comparison.

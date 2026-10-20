@@ -62,13 +62,12 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-compute: engines, entries, runners, `Simulation`, runtime WGSL, grid rules | `agents/henad-compute.md` |
 | henad-models and adding a model | `agents/models.md` |
 | henad-explore: sweeps, searches, output, provenance, testing kit, model files | `agents/henad-explore.md` |
-| henad-app: options, state, builds, teardown, install, hot reload, export | `agents/henad-app.md` |
-| henad-app's Editor tab and project mode | `agents/henad-app-editor.md` |
+| henad-app: options, state, builds, teardown, install, export | `agents/henad-app.md` |
+| henad-app's Editor tab | `agents/henad-app-editor.md` |
 | henad-app's Sweep and Results tabs | `agents/henad-app-sweep.md` |
 | UI text, corners and colours | `agents/ui.md` |
 | henad-cli | `agents/henad-cli.md` |
 | The facade and henad-tutorial | `agents/facade-and-tutorial.md` |
-| henad-hot, henad-dylib, hot-host and the two places `unsafe` code sits | `agents/dev-host.md` |
 | The template (`templates/model-project`) | `agents/template.md` |
 | Hot loops, chunking, determinism, spatial hash, scatter, benchmarking | `agents/performance.md` |
 | GPU traps that already cost real debugging | `agents/gpu-traps.md` |
@@ -116,7 +115,7 @@ write it, using only its documented API, since the engine is being measured as i
 And no engine's stock flocking or foraging example is used: that would compare two simulations, not
 two engines. `benchmarks/krabmaga` is outside the cargo workspace (`exclude` in the root
 `Cargo.toml`), so `./check.sh` never builds it. `templates/model-project` sits in the same
-`exclude`, as do `crates/henad-dylib` and `examples/hot-host`, which `scripts/check_hot.sh` builds.
+`exclude`.
 
 ## Writing style
 
@@ -271,10 +270,10 @@ sentence case, widget names, tense, tooltips, the square corners and the Micfong
   concrete implementations, never designed ahead of them — `GridModel` came from two grid models,
   `GpuGridModel` from GoL plus SIR, `GpuAgentModel` from boids plus ants. A generic with one caller
   is a regression, not a head start.
-- **Verify UI work by running the app, not by compiling it.** The `inspection` feature of henad-app,
-  the facade, the template and hot-host exposes the live widget tree to the egui MCP server (see the
-  environment variables below), which is how a UI change is confirmed to render. Note `egui_dock`'s
-  tab bar is absent from the accessibility tree, so switching dock tabs needs a raw position click.
+- **Verify UI work by running the app, not by compiling it.** `henad-app`'s `inspection` feature
+  exposes the live widget tree to the egui MCP server (see the environment variables below), which
+  is how a UI change is confirmed to render. Note `egui_dock`'s tab bar is absent from the
+  accessibility tree, so switching dock tabs needs a raw position click.
 - **A test-only module goes under a `tests/` directory in `src/`, never beside production modules.**
   `henad-compute/src/gpu/tests/`, `henad-models/src/tests/` and `henad-app/src/tests/` hold any test
   module too big to inline, and henad-compute's holds its `support.rs` (the headless device) as
@@ -305,9 +304,6 @@ cargo check --workspace --all-targets
 cargo check -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features \
   --lib --target wasm32-unknown-unknown    # without atomics, henad-app without its thread pool
 cargo fmt --all -- --check
-cargo fmt --manifest-path crates/henad-dylib/Cargo.toml -- --check   # the packages outside the
-cargo fmt --manifest-path examples/hot-host/Cargo.toml -- --check    # workspace, and hot-host's
-cargo fmt --manifest-path examples/hot-host/generation/Cargo.toml -- --check   # generation crate
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
 cargo test --workspace --all-targets --all-features
 cargo test --workspace --doc
@@ -318,12 +314,6 @@ cargo test -p henad --doc --features example-models,app      # compiles the READ
 ./scripts/check_packaging.sh  # workspace versions, licence copies, paths that climb out of a crate,
                               # the template's [profile.release] held equal to the root's, and its
                               # requirements and the facade README's to the workspace's major and minor
-                              # henad-dylib's fields and `henad = "=X.Y.Z"`, no member on
-                              # henad-dylib, the one [profile.hot] of hot-host and the template,
-                              # and hot-host's lock
-HENAD_REQUIRE_GPU=1 ./scripts/check_hot.sh   # the dev host: lints henad-dylib and hot-host,
-                              # builds hot-host under [profile.hot], runs its app's self-check
-                              # (HENAD_HOT_CHECK=1) and `hot-check`, then `hot-check relink`
 cargo deny --locked check     # advisories, licences, bans and sources, every feature on (deny.toml)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 python3 -m unittest discover -s scripts -p 'test_*.py'   # the scripts' own tests
@@ -331,19 +321,14 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
   --component rust-src,clippy --target wasm32-unknown-unknown   # the pinned nightly the web build needs
 ```
 
-`./check.sh` runs every line above but the install and `check_hot.sh`, and skips `cargo deny` where
-cargo-deny is not installed. CI runs further jobs (`package`, `msrv`, `features`, `hot`, `lint`,
-`docs` and `downstream`), which `agents/ci-and-release.md` describes with how to run each by hand.
+`./check.sh` runs every line above but the install, and skips `cargo deny` where cargo-deny is not
+installed. CI runs further jobs (`package`, `msrv`, `features`, `lint`, `docs` and `downstream`),
+which `agents/ci-and-release.md` describes with how to run each by hand.
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
 Run desktop app: `cargo run -p henad-app` (`-- --open DIR` opens a folder a sweep wrote in the
 Results tab)
-Run Henad's own dev host:
-`cargo run --manifest-path examples/hot-host/Cargo.toml --profile hot --features hot` (through
-`cargo run` alone, which sets the library path; `HENAD_HOT_CHECK=1` checks the dev host and opens no
-window; Model > Reload models and the Editor's project panel rebuild the example models from
-`crates/henad-models/src`)
 Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` + `index.html`)
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
@@ -386,18 +371,11 @@ produces a binary whose thread pool cannot start.
 - `HENAD_REQUIRE_GPU=1` turns "no adapter on this machine" from a silent test skip into a failure.
   CI sets it on all three platforms, so run the GPU tests with it before calling them green. The
   Linux runner gets lavapipe from `templates/model-project/scripts/install-lavapipe.sh`.
-  `hot-check` reads it too, and without it skips the GPU halves of its checks on a machine with no
-  adapter.
 - `HENAD_DUMP_WGSL=<dir>` writes every shader the engine compiles to `<dir>/<label>.wgsl`. Each
   file holds the module composed from a shader's `#import`s and re-emitted by naga. A validation
   error quotes that text, and its line numbers do not match the shader as written.
-- `HENAD_HOT_CHECK=1` makes `run_native` of an app built with henad-app's `hot` feature run the
-  self-check of the dev host its options hold, and return before any window opens: warm-up, one
-  rebuild and load, and the plugin's ids compared with the set's. Set to anything but empty or `0`,
-  as `HENAD_REQUIRE_GPU` is. Options without a dev host fail it. `check_hot.sh` runs hot-host's app
-  with it, and the template's `scripts/ci.sh hot` sets it.
-- `EGUI_INSPECTION=1` with the `inspection` feature (henad-app's, the facade's, the template's or
-  hot-host's) opens the app's inspection port on 5719, which the egui MCP server drives.
+- `EGUI_INSPECTION=1` with `--features inspection` opens the app's inspection port on 5719, which
+  the egui MCP server drives.
 
 ### Lints
 
@@ -407,30 +385,23 @@ flat `Vec`s, rayon), not from unsafe tricks. The workspace `Cargo.toml` also ena
 `clippy::` lint set (`unwrap_used`, `indexing_slicing = "allow"` is a deliberate exception,
 `missing_errors_doc`, etc.) — run `./check.sh` rather than guessing whether something will pass CI.
 
-Beside the generated shader bindings, `unsafe` code sits in two places, and nowhere else:
-henad-hot's `load.rs` and the expansion of `export_models!`. `agents/dev-host.md` holds the rules
-for both.
-
-The nine published workspace crates set `#![warn(missing_docs)]` at the top of `lib.rs`, after the
-`doc_cfg` attribute, and clippy's `-D warnings` makes it an error. henad-dylib, published from
-outside the workspace, sets it in its manifest's `[lints.rust]`. Every public item of a published
-crate takes a doc comment, fields and enum variants included. The tutorial, the template,
-`examples/hot-host` and the binaries are outside the lint. On wasm32 only CI's clippy over
-henad-app and the facade fails on it, and the wasm32 typecheck of `./check.sh` prints a web-only
-item of another crate as a warning.
+The eight published crates set `#![warn(missing_docs)]` at the top of `lib.rs`, after the `doc_cfg`
+attribute, and clippy's `-D warnings` makes it an error. Every public item of a published crate
+takes a doc comment, fields and enum variants included. The tutorial, the template and the binaries
+are outside the lint. On wasm32 only CI's clippy over henad-app and the facade fails on it, and the
+wasm32 typecheck of `./check.sh` prints a web-only item of another crate as a warning.
 
 henad-compute, henad-explore, henad-app, henad-models, the tutorial (its `lib.rs` and
-`tests/parity.rs`), the template's `src/lib.rs`, `examples/hot-host/src/lib.rs` and the facade's
-`tests/facade_paths.rs` set `#![recursion_limit = "256"]`. Proving a type that holds wgpu handles
-`Send` there overflows the default 128, which the pinned nightly reports as the future-incompatible
+`tests/parity.rs`), the template's `src/lib.rs` and the facade's `tests/facade_paths.rs` set
+`#![recursion_limit = "256"]`. Proving a type that holds wgpu handles `Send` there overflows the
+default 128, which the pinned nightly reports as the future-incompatible
 `recursion_depth_exceeding_limit`. A new crate root or test that proves a GPU state `Send` takes
 the same line. The release checklist's native check on that nightly finds one that lacks it, and
 the tutorial's `tests/snippets.rs` holds the template's line to the tutorial's.
 
 Two rules no lint enforces. Every public type of henad-core, henad-compute, henad-models,
-henad-explore, henad-app and henad-hot implements `Debug`. A type that holds a closure, a trait
-object, a model's associated types or a whole graph writes its own impl ending in
-`finish_non_exhaustive`, as
+henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait object, a
+model's associated types or a whole graph writes its own impl ending in `finish_non_exhaustive`, as
 `ModelEntry`, `Network` and the engine states do. So does a type holding a payload, such as cells,
 lanes, positions or a shader's source, and it prints sizes and labels in their place, as `Grid2D`,
 `PassSpec` and `PointSnapshot` do. `cargo clippy -- -W missing_debug_implementations`
@@ -442,16 +413,14 @@ crate that has shadowed them.
 
 ## Architecture
 
-The workspace has 9 crates, and the tutorial crate beside them. Two packages sit outside it:
+The workspace has 8 crates, and the tutorial crate beside them:
 
 ```
 henad-core ─┬─ henad-build      (build dependency of every crate with WGSL or a stamp)
-            ├─ henad-compute ─┬─ henad-models
-            │                 └─ henad-explore ─┬─ henad-cli
-            │                                   └─ henad-app
-            └─ henad-hot        (on henad-core and henad-compute, native only, behind hot)
-henad (facade): core, compute and explore, plus models, app, cli, testing, rules, hot and
-               inspection behind features
+            └─ henad-compute ─┬─ henad-models
+                              └─ henad-explore ─┬─ henad-cli
+                                                └─ henad-app
+henad (facade): core, compute and explore, plus models, app, cli, testing and rules behind features
 henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!, grid rules
@@ -459,23 +428,18 @@ henad-models   the ten example models, and a path dev-dependency of henad-explor
 henad-explore  sweeps, searches, the testing kit and model files
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models
-henad-hot      the dev host: plugin header, export and dev-host macros, cargo driver, guard, loader
 henad          the facade, one module tree over the others, the crate a program depends on
 henad-tutorial the first-model guide's finished code, in examples/tutorial, on the facade alone
-
-henad-dylib    (excluded, published) Henad as one Rust dylib, `pub use henad;` with `hot`
-hot-host       (excluded, unpublished, examples/hot-host) Henad's own dev host, and its test bed
 ```
 
 The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
 Every other normal or build dependency runs from a crate to one drawn above it. henad-cli and
 henad-app take henad-models only behind their default `example-models` feature, and the facade
 takes henad-models, henad-app and henad-cli only behind its features. henad-models and
-henad-explore take no normal dependency on each other, and no workspace member depends on
-henad-dylib. `agents/dependencies.md` names every dev-dependency between Henad crates that the
-normal graph does not hold, and the `cargo tree` lines that check the rule. A new edge is added
-there, and henad-explore reaching an example model outside its tests needs the maintainer's
-approval.
+henad-explore take no normal dependency on each other. `agents/dependencies.md` names every
+dev-dependency between Henad crates that the normal graph does not hold, and the `cargo tree` lines
+that check the rule. A new edge is added there, and henad-explore reaching an example model outside
+its tests needs the maintainer's approval.
 
 Invariants that span crates. Each topic file has the measurements behind them.
 

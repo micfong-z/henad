@@ -28,13 +28,12 @@ compiled crate that `build_info!` returns for the crate it expands in, and `Mode
 entry's type path and the build of the crate that registered it. A build script stamps the
 commit, the dirty flag and the source hash through henad-build, and they read as unknown in a
 crate whose script does not. `__VERSION` is henad-core's version, which has no build script.
-A `ModelSource` also holds a `CodeOrigin` (`Compiled`, `Runtime` or `Plugin`, non-exhaustive).
+A `ModelSource` also holds a `CodeOrigin` (`Compiled` or `Runtime`, non-exhaustive).
 `ModelSource::runtime(label, code)` is a model composed at run time, typed `runtime:<label>`, with
 no build, and its `ModelCode` holds a format, the canonical text and the FNV-1a hash of the tag
 `henad.model-code.1`, the format and the text (`model_code_hash_is_pinned`, keep it).
 `code_hash()` is that hash for runtime code and the registering crate's source hash for compiled
-and plugin code. The hidden `__into_plugin` marks a compiled source as a plugin's. Equality
-covers the origin and the code.
+code. Equality covers the origin and the code.
 `diagnostic.rs` holds `CodeDiagnostic` (severity, message, file, byte span, line and character
 column counted from 1, and notes), `#[non_exhaustive]` and built through `error` and the `with_`
 methods, with `at(text, span)` reading the line and column from a text, and the

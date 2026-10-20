@@ -621,8 +621,8 @@ Each build has these fields.
 | `source_hash` | Hash of the crate's files under `src`, its manifest and, outside a package, its lockfile, as 16 hexadecimal digits. The example models' hash leaves out the lockfile |
 | `debug_build` | Whether the build was a debug build |
 | `type_path` | Type path of the registered model, or `runtime:` and the label of a model composed at run time, for `model_source` alone |
-| `origin` | `runtime` for a model composed at run time, or `plugin` for a model that a dev host loaded from a plugin, for `model_source` alone. Left out for compiled code |
-| `code_hash` | Hash that identifies a runtime or plugin model's code, as 16 hexadecimal digits: the hash of a runtime model's text, or the plugin crate's source hash. Left out for compiled code |
+| `origin` | `runtime` for a model composed at run time, for `model_source` alone. Left out for compiled code |
+| `code_hash` | Hash of a runtime model's text, as 16 hexadecimal digits. Left out for compiled code |
 | `crate_hashes` | Hash of the sources of henad-compute and henad-explore, without the lockfile, for the engine alone |
 | `crate_versions` | Version of henad-core, henad-build, henad-compute and henad-explore, for the engine alone |
 
@@ -636,10 +636,9 @@ Then two builds that each record a clean commit compare by commit alone.
 A commit is clean when `dirty` reads `false`, or when the build records neither `dirty` nor `source_hash`, as a 0.2 session does.
 Otherwise the source hashes decide, and two builds with neither a commit nor a source hash are never the same.
 
-When either of two model builds records an `origin`, the two compare by the identity of their code alone.
-A runtime model's identity is its `code_hash`, and a compiled or plugin model's identity is its `source_hash`.
-Both have to be known and equal.
-A runtime model records no package, version or commit, and a plugin built from unchanged sources is the same build as the compiled crate.
+When either of two model builds records an `origin`, the two are the same only when both are runtime models with the same known `code_hash`.
+A runtime model is never the same build as a compiled model.
+A runtime model records no package, version or commit.
 
 A manifest from Henad 0.2 records no builds in its sessions.
 Each of its sessions is treated as an engine build of its own commit and the version of the `engine` block, and records no model build.
@@ -654,7 +653,7 @@ The resume reads the manifest first.
 It rejects a directory that another process is [writing to](#output-directory), a directory of another model, and a directory whose plan hash, model schema hash or shard does not match the sweep.
 The plan hash covers the model, the configs, the design seeds, the fixed values, the actions, the steps and warm-up, the sampling and series cadence, the stop condition, the reducers, and the seed root and scheme.
 It leaves out the replicate count and the timeout, and a resume can change both settings.
-A model composed at run time or loaded from a plugin also has to run the code of every session that wrote runs, by the rule under [Builds](#builds).
+A model composed at run time also has to run the code of every session that wrote runs, by the rule under [Builds](#builds).
 For a [model file](#model-files), the resume passes the same `--model-file`, unedited.
 The code is compared before the schema and plan hashes, and before the model is built.
 A resume of other code is rejected, as is a resume of such a model into a folder that a compiled model of other sources wrote, or the reverse.
@@ -691,7 +690,7 @@ Every shard plans the whole sweep, and needs the same command line or spec as th
 `--merge DIR... --out DIR` joins shard directories into a new directory.
 It takes no model, and no `--model-file`.
 It rejects inputs that differ in plan hash, schema hash, replicate count, shard count or columns, and two inputs that hold the same shard.
-It also rejects two shards whose sessions ran different model code, where either code is runtime or plugin code, by the rule under [Builds](#builds), and compares the code before the plan hash, as a resume does.
+It also rejects two shards whose sessions ran different model code, where either code is runtime code, by the rule under [Builds](#builds), and compares the code before the plan hash, as a resume does.
 It also rejects a row whose `run_id` is not `config_id * reps + rep` at the replicate count of its manifest.
 A resume that raises a shard's replicate count and ends before renumbering the shard's rows leaves such rows, and resuming that shard again renumbers them.
 It merges `runs.csv` and `series.csv` in run order, leaving out a partial last record and the series rows of runs with no row in `runs.csv`, and rebuilds `summary.csv`.
@@ -1061,7 +1060,7 @@ A run that came out differently would change every batch after it, and `--retry-
 A search runs whole, and `--shard` is rejected too.
 
 The resume rejects a directory of another model, a directory whose search hash, model schema hash or column layout differs, a sweep's directory, and a `runs.csv` with runs out of order or with a run whose key differs from the requested run.
-A model composed at run time or loaded from a plugin also has to run the code that the folder's runs ran, as a [sweep's resume](#resuming) requires.
+A model composed at run time also has to run the code that the folder's runs ran, as a [sweep's resume](#resuming) requires.
 Every run held is checked against its key before any table is written, and a rejected resume leaves the directory as it was.
 The search hash covers the plan hash of the fixed values and actions, the replicate count, the algorithm, the budget, the batch size, the objective, the space and the algorithm's settings.
 The timeout and the execution settings can change, and the budget and the replicate count cannot.
@@ -1105,7 +1104,7 @@ A sweep has its own JSON lines, listed under [its progress](#progress).
 | `stat_columns` | Columns a sweep writes for the stats, from a build at the defaults. Left out when that build fails |
 | `actions` | Index, id and label of each action |
 | `seed` | `{"type":"u64"}` |
-| `origin`, `code_hash` | For a model composed at run time or loaded from a plugin, the origin and the hash that identifies its code, as under [Builds](#builds). Left out for a compiled model |
+| `origin`, `code_hash` | For a model composed at run time, the origin and the hash that identifies its code, as under [Builds](#builds). Left out for a compiled model |
 
 A parameter object holds its `index`, `id`, `label`, `kind` (`f32`, `u32`, `bool` or `choice`), `apply` (`live` or `reload`), `format` (`plain` or `percent`) and `default`.
 A number adds `min` and `max`, and an `f32` adds `step` when it declares a step.

@@ -8,10 +8,7 @@ naming a `ShaderEntry` variant as `wgsl_bindgen` does. `lib.rs` holds `ShaderBui
 copies, the files the entry points import (`imported_files`, through `wgsl_bindgen`'s
 `DependencyTree`), the stamp and the two generated files. `stamp/` holds the build stamps:
 `stamp_commit` for a host or model crate, and the hidden `stamp_engine_commit` (henad-explore)
-and `stamp_source_hash` (henad-compute, henad-models). `stamp_commit` alone also sets
-`HENAD_BUILD_FEATURES` from `CARGO_CFG_FEATURE` (Cargo 1.85 and later), the package's features
-comma-separated, which `dev_host!` reads to build a plugin with the host's features. A Cargo
-without the variable sets none. `stamp/mod.rs` picks the source of a
+and `stamp_source_hash` (henad-compute, henad-models). `stamp/mod.rs` picks the source of a
 stamp by `StampScope`: a package's `.cargo_vcs_info.json` first, then git when
 `git ls-files --error-unmatch Cargo.toml` succeeds, and for the engine only when `--show-prefix`
 is `crates/henad-explore/`. `stamp/files.rs` lists and hashes the files under `src` and the

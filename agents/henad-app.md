@@ -1,8 +1,7 @@
 # henad-app
 
-The app's options, entry points, dev host side, state, build and install path, export and About
-window. The Editor tab is in `henad-app-editor.md`, and the Sweep and Results tabs in
-`henad-app-sweep.md`.
+The app's options, entry points, state, build and install path, export and About window. The
+Editor tab is in `henad-app-editor.md`, and the Sweep and Results tabs in `henad-app-sweep.md`.
 
 **henad-app**: eframe/egui desktop+web GUI, as a library with the official binary over it. The
 public API is `options.rs` and the two entry points. `AppOptions::new(models, product, host)`
@@ -29,43 +28,6 @@ native only and `WebStartError` wasm only. henad-app re-exports no eframe item. 
 `wgpu_configuration` are private. `HenadApp` (`lib.rs`) owns the `SimThread` and polls snapshots each frame.
 `HenadApp::new` takes the options and hands the opening to `AppState::open`, and
 `wgpu_configuration` takes `AppOptions::gpu_needs`, the set's `GpuNeeds`, for the device request.
-`hot/`, behind the native-only `hot` feature, holds `HotHost`, the app's side of the dev host.
-`AppOptions::hot_reload(DevHost)` makes `HenadApp::new` start one build thread,
-`henad-plugin-build`, that runs the warm-up, then one rebuild per request through the private
-`PluginBuilder` trait (the `DevHost`, or a scripted builder in the tests), and sends each change
-of stage and each outcome back over a channel, repainting the UI. A rebuild returns a
-`PluginLoad`, the models with `DevHost::dependency_recompiled`. `HotHost::request_reload` starts a
-reload, or marks one more while a build runs, and `poll` drops the result of a build that a
-queued reload follows, since the files changed after it started, and passes its recompile on to
-the load that follows. `poll` also returns a warm-up that failed to compile, whose problems are
-then listed as a reload's. `logic` calls `AppState::poll_dev_host` (`state/reload.rs`), which
-installs a reload's set through `install_plugin_models`, which hands every entry to
-`install_models`. There an entry of the same code as the one it replaces (`state::same_code`:
-equal `schema_hash`, and equal sources or compiled and plugin code of one type, package and known
-source hash) takes its place and changes nothing else, so a reload of unchanged sources leaves
-every run alone and live edits still reach it, since `selection_is_loaded` and `code_pending`
-compare through `same_code` too. The source hash covers the registering crate alone. A crate the
-package depends on compiled again while no model's code changed, as an edit to a path dependency
-leaves it, installs as unchanged code, and its `ReloadOutcome::Loaded` sets `other_crates`, which
-adds "Press Build to run edits to other crates." to the status. An id the crate provided at its
-last load (at the start, the options' set) and no longer provides leaves the set through
-`ModelSet::remove`, unless a runtime rule holds it now, with its Sweep draft and Results
-comparison dropped, and a selection of it reads "Removed from the crate." (`selection_removed`,
-`ui::model::REMOVED_FROM_CRATE`). An id that returns comes back under the entry it left with, and
-one whose code is unchanged gets its Results comparison and `settle_loaded` back after
-`install_models` passes it over. A failed reload installs nothing and is kept as a `ReloadOutcome`
-(`BuildFailed` with the diagnostics and the standard error tail, or `Refused` with the text
-`hot::message::error_text` gives its `HotError`, such as "Henad changed since the app started. Run
-the app again with cargo run to load models." or "Model 'x' records no source hash. Call
-henad_build::stamp_commit in build.rs."), and a failed build brings the Editor to the front. The
-menu bar's Model menu, in a dev host alone, holds Reload models. The System tab's Dev host section
-shows the warm-up's state (Preparing, Ready, Building, Failed with the reason), the last reload's
-status line, and the package, features and source directories. The drop of `HotHost` closes the
-request channel and cancels the running build until the thread ends, for at most five seconds.
-Options with a dev host merge `GpuNeeds::ADAPTER_MAXIMUM` into the request. With `HENAD_HOT_CHECK`
-set, `run_native` runs `hot::self_check` (`DevHost::check` against the set) first and returns its
-outcome, an `AppError` for a failure or for options without a dev host, before any window.
-`From<HotError> for AppError` lets a `main` write `henad::dev_host!()?`.
 henad-models and the binary's env_logger are optional behind the default
 `example-models` feature, which the `[[bin]]` requires, and `main.rs` builds the official options over
 `example_models()`: "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and `__official()`. The
@@ -85,7 +47,7 @@ egui keys a tab's stored state on the discriminant, and sits after Parameters in
 View menu's order. The default layout leaves it closed, and `focus_tab` and `toggle_tab` open it
 through `open_tab`, in a leaf of its own split to the right of the Viewport's leaf, with the
 Viewport brought to the front of its stack. The menu bar's File menu holds New grid rule, Open
-model and Save model, and a dev host's Model menu Reload models.
+model and Save model.
 `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
 and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
 bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
@@ -99,8 +61,9 @@ is an `Option<String>`, resolved at use through `selected_entry` and `lookup`. T
 simulation's entry is pinned: the private `loaded` holds the `ModelEntry` of the `RunSetup` it was
 built from, `loaded_entry()` returns it and `loaded_id()` its id. The panels, pacing, the run
 details, a fault's model name and live edits then describe the running code after the set's entry
-under its id is replaced. `selection_is_loaded` compares the id and the `ModelSource`, and
-`code_pending` holds for the same id under another source. `offered_models` hides a GPU model
+under its id is replaced. `selection_is_loaded` compares the id and the code through `same_code`
+(the `ModelSource` and the `schema_hash`), and `code_pending` holds for the same id under other
+code. `offered_models` hides a GPU model
 where the adapter has no compute, through `ModelSet::runnable`, and the app opens on the first
 offered model, or with none selected and `NO_MODEL_RUNS` in the Model panel. A missing id reads as
 `lookup_message` words it, "This build does not include model 'x'" or "Model 'x' needs a GPU with
@@ -191,8 +154,8 @@ run from a `henad_core::explore::replay::Replay`. It selects the model, sets the
 and schedule, rebuilds, sends `RunTo` for `OpenAt::Tick`, and sets `focus_request` to the
 Viewport. `HenadApp::ui` applies that request through `dock::focus_tab` after
 `DockArea::show_inside`. The panels draw while the dock is borrowed. `OpenedRun` names the run in
-Playback. A live param edit, an action press, or a build from other values or under another
-`ModelSource` than the `OpenedRun::source` it was opened with marks it modified
+Playback. A live param edit, an action press, or a build from other values or of other code
+(`same_code`) than the `OpenedRun::entry` it was opened with marks it modified
 (`settle_opened_run`), and a build of another model or Offload drops it.
 `AppState::open_setup(&RunSetup, OpenAt)` builds the set's entry under the setup's id from its
 values, seed and schedule through the same fields, keeps a default seed as `None`, and records no
@@ -202,11 +165,11 @@ as "Run not opened" and the reason) in `opening_refusal`, which the Model panel 
 a model to continue." until a model is picked, or above "No model in this build runs on this
 device." when none runs here, and brings the Model tab to the front.
 `state/install.rs` is the install path. `AppState::install_models(&ModelSet)` puts each entry in
-place of the set's entry with its id through `ModelSet::replace`, or appends it, so a runtime or
-plugin entry can shadow a built-in id. A replacement with the same `ModelSource` and `schema_hash`
-changes nothing else. For each other replaced id it carries a selected model whose `schema_hash`
-changed to the replacement by id: `param_values` through `remap_values` (a choice by its option's
-name, and a new parameter or a value the new descriptor rejects at its default), the
+place of the set's entry with its id through `ModelSet::replace`, or appends it, so a runtime entry
+can shadow a built-in id. A replacement of the same code (`same_code`: an equal `ModelSource` and
+`schema_hash`) changes nothing else. For each other replaced id it carries a selected model whose
+`schema_hash` changed to the replacement by id: `param_values` through `remap_values` (a choice
+by its option's name, and a new parameter or a value the new descriptor rejects at its default), the
 `pending_reload` marks, and the schedule through `remap_schedule`, which drops an entry whose
 action is gone. A selected model whose hash matches keeps everything. `SweepPanel::forget_model`
 drops the id's `ColumnsBuild`, its draft when the hash changed, and the last check, and
@@ -230,8 +193,8 @@ reason, and `rebuild_loaded` checks it before any teardown. Cancel keeps the old
 pinned entry, and the Parameters banner (`notice_content`, a `ParamsNotice`) reads "Model code
 changed. Press Build to apply.", and Run's disabled reason names the change too. `KeptDraft` keeps
 the entry its session started with, a session's Save spec writes against it, and Edit sweep
-restores the kept values only while the declarations match. The Editor's Apply and a dev host's
-reload are its callers in the app.
+restores the kept values only while the declarations match. The Editor's Apply is its caller in
+the app.
 `src/tests/install.rs` holds `the_panels_describe_the_running_entry`,
 `an_opened_run_is_modified_after_its_source_changes`,
 `install_keeps_values_when_the_schema_matches`,
@@ -239,7 +202,7 @@ reload are its callers in the app.
 `install_works_for_every_model_type`, `a_loaded_run_past_tick_zero_asks_before_rebuilding`,
 `cancel_keeps_the_old_run_and_flags_the_code_change`, `an_install_during_a_run_to_asks_first`,
 `a_rebuild_the_new_code_refuses_leaves_the_old_run_alone` and
-`compiled_and_plugin_code_of_one_source_hash_is_the_same_code`, the Sweep tab's test
+`equal_sources_with_other_declarations_are_other_code`, the Sweep tab's test
 `install_forgets_the_sweep_tab_columns_of_the_model`, and the store's
 `a_folder_store_compares_its_runs_with_a_replaced_entry`. Keep them.
 `export/metadata.rs` writes `loaded_values` as `params`, the loaded `seed` (null for the default),
@@ -249,9 +212,9 @@ well. `about.rs` draws the product's name, its links and its build rows, Henad's
 for the official app and the host's icon otherwise (decoded once into the `OnceCell`
 `logo_texture`, a failed decode included), a Built on row from `ENGINE_BUILD` (with henad-core's
 version when it differs) for any other product, and one Models row per distinct `ModelSource`
-build, showing the hash of its sources when the build stamps no commit, `plugin` beside a plugin's
-build, and the code hash of a runtime model under its id. Copy copies the name and every row. The
-menu entry reads "About" and the product name.
+build, showing the hash of its sources when the build stamps no commit, and the code hash of a
+runtime model under its id. Copy copies the name and every row. The menu entry reads "About" and
+the product name.
 The runs table's Copy command builds `ResultsStore::cli_command(program, run_id)` from the
 product's `cli_command` and is hidden without one, and disabled for the runs of a model file
 (`ResultsStore::command_refusal`, `MODEL_FILE_COMMAND`), which need `--model-file`, and the Sweep

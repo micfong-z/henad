@@ -91,8 +91,8 @@ picked files in a browser, on the frame after the one that first shows "Reading 
 Resume sweep resumes an incomplete folder through `SweepRun::resume_directory`, with the memory
 budgets its manifest records and automatic concurrency (`SessionExecution::recorded`), and the
 folder is read again once that sweep ends. Resume is disabled while `ResultsStore::code_matches`
-fails (`code_refusal`), for a folder of runtime or plugin code other than the app's entry
-(`Manifest::code_matches`). `henad-app --open DIR` opens a folder at start.
+fails (`code_refusal`), for a folder of other code than the app's entry where either code is
+runtime code (`Manifest::code_matches`). `henad-app --open DIR` opens a folder at start.
 `ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
 PSE axes, the budget, and each method's other settings in a nested Method settings section. An
 output picked there that the runs do not record joins the Outputs section, and Use range from

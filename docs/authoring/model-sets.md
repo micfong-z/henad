@@ -96,20 +96,17 @@ A source also records how the model's code reached the process, as a `CodeOrigin
 |---|---|---|
 | `Compiled` | Compiled into the host from a crate it links, as every `register_*` entry is | The crate's source hash |
 | `Runtime` | Composed at run time from text, such as a grid rule from a model file | The hash of its text |
-| `Plugin` | Compiled from a crate into a library that a dev host loaded while it ran | The crate's source hash |
 
 `ModelSource::origin` returns the origin, and `ModelSource::code_hash` the hash that identifies the code.
 A runtime source holds its text as a `ModelCode`, the canonical text and the name and version of its format, and `ModelSource::code` returns it.
 `ModelSource::runtime` builds such a source, and its type path reads `runtime:` and the label it was given.
 A set never records its build on a runtime source.
 The text identifies the code, and the host's build says nothing about it.
-A plugin's source keeps the build of the plugin's crate, and a set records none on it either.
 
-A runtime or plugin model can take the id of a compiled model, and the results folder records that its code differs.
+A runtime model can take the id of a compiled model, and the results folder records that its code differs.
 A results folder records each model's origin and code hash, and a runtime model's text in the manifest.
 A changed compiled build raises a warning on a resume or a merge.
-Changed runtime or plugin code makes a resume or a merge reject the folder, as [Sweeps](../guide/sweeps.md#resuming-a-sweep) describes.
-A plugin built from unchanged sources is the same code as the compiled crate, and resumes its folder.
+Changed runtime code, or a switch between runtime and compiled code, makes a resume or a merge reject the folder, as [Sweeps](../guide/sweeps.md#resuming-a-sweep) describes.
 
 ## The example models
 

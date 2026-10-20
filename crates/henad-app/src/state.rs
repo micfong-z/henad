@@ -729,14 +729,14 @@ impl AppState {
     }
 
     /// Returns whether the live simulation runs the selected model under the set's entry for it, the same id with the
-    /// same source.
+    /// same code, as [`same_code`] compares it.
     ///
     /// Note that a model whose code the set has replaced since its build is not the selection, and live edits and
     /// actions do not reach it.
     pub fn selection_is_loaded(&self) -> bool {
         self.loaded.as_ref().is_some_and(|loaded| {
             self.selected_entry()
-                .is_some_and(|selected| selected.id() == loaded.id() && selected.source() == loaded.source())
+                .is_some_and(|selected| selected.id() == loaded.id() && same_code(loaded, selected))
         })
     }
 
@@ -745,7 +745,7 @@ impl AppState {
     pub fn code_pending(&self) -> bool {
         self.loaded.as_ref().is_some_and(|loaded| {
             self.selected_entry()
-                .is_some_and(|selected| selected.id() == loaded.id() && selected.source() != loaded.source())
+                .is_some_and(|selected| selected.id() == loaded.id() && !same_code(loaded, selected))
         })
     }
 

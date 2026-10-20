@@ -1528,7 +1528,7 @@ impl ResultsStore {
     /// after the set's entry was replaced, or the reason the app cannot run the model.
     ///
     /// A replay of a run of other code then carries the warning that the replay might differ, and a folder of runtime
-    /// or plugin code that differs from the entry cannot be resumed. Results read from files plan their spec again
+    /// code that differs from the entry cannot be resumed. Results read from files plan their spec again
     /// against an entry whose declarations differ from those of the plan they hold, and take the entry's parameters
     /// and action labels. A sweep run in this app keeps the plan of its session.
     pub fn model_changed(&mut self, model: Result<&ModelEntry, &ModelLookupError>) {

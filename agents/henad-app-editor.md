@@ -32,10 +32,8 @@ Open model and Save model go through `OpenTarget::Model` and `SaveTarget::Model`
 on native and a picked file or a download in a browser. Opening loads the text and applies
 nothing. `AppState::show_fault` gives a fault to the Editor (`EditorPanel::claims`) when it
 belongs to a run built from the applied source that has not passed tick 0, in place of the
-fault modal. A project file in the buffer gives way to the model file text kept from before it
-opened (`project::show_model_file`), and without that text the fault goes to the modal. A lost
-device, a failed poll and a device out of memory stay with the modal, since no edit of the code
-fixes them. `PendingBuild` keeps the entry it builds, and `finish_build`
+fault modal. A lost device, a failed poll and a device out of memory stay with the modal, since
+no edit of the code fixes them. `PendingBuild` keeps the entry it builds, and `finish_build`
 passes it to `show_fault`, so a fault the build thread returns reaches the Editor on the frame
 `poll_build` takes it. `show_fault_in_modal` passes the Editor over: a build thread that did not
 start or ended without a result, and on native a fault `report_fault` takes from a sink while a
@@ -46,7 +44,7 @@ reports a refused rule through the `FaultSink` a frame or more after the build. 
 Apply is disabled and the tab reads `NO_COMPUTE`. Apply builds no model the device cannot hold at
 the next build's values, and reports the sizes as `ApplyOutcome::Faulted`. `reset_simulation`,
 `open_run` and `open_setup` refuse it too, since the engine's own assert would end a browser's
-page. An Open model that fails beside a project file writes its status in the project's status.
+page.
 `src/tests/editor.rs` holds
 `new_grid_rule_starts_from_the_life_starter`,
 `applying_an_edit_installs_and_rebuilds_from_tick_zero`,
@@ -58,40 +56,3 @@ page. An Open model that fails beside a project file writes its status in the pr
 `a_build_fault_of_the_applied_code_reaches_the_editor_from_the_build_thread`,
 `a_diagnostic_moves_the_cursor_to_its_line` and `edit_model_shows_the_code_the_rule_runs`. Keep
 them.
-`ui/editor/project.rs`, behind `hot`, is the Editor's project mode in a dev host. A left panel
-names the package, holds Reload models and the dev host's status line, and lists the `.rs` and
-`.wgsl` files under the dev host's source directories (`list_files`: labels relative to the
-directory that holds each source directory's parent, names starting with `.` left out, listed
-again after each reload). With several source directories the list groups the files under each
-(`file_groups`), each named from its directory, with its label as the tooltip. A press opens a
-file into the same code buffer (`open_file`). An edited project file keeps its text in
-`ProjectEditor::unsaved`, with the disk text it started from, while another file is open, a model
-file
-the buffer held becomes the list's first entry, and `EditorPanel::load` keeps an open file's edit
-before New grid rule, Open model or Edit model replace the text. Save writes every edited file,
-and Apply writes them, then calls `AppState::reload_models`. `problems` places a failed build's
-errors: rustc's `compiler-message` errors by their primary span, a relative path matched to a
-listed file under a directory that holds the manifest's and an absolute one by its path, and
-without any the shader compiler's `┌─ path:line:column` lines on standard error, then any line
-that starts with `error`. The list reads `<line>:<column> <message>` in the open file and puts the
-file's label first for another, and a press opens the file at the place. `check_disk` reads the
-open file again (`read_changed_file`), at most once a second, when its modification time changes,
-and takes the new text into a buffer without edits. A Save or Apply that finds a file changed on
-disk since its edit started, open or not, writes nothing, says so, and takes the disk text as the
-edit's start, so the next press writes it. Opening a kept edit of a changed file says the same.
-`src/tests/project.rs` holds
-`a_plugin_set_replaces_every_id_it_holds`, `a_model_removed_from_the_crate_leaves_the_set`,
-`a_rule_the_editor_applied_stays_when_the_crate_drops_its_id`, `apply_saves_before_it_builds`,
-`a_save_that_fails_starts_no_build`, `a_file_changed_on_disk_is_read_again_unless_edited`,
-`a_kept_edit_of_a_file_changed_on_disk_is_not_written_unasked`,
-`a_warm_up_that_fails_to_compile_lists_its_problems`,
-`a_library_compiled_with_no_model_changed_says_so`,
-`a_build_overtaken_by_a_reload_passes_its_compile_on`,
-`an_apply_during_a_build_queues_one_more_build`, `a_build_error_keeps_the_running_model`,
-`a_crate_without_a_source_hash_is_refused_with_its_advice` and
-`a_plugin_step_that_never_returns_leaves_the_app_responsive` (a reload past a held plugin step
-returns within `STOP_WAIT`, and the rebuild steps on a fresh pool), over a scripted builder that
-reports a library compiled again when its file's text changed, and
-`project.rs` holds `the_file_list_holds_the_sources_by_label`,
-`a_compiler_error_is_placed_in_its_project_file` and `a_shader_error_on_standard_error_is_placed`.
-Keep them.

@@ -1,8 +1,8 @@
 //! Resumes of a sweep into a directory that holds some of its runs.
 //!
 //! A resume accepts a directory only when its manifest records the same model, plan, model schema and shard, and no
-//! more replicates than the sweep runs. A model composed at run time or loaded from a plugin also has to run the code
-//! that every session ran its runs with. A resume keeps every run that ended `ok` or `non_finite`, and every failed
+//! more replicates than the sweep runs. A model composed at run time also has to run the code that every
+//! session ran its runs with. A resume keeps every run that ended `ok` or `non_finite`, and every failed
 //! run unless asked to retry failures. A run that timed out is always run again. Kept runs take their ids in the
 //! current plan. A changed replicate count assigns them new ids.
 
@@ -229,7 +229,7 @@ impl ResumeScan {
 }
 
 /// Checks that `recorded`, the manifest of a directory to resume, holds a sweep of `plan` in `shard` with no more
-/// replicates than `plan`, run with the code of `source` when either is runtime or plugin code.
+/// replicates than `plan`, run with the code of `source` when either is runtime code.
 fn check_recorded(recorded: &Manifest, plan: &Plan, source: &ModelSource, shard: Shard) -> Result<(), ResumeError> {
     if recorded.mode != ManifestMode::Sweep {
         return Err(ResumeError::ModeChanged {
@@ -311,7 +311,7 @@ pub(crate) fn check_directory_code(
 }
 
 /// Checks that every session of `recorded` that wrote runs ran the code of `source`, the model that resumes, when
-/// either records a runtime or plugin origin.
+/// either records a runtime origin.
 ///
 /// Called after the model id and before the schema hash. A runtime model's edit can change its declarations as well,
 /// and the changed code is then the error reported.
@@ -379,7 +379,7 @@ pub enum ResumeError {
         current: String,
     },
     /// A directory holding runs of other model code, where the code that ran them or the code that resumes is runtime
-    /// or plugin code.
+    /// code.
     CodeChanged {
         /// Code that a session of the directory ran, as text naming its origin and its hash.
         recorded: String,
@@ -472,7 +472,7 @@ impl fmt::Display for ResumeError {
             Self::CodeChanged { recorded, current } => write!(
                 f,
                 "the directory holds runs of different model code ({recorded}, expected {current}). A model \
-                 composed at run time or loaded from a plugin resumes only with the code its runs ran"
+                 composed at run time resumes only with the code its runs ran"
             ),
             Self::SchemaChanged { recorded, current } => write!(
                 f,

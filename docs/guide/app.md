@@ -928,7 +928,7 @@ It keeps the memory budgets that the folder's manifest records, and a line under
 **Concurrent runs** is automatic, as on a new sweep.
 `henad-cli --resume` takes the concurrency and the memory budgets from its flags and its spec's `[execution]` table instead.
 For a search the button reads <span class="ui" markdown>:material-play: Resume search</span>, and it [replays the search](search.md#resuming-a-search) up to where it stopped before running the rest.
-The button is disabled when the folder's runs came from runtime or plugin code other than the model's code in this app.
+The button is disabled when the folder's runs came from runtime code other than the model's code in this app.
 `henad-cli --resume` refuses such a folder as well.
 The progress shows in the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab, and the folder is read again once the sweep ends.
 
@@ -1010,7 +1010,7 @@ The [Editor](editor.md) page describes the model file, Apply and the limits of g
 
 ## Model code changes
 
-The code behind a model can change while the app runs, as when a [dev host](hot-reload.md) reloads its models or the [Editor](#editor-tab) applies a grid rule.
+The code behind a model can change while the app runs, as when the [Editor](#editor-tab) applies a grid rule.
 The new code replaces the model of the same id, and the panels describe it at once.
 
 The running simulation keeps the code it was built with.
@@ -1036,7 +1036,7 @@ The seed stays as it is.
 
 The <span class="ui" markdown>:material-flask-outline: Sweep</span> tab reads the model's outputs again, and starts a new draft when the parameters, stats or actions changed.
 A sweep that is running keeps the code it started with.
-In the <span class="ui" markdown>:material-chart-box-outline: Results</span> tab, runs of other code carry the warning under [Opening a run](#opening-a-run), and a folder of other runtime or plugin code cannot be [resumed](#opening-results).
+In the <span class="ui" markdown>:material-chart-box-outline: Results</span> tab, runs of other code carry the warning under [Opening a run](#opening-a-run), and a folder of other runtime code cannot be [resumed](#opening-results).
 
 ## Model build and simulation errors
 
