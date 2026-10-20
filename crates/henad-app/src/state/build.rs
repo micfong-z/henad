@@ -59,7 +59,7 @@ const STOPPED_REPAINT: Duration = Duration::from_secs(1);
 const SETTLE_POLL: Duration = Duration::from_millis(5);
 
 // Phases of a build on its own thread, held in `PendingBuild::phase`. The build thread moves from one to the next by
-// compare and swap, and the app swaps in `PHASE_CANCELLED` when it abandons the build.
+// compare and swap, and the app swaps in `PHASE_CANCELED` when it abandons the build.
 
 /// The build waits for the threads stopped before it.
 #[cfg(not(target_arch = "wasm32"))]
@@ -69,7 +69,7 @@ const PHASE_BUILDING: u8 = 1;
 /// The build has sent its result, or is about to.
 const PHASE_DONE: u8 = 2;
 /// The app abandoned the build. A build that sees it builds nothing, or drops what it built on its own thread.
-const PHASE_CANCELLED: u8 = 3;
+const PHASE_CANCELED: u8 = 3;
 
 /// Runner a build returns, or the build's fault, with the generation of the pool the runner runs in.
 struct Built {
@@ -82,7 +82,7 @@ pub struct PendingBuild {
     /// Channel the build thread returns its result on.
     built: Receiver<Built>,
     thread: JoinHandle<()>,
-    /// Phase of the build, one of [`PHASE_WAITING`], [`PHASE_BUILDING`], [`PHASE_DONE`] and [`PHASE_CANCELLED`].
+    /// Phase of the build, one of [`PHASE_WAITING`], [`PHASE_BUILDING`], [`PHASE_DONE`] and [`PHASE_CANCELED`].
     phase: Arc<AtomicU8>,
     /// Entry of the model being built. A fault of the build names it in the fault modal, and the Editor claims a
     /// fault of the code the Editor applied.
@@ -149,7 +149,7 @@ impl BuildJob {
     #[cfg(not(target_arch = "wasm32"))]
     fn settle(&self) -> Option<(u64, Option<Arc<rayon::ThreadPool>>)> {
         loop {
-            if self.phase.load(Ordering::SeqCst) == PHASE_CANCELLED {
+            if self.phase.load(Ordering::SeqCst) == PHASE_CANCELED {
                 return None;
             }
             let now = Instant::now();
@@ -446,7 +446,7 @@ impl AppState {
     /// The sink of the runner's panics is replaced, so a detached runner's late panic reaches no later run.
     pub(super) fn stop_simulation(&mut self) {
         if let Some(build) = self.building.take() {
-            match build.phase.swap(PHASE_CANCELLED, Ordering::SeqCst) {
+            match build.phase.swap(PHASE_CANCELED, Ordering::SeqCst) {
                 PHASE_BUILDING => {
                     log::warn!("Build of {} abandoned before it returned", build.model.name());
                     // The build took the current pool once every thread before it had ended or retired its pool, and
