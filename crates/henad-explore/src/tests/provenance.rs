@@ -1,7 +1,7 @@
 //! Checks that every session records the builds it ran, and that a resume or a merge warns when a build changed.
 //!
-//! A model composed at run time or loaded from a plugin records the identity of its code, and a resume or a merge
-//! refuses code that changed. The runtime entries here are the registered Game of Life with runtime code attached,
+//! A model composed at run time records the identity of its code, and a resume or a merge refuses code that
+//! changed. The runtime entries here are the registered Game of Life with runtime code attached,
 //! which steps exactly as the registered entry does.
 
 use std::path::PathBuf;
@@ -571,12 +571,6 @@ fn runtime_life(code: &ModelCode) -> ModelEntry {
     entry(GameOfLifeModel::ID, None).__with_code(code.clone())
 }
 
-/// Returns Game of Life loaded from a plugin of the model crate whose sources hash to `hash`, given as 16
-/// hexadecimal digits.
-fn plugin_life(hash: &'static str) -> ModelEntry {
-    registered_by(model_crate(Some("true"), Some(hash))).__into_plugin()
-}
-
 /// Sweeps `first` with one replicate into a fresh directory, then resumes it with `second` and two replicates.
 ///
 /// Returns the warnings or the error of the resume, and whether the resume left the manifest and `runs.csv` as they
@@ -676,37 +670,6 @@ fn a_resume_refuses_runtime_code_that_changed() {
 }
 
 #[test]
-fn a_resume_refuses_a_plugin_whose_sources_changed() {
-    let (result, _) = resume_with(&plugin_life("00000000000000aa"), &plugin_life("00000000000000aa"));
-    assert_eq!(result.expect("unchanged sources resume"), []);
-
-    let (result, unchanged) = resume_with(&plugin_life("00000000000000aa"), &plugin_life("00000000000000bb"));
-    let message = code_refusal(result);
-    assert!(unchanged);
-    assert!(
-        message.contains("plugin code of life-crate 1.0.0, sources 00000000000000aa"),
-        "{message}"
-    );
-
-    // A plugin whose build records no source hash cannot show that its code is unchanged.
-    let unhashed = registered_by(model_crate(Some("false"), None)).__into_plugin();
-    let (result, _) = resume_with(&unhashed, &unhashed);
-    code_refusal(result);
-}
-
-#[test]
-fn a_plugin_with_unchanged_sources_resumes_a_compiled_folder() {
-    let compiled = registered_by(model_crate(Some("false"), Some("00000000000000aa")));
-    let (result, _) = resume_with(&compiled, &plugin_life("00000000000000aa"));
-    assert_eq!(result.expect("unchanged sources resume"), []);
-    let (result, _) = resume_with(&plugin_life("00000000000000aa"), &compiled);
-    assert_eq!(result.expect("unchanged sources resume"), []);
-
-    let (result, _) = resume_with(&compiled, &plugin_life("00000000000000bb"));
-    code_refusal(result);
-}
-
-#[test]
 fn a_compiled_build_change_still_only_warns() {
     let before = registered_by(model_crate(Some("false"), Some("00000000000000aa")));
     let after = registered_by(BuildInfo::__from_env(
@@ -775,22 +738,6 @@ fn a_merge_refuses_shards_of_two_codes() {
     let error = merge(&[dirs[0].clone(), longer], &refused, &mut Recorder::default())
         .expect_err("shards of two codes and two plans");
     assert!(matches!(error, MergeError::CodeChanged { .. }), "{error:?}");
-
-    // Every pair of shards is compared. A compiled shard of sources `aa`, a plugin shard of `aa` and a compiled shard
-    // of `bb` each match the first shard, and the plugin shard and the last shard differ.
-    let three: Vec<PathBuf> = (0..3)
-        .map(|index| scratch.path().join(format!("three-{index}")))
-        .collect();
-    let compiled = |hash| registered_by(model_crate(Some("false"), Some(hash)));
-    shard(&three[0], 0, 3, &compiled("00000000000000aa"), &life_spec(3));
-    shard(&three[1], 1, 3, &plugin_life("00000000000000aa"), &life_spec(3));
-    shard(&three[2], 2, 3, &compiled("00000000000000bb"), &life_spec(3));
-    let error = merge(&three, &refused, &mut Recorder::default()).expect_err("a plugin and other sources");
-    let MergeError::CodeChanged { dir, lower_dir, .. } = &error else {
-        panic!("expected the refusal of changed code, got {error:?}");
-    };
-    assert_eq!((dir, lower_dir), (&three[2], &three[1]));
-    assert!(!refused.exists(), "a refused merge writes nothing");
 }
 
 #[test]
@@ -855,11 +802,10 @@ fn two_codes_under_one_label_are_listed_apart() {
     assert!(!first.same_build(&second) && !first.reads_as(&second));
     assert!(first.code_differs(&second));
 
-    // A plugin of unchanged sources is the same code as the compiled crate, and a list still shows that a plugin ran.
+    // Runtime code is never the same build as compiled code, even of a hashed crate.
     let compiled = RecordedBuild::from(registered_by(model_crate(Some("false"), Some("00000000000000aa"))).source());
-    let plugin = RecordedBuild::from(plugin_life("00000000000000aa").source());
-    assert!(compiled.same_build(&plugin) && !compiled.code_differs(&plugin));
-    assert!(!compiled.reads_as(&plugin) && !plugin.reads_as(&compiled));
+    assert!(!compiled.same_build(&first) && !compiled.reads_as(&first));
+    assert!(compiled.code_differs(&first) && first.code_differs(&compiled));
     assert_eq!(first.describe(), format!("runtime code {:016x}", life.hash()));
     assert_ne!(first.describe(), second.describe());
 

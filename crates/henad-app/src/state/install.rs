@@ -139,7 +139,7 @@ impl AppState {
         let Some(current) = self.models.get(loaded.id()).cloned() else {
             return;
         };
-        if current.source() == loaded.source() {
+        if same_code(&loaded, &current) {
             self.pending_rebuild = None;
             return;
         }

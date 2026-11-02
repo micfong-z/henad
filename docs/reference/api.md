@@ -14,7 +14,7 @@ Each crate's API documentation is on docs.rs.
 A program or a model crate depends on **`henad`**, and on **`henad-build`** as a build dependency when it registers its own models.
 Every item a model, a host or a test needs has a path in `henad`, and the guides refer to items by those paths alone.
 The code they include from the example models is the exception, since henad-models sits below the facade and refers to `henad_core` and `henad_compute`.
-The [template](../guide/your-project.md) depends on these two Henad crates, and on `henad-dylib` behind its `hot` feature.
+The [template](../guide/your-project.md) depends on these two Henad crates.
 
 The other six are the crates `henad` re-exports.
 A program never needs to name them, and their paths can change between releases, while the facade paths stay the same.

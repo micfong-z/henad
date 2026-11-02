@@ -16,21 +16,18 @@ holds no device from its registration. The five `register_*` functions fill a cr
 build in `catching` or `catching_on` (a GPU build with no device is refused) and derive the
 metadata's backend. `an_entry_from_values_reads_like_the_registered_one` holds the two paths
 equal. Keep it. A set refuses a duplicate id or one outside the grammar, records its `BuildInfo`
-on an entry that has none unless its source is runtime or plugin code, and merges the entries'
+on an entry that has none unless its source is runtime code, and merges the entries'
 `GpuNeeds` for the device request. `ModelSet::replace` puts an entry in place of the one with its
 id, at its position, and returns it, or appends the entry and returns `None`, stamping as `insert`
-does, and `ModelSet::remove` takes the entry with an id out and returns it, keeping the order. The
-`register_*` functions are generic, and the engines and kernels monomorphise in the crate that
-calls them. The GPU grid engine is the exception. henad-compute compiles it
+does. The `register_*` functions are generic, and the engines and kernels monomorphise in the
+crate that calls them. The GPU grid engine is the exception. henad-compute compiles it
 once, and only the model's hooks monomorphise in the caller. `register_gpu_grid_model` reads one
 `Arc<GpuGridSpec>` from the model and passes it to the crate-private `ModelEntry::from_grid_spec`,
 whose builds and demand share it and which boxes the engine itself, as a grid rule's entry does.
 `GpuGridState<M>` is the adapter a test or a host builds directly.
 henad-compute instantiates no model outside its own tests.
 `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for other crates' tests alone. The
-hidden `ModelEntry::__into_plugin` marks an entry as a plugin's, and henad-hot's
-`DevHost::rebuild` calls it on every entry a plugin exports. The hidden `__with_code` gives a
-test's entry a runtime source labelled with its id.
+hidden `__with_code` gives a test's entry a runtime source labelled with its id.
 `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU ports
 share. `simulation.rs` is the programmatic API over an entry. `RunSetup`
 (`ModelEntry::setup`) holds values by id, a seed and scheduled actions, each checked when set

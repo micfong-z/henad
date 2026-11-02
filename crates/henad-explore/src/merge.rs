@@ -58,7 +58,7 @@ struct ShardInput {
 /// Returns [`MergeError`] when there are no inputs, an input cannot be read, the inputs hold different plans,
 /// replicate counts, shard counts or columns, two inputs hold the same shard, a run's id does not match its config and
 /// replicate, or the merged directory cannot be written. Returns [`MergeError::CodeChanged`] when two shards ran
-/// different model code, and either code is runtime or plugin code.
+/// different model code, and either code is runtime code.
 pub fn merge(
     shard_dirs: &[PathBuf],
     output_dir: &Path,
@@ -309,11 +309,9 @@ fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
 }
 
 /// Checks that the sessions of `shards`, sorted by shard index, ran one model code wherever either of two codes is
-/// runtime or plugin code.
+/// runtime code.
 ///
-/// Each model build of a session that wrote runs is compared with every build of each lower shard. Note that a
-/// comparison with the lowest shard alone misses a pair. A compiled shard of sources `X`, a plugin shard of `X` and a
-/// compiled shard of `Y` each match the first shard, and the plugin shard and the last shard differ.
+/// Each model build of a session that wrote runs is compared with every build of each lower shard.
 fn check_code(shards: &[ShardInput]) -> Result<(), MergeError> {
     let listed: Vec<(&ShardInput, Vec<Option<RecordedBuild>>)> = shards
         .iter()
@@ -438,7 +436,7 @@ pub enum MergeError {
         /// Path of the input directory with the lowest shard index.
         first: PathBuf,
     },
-    /// Input `dir` ran other model code than input `lower_dir`, and either code is runtime or plugin code.
+    /// Input `dir` ran other model code than input `lower_dir`, and either code is runtime code.
     CodeChanged {
         /// Path of the input directory that differs.
         dir: PathBuf,
@@ -529,7 +527,7 @@ impl fmt::Display for MergeError {
             } => write!(
                 f,
                 "'{}' ran different model code ({current}) from '{}' ({recorded}). Shards of a model composed at run \
-                 time or loaded from a plugin merge only when they ran the same code",
+                 time merge only when they ran the same code",
                 dir.display(),
                 lower_dir.display()
             ),

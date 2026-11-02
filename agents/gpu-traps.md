@@ -21,10 +21,7 @@ is about not undoing them.
   own from its pass list — no constant, because wgpu's own advice is to request only what you need
   and a constant would be either short of a future model or dead headroom. For the example models
   it comes to 8, since `gpu_ants`'s step pass sits at exactly 8. `raise` takes the needs rather
-  than knowing them: henad-compute cannot see which models a host offers. A dev host alone requests
-  `GpuNeeds::ADAPTER_MAXIMUM`, the adapter's own count, which henad-app merges in for options with a
-  dev host and `raise` clamps without its warning. A plugin's GPU model can bind more than the
-  models the app started with.
+  than knowing them: henad-compute cannot see which models a host offers.
   The kit's `BaselineBuild`, run by the registry tests on a `Limits::default()` device from
   `headless_test_device`, holds the line, and asserts in the same breath that `capacity.rs` agrees.
   Build and declared demand pin each other, and an over-reported pass count fails there.

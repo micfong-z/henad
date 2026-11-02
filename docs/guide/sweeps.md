@@ -618,10 +618,9 @@ The manifest's `sessions` lists every process that wrote runs, with three builds
 A build records its commit, whether the sources differed from the commit, and a hash of the sources.
 A resume warns when Henad's build or the model's build differs from a build that a session recorded, and goes ahead.
 An uncommitted edit to a kernel counts as a different build, since its source hash changes.
-A model composed at run time or loaded from a plugin is stricter, and a resume of such a model under other code is rejected.
+A model composed at run time is stricter, and a resume of such a model under other code is rejected.
 The error names the code that the folder's runs ran and the code that resumes.
-A runtime model's code is identified by the hash of its text, and a plugin's code by the source hash of its crate.
-A plugin built from unchanged sources therefore resumes a folder that the compiled crate wrote.
+A runtime model's code is identified by the hash of its text.
 Start a new folder for the edited model, or undo the edit.
 A [model file](#sweeping-a-model-file) resumes with the same `--model-file`.
 The [CLI reference](../reference/cli.md#builds) lists the fields and the rule that compares two builds.
@@ -675,7 +674,7 @@ cargo run --release --locked -p henad-cli -- --merge shard-0 shard-1 shard-2 sha
 It interleaves `runs.csv` and `series.csv` back into run order, rebuilds `summary.csv`, and lists the merged directories in the manifest under `merged_shards`.
 The merged CSV files are the same as those of the sweep run in one piece, apart from the timing columns.
 A merge warns when the shards ran different builds of Henad or of the model.
-It rejects shards of a model composed at run time or loaded from a plugin that ran different code, as a resume does.
+It rejects shards of a model composed at run time that ran different code, as a resume does.
 
 Build every shard, and every later resume, from one commit with `--locked`.
 Cargo then builds from the committed `Cargo.lock` and fails rather than change it.

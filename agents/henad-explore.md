@@ -118,13 +118,12 @@ build into it (`record_session_engines`). `ResultSet::recorded_builds` reads the
 procedure in its `README.md`, and `a_0_2_0_manifest_still_replays_and_merges` replays and merges
 it. Both fail when the folder is missing. `src/tests/provenance.rs` holds the comparisons. Keep
 them.
-Code identity: a model build records `origin` (`runtime` or `plugin`, absent for compiled code)
-and `code_hash`, both optional and left out when absent, and `ManifestModel.code`
+Code identity: a model build records `origin` (`runtime`, absent for compiled code) and
+`code_hash`, both optional and left out when absent, and `ManifestModel.code`
 (`ManifestModelCode`) carries a runtime model's text inline. `FORMAT_VERSION` stays 1.
-`RecordedBuild` is `#[non_exhaustive]`. When either build records an origin, `same_build`
-compares the code identity alone: `runtime` and the code hash, or `rust` and the source hash for
-compiled and plugin code, both known. `is_identified` and `describe` account for it, and
-`reads_as` lists a plugin apart from the compiled build of its sources. The crate-private
+`RecordedBuild` is `#[non_exhaustive]`. When either build records an origin, `same_build` holds
+only when both are runtime code with one known code hash, so runtime code is never the same build
+as compiled code. `is_identified` and `describe` account for it. The crate-private
 `code_differs` is the rejection rule: either build has an origin and the two are not the same
 build. `check_code` (`output/resume.rs`) applies it after the model id and before the schema hash
 for a sweep resume (`ResumeScan::read` takes the `ModelSource`) and a search resume, against
@@ -132,17 +131,14 @@ every session that wrote runs (`Manifest::run_model_builds`), a session with no 
 counting as other code, and returns `ResumeError::CodeChanged`. Both resumes also call
 `check_directory_code` before their probe build, which then never builds changed code. A merge
 compares every shard's builds with those of each lower shard, after the model id and before the
-plan checks (`MergeError::CodeChanged`). One reference shard misses a plugin shard between two
-compiled shards of other sources. Compiled against compiled keeps `BuildChanged`. `schema_json`
-writes `origin` and `code_hash` only for a model that is not compiled, and
+plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildChanged`.
+`schema_json` writes `origin` and `code_hash` only for a model that is not compiled, and
 `ResultSet::code_matches` and `Manifest::code_matches` answer the rule for a host.
 `a_value_built_entry_sweeps_byte_identically_to_the_registered_one`,
-`a_resume_refuses_runtime_code_that_changed`,
-`a_resume_refuses_a_plugin_whose_sources_changed`,
-`a_plugin_with_unchanged_sources_resumes_a_compiled_folder`,
-`a_compiled_build_change_still_only_warns`, `a_merge_refuses_shards_of_two_codes`,
-`a_manifest_carries_runtime_code_inline` and `two_codes_under_one_label_are_listed_apart`
-(`src/tests/provenance.rs`), `a_search_resume_refuses_changed_code` (`src/tests/search.rs`) and
+`a_resume_refuses_runtime_code_that_changed`, `a_compiled_build_change_still_only_warns`,
+`a_merge_refuses_shards_of_two_codes`, `a_manifest_carries_runtime_code_inline` and
+`two_codes_under_one_label_are_listed_apart` (`src/tests/provenance.rs`),
+`a_search_resume_refuses_changed_code` (`src/tests/search.rs`) and
 `schema_json_names_code_only_for_runtime_models` (`schema.rs`) hold it. Keep them.
 Behind the `model-files` feature, which turns on henad-compute's `runtime-wgsl`, `model_file.rs`
 holds `ModelFile`, a grid rule as one TOML file. `parse` reads line ends as `\n` and maps every

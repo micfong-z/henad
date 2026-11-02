@@ -144,6 +144,7 @@ nav = [
             { "#57, 2026-10-10" = "developing/agent-record/20261010-57-runaway-rails.md" },
             { "#58, 2026-10-10" = "developing/agent-record/20261010-58-branch-review.md" },
             { "#59, 2026-10-12" = "developing/agent-record/20261012-59-agents-split.md" },
+            { "#60, 2026-10-20" = "developing/agent-record/20261020-60-dev-host-dropped.md" },
         ] },
     ] },
 ]

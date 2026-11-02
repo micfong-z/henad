@@ -3,8 +3,8 @@
 //! A [`BuildInfo`] identifies one compiled crate: its package, its version and, once a build script stamps it, its
 //! commit, a dirty flag and a hash of its sources. [`build_info!`](crate::build_info) returns the build of the crate it
 //! expands in. A [`ModelSource`] identifies the origin of a model's code: the type registered and the build of the
-//! crate that registered it, or the [`ModelCode`] of a model composed at run time. Its [`CodeOrigin`] tells compiled,
-//! runtime and plugin code apart.
+//! crate that registered it, or the [`ModelCode`] of a model composed at run time. Its [`CodeOrigin`] tells compiled
+//! and runtime code apart.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -157,17 +157,14 @@ pub enum CodeOrigin {
     Compiled,
     /// Code composed at run time from text, such as a grid rule read from a model file.
     Runtime,
-    /// Code compiled from a crate into a library that a dev host loaded while it ran.
-    Plugin,
 }
 
 impl CodeOrigin {
-    /// Returns the name a results folder records for the origin: `compiled`, `runtime` or `plugin`.
+    /// Returns the name a results folder records for the origin: `compiled` or `runtime`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Compiled => "compiled",
             Self::Runtime => "runtime",
-            Self::Plugin => "plugin",
         }
     }
 }
@@ -241,7 +238,7 @@ pub struct ModelSource {
     type_path: Cow<'static, str>,
     build: Option<BuildInfo>,
     origin: CodeOrigin,
-    /// Code of a runtime model, `None` for compiled and plugin code.
+    /// Code of a runtime model, `None` for compiled code.
     code: Option<ModelCode>,
 }
 
@@ -278,32 +275,20 @@ impl ModelSource {
         }
     }
 
-    /// Returns the source marked as code that a dev host loaded from a plugin. A runtime source is returned unchanged.
-    #[doc(hidden)]
-    pub fn __into_plugin(self) -> Self {
-        match self.origin {
-            CodeOrigin::Runtime => self,
-            CodeOrigin::Compiled | CodeOrigin::Plugin => Self {
-                origin: CodeOrigin::Plugin,
-                ..self
-            },
-        }
-    }
-
     /// Way the model's code reached the process.
     pub fn origin(&self) -> CodeOrigin {
         self.origin
     }
 
-    /// Code of a model composed at run time, `None` for compiled and plugin code.
+    /// Code of a model composed at run time, `None` for compiled code.
     pub fn code(&self) -> Option<&ModelCode> {
         self.code.as_ref()
     }
 
     /// Hash that identifies the model's code: the [`ModelCode::hash`] of a runtime model, and the registering
-    /// crate's [source hash](Self::source_hash) for compiled and plugin code.
+    /// crate's [source hash](Self::source_hash) for compiled code.
     ///
-    /// `None` for compiled or plugin code whose build records no source hash.
+    /// `None` for compiled code whose build records no source hash.
     pub fn code_hash(&self) -> Option<u64> {
         match &self.code {
             Some(code) => Some(code.hash()),
@@ -436,7 +421,6 @@ mod tests {
         assert_eq!(source.code(), Some(&code));
         assert_eq!(source.code_hash(), Some(code.hash()));
         assert_eq!(source.build(), None);
-        assert_eq!(source.clone().__into_plugin(), source, "a runtime source stays runtime");
         assert_ne!(
             source,
             ModelSource::runtime("life", ModelCode::new("henad-grid-rule/1", "other rule")),
@@ -450,6 +434,5 @@ mod tests {
             Some(0xAA),
             "compiled code is identified by its sources"
         );
-        assert_ne!(compiled.clone().__into_plugin(), compiled, "equality covers the origin");
     }
 }

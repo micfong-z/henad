@@ -16,8 +16,8 @@ pub const SCHEMA_VERSION: u64 = 1;
 /// Returns the parameters, stats and actions of `entry` as one JSON object.
 ///
 /// The object carries `stat_columns`, the columns a sweep writes, only when `probe` is given. A choice's default is
-/// its option name, with its index beside it as `default_index`. A model composed at run time or loaded from a plugin
-/// adds its `origin` and the `code_hash` that identifies its code, and a compiled model writes neither.
+/// its option name, with its index beside it as `default_index`. A model composed at run time adds its
+/// `origin` and the `code_hash` that identifies its code, and a compiled model writes neither.
 pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
     let params: Vec<Value> = entry
         .param_descriptors()
@@ -224,14 +224,6 @@ mod tests {
         assert_eq!(
             runtime["schema_hash"], compiled["schema_hash"],
             "the code is no part of the schema"
-        );
-
-        let plugin = schema_json(&life.clone().__into_plugin(), None);
-        assert_eq!(plugin["origin"], json!("plugin"));
-        assert_eq!(
-            plugin["code_hash"],
-            json!(life.source().source_hash().map(|hash| format!("{hash:016x}"))),
-            "a plugin is identified by its crate's sources"
         );
     }
 

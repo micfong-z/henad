@@ -290,7 +290,7 @@ pub(crate) fn compose(
 ) -> Result<Composition, Vec<CodeDiagnostic>> {
     if modules.len() > MAX_MODULES {
         return Err(vec![CodeDiagnostic::error(format!(
-            "{} modules passed, and a composition takes at most {MAX_MODULES}",
+            "{} modules passed, but at most {MAX_MODULES} are allowed",
             modules.len()
         ))]);
     }
@@ -504,7 +504,7 @@ fn check_directives(text: &str, is_module: bool, known: &[String], file: &FileIn
     if text.len() > MAX_FILE_BYTES {
         return vec![
             CodeDiagnostic::error(format!(
-                "the file holds {} bytes, and the composer takes at most {MAX_FILE_BYTES}",
+                "the file holds {} bytes, but at most {MAX_FILE_BYTES} are allowed",
                 text.len()
             ))
             .with_file(&file.path),
@@ -534,7 +534,7 @@ fn check_directives(text: &str, is_module: bool, known: &[String], file: &FileIn
                 line,
                 column,
                 DECORATION.len(),
-                "the text holds the name decoration the composer adds to imported items".to_owned(),
+                "the text contains the name decoration the composer adds to imported items".to_owned(),
             );
             continue;
         }
@@ -619,7 +619,7 @@ fn check_directive_line(trimmed: &str, is_module: bool, known: &[String]) -> Res
     let code = trimmed.trim_end();
     if let Some(rest) = code.strip_prefix("#define_import_path") {
         if !is_module {
-            return Err("an entry shader declares no `#define_import_path`".to_owned());
+            return Err("an entry shader must not declare `#define_import_path`".to_owned());
         }
         return if rest.starts_with(char::is_whitespace) && is_module_path(rest.trim()) {
             Ok(())
@@ -637,7 +637,7 @@ fn check_directive_line(trimmed: &str, is_module: bool, known: &[String]) -> Res
     let (module, items) = match body.split_once("::{") {
         Some((module, list)) => {
             let Some(list) = list.strip_suffix('}') else {
-                return Err("an `#import` line closes its `{` on the same line".to_owned());
+                return Err("an `#import` line must close its `{` on the same line".to_owned());
             };
             let items: Vec<&str> = list.split(',').map(str::trim).filter(|item| !item.is_empty()).collect();
             (module, items)
@@ -654,7 +654,7 @@ fn check_directive_line(trimmed: &str, is_module: bool, known: &[String]) -> Res
         return Err(format!("there is no module `{module}` to import from"));
     }
     if items.is_empty() {
-        return Err("an `#import` line names at least one item".to_owned());
+        return Err("an `#import` line must name at least one item".to_owned());
     }
     for item in items {
         let valid = match item.split_once(" as ") {

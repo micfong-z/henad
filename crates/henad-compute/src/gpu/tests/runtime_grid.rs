@@ -169,7 +169,7 @@ fn bindings_and_foreign_directives_in_user_text_are_refused() {
          return henad::rng::pcg_hash(cell);\n}}\n"
     );
     let problems = refusals(&life_with(&step));
-    assert_problem_at(&problems, 1, "declares no bindings");
+    assert_problem_at(&problems, 1, "must not declare bindings");
     assert_problem_at(&problems, 5, "`neighbor` is a name of the rule template");
     assert_eq!(
         problems.iter().filter(|problem| problem.line == Some(1)).count(),
@@ -183,7 +183,7 @@ fn bindings_and_foreign_directives_in_user_text_are_refused() {
     );
     let problems = refusals(&life_with(&step));
     assert_problem_at(&problems, 1, "only `#import` lines");
-    assert_problem_at(&problems, 2, "declares no `#define_import_path`");
+    assert_problem_at(&problems, 2, "must not declare `#define_import_path`");
     assert_problem_at(&problems, 3, "`enable` directive");
     assert_problem_at(&problems, 5, "no `::`");
 
@@ -195,11 +195,11 @@ fn bindings_and_foreign_directives_in_user_text_are_refused() {
 
     // An entry point of the rule's own has no use, however its attribute is written.
     let step = format!("@compute @workgroup_size(1)\nfn other() {{}}\n{STEP_HEAD}    return cell;\n}}\n");
-    assert_problem_at(&refusals(&life_with(&step)), 1, "declares no entry point");
+    assert_problem_at(&refusals(&life_with(&step)), 1, "must not declare entry points");
     let step = format!(
         "@ /* spaced */ compute @workgroup_size(1)\nfn other() {{ loop {{}} }}\n{STEP_HEAD}    return cell;\n}}\n"
     );
-    assert_problem_at(&refusals(&life_with(&step)), 1, "declares no entry point");
+    assert_problem_at(&refusals(&life_with(&step)), 1, "must not declare entry points");
 
     // A module-scope item cannot take a built-in's name, which the template's own lines call. A local can.
     let step = format!(
@@ -490,7 +490,7 @@ fn a_parameter_its_kind_cannot_hold_is_refused() {
         (3, "outside its bounds"),
         (4, "option '1' reads as an index"),
         (5, "option 'square' appears twice"),
-        (6, "no option at its default index"),
+        (6, "no option exists at its default index"),
         (7, "shows as a percentage"),
     ];
     for (index, text) in expected {
@@ -512,7 +512,7 @@ fn two_states_with_one_constant_name_are_refused() {
     let problems = refusals(&rule);
     assert_eq!(problems.len(), 1, "{problems:#?}");
     assert!(
-        problems[0].message.contains("both give the constant `DEAD`"),
+        problems[0].message.contains("both produce the constant `DEAD`"),
         "{problems:#?}"
     );
 

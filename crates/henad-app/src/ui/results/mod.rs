@@ -656,8 +656,8 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
     }
 }
 
-/// Returns the reason Resume cannot resume the folder of `store`, a folder of runtime or plugin code that differs from
-/// the app's entry, or `None` when the code matches.
+/// Returns the reason Resume cannot resume the folder of `store`, a folder of runtime code that differs from the app's
+/// entry, or `None` when the code matches.
 ///
 /// `noun` names the results, "sweep" or "search".
 fn code_refusal(store: Option<&ResultsStore>, noun: &str) -> Option<String> {

@@ -283,14 +283,6 @@ impl ModelEntry {
         Self { parts: Arc::new(parts) }
     }
 
-    /// Returns the entry with its source marked as code that a dev host loaded from a plugin. A runtime source stays
-    /// runtime.
-    #[doc(hidden)]
-    pub fn __into_plugin(self) -> Self {
-        let source = self.parts.source.clone().__into_plugin();
-        self.with_source(source)
-    }
-
     /// Returns the entry with the source of a model composed at run time from `code`, labelled with the entry's id.
     ///
     /// The entry builds its state as before, and its source records no build. Tests give a compiled model runtime code

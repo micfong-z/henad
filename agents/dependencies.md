@@ -26,12 +26,4 @@ reaches the other, each crate compiles once, and packaging strips both edges. Ne
 own tests then build from its tarball. henad-explore reaching
 an example model outside its tests needs the maintainer's approval as a new edge. henad-tutorial
 depends on the facade and, to build, on henad-build. Its tests take the facade again with
-`example-models` and `testing`, and it names no other Henad crate. henad-hot depends on
-henad-core and henad-compute. henad-app takes it behind its own `hot` feature, an edge #49 approved,
-and the facade behind `hot`, each in its native target table. The facade's `hot` turns on `app` and
-henad-app's `hot`. Outside the workspace, henad-dylib depends on the facade alone, at `=X.Y.Z` with
-`hot`, and hot-host on the facade, henad-models, henad-dylib and henad-build by path, and under
-`check` on its own `generation` crate. No workspace member depends on henad-dylib, as
-`scripts/check_packaging.sh` checks. A `--workspace` build would select it as a primary package,
-cargo builds a primary package with a static std, and every member linking it would fail with
-"cannot satisfy dependencies so `std` only shows up once".
+`example-models` and `testing`, and it names no other Henad crate.

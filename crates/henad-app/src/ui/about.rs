@@ -163,7 +163,6 @@ fn build_info(product: &Product, models: &ModelSet) -> Vec<InfoRow> {
                     .code_hash()
                     .map_or_else(|| "unknown".to_owned(), |hash| format!("{hash:016x}"))
             ),
-            CodeOrigin::Plugin => format!("{} {} (plugin, {build})", source.package(), source.version()),
             _ => format!("{} {} ({build})", source.package(), source.version()),
         };
         if !sources.contains(&text) {
@@ -284,10 +283,9 @@ mod tests {
         assert!(info[4].1.starts_with("Henad "), "{}", info[4].1);
     }
 
-    /// A model composed at run time shows its code, and a model loaded from a plugin shows its origin beside its
-    /// crate's build.
+    /// A model composed at run time shows its code, and a compiled model its crate's build.
     #[test]
-    fn runtime_and_plugin_models_name_their_code() {
+    fn a_runtime_model_names_its_code() {
         let examples = henad_models::example_models();
         let life = examples
             .get("game_of_life")
@@ -297,7 +295,7 @@ mod tests {
         let code = ModelCode::new("test-rule/1", "life");
         let mut models = ModelSet::new(henad_core::build_info!());
         models.insert(life.__with_code(code.clone())).expect("a fresh id");
-        models.insert(sir.__into_plugin()).expect("a fresh id");
+        models.insert(sir).expect("a fresh id");
         let official = AppOptions::new(models.clone(), "Henad", henad_core::build_info!()).__official();
         let rows: Vec<String> = build_info(&official.product, &models)
             .into_iter()
@@ -307,7 +305,7 @@ mod tests {
         assert_eq!(rows.len(), 2, "{rows:?}");
         assert_eq!(rows[0], format!("game_of_life (runtime code {:016x})", code.hash()));
         assert!(
-            rows[1].starts_with("henad-models ") && rows[1].contains("(plugin, "),
+            rows[1].starts_with("henad-models ") && !rows[1].contains("runtime"),
             "{}",
             rows[1]
         );

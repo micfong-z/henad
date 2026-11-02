@@ -29,8 +29,7 @@ impl ModelSet {
     }
 
     /// Adds `entry`. An entry whose compiled source records no build yet receives the set's build, and any other entry
-    /// keeps the build it records. A model composed at run time records its code, and receives no build. A plugin's
-    /// source receives none either. The set's build is not the build of the plugin's crate.
+    /// keeps the build it records. A model composed at run time records its code, and receives no build.
     ///
     /// Note that an entry registered from a type in a third-party crate also receives the set's build. Its source's
     /// type path still refers to the real crate. A model library therefore exports a set built from its own
@@ -136,7 +135,7 @@ impl ModelSet {
     }
 
     /// Returns `entry` with the set's build recorded on its source, unless the source records a build already or holds
-    /// runtime or plugin code.
+    /// runtime code.
     fn stamped(&self, entry: ModelEntry) -> ModelEntry {
         let source = entry.source();
         if source.build().is_some() || source.origin() != CodeOrigin::Compiled {
@@ -523,44 +522,5 @@ mod tests {
         assert_eq!(replaced.source().code(), Some(&code));
         let source = models.get("still").expect("'still' is in the set").source();
         assert_eq!((source.build(), source.code_hash()), (None, Some(edited.hash())));
-    }
-
-    #[test]
-    fn a_marked_plugin_source_reads_as_plugin() {
-        let mut plugin = ModelSet::new(hashed_build("plugin-crate"));
-        plugin.insert(register_grid_model::<Still>()).expect("a fresh id");
-        let entry = plugin.get("still").expect("'still' is in the set").clone();
-        assert_eq!(entry.source().origin(), CodeOrigin::Compiled);
-
-        let marked = entry.clone().__into_plugin();
-        let source = marked.source();
-        assert_eq!(source.origin(), CodeOrigin::Plugin);
-        assert_eq!(source.package(), "plugin-crate", "the plugin keeps its crate's build");
-        assert_eq!(
-            source.code_hash(),
-            Some(0xAA),
-            "a plugin is identified by its crate's sources"
-        );
-        assert_eq!(source.code(), None);
-        assert_ne!(source, entry.source());
-
-        let mut host = ModelSet::new(build("host"));
-        host.insert(register_grid_model::<Still>()).expect("a fresh id");
-        host.replace(marked).expect("a valid id");
-        let source = host.get("still").expect("'still' is in the set").source();
-        assert_eq!(
-            (source.origin(), source.package()),
-            (CodeOrigin::Plugin, "plugin-crate")
-        );
-
-        // A plugin's entry marked before any set recorded a build stays without one. The host's build would claim the
-        // host's sources as the plugin's code.
-        host.replace(register_grid_model::<Still>().__into_plugin())
-            .expect("a valid id");
-        let source = host.get("still").expect("'still' is in the set").source();
-        assert_eq!(
-            (source.origin(), source.build(), source.code_hash()),
-            (CodeOrigin::Plugin, None, None)
-        );
     }
 }

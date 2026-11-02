@@ -4,9 +4,9 @@
 nothing but the `params!` forward and its hidden `__macro_support`: the root items and macros,
 `params`, `stats`, `views`, `action`, `gpu`, `runner`, `engine`, `explore`, `benchmark`
 (native), `authoring` with its `primitives` and `prelude`, the
-gated `models` (`example-models`), `app` (`app`), `cli` (`cli`), `testing` (`testing`), `rules`
-(`model-files`: the grid rules, the model files and `compose_wgsl`) and `hot` with the
-`export_models!` and `dev_host!` macros (`hot`), and `henad::prelude`. Each
+gated `models` (`example-models`), `app` (`app`), `cli` (`cli`), `testing` (`testing`) and
+`rules` (`model-files`: the grid rules, the model files and `compose_wgsl`), and
+`henad::prelude`. Each
 re-export fixes its item's one documented path, and the guides name items by these paths alone.
 `henad::explore` keeps henad-core's planning modules as modules (`spec`,
 `plan`, `search` and the rest), and `henad::authoring` globs henad-core's `authoring::model`
@@ -16,10 +16,8 @@ names each item of `helpers`, and leaves the engine's `buffer_target`, `RESERVED
 `fmt_bytes` out. `params!` is a macro of the facade's own that forwards to henad-core's through
 the hidden `__macro_support`. A `use` of henad-core's would bring its `params` module along, and
 docs.rs would show that module at `henad::params`. The other root macros are plain re-exports.
-henad-cli and henad-hot sit under a native target table, and `cli` adds nothing on wasm32. `hot`
-turns on `app` and henad-app's `hot`, and adds nothing else on wasm32. `inspection` turns on `app`
-and henad-app's `inspection`, and adds no item. docs.rs builds the facade for wasm32 too, without
-atomics, for the app's web entry point.
+henad-cli sits under a native target table, and `cli` adds nothing on wasm32. docs.rs builds the
+facade for wasm32 too, without atomics, for the app's web entry point.
 No feature changes a bound,
 a layout or a result. `examples/complete.rs` is the program a newcomer reads first, and
 `README.md`, which the crate doc includes with `app` and `example-models` both on, holds a copy in
@@ -37,8 +35,7 @@ names. It defines no model, needs no build script and never builds on a device, 
 that need an entry compile in a module no test calls. That module also holds the `gpu_build`
 and `scoped_steps` regions `guide/library.md` includes, the second through a `rayon`
 dev-dependency. Its `named_only` module names items whose path is the whole check, the grid rule
-items under `model-files` among them, and under `hot` expands `export_models!` under the
-workspace's `deny(unsafe_code)`. Keep all three.
+items under `model-files` among them. Keep all three.
 
 **henad-tutorial** (`examples/tutorial`, `publish = false`): the finished code of the five pages
 under `docs/guide/first-model/`, which include each file whole. `life.rs`, `foraging/`,
