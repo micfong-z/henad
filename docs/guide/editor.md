@@ -69,7 +69,7 @@ Applying the code the run already runs changes nothing, and the Editor reads **M
 ## Problems
 
 The list under the code shows the outcome of the last Apply.
-A text that fails the check leaves the running model alone, and the list names each problem at its line and column, as in **37:5 loops are not allowed in a grid rule. Without them a step's work is bounded** for a `loop {}` on the line after `let alive` in the Life starter.
+A text that fails the check leaves the running model alone, and the list names each problem at its line and column, as in **37:5 loops are not allowed in a grid rule. Step functions must be bounded** for a `loop {}` on the line after `let alive` in the Life starter.
 The line numbers are those of the gutter beside the code.
 Press a problem to move the cursor to it.
 The list holds the problems of the last Apply, and an edit since then shows its problems on the next one.

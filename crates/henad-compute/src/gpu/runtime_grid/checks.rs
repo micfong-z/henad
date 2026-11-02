@@ -72,7 +72,7 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
             problems.push((
                 Some(RuleDeclaration::Grid),
                 CodeDiagnostic::error(format!(
-                    "the grid {side} is {value}, and a rule's grid side is 1 to {MAX_GRID_SIDE}"
+                    "the grid {side} is {value}, but it must be between 1 and {MAX_GRID_SIDE}"
                 )),
             ));
         }
@@ -81,13 +81,16 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
     let fields = check_params(&rule.params, &mut problems);
 
     if rule.states.is_empty() {
-        problems.push((None, CodeDiagnostic::error("a rule declares at least one state")));
+        problems.push((
+            None,
+            CodeDiagnostic::error("a grid rule must declare at least one state"),
+        ));
     }
     if rule.states.len() > MAX_STATES {
         problems.push((
             None,
             CodeDiagnostic::error(format!(
-                "the rule declares {} states, and a rule takes at most {MAX_STATES}",
+                "the rule declares {} states, but at most {MAX_STATES} are allowed",
                 rule.states.len()
             )),
         ));
@@ -110,7 +113,7 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
             && let Some(other) = constants.iter().position(|earlier| *earlier == constant)
         {
             problem(format!(
-                "states '{}' and '{}' both give the constant `{constant}`",
+                "states '{}' and '{}' both produce the constant `{constant}`",
                 rule.states[other].label, state.label
             ));
         }
@@ -122,11 +125,11 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
                     shares.push((state_index, position));
                 }
                 Some(_) => problem(format!(
-                    "state '{}' takes its initial share from '{id}', which is not an f32 parameter",
+                    "state '{}' takes its initial share from '{id}', but '{id}' is not an f32 parameter",
                     state.label
                 )),
                 None => problem(format!(
-                    "state '{}' takes its initial share from '{id}', and the rule declares no such parameter",
+                    "state '{}' takes its initial share from '{id}', but no such parameter is declared",
                     state.label
                 )),
             },
@@ -139,7 +142,7 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
         problems.push((
             None,
             CodeDiagnostic::error(
-                "every state takes an initial share. Leave one state without `initial`, and it takes the cells no \
+                "every state has an initial share. One state must leave out `initial`, and it will take the cells no \
                  share claims",
             ),
         ));
@@ -162,8 +165,8 @@ fn check_names(rule: &GridRule, problems: &mut Vec<DeclarationProblem>) {
         problems.push((
             Some(RuleDeclaration::Id),
             CodeDiagnostic::error(format!(
-                "rule id '{}' {reason} (an id is a lowercase ASCII letter, then lowercase letters, digits and \
-                 underscores)",
+                "rule id '{}' {reason} (an id must start with a lowercase ASCII letter, followed by lowercase \
+                 letters, digits and underscores)",
                 rule.id
             )),
         ));
@@ -182,7 +185,7 @@ fn check_names(rule: &GridRule, problems: &mut Vec<DeclarationProblem>) {
 fn control_message(holder: &str, text: &str) -> Option<String> {
     let character = text.chars().find(|character| character.is_control())?;
     Some(format!(
-        "{holder} holds the control character U+{:04X}",
+        "{holder} contains the control character U+{:04X}",
         u32::from(character)
     ))
 }
@@ -192,23 +195,24 @@ fn control_message(holder: &str, text: &str) -> Option<String> {
 fn state_constant(label: &str) -> (String, Option<String>) {
     match constant_name(label) {
         Some(name) if name.starts_with(|c: char| c.is_ascii_digit()) => {
-            let reason = format!("state '{label}' gives the constant `{name}`, which starts with a digit");
+            let reason =
+                format!("state '{label}' produces the constant `{name}`, but constants must not start with a digit");
             (name, Some(reason))
         }
         Some(name) if is_reserved_name(&name) => {
             let reason =
-                format!("state '{label}' gives the constant `{name}`, which the rule template already declares");
+                format!("state '{label}' produces the constant `{name}`, but the rule template already declares it");
             (name, Some(reason))
         }
         Some(name) if naga::keywords::wgsl::RESERVED.contains(&name.as_str()) => {
-            let reason = format!("state '{label}' gives the constant `{name}`, which is a reserved word of WGSL");
+            let reason = format!("state '{label}' produces the constant `{name}`, but it is a reserved word of WGSL");
             (name, Some(reason))
         }
         Some(name) => (name, None),
         None => (
             String::new(),
             Some(format!(
-                "state '{label}' gives no constant name. A label holds at least one ASCII letter or digit"
+                "state '{label}' produces no constant name. A label must contain at least one ASCII letter or digit"
             )),
         ),
     }
@@ -220,7 +224,7 @@ fn check_params(params: &[ParamDescriptor], problems: &mut Vec<DeclarationProble
         problems.push((
             None,
             CodeDiagnostic::error(format!(
-                "the rule declares {} parameters, and a rule takes at most {MAX_PARAMS}",
+                "the rule declares {} parameters, but at most {MAX_PARAMS} are allowed",
                 params.len()
             )),
         ));
@@ -236,8 +240,8 @@ fn check_params(params: &[ParamDescriptor], problems: &mut Vec<DeclarationProble
             problem(format!("parameter id '{id}' {reason}"));
         } else if RESERVED_PARAM_IDS.contains(&id) || GRID_PARAM_IDS.contains(&id) || id.starts_with(PRIVATE_PREFIX) {
             problem(format!(
-                "parameter id '{id}' is reserved. The engine fills `params.width`, `params.height` and `params.seed`, \
-                 and declares `grid_width` and `grid_height`"
+                "parameter id '{id}' is reserved. The engine will fill `params.width`, `params.height` and \
+                 `params.seed`, and will declare `grid_width` and `grid_height`"
             ));
         } else if naga::keywords::wgsl::RESERVED.contains(&id) {
             problem(format!("parameter id '{id}' is a WGSL keyword"));
@@ -260,7 +264,7 @@ fn check_params(params: &[ParamDescriptor], problems: &mut Vec<DeclarationProble
         }
         if param.format() == ParamFormat::Percent && !matches!(param.kind(), ParamKind::F32 { .. }) {
             problem(format!(
-                "parameter '{id}' shows as a percentage, and only an f32 parameter holds a fraction"
+                "parameter '{id}' shows as a percentage, but only an f32 parameter can hold a fraction"
             ));
         }
         let field = match param.kind() {
@@ -283,7 +287,7 @@ fn check_kind(kind: &ParamKind) -> Result<(), String> {
             step,
         } => {
             if ![*min, *max, *default].iter().all(|value| value.is_finite()) {
-                Err("holds a bound or default that is not finite".to_owned())
+                Err("has a bound or default that is not finite".to_owned())
             } else if !(min <= default && default <= max) {
                 Err(format!(
                     "has the default {default:?}, outside its bounds {min:?} to {max:?}"
@@ -309,7 +313,7 @@ fn check_kind(kind: &ParamKind) -> Result<(), String> {
                 Ok(())
             } else {
                 Err(format!(
-                    "has {} options, and no option at its default index {default}",
+                    "has {} options, but no option exists at its default index {default}",
                     names.len()
                 ))
             }
@@ -332,7 +336,7 @@ fn is_reserved_name(name: &str) -> bool {
 pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic> {
     if step.len() > MAX_STEP_BYTES {
         return vec![CodeDiagnostic::error(format!(
-            "the rule's text holds {} bytes, and a rule's text holds at most {MAX_STEP_BYTES}",
+            "the rule's text holds {} bytes, but at most {MAX_STEP_BYTES} are allowed",
             step.len()
         ))];
     }
@@ -371,8 +375,8 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
         {
             problems.push(place(
                 CodeDiagnostic::error(format!(
-                    "a grid rule declares no entry point. The engine's `main` calls `step_cell`, and `@{word}` \
-                     has no use"
+                    "a grid rule must not declare entry points. The engine's `main` calls `step_cell`, and `@{word}` \
+                     will be ignored"
                 )),
                 at,
                 offset + word.len() - at,
@@ -386,7 +390,8 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
                 binding_line_end = code[offset..].find('\n').map_or(code.len(), |end| offset + end);
                 problems.push(place(
                     CodeDiagnostic::error(
-                        "a grid rule declares no bindings. The engine binds the cells and `params` for the rule",
+                        "a grid rule must not declare bindings. The engine will bind the cells and `params` for \
+                         the rule",
                     ),
                     at,
                     offset + word.len() - at,
@@ -406,7 +411,7 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
         if is_reserved_name(name) || constants.iter().any(|constant| constant == name) {
             problems.push(place(
                 CodeDiagnostic::error(format!(
-                    "`{name}` is a name of the rule template, and cannot be declared again"
+                    "`{name}` is a name of the rule template, and must not be declared again"
                 )),
                 name_offset,
                 name.len(),
@@ -422,7 +427,7 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
     }
     if !defines_step && problems.is_empty() {
         problems.push(
-            CodeDiagnostic::error("the rule defines no `step_cell`").with_note(format!("define `{STEP_SIGNATURE}`")),
+            CodeDiagnostic::error("the rule must define `step_cell`").with_note(format!("define `{STEP_SIGNATURE}`")),
         );
     }
     problems
@@ -430,7 +435,7 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
 
 /// Returns the message of a diagnostic about a module-scope item of the rule's text named `name`, a WGSL built-in.
 fn builtin_name_message(name: &str) -> String {
-    format!("`{name}` is a predeclared name of WGSL, and a rule's module-scope items cannot take it")
+    format!("`{name}` is a predeclared name of WGSL. A rule's module-scope items must not use it")
 }
 
 /// Returns the name a declaration keyword ending at byte `after` of `code` declares, with its offset.
@@ -516,8 +521,8 @@ pub(crate) fn check_module(composition: &Composition, start_offset: usize) -> Ve
             walker.report(
                 span,
                 format!(
-                    "the rule declares the entry point `{}`. A grid rule declares none, and the engine's `main` calls \
-                     `step_cell`",
+                    "the rule declares the entry point `{}`. Grid rules must not declare entry points. The engine's \
+                     `main` calls `step_cell`",
                     entry_point.name
                 ),
             );
@@ -544,12 +549,10 @@ pub(crate) fn check_module(composition: &Composition, start_offset: usize) -> Ve
 /// Returns the reason a value or variable of type `inner` is refused, or `None` when it is allowed.
 fn type_problem(module: &Module, inner: &TypeInner) -> Option<String> {
     if contains_atomic(module, inner) {
-        return Some("holds an atomic, and a grid rule uses no atomics".to_owned());
+        return Some("holds an atomic, but a grid rule must not use atomics".to_owned());
     }
     let bytes = type_bytes(module, inner);
-    (bytes > MAX_FUNCTION_BYTES).then(|| {
-        format!("takes {bytes} bytes, and a grid rule's values and variables take at most {MAX_FUNCTION_BYTES}")
-    })
+    (bytes > MAX_FUNCTION_BYTES).then(|| format!("takes {bytes} bytes, but at most {MAX_FUNCTION_BYTES} are allowed"))
 }
 
 /// Returns the byte size of a value of type `inner`, or `u64::MAX` for a size past naga's limit.
@@ -589,13 +592,13 @@ impl Finding {
     /// Returns the message of a finding in the rule's own function.
     fn message(&self) -> String {
         match self {
-            Self::Loop => "loops are not allowed in a grid rule. Without them a step's work is bounded".to_owned(),
+            Self::Loop => "loops are not allowed in a grid rule. Step functions must be bounded".to_owned(),
             Self::Write(name) => {
-                format!("this writes `{name}`. A grid rule writes only its locals and `private` variables")
+                format!("this writes `{name}`. Grid rules must only write their locals and `private` variables")
             }
             Self::Pointer(name) => format!(
-                "this passes a pointer to `{name}`. A grid rule passes pointers only to its locals and `private` \
-                 variables"
+                "this passes a pointer to `{name}`. Grid rules must only pass pointers to their locals and \
+                 `private` variables"
             ),
             Self::Atomic => "atomics are not allowed in a grid rule".to_owned(),
             Self::Barrier => "barriers are not allowed in a grid rule".to_owned(),
@@ -606,14 +609,14 @@ impl Finding {
     /// Returns the message of a finding in `callee`, a function outside the rule's text that the rule calls.
     fn message_through(&self, callee: &str) -> String {
         let what = match self {
-            Self::Loop => "holds a loop".to_owned(),
+            Self::Loop => "contains a loop".to_owned(),
             Self::Write(name) => format!("writes `{name}`, memory the cell does not own"),
             Self::Pointer(name) => format!("passes a pointer to `{name}`, memory the cell does not own"),
             Self::Atomic => "uses atomics".to_owned(),
             Self::Barrier => "uses a barrier".to_owned(),
-            Self::Statement => "holds a statement a grid rule cannot use".to_owned(),
+            Self::Statement => "contains a statement a grid rule cannot use".to_owned(),
         };
-        format!("this calls `{callee}`, which {what}. A grid rule cannot call it")
+        format!("this calls `{callee}`, which {what}. Grid rules must not call it")
     }
 }
 
@@ -667,26 +670,27 @@ impl Walker<'_> {
             let inner = &module.types[global.ty].inner;
             if global.binding.is_some() {
                 self.problems.push(located.place(CodeDiagnostic::error(format!(
-                    "`{name}` has a binding. A grid rule declares no bindings"
+                    "`{name}` has a binding. Grid rules must not declare bindings"
                 ))));
             } else if global.space != AddressSpace::Private {
                 self.problems.push(located.place(CodeDiagnostic::error(format!(
-                    "`{name}` is a module-scope variable outside `private`. A grid rule shares no memory between cells"
+                    "`{name}` is a module-scope variable outside `private`. Grid rules must not share memory \
+                     between cells"
                 ))));
             } else {
                 private_bytes = private_bytes.saturating_add(type_bytes(module, inner));
                 if private_bytes > MAX_PRIVATE_BYTES && !private_reported {
                     private_reported = true;
                     self.problems.push(located.place(CodeDiagnostic::error(format!(
-                        "`{name}` brings the shader's `private` variables to {private_bytes} bytes, and they take at \
-                         most {MAX_PRIVATE_BYTES}"
+                        "`{name}` brings the shader's `private` variables to {private_bytes} bytes, but at \
+                         most {MAX_PRIVATE_BYTES} are allowed"
                     ))));
                     continue;
                 }
             }
             if contains_atomic(module, inner) {
                 self.problems.push(located.place(CodeDiagnostic::error(format!(
-                    "`{name}` holds an atomic, and a grid rule uses no atomics"
+                    "`{name}` holds an atomic, but a grid rule must not use atomics"
                 ))));
             }
         }
@@ -744,7 +748,7 @@ impl Walker<'_> {
             if contains_atomic(self.module, inner) && reported.insert("atomic") {
                 self.report(
                     span,
-                    format!("`{variable_name}` holds an atomic, and a grid rule uses no atomics"),
+                    format!("`{variable_name}` holds an atomic, but a grid rule must not use atomics"),
                 );
             }
             local_bytes = local_bytes.saturating_add(type_bytes(self.module, inner));
@@ -752,8 +756,8 @@ impl Walker<'_> {
                 self.report(
                     span,
                     format!(
-                        "`{variable_name}` brings the local variables of `{name}` to {local_bytes} bytes, and one \
-                         function's take at most {MAX_FUNCTION_BYTES}"
+                        "`{variable_name}` brings the local variables of `{name}` to {local_bytes} bytes, but at \
+                         most {MAX_FUNCTION_BYTES} are allowed"
                     ),
                 );
             }
@@ -790,8 +794,8 @@ impl Walker<'_> {
                 self.report(
                     function.expressions.get_span(expression),
                     format!(
-                        "`{name}` is a buffer of the engine. A grid rule reads its cell through `cell` and the cells \
-                         around it through `neighbor`"
+                        "`{name}` is a buffer of the engine. Grid rules must read their cell through `cell` and the \
+                         cells around it through `neighbor`"
                     ),
                 );
             }
@@ -843,7 +847,7 @@ impl Walker<'_> {
                 span,
                 format!(
                     "one call of `{name}` runs {} expressions and statements, counting each function's body once per \
-                     call, and a step runs at most {MAX_STEP_COST}",
+                     call, but at most {MAX_STEP_COST} are allowed",
                     cost(current)
                 ),
             );

@@ -202,7 +202,7 @@ fn a_declaration_error_points_at_its_table() {
     let expected = [
         (line_of("id = \"Life\""), "rule id 'Life'"),
         (line_of("[grid]"), "the grid width is 0"),
-        (line_at(third_state), "both give the constant `DEAD`"),
+        (line_at(third_state), "both produce the constant `DEAD`"),
         (line_at(second_param), "parameter id 'seed' is reserved"),
     ];
     assert_eq!(placed.len(), expected.len(), "{}", lines_of(&error).join("\n"));
@@ -242,14 +242,14 @@ fn control_characters_in_the_declarations_are_refused() {
     assert_eq!(
         placed,
         [
-            (None, "the rule's name holds the control character U+001B"),
+            (None, "the rule's name contains the control character U+001B"),
             (
                 Some(line_at(third_state)),
-                "the label of state 2 holds the control character U+001B"
+                "the label of state 2 contains the control character U+001B"
             ),
             (
                 Some(line_at(choice)),
-                "an option of parameter 'mode' holds the control character U+001B"
+                "an option of parameter 'mode' contains the control character U+001B"
             ),
         ],
         "{}",

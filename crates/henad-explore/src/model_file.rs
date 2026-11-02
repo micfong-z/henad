@@ -188,7 +188,7 @@ impl ModelFile {
                     .all(|value| value.is_finite())
             {
                 return Err(format_error(format!(
-                    "parameter '{}' holds a float that is not finite",
+                    "parameter '{}' contains a float that is not finite",
                     param.id()
                 )));
             }
@@ -353,7 +353,7 @@ impl ModelFile {
 fn check_step(step: &str) -> Result<(), (String, Range<usize>)> {
     if let Some(at) = step.find("'''") {
         return Err((
-            "the step holds `'''`, which ends a literal string in a model file".to_owned(),
+            "the step contains `'''`, which ends a literal string in a model file".to_owned(),
             at..at + 3,
         ));
     }
@@ -363,7 +363,7 @@ fn check_step(step: &str) -> Result<(), (String, Range<usize>)> {
     {
         Some((at, c)) => Err((
             format!(
-                "the step holds the control character U+{:04X}, which a model file cannot hold",
+                "the step contains the control character U+{:04X}, which is not allowed in a model file",
                 u32::from(c)
             ),
             at..at + c.len_utf8(),
@@ -505,7 +505,7 @@ impl HeaderTable {
             && format.get_ref() != FORMAT
         {
             let message = format!(
-                "the file's format is '{}', and a model file's is '{FORMAT}'",
+                "the file's format is '{}', but a model file's format must be '{FORMAT}'",
                 format.get_ref()
             );
             return Err((message, format.span()));
@@ -514,7 +514,7 @@ impl HeaderTable {
             && *version.get_ref() != FORMAT_VERSION
         {
             let message = format!(
-                "the file is model file version {}, and this build reads version {FORMAT_VERSION}",
+                "the file is model file version {}, but this build only reads version {FORMAT_VERSION}",
                 version.get_ref()
             );
             return Err((message, version.span()));
@@ -523,7 +523,7 @@ impl HeaderTable {
             && kind.get_ref() != KIND_GPU_GRID
         {
             let message = format!(
-                "the file holds a model of kind '{}', and this build reads '{KIND_GPU_GRID}'",
+                "the file contains a model of kind '{}', but this build only reads '{KIND_GPU_GRID}'",
                 kind.get_ref()
             );
             return Err((message, kind.span()));
@@ -593,7 +593,7 @@ impl StateTable {
             [red, green, blue, alpha] => [red, green, blue, alpha],
             _ => {
                 return Err(format!(
-                    "state '{label}' has a colour of {} bytes, and a colour has 3 or 4",
+                    "state '{label}' has a colour of {} bytes, but a colour must have 3 or 4",
                     color.len()
                 ));
             }
@@ -650,7 +650,7 @@ impl ParamTable {
         let label = self.label.unwrap_or_else(|| id.clone());
         let unused = |key: &str, present: bool| {
             if present {
-                Err(format!("parameter '{id}' of this kind takes no `{key}`"))
+                Err(format!("parameter '{id}' of this kind must not set `{key}`"))
             } else {
                 Ok(())
             }
@@ -682,7 +682,7 @@ impl ParamTable {
                         .iter()
                         .all(|value| value.is_finite())
                 {
-                    return Err(format!("parameter '{id}' holds a float that is not finite"));
+                    return Err(format!("parameter '{id}' contains a float that is not finite"));
                 }
                 kind
             }
