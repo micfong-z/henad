@@ -24,7 +24,10 @@ crate that calls them. The GPU grid engine is the exception. henad-compute compi
 once, and only the model's hooks monomorphise in the caller. `register_gpu_grid_model` reads one
 `Arc<GpuGridSpec>` from the model and passes it to the crate-private `ModelEntry::from_grid_spec`,
 whose builds and demand share it and which boxes the engine itself, as a grid rule's entry does.
-`GpuGridState<M>` is the adapter a test or a host builds directly.
+`GpuGridState<M>` is the adapter a test or a host builds directly. The GPU agent engine is the
+same, through `register_gpu_agent_model`, `ModelEntry::from_agent_spec` and `GpuAgentState<M>`.
+Behind `runtime-wgsl`, `EntryDeclarations` (`entry/declarations.rs`, with `new`) is public, as are
+`ModelEntry::from_gpu_grid_spec` and `from_gpu_agent_spec`, which forward to those two.
 henad-compute instantiates no model outside its own tests.
 `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for other crates' tests alone. The
 hidden `__with_code` gives a test's entry a runtime source labelled with its id.
@@ -69,15 +72,39 @@ types an unsuffixed literal falls back to.
   leaf repeats are WGSL in henad-core's `authoring/primitives/wgsl/`. `gpu/grid_dims.wgsl` is an
   entry point that is never dispatched. It brings `henad::dims::Dims` into the generated
   bindings, and `grid_engine.rs`'s `Dims` is a `pub(crate)` alias of that struct.
-  The grid engine is non-generic. `gpu/grid_spec.rs` holds `GpuGridSpec`, a `GpuGridModel`'s
-  declarations as values: its shader sources and binding lists as `Cow`s, borrowed from the
-  consts, and its functions behind the private `GridHooks` trait. `GpuGridEngine` builds every
-  wgpu object from a spec and implements `SimState` and `GpuSimState`, and `GpuGridState<M>`
-  reads a spec from `M` and forwards every call. `GpuGridSpec` and `GpuGridEngine` are
-  `pub(crate)`. `demand`, `max_storage_bindings` and the contract asserts read the spec. The
-  engine computes each pass's workgroups and its buffer bytes at construction, and a step calls
-  no hook. `GridHooks::step_params_bytes` takes the run's seed, which a model type ignores and a
-  grid rule writes into its uniform block.
+  Both engines are non-generic. `gpu/shader_spec.rs` holds `ShaderSpec` (WGSL source and
+  `ShaderBinding`s, whose names are `Cow`s, unlike the `&'static` of `BindingDecl`).
+  `gpu/grid_spec.rs` holds `GpuGridSpec`, a `GpuGridModel`'s declarations as values, borrowed from
+  the consts, and its functions behind the `GridHooks` trait. `GpuGridEngine` builds every wgpu
+  object from a spec and implements `SimState` and `GpuSimState`, and `GpuGridState<M>` reads a
+  spec from `M` and forwards every call. `demand`, `max_storage_bindings` and the contract asserts
+  read the spec. The engine computes each pass's workgroups and its buffer bytes at construction,
+  and a step calls no hook. `GridHooks::step_params_bytes` takes the run's seed, which a model
+  type ignores and a grid rule writes into its uniform block. `gpu/agent_spec.rs` holds
+  `GpuAgentSpec` and `AgentHooks` in the same shape, with `AgentBufferSpec`, `AgentPassSpec`,
+  `AgentDisplaySpec`, `AgentReduceSpec` and `AgentActionSpec` as the forms of henad-core's
+  `&'static` specs that can own their strings. `GpuAgentEngine` and `GpuAgentState<M>` sit in
+  `gpu/agent_engine.rs`. Each pass holds a `SideTable`, one `SideRow` per buffer, naming the
+  `BufferSide` (`Current` or `Next`) a read-only and a writable binding resolve to, read once when
+  the bind groups are built. Every double buffered buffer swaps once at the end of a step,
+  whatever the tables say. `from_model` reproduces the one orientation stock shaders assume,
+  `swapping` on every step, display and reduce pass and `in_place` on every action. A model
+  composed at run time points a pass after a writer at `Next`, the per-pass commit of
+  `lowering.md`. `GpuAgentSpec::assert_contracts` also refuses a table of another length, a
+  position or colour index past the buffers, a position or colour buffer that is not drawable,
+  a double buffered buffer with no writable binding reaching `Next` in a step pass, and one side
+  of a buffer bound both read-only and writable in one pass, which wgpu rejects only at the
+  dispatch. These also reach hand-written models through `GpuAgentState<M>`. A step and a snapshot
+  call no hook, a press calls `pass_params_bytes` once and a stats read calls `stats` once, which
+  `a_step_calls_no_hook` holds. The specs, hooks and shader types are `pub(crate)` modules whose
+  items `gpu/mod.rs` re-exports only behind `runtime-wgsl`. Each struct and enum is
+  `#[non_exhaustive]`, each struct has a `new`, and `SideTable` keeps its field private instead.
+  The engines stay `pub(crate)`. `GpuSimState::read_buffer` is a blocking read of a buffer's
+  current side for a parity test or an export, `None` by default and on the grid engine, and the
+  runner never calls it. `an_owned_spec_entry_reads_like_the_registered_one`
+  (`henad-models/src/tests/gpu_agent_adapter.rs`) holds `gpu_ants` and `gpu_boids` built through
+  the public constructors from owned strings equal to their registered entries in `Debug`, schema
+  hash, needs, demand and stepped stats. Keep it.
   `gpu/tests/parity.wgsl` is the parity test's shader, with a `CODES` array that references
   each boundary and table code the test reads.
   `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`

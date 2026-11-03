@@ -180,6 +180,74 @@ agent_model_with!(
         ..GpuAnts::DISPLAY.expect("ants draws a display")
     }),
 );
+// GpuAnts with a second side on `sites`, which every pass only reads.
+agent_model_with!(
+    UnwrittenSecondSide,
+    GpuAnts,
+    buffers: &[
+        BufferSpec {
+            label: "pos",
+            double_buffered: false,
+            drawable: true,
+        },
+        BufferSpec {
+            label: "state",
+            double_buffered: false,
+            drawable: false,
+        },
+        BufferSpec {
+            label: "color",
+            double_buffered: false,
+            drawable: true,
+        },
+        BufferSpec {
+            label: "rng",
+            double_buffered: false,
+            drawable: false,
+        },
+        BufferSpec {
+            label: "field",
+            double_buffered: false,
+            drawable: false,
+        },
+        BufferSpec {
+            label: "accum",
+            double_buffered: false,
+            drawable: false,
+        },
+        BufferSpec {
+            label: "sites",
+            double_buffered: true,
+            drawable: false,
+        },
+    ],
+    step_passes: GpuAnts::STEP_PASSES,
+    display: GpuAnts::DISPLAY,
+);
+// GpuBoids with positions the view cannot draw.
+agent_model_with!(
+    HiddenPositions,
+    GpuBoids,
+    buffers: &[
+        BufferSpec {
+            label: "pos",
+            double_buffered: true,
+            drawable: false,
+        },
+        BufferSpec {
+            label: "vel",
+            double_buffered: true,
+            drawable: false,
+        },
+        BufferSpec {
+            label: "color",
+            double_buffered: true,
+            drawable: true,
+        },
+    ],
+    step_passes: GpuBoids::STEP_PASSES,
+    display: GpuBoids::DISPLAY,
+);
 
 /// Returns the panic message of `build`, which builds a model on a device.
 fn build_refusal(build: impl FnOnce()) -> String {
@@ -248,6 +316,32 @@ fn the_agent_engine_refuses_a_reserved_label() {
     };
     let message = agent_refusal::<ReservedAgentLabel>(&ctx);
     assert!(message.contains("buffer label `partials` is reserved"), "{message}");
+}
+
+/// Without the check, the state alternates between the seed and zeros on every step.
+#[test]
+fn the_agent_engine_refuses_a_second_side_no_step_pass_writes() {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+        return;
+    };
+    let message = agent_refusal::<UnwrittenSecondSide>(&ctx);
+    assert!(
+        message.contains("no step pass writes the next side of double buffered buffer `sites`"),
+        "{message}"
+    );
+}
+
+/// Without the check, the first draw faults the device after a build that succeeded.
+#[test]
+fn the_agent_engine_refuses_positions_it_cannot_draw() {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+        return;
+    };
+    let message = agent_refusal::<HiddenPositions>(&ctx);
+    assert!(
+        message.contains("the position buffer `pos` is not drawable"),
+        "{message}"
+    );
 }
 
 #[test]

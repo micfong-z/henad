@@ -43,15 +43,21 @@ pub struct BindingDecl {
 ///
 /// Returns `None` for a reserved name, which the engine resolves without consulting the model's buffers.
 pub fn buffer_target(decl: &BindingDecl) -> Option<(&'static str, bool)> {
-    if RESERVED.contains(&decl.name) {
+    named_buffer_target(decl.name, decl.kind)
+}
+
+/// Returns the buffer label that a binding of `name` and `kind` refers to, and whether the pass writes it.
+///
+/// Returns `None` for a reserved name, as [`buffer_target`] does. The name can be one built at run time.
+pub fn named_buffer_target(name: &str, kind: BindingKind) -> Option<(&str, bool)> {
+    if RESERVED.contains(&name) {
         return None;
     }
-    let label = decl
-        .name
+    let label = name
         .strip_suffix("_in")
-        .or_else(|| decl.name.strip_suffix("_out"))
-        .unwrap_or(decl.name);
-    let writes = !matches!(decl.kind, BindingKind::Storage { read_only: true });
+        .or_else(|| name.strip_suffix("_out"))
+        .unwrap_or(name);
+    let writes = !matches!(kind, BindingKind::Storage { read_only: true });
     Some((label, writes))
 }
 

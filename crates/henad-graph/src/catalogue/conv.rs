@@ -43,7 +43,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "conv.to_u32",
         label: "To u32",
-        semantics: "`a` as a `u32`. From a float it truncates toward zero and saturates at 0 and `u32::MAX`, and a NaN gives 0 on the host and is indeterminate in a shader, since a shader may assume no NaN. From an `i32` it reinterprets the bits, from a `bool` it gives 0 or 1, and from a `u64` it keeps the low 32 bits.",
+        semantics: "`a` as a `u32`. From a float it truncates toward zero and clamps to the values of the float's type that a `u32` holds exactly, as WGSL converts: 0 to 4294967040 (`0x4f7fffff`, the largest `f32` below 2^32) from an `f32`, and 0 to `u32::MAX` from an `f64`. A NaN gives 0 on the host and is indeterminate in a shader, since a shader may assume no NaN. From an `i32` it reinterprets the bits, from a `bool` it gives 0 or 1, and from a `u64` it keeps the low 32 bits.",
         type_var: &[
             TypeClass::F32,
             TypeClass::I32,
@@ -55,7 +55,21 @@ pub(super) static KINDS: &[NodeDef] = &[
         cases: &[
             case("truncates", &[("a", F32(3.9))], &[("out", U32(3))]),
             case("saturates below", &[("a", F32(-1.0))], &[("out", U32(0))]),
-            case("saturates above", &[("a", F32(5e9))], &[("out", U32(u32::MAX))]),
+            case(
+                "clamps above to the largest f32 below 2^32",
+                &[("a", F32(5e9))],
+                &[("out", U32(4_294_967_040))],
+            ),
+            case(
+                "the largest f32 below 2^32 is exact",
+                &[("a", F32(f32::from_bits(0x4f7f_ffff)))],
+                &[("out", U32(4_294_967_040))],
+            ),
+            host_case(
+                "f64 clamps above to u32::MAX",
+                &[("a", F64(5e9))],
+                &[("out", U32(u32::MAX))],
+            ),
             case("i32 keeps the bits", &[("a", I32(-1))], &[("out", U32(u32::MAX))]),
             case("bool", &[("a", Bool(true))], &[("out", U32(1))]),
             case(
@@ -70,12 +84,16 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "conv.to_i32",
         label: "To i32",
-        semantics: "`a` as an `i32`. From an `f32` it truncates toward zero and saturates at `i32::MIN` and `i32::MAX`, and a NaN gives 0 on the host and is indeterminate in a shader, since a shader may assume no NaN. From a `u32` it reinterprets the bits, and from a `bool` it gives 0 or 1.",
+        semantics: "`a` as an `i32`. From an `f32` it truncates toward zero and clamps to the `f32` values an `i32` holds exactly, as WGSL converts: `i32::MIN` to 2147483520 (`0x4effffff`, the largest `f32` below 2^31). A NaN gives 0 on the host and is indeterminate in a shader, since a shader may assume no NaN. From a `u32` it reinterprets the bits, and from a `bool` it gives 0 or 1.",
         type_var: &[TypeClass::F32, TypeClass::U32, TypeClass::Bool],
         outputs: &[output("out", SocketType::Fixed(TypeClass::I32))],
         cases: &[
             case("truncates toward zero", &[("a", F32(-3.9))], &[("out", I32(-3))]),
-            case("saturates above", &[("a", F32(3e9))], &[("out", I32(i32::MAX))]),
+            case(
+                "clamps above to the largest f32 below 2^31",
+                &[("a", F32(3e9))],
+                &[("out", I32(2_147_483_520))],
+            ),
             case("saturates below", &[("a", F32(-3e9))], &[("out", I32(i32::MIN))]),
             case("u32 keeps the bits", &[("a", U32(u32::MAX))], &[("out", I32(-1))]),
             case("bool", &[("a", Bool(true))], &[("out", I32(1))]),

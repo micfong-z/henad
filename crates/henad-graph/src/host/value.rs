@@ -494,7 +494,21 @@ pub(crate) enum Conversion {
     ToI32,
 }
 
+/// Largest `f32` below 2^32, the top of the range WGSL clamps an `f32` to before converting it to a `u32`.
+const LARGEST_F32_BELOW_2_POW_32: f32 = f32::from_bits(0x4f7f_ffff);
+
+/// Largest `f32` below 2^31, the top of the range WGSL clamps an `f32` to before converting it to an `i32`.
+const LARGEST_F32_BELOW_2_POW_31: f32 = f32::from_bits(0x4eff_ffff);
+
+/// Returns `x` clamped to `top` from above, and a NaN as it is. `f32::min` would turn a NaN into `top`.
+fn clamp_above(x: f32, top: f32) -> f32 {
+    if x > top { top } else { x }
+}
+
 /// Converts `a` as the conversion kinds define it, or returns `None` for a value the kind does not take.
+///
+/// A float converts as WGSL converts it: clamped to the values of its type that the target holds exactly, then
+/// truncated toward zero. A NaN gives 0.
 pub(crate) fn convert(target: Conversion, a: HostValue) -> Option<HostValue> {
     Some(match (target, a) {
         (Conversion::ToF32, HostValue::U32(x)) => HostValue::F32(x as f32),
@@ -502,12 +516,12 @@ pub(crate) fn convert(target: Conversion, a: HostValue) -> Option<HostValue> {
         (Conversion::ToF32, HostValue::Bool(x)) => HostValue::F32(f32::from(u8::from(x))),
         (Conversion::ToF32, HostValue::U64(x)) => HostValue::F32(x as f32),
         (Conversion::ToF32, HostValue::F64(x)) => HostValue::F32(x as f32),
-        (Conversion::ToU32, HostValue::F32(x)) => HostValue::U32(x as u32),
+        (Conversion::ToU32, HostValue::F32(x)) => HostValue::U32(clamp_above(x, LARGEST_F32_BELOW_2_POW_32) as u32),
         (Conversion::ToU32, HostValue::I32(x)) => HostValue::U32(x as u32),
         (Conversion::ToU32, HostValue::Bool(x)) => HostValue::U32(u32::from(x)),
         (Conversion::ToU32, HostValue::U64(x)) => HostValue::U32(x as u32),
         (Conversion::ToU32, HostValue::F64(x)) => HostValue::U32(x as u32),
-        (Conversion::ToI32, HostValue::F32(x)) => HostValue::I32(x as i32),
+        (Conversion::ToI32, HostValue::F32(x)) => HostValue::I32(clamp_above(x, LARGEST_F32_BELOW_2_POW_31) as i32),
         (Conversion::ToI32, HostValue::U32(x)) => HostValue::I32(x as i32),
         (Conversion::ToI32, HostValue::Bool(x)) => HostValue::I32(i32::from(x)),
         _ => return None,

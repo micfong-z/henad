@@ -11,8 +11,14 @@
     )
 )]
 
+mod declarations;
 mod set;
 
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use declarations::EntryDeclarations;
+#[cfg(not(feature = "runtime-wgsl"))]
+pub(crate) use declarations::EntryDeclarations;
 #[cfg(feature = "runtime-wgsl")]
 pub(crate) use set::check_id_grammar;
 pub use set::{ModelLookupError, ModelSet, ModelSetError, ModelSetIter};
@@ -42,7 +48,8 @@ use crate::cpu::agent_engine::{AgentModelState, agent_model_param_descriptors};
 use crate::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
 use crate::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
 use crate::fault::{BUILDING, Fault, catching};
-use crate::gpu::agent_engine::GpuAgentState;
+use crate::gpu::agent_engine::GpuAgentEngine;
+use crate::gpu::agent_spec::GpuAgentSpec;
 use crate::gpu::capacity::Demand;
 use crate::gpu::fault::catching_on;
 use crate::gpu::grid_engine::GpuGridEngine;
@@ -92,34 +99,6 @@ impl<F> Factory for F where
 pub(crate) trait Capacity: Fn(&[ParamValue], &wgpu::Limits) -> Demand + WasmNotSend + WasmNotSync {}
 
 impl<F: Fn(&[ParamValue], &wgpu::Limits) -> Demand + WasmNotSend + WasmNotSync> Capacity for F {}
-
-/// Declarations of one model, as values: everything an entry holds apart from its source and how it builds.
-///
-/// The backend comes from the constructor that takes the declarations, [`ModelEntry::new_cpu`] or
-/// [`ModelEntry::new_gpu`].
-#[derive(Debug)]
-pub(crate) struct EntryDeclarations {
-    /// Id in the model id grammar, checked when the entry joins a set.
-    pub(crate) id: String,
-    /// Name shown in the UI.
-    pub(crate) name: String,
-    /// One-line description shown in the UI.
-    pub(crate) description: String,
-    /// Every parameter, the engine's own included, in the order a build reads its values.
-    pub(crate) params: Vec<ParamDescriptor>,
-    /// Stats, in the order the state returns them.
-    pub(crate) stats: Vec<StatDescriptor>,
-    /// One-off steps, in the order the Parameters panel draws their buttons.
-    pub(crate) actions: Vec<ActionDescriptor>,
-    /// Display layers the model presents.
-    pub(crate) topology_hint: TopologyHint,
-    /// Storage layout of the model.
-    pub(crate) structure: Structure,
-    /// Colours of the display layer or the agent population, `None` for a model whose shaders write RGBA.
-    pub(crate) palette: Option<Cow<'static, [[u8; 4]]>>,
-    /// Whether two builds on one seed step through identical states.
-    pub(crate) replays_exactly: bool,
-}
 
 /// One model a host can offer: its declarations, and the factory that builds it on any device.
 ///
@@ -363,6 +342,50 @@ impl ModelEntry {
         )
     }
 
+    /// Returns the entry of a GPU agent model with `declarations` and `source`, whose builds and demand share `spec`.
+    pub(crate) fn from_agent_spec(
+        declarations: EntryDeclarations,
+        source: ModelSource,
+        spec: Arc<GpuAgentSpec>,
+    ) -> Self {
+        let needs = GpuNeeds::with_storage_buffers(spec.max_storage_bindings());
+        let build_spec = Arc::clone(&spec);
+        Self::new_gpu(
+            declarations,
+            source,
+            needs,
+            move |ctx, params, seed| -> Box<dyn GpuSimState> {
+                Box::new(GpuAgentEngine::new(ctx, Arc::clone(&build_spec), params, seed))
+            },
+            move |params, limits| spec.demand(params, limits),
+        )
+    }
+
+    /// Returns the entry of a GPU grid model composed at run time, whose builds and demand share `spec`.
+    ///
+    /// `declarations` describe the model to a host and `spec` is what the engine runs, so the stats and actions of the
+    /// two list the same items in the same order. [`GpuGridSpec::structure`] fills [`EntryDeclarations::structure`].
+    /// `source` is usually [`ModelSource::runtime`]. Each build runs inside [`catching_on`], and a panic or a device
+    /// error returns a [`Fault`].
+    #[cfg(feature = "runtime-wgsl")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+    pub fn from_gpu_grid_spec(declarations: EntryDeclarations, source: ModelSource, spec: Arc<GpuGridSpec>) -> Self {
+        Self::from_grid_spec(declarations, source, spec)
+    }
+
+    /// Returns the entry of a GPU agent model composed at run time, whose builds and demand share `spec`.
+    ///
+    /// `declarations` describe the model to a host and `spec` is what the engine runs, so the stats and actions of the
+    /// two list the same items in the same order. [`GpuAgentSpec::structure`] fills [`EntryDeclarations::structure`]
+    /// and [`GpuAgentSpec::topology_hint`] fills [`EntryDeclarations::topology_hint`]. `source` is usually
+    /// [`ModelSource::runtime`]. Each build runs inside [`catching_on`], and a panic or a device error returns a
+    /// [`Fault`].
+    #[cfg(feature = "runtime-wgsl")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+    pub fn from_gpu_agent_spec(declarations: EntryDeclarations, source: ModelSource, spec: Arc<GpuAgentSpec>) -> Self {
+        Self::from_agent_spec(declarations, source, spec)
+    }
+
     /// Returns the entry that holds `declarations`, with the metadata of a model on `backend`.
     fn from_declarations(
         declarations: EntryDeclarations,
@@ -495,6 +518,7 @@ pub fn register_network_model<N: NetworkModel>() -> ModelEntry {
 ///
 /// Every parameter applies on reload, since the GPU state accepts no live edit.
 pub fn register_gpu_grid_model<M: GpuGridModel>() -> ModelEntry {
+    let spec = Arc::new(GpuGridSpec::from_model::<M>());
     let declarations = EntryDeclarations {
         id: M::ID.to_owned(),
         name: M::NAME.to_owned(),
@@ -507,21 +531,19 @@ pub fn register_gpu_grid_model<M: GpuGridModel>() -> ModelEntry {
         actions: M::ACTIONS.iter().map(|action| action.desc.clone()).collect(),
         // The grid reaches the view as a texture instead of a cell buffer.
         topology_hint: TopologyHint::GRID,
-        structure: Structure::GpuGrid {
-            buffers: M::BUFFERS,
-            workgroup: M::WORKGROUP_SIZE,
-        },
+        structure: spec.structure(),
         palette: Some(Cow::Borrowed(M::PALETTE)),
         replays_exactly: M::REPLAYS_EXACTLY,
     };
     let source = ModelSource::__from_type_path(type_name::<M>());
-    ModelEntry::from_grid_spec(declarations, source, Arc::new(GpuGridSpec::from_model::<M>()))
+    ModelEntry::from_grid_spec(declarations, source, spec)
 }
 
 /// Returns an entry for the GPU agent model `M`.
 ///
 /// Every parameter applies on reload, since the GPU state accepts no live edit.
 pub fn register_gpu_agent_model<M: GpuAgentModel>() -> ModelEntry {
+    let spec = Arc::new(GpuAgentSpec::from_model::<M>());
     let declarations = EntryDeclarations {
         id: M::ID.to_owned(),
         name: M::NAME.to_owned(),
@@ -532,32 +554,14 @@ pub fn register_gpu_agent_model<M: GpuAgentModel>() -> ModelEntry {
             .collect(),
         stats: M::STATS.to_vec(),
         actions: M::ACTIONS.iter().map(|action| action.desc.clone()).collect(),
-        // A model that declares a display pass draws a grid layer under its agents.
-        topology_hint: TopologyHint {
-            grid: M::DISPLAY.is_some(),
-            agents: true,
-            edges: false,
-        },
-        structure: Structure::GpuAgents {
-            buffers: M::BUFFERS,
-            passes: M::STEP_PASSES,
-            index: M::INDEX,
-            display: M::DISPLAY.is_some(),
-            counters: M::COUNTERS,
-        },
+        topology_hint: spec.topology_hint(),
+        structure: spec.structure(),
         // No palette. A GPU agent model's shaders write RGBA themselves.
         palette: None,
         replays_exactly: M::REPLAYS_EXACTLY,
     };
     let source = ModelSource::__from_type_path(type_name::<M>());
-    let needs = GpuNeeds::with_storage_buffers(GpuAgentState::<M>::max_storage_bindings());
-    ModelEntry::new_gpu(
-        declarations,
-        source,
-        needs,
-        |ctx, params, seed| Box::new(GpuAgentState::<M>::new_seeded(ctx, params, seed)),
-        GpuAgentState::<M>::demand,
-    )
+    ModelEntry::from_agent_spec(declarations, source, spec)
 }
 
 #[cfg(test)]

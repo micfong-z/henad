@@ -73,6 +73,18 @@ pub trait GpuSimState: SimState {
     ///
     /// The result is cloned into every snapshot. Keep it to `Arc` clones of things built once at construction.
     fn view(&self) -> GpuSnapshot;
+
+    /// Returns the current side of the state's buffer `index` as raw words, blocking on the GPU.
+    ///
+    /// Returns `None` for an index the state does not hold, and for a state that keeps no buffers to read. This
+    /// default does the latter. A parity test or an export calls it between steps, and the runner never does.
+    ///
+    /// # Panics
+    ///
+    /// A state that implements this panics if the readback fails.
+    fn read_buffer(&self, _index: usize) -> Option<Vec<u32>> {
+        None
+    }
 }
 
 /// Live GPU-runner numbers that have no CPU counterpart, polled by the UI once per frame.

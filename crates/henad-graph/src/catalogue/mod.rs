@@ -476,7 +476,8 @@ pub enum ConfigType {
     PaletteId,
     /// The name of a variant of `config.category`.
     VariantName,
-    /// A list of integers from 0 to `max`.
+    /// A set of integers from 0 to `max`, as a list. The canonical text writes it in ascending order with each
+    /// integer once.
     CountList {
         /// Largest value.
         max: i64,

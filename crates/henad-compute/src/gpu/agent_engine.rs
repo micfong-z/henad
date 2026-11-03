@@ -3,21 +3,19 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use henad_core::authoring::model::binding::{BindingDecl, buffer_target};
-use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Geometry, GpuAgentModel, PassCtx, PassId};
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::{StatEntry, stat_entries};
 
-use crate::display_scale::display_dims;
-use crate::gpu::capacity::{Demand, layout_entry, storage_bindings};
-use crate::gpu::contracts::{assert_buffer_labels, assert_workgroup_size};
-use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
+use crate::gpu::agent_spec::{BufferSide, GpuAgentSpec, SideTable};
+use crate::gpu::capacity::{Demand, layout_entry};
+use crate::gpu::primitives::dispatch::linear_dispatch;
 use crate::gpu::primitives::pipeline::{compute_pipeline, lane_buffer, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::gpu::primitives::reduce::GpuLaneReduce;
-use crate::gpu::primitives::spatial_hash::{GpuSpatialHash, HashGrid};
+use crate::gpu::primitives::spatial_hash::GpuSpatialHash;
+use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
@@ -52,6 +50,15 @@ impl BufferSides {
             None => (&self.a, &self.a),
             Some(b) if a_is_current => (&self.a, b),
             Some(b) => (b, &self.a),
+        }
+    }
+
+    /// Returns the buffer on `side`, the same buffer on either side when this one is written in place.
+    fn side(&self, a_is_current: bool, side: BufferSide) -> &wgpu::Buffer {
+        let (current, next) = self.sides(a_is_current);
+        match side {
+            BufferSide::Current => current,
+            BufferSide::Next => next,
         }
     }
 }
@@ -99,8 +106,14 @@ fn stamps(
         })
 }
 
-/// GPU-resident state for a [`GpuAgentModel`], with every buffer, pass and bind group its model declares.
-pub struct GpuAgentState<M: GpuAgentModel> {
+/// GPU-resident state built from a [`GpuAgentSpec`], with every buffer, pass and bind group the spec declares.
+///
+/// [`GpuAgentState`] builds the spec from a model type and forwards every call here.
+///
+/// A step calls no hook of the spec, an action press calls one for its uniform block, and [`SimState::stats`] calls one
+/// for the values.
+pub(crate) struct GpuAgentEngine {
+    spec: Arc<GpuAgentSpec>,
     geom: Geometry,
     tick: u64,
 
@@ -125,113 +138,33 @@ pub struct GpuAgentState<M: GpuAgentModel> {
     counters: Option<CounterReadback>,
 
     actions: Vec<EncodedPass>,
+    /// Invocations of each action, in the order of [`Self::actions`].
+    action_invocations: Vec<u32>,
     /// Seed of the next action press, advanced per press so that pressing twice draws twice.
     action_seed: u32,
     /// Parameter values, kept to rewrite the action uniforms on each press.
     params: Vec<ParamValue>,
 
     agents: Sides<Arc<GpuAgents>>,
-
-    _marker: PhantomData<M>,
 }
 
-impl<M: GpuAgentModel> std::fmt::Debug for GpuAgentState<M> {
+impl std::fmt::Debug for GpuAgentEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GpuAgentState")
-            .field("model", &M::ID)
+        f.debug_struct("GpuAgentEngine")
+            .field("model", &self.spec.id)
             .field("tick", &self.tick)
             .finish_non_exhaustive()
     }
 }
 
-impl<M: GpuAgentModel> GpuAgentState<M> {
-    /// Builds the state on `ctx`, seeded with the model's default seed.
+impl GpuAgentEngine {
+    /// Builds the state for `spec` on `ctx`, seeded with `seed`, or with the model's own default seed when it is `None`.
     ///
     /// # Panics
     ///
-    /// Panics as [`Self::new_seeded`] does.
-    pub fn new(ctx: &GpuContext, params: &[ParamValue]) -> Self {
-        Self::new_seeded(ctx, params, None)
-    }
-
-    /// Returns the geometry for `params`, without touching a device. `limits` sets only the display cap.
-    pub fn geometry_for(params: &[ParamValue], limits: &wgpu::Limits) -> Geometry {
-        let (num_agents, extent) = M::dims(params);
-        let num_agents = num_agents.max(1);
-        let extent = Extent {
-            w: extent.w.max(1.0),
-            h: extent.h.max(1.0),
-        };
-        let (width, height) = extent.cells();
-        Geometry {
-            num_agents,
-            extent,
-            width,
-            height,
-            n_cells: width * height,
-            display: display_dims(width, height, limits.max_texture_dimension_2d),
-            index: M::INDEX.then(|| HashGrid::new(extent, M::index_cell_size(params))),
-        }
-    }
-
-    /// Resources that would be allocated for this model based on `params`.
-    pub fn demand(params: &[ParamValue], limits: &wgpu::Limits) -> Demand {
-        let geom = Self::geometry_for(params, limits);
-        let mut demand = Demand::default();
-        for (spec, len) in M::BUFFERS.iter().zip(M::buffer_lens(&geom)) {
-            demand.push_sides(&format!("{}_{}", M::ID, spec.label), len, spec.double_buffered);
-        }
-        if let Some(grid) = geom.index {
-            demand.push_index(M::ID, grid.num_cells(), geom.num_agents);
-        }
-        if M::DISPLAY.is_some() {
-            demand.set_display(geom.width, geom.height, limits);
-        }
-
-        for (label, storage) in Self::declared_passes() {
-            demand.push_pass(label, storage);
-        }
-        demand
-    }
-
-    /// Storage buffers each declared pass binds. Read by both [`Self::demand`] and
-    /// [`Self::max_storage_bindings`], so the device that a host requests and the shortfall that the UI
-    /// reports cannot disagree.
-    fn declared_passes() -> Vec<(String, u32)> {
-        let mut passes: Vec<(String, u32)> = M::STEP_PASSES
-            .iter()
-            .map(|spec| (format!("{}_{}", M::ID, spec.label), storage_bindings(spec.bindings)))
-            .collect();
-        if let Some(spec) = &M::DISPLAY {
-            passes.push((format!("{}_display", M::ID), storage_bindings(spec.bindings)));
-        }
-        passes.push((format!("{}_reduce_leaf", M::ID), storage_bindings(M::REDUCE.bindings)));
-        for action in M::ACTIONS {
-            passes.push((
-                format!("{}_action_{}", M::ID, action.desc.id()),
-                storage_bindings(action.pass.bindings),
-            ));
-        }
-        passes
-    }
-
-    /// Returns the most storage buffers any declared pass binds. It does not depend on params, so a host can query it
-    /// before it has a device.
-    pub fn max_storage_bindings() -> u32 {
-        Self::declared_passes()
-            .into_iter()
-            .map(|(_, storage)| storage)
-            .max()
-            .unwrap_or(0)
-    }
-
-    /// Builds the state on `ctx`, seeded with `seed`, or with the model's own default seed when it is `None`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the device cannot hold the model. A host calls [`Self::demand`] first, and this assert is the
-    /// backstop. Also panics if a shader declares a workgroup size other than the one its pass dispatches, or a
-    /// buffer label is reserved or ends in `_in` or `_out`.
+    /// Panics if the device cannot hold the model, or if [`GpuAgentSpec::assert_contracts`] panics. Also panics if the
+    /// hooks return lengths or seeds for another number of buffers than [`GpuAgentSpec::buffers`] holds, or a seed
+    /// whose length differs from the length of its buffer.
     #[expect(clippy::too_many_lines, reason = "one linear construction of every wgpu object")]
     #[cfg_attr(
         all(target_arch = "wasm32", target_feature = "atomics"),
@@ -240,65 +173,59 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             reason = "the agent layers hold wgpu buffers, which atomics leave unsendable"
         )
     )]
-    pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
+    pub(crate) fn new(ctx: &GpuContext, spec: Arc<GpuAgentSpec>, params: &[ParamValue], seed: Option<u64>) -> Self {
         let device = &ctx.device;
         let queue = &ctx.queue;
+        let id = &*spec.id;
 
         let limits = device.limits();
-        let shortfalls = Self::demand(params, &limits).shortfalls(&limits);
+        let shortfalls = spec.demand(params, &limits).shortfalls(&limits);
         assert!(
             shortfalls.is_empty(),
-            "{} does not fit this device at these params: {}",
-            M::ID,
+            "{id} does not fit this device at these params: {}",
             shortfalls.join("; ")
         );
-        assert_buffer_labels(M::ID, M::BUFFERS.iter().map(|spec| spec.label));
-        // Every pass but the display folds a linear domain onto workgroups of `WORKGROUP`.
-        let linear = [WORKGROUP, 1, 1];
-        for (pass, shader) in M::STEP_PASSES
-            .iter()
-            .map(|spec| (spec.label, spec.shader))
-            .chain([("reduce leaf", M::REDUCE.shader)])
-            .chain(M::ACTIONS.iter().map(|action| (action.desc.id(), action.pass.shader)))
-        {
-            assert_workgroup_size(M::ID, pass, shader, linear);
-        }
-        if let Some(spec) = &M::DISPLAY {
-            assert_workgroup_size(M::ID, "display", spec.shader, [spec.workgroup, spec.workgroup, 1]);
-        }
+        spec.assert_contracts();
 
-        let mut geom = Self::geometry_for(params, &limits);
+        let mut geom = spec.geometry(params, &limits);
         let (num_agents, extent) = (geom.num_agents, geom.extent);
         let (width, height) = (geom.width, geom.height);
 
         // The hash fits its own grid to the index cell size. That size can differ from the field's cell size.
-        let index =
-            M::INDEX.then(|| GpuSpatialHash::new(device, queue, M::ID, extent, M::index_cell_size(params), num_agents));
+        let index = spec.index.then(|| {
+            GpuSpatialHash::new(
+                device,
+                queue,
+                id,
+                extent,
+                spec.hooks.index_cell_size(params),
+                num_agents,
+            )
+        });
         geom.index = index.as_ref().map(GpuSpatialHash::grid);
 
         // Buffers.
-        let lens = M::buffer_lens(&geom);
+        let lens = spec.hooks.buffer_lens(&geom);
         assert_eq!(
             lens.len(),
-            M::BUFFERS.len(),
-            "{}: buffer_lens must return one length per BUFFERS entry",
-            M::ID
+            spec.buffers.len(),
+            "{id}: buffer_lens must return one length per BUFFERS entry"
         );
-        let seeds = M::seed_buffers(&geom, params, seed);
+        let seeds = spec.hooks.seed_buffers(&geom, params, seed);
         assert_eq!(
             seeds.len(),
-            M::BUFFERS.len(),
-            "{}: seed_buffers must return one vector per BUFFERS entry",
-            M::ID
+            spec.buffers.len(),
+            "{id}: seed_buffers must return one vector per BUFFERS entry"
         );
 
-        let buffers: Vec<BufferSides> = M::BUFFERS
+        let buffers: Vec<BufferSides> = spec
+            .buffers
             .iter()
             .zip(&lens)
-            .map(|(spec, &len)| {
+            .map(|(buffer, &len)| {
                 let make_buffer = |side: &str| {
-                    let label = format!("{}_{}_{side}", M::ID, spec.label);
-                    if spec.drawable {
+                    let label = format!("{id}_{}_{side}", buffer.label);
+                    if buffer.drawable {
                         lane_buffer(device, &label, len)
                     } else {
                         storage_buffer(device, &label, len)
@@ -307,13 +234,13 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
                 BufferSides {
                     a: make_buffer("a"),
                     // Only the current side is seeded, so the other side is written by the first step.
-                    b: spec.double_buffered.then(|| make_buffer("b")),
+                    b: buffer.double_buffered.then(|| make_buffer("b")),
                 }
             })
             .collect();
 
         let mut clear = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some(&format!("{}_seed", M::ID)),
+            label: Some(&format!("{id}_seed")),
         });
         for (k, (buffer, bytes)) in buffers.iter().zip(&seeds).enumerate() {
             if bytes.is_empty() {
@@ -323,32 +250,31 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             assert_eq!(
                 bytes.len(),
                 lens[k] * std::mem::size_of::<u32>(),
-                "{}: seed for buffer '{}' must be buffer_lens[{k}] words of bytes",
-                M::ID,
-                M::BUFFERS[k].label
+                "{id}: seed for buffer '{}' must be buffer_lens[{k}] words of bytes",
+                spec.buffers[k].label
             );
             queue.write_buffer(&buffer.a, 0, bytes);
         }
         queue.submit(Some(clear.finish()));
 
-        let ping_pong = M::BUFFERS.iter().any(|spec| spec.double_buffered);
+        let ping_pong = spec.buffers.iter().any(|buffer| buffer.double_buffered);
         let index_binds = index.as_ref().map(|hash| {
-            let pos = &buffers[M::POS_BUFFER];
+            let pos = &buffers[spec.pos_buffer];
             Sides {
-                a: hash.bind_positions(device, &format!("{}_hash_bind_a", M::ID), &pos.a),
+                a: hash.bind_positions(device, &format!("{id}_hash_bind_a"), &pos.a),
                 b: pos
                     .b
                     .as_ref()
-                    .map(|b| hash.bind_positions(device, &format!("{}_hash_bind_b", M::ID), b)),
+                    .map(|b| hash.bind_positions(device, &format!("{id}_hash_bind_b"), b)),
             }
         });
 
         let counters =
-            (M::COUNTERS > 0).then(|| CounterReadback::new(device, &format!("{}_counters", M::ID), M::COUNTERS));
+            (spec.counters > 0).then(|| CounterReadback::new(device, &format!("{id}_counters"), spec.counters));
 
-        let display_spec = M::DISPLAY;
         // The display pass binds the view, and the snapshot carries the handle.
-        let (display_view, display_handle) = match display_spec
+        let (display_view, display_handle) = match spec
+            .display
             .as_ref()
             .map(|_| build_display_target(device, ctx.target_format, width, height))
         {
@@ -356,12 +282,13 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             None => (None, None),
         };
 
-        let reduce_domain = M::REDUCE.domain.invocations(&geom);
-        let reduce = GpuLaneReduce::new(device, queue, M::ID, M::REDUCE.lanes, reduce_domain);
+        let reduce_domain = spec.reduce.domain.invocations(&geom);
+        let reduce = GpuLaneReduce::new(device, queue, id, spec.reduce.lanes, reduce_domain);
 
         let build = PassBuilder {
             device,
             queue,
+            spec: &spec,
             geom: &geom,
             params,
             buffers: &buffers,
@@ -372,64 +299,78 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             reduce: &reduce,
         };
 
-        let steps: Vec<EncodedPass> = M::STEP_PASSES
+        let steps: Vec<EncodedPass> = spec
+            .steps
             .iter()
             .enumerate()
-            .map(|(i, spec)| {
-                let invocations = spec.domain.invocations(&geom);
-                build.linear_pass::<M>(PassId::Step(i), spec.label, spec.shader, spec.bindings, invocations)
+            .map(|(i, pass)| {
+                let invocations = pass.domain.invocations(&geom);
+                build.pass(
+                    PassId::Step(i),
+                    &pass.label,
+                    &pass.shader,
+                    &pass.sides,
+                    linear_dispatch(invocations),
+                    invocations,
+                    0,
+                )
             })
             .collect();
 
         // One invocation per texel, as the grid engine's display pass does.
-        let display = display_spec.as_ref().zip(display_handle).map(|(spec, handle)| {
+        let display = spec.display.as_ref().zip(display_handle).map(|(pass, handle)| {
             let (tex_w, tex_h) = geom.display;
-            let groups = (tex_w.div_ceil(spec.workgroup), tex_h.div_ceil(spec.workgroup));
-            let pass = build.pass::<M>(
+            let groups = (tex_w.div_ceil(pass.workgroup), tex_h.div_ceil(pass.workgroup));
+            let encoded = build.pass(
                 PassId::Display,
                 "display",
-                spec.shader,
-                spec.bindings,
+                &pass.shader,
+                &pass.sides,
                 groups,
                 tex_w * tex_h,
+                0,
             );
-            (pass, handle)
+            (encoded, handle)
         });
 
-        let reduce_groups = reduce.agent_groups();
-        let reduce_pass = build.pass::<M>(
+        let reduce_pass = build.pass(
             PassId::Reduce,
             "reduce_leaf",
-            M::REDUCE.shader,
-            M::REDUCE.bindings,
-            reduce_groups,
+            &spec.reduce.shader,
+            &spec.reduce.sides,
+            reduce.agent_groups(),
             reduce_domain,
+            0,
         );
 
         // Truncated from the same stream the CPU engines use, since the WGSL generator is 32 bit.
         let action_seed = henad_core::action::action_seed(seed) as u32;
-        let actions: Vec<EncodedPass> = M::ACTIONS
+        let action_invocations: Vec<u32> = spec
+            .actions
             .iter()
+            .map(|action| action.domain.invocations(&geom))
+            .collect();
+        let actions: Vec<EncodedPass> = spec
+            .actions
+            .iter()
+            .zip(&action_invocations)
             .enumerate()
-            .map(|(i, action)| {
-                let spec = &action.pass;
-                let invocations = spec.domain.invocations(&geom);
-                build.pass_in_place::<M>(
+            .map(|(i, (action, &invocations))| {
+                build.pass(
                     PassId::Action(i),
-                    &format!("action_{}", action.desc.id()),
-                    spec.shader,
-                    spec.bindings,
+                    &format!("action_{}", action.id),
+                    &action.shader,
+                    &action.sides,
                     linear_dispatch(invocations),
                     invocations,
-                    true,
                     action_seed,
                 )
             })
             .collect();
 
         let make_agents = |a_is_current: bool| {
-            let (pos, _) = buffers[M::POS_BUFFER].sides(a_is_current);
-            let (color, _) = buffers[M::COLOR_BUFFER].sides(a_is_current);
+            let (pos, _) = buffers[spec.pos_buffer].sides(a_is_current);
+            let (color, _) = buffers[spec.color_buffer].sides(a_is_current);
             Arc::new(GpuAgents {
                 pos: pos.clone(),
                 color: color.clone(),
@@ -444,6 +385,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         };
 
         Self {
+            spec,
             geom,
             tick: 0,
             device: device.clone(),
@@ -459,16 +401,16 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
             reduce_pass,
             counters,
             actions,
+            action_invocations,
             action_seed,
             params: params.to_vec(),
             agents,
-            _marker: PhantomData,
         }
     }
 
     /// Submits `steps` steps, at most [`MAX_STEPS_PER_SUBMISSION`] per command buffer, as the runner does. Nothing
     /// waits on the GPU.
-    pub fn run_batched(&mut self, steps: u32) {
+    pub(crate) fn run_batched(&mut self, steps: u32) {
         let mut remaining = steps;
         while remaining > 0 {
             let batch = remaining.min(MAX_STEPS_PER_SUBMISSION);
@@ -482,7 +424,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
     }
 
     /// Runs the snapshot passes and waits for the readback, so `stats()` reports the current tick.
-    pub fn refresh_stats(&mut self) {
+    pub(crate) fn refresh_stats(&mut self) {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("henad_gpu_agent_snapshot"),
         });
@@ -498,7 +440,7 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
     /// # Panics
     ///
     /// Panics if the readback fails.
-    pub fn read_buffer(&self, index: usize) -> Vec<u32> {
+    pub(crate) fn read_buffer(&self, index: usize) -> Vec<u32> {
         let (buffer, _) = self.buffers[index].sides(self.current_is_a);
         let size = buffer.size();
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -527,17 +469,13 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         staging.unmap();
         out
     }
-
-    /// Geometry the state was built at.
-    pub fn geometry(&self) -> &Geometry {
-        &self.geom
-    }
 }
 
 /// Carries what every pass needs to resolve its bindings into wgpu objects.
 struct PassBuilder<'a> {
     device: &'a wgpu::Device,
     queue: &'a wgpu::Queue,
+    spec: &'a GpuAgentSpec,
     geom: &'a Geometry,
     params: &'a [ParamValue],
     buffers: &'a [BufferSides],
@@ -549,59 +487,31 @@ struct PassBuilder<'a> {
 }
 
 impl PassBuilder<'_> {
-    /// A pass over a linear invocation domain, folded onto the 2D workgroup grid.
-    fn linear_pass<M: GpuAgentModel>(
-        &self,
-        id: PassId,
-        label: &str,
-        shader: &str,
-        bindings: &[BindingDecl],
-        invocations: u32,
-    ) -> EncodedPass {
-        self.pass::<M>(id, label, shader, bindings, linear_dispatch(invocations), invocations)
-    }
-
-    /// Builds a pass over `groups` workgroups.
+    /// Builds a pass over `groups` workgroups, binding each buffer through `sides`.
     ///
     /// `groups.0` is the fold width that `henad::dispatch::linear_index` expects, and goes in the uniform as
-    /// `groups_x`.
-    fn pass<M: GpuAgentModel>(
-        &self,
-        id: PassId,
-        label: &str,
-        shader: &str,
-        bindings: &[BindingDecl],
-        groups: (u32, u32),
-        invocations: u32,
-    ) -> EncodedPass {
-        self.pass_in_place::<M>(id, label, shader, bindings, groups, invocations, false, 0)
-    }
-
-    /// Builds a pass as [`Self::pass`] does, with `in_place` binding writes to the side that already holds the state.
-    ///
-    /// Nothing swaps after an action, so writing the far side would throw the work away.
+    /// `groups_x`. `seed` goes in the uniform as well, and is zero for a pass that is not an action.
     #[expect(
         clippy::too_many_arguments,
-        reason = "one call site, and every argument is a pass fact"
+        reason = "every argument is a pass fact, and each call site names them"
     )]
-    fn pass_in_place<M: GpuAgentModel>(
+    fn pass(
         &self,
         id: PassId,
         label: &str,
-        shader: &str,
-        bindings: &[BindingDecl],
+        shader: &ShaderSpec,
+        sides: &SideTable,
         groups: (u32, u32),
         invocations: u32,
-        in_place: bool,
         seed: u32,
     ) -> EncodedPass {
-        let label = format!("{}_{label}", M::ID);
+        let label = format!("{}_{label}", self.spec.id);
 
         let uniform = uniform_buffer(
             self.device,
             self.queue,
             &format!("{label}_params"),
-            &M::pass_params_bytes(
+            &self.spec.hooks.pass_params_bytes(
                 id,
                 PassCtx {
                     geom: self.geom,
@@ -613,10 +523,11 @@ impl PassBuilder<'_> {
             ),
         );
 
-        let entries: Vec<wgpu::BindGroupLayoutEntry> = bindings
+        let entries: Vec<wgpu::BindGroupLayoutEntry> = shader
+            .bindings
             .iter()
             .enumerate()
-            .map(|(i, decl)| layout_entry(i as u32, decl))
+            .map(|(i, binding)| layout_entry(i as u32, binding))
             .collect();
         let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(&format!("{label}_layout")),
@@ -624,12 +535,13 @@ impl PassBuilder<'_> {
         });
 
         let make_bind = |a_is_current: bool, side: &str| {
-            let entries: Vec<wgpu::BindGroupEntry<'_>> = bindings
+            let entries: Vec<wgpu::BindGroupEntry<'_>> = shader
+                .bindings
                 .iter()
                 .enumerate()
-                .map(|(i, decl)| wgpu::BindGroupEntry {
+                .map(|(i, binding)| wgpu::BindGroupEntry {
                     binding: i as u32,
-                    resource: self.resource::<M>(decl, a_is_current, in_place, &uniform),
+                    resource: self.resource(binding, a_is_current, sides, &uniform),
                 })
                 .collect();
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -644,7 +556,7 @@ impl PassBuilder<'_> {
             b: self.ping_pong.then(|| make_bind(false, "b")),
         };
 
-        let pipeline = compute_pipeline(self.device, &label, shader, &layout);
+        let pipeline = compute_pipeline(self.device, &label, &shader.source, &layout);
         EncodedPass {
             label,
             pipeline,
@@ -654,38 +566,43 @@ impl PassBuilder<'_> {
         }
     }
 
-    /// Returns the resource that a shader binding's name refers to. The name alone links the binding to its resource.
+    /// Returns the resource that a shader binding's name refers to. The name alone links the binding to its resource,
+    /// and `sides` picks the side of a buffer.
     ///
     /// Panics rather than returning an error, since a name that resolves to nothing is a shader
     /// and model that disagree, and no run can be correct after that.
-    fn resource<'r, M: GpuAgentModel>(
+    fn resource<'r>(
         &'r self,
-        decl: &BindingDecl,
+        binding: &ShaderBinding,
         a_is_current: bool,
-        in_place: bool,
+        sides: &SideTable,
         uniform: &'r wgpu::Buffer,
     ) -> wgpu::BindingResource<'r> {
-        if let Some((label, writes)) = buffer_target(decl) {
-            let k = M::BUFFERS
+        let id = &self.spec.id;
+        if let Some((label, writes)) = binding.buffer_target() {
+            let k = self
+                .spec
+                .buffers
                 .iter()
-                .position(|spec| spec.label == label)
-                .unwrap_or_else(|| panic!("{}: no buffer labelled `{label}`, wanted by `{}`", M::ID, decl.name));
-            let (read, write) = self.buffers[k].sides(a_is_current);
-            return if writes && !in_place { write } else { read }.as_entire_binding();
+                .position(|buffer| buffer.label == label)
+                .unwrap_or_else(|| panic!("{id}: no buffer labelled `{label}`, wanted by `{}`", binding.name));
+            let row = sides.rows()[k];
+            let side = if writes { row.write } else { row.read };
+            return self.buffers[k].side(a_is_current, side).as_entire_binding();
         }
-        match decl.name {
+        match binding.name.as_ref() {
             "params" => uniform.as_entire_binding(),
             "cell_start" => self.index.expect("INDEX is declared").cell_start_binding(),
             "sorted" => self.index.expect("INDEX is declared").sorted_binding(),
             "counters" => self.counters.expect("COUNTERS is non-zero").binding(),
             "partials" => self.reduce.partials_binding(),
             "output" => wgpu::BindingResource::TextureView(self.display_view.expect("DISPLAY is declared")),
-            other => panic!("{}: `{other}` is reserved but the engine has no resource for it", M::ID),
+            other => panic!("{id}: `{other}` is reserved but the engine has no resource for it"),
         }
     }
 }
 
-impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
+impl SimState for GpuAgentEngine {
     /// Steps once in its own submission, for a caller that holds only a `SimState`. The GPU runner batches
     /// instead.
     fn step(&mut self) {
@@ -702,7 +619,10 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
 
     fn stats(&self) -> Vec<StatEntry> {
         let counters = self.counters.as_ref().map_or(&[][..], CounterReadback::values);
-        stat_entries(M::STATS, M::stats(&self.reduce.sums(), counters, &self.geom))
+        stat_entries(
+            &self.spec.stats,
+            self.spec.hooks.stats(&self.reduce.sums(), counters, &self.geom),
+        )
     }
 
     /// Encodes the action into its own submission.
@@ -742,11 +662,11 @@ impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
             + display
             + self.index.as_ref().map_or(0, GpuSpatialHash::heap_bytes)
             + self.reduce.heap_bytes()
-            + M::COUNTERS * std::mem::size_of::<u32>()
+            + self.spec.counters * std::mem::size_of::<u32>()
     }
 }
 
-impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
+impl GpuSimState for GpuAgentEngine {
     /// Records one compute pass per declared pass per step, all into one encoder.
     ///
     /// A pass is the synchronization boundary wgpu inserts barriers at, so a step's passes
@@ -796,11 +716,11 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
         self.queue.write_buffer(
             &action.uniform,
             0,
-            &M::pass_params_bytes(
+            &self.spec.hooks.pass_params_bytes(
                 PassId::Action(index),
                 PassCtx {
                     geom: &self.geom,
-                    invocations: M::ACTIONS[index].pass.domain.invocations(&self.geom),
+                    invocations: self.action_invocations[index],
                     groups_x: action.groups.0,
                     seed: self.action_seed,
                 },
@@ -856,5 +776,177 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
             display: self.display.as_ref().map(|(_, display)| Arc::clone(display)),
             agents: Some(Arc::clone(self.agents.pick(self.current_is_a))),
         }
+    }
+
+    fn read_buffer(&self, index: usize) -> Option<Vec<u32>> {
+        (index < self.buffers.len()).then(|| Self::read_buffer(self, index))
+    }
+}
+
+/// GPU-resident state for a [`GpuAgentModel`], with every buffer, pass and bind group its model declares.
+pub struct GpuAgentState<M: GpuAgentModel> {
+    engine: GpuAgentEngine,
+    _marker: PhantomData<M>,
+}
+
+impl<M: GpuAgentModel> std::fmt::Debug for GpuAgentState<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuAgentState")
+            .field("model", &M::ID)
+            .field("tick", &self.engine.tick)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<M: GpuAgentModel> GpuAgentState<M> {
+    /// Builds the state on `ctx`, seeded with the model's default seed.
+    ///
+    /// # Panics
+    ///
+    /// Panics as [`Self::new_seeded`] does.
+    pub fn new(ctx: &GpuContext, params: &[ParamValue]) -> Self {
+        Self::new_seeded(ctx, params, None)
+    }
+
+    /// Returns the geometry for `params`, without touching a device. `limits` sets only the display cap.
+    pub fn geometry_for(params: &[ParamValue], limits: &wgpu::Limits) -> Geometry {
+        GpuAgentSpec::from_model::<M>().geometry(params, limits)
+    }
+
+    /// Resources that would be allocated for this model based on `params`.
+    pub fn demand(params: &[ParamValue], limits: &wgpu::Limits) -> Demand {
+        GpuAgentSpec::from_model::<M>().demand(params, limits)
+    }
+
+    /// Returns the most storage buffers any declared pass binds. It does not depend on params, so a host can query it
+    /// before it has a device.
+    pub fn max_storage_bindings() -> u32 {
+        GpuAgentSpec::from_model::<M>().max_storage_bindings()
+    }
+
+    /// Builds the state on `ctx`, seeded with `seed`, or with the model's own default seed when it is `None`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the device cannot hold the model. A host calls [`Self::demand`] first, and this assert is the
+    /// backstop. Also panics if a shader declares a workgroup size other than the one its pass dispatches, or a
+    /// buffer label is reserved or ends in `_in` or `_out`.
+    ///
+    /// Panics if a pass binds one side of a buffer both read-only and writable. An action binds in place, so an action
+    /// with both `x_in` and `x_out` panics here even if it is never pressed. Panics if [`GpuAgentModel::POS_BUFFER`] or
+    /// [`GpuAgentModel::COLOR_BUFFER`] lies past the buffers or is not drawable, even for a model that only runs
+    /// headless. Panics if no step pass writes a double buffered buffer through a writable binding.
+    pub fn new_seeded(ctx: &GpuContext, params: &[ParamValue], seed: Option<u64>) -> Self {
+        Self {
+            engine: GpuAgentEngine::new(ctx, Arc::new(GpuAgentSpec::from_model::<M>()), params, seed),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Submits `steps` steps, at most [`MAX_STEPS_PER_SUBMISSION`] per command buffer, as the runner does. Nothing
+    /// waits on the GPU.
+    pub fn run_batched(&mut self, steps: u32) {
+        self.engine.run_batched(steps);
+    }
+
+    /// Runs the snapshot passes and waits for the readback, so `stats()` reports the current tick.
+    pub fn refresh_stats(&mut self) {
+        self.engine.refresh_stats();
+    }
+
+    /// Returns the current side of buffer `index` as raw words, blocking on the GPU.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the readback fails.
+    pub fn read_buffer(&self, index: usize) -> Vec<u32> {
+        self.engine.read_buffer(index)
+    }
+
+    /// Geometry the state was built at.
+    pub fn geometry(&self) -> &Geometry {
+        &self.engine.geom
+    }
+}
+
+// Forwards every call to the engine.
+impl<M: GpuAgentModel> SimState for GpuAgentState<M> {
+    /// Steps once in its own submission, for a caller that holds only a `SimState`. The GPU runner batches
+    /// instead.
+    fn step(&mut self) {
+        self.engine.step();
+    }
+
+    fn tick(&self) -> u64 {
+        self.engine.tick()
+    }
+
+    fn stats(&self) -> Vec<StatEntry> {
+        self.engine.stats()
+    }
+
+    /// Encodes the action into its own submission.
+    ///
+    /// The GPU runner calls [`GpuSimState::encode_action`] instead, and submits the action before
+    /// its snapshot.
+    fn act(&mut self, index: usize) -> bool {
+        self.engine.act(index)
+    }
+
+    /// Rejects every live edit. Its entry declares every parameter reload-only.
+    fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
+        self.engine.set_param(index, value)
+    }
+
+    fn population(&self) -> u64 {
+        self.engine.population()
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.engine.heap_bytes()
+    }
+}
+
+// Forwards every call to the engine.
+impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
+    /// Records one compute pass per declared pass per step, all into one encoder.
+    ///
+    /// A pass is the synchronization boundary wgpu inserts barriers at, so a step's passes
+    /// cannot be collapsed into dispatches inside one pass. The later ones would read stale
+    /// data.
+    fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>) {
+        self.engine.encode_steps(encoder, count, timestamps);
+    }
+
+    fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
+        self.engine.encode_action(encoder, index)
+    }
+
+    fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.engine.encode_snapshot_passes(encoder);
+    }
+
+    fn encode_stats_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.engine.encode_stats_passes(encoder);
+    }
+
+    fn begin_stats_readback(&mut self) {
+        self.engine.begin_stats_readback();
+    }
+
+    fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
+        self.engine.poll_stats_readback(device, block)
+    }
+
+    fn stats_readback_pending(&self) -> bool {
+        self.engine.stats_readback_pending()
+    }
+
+    fn view(&self) -> GpuSnapshot {
+        self.engine.view()
+    }
+
+    fn read_buffer(&self, index: usize) -> Option<Vec<u32>> {
+        GpuSimState::read_buffer(&self.engine, index)
     }
 }

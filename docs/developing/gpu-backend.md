@@ -37,13 +37,22 @@ Each derives every buffer, layout, pipeline and bind group from what its model d
 
 The grid engine reads its model through a value.
 `GpuGridSpec` holds what a `GpuGridModel` declares: the id, the workgroup size, the buffer labels, each shader's source and binding declarations, and the stat series.
-The sources and declarations are `Cow`s, borrowed from the model's consts.
-The model's functions sit behind the private `GridHooks` trait.
+The sources and binding names are `Cow`s, borrowed from the model's consts.
+The model's functions sit behind the `GridHooks` trait.
 The non-generic `GpuGridEngine` builds every wgpu object from a spec and implements both traits.
 `GpuGridState<M>` reads a spec from `M` at each build and forwards every call to the engine.
 Its `demand` and `max_storage_bindings` read a spec too, and the capacity check and the device request see the declarations the build sees.
 The engine computes the workgroups of each pass and the bytes of its buffers once, at construction.
 A step calls no hook, an action press calls one for its uniform block, and `stats` calls one for the values.
+
+The agent engine has the same shape.
+`GpuAgentSpec` holds what a `GpuAgentModel` declares, with the model's functions behind `AgentHooks`, the non-generic `GpuAgentEngine` builds every wgpu object from it, and `GpuAgentState<M>` reads a spec from `M` and forwards every call.
+Each pass of a spec also holds a `SideTable`, which names for each buffer the side that its reads and its writes reach.
+`GpuAgentState<M>` fills the tables with the orientation its model's shaders assume: a pass reads each current side and writes each next side, and an action reads and writes each current side.
+A model composed at run time can point a pass after a writer at the next side, and every double buffered buffer still swaps once, at the end of the step.
+
+The specs, the hooks, `ShaderSpec`, `EntryDeclarations`, `ModelEntry::from_gpu_grid_spec` and `ModelEntry::from_gpu_agent_spec` are public behind henad-compute's `runtime-wgsl` feature, for a crate that composes models at run time.
+Hand-written models never see them.
 
 `GpuSimState` is the extra interface a GPU model needs on top of `SimState`, and `GpuSimThread` drives the state through it.
 A host refers to it as `henad::runner::GpuSimState`.

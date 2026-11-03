@@ -225,7 +225,7 @@ A **patch release** goes from 0.x.y to 0.x.(y+1) and stays compatible, as Cargo'
   The enums that authors pick or match on, `Domain`, `Boundary`, `NeighborhoodKind` and `PassId`, gain variants in a breaking release only.
 - `ParamDescriptor`, `StatDescriptor`, `StatEntry` and `ActionDescriptor` keep their fields private, and each holds its strings borrowed for `'static` or owned.
   Model code builds the descriptors through helpers and `const fn new`, and a model read at run time through `ParamDescriptor::new`, `StatDescriptor::owned` and `ActionDescriptor::owned`.
-  The details inside `Structure` (`LaneSpec`, `BufferSpec` and `PassSpec`) stay `&'static`.
+  `LaneSpec` inside `Structure` stays `&'static`, and `Structure::GpuGrid` and `Structure::GpuAgents` hold `Cow`s, with `GpuBufferInfo` and `GpuPassInfo` as the descriptions a compiled model and a model composed at run time both fill.
   The spec types (`SweepSpec`, `BlockSpec`, `RunSettings`, `MeasureSettings`, `SeedSettings`, `ActionSpec`, `FactorSpec` and the rest) stay exhaustive in 0.3, since hosts and tests build them by literal.
 - henad-models' items belong to the example models, and may change in any breaking release.
 - `ParamValue` converts from `f32`, `u32` and `bool` alone.
@@ -233,6 +233,7 @@ A **patch release** goes from 0.x.y to 0.x.(y+1) and stays compatible, as Cargo'
 - A struct with public fields gains a field, and an enum gains a variant, in a breaking release only.
   That covers the enums that the engine produces and hosts match on, such as `ProgressEvent`, `SweepEvent`, `SweepWarning`, `RunStatus`, `StopReason` and `ModelState`, and the output structs such as `SweepRecord`, `SweepReport`, `ResultCounts` and `Manifest`.
 - `#[non_exhaustive]` marks the types built through `new`: `SweepOptions`, `SweepRunOptions`, `BenchmarkSettings`, `TestDeviceRequest`, `SimulationViews` and `ModelMetadata`.
+  So does each spec type behind `runtime-wgsl`, such as `GpuAgentSpec`, `GpuGridSpec`, `ShaderSpec` and `EntryDeclarations`, with `GpuBufferInfo` and `GpuPassInfo` in henad-core. `SideTable` has a private field in place of the attribute. A new hook of `AgentHooks` or `GridHooks` takes a default body.
   It also marks the types that are lists by nature: the error enums `SetupError`, `ExportError`, `ModelSetError`, `ModelLookupError` and `ShaderBuildError`, `AppOpening`, `OpenAt`, `ModelCheck`, `SkipReason` and `Structure`.
   `ExploreError` and `SweepOutput` carry it as well, since their variants differ between targets.
   `FaultKind` carries it too, and gains a variant when the engine learns to report a new kind of fault.

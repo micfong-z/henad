@@ -4,17 +4,18 @@
 //! `key = value` with single spaces. Tables follow a fixed order, declarations keep their order, passes run in stack
 //! order and nodes in natural id order.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use henad_core::authoring::primitives::space::Boundary;
 
 use crate::catalogue::{ConfigType, NodeDef, effective_config, lookup};
-use crate::document::{Category, Function, GraphDocument, Lane, Pass, PassEnabled, World};
+use crate::document::{Category, Function, GraphDocument, Lane, Pass, PassEnabled, PassStage, World};
 use crate::file::{FORMAT, FORMAT_VERSION, KIND_GRAPH};
+use crate::ids::NodeId;
 use crate::model_text::{toml_string, write_param};
 use crate::node::{Combine, Node, NodeBody, OP_REGION_PUT};
 use crate::reader::read_u64;
-use crate::value::{Color, ConfigValue, InputValue, Literal};
+use crate::value::{Color, ConfigValue, InputValue, Literal, PortRef};
 
 /// Keys of an inline table of a node's configuration, in the order they are written. A key not listed follows, in
 /// lexical order.
@@ -64,7 +65,11 @@ pub(crate) fn semantic_text(document: &GraphDocument) -> String {
     for stat in &document.stats {
         text.push_str("\n[[stat]]\n");
         key(&mut text, "label", &toml_string(&stat.label));
-        key(&mut text, "from", &toml_string(&stat.from.to_string()));
+        key(
+            &mut text,
+            "from",
+            &toml_string(&normal_stat_source(document, &stat.from).to_string()),
+        );
         key(&mut text, "color", &color(&stat.color));
     }
     for action in &document.actions {
@@ -195,18 +200,29 @@ fn write_pass(text: &mut String, document: &GraphDocument, pass: &Pass) {
 }
 
 fn write_body(text: &mut String, document: &GraphDocument, parent: &str, body: &NodeBody) {
+    let mut index: HashMap<NodeId, &Node> = HashMap::with_capacity(body.nodes.len());
+    for node in &body.nodes {
+        // The first node of an id wins, as in [`NodeBody::node`].
+        index.entry(node.id).or_insert(node);
+    }
     let mut nodes: Vec<&Node> = body.nodes.iter().collect();
     nodes.sort_by_key(|node| node.id);
     for node in nodes {
         text.push_str(&format!("\n[[{parent}.node]]\n"));
-        write_node(text, document, body, node);
+        write_node(text, document, body, &index, node);
     }
 }
 
 /// Writes a node's keys: configuration in the order of its definition, then inputs in the order of its definition, each
 /// with its default when the file leaves it unwritten. A key the definition does not name, or a kind with no
 /// definition, follows in lexical order, so a broken file still has one canonical text.
-fn write_node(text: &mut String, document: &GraphDocument, body: &NodeBody, node: &Node) {
+fn write_node(
+    text: &mut String,
+    document: &GraphDocument,
+    body: &NodeBody,
+    index: &HashMap<NodeId, &Node>,
+    node: &Node,
+) {
     key(text, "id", &toml_string(&node.id.to_string()));
     key(text, "op", &toml_string(&node.op));
     let def = lookup(&node.op, document.library);
@@ -240,13 +256,17 @@ fn write_node(text: &mut String, document: &GraphDocument, body: &NodeBody, node
                 .or_else(|| def.input_default(&input.name))
                 .or_else(|| default_put_value(body, node, &input.name));
             if let Some(value) = value {
-                key(text, &format!("in.{}", input.name), &input_value(&value));
+                key(
+                    text,
+                    &format!("in.{}", input.name),
+                    &input_value(document, index, node, &value),
+                );
                 written.push(input.name);
             }
         }
     }
     for (port, value) in node.inputs.iter().filter(|(port, _)| !written.contains(port)) {
-        key(text, &format!("in.{port}"), &input_value(value));
+        key(text, &format!("in.{port}"), &input_value(document, index, node, value));
     }
     if let Some(region) = node.region {
         key(text, "region", &toml_string(&region.to_string()));
@@ -265,6 +285,9 @@ fn default_put_value(body: &NodeBody, node: &Node, port: &str) -> Option<InputVa
 }
 
 /// Returns the one form of a configuration value that has several spellings, or `None` when `value` is in that form.
+///
+/// A count list is a set, written in ascending order with each count once. A list holding anything but integers is
+/// left for the checker to refuse.
 fn normal_config(def: &NodeDef, name: &str, value: &ConfigValue) -> Option<ConfigValue> {
     let config_key = def.config.iter().find(|config_key| config_key.name == name)?;
     match config_key.value {
@@ -272,7 +295,78 @@ fn normal_config(def: &NodeDef, name: &str, value: &ConfigValue) -> Option<Confi
             let number = read_u64(value.as_str()?)?;
             Some(ConfigValue::String(format!("{number:#x}")))
         }
+        ConfigType::CountList { .. } => {
+            let mut counts = value
+                .as_array()?
+                .iter()
+                .map(ConfigValue::as_integer)
+                .collect::<Option<Vec<i64>>>()?;
+            counts.sort_unstable();
+            counts.dedup();
+            Some(ConfigValue::Array(
+                counts.into_iter().map(ConfigValue::Integer).collect(),
+            ))
+        }
         _ => None,
+    }
+}
+
+/// Returns the one form of a link from `reader`: bare when it names the only output of a node outside every region
+/// around `reader`, and as written otherwise.
+///
+/// A region read from its own body keeps the port name, since there a bare link names nothing. `index` holds the
+/// nodes of the body by id.
+fn normal_link(document: &GraphDocument, index: &HashMap<NodeId, &Node>, reader: &Node, link: &PortRef) -> PortRef {
+    let Some(port) = &link.port else {
+        return link.clone();
+    };
+    let Some(source) = index.get(&link.node) else {
+        return link.clone();
+    };
+    // A cycle of regions, which the checker reports, ends the walk after one step per node.
+    let mut region = reader.region;
+    for _ in 0..index.len() {
+        match region {
+            Some(id) if id == link.node => return link.clone(),
+            Some(id) => region = index.get(&id).and_then(|node| node.region),
+            None => break,
+        }
+    }
+    match only_output(document, source) {
+        Some(only) if &only == port => PortRef {
+            node: link.node,
+            port: None,
+        },
+        _ => link.clone(),
+    }
+}
+
+/// Returns the name of the only output of `node`, or `None` for a node with several, none or an unknown kind.
+fn only_output(document: &GraphDocument, node: &Node) -> Option<String> {
+    let def = lookup(&node.op, document.library)?;
+    match def.resolved_outputs(node, document).as_slice() {
+        [only] => Some(only.name.clone()),
+        _ => None,
+    }
+}
+
+/// Returns the one form of the reference of a `[[stat]]`: bare when it names the only output of a node of a stats
+/// pass.
+fn normal_stat_source(document: &GraphDocument, from: &PortRef) -> PortRef {
+    let Some(port) = &from.port else {
+        return from.clone();
+    };
+    let source = document
+        .passes
+        .iter()
+        .filter(|pass| pass.stage == PassStage::Stats)
+        .find_map(|pass| pass.body.node(from.node));
+    match source.and_then(|source| only_output(document, source)) {
+        Some(only) if &only == port => PortRef {
+            node: from.node,
+            port: None,
+        },
+        _ => from.clone(),
     }
 }
 
@@ -309,9 +403,9 @@ fn multiline_array(items: &[String]) -> String {
     text
 }
 
-fn input_value(value: &InputValue) -> String {
+fn input_value(document: &GraphDocument, index: &HashMap<NodeId, &Node>, reader: &Node, value: &InputValue) -> String {
     match value {
-        InputValue::Link(reference) => toml_string(&reference.to_string()),
+        InputValue::Link(reference) => toml_string(&normal_link(document, index, reader, reference).to_string()),
         InputValue::Literal(constant) => literal(constant),
         InputValue::Param(id) => format!("{{ param = {} }}", toml_string(id)),
     }

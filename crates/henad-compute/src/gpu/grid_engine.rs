@@ -3,7 +3,6 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use henad_core::authoring::model::binding::{BindingDecl, buffer_target};
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
@@ -11,9 +10,10 @@ use henad_core::view::{StatEntry, stat_entries};
 
 use crate::gpu::GpuContext;
 use crate::gpu::capacity::{Demand, layout_entry};
-use crate::gpu::grid_spec::{GpuGridSpec, GridShaderSpec};
+use crate::gpu::grid_spec::GpuGridSpec;
 use crate::gpu::primitives::pipeline::{compute_pipeline, uniform_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
+use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
 use crate::snapshot::GpuSnapshot;
@@ -242,8 +242,8 @@ impl GpuGridEngine {
 
         // An action writes the side that already holds the state. Nothing swaps after an action, so
         // writing the far side would throw the work away.
-        let resolve = |decl: &BindingDecl, a_is_current: bool, action: Option<usize>| -> wgpu::BindingResource<'_> {
-            if let Some((label, writes)) = buffer_target(decl) {
+        let resolve = |decl: &ShaderBinding, a_is_current: bool, action: Option<usize>| -> wgpu::BindingResource<'_> {
+            if let Some((label, writes)) = decl.buffer_target() {
                 let k = spec
                     .buffers
                     .iter()
@@ -257,7 +257,7 @@ impl GpuGridEngine {
                 };
                 return if writes && action.is_none() { write } else { read }.as_entire_binding();
             }
-            match decl.name {
+            match decl.name.as_ref() {
                 "params" => match action {
                     Some(i) => action_uniforms[i].as_entire_binding(),
                     None => step_params_buffer.as_entire_binding(),
@@ -269,7 +269,7 @@ impl GpuGridEngine {
             }
         };
 
-        let build = |label: &str, shader: &GridShaderSpec, action: Option<usize>| {
+        let build = |label: &str, shader: &ShaderSpec, action: Option<usize>| {
             let entries: Vec<wgpu::BindGroupLayoutEntry> = shader
                 .bindings
                 .iter()

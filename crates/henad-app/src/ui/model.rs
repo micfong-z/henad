@@ -248,8 +248,8 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
             counters,
         } => {
             let doubled = buffers.iter().filter(|spec| spec.double_buffered).count();
-            let buffer_names: Vec<&str> = buffers.iter().map(|spec| spec.label).collect();
-            let pass_names: Vec<&str> = passes.iter().map(|pass| pass.label).collect();
+            let buffer_names: Vec<&str> = buffers.iter().map(|spec| spec.label.as_ref()).collect();
+            let pass_names: Vec<&str> = passes.iter().map(|pass| pass.label.as_ref()).collect();
             row_listing(
                 ui,
                 rows,

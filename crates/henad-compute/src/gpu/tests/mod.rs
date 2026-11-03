@@ -2,6 +2,7 @@
 
 pub mod support;
 
+mod agent_spec;
 #[cfg(feature = "runtime-wgsl")]
 mod compose;
 mod parity;

@@ -595,3 +595,85 @@ fn a_frame_and_a_move_change_the_editor_region_alone() {
     assert_eq!(file.code(), code, "the code identity stays");
     assert!(file.to_toml().contains("title = \"Count\""));
 }
+
+/// A graph whose category `kind` holds one variant, counted by `n21`, which a stat reads.
+const ONE_VARIANT: &str = r#"format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "node_one_variant"
+
+[graph]
+topology = "grid"
+library = 1
+
+[[target]]
+backend = "gpu"
+
+[grid]
+width = 4
+height = 4
+
+[[category]]
+id = "kind"
+variants = [{ name = "Only", color = [1, 2, 3] }]
+
+[[lane]]
+id = "state"
+domain = "cells"
+type = "cat:kind"
+
+[[stat]]
+label = "Only"
+from = "n21.Only"
+color = [1, 2, 3]
+
+[[pass]]
+id = "step"
+stage = "tick"
+kind = "map"
+domain = "cells"
+
+[[pass]]
+id = "counts"
+stage = "stats"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n20"
+op = "lane.get"
+config.lane = "state"
+
+[[pass.node]]
+id = "n21"
+op = "stat.count_by"
+config.category = "kind"
+in.value = "n20"
+"#;
+
+#[test]
+fn a_bare_link_to_a_counter_of_one_variant_is_named_before_a_variant_edit() {
+    let canonical = GraphFile::parse(ONE_VARIANT).expect("the text reads").to_toml();
+    assert!(canonical.contains("from = \"n21\"\n"), "{canonical}");
+    let file = GraphFile::parse(&canonical).expect("the canonical text reads");
+    let mut builder = GraphBuilder::from_file(&file);
+    let refused = builder.apply(EditCommand::RemoveVariant {
+        category: "kind".to_owned(),
+        name: "Only".to_owned(),
+    });
+    assert!(matches!(refused, Err(EditError::Referenced { .. })), "{refused:?}");
+    builder
+        .apply(EditCommand::AddVariant {
+            category: "kind".to_owned(),
+            variant: Variant::new("Other", [4, 5, 6, 255]),
+        })
+        .expect("the variant is added");
+    let file = assert_checks(&builder);
+    assert_eq!(
+        file.document().stats[0].from,
+        PortRef {
+            node: n(21),
+            port: Some("Only".to_owned()),
+        }
+    );
+}

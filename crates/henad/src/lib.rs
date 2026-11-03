@@ -11,7 +11,7 @@ pub use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelSetE
 pub use henad_compute::fault::{Fault, FaultKind, install_panic_hook};
 pub use henad_compute::simulation::{ExportError, RunSetup, SetupError, Simulation, SimulationViews, StatSample};
 pub use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
-pub use henad_core::metadata::{Backend, LaneSpec, ModelMetadata, Structure};
+pub use henad_core::metadata::{Backend, GpuBufferInfo, GpuPassInfo, LaneSpec, ModelMetadata, Structure};
 pub use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode, ModelSource};
 pub use henad_core::send_sync::{WasmNotSend, WasmNotSync};
 pub use henad_core::topology::TopologyHint;

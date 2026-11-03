@@ -24,12 +24,16 @@ thread_local! {
 /// loses the line for exactly the panics most worth locating.
 ///
 /// Keyed by message and read newest first. A catch can pick up a site belonging to some other panic only when two
-/// panics on concurrent threads have the same message.
+/// panics on concurrent threads have the same message. A site recorded again moves to the newest place, so a parallel
+/// kernel whose every worker fails one assert holds one entry, and its burst does not push out the sites of other
+/// panics.
 static RECENT_PANIC_SITES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
-/// Number of unclaimed sites kept before the oldest is dropped. Nothing reads a stale entry, and every
-/// claimed one is removed, so this only bounds what a burst can leave behind.
-const RECENT_PANIC_SITES_CAP: usize = 16;
+/// Number of distinct sites kept before the oldest is dropped.
+///
+/// A catch reads the newest site with its message, which is never older than the panic it catches. The cap only
+/// bounds what a burst of distinct panics can leave behind.
+const RECENT_PANIC_SITES_CAP: usize = 64;
 
 /// Phase of a fault raised while a host builds a model.
 pub const BUILDING: &str = "building the model";
@@ -170,7 +174,12 @@ pub fn install_panic_hook() {
                 let message = payload_message(info.payload());
                 LAST_PANIC.with(|slot| *slot.borrow_mut() = Some((message.clone(), site.clone())));
                 if let Ok(mut recent) = RECENT_PANIC_SITES.lock() {
-                    if recent.len() >= RECENT_PANIC_SITES_CAP {
+                    if let Some(seen) = recent
+                        .iter()
+                        .position(|(seen, seen_site)| *seen == message && *seen_site == site)
+                    {
+                        recent.remove(seen);
+                    } else if recent.len() >= RECENT_PANIC_SITES_CAP {
                         recent.remove(0);
                     }
                     recent.push((message, site));
@@ -184,26 +193,17 @@ pub fn install_panic_hook() {
 /// Returns the location of the panic that carried `message`, if any.
 ///
 /// The site this thread recorded wins when its message matches. Otherwise the newest site recorded with `message` on
-/// any thread is taken. Either way the site leaves the process-wide list.
+/// any thread is taken. The process-wide list keeps the site, so two catches of one panic both find it.
 fn take_location(message: &str) -> Option<String> {
     let here = LAST_PANIC
         .with(|slot| slot.borrow_mut().take())
         .filter(|(seen, _)| seen == message);
-    let mut recent = RECENT_PANIC_SITES.lock().ok();
-    let Some(recent) = recent.as_mut() else {
-        return here.map(|(_, site)| site);
-    };
     if let Some((_, site)) = here {
-        if let Some(found) = recent
-            .iter()
-            .rposition(|(seen, seen_site)| seen == message && *seen_site == site)
-        {
-            recent.remove(found);
-        }
         return Some(site);
     }
+    let recent = RECENT_PANIC_SITES.lock().ok()?;
     let found = recent.iter().rposition(|(seen, _)| seen == message)?;
-    Some(recent.remove(found).1)
+    Some(recent[found].1.clone())
 }
 
 /// Returns the `&str` or `String` that a panic carried, or `"panicked"` for anything else.
@@ -353,6 +353,35 @@ mod tests {
             "the nested job's site was taken: {location}"
         );
         assert!(location.ends_with(&format!(":{worker_line}")), "{location}");
+    }
+
+    /// Tests run in parallel, and a parallel kernel can fail one assert on every worker. Such a burst must not push
+    /// out the site of a panic another thread is about to catch.
+    #[test]
+    fn a_burst_of_one_panic_keeps_the_sites_of_others() {
+        install_panic_hook();
+        let located_line = line!() + 3;
+        let outcome: Result<(), Fault> = catching("testing", || {
+            let located = std::thread::spawn(|| {
+                panic!("from a thread before a burst");
+            })
+            .join()
+            .expect_err("the thread panics");
+            std::thread::spawn(|| {
+                for _ in 0..100 {
+                    drop(std::panic::catch_unwind(|| panic!("from a burst")));
+                }
+            })
+            .join()
+            .expect("the burst is caught");
+            std::panic::resume_unwind(located);
+        });
+        let fault = outcome.expect_err("the thread's panic is raised again");
+        let FaultKind::Panic { location, .. } = &fault.kind else {
+            panic!("expected a panic fault, got {fault:?}");
+        };
+        let location = location.as_deref().expect("the burst left the site in place");
+        assert!(location.ends_with(&format!(":{located_line}")), "{location}");
     }
 
     /// A stale location from an earlier caught panic must not be pinned onto a later one.

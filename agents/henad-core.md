@@ -61,7 +61,10 @@ a `ChoiceOptions` of either kind. Model code never changes with the storage. `Mo
 henad-core takes a wildcard arm. The arms sit in the kit's `declared.rs` (`prepended_ids`, and
 `metadata`, whose wildcard fails the check), `size_for_jobs` in `determinism.rs`, the app's
 `structure_rows`, and a `matches!` in `benchmark.rs`, and a new variant takes an arm in each.
-`LaneSpec`, `BufferSpec` and `PassSpec` stay `&'static`.
+`LaneSpec`, `BufferSpec` and `PassSpec` stay `&'static`, and hand-written models fill the last two.
+`Structure::GpuGrid` holds `Cow`s, and `Structure::GpuAgents` holds `Cow`s of `GpuBufferInfo` and
+`GpuPassInfo`, descriptions that a compiled model and a model composed at run time both fill.
+`binding::named_buffer_target` is `buffer_target` for a binding name built at run time.
 `Network` keeps its adjacency rows in compressed sparse row (CSR) form with slack, beside an edge
 list the view draws. A full row relocates to the end, the engine repacks after a tick once
 `should_repack()` finds too much stale space, and a full `rebuild()` runs only when the graph

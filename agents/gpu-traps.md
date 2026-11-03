@@ -56,7 +56,11 @@ is about not undoing them.
   `run()` once at thread start, outside the loop, so the catch costs nothing per tick. Rayon
   catches a worker's panic and re-raises it on the caller with `resume_unwind`, which does not run
   the panic hook again, so `fault.rs` keeps a global fallback alongside its thread-local record.
-  Drop the fallback and every `step_cell` panic loses its `file:line`.
+  Drop the fallback and every `step_cell` panic loses its `file:line`. The fallback keeps each
+  `(message, site)` once, moved to the newest place when recorded again, and a catch reads it
+  without removing it. A FIFO of every panic let one kernel's burst of identical panics, or a
+  parallel test's, push out the site a catch was about to read
+  (`a_burst_of_one_panic_keeps_the_sites_of_others`).
 - **Two clocks that must be reset together.** `gpu/sim_thread.rs` gates its stats refresh on
   `last_stats_publish` but divides by `tps_timer`; resetting one without the other reports a whole
   batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.

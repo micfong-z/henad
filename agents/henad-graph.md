@@ -54,9 +54,16 @@ defaults filled (`effective_config`), then inputs in `resolved_inputs` order (fi
 ports configuration makes, in the configuration's order) with a literal default filled, and a
 `region.put` feeding a `count` accumulator gets `in.value = { u32 = 1 }`. A key the definition
 does not name, or a kind with no definition, follows in lexical order, so a broken file still has
-one text. `normal_config` writes a `U64Text` value as lowercase hexadecimal. A `ConfigValue::Table`
-follows `INLINE_KEY_ORDER`, then lexical order. An `init.<acc>` stays unwritten when absent, since
-a float `min` identity has no literal form.
+one text. `normal_config` writes a `U64Text` value as lowercase hexadecimal and a `CountList`
+(`grid.life_like`'s `birth` and `survive`) ascending with each count once, since both are sets. A
+`ConfigValue::Table` follows `INLINE_KEY_ORDER`, then lexical order. An `init.<acc>` stays
+unwritten when absent, since a float `min` identity has no literal form. `normal_link` writes a
+link bare when it names the only output of a node outside every region around the reader, and
+keeps the port of a region read from its body (inner outputs). `normal_stat_source` does the same
+for `[[stat]] from`. `respellings_of_the_life_starter_write_one_text` holds the four respellings the
+round 1 audit found. Because a canonical text holds bare links, `AddVariant` and `RemoveVariant`
+first name the variant on a bare link to a `stat.count_by` over a one-variant category
+(`name_bare_counter_links`), which would otherwise name nothing or hide a reference.
 
 **The catalogue.** One `NodeDef` per kind, `static` tables in `catalogue/state.rs`, `math.rs`,
 `bits_logic.rs`, `conv.rs`, `random.rs`, `region.rs` and `view.rs`, filled from the `BASE`
@@ -70,7 +77,11 @@ region, `ContextSet` (stages plus a `region` flag), an optional `Domain`, `Effec
 `resolved_inner_outputs` expand a node's ports, and the writer, the checker and every later
 consumer read ports through them. The milestone G1 kinds are all in: 64. A kind with no row in
 `node-catalogue.md` has its definition written here, with WGSL's integer rules and the NaN
-behaviour stated, and the definitions say a shader may assume no NaN or infinity.
+behaviour stated, and the definitions say a shader may assume no NaN or infinity. A float to
+integer conversion follows WGSL, which naga emits as a clamp before the cast: `conv.to_u32` from an
+`f32` tops out at 4294967040 (`0x4f7fffff`) and `conv.to_i32` at 2147483520 (`0x4effffff`), the
+largest `f32` values the target holds, and the host form clamps the same way
+(`host/value.rs`). An Apple M4 Pro returned exactly these values.
 
 **Known-answer cases** (`catalogue/cases.rs`). `CaseForm::Node` gives config lines, input values,
 a `CaseContext` (seed, phase, element, tick, iteration, press, stream state) and expected outputs.

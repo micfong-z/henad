@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use crate::authoring::model::gpu_agent_model::{BufferSpec, PassSpec};
+use crate::authoring::model::gpu_agent_model::{BufferSpec, Domain, PassSpec};
 use crate::topology::NeighborhoodKind;
 
 /// Model backend.
@@ -37,6 +37,65 @@ pub struct LaneSpec {
     pub double_buffered: bool,
 }
 
+/// One storage buffer of a GPU agent model, as [`Structure::GpuAgents`] describes it.
+///
+/// A compiled model fills one from its [`BufferSpec`], and a model composed at run time from its own declarations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GpuBufferInfo {
+    /// Name that a shader's bindings refer to.
+    pub label: Cow<'static, str>,
+    /// Whether the buffer has a second side.
+    pub double_buffered: bool,
+    /// Whether the buffer is also a vertex stream.
+    pub drawable: bool,
+}
+
+impl GpuBufferInfo {
+    /// Creates the description of buffer `label`.
+    pub fn new(label: impl Into<Cow<'static, str>>, double_buffered: bool, drawable: bool) -> Self {
+        Self {
+            label: label.into(),
+            double_buffered,
+            drawable,
+        }
+    }
+}
+
+impl From<&BufferSpec> for GpuBufferInfo {
+    fn from(spec: &BufferSpec) -> Self {
+        Self::new(spec.label, spec.double_buffered, spec.drawable)
+    }
+}
+
+/// One compute pass of a GPU agent model's step, as [`Structure::GpuAgents`] describes it.
+///
+/// A compiled model fills one from its [`PassSpec`], and a model composed at run time from its own declarations.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct GpuPassInfo {
+    /// Name of the pass, as the Model panel shows it.
+    pub label: Cow<'static, str>,
+    /// Invocation domain of the pass.
+    pub domain: Domain,
+}
+
+impl GpuPassInfo {
+    /// Creates the description of pass `label` over `domain`.
+    pub fn new(label: impl Into<Cow<'static, str>>, domain: Domain) -> Self {
+        Self {
+            label: label.into(),
+            domain,
+        }
+    }
+}
+
+impl From<&PassSpec> for GpuPassInfo {
+    fn from(spec: &PassSpec) -> Self {
+        Self::new(spec.label, spec.domain)
+    }
+}
+
 /// Storage layout of a model, by backend and topology.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -69,16 +128,16 @@ pub enum Structure {
     /// A GPU grid model.
     GpuGrid {
         /// Ping-ponged buffer labels.
-        buffers: &'static [&'static str],
+        buffers: Cow<'static, [Cow<'static, str>]>,
         /// Side of the square workgroup that every shader declares.
         workgroup: u32,
     },
     /// A GPU agent model.
     GpuAgents {
         /// Storage buffers, in declaration order.
-        buffers: &'static [BufferSpec],
+        buffers: Cow<'static, [GpuBufferInfo]>,
         /// Passes of one step, in the order they run.
-        passes: &'static [PassSpec],
+        passes: Cow<'static, [GpuPassInfo]>,
         /// Whether the engine rebuilds a neighbour index before every step.
         index: bool,
         /// Whether the model declares a display pass.

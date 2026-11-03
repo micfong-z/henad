@@ -2,48 +2,45 @@
 //! pipelines and bind groups from them.
 //!
 //! A [`GpuGridSpec`] holds a model's shaders and binding lists, borrowed from its consts or owned, and its functions
-//! behind [`GridHooks`]. [`GpuGridSpec::from_model`] reads a spec from a model type.
+//! behind [`GridHooks`]. [`GpuGridSpec::from_model`] reads a spec from a model type, and [`GpuGridSpec::new`] builds one
+//! from values for a model composed at run time.
 
 use std::borrow::Cow;
+use std::fmt;
 use std::marker::PhantomData;
 
-use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
+use henad_core::metadata::Structure;
 use henad_core::params::ParamValue;
 use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::gpu::capacity::{Demand, storage_bindings};
 use crate::gpu::contracts::{assert_buffer_labels, assert_workgroup_size};
-
-/// A compute shader's WGSL source, with its `@group(0)` declarations in `@binding` order.
-pub(crate) struct GridShaderSpec {
-    /// WGSL source, with `main` as the entry point.
-    pub(crate) source: Cow<'static, str>,
-    /// Declarations of the shader's bindings.
-    pub(crate) bindings: Cow<'static, [BindingDecl]>,
-}
-
-impl GridShaderSpec {
-    /// Returns a shader whose source and declarations are a model's consts.
-    fn borrowed(source: &'static str, bindings: &'static [BindingDecl]) -> Self {
-        Self {
-            source: Cow::Borrowed(source),
-            bindings: Cow::Borrowed(bindings),
-        }
-    }
-}
+use crate::gpu::shader_spec::ShaderSpec;
 
 /// A one-off pass the user can trigger, dispatched over the step pass's domain.
-pub(crate) struct GridActionSpec {
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct GridActionSpec {
     /// Id of the action, part of the labels of its pass and its uniform.
-    pub(crate) id: Cow<'static, str>,
+    pub id: Cow<'static, str>,
     /// Shader of the pass.
-    pub(crate) shader: GridShaderSpec,
+    pub shader: ShaderSpec,
+}
+
+impl GridActionSpec {
+    /// Creates the action `id`, which runs `shader`.
+    pub fn new(id: impl Into<Cow<'static, str>>, shader: ShaderSpec) -> Self {
+        Self { id: id.into(), shader }
+    }
 }
 
 /// Functions of a GPU grid model that the engine calls, each the counterpart of the [`GpuGridModel`] function of the
 /// same name.
-pub(crate) trait GridHooks: Send + Sync {
+///
+/// The engine calls no hook per step or per element. It reads the sizes and seeds once at construction, a uniform block
+/// once per build or action press, and the stat values once per read.
+pub trait GridHooks: Send + Sync {
     /// Returns the grid size for `params`, before the engine clamps each side to at least 1.
     fn dims(&self, params: &[ParamValue]) -> (u32, u32);
 
@@ -104,57 +101,110 @@ impl<M: GpuGridModel> GridHooks for ModelHooks<M> {
 /// Declarations of a GPU grid model, held as values.
 ///
 /// Each label the engine gives a wgpu object starts with [`Self::id`].
-pub(crate) struct GpuGridSpec {
+#[non_exhaustive]
+pub struct GpuGridSpec {
     /// Id of the model.
-    pub(crate) id: Cow<'static, str>,
+    pub id: Cow<'static, str>,
     /// Side `N` of the `@workgroup_size(N, N)` every shader declares, actions included.
-    pub(crate) workgroup_size: u32,
+    pub workgroup_size: u32,
     /// Labels of the buffers ping-ponged per step. A binding names one of them, with an optional `_in` or `_out`.
-    pub(crate) buffers: &'static [&'static str],
+    pub buffers: Vec<Cow<'static, str>>,
     /// Step shader, dispatched over the step domain of [`Self::hooks`].
-    pub(crate) step: GridShaderSpec,
+    pub step: ShaderSpec,
     /// Display shader, dispatched once per display texel.
-    pub(crate) display: GridShaderSpec,
+    pub display: ShaderSpec,
     /// Reduce shader, dispatched once per cell.
-    pub(crate) reduce: GridShaderSpec,
-    /// One-off passes the user can trigger, in the order of their buttons.
-    pub(crate) actions: Vec<GridActionSpec>,
+    pub reduce: ShaderSpec,
+    /// One-off passes the user can trigger, in the order of their buttons. [`Self::new`] leaves this empty.
+    pub actions: Vec<GridActionSpec>,
     /// Stat series, one per counter of the reduce shader's `counters` binding.
-    pub(crate) stats: Cow<'static, [StatDescriptor]>,
+    pub stats: Cow<'static, [StatDescriptor]>,
     /// Functions the engine calls for the sizes, the seeds, the uniform blocks and the stat values.
-    pub(crate) hooks: Box<dyn GridHooks>,
+    pub hooks: Box<dyn GridHooks>,
+}
+
+/// Prints the declarations, and leaves out the hooks.
+impl fmt::Debug for GpuGridSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GpuGridSpec")
+            .field("id", &self.id)
+            .field("workgroup_size", &self.workgroup_size)
+            .field("buffers", &self.buffers)
+            .field("step", &self.step)
+            .field("display", &self.display)
+            .field("reduce", &self.reduce)
+            .field("actions", &self.actions)
+            .field("stats", &self.stats)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GpuGridSpec {
-    /// Returns the declarations of model `M`, borrowing its shaders, its binding lists and its stats.
-    pub(crate) fn from_model<M: GpuGridModel>() -> Self {
+    /// Creates the spec of model `id` with no actions.
+    ///
+    /// [`Self::actions`] is a public field, for a model that has some.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "every argument is a declaration the engine cannot run without"
+    )]
+    pub fn new(
+        id: impl Into<Cow<'static, str>>,
+        workgroup_size: u32,
+        buffers: Vec<Cow<'static, str>>,
+        step: ShaderSpec,
+        display: ShaderSpec,
+        reduce: ShaderSpec,
+        stats: impl Into<Cow<'static, [StatDescriptor]>>,
+        hooks: Box<dyn GridHooks>,
+    ) -> Self {
         Self {
-            id: Cow::Borrowed(M::ID),
-            workgroup_size: M::WORKGROUP_SIZE,
-            buffers: M::BUFFERS,
-            step: GridShaderSpec::borrowed(M::STEP_SHADER, M::STEP_BINDINGS),
-            display: GridShaderSpec::borrowed(M::DISPLAY_SHADER, M::DISPLAY_BINDINGS),
-            reduce: GridShaderSpec::borrowed(M::REDUCE_SHADER, M::REDUCE_BINDINGS),
-            actions: M::ACTIONS
-                .iter()
-                .map(|action| GridActionSpec {
-                    id: Cow::Borrowed(action.desc.id()),
-                    shader: GridShaderSpec::borrowed(action.shader, action.bindings),
-                })
-                .collect(),
-            stats: Cow::Borrowed(M::STATS),
-            hooks: Box::new(ModelHooks::<M>(PhantomData)),
+            id: id.into(),
+            workgroup_size,
+            buffers,
+            step,
+            display,
+            reduce,
+            actions: Vec::new(),
+            stats: stats.into(),
+            hooks,
+        }
+    }
+
+    /// Returns the declarations of model `M`, borrowing its shaders, its binding names and its stats.
+    pub(crate) fn from_model<M: GpuGridModel>() -> Self {
+        let mut spec = Self::new(
+            M::ID,
+            M::WORKGROUP_SIZE,
+            M::BUFFERS.iter().map(|label| Cow::Borrowed(*label)).collect(),
+            ShaderSpec::borrowed(M::STEP_SHADER, M::STEP_BINDINGS),
+            ShaderSpec::borrowed(M::DISPLAY_SHADER, M::DISPLAY_BINDINGS),
+            ShaderSpec::borrowed(M::REDUCE_SHADER, M::REDUCE_BINDINGS),
+            M::STATS,
+            Box::new(ModelHooks::<M>(PhantomData)),
+        );
+        spec.actions = M::ACTIONS
+            .iter()
+            .map(|action| GridActionSpec::new(action.desc.id(), ShaderSpec::borrowed(action.shader, action.bindings)))
+            .collect();
+        spec
+    }
+
+    /// Returns the [`Structure`] an entry of this model declares.
+    pub fn structure(&self) -> Structure {
+        Structure::GpuGrid {
+            buffers: Cow::Owned(self.buffers.clone()),
+            workgroup: self.workgroup_size,
         }
     }
 
     /// Returns the grid size for `params`, each side clamped to at least 1.
-    pub(crate) fn dims(&self, params: &[ParamValue]) -> (u32, u32) {
+    pub fn dims(&self, params: &[ParamValue]) -> (u32, u32) {
         let (width, height) = self.hooks.dims(params);
         (width.max(1), height.max(1))
     }
 
     /// Resources that would be allocated for this model based on `params`.
-    pub(crate) fn demand(&self, params: &[ParamValue], limits: &wgpu::Limits) -> Demand {
+    pub fn demand(&self, params: &[ParamValue], limits: &wgpu::Limits) -> Demand {
         let (width, height) = self.dims(params);
 
         let mut demand = Demand::default();
@@ -186,7 +236,7 @@ impl GpuGridSpec {
     }
 
     /// Returns the most storage buffers any pass binds.
-    pub(crate) fn max_storage_bindings(&self) -> u32 {
+    pub fn max_storage_bindings(&self) -> u32 {
         self.declared_passes()
             .into_iter()
             .map(|(_, storage)| storage)
@@ -201,7 +251,7 @@ impl GpuGridSpec {
     /// Panics if a buffer label is reserved or ends in `_in` or `_out`, or if a shader declares a workgroup size
     /// other than [`Self::workgroup_size`] on both sides.
     pub(crate) fn assert_contracts(&self) {
-        assert_buffer_labels(&self.id, self.buffers.iter().copied());
+        assert_buffer_labels(&self.id, self.buffers.iter().map(Cow::as_ref));
         // Every pass dispatches square workgroups of `workgroup_size`.
         let square = [self.workgroup_size, self.workgroup_size, 1];
         let passes = [
@@ -229,7 +279,7 @@ mod tests {
     use henad_core::params::{ParamDescriptor, ParamValue};
     use henad_core::view::{StatDescriptor, StatValue};
 
-    use super::{GpuGridSpec, GridShaderSpec};
+    use super::{GpuGridSpec, ShaderSpec};
 
     const fn storage(name: &'static str, read_only: bool) -> BindingDecl {
         BindingDecl {
@@ -320,16 +370,13 @@ mod tests {
         }
     }
 
-    /// Returns the declarations of `bindings` as name and kind pairs. Unlike the declarations, the pairs implement
-    /// `PartialEq`.
-    fn declared(bindings: &[BindingDecl]) -> Vec<(&'static str, BindingKind)> {
-        bindings.iter().map(|decl| (decl.name, decl.kind)).collect()
-    }
-
-    /// Returns whether `shader` borrows `source` and the declarations of `bindings`.
-    fn borrows(shader: &GridShaderSpec, source: &str, bindings: &[BindingDecl]) -> bool {
+    /// Returns whether `shader` borrows `source` and the name of each of `bindings`, in the kinds they declare.
+    fn borrows(shader: &ShaderSpec, source: &str, bindings: &[BindingDecl]) -> bool {
         matches!(shader.source, Cow::Borrowed(text) if text == source)
-            && matches!(shader.bindings, Cow::Borrowed(decls) if declared(decls) == declared(bindings))
+            && shader.bindings.len() == bindings.len()
+            && shader.bindings.iter().zip(bindings).all(|(binding, decl)| {
+                matches!(binding.name, Cow::Borrowed(name) if name == decl.name) && binding.kind == decl.kind
+            })
     }
 
     /// The spec of a model borrows every declaration it holds, and each hook calls the function of the same name.

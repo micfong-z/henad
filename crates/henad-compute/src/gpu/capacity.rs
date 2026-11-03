@@ -7,17 +7,18 @@ use henad_core::helpers::fmt_bytes;
 
 use crate::display_scale::display_dims;
 use crate::gpu::primitives::pipeline::{storage_entry, uniform_entry};
-use henad_core::authoring::model::binding::{BindingDecl, BindingKind};
+use crate::gpu::shader_spec::ShaderBinding;
+use henad_core::authoring::model::binding::BindingKind;
 
 /// Returns the number of bindings that count against `max_storage_buffers_per_shader_stage`. A uniform and a storage
 /// texture each count against a separate limit.
-pub(crate) fn storage_bindings(decls: &[BindingDecl]) -> u32 {
-    decls.iter().filter(|d| d.kind.is_storage_buffer()).count() as u32
+pub(crate) fn storage_bindings(bindings: &[ShaderBinding]) -> u32 {
+    bindings.iter().filter(|d| d.kind.is_storage_buffer()).count() as u32
 }
 
 /// Returns the layout entry that a declaration requires.
-pub(crate) fn layout_entry(i: u32, decl: &BindingDecl) -> wgpu::BindGroupLayoutEntry {
-    match decl.kind {
+pub(crate) fn layout_entry(i: u32, binding: &ShaderBinding) -> wgpu::BindGroupLayoutEntry {
+    match binding.kind {
         BindingKind::Storage { read_only } => storage_entry(i, read_only),
         BindingKind::Uniform => uniform_entry(i),
         BindingKind::StorageTexture => wgpu::BindGroupLayoutEntry {

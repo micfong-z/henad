@@ -183,6 +183,7 @@ impl GraphBuilder {
                 Ok(())
             }
             EditCommand::AddVariant { category, variant } => {
+                self.name_bare_counter_links(&category);
                 let category = self.category_mut(&category)?;
                 if !is_port_segment(&variant.name) {
                     return Err(EditError::Invalid(format!("'{}' is no variant name", variant.name)));
@@ -199,6 +200,7 @@ impl GraphBuilder {
             EditCommand::RenameVariant { category, from, to } => self.rename_variant(&category, &from, &to),
             EditCommand::RemoveVariant { category, name } => {
                 let position = self.variant_position(&category, &name)?;
+                self.name_bare_counter_links(&category);
                 let references = self.variant_references(&category, &name);
                 Self::refuse_referenced(format!("the variant '{category}.{name}'"), references)?;
                 self.category_mut(&category)?.variants.remove(position);
@@ -353,6 +355,54 @@ impl GraphBuilder {
             })
             .map(|(scope, node)| (scope, node.id))
             .collect()
+    }
+
+    /// Names the variant on every bare link to a `stat.count_by` over `category`, when the category holds one variant.
+    ///
+    /// A bare link names a node's only output, and the canonical text writes a link to a counter of one variant bare.
+    /// Called before a variant is added or removed. Otherwise the link would name an output that is no longer the only
+    /// one, or hide a reference to the variant removed.
+    fn name_bare_counter_links(&mut self, category: &str) {
+        let Some(only) = self
+            .document
+            .categories
+            .iter()
+            .find(|known| known.id == category)
+            .and_then(|known| match known.variants.as_slice() {
+                [only] => Some(only.name.clone()),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let counters = self.variant_counters(category);
+        for stat in &mut self.document.stats {
+            if stat.from.port.is_none() && counters.iter().any(|(_, node)| *node == stat.from.node) {
+                stat.from.port = Some(only.clone());
+            }
+        }
+        let passes = self
+            .document
+            .passes
+            .iter_mut()
+            .map(|pass| (Scope::Pass(pass.id.clone()), &mut pass.body));
+        let functions = self
+            .document
+            .functions
+            .iter_mut()
+            .map(|function| (Scope::Function(function.id.clone()), &mut function.body));
+        for (scope, body) in passes.chain(functions) {
+            for node in &mut body.nodes {
+                for value in node.inputs.values_mut() {
+                    if let InputValue::Link(link) = value
+                        && link.port.is_none()
+                        && counters.contains(&(scope.clone(), link.node))
+                    {
+                        link.port = Some(only.clone());
+                    }
+                }
+            }
+        }
     }
 
     /// Returns each place that names the variant `name` of `category`.

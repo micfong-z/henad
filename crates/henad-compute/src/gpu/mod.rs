@@ -5,6 +5,7 @@
 //! A model contributes shaders, seed data and metadata, and every wgpu object is built here.
 
 pub mod agent_engine;
+pub(crate) mod agent_spec;
 pub mod capacity;
 #[cfg(feature = "runtime-wgsl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
@@ -18,6 +19,7 @@ pub mod primitives;
 #[cfg(feature = "runtime-wgsl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
 pub mod runtime_grid;
+pub(crate) mod shader_spec;
 pub mod sim_thread;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stepping;
@@ -28,11 +30,23 @@ pub mod view;
 mod tests;
 
 pub use agent_engine::GpuAgentState;
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use agent_spec::{
+    AgentActionSpec, AgentBufferSpec, AgentDisplaySpec, AgentHooks, AgentPassSpec, AgentReduceSpec, BufferSide,
+    GpuAgentSpec, SideRow, SideTable,
+};
 pub use capacity::Demand;
 pub use grid_engine::GpuGridState;
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use grid_spec::{GpuGridSpec, GridActionSpec, GridHooks};
 pub use limits::GpuNeeds;
 pub use primitives::readback::StatsPoll;
 pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use shader_spec::{ShaderBinding, ShaderSpec};
 pub use sim_thread::{GpuSimState, GpuStats};
 pub use view::agents::GpuAgents;
 pub use view::display::{DisplayTarget, GpuDisplay};

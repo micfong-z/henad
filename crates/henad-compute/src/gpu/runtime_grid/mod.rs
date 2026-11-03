@@ -37,11 +37,11 @@ use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 
+use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::primitives::rng::{below, mix_seed, next_bits};
 use henad_core::authoring::primitives::space::Boundary;
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::helpers::{extract_u32, f32_param, u32_param};
-use henad_core::metadata::Structure;
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::provenance::{ModelCode, ModelSource};
 use henad_core::topology::TopologyHint;
@@ -50,7 +50,8 @@ use henad_core::view::{StatDescriptor, StatValue};
 use crate::cpu::field::{GRID_INIT_SEED, grid_init_rng};
 use crate::entry::{EntryDeclarations, ModelEntry};
 use crate::gpu::compose::{BEFORE_TEXT_NOTE, Composition, WgslFile, compose, compose_wgsl};
-use crate::gpu::grid_spec::{GpuGridSpec, GridHooks, GridShaderSpec};
+use crate::gpu::grid_spec::{GpuGridSpec, GridHooks};
+use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
 
 use checks::Declared;
 use template::FieldType;
@@ -388,41 +389,29 @@ impl CompiledGridRule {
             .iter()
             .map(|state| StatDescriptor::owned(state.label.clone(), state.color))
             .collect();
-        let declarations = EntryDeclarations {
-            id: rule.id.clone(),
-            name: rule.name.clone(),
-            description: rule.description.clone(),
-            params: rule.param_descriptors(),
-            stats: stats.clone(),
-            actions: Vec::new(),
-            topology_hint: TopologyHint::GRID,
-            structure: Structure::GpuGrid {
-                buffers: template::BUFFERS,
-                workgroup: template::WORKGROUP_SIZE,
-            },
-            palette: Some(Cow::Owned(rule.states.iter().map(|state| state.color).collect())),
-            replays_exactly: true,
+        let shader = |source: &str, bindings: &'static [BindingDecl]| {
+            ShaderSpec::new(source.to_owned(), bindings.iter().map(ShaderBinding::from).collect())
         };
-        let spec = Arc::new(GpuGridSpec {
-            id: Cow::Owned(rule.id.clone()),
-            workgroup_size: template::WORKGROUP_SIZE,
-            buffers: template::BUFFERS,
-            step: GridShaderSpec {
-                source: Cow::Owned(parts.step.clone()),
-                bindings: Cow::Borrowed(template::STEP_BINDINGS),
-            },
-            display: GridShaderSpec {
-                source: Cow::Owned(parts.display.clone()),
-                bindings: Cow::Borrowed(template::DISPLAY_BINDINGS),
-            },
-            reduce: GridShaderSpec {
-                source: Cow::Owned(parts.reduce.clone()),
-                bindings: Cow::Borrowed(template::REDUCE_BINDINGS),
-            },
-            actions: Vec::new(),
-            stats: Cow::Owned(stats),
-            hooks: Box::new(self.hooks()),
-        });
+        let spec = Arc::new(GpuGridSpec::new(
+            rule.id.clone(),
+            template::WORKGROUP_SIZE,
+            template::BUFFERS.iter().map(|label| Cow::Borrowed(*label)).collect(),
+            shader(&parts.step, template::STEP_BINDINGS),
+            shader(&parts.display, template::DISPLAY_BINDINGS),
+            shader(&parts.reduce, template::REDUCE_BINDINGS),
+            stats.clone(),
+            Box::new(self.hooks()),
+        ));
+        let mut declarations = EntryDeclarations::new(
+            rule.id.clone(),
+            rule.name.clone(),
+            rule.description.clone(),
+            rule.param_descriptors(),
+            TopologyHint::GRID,
+            spec.structure(),
+        );
+        declarations.stats = stats;
+        declarations.palette = Some(Cow::Owned(rule.states.iter().map(|state| state.color).collect()));
         ModelEntry::from_grid_spec(declarations, ModelSource::runtime(&rule.id, code), spec)
     }
 

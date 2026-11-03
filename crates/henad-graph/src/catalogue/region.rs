@@ -783,7 +783,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         id: "grid.life_like",
         group: "Grid",
         label: "Life-like rule",
-        semantics: "Two-state outer-totalistic rule: `alive` when `cell` is `alive` and `count` is in `survive`, or when `cell` is anything else and `count` is in `birth`, otherwise `dead`. `birth` and `survive` hold counts from 0 to 9, and a `count` past 9 is in neither.",
+        semantics: "Two-state outer-totalistic rule: `alive` when `cell` is `alive` and `count` is in `survive`, or when `cell` is anything else and `count` is in `birth`, otherwise `dead`. `birth` and `survive` are sets of counts from 0 to 9, written in ascending order with each count once, and a `count` past 9 is in neither.",
         config: &[
             config("category", ConfigType::CategoryId),
             config("birth", ConfigType::CountList { max: 9 }),

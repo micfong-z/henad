@@ -413,6 +413,60 @@ fn two_spellings_of_one_graph_hash_alike() {
 }
 
 #[test]
+fn respellings_of_the_life_starter_write_one_text() {
+    let text = crate::starters::starter("game_of_life.toml")
+        .expect("the starter exists")
+        .text;
+    let base = parse(text);
+    assert!(!base.check().has_errors(), "the starter checks");
+    for (old, new) in [
+        ("config.survive = [2, 3]", "config.survive = [3, 2]"),
+        ("config.survive = [2, 3]", "config.survive = [2, 3, 3]"),
+        ("config.survive = [2, 3]", "config.survive = [3, 2, 2, 3]"),
+        ("in.cell = \"n10\"", "in.cell = \"n10.value\""),
+        ("in.cond = \"n3\"", "in.cond = \"n3.out\""),
+    ] {
+        assert!(text.contains(old), "the test edits a line the starter holds: {old}");
+        let respelled = parse(&text.replacen(old, new, 1));
+        let errors: Vec<_> = respelled.check().errors().cloned().collect();
+        assert!(errors.is_empty(), "`{new}` checks: {errors:?}");
+        assert_eq!(
+            respelled.semantic_text(),
+            base.semantic_text(),
+            "`{new}` writes the starter's text"
+        );
+        assert_eq!(respelled.code().hash(), base.code().hash(), "`{new}` keeps the hash");
+    }
+}
+
+#[test]
+fn a_link_keeps_its_port_where_a_bare_link_would_mean_another() {
+    // `n21` counts two variants, and `n3` is the region around `n4`, which reads its inner output `k`.
+    let text = minimal_with(
+        "[[category]]\nid = \"life\"\nvariants = [{ name = \"Dead\", color = [0, 0, 0] }, { name = \"Alive\", color = [0, 230, 118] }]\n\n\
+         [[lane]]\nid = \"state\"\ndomain = \"cells\"\ntype = \"cat:life\"\n\n\
+         [[stat]]\nlabel = \"Alive\"\nfrom = \"n21.Alive\"\ncolor = [0, 230, 118]\n\n\
+         [[stat]]\nlabel = \"Cells\"\nfrom = \"n22.count\"\ncolor = [0, 0, 0]\n\n\
+         [[pass]]\nid = \"step\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"cells\"\n\n\
+         [[pass.node]]\nid = \"n3\"\nop = \"region.repeat\"\nconfig.max = 4\n\
+         config.acc = [{ name = \"sum_k\", type = \"u32\", combine = \"sum\" }]\nin.count = { u32 = 4 }\n\n\
+         [[pass.node]]\nid = \"n4\"\nop = \"region.put\"\nregion = \"n3\"\nconfig.acc = \"sum_k\"\nin.value = \"n3.k\"\n\n\
+         [[pass]]\nid = \"counts\"\nstage = \"stats\"\nkind = \"map\"\ndomain = \"cells\"\n\n\
+         [[pass.node]]\nid = \"n20\"\nop = \"lane.get\"\nconfig.lane = \"state\"\n\n\
+         [[pass.node]]\nid = \"n21\"\nop = \"stat.count_by\"\nconfig.category = \"life\"\nin.value = \"n20\"\n\n\
+         [[pass.node]]\nid = \"n22\"\nop = \"stat.count_where\"\nin.pred = { bool = true }\n",
+    );
+    let file = parse(&text);
+    let errors: Vec<_> = file.check().errors().cloned().collect();
+    assert!(errors.is_empty(), "the file checks: {errors:?}");
+    let written = file.to_toml();
+    assert!(written.contains("in.value = \"n3.k\"\n"), "{written}");
+    assert!(written.contains("from = \"n21.Alive\"\n"), "{written}");
+    assert!(written.contains("in.value = \"n20\"\n"), "{written}");
+    assert!(written.contains("from = \"n22\"\n"), "{written}");
+}
+
+#[test]
 fn line_ends_are_one_more_spelling() {
     let crlf = SPELLING_SHORT.replace('\n', "\r\n");
     assert_eq!(parse(&crlf).code().hash(), parse(SPELLING_SHORT).code().hash());
