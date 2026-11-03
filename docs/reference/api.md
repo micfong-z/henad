@@ -25,6 +25,7 @@ A program never needs to name them, and their paths can change between releases,
 | `henad-build` | [docs.rs/henad-build](https://docs.rs/henad-build) | The build-script side: shader bindings and the commit stamp |
 | `henad-core` | [docs.rs/henad-core](https://docs.rs/henad-core) | The model traits, the primitives, the shared WGSL, and the parts of a sweep that need no engine |
 | `henad-compute` | [docs.rs/henad-compute](https://docs.rs/henad-compute) | The engines, the runners, model entries and sets, `Simulation`, and grid rules composed while the program runs |
+| `henad-graph` | [docs.rs/henad-graph](https://docs.rs/henad-graph) | Graph models: the node graph a model file holds, read and written in one canonical form |
 | `henad-explore` | [docs.rs/henad-explore](https://docs.rs/henad-explore) | Sweeps, searches, results folders, model files and the testing kit |
 | `henad-models` | [docs.rs/henad-models](https://docs.rs/henad-models) | The ten example models |
 | `henad-cli` | [docs.rs/henad-cli](https://docs.rs/henad-cli) | The command line as a library, and the `henad-cli` binary |

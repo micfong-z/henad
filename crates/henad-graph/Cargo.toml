@@ -1,0 +1,28 @@
+[package]
+name = "henad-graph"
+version.workspace = true
+description = "Graph models of Henad: the node graph a model file holds, read and written in one canonical form."
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/henad-graph"
+readme = "README.md"
+keywords = ["agent-based-model", "abm", "simulation", "node-graph", "gpu"]
+categories = ["simulation", "science"]
+
+[dependencies]
+henad-core = { workspace = true }
+henad-compute = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+rustdoc-args = ["--cfg", "docsrs"]

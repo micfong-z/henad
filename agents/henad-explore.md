@@ -140,9 +140,10 @@ plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildC
 `two_codes_under_one_label_are_listed_apart` (`src/tests/provenance.rs`),
 `a_search_resume_refuses_changed_code` (`src/tests/search.rs`) and
 `schema_json_names_code_only_for_runtime_models` (`schema.rs`) hold it. Keep them.
-Behind the `model-files` feature, which turns on henad-compute's `runtime-wgsl`, `model_file.rs`
-holds `ModelFile`, a grid rule as one TOML file. `parse` reads line ends as `\n` and maps every
-span back to the text as passed (`LineEnds`). It reads the header keys first, ignoring the rest,
+Behind the `model-files` feature, which turns on henad-compute's `runtime-wgsl` and henad-graph,
+`model_file.rs` holds `ModelFile`, a grid rule as one TOML file. `parse` reads line ends as `\n` and maps every
+span back to the text as passed (`LineEnds`, which henad-graph's `model_text` holds with
+`toml_string`, `ParamTable` and `write_param`). It reads the header keys first, ignoring the rest,
 so a later version or another kind reads as one before an unknown key is refused, then refuses
 an unknown key in every table. The file holds `format = "henad-model"`, `format_version = 1` and
 `kind = "gpu_grid"`, then `id`, `name` and `description`, `[grid]` (width, height, boundary),

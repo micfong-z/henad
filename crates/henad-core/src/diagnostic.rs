@@ -12,20 +12,24 @@ use std::ops::Range;
 pub enum DiagnosticSeverity {
     /// The code cannot be used.
     Error,
+    /// The code can be used, and something in it probably does not do what its author wants. A warning never blocks a
+    /// build.
+    Warning,
 }
 
 impl DiagnosticSeverity {
-    /// Returns the word a diagnostic prints for the severity, `error`.
+    /// Returns the word a diagnostic prints for the severity, `error` or `warning`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Error => "error",
+            Self::Warning => "warning",
         }
     }
 }
 
 /// One finding about a piece of code, with its place in the file when it has one.
 ///
-/// Build one with [`Self::error`] and the `with_` methods.
+/// Build one with [`Self::error`] or [`Self::warning`] and the `with_` methods.
 ///
 /// ```
 /// use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
@@ -57,12 +61,21 @@ pub struct CodeDiagnostic {
     pub column: Option<u32>,
     /// Further lines that explain the finding, in the order they print.
     pub notes: Vec<String>,
+    /// Id of the graph model's pass the finding is in, `None` for code that has no passes.
+    pub pass: Option<String>,
+    /// Id of the graph model's node the finding is about, `None` for code that has no nodes.
+    pub node: Option<String>,
 }
 
 impl CodeDiagnostic {
     /// Returns an error with `message`, no file and no place.
     pub fn error(message: impl Into<String>) -> Self {
         Self::new(DiagnosticSeverity::Error, message.into())
+    }
+
+    /// Returns a warning with `message`, no file and no place.
+    pub fn warning(message: impl Into<String>) -> Self {
+        Self::new(DiagnosticSeverity::Warning, message.into())
     }
 
     fn new(severity: DiagnosticSeverity, message: String) -> Self {
@@ -74,6 +87,8 @@ impl CodeDiagnostic {
             line: None,
             column: None,
             notes: Vec::new(),
+            pass: None,
+            node: None,
         }
     }
 
@@ -115,6 +130,18 @@ impl CodeDiagnostic {
         }
         let column = u32::try_from(text[line_start..start].chars().count() + 1).unwrap_or(u32::MAX);
         self.with_span(start..end, line, column)
+    }
+
+    /// Returns the diagnostic with `pass` as the graph model's pass it is in.
+    pub fn with_pass(mut self, pass: impl Into<String>) -> Self {
+        self.pass = Some(pass.into());
+        self
+    }
+
+    /// Returns the diagnostic with `node` as the graph model's node it is about.
+    pub fn with_node(mut self, node: impl Into<String>) -> Self {
+        self.node = Some(node.into());
+        self
     }
 
     /// Returns the diagnostic with `note` added after its other notes.
@@ -169,7 +196,7 @@ fn write_escaped(f: &mut fmt::Formatter<'_>, text: &str) -> fmt::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::CodeDiagnostic;
+    use super::{CodeDiagnostic, DiagnosticSeverity};
 
     #[test]
     fn a_place_reads_its_line_and_character_column_from_the_text() {
@@ -192,6 +219,15 @@ mod tests {
             CodeDiagnostic::error("bad").with_span(3..4, 2, 1).to_string(),
             "2:1: error: bad"
         );
+    }
+
+    #[test]
+    fn a_warning_prints_its_severity_and_keeps_its_pass_and_node() {
+        let warning = CodeDiagnostic::warning("odd").with_pass("step").with_node("n3");
+        assert_eq!(warning.severity, DiagnosticSeverity::Warning);
+        assert_eq!(warning.to_string(), "warning: odd");
+        assert_eq!(warning.pass.as_deref(), Some("step"));
+        assert_eq!(warning.node.as_deref(), Some("n3"));
     }
 
     #[test]

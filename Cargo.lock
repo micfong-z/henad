@@ -1952,6 +1952,7 @@ dependencies = [
  "henad-compute",
  "henad-core",
  "henad-explore",
+ "henad-graph",
  "henad-models",
  "image",
  "js-sys",
@@ -2025,6 +2026,7 @@ dependencies = [
  "henad-build",
  "henad-compute",
  "henad-core",
+ "henad-graph",
  "henad-models",
  "pollster 1.0.1",
  "rayon",
@@ -2033,6 +2035,16 @@ dependencies = [
  "toml",
  "web-time",
  "wgpu",
+]
+
+[[package]]
+name = "henad-graph"
+version = "0.3.0"
+dependencies = [
+ "henad-compute",
+ "henad-core",
+ "serde",
+ "toml",
 ]
 
 [[package]]

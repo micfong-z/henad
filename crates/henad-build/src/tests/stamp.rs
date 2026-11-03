@@ -623,6 +623,8 @@ fn the_engine_stamp_reads_cargo_vcs_info() {
             "-p",
             "henad-compute",
             "-p",
+            "henad-graph",
+            "-p",
             "henad-explore",
             "-p",
             "henad-models",

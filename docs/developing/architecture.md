@@ -6,7 +6,7 @@ icon: material/crane
 
 # Architecture
 
-Henad is a workspace of eight crates, all published to crates.io at one version.
+Henad is a workspace of nine crates, all published to crates.io at one version.
 henad-core depends on no other crate, and henad-build on henad-core alone.
 Every other dependency runs from a crate to a crate drawn above it in the graph below, and a crate with WGSL or a commit stamp takes henad-build as a build dependency.
 henad-models and henad-explore take no normal dependency on each other, and the two front ends reach the example models only for `example_models()`, behind their default `example-models` feature.
@@ -23,6 +23,9 @@ graph LR
   build -. "build" .-> app
   compute --> models["henad-models<br/><small>example models</small>"]
   compute --> explore["henad-explore<br/><small>sweeps, searches and the testing kit</small>"]
+  compute --> graph["henad-graph<br/><small>graph models</small>"]
+  graph -. "model-files" .-> explore
+  graph --> app
   explore --> cli["henad-cli<br/><small>command line</small>"]
   explore --> app["henad-app<br/><small>egui UI</small>"]
   models -- "example_models()" --> cli

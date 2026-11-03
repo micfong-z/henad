@@ -45,7 +45,7 @@ jobs:
       # Without atomics, so a `std::thread` reaching the web build fails here. henad-app then has
       # no thread pool, as docs.rs builds it, and the `web` job builds it the way it actually ships.
       - name: wasm typecheck
-        run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features --lib --target wasm32-unknown-unknown
+        run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-graph -p henad-explore -p henad-app --all-features --lib --target wasm32-unknown-unknown
 
       # The facade with no feature and with all four, without atomics, as docs.rs builds it. henad-cli sits behind a
       # native target gate and never joins.
@@ -300,7 +300,7 @@ jobs:
           {
             echo
             echo "[patch.crates-io]"
-            for crate in henad henad-build henad-core henad-compute henad-explore henad-app henad-cli; do
+            for crate in henad henad-build henad-core henad-compute henad-graph henad-explore henad-app henad-cli; do
               echo "$crate = { path = \"$RUNNER_TEMP/verify/package/$crate-$version\" }"
             done
           } >> Cargo.toml

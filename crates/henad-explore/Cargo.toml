@@ -19,11 +19,12 @@ exclude = ["/tests/"]
 # `henad_explore::testing`, the checks a model's tests run against its entry.
 testing = []
 # `henad_explore::model_file`, grid rules read from and written to model files, composed while the program runs.
-model-files = ["henad-compute/runtime-wgsl"]
+model-files = ["henad-compute/runtime-wgsl", "dep:henad-graph"]
 
 [dependencies]
 henad-core = { workspace = true }
 henad-compute = { workspace = true }
+henad-graph = { workspace = true, optional = true }
 wgpu = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }

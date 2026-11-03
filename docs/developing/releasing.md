@@ -6,14 +6,14 @@ icon: material/tag-outline
 
 # Releasing
 
-A release is a git tag on `master` and eight crates on crates.io.
+A release is a git tag on `master` and nine crates on crates.io.
 Pushing `vX.Y.Z` drafts a GitHub release whose body is that version's `CHANGELOG.md` section, and the maintainer publishes the crates by hand.
 Nothing is published without a human running the command or pressing the button.
 
 ## Versions
 
-Eight crates publish: henad-core, henad-build, henad-compute, henad-models, henad-explore, henad-cli, henad-app and henad.
-All eight share the version in `[workspace.package]`, and every release moves them together.
+Nine crates publish: henad-core, henad-build, henad-compute, henad-models, henad-graph, henad-explore, henad-cli, henad-app and henad.
+All nine share the version in `[workspace.package]`, and every release moves them together.
 Each requires its siblings at that version with a caret, as in `henad-core = "0.3.0"`, and `scripts/check_packaging.sh` checks that every requirement equals the workspace version.
 A crate then never resolves against a sibling older than itself.
 
@@ -125,11 +125,13 @@ The shared modules under `crates/henad-core/src/` form a separate interface, and
 ## Publishing to crates.io
 
 The crates publish in dependency order.
-crates.io allows five new crates in a burst and then one every ten minutes, and the first release creates eight crates:
+crates.io allows five new crates in a burst and then one every ten minutes, and the first release creates nine crates:
 
 ```bash
 CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --workspace --dry-run --locked
-CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --locked -p henad-core -p henad-build -p henad-compute -p henad-models -p henad-explore
+CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --locked -p henad-core -p henad-build -p henad-compute -p henad-models -p henad-graph
+# ten minutes later
+CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --locked -p henad-explore
 # ten minutes later
 CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --locked -p henad-cli
 # ten minutes later
@@ -139,7 +141,7 @@ CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --locked -p henad
 ```
 
 Each command verifies in a fresh target directory, as the packaging passes do.
-henad-models comes before the two hosts, whose optional dependency on it has to resolve.
+henad-models comes before the two hosts, whose optional dependency on it has to resolve, and henad-graph before henad-explore and henad-app, which depend on it.
 A rate limit hit part way leaves the earlier crates published, and the run resumes with `-p` for the remaining crates.
 `cargo publish --workspace` skips the tutorial crate.
 
@@ -152,12 +154,12 @@ CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --workspace --locked
 Cargo 1.97 or later is required.
 Cargo 1.96 raised a false deadlock error while waiting for the registry.
 
-A broken release is yanked, and a patch release of all eight follows.
+A broken release is yanked, and a patch release of all nine follows.
 
 ### The crates.io account
 
 - crates.io requires a verified email before any publish, and the maintainer's account has one.
-- The first release publishes with a token scoped to `publish-new`, since it creates eight crates.
+- The first release publishes with a token scoped to `publish-new`, since it creates nine crates.
   Every later release publishes with a token scoped to `publish-update`.
   Each token is limited to the `henad*` crates and carries an expiry.
 - The maintainer is the sole owner of every crate.

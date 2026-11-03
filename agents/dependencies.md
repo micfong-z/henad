@@ -20,7 +20,16 @@ henad-explore to henad-models, for its tests, the one from henad-models to henad
 `testing` feature, for the kit over the example models, and the ones from henad-cli and henad-app
 to henad-models, for their unit tests without the feature. henad-models also takes henad-compute
 again as a dev-dependency, with `runtime-wgsl`, a feature on an edge the normal graph holds.
-henad-app and henad-cli take henad-explore with `model-files`. The pair between henad-models and
+henad-app and henad-cli take henad-explore with `model-files`.
+
+henad-graph sits on henad-core and henad-compute, and outside egui. Two edges run onto it.
+henad-explore takes it as an optional dependency behind `model-files`, which turns on `dep:henad-graph`
+beside `henad-compute/runtime-wgsl`. With the feature off, `cargo tree -p henad-explore -e normal -i
+henad-graph` reports that no package matches `henad-graph` and exits 101. henad-app takes it directly,
+for the editor. henad-graph takes no dependency on henad-explore, henad-models or either host, and
+`cargo tree -p henad-graph -e normal` names only henad-core and henad-compute among Henad's crates.
+
+The pair between henad-models and
 henad-explore is the one dev-only edge against the dependency direction. Neither normal graph
 reaches the other, each crate compiles once, and packaging strips both edges. Neither package's
 own tests then build from its tarball. henad-explore reaching

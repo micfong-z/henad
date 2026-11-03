@@ -35,9 +35,11 @@ no build, and its `ModelCode` holds a format, the canonical text and the FNV-1a 
 `code_hash()` is that hash for runtime code and the registering crate's source hash for compiled
 code. Equality covers the origin and the code.
 `diagnostic.rs` holds `CodeDiagnostic` (severity, message, file, byte span, line and character
-column counted from 1, and notes), `#[non_exhaustive]` and built through `error` and the `with_`
-methods, with `at(text, span)` reading the line and column from a text, and the
-`#[non_exhaustive]` `DiagnosticSeverity`, whose one variant is `Error`. Its `Display` writes
+column counted from 1, notes, and the optional `pass` and `node` id a graph model's checker sets),
+`#[non_exhaustive]` and built through `error` or `warning` and the `with_` methods, with
+`at(text, span)` reading the line and column from a text, and the `#[non_exhaustive]`
+`DiagnosticSeverity`: `Error`, and `Warning`, which never blocks a build. `Display` leaves the
+pass and node out. Its `Display` writes
 `file:line:column: severity: message` with each control character escaped (`write_escaped`), so
 a key or a label quoted from a file never reaches a terminal raw. `helpers::check_choice_options`
 is the option-name check `choice_param` panics on, for options read at run time.

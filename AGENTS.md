@@ -62,6 +62,7 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-compute: engines, entries, runners, `Simulation`, runtime WGSL, grid rules | `agents/henad-compute.md` |
 | henad-models and adding a model | `agents/models.md` |
 | henad-explore: sweeps, searches, output, provenance, testing kit, model files | `agents/henad-explore.md` |
+| henad-graph: graph models, the IR, the reader, the canonical writer | `agents/henad-graph.md` |
 | henad-app: options, state, builds, teardown, install, export | `agents/henad-app.md` |
 | henad-app's Editor tab | `agents/henad-app-editor.md` |
 | henad-app's Sweep and Results tabs | `agents/henad-app-sweep.md` |
@@ -301,7 +302,7 @@ sentence case, widget names, tense, tooltips, the square corners and the Micfong
 ```bash
 ./check.sh                    # all CI checks except the slow ones — run this before considering work done
 cargo check --workspace --all-targets
-cargo check -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features \
+cargo check -p henad-core -p henad-compute -p henad-models -p henad-graph -p henad-explore -p henad-app --all-features \
   --lib --target wasm32-unknown-unknown    # without atomics, henad-app without its thread pool
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
@@ -385,13 +386,13 @@ flat `Vec`s, rayon), not from unsafe tricks. The workspace `Cargo.toml` also ena
 `clippy::` lint set (`unwrap_used`, `indexing_slicing = "allow"` is a deliberate exception,
 `missing_errors_doc`, etc.) — run `./check.sh` rather than guessing whether something will pass CI.
 
-The eight published crates set `#![warn(missing_docs)]` at the top of `lib.rs`, after the `doc_cfg`
+The nine published crates set `#![warn(missing_docs)]` at the top of `lib.rs`, after the `doc_cfg`
 attribute, and clippy's `-D warnings` makes it an error. Every public item of a published crate
 takes a doc comment, fields and enum variants included. The tutorial, the template and the binaries
 are outside the lint. On wasm32 only CI's clippy over henad-app and the facade fails on it, and the
 wasm32 typecheck of `./check.sh` prints a web-only item of another crate as a warning.
 
-henad-compute, henad-explore, henad-app, henad-models, the tutorial (its `lib.rs` and
+henad-compute, henad-graph, henad-explore, henad-app, henad-models, the tutorial (its `lib.rs` and
 `tests/parity.rs`), the template's `src/lib.rs` and the facade's `tests/facade_paths.rs` set
 `#![recursion_limit = "256"]`. Proving a type that holds wgpu handles `Send` there overflows the
 default 128, which the pinned nightly reports as the future-incompatible
@@ -400,7 +401,7 @@ the same line. The release checklist's native check on that nightly finds one th
 the tutorial's `tests/snippets.rs` holds the template's line to the tutorial's.
 
 Two rules no lint enforces. Every public type of henad-core, henad-compute, henad-models,
-henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait object, a
+henad-graph, henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait object, a
 model's associated types or a whole graph writes its own impl ending in `finish_non_exhaustive`, as
 `ModelEntry`, `Network` and the engine states do. So does a type holding a payload, such as cells,
 lanes, positions or a shader's source, and it prints sizes and labels in their place, as `Grid2D`,
@@ -413,18 +414,19 @@ crate that has shadowed them.
 
 ## Architecture
 
-The workspace has 8 crates, and the tutorial crate beside them:
+The workspace has 9 crates, and the tutorial crate beside them:
 
 ```
 henad-core ─┬─ henad-build      (build dependency of every crate with WGSL or a stamp)
             └─ henad-compute ─┬─ henad-models
-                              └─ henad-explore ─┬─ henad-cli
-                                                └─ henad-app
+                              └─ henad-graph ── henad-explore ─┬─ henad-cli
+                                                               └─ henad-app
 henad (facade): core, compute and explore, plus models, app, cli, testing and rules behind features
 henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!, grid rules
 henad-models   the ten example models, and a path dev-dependency of henad-explore
+henad-graph    graph models: the node graph a model file holds, read and written canonically
 henad-explore  sweeps, searches, the testing kit and model files
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models
@@ -435,7 +437,8 @@ henad-tutorial the first-model guide's finished code, in examples/tutorial, on t
 The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
 Every other normal or build dependency runs from a crate to one drawn above it. henad-cli and
 henad-app take henad-models only behind their default `example-models` feature, and the facade
-takes henad-models, henad-app and henad-cli only behind its features. henad-models and
+takes henad-models, henad-app and henad-cli only behind its features. henad-explore takes
+henad-graph only behind its `model-files` feature. henad-models and
 henad-explore take no normal dependency on each other. `agents/dependencies.md` names every
 dev-dependency between Henad crates that the normal graph does not hold, and the `cargo tree` lines
 that check the rule. A new edge is added there, and henad-explore reaching an example model outside
