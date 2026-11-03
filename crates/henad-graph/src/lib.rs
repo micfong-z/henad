@@ -54,6 +54,7 @@ mod reader;
 pub mod starters;
 pub mod types;
 pub mod value;
+pub mod wgsl;
 mod writer;
 
 #[cfg(test)]

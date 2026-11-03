@@ -201,6 +201,17 @@ impl LaneColumn {
         })
     }
 
+    /// Returns the column with `words` in place of its words, for a test that reads a lane back from a device.
+    #[cfg(test)]
+    pub(crate) fn with_words(&self, words: Vec<u32>) -> Self {
+        Self {
+            id: self.id.clone(),
+            value_type: self.value_type.clone(),
+            stride: self.stride,
+            words,
+        }
+    }
+
     /// Id of the lane.
     pub fn id(&self) -> &str {
         &self.id

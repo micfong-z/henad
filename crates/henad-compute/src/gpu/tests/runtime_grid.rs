@@ -12,12 +12,24 @@ use henad_core::view::StatValue;
 use super::support::headless_context;
 use crate::entry::ModelState;
 use crate::gpu::compose::split_span;
-use crate::gpu::grid_spec::GridHooks as _;
+use crate::gpu::grid_spec::{GridHooks, GridPassCtx, GridPassId, GridPress};
 use crate::gpu::runtime_grid::test_support::{
     DISPLAY_BINDINGS, MAX_FUNCTION_BYTES, MAX_PRIVATE_BYTES, MAX_STEP_COST, REDUCE_BINDINGS, STEP_BINDINGS, composed,
     costs, module_problems,
 };
 use crate::gpu::runtime_grid::{GridRule, MAX_STEP_BYTES, RuleDeclaration, RuleState};
+
+/// Returns the step pass's uniform block that `hooks` write for a `width` by `height` grid seeded with `seed`.
+fn step_block(hooks: &impl GridHooks, width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<u8> {
+    let ctx = GridPassCtx {
+        width,
+        height,
+        seed,
+        press: GridPress::new(0, 0),
+        tick: 0,
+    };
+    hooks.pass_params_bytes(GridPassId::Step(0), ctx, params)
+}
 
 /// Returns the Life rule with `step` as its text.
 fn life_with(step: &str) -> GridRule {
@@ -570,7 +582,7 @@ fn the_params_block_matches_the_naga_layout() {
         ParamValue::Bool(true),
         ParamValue::Choice(1),
     ];
-    let bytes = compiled.hooks().step_params_bytes(40, 30, &values, Some(9));
+    let bytes = step_block(&compiled.hooks(), 40, 30, &values, Some(9));
     assert_eq!(bytes.len(), 32, "the block is padded to 16 bytes");
     let word = |index: usize| {
         u32::from_le_bytes([
@@ -585,7 +597,7 @@ fn the_params_block_matches_the_naga_layout() {
     assert_eq!([word(4), word(5), word(6)], [4, 1, 1]);
     // Another seed gives another word of the random stream.
     assert_ne!(
-        compiled.hooks().step_params_bytes(40, 30, &values, Some(10))[8..12],
+        step_block(&compiled.hooks(), 40, 30, &values, Some(10))[8..12],
         bytes[8..12]
     );
 }
@@ -687,7 +699,7 @@ fn a_random_rule_draws_a_fresh_stream_each_tick() {
     let entry = compiled.entry(ModelCode::new(GridRule::CODE_FORMAT, rule.step.clone()));
     let (width, height, seed) = (40u32, 24u32, Some(5));
     let params = [ParamValue::U32(width), ParamValue::U32(height), ParamValue::F32(0.3)];
-    let uniform = compiled.hooks().step_params_bytes(width, height, &params, seed);
+    let uniform = step_block(&compiled.hooks(), width, height, &params, seed);
     let seed_word = u32::from_le_bytes([uniform[8], uniform[9], uniform[10], uniform[11]]);
     let built = entry
         .build(&params, seed, Some(&ctx))

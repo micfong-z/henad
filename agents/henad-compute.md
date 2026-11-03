@@ -74,13 +74,34 @@ types an unsuffixed literal falls back to.
   bindings, and `grid_engine.rs`'s `Dims` is a `pub(crate)` alias of that struct.
   Both engines are non-generic. `gpu/shader_spec.rs` holds `ShaderSpec` (WGSL source and
   `ShaderBinding`s, whose names are `Cow`s, unlike the `&'static` of `BindingDecl`).
-  `gpu/grid_spec.rs` holds `GpuGridSpec`, a `GpuGridModel`'s declarations as values, borrowed from
-  the consts, and its functions behind the `GridHooks` trait. `GpuGridEngine` builds every wgpu
-  object from a spec and implements `SimState` and `GpuSimState`, and `GpuGridState<M>` reads a
-  spec from `M` and forwards every call. `demand`, `max_storage_bindings` and the contract asserts
-  read the spec. The engine computes each pass's workgroups and its buffer bytes at construction,
-  and a step calls no hook. `GridHooks::step_params_bytes` takes the run's seed, which a model
-  type ignores and a grid rule writes into its uniform block. `gpu/agent_spec.rs` holds
+  `gpu/grid_spec.rs` holds `GpuGridSpec`, lowering section 7.3's generalised grid spec, and its
+  functions behind the `GridHooks` trait. Its `GridBufferSpec`s fall into a dual set
+  (`double_buffered`, two sides swapped once at the end of a step) and a plain set (one side,
+  read and written in place). `steps` is a list of `GridPassSpec`s run in order over the step
+  domain, each with a `SideTable` and a `cost` per invocation, and `display` and `reduce` are
+  `GridPassSpec`s too. A `GridActionSpec` holds a list of passes and a `rerun_cost`. A press
+  advances the `GridPress` (seed by the PCG step, count by one, both shared by every action),
+  calls `GridHooks::rerun`, uploads the `RerunUploads` it returns to the current sides with
+  `write_buffer`, then runs the passes in order, each rewriting its uniform first. A rerun's
+  `Err` goes to `ctx.faults` as a refused fault, and no pass runs. `pass_params_bytes(GridPassId,
+  GridPassCtx, params)` writes every uniform block, and a pass gets a uniform only when its shader
+  binds `params`. `GridPassCtx.tick` is the steps done: 0 at construction, the engine's tick at
+  a press, and the tick the reduce pass was recorded at (`stats_tick`) for `GridHooks::stats(counts,
+  ctx, params)`, which a graph's stats read through the host. `counters` is the length of the
+  reduce shader's `counters` array and of the readback, `stats.len().max(1)` from `new`, and a
+  graph sets its tally count. `init_cost` is the host's cost per cell at build. `from_model` and
+  `single_step` put every buffer in the dual set, one step pass labelled `step`, the swapping
+  table on step, display and reduce and the in-place table on actions, which is the orientation
+  stock shaders assume. `GpuGridEngine` builds every wgpu object from a spec and implements `SimState` and
+  `GpuSimState`, `read_buffer` included, and `GpuGridState<M>` reads a spec from `M` and forwards
+  every call. `demand`, `max_storage_bindings` and the contract asserts read the spec. The engine
+  computes each pass's workgroups and its buffer bytes at construction, and a step calls no hook.
+  Unlike the agent spec, the grid spec does not refuse a double buffered buffer no step writes or
+  a side bound both ways, since the stock grid models never went through those checks.
+  `gpu/tests/grid_spec.rs` holds the engine tests: per-pass sides, a plain buffer, a rerun before
+  the action's passes on either orientation, a rerun fault. `gpu/sides.rs` holds `BufferSide`,
+  `SideRow` and `SideTable`, which both specs use. `primitives/readback.rs`'s `read_words` is the
+  blocking buffer read both engines' `read_buffer` call. `gpu/agent_spec.rs` holds
   `GpuAgentSpec` and `AgentHooks` in the same shape, with `AgentBufferSpec`, `AgentPassSpec`,
   `AgentDisplaySpec`, `AgentReduceSpec` and `AgentActionSpec` as the forms of henad-core's
   `&'static` specs that can own their strings. `GpuAgentEngine` and `GpuAgentState<M>` sit in
@@ -100,15 +121,38 @@ types an unsuffixed literal falls back to.
   items `gpu/mod.rs` re-exports only behind `runtime-wgsl`. Each struct and enum is
   `#[non_exhaustive]`, each struct has a `new`, and `SideTable` keeps its field private instead.
   The engines stay `pub(crate)`. `GpuSimState::read_buffer` is a blocking read of a buffer's
-  current side for a parity test or an export, `None` by default and on the grid engine, and the
-  runner never calls it. `an_owned_spec_entry_reads_like_the_registered_one`
+  current side for a parity test or an export, `None` by default, and the runner never calls it. `an_owned_spec_entry_reads_like_the_registered_one`
   (`henad-models/src/tests/gpu_agent_adapter.rs`) holds `gpu_ants` and `gpu_boids` built through
   the public constructors from owned strings equal to their registered entries in `Debug`, schema
   hash, needs, demand and stepped stats. Keep it.
   `gpu/tests/parity.wgsl` is the parity test's shader, with a `CODES` array that references
   each boundary and table code the test reads.
   `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`
-  is what asks whether a model fits the device before anything is allocated.
+  is what asks whether a model fits the device before anything is allocated. A `PassBindings`
+  holds a pass's `PassKind` (`Step`, `Display`, `Reduce`, `Action(index)`) and its `work`, cost
+  per invocation times invocations (texels for a display), zero for a hand-written shader, and
+  `Demand.host` holds `HostWork` runs (a graph's init, an action's rerun). `Demand::shortfalls`
+  refuses a submission past `SUBMISSION_WORK_BUDGET` (600e9 units: `MAX_STEPS_PER_SUBMISSION`
+  times the step passes plus display and reduce, or one press's passes), naming the heaviest pass,
+  and a host run past `HOST_WORK_BUDGET` (4e9 units). Work saturates. Both budgets come from one
+  measurement on an Apple M4 Pro (Metal, release builds, 2026-11-03). Stock `gpu_sir` at 16384 by
+  16384 ran 45.7 to 46.2 steps a second (21.6 to 21.9 ms a step, 81 ps a cell; 79 ps at 8192),
+  so 64 steps take about 1.4 s. Its exact port `gpu_sir_exact.toml` costs 29 units a cell a tick,
+  which puts the rate near 3.6e11 units a second. The heaviest grid corpus file at 16384 by
+  16384, `gpu_sir_exact.toml`, is 4.99e11 units a submission, and the budget is about 20 percent
+  above it, about 1.7 s at that rate. `gpu_game_of_life` ran 2135 steps a second at that size,
+  bit-packed. The host evaluator ran grid inits at 3.1e8 to 4.7e8 units a second on one core
+  (`vote.toml` slowest, `gpu_sir_exact.toml` fastest, 2048 and 4096 squared, linear), so the
+  heaviest init at 16384 squared, `gpu_sir_exact.toml` at 11 units a cell, is 2.95e9 units, about
+  6 s, and the host budget is a third above it. henad-models' `graph_corpus.rs` holds
+  `every_grid_corpus_file_at_its_largest_size_fits_the_work_budgets`. Keep it.
+  A `PassBindings` also holds `uniform_bytes` and `workgroup_bytes`, copied from the
+  `GridPassSpec` fields of the same names (zero when unknown, as for a hand-written shader), and
+  `shortfalls` refuses a pass past `max_uniform_buffer_binding_size` or
+  `max_compute_workgroup_storage_size`, naming it. `raise` leaves both limits at the baseline
+  (64 KiB and 16 KiB). wgpu validates neither at pipeline creation: a reduce shader past the
+  workgroup limit built on Metal and counted wrong, and a uniform block past the binding limit
+  failed only at `create_bind_group`.
   `gpu/contracts.rs` holds the asserts both engines make first: each shader's `main` declares the
   `@workgroup_size` its pass dispatches (read from the literal naga writes, skipped for anything
   else), and no buffer label is reserved or ends in `_in` or `_out`. Either mismatch validates

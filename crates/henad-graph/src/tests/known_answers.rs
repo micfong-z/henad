@@ -14,7 +14,7 @@ use crate::value::{InputValue, Literal, MemberName, PortRef};
 use henad_core::authoring::primitives::space::Boundary;
 
 /// Returns the literal of an input value, which may be a float a file cannot write.
-fn input_literal(value: CaseValue) -> Literal {
+pub(super) fn input_literal(value: CaseValue) -> Literal {
     match value {
         CaseValue::Bool(flag) => Literal::Bool(flag),
         CaseValue::U32(number) => Literal::U32(number),
@@ -34,7 +34,7 @@ fn input_literal(value: CaseValue) -> Literal {
 }
 
 /// Returns whether `found` meets the expected value `expected`: floats bit for bit, except a NaN or a tolerance.
-fn meets(expected: CaseValue, found: HostValue, document: &GraphDocument) -> bool {
+pub(super) fn meets(expected: CaseValue, found: HostValue, document: &GraphDocument) -> bool {
     match (expected, found) {
         (CaseValue::Nan, HostValue::F32(value)) => value.is_nan(),
         (CaseValue::Near(target, within), HostValue::F32(value)) => (value - target).abs() <= within,

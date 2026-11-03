@@ -152,6 +152,8 @@ mod named_only {
     type PayloadTypes = (
         henad::gpu::Alloc,
         henad::gpu::PassBindings,
+        henad::gpu::PassKind,
+        henad::gpu::HostWork,
         henad::explore::BatchStanding,
         henad::explore::EvaluatedCandidate,
         henad::explore::EvaluationReading,
@@ -172,6 +174,9 @@ mod named_only {
         henad::CodeDiagnostic,
         henad::DiagnosticSeverity,
     );
+
+    /// Work budgets that [`henad::gpu::Demand::shortfalls`] holds a model to.
+    const WORK_BUDGETS: [u64; 2] = [henad::gpu::SUBMISSION_WORK_BUDGET, henad::gpu::HOST_WORK_BUDGET];
 
     /// Types of the grid rules that a host built with the `model-files` feature names.
     #[cfg(feature = "model-files")]
@@ -196,6 +201,8 @@ mod named_only {
         henad::graph::host::HostEvaluator,
         henad::graph::edit::GraphBuilder,
         henad::graph::starters::Starter,
+        henad::graph::wgsl::GridProgram,
+        henad::graph::wgsl::GeneratedShader,
     );
 
     /// Returns whether every graph starter reads and checks without an error, for a host built with `model-files`.

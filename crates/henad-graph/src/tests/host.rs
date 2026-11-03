@@ -11,7 +11,7 @@ use crate::draw::{PHASE_INIT, action_phase, draw_bits, key_word};
 use crate::host::{HostError, HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
 
 /// Header of a grid of 8 by 8 with a `u32` lane `x`, an `f32` lane `y`, and the parameters `share` and `seeding`.
-const GRID: &str = r#"format = "henad-model"
+pub(super) const GRID: &str = r#"format = "henad-model"
 format_version = 1
 kind = "graph"
 id = "node_host"
@@ -86,7 +86,7 @@ fn init(nodes: &str) -> String {
 }
 
 /// The world of [`GRID`].
-const WORLD: HostWorld = HostWorld::Grid {
+pub(super) const WORLD: HostWorld = HostWorld::Grid {
     width: 8,
     height: 8,
     boundary: Boundary::Torus,
@@ -118,7 +118,10 @@ fn every_corpus_init_runs_on_the_host_and_replays() {
             lanes.columns().iter().map(|column| column.words().to_vec()).collect()
         };
         assert_eq!(words(&first), words(&again), "{name}: one seed gives one init");
-        assert_ne!(words(&first), words(&other), "{name}: another seed gives another init");
+        // `repeat_trials.toml` has no init pass, and its cells start at their declared initial value at any seed.
+        if document.passes.iter().any(|pass| pass.stage == PassStage::Init) {
+            assert_ne!(words(&first), words(&other), "{name}: another seed gives another init");
+        }
         for pass in &document.passes {
             let mut lanes = first.clone();
             let context = match pass.stage {
@@ -230,7 +233,7 @@ fn a_tick_pass_reads_the_start_of_the_pass() {
 }
 
 /// A Repeat of five iterations over a `u32` and an `f32` carry, each started from the cell's index.
-const CARRIED: &str = r#"
+pub(super) const CARRIED: &str = r#"
 [[pass.node]]
 id = "n1"
 op = "ctx.index"
@@ -313,7 +316,7 @@ in.value = "n3.number"
 "#;
 
 /// Returns the body of [`CARRIED`] written out five times, iteration `k` reading the literal `k`.
-fn chained() -> String {
+pub(super) fn chained() -> String {
     let mut text = String::from(
         "\n[[pass.node]]\nid = \"n1\"\nop = \"ctx.index\"\n\n[[pass.node]]\nid = \"n2\"\nop = \"conv.to_f32\"\nin.a = \"n1\"\n",
     );
@@ -371,7 +374,7 @@ fn a_repeat_body_equals_its_hand_chained_copies_bit_for_bit() {
 }
 
 /// A Repeat of two iterations that keeps the draw of each iteration in a carry of its own.
-const TWO_DRAWS: &str = r#"
+pub(super) const TWO_DRAWS: &str = r#"
 [[pass.node]]
 id = "n1"
 op = "region.repeat"
@@ -480,7 +483,7 @@ fn two_iterations_of_one_draw_differ_and_one_seed_replays() {
 }
 
 /// A Repeat of two iterations around one of three, whose draw on outer iteration 1 and inner iteration 2 lands in `y`.
-const NESTED_DRAW: &str = r#"
+pub(super) const NESTED_DRAW: &str = r#"
 [[pass.node]]
 id = "n1"
 op = "region.repeat"

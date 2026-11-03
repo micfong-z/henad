@@ -89,7 +89,7 @@ pub(super) static KINDS: &[NodeDef] = &[
                 &[("out", U32(0b0110))],
             ),
             case("i32", &[("a", I32(-1)), ("b", I32(1))], &[("out", I32(-2))]),
-            case(
+            host_case(
                 "u64 on the host",
                 &[("a", U64(1 << 40)), ("b", U64(1))],
                 &[("out", U64((1 << 40) | 1))],
@@ -153,7 +153,7 @@ pub(super) static KINDS: &[NodeDef] = &[
             ),
             case("amount modulo 32", &[("a", U32(1)), ("b", U32(33))], &[("out", U32(2))]),
             case("i32", &[("a", I32(-1)), ("b", U32(1))], &[("out", I32(-2))]),
-            case(
+            host_case(
                 "u64 amount modulo 64",
                 &[("a", U64(1)), ("b", U32(65))],
                 &[("out", U64(2))],

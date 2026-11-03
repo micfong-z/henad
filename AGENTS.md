@@ -62,7 +62,7 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-compute: engines, entries, runners, `Simulation`, runtime WGSL, grid rules | `agents/henad-compute.md` |
 | henad-models and adding a model | `agents/models.md` |
 | henad-explore: sweeps, searches, output, provenance, testing kit, model files | `agents/henad-explore.md` |
-| henad-graph: graph models, IR, checker, host evaluator, edit commands, starters | `agents/henad-graph.md` |
+| henad-graph: graph models, IR, checker, host evaluator, WGSL compiler, edit commands, starters | `agents/henad-graph.md` |
 | henad-app: options, state, builds, teardown, install, export | `agents/henad-app.md` |
 | henad-app's Editor tab | `agents/henad-app-editor.md` |
 | henad-app's Sweep and Results tabs | `agents/henad-app-sweep.md` |
@@ -276,15 +276,16 @@ sentence case, widget names, tense, tooltips, the square corners and the Micfong
   is how a UI change is confirmed to render. Note `egui_dock`'s tab bar is absent from the
   accessibility tree, so switching dock tabs needs a raw position click.
 - **A test-only module goes under a `tests/` directory in `src/`, never beside production modules.**
-  `henad-compute/src/gpu/tests/`, `henad-models/src/tests/` and `henad-app/src/tests/` hold any test
-  module too big to inline, and henad-compute's holds its `support.rs` (the headless device) as
-  well, as henad-app's holds the model and helpers its tests of replaced code share, so each
-  `mod.rs` lists exactly one `#[cfg(test)] mod tests;` rather than interleaving test modules with
-  real ones.
+  `henad-compute/src/gpu/tests/`, `henad-graph/src/tests/`, `henad-models/src/tests/` and
+  `henad-app/src/tests/` hold any test module too big to inline, and henad-compute's and
+  henad-graph's each hold a `support.rs` (the headless device) as well, as henad-app's holds the
+  model and helpers its tests of replaced code share, so each `mod.rs` lists exactly one
+  `#[cfg(test)] mod tests;` rather than interleaving test modules with real ones.
   An inline `#[cfg(test)] mod tests` at the bottom of the file it tests is still the default and is
   unaffected. Every other crate's tests take their device from
-  `henad_explore::testing::headless_test_device`. henad-compute keeps its own helper on purpose. It
-  sits below the kit, and raises the device limits for its spatial-hash tests. henad-models' tests
+  `henad_explore::testing::headless_test_device`. henad-compute and henad-graph keep their own
+  helpers on purpose. Both sit below the kit, and henad-compute's raises the device limits for its
+  spatial-hash tests. henad-models' tests
   ask the kit for `TestDeviceRequest::baseline()`, since the kit's `BaselineBuild` has to build
   every example GPU model on a `Limits::default()` device.
 - **Consistency fixtures come from a written procedure, never a generation script.** The procedure
@@ -331,9 +332,9 @@ Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatte
 Run desktop app: `cargo run -p henad-app` (`-- --open DIR` opens a folder a sweep wrote in the
 Results tab)
 Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` + `index.html`)
-Check a graph model file: `cargo run -p henad-cli -- --model-file
-crates/henad-graph/starters/sir.toml --params` (prints its warnings and errors at their lines, then
-refuses to run a graph)
+Run a graph model file: `cargo run --release -p henad-cli -- --model-file
+crates/henad-graph/starters/sir.toml --steps 100` (prints its warnings and errors at their lines,
+runs a graph on a grid, refuses one of agents)
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
 one, `--export-stats` for the time series)
@@ -429,7 +430,7 @@ henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!, grid rules
 henad-models   the ten example models, and a path dev-dependency of henad-explore
-henad-graph    graph models: IR, checker, host evaluator, edit commands and starters
+henad-graph    graph models: IR, checker, host evaluator, WGSL compiler, edits and starters
 henad-explore  sweeps, searches, the testing kit and model files
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models

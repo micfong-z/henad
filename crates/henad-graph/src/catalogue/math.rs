@@ -84,7 +84,7 @@ pub(super) static KINDS: &[NodeDef] = &[
                 &[("a", Vec2F([1.0, 2.0])), ("b", Vec2F([0.5, -2.0]))],
                 &[("out", Vec2F([1.5, 0.0]))],
             ),
-            case(
+            host_case(
                 "u64 on the host",
                 &[("a", U64(u64::MAX)), ("b", U64(1))],
                 &[("out", U64(0))],

@@ -4,7 +4,8 @@
 //! A *slot* holds one value of the frame an element evaluates in. A *block* is a list of instructions. The top of a
 //! pass splits into three blocks: the *prelude* of values that are the same for every element, run once, the
 //! *element block*, run per element, and the *post block* of values computed from reducers, run once after the
-//! elements. A region's body is a block of its own, run per iteration.
+//! elements. A region's body is a block of its own, run per iteration. A pure value of a body that reads no iteration
+//! and no element runs in the prelude instead.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -52,6 +53,8 @@ pub(crate) struct Program {
     pub uniform_outputs: Vec<(NodeId, String, usize)>,
     /// Slot of every output by node and port.
     pub outputs: BTreeMap<(NodeId, String), usize>,
+    /// Slot of every inner output of a region by node and port.
+    pub inner_outputs: BTreeMap<(NodeId, String), usize>,
 }
 
 impl Program {
@@ -298,6 +301,135 @@ pub(crate) enum Operation {
     },
 }
 
+impl Operation {
+    /// Returns the slots the operation reads, its region body included.
+    pub(crate) fn operands(&self) -> Vec<usize> {
+        match self {
+            Self::Index | Self::Tick | Self::PressSeed | Self::LaneGet { .. } | Self::LaneSeed { .. } => Vec::new(),
+            Self::LaneSet { value, .. } | Self::CountBy { value, .. } => vec![*value],
+            Self::Binary { a, b, .. } | Self::Shift { a, b, .. } | Self::Compare { a, b, .. } => vec![*a, *b],
+            Self::Unary { a, .. } | Self::Convert { a, .. } | Self::U32ToCat { a, .. } | Self::CatToU32 { a } => {
+                vec![*a]
+            }
+            Self::Powi { base, exponent, .. } | Self::Pow { base, exponent } => vec![*base, *exponent],
+            Self::Logic { a, b, .. } => std::iter::once(*a).chain(*b).collect(),
+            Self::Select {
+                cond,
+                if_true,
+                if_false,
+            } => vec![*cond, *if_true, *if_false],
+            Self::Pick { index, .. } | Self::Color { index, .. } => vec![*index],
+            Self::Switch { select, cases, default } => std::iter::once(*select)
+                .chain(cases.iter().flatten().copied())
+                .chain(*default)
+                .collect(),
+            Self::Transition { state, rules, .. } => std::iter::once(*state)
+                .chain(
+                    rules
+                        .iter()
+                        .flat_map(|rule| std::iter::once(rule.when).chain(rule.to_input)),
+                )
+                .collect(),
+            Self::Draw { input, .. } => vec![*input],
+            Self::Threshold { p } => vec![*p],
+            Self::Hash { x } => vec![*x],
+            Self::ToFloat { bits, max } => vec![*bits, *max],
+            Self::Below { bits, threshold } => vec![*bits, *threshold],
+            Self::StreamBits { when } => vec![*when],
+            Self::Repeat(repeat) => {
+                let mut found = vec![repeat.count, repeat.when];
+                found.extend(repeat.accumulators.iter().filter_map(|accumulator| accumulator.init));
+                found.extend(
+                    repeat
+                        .body
+                        .iter()
+                        .flat_map(|instruction| instruction.operation.operands()),
+                );
+                found
+            }
+            Self::Put { value, when, .. } => std::iter::once(*when).chain(*value).collect(),
+            Self::GridCount { value, when, .. } => vec![*value, *when],
+            Self::LifeLike { cell, count, .. } => vec![*cell, *count],
+            Self::CountWhere { pred, .. } => vec![*pred],
+            Self::Ramp { value, low, high, .. } => vec![*value, *low, *high],
+        }
+    }
+
+    /// Returns whether the operation computes a value from its operands and the run's context alone, the same for
+    /// every element and every iteration when its operands are, and cannot fault in a checked file.
+    ///
+    /// A draw is not one, since it reads the iteration word of the region around it.
+    fn is_pure(&self) -> bool {
+        matches!(
+            self,
+            Self::PressSeed
+                | Self::LaneSeed { .. }
+                | Self::Binary { .. }
+                | Self::Shift { .. }
+                | Self::Unary { .. }
+                | Self::Powi { .. }
+                | Self::Pow { .. }
+                | Self::Compare { .. }
+                | Self::Logic { .. }
+                | Self::Select { .. }
+                | Self::Pick { .. }
+                | Self::Switch { .. }
+                | Self::Convert { .. }
+                | Self::U32ToCat { .. }
+                | Self::CatToU32 { .. }
+                | Self::Threshold { .. }
+                | Self::Hash { .. }
+                | Self::ToFloat { .. }
+                | Self::Below { .. }
+        )
+    }
+}
+
+/// Moves every instruction of a region body in `program`'s element block that is pure and reads only values the same
+/// for every element and iteration to the end of the prelude, nested bodies included, in body order.
+///
+/// Such a value is the same in every iteration, so the prelude computes it once. The WGSL compiler then reads it from
+/// the uniform block, as it reads every other prelude value.
+fn hoist_uniform_body_values(program: &mut Program) {
+    let mut uniform: BTreeSet<usize> = program
+        .constants
+        .iter()
+        .map(|(slot, _)| *slot)
+        .chain(program.params.iter().map(|(slot, _)| *slot))
+        .collect();
+    for instruction in &program.prelude {
+        uniform.insert(instruction.out);
+        if let Operation::Transition { fired, .. } = &instruction.operation {
+            uniform.extend(fired.iter().copied());
+        }
+    }
+    let mut hoisted = Vec::new();
+    for instruction in &mut program.element {
+        if let Operation::Repeat(repeat) = &mut instruction.operation {
+            hoist_from_body(repeat, &mut uniform, &mut hoisted);
+        }
+    }
+    program.prelude.extend(hoisted);
+}
+
+/// Moves the instructions of `repeat`'s body, and of the bodies nested in it, that are pure and read only `uniform`
+/// slots into `hoisted`, and adds the slots they fill to `uniform`.
+fn hoist_from_body(repeat: &mut Repeat, uniform: &mut BTreeSet<usize>, hoisted: &mut Vec<Instruction>) {
+    let body = std::mem::take(&mut repeat.body);
+    for mut instruction in body {
+        if let Operation::Repeat(inner) = &mut instruction.operation {
+            hoist_from_body(inner, uniform, hoisted);
+        }
+        let operation = &instruction.operation;
+        if operation.is_pure() && operation.operands().iter().all(|slot| uniform.contains(slot)) {
+            uniform.insert(instruction.out);
+            hoisted.push(instruction);
+        } else {
+            repeat.body.push(instruction);
+        }
+    }
+}
+
 /// When an instruction at the top of a pass runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Timing {
@@ -397,6 +529,7 @@ pub(crate) fn compile(document: &GraphDocument, pass: &Pass) -> Result<Program, 
         colors: false,
         uniform_outputs: Vec::new(),
         outputs: BTreeMap::new(),
+        inner_outputs: BTreeMap::new(),
     };
     for (&position, timing) in top.iter().zip(&timings) {
         let instruction = compiler.instruction(position, &order)?;
@@ -423,6 +556,8 @@ pub(crate) fn compile(document: &GraphDocument, pass: &Pass) -> Result<Program, 
     program.written = compiler.written.into_iter().collect();
     program.colors = compiler.colors;
     program.outputs = compiler.outputs;
+    program.inner_outputs = compiler.inner_outputs;
+    hoist_uniform_body_values(&mut program);
     Ok(program)
 }
 

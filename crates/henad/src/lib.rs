@@ -75,7 +75,9 @@ pub mod action {
 
 /// The GPU device a model builds on, its sizing, and the headless device a program acquires.
 pub mod gpu {
-    pub use henad_compute::gpu::capacity::{Alloc, PassBindings};
+    pub use henad_compute::gpu::capacity::{
+        Alloc, HOST_WORK_BUDGET, HostWork, PassBindings, PassKind, SUBMISSION_WORK_BUDGET,
+    };
     pub use henad_compute::gpu::limits::raise as raise_limits;
     pub use henad_compute::gpu::{Demand, GpuContext, GpuNeeds, wgpu};
     pub use henad_compute::runtime_info::{HostInfo, RuntimeInfo};
@@ -273,19 +275,20 @@ pub mod rules {
     pub use henad_explore::model_file::{GridRuleFile, ModelFile, ModelFileError};
 }
 
-/// Graph models: the node graph a model file of kind `graph` holds, its checker, its host evaluator and its edit
-/// commands.
+/// Graph models: the node graph a model file of kind `graph` holds, its checker, its host evaluator, its WGSL
+/// compiler and its edit commands.
 ///
 /// A [`GraphFile`](graph::GraphFile) reads a graph and writes its canonical text, and
 /// [`GraphFile::check`](graph::GraphFile::check) reports every problem at once. [`starters`](graph::starters::starters)
-/// returns the graph files a new graph model begins from. A [`ModelFile`](rules::ModelFile) of kind `graph` holds a
+/// returns the graph files a new graph model begins from. [`GridProgram`](graph::wgsl::GridProgram) compiles a graph
+/// on a grid to WGSL and builds its entry. A [`ModelFile`](rules::ModelFile) of kind `graph` holds a
 /// [`GraphFile`](graph::GraphFile).
 #[cfg(feature = "model-files")]
 #[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
 pub mod graph {
     pub use henad_graph::{
         CODE_FORMAT, FORMAT, FORMAT_VERSION, GraphFile, GraphFileError, KIND_GRAPH, LIBRARY, catalogue, check,
-        document, draw, edit, editor, file, host, ids, limits, model_text, node, starters, types, value,
+        document, draw, edit, editor, file, host, ids, limits, model_text, node, starters, types, value, wgsl,
     };
 }
 

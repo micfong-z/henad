@@ -1,9 +1,9 @@
 //! Checks `--model-file`: a model file's model sweeps, resumes and merges only under its own code, can take the place
 //! of an example model, shows in `--list` and `--params --json`, and is refused at the line of a problem. A graph model
-//! file checks, prints its problems at their lines and is refused to run.
+//! file checks, prints its problems at their lines, and runs.
 //!
-//! A grid rule runs on the GPU. The tests that build one skip on a machine without a device, and fail there when
-//! `HENAD_REQUIRE_GPU` is set.
+//! A grid rule and a graph run on the GPU. The tests that build one skip on a machine without a device, and fail there
+//! when `HENAD_REQUIRE_GPU` is set.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -464,31 +464,39 @@ fn life_graph() -> String {
 }
 
 #[test]
-fn a_graph_model_file_checks_and_is_refused_to_run() {
+fn a_graph_model_file_checks_runs_and_prints_its_problems() {
     let scratch = Scratch::new("graph");
     let text = life_graph();
 
-    // A graph that checks is refused with one placed error, and nothing runs.
+    // A graph that checks loads, lists its parameters, and sweeps under its own code where a device is.
     let graph = scratch.write("life.toml", &text);
-    let id_line = text
-        .lines()
-        .position(|line| line == "id = \"node_game_of_life\"")
-        .expect("the header's id")
-        + 1;
-    let output = run(&["--model-file", &graph, "--params"]);
-    assert_eq!(output.status.code(), Some(1));
-    let message = stderr(&output);
-    assert!(
-        message.contains(&format!("cannot load model file '{graph}'")),
-        "{message}"
-    );
-    assert!(
-        message.contains(&format!(
-            "{graph}:{id_line}:6: error: the graph checks, but this build cannot run"
-        )),
-        "{message}"
-    );
-    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+    let params = stdout(&run_ok(&["node_game_of_life", "--model-file", &graph, "--params"]));
+    assert!(params.contains("density"), "{params}");
+    if has_device() {
+        let dir = scratch.path("sweep");
+        run_ok(&[
+            "node_game_of_life",
+            "--model-file",
+            &graph,
+            "--set",
+            "grid_width=16",
+            "--set",
+            "grid_height=16",
+            "--steps",
+            "4",
+            "--vary",
+            "density=0.2,0.4",
+            "--reps",
+            "1",
+            "--out",
+            &argument(&dir),
+        ]);
+        assert_eq!(run_count(&dir), 2, "two densities, one replicate");
+        let manifest = manifest(&dir);
+        assert_eq!(manifest["model"]["id"], "node_game_of_life");
+        assert_eq!(manifest["model"]["code"]["format"], "henad-graph/1");
+        assert_eq!(manifest["sessions"][0]["model_source"]["origin"], "runtime");
+    }
 
     // A checker error is refused at its line, with its pass and node in a note.
     let unknown_line = text
@@ -521,5 +529,5 @@ fn a_graph_model_file_checks_and_is_refused_to_run() {
         "{message}"
     );
     assert!(message.contains("note: in node n14 of pass 'step'"), "{message}");
-    assert!(message.contains("cannot run graph models"), "{message}");
+    assert!(!message.contains("error"), "{message}");
 }

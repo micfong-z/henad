@@ -1,11 +1,13 @@
 //! The grid graph corpus held to the stock models at tick 0: every graph file's init, run by henad-graph's host
-//! evaluator, equals the stock model's seed, and its schema hashes like the stock model's under the stock id.
+//! evaluator, equals the stock model's seed, and its schema hashes like the stock model's under the stock id. Every
+//! file also fits the work budgets at its largest size, and its entry passes the testing kit.
 //!
 //! The corpus is henad-graph's starters and the exact ports in `tests/fixtures/graphs`. The Vote oracle is a copy of
 //! the template's `vote.rs`, since the template sits outside the workspace.
 
 use henad_compute::cpu::grid_engine::{GRID_PARAM_BASE, grid_init_rng};
 use henad_compute::cpu::primitives::chunked::{STATS_CHUNK, reduce_chunks};
+use henad_compute::gpu::{Demand, HOST_WORK_BUDGET, PassKind, SUBMISSION_WORK_BUDGET};
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel as _;
 use henad_core::authoring::model::grid_model::GridModel;
@@ -18,15 +20,16 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{StatDescriptor, StatValue};
 use henad_explore::model_file::ModelFile;
+use henad_explore::testing::{CheckSettings, TestDeviceRequest, assert_set_conforms, headless_test_device};
 use henad_graph::GraphFile;
-use henad_graph::document::World;
+use henad_graph::document::{PassStage, World};
 use henad_graph::host::{HostEvaluator, HostWorld};
 
 use crate::gpu_game_of_life::{GpuGameOfLife, words_per_row};
 use crate::gpu_sir::GpuSir;
 
 /// The template's Vote model, copied from `templates/model-project/src/vote.rs`.
-mod vote {
+pub(super) mod vote {
     use super::{
         Grid2D, GridModel, NeighborhoodKind, ParamDescriptor, ParamValue, STATS_CHUNK, StatDescriptor, StatValue,
         below, extract_f32, f32_param, next_bits, reduce_chunks,
@@ -38,7 +41,7 @@ mod vote {
         const DENSITY = f32_param("density", "Initial density", 0.5, 0.0, 1.0, Some(0.01)).on_reload();
     }
 
-    pub(super) struct Vote;
+    pub(crate) struct Vote;
 
     impl GridModel for Vote {
         const NAME: &'static str = "Vote";
@@ -97,6 +100,9 @@ enum Oracle {
     SirCells,
     /// `gpu_sir`'s `state` and `rng` buffers, for the exact port.
     SirExact,
+    /// No stock model: `repeat_trials.toml` exercises `region.repeat`, and its cells start at their declared initial
+    /// value. `graph_repeat.rs` holds its rate to the closed form.
+    Trials,
 }
 
 impl Oracle {
@@ -111,16 +117,18 @@ impl Oracle {
             "vote.toml" => Self::Vote,
             "sir.toml" => Self::SirCells,
             "gpu_sir_exact.toml" => Self::SirExact,
+            "repeat_trials.toml" => Self::Trials,
             other => panic!("the grid corpus file {other} has no oracle in this test"),
         }
     }
 
-    /// Id of the stock model.
-    fn stock_id(self) -> &'static str {
+    /// Id of the stock model, `None` for a file with no stock model.
+    fn stock_id(self) -> Option<&'static str> {
         match self {
-            Self::GameOfLife => "gpu_game_of_life",
-            Self::Vote => "gpu_vote",
-            Self::SirCells | Self::SirExact => "gpu_sir",
+            Self::GameOfLife => Some("gpu_game_of_life"),
+            Self::Vote => Some("gpu_vote"),
+            Self::SirCells | Self::SirExact => Some("gpu_sir"),
+            Self::Trials => None,
         }
     }
 
@@ -130,6 +138,10 @@ impl Oracle {
             Self::GameOfLife => GpuGameOfLife::param_descriptors()[GRID_PARAM_BASE..].to_vec(),
             Self::Vote => Vote::param_descriptors(),
             Self::SirCells | Self::SirExact => GpuSir::param_descriptors()[GRID_PARAM_BASE..].to_vec(),
+            Self::Trials => vec![
+                u32_param("trials", "Trials", 4, 0, 4),
+                f32_param("p", "Chance of a hit", 0.1, 0.0, 1.0, Some(0.01)),
+            ],
         };
         descriptors
             .iter()
@@ -172,12 +184,13 @@ impl Oracle {
                 let rng = buffers.next().expect("the rng buffer");
                 vec![("health", cells), ("rng", rng)]
             }
+            Self::Trials => vec![("outcome", vec![0; (width as usize) * (height as usize)])],
         }
     }
 
-    /// Returns the stock model's schema.
-    fn schema(self) -> (Vec<ParamDescriptor>, Vec<StatDescriptor>, Vec<ActionDescriptor>) {
-        match self {
+    /// Returns the stock model's schema, `None` for a file with no stock model.
+    fn schema(self) -> Option<(Vec<ParamDescriptor>, Vec<StatDescriptor>, Vec<ActionDescriptor>)> {
+        Some(match self {
             Self::GameOfLife => (
                 GpuGameOfLife::param_descriptors(),
                 GpuGameOfLife::STATS.to_vec(),
@@ -200,7 +213,8 @@ impl Oracle {
                 GpuSir::STATS.to_vec(),
                 GpuSir::ACTIONS.iter().map(|action| action.desc.clone()).collect(),
             ),
-        }
+            Self::Trials => return None,
+        })
     }
 }
 
@@ -240,6 +254,7 @@ fn varied_param(oracle: Oracle) -> (&'static str, f32) {
         Oracle::GameOfLife => ("density", 0.42),
         Oracle::Vote => ("density", 0.37),
         Oracle::SirCells | Oracle::SirExact => ("initial_infected_pct", 0.2),
+        Oracle::Trials => ("p", 0.3),
     }
 }
 
@@ -247,7 +262,13 @@ fn varied_param(oracle: Oracle) -> (&'static str, f32) {
 fn tick_0_cells_of_every_grid_corpus_file_equal_the_stock_init() {
     let corpus = grid_corpus();
     let names: Vec<&str> = corpus.iter().map(|(name, _)| name.as_str()).collect();
-    for expected in ["game_of_life.toml", "vote.toml", "sir.toml", "gpu_sir_exact.toml"] {
+    for expected in [
+        "game_of_life.toml",
+        "vote.toml",
+        "sir.toml",
+        "gpu_sir_exact.toml",
+        "repeat_trials.toml",
+    ] {
         assert!(names.contains(&expected), "{expected} is missing from {names:?}");
     }
     for (name, file) in &corpus {
@@ -329,29 +350,136 @@ fn hash_of(
 /// part of the schema the hash reads is held equal here, under the stock id.
 #[test]
 fn every_grid_corpus_schema_hashes_like_the_stock_model_under_its_id() {
+    let mut checked = 0;
     for (name, file) in grid_corpus() {
         let oracle = Oracle::of(&name);
-        let stock = oracle.schema();
+        let (Some(stock_id), Some(stock)) = (oracle.stock_id(), oracle.schema()) else {
+            continue;
+        };
+        checked += 1;
         let graph = graph_schema(&file);
         assert_eq!(
-            hash_of(oracle.stock_id(), &graph),
-            hash_of(oracle.stock_id(), &stock),
-            "{name}: the schema differs from {}",
-            oracle.stock_id()
+            hash_of(stock_id, &graph),
+            hash_of(stock_id, &stock),
+            "{name}: the schema differs from {stock_id}"
         );
         assert_ne!(
             hash_of(&file.document().target.id, &graph),
-            hash_of(oracle.stock_id(), &stock),
+            hash_of(stock_id, &stock),
             "{name}: the hash reads the model id"
         );
+        // The entry the model file builds declares the schema this test builds.
+        let entry = ModelFile::parse(&file.to_toml())
+            .and_then(|model_file| model_file.entry())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let schema = entry.schema();
+        let declared = (schema.params.to_vec(), schema.stats.to_vec(), schema.actions.to_vec());
+        assert_eq!(schema.id, file.document().target.id, "{name}");
+        assert_eq!(
+            hash_of(stock_id, &declared),
+            hash_of(stock_id, &stock),
+            "{name}: the entry's schema differs from {stock_id}"
+        );
     }
+    assert_eq!(checked, 4, "every grid corpus file with a stock model");
     // The registered stock entries hash as the schemas this test builds.
     let models = crate::example_models();
     for oracle in [Oracle::GameOfLife, Oracle::SirExact] {
-        let entry = models.get(oracle.stock_id()).expect("a stock model");
-        assert_eq!(
-            schema_hash(&entry.schema()),
-            hash_of(oracle.stock_id(), &oracle.schema())
-        );
+        let id = oracle.stock_id().expect("a stock model");
+        let entry = models.get(id).expect("a stock model");
+        let schema = oracle.schema().expect("a stock schema");
+        assert_eq!(schema_hash(&entry.schema()), hash_of(id, &schema));
     }
+}
+
+/// Returns the demand's work for `file` at `GPU_GRID_SIDE` by `GPU_GRID_SIDE` cells: one pass per GPU pass of the
+/// file, with the checker's cost per element, and the init passes as one run on the host.
+fn largest_work(file: &GraphFile) -> Demand {
+    let report = file.check();
+    let document = file.document();
+    let cells = u64::from(GPU_GRID_SIDE) * u64::from(GPU_GRID_SIDE);
+    let limits = wgpu::Limits::default();
+    let mut demand = Demand::default();
+    demand.set_display(GPU_GRID_SIDE, GPU_GRID_SIDE, &limits);
+    let texels = demand
+        .texture
+        .map_or(0, |(width, height)| u64::from(width) * u64::from(height));
+    let mut init = 0u64;
+    for (pass, cost) in document.passes.iter().zip(report.passes.iter().map(|pass| pass.cost)) {
+        let (kind, elements) = match pass.stage {
+            PassStage::Init => {
+                init = init.saturating_add(cost.saturating_mul(cells));
+                continue;
+            }
+            PassStage::Tick => (PassKind::Step, cells),
+            PassStage::View => (PassKind::Display, texels),
+            PassStage::Stats => (PassKind::Reduce, cells),
+            PassStage::Action => {
+                let action = pass.action.as_deref().expect("an action pass names its action");
+                let index = document
+                    .actions
+                    .iter()
+                    .position(|declared| declared.id == action)
+                    .expect("the action is declared");
+                (PassKind::Action(index), cells)
+            }
+            other => panic!("pass {} of stage {other:?} on a grid", pass.id),
+        };
+        demand.push_pass(pass.id.clone(), kind, 0, cost.saturating_mul(elements));
+    }
+    demand.push_host("init".to_owned(), init);
+    demand
+}
+
+/// Every grid corpus file fits the submission and host budgets at the largest grid the GPU grid ports accept, so the
+/// budgets never refuse a corpus model at a size its stock model runs at.
+#[test]
+fn every_grid_corpus_file_at_its_largest_size_fits_the_work_budgets() {
+    for (name, file) in grid_corpus() {
+        let demand = largest_work(&file);
+        let submission = demand.submission_work();
+        assert!(
+            submission > 0 && submission <= SUBMISSION_WORK_BUDGET,
+            "{name}: {submission} units in one submission"
+        );
+        for run in &demand.host {
+            assert!(run.work <= HOST_WORK_BUDGET, "{name}: {} units on the host", run.work);
+        }
+        let found = demand.shortfalls(&wgpu::Limits::default());
+        assert!(found.is_empty(), "{name}: {found:?}");
+        // The entry the compiler builds reports the same work, on a device that holds its buffers.
+        let entry = ModelFile::parse(&file.to_toml())
+            .and_then(|model_file| model_file.entry())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let limits = wgpu::Limits {
+            max_storage_buffer_binding_size: u64::MAX,
+            max_buffer_size: u64::MAX,
+            ..wgpu::Limits::default()
+        };
+        let side = [ParamValue::U32(GPU_GRID_SIDE), ParamValue::U32(GPU_GRID_SIDE)];
+        let found = entry.shortfalls(&side, &limits);
+        assert!(found.is_empty(), "{name}: {found:?}");
+    }
+}
+
+/// The entry of every grid corpus file passes every check of the testing kit, its GPU checks on a baseline device
+/// included.
+#[test]
+fn every_grid_corpus_entry_conforms() {
+    let mut models = henad_compute::entry::ModelSet::new(henad_core::build_info!());
+    for (name, file) in grid_corpus() {
+        let entry = ModelFile::parse(&file.to_toml())
+            .and_then(|model_file| model_file.entry())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        models
+            .insert(entry)
+            .unwrap_or_else(|error| panic!("{name}: the set refused the entry: {error}"));
+    }
+    let mut settings = CheckSettings::default();
+    if let Some(device) = headless_test_device(&TestDeviceRequest::baseline()) {
+        settings = settings.gpu(device);
+    } else {
+        log::warn!("checking the grid corpus without its GPU checks: no adapter");
+    }
+    assert_set_conforms(&models, &settings);
 }

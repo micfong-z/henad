@@ -27,8 +27,8 @@
 //!
 //! `--model-file` reads a model file, a grid rule as one TOML file, and adds its model to the set, in place of a model
 //! with the same id. The files and `--spec` are read before the device is acquired. The device is then sized to the
-//! files' models as well. A file of kind `graph` reads and checks, and its warnings and errors print at their lines,
-//! but this build cannot run a graph and refuses the file.
+//! files' models as well. A file of kind `graph` reads, checks and compiles to WGSL, and its warnings and errors print
+//! at their lines. A graph of agents checks and is refused, since this build compiles graphs on a grid alone.
 //!
 //! ```text
 //! henad-cli --list
@@ -488,7 +488,8 @@ fn with_model_files<'a>(
 ///
 /// Returns an error when the file cannot be read, does not hold a model file, or holds a model that does not compile.
 /// The error lists each problem as `path:line:column: error: message`, with its notes on the lines below and the pass
-/// and node of a graph's problem in a last note. A graph that checks is refused, since this build cannot run one.
+/// and node of a graph's problem in a last note. A graph of agents that checks is refused, since this build compiles
+/// graphs on a grid alone.
 fn load_model_file(path: &Path) -> Result<ModelEntry> {
     let text = fs::read_to_string(path).with_context(|| format!("cannot read model file '{}'", path.display()))?;
     let file_name = path.display().to_string();

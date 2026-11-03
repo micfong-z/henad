@@ -392,10 +392,10 @@ fn life_with(step: &str) -> GridRule {
     rule
 }
 
-/// A file of kind `graph` reads as a graph, keeps the graph's canonical text and code, and its entry is refused with
-/// one placed diagnostic, since this build compiles no graph.
+/// A file of kind `graph` reads as a graph and keeps the graph's canonical text and code. A graph on a grid builds an
+/// entry under its target's id, which records the graph's code.
 #[test]
-fn every_graph_starter_reads_and_checks_and_is_refused_to_run() {
+fn every_graph_starter_reads_checks_and_builds_an_entry() {
     for starter in henad_graph::starters::starters() {
         let name = starter.file_name;
         let file = ModelFile::parse(starter.text).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -406,13 +406,24 @@ fn every_graph_starter_reads_and_checks_and_is_refused_to_run() {
         assert_eq!(file.code(), graph.code());
         assert_eq!(file.code().format(), henad_graph::CODE_FORMAT);
         assert!(file.warnings().is_empty(), "{name}: {:?}", file.warnings());
-        let error = file.entry().err().unwrap_or_else(|| panic!("{name} built"));
-        let ModelFileError::Unsupported(diagnostic) = &error else {
-            panic!("{name}: {error:?}");
-        };
-        assert!(diagnostic.message.contains("cannot run graph models"), "{diagnostic}");
-        assert!(diagnostic.line.is_some(), "{diagnostic}");
+        let entry = file.entry().unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(entry.id(), file.id());
+        assert_eq!(entry.source(), &graph.source(), "{name}");
     }
+}
+
+/// A graph of agents that checks is refused with one placed diagnostic, since this build compiles graphs on a grid
+/// alone.
+#[test]
+fn a_graph_of_agents_is_refused_to_run() {
+    let text = "format = \"henad-model\"\nformat_version = 1\nkind = \"graph\"\nid = \"node_flock\"\n\n[graph]\ntopology = \"agents\"\nlibrary = 1\n\n[[target]]\nbackend = \"gpu\"\n\n[agents]\ncount = 50\nwidth = 200\n\n[[lane]]\nid = \"position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n";
+    let file = ModelFile::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    let error = file.entry().err().unwrap_or_else(|| panic!("a graph of agents built"));
+    let ModelFileError::Unsupported(diagnostic) = &error else {
+        panic!("{error:?}");
+    };
+    assert!(diagnostic.message.contains("on a grid alone"), "{diagnostic}");
+    assert!(diagnostic.line.is_some(), "{diagnostic}");
 }
 
 /// A graph that does not check returns the checker's errors, placed in the file with their pass and node.

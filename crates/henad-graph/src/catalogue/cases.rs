@@ -24,7 +24,8 @@ pub struct KnownAnswer {
 pub enum CaseScope {
     /// The host and WGSL.
     Both,
-    /// The host alone. WGSL leaves the answer indeterminate, since a shader may assume no NaN and no infinity.
+    /// The host alone. WGSL leaves the answer indeterminate, since a shader may assume no NaN and no infinity, or the
+    /// case's values are of a type only the host holds, such as a `u64`.
     Host,
 }
 

@@ -147,6 +147,85 @@ pub(super) fn run(
     Ok(outcome)
 }
 
+/// Returns the frame of `program` after its prelude alone, run in `context` over `world` with no lane.
+///
+/// The prelude reads no lane, so the frame holds every value the same for every element.
+///
+/// # Errors
+///
+/// Returns [`HostError::Fault`] for a value the prelude cannot use.
+pub(crate) fn prelude(
+    program: &Program,
+    params: &[HostValue],
+    context: &RunContext,
+    world: HostWorld,
+) -> Result<Vec<HostValue>, HostError> {
+    finish(program, params, context, world, None)
+}
+
+/// Returns the frame of `program` after its prelude and, when `tallies` is `Some`, its post block, with each tally's
+/// count in place of the elements.
+///
+/// The GPU counts the tallies of a stats pass, and the host runs the values computed from them.
+///
+/// # Errors
+///
+/// Returns [`HostError::Fault`] for a value either block cannot use.
+pub(crate) fn finish(
+    program: &Program,
+    params: &[HostValue],
+    context: &RunContext,
+    world: HostWorld,
+    tallies: Option<&[u64]>,
+) -> Result<Vec<HostValue>, HostError> {
+    let lanes = HostLanes {
+        world,
+        columns: Vec::new(),
+    };
+    let mut frame = vec![HostValue::Bool(false); program.slots];
+    for (slot, value) in &program.constants {
+        frame[*slot] = *value;
+    }
+    for (slot, param) in &program.params {
+        frame[*slot] = *params.get(*param).ok_or_else(|| HostError::Fault {
+            pass: program.pass.clone(),
+            node: None,
+            reason: format!("no value for parameter {param}"),
+        })?;
+    }
+    let mut stream = 0;
+    let mut machine = Machine {
+        program,
+        lanes: &lanes,
+        staged: Vec::new(),
+        context,
+        key_words: program
+            .draw_keys
+            .iter()
+            .map(|&key| key_word(key, context.phase, context.seed))
+            .collect(),
+        press_seed: press_word(context.seed, context.press),
+        tallies: vec![0; program.tallies],
+        colors: Vec::new(),
+        stream: &mut stream,
+        width: 0,
+        height: 0,
+        bounded: false,
+        element: 0,
+        iteration: None,
+    };
+    machine.execute(&program.prelude, &mut frame)?;
+    if let Some(tallies) = tallies {
+        for (slot, count) in program.tally_slots.iter().zip(tallies) {
+            if let Some(target) = frame.get_mut(*slot) {
+                *target = HostValue::U64(*count);
+            }
+        }
+        machine.execute(&program.post, &mut frame)?;
+    }
+    Ok(frame)
+}
+
 /// Runs only the element block of `program` at `element`, with `iteration` as the iteration word of the region around
 /// it, and returns the frame. Every lane must already hold the element.
 ///

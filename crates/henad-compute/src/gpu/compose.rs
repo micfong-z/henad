@@ -38,9 +38,11 @@ use crate::fault::catching;
 /// below hold a byte offset into the module's text with its import header in front.
 pub(crate) const SPAN_SHIFT: u32 = 21;
 
-/// Largest file the composer accepts, in bytes. A span keeps [`SPAN_SHIFT`] bits for an offset, and `naga_oil` puts an
-/// import header in front of the text.
-const MAX_FILE_BYTES: usize = 1 << 20;
+/// Largest file the composer accepts, in bytes.
+///
+/// A span of the composed module keeps 21 bits for an offset, and `naga_oil` puts an import header in front of the
+/// text.
+pub const MAX_FILE_BYTES: usize = 1 << 20;
 
 /// Largest number of modules one composition takes. `naga_oil` numbers the modules in the bits above [`SPAN_SHIFT`].
 const MAX_MODULES: usize = 1024;

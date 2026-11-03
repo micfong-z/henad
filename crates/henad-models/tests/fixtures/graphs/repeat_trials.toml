@@ -1,0 +1,133 @@
+# Repeated Bernoulli trials as a graph model, the grid file that exercises `region.repeat`. Each tick every cell makes
+# `trials` draws at probability `p`, and an `or` accumulator records whether any draw hit, so the share of hits is
+# `1 - (1 - p)^trials`. The bound `max = 4` keeps the file within the submission budget at 16384 by 16384 cells.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "node_repeat_trials"
+name = "Repeated trials"
+description = "Each cell makes a number of Bernoulli trials every tick and records whether any of them hit"
+
+[graph]
+topology = "grid"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "node_repeat_trials"
+name = "Repeated trials (GPU)"
+description = "Each cell makes a number of Bernoulli trials every tick and records whether any of them hit, on the GPU"
+
+[grid]
+width = 1024
+height = 1024
+boundary = "torus"
+
+[[category]]
+id = "outcome"
+variants = [
+  { name = "Miss", label = "Miss", color = [26, 26, 46, 255] },
+  { name = "Hit", label = "Hit", color = [242, 166, 59, 255] },
+]
+
+[[lane]]
+id = "outcome"
+domain = "cells"
+type = "cat:outcome"
+storage = "u8"
+initial = { cat = "outcome.Miss" }
+
+[[param]]
+id = "trials"
+label = "Trials"
+kind = "u32"
+min = 0
+max = 4
+default = 4
+
+[[param]]
+id = "p"
+label = "Chance of a hit"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.1
+step = 0.01
+
+[[stat]]
+label = "Hits"
+from = "n21.Hit"
+color = [242, 166, 59, 255]
+
+[[pass]]
+id = "step"
+stage = "tick"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n1"
+op = "region.repeat"
+config.max = 4
+config.acc = [{ name = "hit", type = "bool", combine = "or" }]
+in.count = { param = "trials" }
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n2"
+op = "rand.chance"
+config.key = 2734176385
+in.p = { param = "p" }
+region = "n1"
+
+[[pass.node]]
+id = "n3"
+op = "region.put"
+config.acc = "hit"
+in.value = "n2"
+in.when = { bool = true }
+region = "n1"
+
+[[pass.node]]
+id = "n4"
+op = "logic.select"
+in.cond = "n1.hit"
+in.if_true = { cat = "outcome.Hit" }
+in.if_false = { cat = "outcome.Miss" }
+
+[[pass.node]]
+id = "n5"
+op = "lane.set"
+config.lane = "outcome"
+in.value = "n4"
+
+[[pass]]
+id = "counts"
+stage = "stats"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n20"
+op = "lane.get"
+config.lane = "outcome"
+
+[[pass.node]]
+id = "n21"
+op = "stat.count_by"
+config.category = "outcome"
+in.value = "n20"
+
+[editor]
+version = 1
+next_id = 22
+node.n1 = { pos = [40.0, 40.0], label = "Trials" }
+node.n2 = { pos = [80.0, 120.0] }
+node.n3 = { pos = [280.0, 120.0] }
+node.n4 = { pos = [520.0, 80.0] }
+node.n5 = { pos = [720.0, 80.0] }
+node.n20 = { pos = [40.0, 40.0] }
+node.n21 = { pos = [260.0, 40.0] }
+view."pass.step" = { pan = [0.0, 0.0], zoom = 1.0 }

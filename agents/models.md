@@ -25,18 +25,38 @@ guards for the example models alone: no GPU entry builds without a device, `gpu_
 at 6000 by 6000, each GPU entry's `GpuNeeds` against its widest pass, and the set's coverage.
 `gpu_boids` declares `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly`
 reads it.
-`src/tests/graph_corpus.rs` holds the grid graph corpus to the stock models: henad-graph's
-starters and the exact ports in `tests/fixtures/graphs/` (`gpu_sir_exact.toml`), read through
-`ModelFile::parse`. `tick_0_cells_of_every_grid_corpus_file_equal_the_stock_init` runs each file's
-init on the host evaluator at two sizes, two parameter sets and four seeds, and compares every
-lane the stock seeds with `seed_buffers` (Life unpacked from its bits, `gpu_sir_exact`'s `rng`
-lane too). A grid file without an `Oracle` arm fails it. `Vote` there is a copy of the template's
-`vote.rs`, since the template sits outside the workspace.
-`every_grid_corpus_schema_hashes_like_the_stock_model_under_its_id` builds a graph's schema as a
-GPU grid entry would (`grid_width` and `grid_height` up to 16384 at the world's defaults, then the
-file's parameters, stats and actions) and compares `schema_hash` under the stock id.
-`schema_hash` reads the model id, so a `node_<model>` entry never hashes like its stock model, and
-the test asserts that too. Keep both.
+`src/tests/graph_corpus.rs` holds the grid graph corpus to the stock models: henad-graph's starters
+and the fixtures in `tests/fixtures/graphs/` (the exact port `gpu_sir_exact.toml` and
+`repeat_trials.toml`, which has no stock model), read through `ModelFile::parse`.
+`tick_0_cells_of_every_grid_corpus_file_equal_the_stock_init` runs each file's init on the host
+evaluator at two sizes, two parameter sets and four seeds, and compares every lane the stock seeds
+with `seed_buffers` (Life unpacked from its bits, `gpu_sir_exact`'s `rng` lane too). A grid file
+without an `Oracle` arm fails it. `Oracle::Trials` is `repeat_trials.toml`, whose cells start at
+their declared initial value, and its `stock_id` and `schema` are `None`. `Vote` there is a copy of
+the template's `vote.rs`, since the template sits outside the workspace.
+`every_grid_corpus_schema_hashes_like_the_stock_model_under_its_id` builds a graph's schema as a GPU
+grid entry would (`grid_width` and `grid_height` up to 16384 at the world's defaults, then the
+file's parameters, stats and actions) and compares `schema_hash` under the stock id, and so does the
+entry `ModelFile::entry` builds. `schema_hash` reads the model id, so a `node_<model>` entry never
+hashes like its stock model, and the test asserts that too. It checks the four files with a stock
+model and asserts that count. The budgets test also holds each compiled entry's `shortfalls` empty
+at 16384 by 16384, and `every_grid_corpus_entry_conforms` runs the testing kit over every grid
+corpus entry on a baseline device. `src/tests/graph_grid_parity.rs` builds the starters from their
+model files and holds them to the stock models every tick, reading lanes with `read_buffer`: Game of
+Life to `gpu_game_of_life` (cells unpacked, Alive, a 64-step batch, and every press of Randomise and
+Clear at three seeds) and Vote to the CPU `Vote` (cells and Ones). `graph_corpus::vote` is
+`pub(super)` for it, and so are the file's helpers (`build_gpu`, `step`, `press`, `snapshot`,
+`stat`, `graph_cells`, `starter_entry`) for the two files below. `src/tests/graph_sir_parity.rs`
+holds `gpu_sir_exact.toml` to `gpu_sir` every tick in cells, `rng` words and counts, over a 64-step
+batch and presses of Seed outbreak, at three sizes and seeds. It holds the starter `sir.toml` to
+`gpu_sir` at tick 0, and every tick and press under the rate gates (infection rate 0 or 1, recovery
+rate 0 or 1), which leave no decision to a draw. Past those the starter meets the bands of
+`tests/consistency_sir.rs` at its size, rates and seed and one more seed, over the step from tick 0.
+`src/tests/graph_repeat.rs` holds `repeat_trials.toml`'s share of hits to `1 - (1 - p)^trials`
+within five standard deviations, each device tick to the host evaluator's `run_pass` of its tick
+pass cell for cell, and a copy with `max = 140` refused by `Demand::shortfalls` at 4096 by 4096 and
+by `build` before the engine allocates. `repeat_trials.toml` keeps `max = 4`, the largest bound
+whose submission at 16384 by 16384 fits `SUBMISSION_WORK_BUDGET`. Keep these files.
 
 ## Adding a new model
 

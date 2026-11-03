@@ -8,12 +8,14 @@ use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::{StatEntry, stat_entries};
 
+use crate::fault::{Fault, FaultSink};
 use crate::gpu::GpuContext;
 use crate::gpu::capacity::{Demand, layout_entry};
-use crate::gpu::grid_spec::GpuGridSpec;
+use crate::gpu::grid_spec::{GpuGridSpec, GridPassCtx, GridPassId, GridPassSpec, GridPress};
 use crate::gpu::primitives::pipeline::{compute_pipeline, uniform_buffer};
-use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
-use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
+use crate::gpu::primitives::readback::{CounterReadback, StatsPoll, read_words};
+use crate::gpu::shader_spec::ShaderBinding;
+use crate::gpu::sides::BufferSide;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
 use crate::snapshot::GpuSnapshot;
@@ -21,24 +23,59 @@ use crate::snapshot::GpuSnapshot;
 /// The uniform every display and reduce shader reads, generated from `henad::dims` through `grid_dims.wgsl`.
 pub(crate) type Dims = crate::shader_bindings::henad::dims::Dims;
 
-/// One ping-ponged pair of storage buffers.
-struct BufferPair {
+/// One storage buffer, with its second side when it is in the dual set.
+struct GridBuffer {
     a: wgpu::Buffer,
-    b: wgpu::Buffer,
+    b: Option<wgpu::Buffer>,
 }
 
-/// A built action pass, with the uniform kept so a press can reseed it.
-struct ActionPass {
+impl GridBuffer {
+    /// Returns the buffer that `side` reaches, given whether side `a` is current. A plain buffer has one side, which
+    /// every side reaches.
+    fn side(&self, side: BufferSide, a_is_current: bool) -> &wgpu::Buffer {
+        match &self.b {
+            Some(b) if (side == BufferSide::Current) != a_is_current => b,
+            _ => &self.a,
+        }
+    }
+
+    /// Returns the side that holds the current state.
+    fn current(&self, a_is_current: bool) -> &wgpu::Buffer {
+        self.side(BufferSide::Current, a_is_current)
+    }
+}
+
+/// A built pass, with one bind group for each side holding the current state.
+struct BuiltPass {
     label: String,
     pipeline: wgpu::ComputePipeline,
     bind_a: wgpu::BindGroup,
     bind_b: wgpu::BindGroup,
-    uniform: wgpu::Buffer,
+    /// Uniform block bound as `params`, kept so a press can rewrite an action's.
+    uniform: Option<wgpu::Buffer>,
 }
 
-impl ActionPass {
+impl BuiltPass {
     fn bind(&self, a_is_current: bool) -> &wgpu::BindGroup {
         if a_is_current { &self.bind_a } else { &self.bind_b }
+    }
+
+    /// Records the pass into `encoder` as a compute pass of its own, over `groups` workgroups.
+    fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        groups: (u32, u32),
+        a_is_current: bool,
+        label: &str,
+        timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
+    ) {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(label),
+            timestamp_writes,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, self.bind(a_is_current), &[]);
+        pass.dispatch_workgroups(groups.0, groups.1, 1);
     }
 }
 
@@ -46,9 +83,9 @@ impl ActionPass {
 ///
 /// [`GpuGridState`] builds the spec from a model type and forwards every call here.
 ///
-/// The workgroup counts of every pass and the size of the ping-ponged buffers are computed once at construction. A
-/// step calls no hook of the spec, an action press calls one for its uniform block, and [`SimState::stats`] calls one
-/// for the values.
+/// The workgroup counts of every pass and the size of the buffers are computed once at construction. A step calls no
+/// hook of the spec. An action press calls one for its rerun and one per action pass for its uniform block, and
+/// [`SimState::stats`] calls one for the values.
 pub(crate) struct GpuGridEngine {
     spec: Arc<GpuGridSpec>,
 
@@ -58,42 +95,46 @@ pub(crate) struct GpuGridEngine {
     tex: (u32, u32),
     tick: u64,
 
-    /// Workgroups of the step pass and of every action, over the step domain the spec's hooks return.
+    /// Workgroups of every step and action pass, over the step domain the spec's hooks return.
     step_workgroups: (u32, u32),
     /// Workgroups of the reduce pass, at one invocation per cell.
     cell_workgroups: (u32, u32),
     /// Workgroups of the display pass, at one invocation per texel. Equal to [`Self::cell_workgroups`] until the grid
     /// outgrows the texture cap.
     texel_workgroups: (u32, u32),
-    /// Bytes of both sides of every ping-ponged buffer.
+    /// Bytes of every side of every buffer.
     buffer_bytes: usize,
+    /// Length in words of each buffer, in the spec's order.
+    buffer_lens: Vec<usize>,
 
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// Sink a rerun's fault is reported to.
+    faults: FaultSink,
 
-    step_pipeline: wgpu::ComputePipeline,
-    bind_a2b: wgpu::BindGroup,
-    bind_b2a: wgpu::BindGroup,
-
-    display_pipeline: wgpu::ComputePipeline,
-    display_bind_a: wgpu::BindGroup,
-    display_bind_b: wgpu::BindGroup,
+    buffers: Vec<GridBuffer>,
+    steps: Vec<BuiltPass>,
+    display_pass: BuiltPass,
     display: Arc<GpuDisplay>,
-
-    reduce_pipeline: wgpu::ComputePipeline,
-    reduce_bind_a: wgpu::BindGroup,
-    reduce_bind_b: wgpu::BindGroup,
+    reduce: BuiltPass,
     readback: CounterReadback,
 
-    actions: Vec<ActionPass>,
-    /// Seed of the next action press, advanced per press so that pressing twice draws twice.
-    action_seed: u32,
+    /// Passes of each action, in the spec's order.
+    actions: Vec<Vec<BuiltPass>>,
+    /// Latest press, advanced on every press so that pressing twice draws twice.
+    press: GridPress,
+    /// Action stream that a rerun draws from, continued across presses.
+    action_stream: u64,
+    /// Seed of the run, which a rerun and an action's uniform block read.
+    seed: Option<u64>,
     /// Parameter values, kept to rewrite the action uniforms on each press. Never edited, since a GPU grid model
     /// declares every parameter reload-only.
     params: Vec<ParamValue>,
 
     /// `true` when the `a` side of every buffer holds the current (latest) state.
     current_is_a: bool,
+    /// Steps done when the latest reduce pass was recorded, which the stat values hook reads.
+    stats_tick: u64,
 }
 
 impl std::fmt::Debug for GpuGridEngine {
@@ -111,6 +152,11 @@ impl std::fmt::Debug for GpuGridEngine {
 fn workgroups((width, height): (u32, u32), workgroup_size: u32) -> (u32, u32) {
     (width.div_ceil(workgroup_size), height.div_ceil(workgroup_size))
 }
+
+/// Multiplier of the per-press seed.
+const PRESS_MULTIPLIER: u32 = 747_796_405;
+/// Increment of the per-press seed.
+const PRESS_INCREMENT: u32 = 2_891_336_453;
 
 impl GpuGridEngine {
     /// Builds the state for `spec` on `ctx`, seeded with `seed`, or with the model's fixed default seed when it is
@@ -137,7 +183,7 @@ impl GpuGridEngine {
         );
         spec.assert_contracts();
 
-        // Ping-ponged storage buffers, seeded from the model.
+        // Storage buffers, seeded from the model.
         // Buffer lengths come from the model. A bit-packed model holds many cells per u32, and only the
         // model knows its buffer lengths.
         let buffer_lens = spec.hooks.buffer_lens(width, height);
@@ -157,11 +203,12 @@ impl GpuGridEngine {
             seeds.len()
         );
 
-        let buffers: Vec<BufferPair> = seeds
+        let buffers: Vec<GridBuffer> = seeds
             .iter()
             .zip(&buffer_lens)
+            .zip(&spec.buffers)
             .enumerate()
-            .map(|(k, (seed, &len))| {
+            .map(|(k, ((seed, &len), declared))| {
                 assert_eq!(
                     seed.len(),
                     len,
@@ -179,27 +226,15 @@ impl GpuGridEngine {
                         mapped_at_creation: false,
                     })
                 };
-                let pair = BufferPair {
+                let buffer = GridBuffer {
                     a: make('a'),
-                    b: make('b'),
+                    b: declared.double_buffered.then(|| make('b')),
                 };
-                // Only the `a` side needs seeding since the `b` side is always written during stepping.
-                queue.write_buffer(&pair.a, 0, bytemuck::cast_slice(seed));
-                pair
+                // Only the `a` side needs seeding since a step pass writes the `b` side.
+                queue.write_buffer(&buffer.a, 0, bytemuck::cast_slice(seed));
+                buffer
             })
             .collect();
-
-        // Uniforms.
-        // Display and reduce get their own small buffer rather than depending on the model's
-        // layout starting with the dimensions.
-        let step_params = spec.hooks.step_params_bytes(width, height, params, seed);
-        let step_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("{id}_step_params_buffer")),
-            size: step_params.len() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&step_params_buffer, 0, &step_params);
 
         let DisplayTarget {
             view: display_view,
@@ -217,59 +252,55 @@ impl GpuGridEngine {
             }),
         );
 
-        let readback = CounterReadback::new(device, &format!("{id}_counters"), spec.stats.len());
+        let readback = CounterReadback::new(device, &format!("{id}_counters"), spec.counters.max(1));
 
-        // Pipelines.
+        // The seed is truncated from the stream the CPU engines use, as the WGSL generator is 32 bit. Each action
+        // uniform is rewritten with a fresh seed on every press.
+        let press = GridPress::new(henad_core::action::action_seed(seed) as u32, 0);
+        let pass_ctx = GridPassCtx {
+            width,
+            height,
+            seed,
+            press,
+            tick: 0,
+        };
+
         // Every layout entry and every bind group entry comes from the name its shader gives the
         // binding, so a slot index cannot disagree with the shader that owns it.
-        // The action uniforms are built before the pipelines, so the resolver below can return an action uniform by
-        // index. Each uniform is rewritten with a fresh seed on every press. The seed is truncated from the
-        // stream the CPU engines use, as the WGSL generator is 32 bit.
-        let action_seed = henad_core::action::action_seed(seed) as u32;
-        let action_uniforms: Vec<wgpu::Buffer> = spec
-            .actions
-            .iter()
-            .enumerate()
-            .map(|(i, action)| {
+        let build = |label: String, pass: &GridPassSpec, uniform_of: GridPassId| -> BuiltPass {
+            let shader = &pass.shader;
+            let uniform = shader.bindings.iter().any(|decl| decl.name == "params").then(|| {
                 uniform_buffer(
                     device,
                     queue,
-                    &format!("{id}_action_{}_params", action.id),
-                    &spec.hooks.action_params_bytes(i, width, height, params, action_seed),
+                    &format!("{label}_params"),
+                    &spec.hooks.pass_params_bytes(uniform_of, pass_ctx, params),
                 )
-            })
-            .collect();
-
-        // An action writes the side that already holds the state. Nothing swaps after an action, so
-        // writing the far side would throw the work away.
-        let resolve = |decl: &ShaderBinding, a_is_current: bool, action: Option<usize>| -> wgpu::BindingResource<'_> {
-            if let Some((label, writes)) = decl.buffer_target() {
-                let k = spec
-                    .buffers
-                    .iter()
-                    .position(|l| *l == label)
-                    .unwrap_or_else(|| panic!("{id}: no buffer labelled `{label}`, wanted by `{}`", decl.name));
-                let pair = &buffers[k];
-                let (read, write) = if a_is_current {
-                    (&pair.a, &pair.b)
-                } else {
-                    (&pair.b, &pair.a)
-                };
-                return if writes && action.is_none() { write } else { read }.as_entire_binding();
-            }
-            match decl.name.as_ref() {
-                "params" => match action {
-                    Some(i) => action_uniforms[i].as_entire_binding(),
-                    None => step_params_buffer.as_entire_binding(),
-                },
-                "dims" => dims_buffer.as_entire_binding(),
-                "counters" => readback.binding(),
-                "output" => wgpu::BindingResource::TextureView(&display_view),
-                other => panic!("{id}: `{other}` is reserved but the engine has no resource for it"),
-            }
-        };
-
-        let build = |label: &str, shader: &ShaderSpec, action: Option<usize>| {
+            });
+            let resolve = |decl: &ShaderBinding, a_is_current: bool| -> wgpu::BindingResource<'_> {
+                if let Some((buffer_label, writes)) = decl.buffer_target() {
+                    let k = spec
+                        .buffers
+                        .iter()
+                        .position(|buffer| buffer.label == buffer_label)
+                        .unwrap_or_else(|| {
+                            panic!("{id}: no buffer labelled `{buffer_label}`, wanted by `{}`", decl.name)
+                        });
+                    let row = pass.sides.rows()[k];
+                    let side = if writes { row.write } else { row.read };
+                    return buffers[k].side(side, a_is_current).as_entire_binding();
+                }
+                match decl.name.as_ref() {
+                    "params" => uniform
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("{id}: `params` has no uniform"))
+                        .as_entire_binding(),
+                    "dims" => dims_buffer.as_entire_binding(),
+                    "counters" => readback.binding(),
+                    "output" => wgpu::BindingResource::TextureView(&display_view),
+                    other => panic!("{id}: `{other}` is reserved but the engine has no resource for it"),
+                }
+            };
             let entries: Vec<wgpu::BindGroupLayoutEntry> = shader
                 .bindings
                 .iter()
@@ -277,7 +308,7 @@ impl GpuGridEngine {
                 .map(|(i, decl)| layout_entry(i as u32, decl))
                 .collect();
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some(&format!("{id}_{label}_layout")),
+                label: Some(&format!("{label}_layout")),
                 entries: &entries,
             });
             let make = |a_is_current: bool, side: &str| {
@@ -287,49 +318,68 @@ impl GpuGridEngine {
                     .enumerate()
                     .map(|(i, decl)| wgpu::BindGroupEntry {
                         binding: i as u32,
-                        resource: resolve(decl, a_is_current, action),
+                        resource: resolve(decl, a_is_current),
                     })
                     .collect();
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("{id}_{label}_bind_{side}")),
+                    label: Some(&format!("{label}_bind_{side}")),
                     layout: &layout,
                     entries: &entries,
                 })
             };
-            let binds = (make(true, "a"), make(false, "b"));
-            let pipeline = compute_pipeline(device, &format!("{id}_{label}"), &shader.source, &layout);
-            (pipeline, binds)
+            let (bind_a, bind_b) = (make(true, "a"), make(false, "b"));
+            let pipeline = compute_pipeline(device, &label, &shader.source, &layout);
+            BuiltPass {
+                label,
+                pipeline,
+                bind_a,
+                bind_b,
+                uniform: uniform.clone(),
+            }
         };
 
-        let (step_pipeline, (bind_a2b, bind_b2a)) = build("step", &spec.step, None);
-        let (display_pipeline, (display_bind_a, display_bind_b)) = build("display", &spec.display, None);
-        let (reduce_pipeline, (reduce_bind_a, reduce_bind_b)) = build("reduce", &spec.reduce, None);
-
-        let actions: Vec<ActionPass> = spec
+        let steps: Vec<BuiltPass> = spec
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(i, pass)| build(format!("{id}_{}", pass.label), pass, GridPassId::Step(i)))
+            .collect();
+        let display_pass = build(
+            format!("{id}_{}", spec.display.label),
+            &spec.display,
+            GridPassId::Display,
+        );
+        let reduce = build(format!("{id}_{}", spec.reduce.label), &spec.reduce, GridPassId::Reduce);
+        let actions: Vec<Vec<BuiltPass>> = spec
             .actions
             .iter()
             .enumerate()
-            .map(|(i, action)| {
-                let label = format!("action_{}", action.id);
-                let (pipeline, (bind_a, bind_b)) = build(&label, &action.shader, Some(i));
-                ActionPass {
-                    label: format!("{id}_{label}"),
-                    pipeline,
-                    bind_a,
-                    bind_b,
-                    uniform: action_uniforms[i].clone(),
-                }
+            .map(|(action, declared)| {
+                declared
+                    .passes
+                    .iter()
+                    .enumerate()
+                    .map(|(pass, spec_pass)| {
+                        build(
+                            format!("{id}_action_{}", spec_pass.label),
+                            spec_pass,
+                            GridPassId::Action { action, pass },
+                        )
+                    })
+                    .collect()
             })
             .collect();
 
         let step_workgroups = workgroups(spec.hooks.step_dims(width, height), spec.workgroup_size);
         let cell_workgroups = workgroups((width, height), spec.workgroup_size);
         let texel_workgroups = workgroups(tex, spec.workgroup_size);
-        // Two ping-ponged sides per buffer.
-        let buffer_bytes = buffer_lens.iter().map(|len| len * std::mem::size_of::<u32>() * 2).sum();
+        let buffer_bytes = buffer_lens
+            .iter()
+            .zip(&spec.buffers)
+            .map(|(len, buffer)| len * std::mem::size_of::<u32>() * if buffer.double_buffered { 2 } else { 1 })
+            .sum();
 
         Self {
-            spec,
             width,
             height,
             tex,
@@ -338,42 +388,66 @@ impl GpuGridEngine {
             cell_workgroups,
             texel_workgroups,
             buffer_bytes,
+            buffer_lens,
             device: device.clone(),
             queue: queue.clone(),
-            step_pipeline,
-            bind_a2b,
-            bind_b2a,
-            display_pipeline,
-            display_bind_a,
-            display_bind_b,
+            faults: ctx.faults.clone(),
+            buffers,
+            steps,
+            display_pass,
             display,
-            reduce_pipeline,
-            reduce_bind_a,
-            reduce_bind_b,
+            reduce,
             readback,
             actions,
-            action_seed,
+            press,
+            action_stream: henad_core::action::action_seed(seed),
+            seed,
             params: params.to_vec(),
             current_is_a: true,
+            stats_tick: 0,
+            spec,
         }
     }
 
-    fn current_display_bind_group(&self) -> &wgpu::BindGroup {
-        if self.current_is_a {
-            &self.display_bind_a
-        } else {
-            &self.display_bind_b
+    /// Runs the rerun of action `index` on the host and uploads the buffers it writes to their current sides.
+    ///
+    /// Returns whether the rerun succeeded. A fault goes to the context's fault sink.
+    fn rerun(&mut self, index: usize, ctx: GridPassCtx) -> bool {
+        let id = &self.spec.id;
+        let uploads = match self.spec.hooks.rerun(index, ctx, &self.params, &mut self.action_stream) {
+            Ok(uploads) => uploads,
+            Err(message) => {
+                self.faults.set_once(Fault::refused(PRESSING, message));
+                return false;
+            }
+        };
+        for (k, words) in uploads {
+            let Some(&len) = self.buffer_lens.get(k) else {
+                self.faults.set_once(Fault::refused(
+                    PRESSING,
+                    format!("{id}: a rerun wrote buffer {k}, which does not exist"),
+                ));
+                return false;
+            };
+            if words.len() != len {
+                self.faults.set_once(Fault::refused(
+                    PRESSING,
+                    format!("{id}: a rerun wrote {} words to buffer {k} of {len}", words.len()),
+                ));
+                return false;
+            }
+            self.queue.write_buffer(
+                self.buffers[k].current(self.current_is_a),
+                0,
+                bytemuck::cast_slice(&words),
+            );
         }
-    }
-
-    fn current_reduce_bind_group(&self) -> &wgpu::BindGroup {
-        if self.current_is_a {
-            &self.reduce_bind_a
-        } else {
-            &self.reduce_bind_b
-        }
+        true
     }
 }
+
+/// What the engine was doing when a rerun's fault was reported.
+const PRESSING: &str = "pressing an action";
 
 impl SimState for GpuGridEngine {
     fn step(&mut self) {
@@ -389,7 +463,17 @@ impl SimState for GpuGridEngine {
     }
 
     fn stats(&self) -> Vec<StatEntry> {
-        stat_entries(&self.spec.stats, self.spec.hooks.stats(self.readback.values()))
+        let ctx = GridPassCtx {
+            width: self.width,
+            height: self.height,
+            seed: self.seed,
+            press: self.press,
+            tick: self.stats_tick,
+        };
+        stat_entries(
+            &self.spec.stats,
+            self.spec.hooks.stats(self.readback.values(), ctx, &self.params),
+        )
     }
 
     fn act(&mut self, index: usize) -> bool {
@@ -423,94 +507,93 @@ impl GpuSimState for GpuGridEngine {
         if count == 0 {
             return;
         }
-        let (wg_x, wg_y) = self.step_workgroups;
+        let last_pass = self.steps.len().saturating_sub(1);
         for i in 0..count {
-            let bind_group = if self.current_is_a {
-                &self.bind_a2b
-            } else {
-                &self.bind_b2a
-            };
-            let is_first = i == 0;
-            let is_last = i == count - 1;
-            // A `ComputePassTimestampWrites` requires at least one of the two indices to be
-            // `Some`, so only the first and last passes of the batch get timestamp writes.
-            let timestamp_writes =
-                timestamps
-                    .filter(|_| is_first || is_last)
-                    .map(|query_set| wgpu::ComputePassTimestampWrites {
-                        query_set,
-                        beginning_of_pass_write_index: is_first.then_some(0),
-                        end_of_pass_write_index: is_last.then_some(1),
-                    });
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("gpu_grid_step_pass"),
-                timestamp_writes,
-            });
-            pass.set_pipeline(&self.step_pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.dispatch_workgroups(wg_x, wg_y, 1);
-            drop(pass);
+            for (k, pass) in self.steps.iter().enumerate() {
+                let is_first = i == 0 && k == 0;
+                let is_last = i == count - 1 && k == last_pass;
+                // A `ComputePassTimestampWrites` requires at least one of the two indices to be
+                // `Some`, so only the first and last passes of the batch get timestamp writes.
+                let timestamp_writes =
+                    timestamps
+                        .filter(|_| is_first || is_last)
+                        .map(|query_set| wgpu::ComputePassTimestampWrites {
+                            query_set,
+                            beginning_of_pass_write_index: is_first.then_some(0),
+                            end_of_pass_write_index: is_last.then_some(1),
+                        });
+                pass.encode(
+                    encoder,
+                    self.step_workgroups,
+                    self.current_is_a,
+                    "gpu_grid_step_pass",
+                    timestamp_writes,
+                );
+            }
             self.current_is_a = !self.current_is_a;
         }
         self.tick += u64::from(count);
     }
 
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
-        let Some(action) = self.actions.get(index) else {
+        if index >= self.actions.len() {
             return false;
-        };
-        // A fresh seed per press, so pressing twice draws twice. The write is queued before the
-        // encoder is submitted, so the pass reads the new value.
-        self.action_seed = self.action_seed.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
-        self.queue.write_buffer(
-            &action.uniform,
-            0,
-            &self
-                .spec
-                .hooks
-                .action_params_bytes(index, self.width, self.height, &self.params, self.action_seed),
+        }
+        // A fresh seed per press, so pressing twice draws twice. The writes are queued before the
+        // encoder is submitted, so the passes read the new values.
+        self.press = GridPress::new(
+            self.press
+                .seed
+                .wrapping_mul(PRESS_MULTIPLIER)
+                .wrapping_add(PRESS_INCREMENT),
+            self.press.count.wrapping_add(1),
         );
-
-        let (groups_x, groups_y) = self.step_workgroups;
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some(&action.label),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&action.pipeline);
-        pass.set_bind_group(0, action.bind(self.current_is_a), &[]);
-        pass.dispatch_workgroups(groups_x, groups_y, 1);
+        let ctx = GridPassCtx {
+            width: self.width,
+            height: self.height,
+            seed: self.seed,
+            press: self.press,
+            tick: self.tick,
+        };
+        if !self.rerun(index, ctx) {
+            return true;
+        }
+        for (k, pass) in self.actions[index].iter().enumerate() {
+            if let Some(uniform) = &pass.uniform {
+                let bytes =
+                    self.spec
+                        .hooks
+                        .pass_params_bytes(GridPassId::Action { action: index, pass: k }, ctx, &self.params);
+                self.queue.write_buffer(uniform, 0, &bytes);
+            }
+            pass.encode(encoder, self.step_workgroups, self.current_is_a, &pass.label, None);
+        }
         true
     }
 
     fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        {
-            let (wg_x, wg_y) = self.texel_workgroups;
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("gpu_grid_display_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.display_pipeline);
-            pass.set_bind_group(0, self.current_display_bind_group(), &[]);
-            pass.dispatch_workgroups(wg_x, wg_y, 1);
-        }
+        self.display_pass.encode(
+            encoder,
+            self.texel_workgroups,
+            self.current_is_a,
+            "gpu_grid_display_pass",
+            None,
+        );
         self.encode_stats_passes(encoder);
     }
 
     fn encode_stats_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        let (wg_x, wg_y) = self.cell_workgroups;
-
         // Clear -> accumulate -> copy out. wgpu inserts the barriers between these because they
         // are separate passes/copies within the one encoder.
+        self.stats_tick = self.tick;
         self.readback.encode_clear(encoder);
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("gpu_grid_reduce_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.reduce_pipeline);
-            pass.set_bind_group(0, self.current_reduce_bind_group(), &[]);
-            pass.dispatch_workgroups(wg_x, wg_y, 1);
-        }
+        self.reduce.encode(
+            encoder,
+            self.cell_workgroups,
+            self.current_is_a,
+            "gpu_grid_reduce_pass",
+            None,
+        );
         self.readback.encode_copy(encoder);
     }
 
@@ -535,6 +618,11 @@ impl GpuSimState for GpuGridEngine {
             display: Some(Arc::clone(&self.display)),
             agents: None,
         }
+    }
+
+    fn read_buffer(&self, index: usize) -> Option<Vec<u32>> {
+        let buffer = self.buffers.get(index)?;
+        Some(read_words(&self.device, &self.queue, buffer.current(self.current_is_a)))
     }
 }
 
@@ -670,5 +758,9 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
     /// Returns the display layer alone. A `GpuGridModel` has no agent layer.
     fn view(&self) -> GpuSnapshot {
         self.engine.view()
+    }
+
+    fn read_buffer(&self, index: usize) -> Option<Vec<u32>> {
+        self.engine.read_buffer(index)
     }
 }

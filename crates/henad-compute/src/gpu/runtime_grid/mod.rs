@@ -50,7 +50,7 @@ use henad_core::view::{StatDescriptor, StatValue};
 use crate::cpu::field::{GRID_INIT_SEED, grid_init_rng};
 use crate::entry::{EntryDeclarations, ModelEntry};
 use crate::gpu::compose::{BEFORE_TEXT_NOTE, Composition, WgslFile, compose, compose_wgsl};
-use crate::gpu::grid_spec::{GpuGridSpec, GridHooks};
+use crate::gpu::grid_spec::{GpuGridSpec, GridHooks, GridPassCtx, GridPassId};
 use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
 
 use checks::Declared;
@@ -392,7 +392,7 @@ impl CompiledGridRule {
         let shader = |source: &str, bindings: &'static [BindingDecl]| {
             ShaderSpec::new(source.to_owned(), bindings.iter().map(ShaderBinding::from).collect())
         };
-        let spec = Arc::new(GpuGridSpec::new(
+        let spec = Arc::new(GpuGridSpec::single_step(
             rule.id.clone(),
             template::WORKGROUP_SIZE,
             template::BUFFERS.iter().map(|label| Cow::Borrowed(*label)).collect(),
@@ -498,10 +498,11 @@ impl GridHooks for RuleHooks {
         vec![self.seed_cells(width, height, params, seed), vec![0]]
     }
 
-    /// Returns `width`, `height`, a word of the seed, and one word per parameter, padded to a multiple of 16 bytes.
-    fn step_params_bytes(&self, width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<u8> {
-        let mixed = seed.map_or(STEP_SEED, |seed| mix_seed(seed ^ STEP_SEED));
-        let mut words = vec![width, height, (mixed ^ (mixed >> 32)) as u32];
+    /// Returns `width`, `height`, a word of the seed, and one word per parameter, padded to a multiple of 16 bytes, for
+    /// every pass. A rule declares no action.
+    fn pass_params_bytes(&self, _pass: GridPassId, ctx: GridPassCtx, params: &[ParamValue]) -> Vec<u8> {
+        let mixed = ctx.seed.map_or(STEP_SEED, |seed| mix_seed(seed ^ STEP_SEED));
+        let mut words = vec![ctx.width, ctx.height, (mixed ^ (mixed >> 32)) as u32];
         words.extend(
             (0..self.params.len()).map(|position| match self.value(params, position) {
                 ParamValue::F32(value) => value.to_bits(),
@@ -515,19 +516,7 @@ impl GridHooks for RuleHooks {
         bytes
     }
 
-    /// Returns nothing. A rule declares no action.
-    fn action_params_bytes(
-        &self,
-        _action: usize,
-        _width: u32,
-        _height: u32,
-        _params: &[ParamValue],
-        _seed: u32,
-    ) -> Vec<u8> {
-        Vec::new()
-    }
-
-    fn stats(&self, counts: &[u32]) -> Vec<StatValue> {
+    fn stats(&self, counts: &[u32], _ctx: GridPassCtx, _params: &[ParamValue]) -> Vec<StatValue> {
         counts
             .iter()
             .map(|&count| StatValue::Scalar(f64::from(count)))

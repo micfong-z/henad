@@ -17,8 +17,10 @@ file shares (`LineEnds`, `toml_string`, `ParamTable`, `write_param`), and henad-
 `file.rs` holds `GraphFile`, `GraphFileError`, `Places` and the constants `FORMAT`,
 `FORMAT_VERSION`, `KIND_GRAPH`, `LIBRARY` and `CODE_FORMAT`, and the crate-private `Placer`, which
 places many diagnostics with one scan of the text. `catalogue/` holds the node kinds, `draw.rs`
-the counter-based draw words, `check/` the checker, `host/` the host evaluator and `edit/` the
-edit commands and `GraphBuilder`. `starters/` at the crate root holds the grid starters
+the counter-based draw words and `draw.wgsl` their WGSL twin, `check/` the checker, `host/` the
+host evaluator, `wgsl/` the WGSL compiler of grid graphs and `edit/` the edit commands and
+`GraphBuilder`. henad-graph takes henad-compute with `runtime-wgsl` on, for the public specs and
+`compose_wgsl`. `starters/` at the crate root holds the grid starters
 (`game_of_life`, `vote`, `sir`), ported to one GPU target with `node_<model>` ids and no `apply`
 key. `starters.rs` embeds them with `include_str!` (`scripts/check_packaging.sh` refuses a path
 out of the crate) and returns them through `starters()` in editor order and `starter(file_name)`.
@@ -92,17 +94,33 @@ compare loosely, and every other float compares by bits. `src/tests/case_files.r
 from each case over a fixed case world (categories `health` S, I, R and `life` Dead, Alive, the
 palette `ramp` of four colours). `known_answers.rs` runs every case, node and pass, through the
 host evaluator. A node case's inputs go into the document as they are, so a NaN or an infinity
-reaches the node although a file cannot write one. G2's WGSL runner must run the same cases.
+reaches the node although a file cannot write one. `CaseScope::Host` also marks a case over a
+type only the host holds (`u64`, `f64`). `gpu_cases.rs` runs every case of scope `Both` on a
+device through the compiler's own shaders, with `support.rs`'s headless device and a runner that
+binds a shader as the engine does. A pass case runs the shader of its pass `case`. A node case
+becomes a pass: each input whose socket takes an element rate comes from a lane `in_<k>` read by
+`n<200 + k>`, so the node's WGSL form computes it, an input of a uniform socket stays a literal
+that the host evaluates into the uniform block, and each output goes to a lane `out_<k>` (a view
+kind's through `view.color` on the palette `ramp`). The element is the last cell of a one-row
+grid, the tick the tick buffer's word, and a region iteration the compiler's `outer_iteration`. A
+case in the init stage runs on the host alone, since init never runs on the device. 200 cases run
+on the device.
 
 **Draws** (`draw.rs`). `key_word(key, phase, seed)`, `draw_bits(k, element, tick, iteration,
 sub_draw)` and `press_word(seed, press)`, with `GRAPH_DEFAULT_SEED` and `GRAPH_SEED_SALT`. The
-core is the provisional `chainm` of the PractRand gate, which failed both candidates: the
-maintainer chooses the core, and the `rand.*` cases and their lock lines move with it. Phase
+core is `draw_core`, the provisional `pcg4d2`: `pcg4d(pcg4d([k, e, t, (i << 4) | (s >> 2)]))[s &
+3]`, with `i` 0 outside every region and `pcg4d` the JCGT function. It is the one core that
+passed every walk of the PractRand gate, which failed both candidates. The maintainer chooses the
+core, so it stays one function here and one in WGSL, and the `rand.*` case words and their lock
+lines move with it. Phase
 words: `PHASE_INIT` 0, `PHASE_TICK` 1 (view and stats too, which draw nothing), and
 `action_phase(j)` = 2 + j for the action at position `j` of `[[action]]`, its reruns included.
 The tick word `t` is the tick in a tick pass, the press count in an action, 0 in init.
 `iteration_word(outer, max, k)` is `k` at the top and `outer * max + k` nested, so a draw inside
-a Repeat reads `Some(k)`, and one outside every region reads `None`. WGSL must match all of this.
+a Repeat reads `Some(k)`, and one outside every region reads `None`. The WGSL twin is `draw.wgsl`
+(`DRAW_WGSL`, import path `henad_graph::draw`). A shader reads the key word from its uniform
+block, `e` is `henad_index`, `t` the tick buffer's word in a tick pass and the press count in an
+action, and `i` the loop's `henad_iteration_n<id>`.
 
 **The host evaluator** (`host/`). `HostEvaluator::new(&GraphFile)` checks the file (errors give
 `HostError::Checked`) and compiles every pass once (`compile.rs`). A pass the host cannot run
@@ -120,7 +138,12 @@ the agent count, and `HostLanes` holds one `LaneColumn` per `[[lane]]` as GPU wo
 1, a category its variant number, two words for a vec2, u64 or f64, low first). Narrowing to a
 lane's `storage` is the upload's job. A pass reads its start and commits at its end (written
 lanes are staged copies). The top of a pass splits into prelude (uniform, run once), element
-block, and post block (reads a reducer, run once after the elements). An element value that
+block, and post block (reads a reducer, run once after the elements). After the split,
+`hoist_uniform_body_values` moves each instruction of a Repeat body (nested ones included) that
+`Operation::is_pure` admits and that reads only constants, parameters and prelude slots to the end
+of the prelude, in body order. Draws, stream bits, lane access and effects never move. The WGSL
+compiler then reads a lane seed, a press word or a powi base computed in a body from the uniform
+block, as it reads every other prelude value. An element value that
 reads a reducer is refused. Each scope orders its members by Kahn's algorithm with ties by node
 id, a region counting every link of its body, and consecutive `draw_order` entries add edges. A
 Repeat seeds each accumulator (`init` or the combine's identity: largest finite value for
@@ -194,20 +217,71 @@ reader refuses nesting past 80 and a dotted key in the source is written as nest
 `CodeOrigin::Runtime`. `from_code` refuses another format with the message
 `Recorded under X, and this build runs henad-graph/1`.
 
+**The WGSL compiler** (`wgsl/`). `GridProgram::compile(&GraphFile)` checks the file, builds a
+`HostEvaluator`, and writes one `GeneratedShader` per role (`ShaderRole`): one step per enabled
+tick pass in stack order, a display shader over the enabled view passes, a reduce shader over the
+enabled stats passes, and one per enabled action pass. A pass with `enabled = false` is left out,
+and one bound to a parameter reads a uniform flag. Each body is the pass's host `Program` written
+as WGSL (`emit.rs`), so the backends share one schedule. Every value is a `let` named
+`n<id>_<port>` (`value_name`, a dotted port's `.` written `__`). `is_port_segment` refuses `__`,
+which keeps the names injective. Lane writes are staged in `henad_write_<lane>` and stored at the
+end of the pass. Prelude values that read no tick are evaluated on the host (`run::prelude`) into
+the uniform block `HenadParams` (`uniform.rs`: `henad_width`, `henad_height`, prelude slots,
+`henad_key_n<id>` key words, `henad_press`, `math.powi`'s `henad_powers_n<id>` packed four to a
+`vec4`, enabled flags, tables last, padded to 16 bytes). Prelude values that read the tick are
+computed in the shader. A reduce shader's post block runs on the host after the readback
+(`run::finish`), which is how a `[[stat]]` gets its value (`GridHooks::stats`). The buffers are
+the lanes, labelled `lane_<id>_cells` (one word per element, since a lane's `storage` is for a CPU
+target), then a one-word dual `henad_tick` buffer when a GPU pass reads the tick or a tick pass
+draws. A lane of `CheckReport::dual_lanes` whose writer tick pass runs is dual: its writer binds
+`lane_<id>_cells_in` (current side) and `_out` (next side), passes before it read the current side
+and passes after it the next. The last step writes the tick from invocation (0, 0), and a graph
+that reads the tick with no tick pass gets an `advance_tick` step. Every other binding is one
+`lane_<id>_cells`, read-only or read-write. A Repeat is a counted `for` loop with its accumulators
+as `var`s, a grid count is unrolled over its stencil through `henad_at` (`offset_cell` of
+`henad::space`), and a draw calls `draw_core`. Each shader goes through `compose_wgsl` with
+`DRAW_WGSL`, and a problem there is a compiler fault, placed on the node whose `NodeRange` holds
+its span. A text past `compose::MAX_FILE_BYTES` (1 MiB) is checked first and refused as a
+problem of the file, placed on the pass whose ranges hold the most bytes (`oversized`), since a
+checked file of many grid counts can expand that far.
+`GeneratedShader` exposes `text` (before composition), `composed`, `ranges`,
+`node_at(offset)`, `role`, `passes`, `label` and `cost`, the API of E1's generated WGSL view.
+`GridProgram::spec` builds the `GpuGridSpec` (workgroup 16, `counters` the reduce tallies,
+`init_cost` and each action's `rerun_cost` from the checker's costs, each pass's
+`uniform_bytes` its block's size, and the reduce pass's `workgroup_bytes` four a tally, which
+`Demand::shortfalls` holds to the device), and `GridProgram::entry`
+the `ModelEntry` (`grid_width` and `grid_height` 1 to 16384 at the `[grid]` defaults, then the
+file's parameters, all reload, its stats, actions and palette). `hooks.rs` holds `GraphHooks`.
+`seed_buffers` runs `HostEvaluator::init`, and a fault panics, which the build's scope reports.
+`rerun` evaluates each action pass's block first, so a fault refuses the press, then reruns the
+init passes of `runs` on fresh lanes. A tick pass in an action's `runs` is refused, since a press
+runs its reruns on the host. A problem the compiler finds names its pass and node and is placed on
+the node's table, or the pass's (`place`). Graphs of agents are A2's.
+
 **Outside the crate.** henad-explore's `ModelFile::Graph` holds a `GraphFile`, and its `entry`
-returns the checker's errors, then `HostEvaluator::new`'s, then `ModelFileError::Unsupported`
-until G2's WGSL compiler builds an entry. henad-cli's `--model-file` prints a graph's warnings
-and errors with places through it. The facade's `henad::graph` (feature `model-files`) names the
-crate's root items and public modules. G2 must give a GPU grid entry the schema that
-henad-models' `graph_corpus.rs` builds: `grid_width` and `grid_height` (1 to 16384, defaults from
-`[grid]`), then the file's `[[param]]`s, its stats by label and its actions by id. Its
-`seed_buffers` is `init(HostWorld::Grid { width, height, boundary }, &params[2..], seed)` and
-`lanes.column(id).words()` per buffer, narrowed to the lane's storage.
+returns the checker's errors, then `HostEvaluator::new`'s, then `GridProgram::compile`'s, or the
+entry of a grid graph. A graph of agents returns `ModelFileError::Unsupported`. henad-cli's
+`--model-file` prints a graph's warnings and errors with places through it. The facade's
+`henad::graph` (feature `model-files`) names the crate's root items and public modules.
+henad-models' `graph_corpus.rs` holds the compiled entry's schema to the stock model's and runs
+the testing kit over every grid corpus entry, `graph_grid_parity.rs` holds Game of Life and Vote to
+the stock models every tick, `graph_sir_parity.rs` the SIR files, and `graph_repeat.rs`
+`repeat_trials.toml` (`agents/models.md`).
 
 Tests sit in `src/tests/`: `file_format.rs` with `full_graph.toml` as a file in a hand-written
 spelling, `catalogue.rs`, `known_answers.rs`, `checker.rs`, `host.rs` (corpus inits replay,
 reruns, a Repeat equals its hand-chained copies bit for bit, mixed-radix draws), `edit.rs`,
-`library_lock.rs` and `mutation.rs`.
+`library_lock.rs`, `mutation.rs`, `wgsl.rs` (every starter compiles, the range table, region
+forms, uniform body values, and files past the workgroup, uniform and shader-size limits built
+in the test), `gpu_cases.rs` and `gpu_repeat.rs`. `HENAD_DUMP_GRAPH_WGSL=<dir>` makes
+`every_starter_compiles` write each shader's text there. `gpu_repeat.rs` runs `host.rs`'s Repeat
+bodies (`CARRIED`, `chained()`, `TWO_DRAWS`, `NESTED_DRAW`, `pub(super)` there) in a tick pass,
+once through the step shader on the device and once through `run_pass`: the integer half of
+`CARRIED` equals its hand-chained copies and the host bit for bit, two iterations of one draw
+differ and replay, and draws read the mixed-radix iteration word, each equal to the host's. Its
+float half differs on Metal (`agents/gpu-traps.md`), so
+`a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` is `#[ignore]`d with that
+reason. Run it with `--ignored` on another backend before calling the gate met there.
 `corpus.rs` reads the starters through `starters()` and, at run time, the graphs in
 `crates/henad-models/tests/fixtures/graphs/`, since a packaged crate has no path out of itself.
 `two_spellings_of_one_graph_hash_alike`, `a_canonical_text_reads_back_to_itself` and

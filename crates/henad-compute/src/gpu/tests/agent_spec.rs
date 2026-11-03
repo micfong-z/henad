@@ -14,10 +14,10 @@ use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::gpu::agent_engine::GpuAgentEngine;
 use crate::gpu::agent_spec::{
-    AgentActionSpec, AgentBufferSpec, AgentHooks, AgentPassSpec, AgentReduceSpec, BufferSide, GpuAgentSpec, SideRow,
-    SideTable,
+    AgentActionSpec, AgentBufferSpec, AgentHooks, AgentPassSpec, AgentReduceSpec, GpuAgentSpec,
 };
 use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
+use crate::gpu::sides::{BufferSide, SideRow, SideTable};
 use crate::gpu::sim_thread::GpuSimState as _;
 use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION, headless_context};
 

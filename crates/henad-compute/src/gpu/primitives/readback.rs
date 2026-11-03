@@ -322,3 +322,37 @@ mod tests {
         assert!(ctx.faults.take().is_none(), "a copy went into a mapped staging buffer");
     }
 }
+
+/// Returns the contents of `buffer` as raw words, blocking on the GPU until the copy lands.
+///
+/// `buffer` needs `COPY_SRC` usage. A parity test or an export calls this between steps, and the runner never does.
+///
+/// # Panics
+///
+/// Panics if the readback fails.
+pub(crate) fn read_words(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<u32> {
+    let size = buffer.size();
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("henad_gpu_buffer_readback"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("henad_gpu_buffer_readback"),
+    });
+    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+    queue.submit(Some(encoder.finish()));
+
+    let (tx, rx) = flume::bounded(1);
+    staging
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |r| drop(tx.send(r)));
+    device.poll(wgpu::PollType::wait_indefinitely()).expect("readback poll");
+    rx.recv().expect("readback channel").expect("readback map");
+    let data = staging.slice(..).get_mapped_range().expect("readback range");
+    let out = bytemuck::cast_slice::<u8, u32>(&data).to_vec();
+    drop(data);
+    staging.unmap();
+    out
+}

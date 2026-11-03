@@ -18,8 +18,8 @@
 //! every value in one form, and, for a grid rule, no comment outside the step. Two files that differ in nothing else
 //! have the same canonical text, and its [`ModelCode`] is the model's code identity in a results folder.
 //!
-//! A graph model reads and checks. Its entry needs the graph's WGSL compiler, which this build lacks, and
-//! [`ModelFile::entry`] returns [`ModelFileError::Unsupported`] for a graph that checks.
+//! A graph model on a grid builds through henad-graph's WGSL compiler, [`GridProgram`]. A graph of agents reads and
+//! checks, and [`ModelFile::entry`] returns [`ModelFileError::Unsupported`] for one that checks.
 
 use std::fmt;
 use std::ops::Range;
@@ -34,8 +34,10 @@ use henad_core::authoring::primitives::space::Boundary;
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::params::ParamKind;
 use henad_core::provenance::ModelCode;
+use henad_graph::document::World;
 use henad_graph::host::HostEvaluator;
 use henad_graph::model_text::{LineEnds, ParamTable, toml_string as string, write_param};
+use henad_graph::wgsl::GridProgram;
 use henad_graph::{GraphFile, GraphFileError, KIND_GRAPH};
 
 /// Value of a model file's `format` key.
@@ -163,8 +165,8 @@ impl fmt::Display for ModelFileError {
 
 impl std::error::Error for ModelFileError {}
 
-/// Message of [`ModelFileError::Unsupported`] for a graph that checks.
-const GRAPH_UNSUPPORTED: &str = "the graph checks, but this build cannot run graph models yet";
+/// Message of [`ModelFileError::Unsupported`] for a graph of agents that checks.
+const GRAPH_UNSUPPORTED: &str = "the graph checks, but this build runs graphs on a grid alone, and not of agents";
 
 impl ModelFile {
     /// Returns the model file of `rule`, its text the canonical text.
@@ -256,8 +258,9 @@ impl ModelFile {
     /// # Errors
     ///
     /// Returns the errors of [`GridRuleFile::entry`] for a grid rule. For a graph, returns [`ModelFileError::Graph`]
-    /// with the errors of its checker, then with the error of its host evaluator, which compiles every init pass, and
-    /// [`ModelFileError::Unsupported`] for a graph that passes both.
+    /// with the errors of its checker, then with the error of its host evaluator, which compiles every init pass, then
+    /// with the errors of [`GridProgram::compile`], and [`ModelFileError::Unsupported`] for a graph of agents that
+    /// passes the first two.
     pub fn entry(&self) -> Result<ModelEntry, ModelFileError> {
         match self {
             Self::GpuGrid(file) => file.entry(),
@@ -267,10 +270,15 @@ impl ModelFile {
                     return Err(ModelFileError::Graph(report.errors().cloned().collect()));
                 }
                 HostEvaluator::new(file).map_err(|error| ModelFileError::Graph(error.diagnostics()))?;
-                let id = file.places().id.clone();
-                Err(ModelFileError::Unsupported(Box::new(
-                    file.place(CodeDiagnostic::error(GRAPH_UNSUPPORTED), id),
-                )))
+                if matches!(file.document().world, World::Agents(_)) {
+                    let id = file.places().id.clone();
+                    return Err(ModelFileError::Unsupported(Box::new(
+                        file.place(CodeDiagnostic::error(GRAPH_UNSUPPORTED), id),
+                    )));
+                }
+                GridProgram::compile(file)
+                    .map(|program| program.entry())
+                    .map_err(ModelFileError::Graph)
             }
         }
     }

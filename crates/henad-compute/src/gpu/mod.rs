@@ -20,6 +20,7 @@ pub mod primitives;
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
 pub mod runtime_grid;
 pub(crate) mod shader_spec;
+pub(crate) mod sides;
 pub mod sim_thread;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stepping;
@@ -33,20 +34,25 @@ pub use agent_engine::GpuAgentState;
 #[cfg(feature = "runtime-wgsl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
 pub use agent_spec::{
-    AgentActionSpec, AgentBufferSpec, AgentDisplaySpec, AgentHooks, AgentPassSpec, AgentReduceSpec, BufferSide,
-    GpuAgentSpec, SideRow, SideTable,
+    AgentActionSpec, AgentBufferSpec, AgentDisplaySpec, AgentHooks, AgentPassSpec, AgentReduceSpec, GpuAgentSpec,
 };
-pub use capacity::Demand;
+pub use capacity::{Demand, HOST_WORK_BUDGET, HostWork, PassBindings, PassKind, SUBMISSION_WORK_BUDGET};
 pub use grid_engine::GpuGridState;
 #[cfg(feature = "runtime-wgsl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
-pub use grid_spec::{GpuGridSpec, GridActionSpec, GridHooks};
+pub use grid_spec::{
+    GpuGridSpec, GridActionSpec, GridBufferSpec, GridHooks, GridPassCtx, GridPassId, GridPassSpec, GridPress,
+    RerunUploads,
+};
 pub use limits::GpuNeeds;
 pub use primitives::readback::StatsPoll;
 pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
 #[cfg(feature = "runtime-wgsl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
 pub use shader_spec::{ShaderBinding, ShaderSpec};
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use sides::{BufferSide, SideRow, SideTable};
 pub use sim_thread::{GpuSimState, GpuStats};
 pub use view::agents::GpuAgents;
 pub use view::display::{DisplayTarget, GpuDisplay};

@@ -9,9 +9,9 @@
 //! after them. A *stream* is the serial `xorshift64` state a `stream.*` draw advances: the init stream continues across
 //! the init passes, and the action stream across presses.
 
-mod compile;
-mod run;
-mod value;
+pub(crate) mod compile;
+pub(crate) mod run;
+pub(crate) mod value;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -397,9 +397,14 @@ impl HostEvaluator {
         &self.document
     }
 
+    /// Returns the program of the pass at `position`, or the reason the host cannot compile it.
+    pub(crate) fn program_at(&self, position: usize) -> Option<&Result<Program, HostError>> {
+        self.programs.get(position)
+    }
+
     /// Returns the values of the document's parameters: `params` in schema order, and the default of each parameter
     /// that `params` lacks or gives a value of another kind.
-    fn param_values(&self, params: &[ParamValue]) -> Vec<HostValue> {
+    pub(crate) fn param_values(&self, params: &[ParamValue]) -> Vec<HostValue> {
         self.document
             .params
             .iter()
@@ -416,7 +421,7 @@ impl HostEvaluator {
     }
 
     /// Returns whether the pass at `position` runs with `params`.
-    fn is_enabled(&self, position: usize, params: &[HostValue]) -> bool {
+    pub(crate) fn is_enabled(&self, position: usize, params: &[HostValue]) -> bool {
         match &self.document.passes[position].enabled {
             PassEnabled::Literal(enabled) => *enabled,
             PassEnabled::Param(id) => self
@@ -469,7 +474,7 @@ impl HostEvaluator {
     }
 
     /// Returns the position and program of the pass `id`.
-    fn program(&self, id: &str) -> Result<(usize, &Program), HostError> {
+    pub(crate) fn program(&self, id: &str) -> Result<(usize, &Program), HostError> {
         let position = self
             .document
             .passes

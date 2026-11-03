@@ -22,73 +22,12 @@ use henad_core::topology::TopologyHint;
 use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::display_scale::display_dims;
-use crate::gpu::capacity::{Demand, storage_bindings};
+use crate::gpu::capacity::{Demand, PassKind, storage_bindings};
 use crate::gpu::contracts::{assert_buffer_labels, assert_workgroup_size};
 use crate::gpu::primitives::dispatch::WORKGROUP;
 use crate::gpu::primitives::spatial_hash::HashGrid;
 use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
-
-/// Side of a double buffered buffer, relative to the swap at the end of the step.
-///
-/// A buffer with one side resolves both values to that side.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum BufferSide {
-    /// Side that holds the state at the start of the step.
-    Current,
-    /// Side that holds the state at the start of the next step.
-    Next,
-}
-
-/// Sides that one pass reaches in one buffer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct SideRow {
-    /// Side a read-only binding of the buffer resolves to.
-    pub read: BufferSide,
-    /// Side a writable binding of the buffer resolves to.
-    pub write: BufferSide,
-}
-
-impl SideRow {
-    /// Creates a row whose read-only bindings reach `read` and whose writable bindings reach `write`.
-    pub fn new(read: BufferSide, write: BufferSide) -> Self {
-        Self { read, write }
-    }
-}
-
-/// Sides a pass binds, with one [`SideRow`] per buffer of its [`GpuAgentSpec`], in [`GpuAgentSpec::buffers`] order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SideTable {
-    rows: Vec<SideRow>,
-}
-
-impl SideTable {
-    /// Creates a table from one row per buffer.
-    pub fn new(rows: Vec<SideRow>) -> Self {
-        Self { rows }
-    }
-
-    /// Returns the table of a pass over `buffers` buffers that reads each current side and writes each next side.
-    ///
-    /// Every step pass of a [`GpuAgentModel`] binds this way.
-    pub fn swapping(buffers: usize) -> Self {
-        Self::new(vec![SideRow::new(BufferSide::Current, BufferSide::Next); buffers])
-    }
-
-    /// Returns the table of a pass over `buffers` buffers that reads and writes each current side.
-    ///
-    /// Every action of a [`GpuAgentModel`] binds this way. Nothing swaps after an action, and a write to the next side
-    /// would be lost.
-    pub fn in_place(buffers: usize) -> Self {
-        Self::new(vec![SideRow::new(BufferSide::Current, BufferSide::Current); buffers])
-    }
-
-    /// Rows of the table, one per buffer.
-    pub fn rows(&self) -> &[SideRow] {
-        &self.rows
-    }
-}
+use crate::gpu::sides::{BufferSide, SideTable};
 
 /// One storage buffer of a model's state, the form of [`BufferSpec`] that can own its label.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -485,21 +424,23 @@ impl GpuAgentSpec {
         if self.display.is_some() {
             demand.set_display(geom.width, geom.height, limits);
         }
-        for (label, storage) in self.declared_passes() {
-            demand.push_pass(label, storage);
+        // A hand-written shader has no cost, and its work counts as zero.
+        for (label, kind, storage) in self.declared_passes() {
+            demand.push_pass(label, kind, storage, 0);
         }
         demand
     }
 
     /// Storage buffers each declared pass binds. Read by both [`Self::demand`] and [`Self::max_storage_bindings`], so
     /// the device that a host requests and the shortfall that the UI reports cannot disagree.
-    fn declared_passes(&self) -> Vec<(String, u32)> {
-        let mut passes: Vec<(String, u32)> = self
+    fn declared_passes(&self) -> Vec<(String, PassKind, u32)> {
+        let mut passes: Vec<(String, PassKind, u32)> = self
             .steps
             .iter()
             .map(|pass| {
                 (
                     format!("{}_{}", self.id, pass.label),
+                    PassKind::Step,
                     storage_bindings(&pass.shader.bindings),
                 )
             })
@@ -507,16 +448,19 @@ impl GpuAgentSpec {
         if let Some(display) = &self.display {
             passes.push((
                 format!("{}_display", self.id),
+                PassKind::Display,
                 storage_bindings(&display.shader.bindings),
             ));
         }
         passes.push((
             format!("{}_reduce_leaf", self.id),
+            PassKind::Reduce,
             storage_bindings(&self.reduce.shader.bindings),
         ));
-        for action in &self.actions {
+        for (index, action) in self.actions.iter().enumerate() {
             passes.push((
                 format!("{}_action_{}", self.id, action.id),
+                PassKind::Action(index),
                 storage_bindings(&action.shader.bindings),
             ));
         }
@@ -528,7 +472,7 @@ impl GpuAgentSpec {
     pub fn max_storage_bindings(&self) -> u32 {
         self.declared_passes()
             .into_iter()
-            .map(|(_, storage)| storage)
+            .map(|(_, _, storage)| storage)
             .max()
             .unwrap_or(0)
     }
@@ -662,7 +606,8 @@ mod tests {
     use henad_core::params::{ParamDescriptor, ParamValue};
     use henad_core::view::{StatDescriptor, StatValue};
 
-    use super::{AgentPassSpec, BufferSide, GpuAgentSpec, ShaderBinding, ShaderSpec, SideRow, SideTable};
+    use super::{AgentPassSpec, GpuAgentSpec, ShaderBinding, ShaderSpec};
+    use crate::gpu::sides::{BufferSide, SideRow, SideTable};
 
     const fn storage(name: &'static str, read_only: bool) -> BindingDecl {
         BindingDecl {

@@ -78,19 +78,19 @@ pub(super) static KINDS: &[NodeDef] = &[
                 "one",
                 &[("max", F32(1.0))],
                 AT_ELEMENT_THREE,
-                &[("out", F32(unit_float(0x6e1c_8791)))],
+                &[("out", F32(unit_float(0x0af7_ca7f)))],
             ),
             draw_case(
                 "scaled",
                 &[("max", F32(2.0))],
                 AT_ELEMENT_THREE,
-                &[("out", F32(unit_float(0x6e1c_8791) * 2.0))],
+                &[("out", F32(unit_float(0x0af7_ca7f) * 2.0))],
             ),
             draw_case(
                 "in a region",
                 &[("max", F32(1.0))],
                 ON_ITERATION_TWO,
-                &[("out", F32(unit_float(0x3401_275b)))],
+                &[("out", F32(unit_float(0xca02_e006)))],
             ),
             draw_case(
                 "another tick",
@@ -99,7 +99,7 @@ pub(super) static KINDS: &[NodeDef] = &[
                     tick: 6,
                     ..AT_ELEMENT_THREE
                 },
-                &[("out", F32(unit_float(0xae90_7a07)))],
+                &[("out", F32(unit_float(0x22fd_6517)))],
             ),
             draw_case(
                 "another element",
@@ -108,7 +108,7 @@ pub(super) static KINDS: &[NodeDef] = &[
                     element: 4,
                     ..AT_ELEMENT_THREE
                 },
-                &[("out", F32(unit_float(0x6295_c096)))],
+                &[("out", F32(unit_float(0x1cd4_4b33)))],
             ),
             draw_case(
                 "no seed",
@@ -117,7 +117,7 @@ pub(super) static KINDS: &[NodeDef] = &[
                     seed: None,
                     ..AT_ELEMENT_THREE
                 },
-                &[("out", F32(unit_float(0x8f52_273a)))],
+                &[("out", F32(unit_float(0x746f_85b1)))],
             ),
         ],
         ..DRAW
@@ -131,19 +131,19 @@ pub(super) static KINDS: &[NodeDef] = &[
         cases: &[
             draw_case(
                 "just above the bits",
-                &[("threshold", U32(0x6e1c_8792))],
+                &[("threshold", U32(0x0af7_ca80))],
                 AT_ELEMENT_THREE,
                 &[("out", Bool(true))],
             ),
             draw_case(
                 "at the bits",
-                &[("threshold", U32(0x6e1c_8791))],
+                &[("threshold", U32(0x0af7_ca7f))],
                 AT_ELEMENT_THREE,
                 &[("out", Bool(false))],
             ),
             draw_case(
                 "in a region",
-                &[("threshold", U32(0x3401_275c))],
+                &[("threshold", U32(0xca02_e007))],
                 ON_ITERATION_TWO,
                 &[("out", Bool(true))],
             ),
@@ -161,13 +161,13 @@ pub(super) static KINDS: &[NodeDef] = &[
             draw_case("never", &[("p", F32(0.0))], AT_ELEMENT_THREE, &[("out", Bool(false))]),
             draw_case(
                 "above the float",
-                &[("p", F32(0.44))],
+                &[("p", F32(0.05))],
                 AT_ELEMENT_THREE,
                 &[("out", Bool(true))],
             ),
             draw_case(
                 "below the float",
-                &[("p", F32(0.42))],
+                &[("p", F32(0.04))],
                 AT_ELEMENT_THREE,
                 &[("out", Bool(false))],
             ),

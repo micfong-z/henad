@@ -92,6 +92,22 @@ is about not undoing them.
   `Tokenizer`. A column counts characters. A validation error lists its spans from the function to
   the expression at fault, and is placed by the last. `naga_oil_span_encoding_is_unchanged` and the
   place tests of `gpu/tests/runtime_grid.rs` fail when naga_oil changes any of it.
+- **Metal compiles every shader with fast math.** wgpu 30's Metal backend sets only
+  `preserveInvariance` on `MTLCompileOptions`, and Metal's default turns fast math on, so the device
+  may contract a multiply and an add into one rounding, reassociate a chain of adds, and replace a
+  division with a multiply by the reciprocal. The same arithmetic then rounds differently in two
+  code shapes: a Repeat of `prev * 1.1 + f32(k)` and its five copies with `k` as literals differ in
+  the last bit of some cells on an Apple M4 Pro (record #66). Integer arithmetic and comparisons are
+  unaffected, and so are the draws of henad-graph's tests. A graph equals a stock port on one device
+  when both write the same float expression, as `gpu_sir_exact.toml` and `gpu_sir` do with `pow`.
+  henad-graph's `a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` is `#[ignore]`d
+  for it, and A2's contraction probe meets it again.
+- **wgpu checks no shader's workgroup memory against the device.** A generated reduce shader with
+  `var<workgroup>` past `max_compute_workgroup_storage_size` built on Metal with no error and
+  counted wrong: 66560 bytes on a 16 KiB device reported 8192 for a stat of 4096 cells. A uniform
+  block past `max_uniform_buffer_binding_size` builds too and fails only at `create_bind_group`,
+  with no place in the file. `Demand::shortfalls` refuses both before a build from the sizes a
+  `GridPassSpec` declares, so a generated pass sets `uniform_bytes` and `workgroup_bytes`.
 - **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
   henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
   `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as

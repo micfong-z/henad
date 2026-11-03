@@ -1267,7 +1267,8 @@ fn the_id_grammars_hold() {
     assert!(!is_id(&"a".repeat(65)));
     assert!(is_id(&"a".repeat(64)));
     assert!(is_port_segment("Alive"));
-    assert!(is_port_segment("a__b"));
+    assert!(is_port_segment("a_b_"));
+    assert!(!is_port_segment("a__b"));
     assert!(!is_port_segment("1a"));
     assert!(!is_port_segment("a.b"));
     assert!(!is_port_segment(&"a".repeat(65)));

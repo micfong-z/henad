@@ -157,6 +157,7 @@ fn a_lane_read_at_neighbours_in_the_pass_that_writes_it_is_dual() {
         let expected: &[&str] = match name.as_str() {
             "game_of_life.toml" => &["state"],
             "vote.toml" => &["vote"],
+            "repeat_trials.toml" => &[],
             _ => &["health"],
         };
         assert_eq!(report.dual_lanes, expected, "{name}");

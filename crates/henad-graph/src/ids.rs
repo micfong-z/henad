@@ -58,10 +58,13 @@ pub fn is_id(text: &str) -> bool {
         && !text.contains("__")
 }
 
-/// Returns whether `text` follows the port segment grammar `[A-Za-z][A-Za-z0-9_]{0,63}`.
+/// Returns whether `text` follows the port segment grammar `[A-Za-z][A-Za-z0-9_]{0,63}`, with no double underscore.
+///
+/// A segment holds no double underscore, which keeps the WGSL name of a dotted port injective.
 pub fn is_port_segment(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.first().is_some_and(u8::is_ascii_alphabetic)
         && bytes.len() <= 64
         && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        && !text.contains("__")
 }

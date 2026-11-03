@@ -152,8 +152,9 @@ as it did before G1 (`only_a_graph_is_held_to_the_graph_size_limit`). `GraphFile
 enum forwards `to_toml`, `code` and `entry`, and adds `id`, `rule` and `graph` (each `Option`) and
 `warnings` (the graph checker's, empty for a rule). For a graph, `entry` returns
 `ModelFileError::Graph` with the checker's errors, then with `HostEvaluator::new`'s (an init pass
-the host cannot run), and otherwise `ModelFileError::Unsupported`, placed at the header's `id`: G2's
-WGSL compiler is what builds a graph entry, and it replaces that last arm. `GridRuleFile`, a grid
+the host cannot run), then with `GridProgram::compile`'s, and otherwise builds the entry through
+`GridProgram::entry`. A graph of agents that checks returns `ModelFileError::Unsupported`, placed
+at the header's `id`, until A2 compiles agents. `GridRuleFile`, a grid
 rule as one TOML file, behaves as `ModelFile` did before the enum. `GridRuleFile::parse` reads line
 ends as `\n` and maps every span back to the text as passed (`LineEnds`, which henad-graph's
 `model_text` holds with `toml_string`, `ParamTable` and `write_param`). It reads the header keys
@@ -178,7 +179,8 @@ edit copies of it by its text.
 `a_step_holds_what_a_literal_string_holds`, `unknown_keys_are_refused`,
 `a_declaration_error_points_at_its_table`, `control_characters_in_the_declarations_are_refused`,
 `the_canonical_code_ignores_formatting`, `a_wgsl_error_points_at_its_file_line`,
-`every_example_model_file_loads`, `every_graph_starter_reads_and_checks_and_is_refused_to_run`,
+`every_example_model_file_loads`, `every_graph_starter_reads_checks_and_builds_an_entry`,
+`a_graph_of_agents_is_refused_to_run`,
 `a_graph_with_an_error_returns_the_checker_errors_with_places` and
 `the_header_dispatches_on_the_kind`. Keep them.
 `progress.rs` is the `Progress` trait the host renders. The library never prints. `device.rs`

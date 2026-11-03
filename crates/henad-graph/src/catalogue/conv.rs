@@ -36,7 +36,7 @@ pub(super) static KINDS: &[NodeDef] = &[
                 &[("out", F32(16_777_216.0))],
             ),
             case("bool", &[("a", Bool(true))], &[("out", F32(1.0))]),
-            case("f64 on the host", &[("a", F64(0.5))], &[("out", F32(0.5))]),
+            host_case("f64 on the host", &[("a", F64(0.5))], &[("out", F32(0.5))]),
         ],
         ..CONVERSION
     },
@@ -72,7 +72,7 @@ pub(super) static KINDS: &[NodeDef] = &[
             ),
             case("i32 keeps the bits", &[("a", I32(-1))], &[("out", U32(u32::MAX))]),
             case("bool", &[("a", Bool(true))], &[("out", U32(1))]),
-            case(
+            host_case(
                 "u64 keeps the low bits",
                 &[("a", U64(0x1_0000_0002))],
                 &[("out", U32(2))],
