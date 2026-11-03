@@ -56,6 +56,8 @@ pub(crate) struct GraphHooks {
     pub tick_buffer: bool,
     pub uniforms: Vec<PassUniform>,
     pub stats: Vec<StatSource>,
+    /// Document position and sum number of each float lane the reduce shader sums, in the order of its partials.
+    pub sum_lanes: Vec<(usize, usize)>,
     pub actions: Vec<ActionPlan>,
 }
 
@@ -86,6 +88,29 @@ impl GraphHooks {
     }
 
     /// Returns the uniform block of pass `id`, or `Err` with the fault of a prelude the host cannot evaluate.
+    /// Returns the totals of each of the `count` float sums of the stats pass at `position`, read from the lanes
+    /// `sums` holds, with whether each sums `vec2f` values. A sum the readback leaves out is 0.
+    pub(crate) fn pass_sums(&self, position: usize, count: usize, sums: &[f32]) -> Vec<([f64; 2], bool)> {
+        (0..count)
+            .map(|sum| {
+                let lanes: Vec<usize> = self
+                    .sum_lanes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (known, number))| *known == position && *number == sum)
+                    .map(|(lane, _)| lane)
+                    .collect();
+                let value = |k: usize| {
+                    lanes
+                        .get(k)
+                        .and_then(|&lane| sums.get(lane))
+                        .map_or(0.0, |&total| f64::from(total))
+                };
+                ([value(0), value(1)], lanes.len() > 1)
+            })
+            .collect()
+    }
+
     pub(crate) fn block_bytes(
         &self,
         id: GridPassId,
@@ -202,6 +227,10 @@ impl GridHooks for GraphHooks {
     }
 
     fn stats(&self, counts: &[u32], ctx: GridPassCtx, params: &[ParamValue]) -> Vec<StatValue> {
+        self.stats_with_sums(counts, &[], ctx, params)
+    }
+
+    fn stats_with_sums(&self, counts: &[u32], sums: &[f32], ctx: GridPassCtx, params: &[ParamValue]) -> Vec<StatValue> {
         let own = self.own(params);
         let world = self.world(ctx.width, ctx.height);
         let context = RunContext::tick(ctx.seed, tick32(ctx.tick));
@@ -222,6 +251,7 @@ impl GridHooks for GraphHooks {
                                     tallies: (0..program.tallies)
                                         .map(|k| u64::from(counts.get(source.first_counter + k).copied().unwrap_or(0)))
                                         .collect(),
+                                    sums: self.pass_sums(position, program.sums.len(), sums),
                                     ..run::Readback::default()
                                 };
                                 run::finish(program, &own, &context, world, Some(&readback)).ok()

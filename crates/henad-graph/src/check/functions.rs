@@ -36,13 +36,14 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, view: &BodyView<'_>) {
     }
 }
 
-/// Checks the function body `view`, its types included, and returns whether it holds no error.
-pub(super) fn check_function(checker: &mut Checker<'_>, view: &BodyView<'_>) -> bool {
+/// Checks the function body `view`, its types included, and returns whether it holds no error, with the inferred
+/// outputs of its nodes.
+pub(super) fn check_function(checker: &mut Checker<'_>, view: &BodyView<'_>) -> (bool, super::body::BodyPorts) {
     let before = errors(checker);
-    super::body::check(checker, view);
+    let ports = super::body::check(checker, view);
     check_expressions(checker, view);
     check_body(checker, view);
-    errors(checker) == before
+    (errors(checker) == before, ports)
 }
 
 /// Returns the ids of the functions a pass can inline: those of `clean` holding no error whose calls all name

@@ -106,7 +106,7 @@ fn pass_row(ui: &mut Ui, graph: &GraphEditor, pass: &Pass, requests: &mut Vec<Gr
         {
             requests.push(GraphRequest::Open(Scope::pass(&pass.id)));
         }
-        let (errors, warnings) = graph.pass_issue_counts(&pass.id);
+        let (errors, warnings) = graph.issue_counts(&Scope::pass(&pass.id));
         count_badge(ui, errors, mcs::RED_900, mcs::RED_200, "Errors in this pass");
         count_badge(ui, warnings, mcs::ORANGE_900, mcs::ORANGE_200, "Warnings in this pass");
         match &pass.enabled {

@@ -219,6 +219,16 @@ pub trait GridHooks: Send + Sync {
     /// `counts` holds [`GpuGridSpec::counters`] words. `ctx` holds the tick of the reduce, and `params` the values the
     /// model was built with.
     fn stats(&self, counts: &[u32], ctx: GridPassCtx, params: &[ParamValue]) -> Vec<StatValue>;
+
+    /// Turns the counters and the float sums read back from the reduce pass into values, in [`GpuGridSpec::stats`]
+    /// order. The engine calls this, and the default ignores `sums` and returns [`Self::stats`].
+    ///
+    /// `sums` holds one total per lane of [`GpuGridSpec::sums`], each folded on the device from the reduce shader's
+    /// `partials` in a fixed order. It is empty when the spec sums no lane.
+    fn stats_with_sums(&self, counts: &[u32], sums: &[f32], ctx: GridPassCtx, params: &[ParamValue]) -> Vec<StatValue> {
+        let _: &[f32] = sums;
+        self.stats(counts, ctx, params)
+    }
 }
 
 /// Hooks of model `M`, each calling the associated function of the same name.
@@ -282,6 +292,10 @@ pub struct GpuGridSpec {
     /// Number of `atomic<u32>` counters the reduce shader's `counters` binding holds, at least 1. [`Self::new`] sets
     /// one per stat series, as a model type's reduce shader counts.
     pub counters: usize,
+    /// Number of float lanes the reduce shader sums. A shader that sums any binds `partials` as `array<f32>` and writes
+    /// the total of workgroup `block` at `partials[block * sums + lane]`, `block` being `wid.y * groups_x + wid.x` over
+    /// the cell workgroups. [`GridHooks::stats_with_sums`] receives each lane's total. [`Self::new`] sets zero.
+    pub sums: usize,
     /// Cost per cell in work units of what the host runs at build, the seeds included. Zero when unknown, as for a
     /// model type, and [`Self::new`] leaves it at zero.
     pub init_cost: u64,
@@ -302,6 +316,7 @@ impl fmt::Debug for GpuGridSpec {
             .field("actions", &self.actions)
             .field("stats", &self.stats)
             .field("counters", &self.counters)
+            .field("sums", &self.sums)
             .field("init_cost", &self.init_cost)
             .finish_non_exhaustive()
     }
@@ -310,8 +325,8 @@ impl fmt::Debug for GpuGridSpec {
 impl GpuGridSpec {
     /// Creates the spec of model `id` with no actions.
     ///
-    /// [`Self::actions`], [`Self::counters`] and [`Self::init_cost`] are public fields, for a model that declares
-    /// otherwise.
+    /// [`Self::actions`], [`Self::counters`], [`Self::sums`] and [`Self::init_cost`] are public fields, for a model
+    /// that declares otherwise.
     #[expect(
         clippy::too_many_arguments,
         reason = "every argument is a declaration the engine cannot run without"
@@ -336,6 +351,7 @@ impl GpuGridSpec {
             reduce,
             actions: Vec::new(),
             counters: stats.len().max(1),
+            sums: 0,
             stats,
             init_cost: 0,
             hooks,
@@ -434,6 +450,15 @@ impl GpuGridSpec {
             .zip(&self.buffers)
         {
             demand.push_sides(&format!("{}_buffer{k}", self.id), len, buffer.double_buffered);
+        }
+        if self.sums > 0 {
+            let side = u64::from(self.workgroup_size.max(1));
+            let blocks = u64::from(width).div_ceil(side) * u64::from(height).div_ceil(side);
+            demand.push_sides(
+                &format!("{}_reduce_partials", self.id),
+                usize::try_from(blocks).unwrap_or(usize::MAX).saturating_mul(self.sums),
+                false,
+            );
         }
         demand.set_display(width, height, limits);
         let texels = demand.texture.map_or(0, |(w, h)| u64::from(w) * u64::from(h));

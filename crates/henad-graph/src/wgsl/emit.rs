@@ -1500,11 +1500,11 @@ impl Emitter<'_> {
                 self.radius_fold(block, node, fold, indent, text);
             }
             Operation::Sum { value, sum } => {
-                if self.role != Role::Reduce || self.input.agents.is_none() {
+                if self.role != Role::Reduce {
                     self.refuse(
                         &pass_id,
                         Some(node),
-                        "sums floats, which the GPU reduces in a stats pass of an agents world alone",
+                        "sums floats, which the GPU reduces in a stats pass alone",
                     );
                     return;
                 }
@@ -1993,7 +1993,7 @@ impl Emitter<'_> {
         if agents && self.role != Role::Display {
             text.push("#import henad::dispatch::linear_index\n");
         }
-        if agents && self.role == Role::Reduce && !self.sum_lanes.is_empty() {
+        if self.role == Role::Reduce && !self.sum_lanes.is_empty() {
             text.push("#import henad::reduce_tree::block_sum\n");
         }
         if self.uses.hash {
@@ -2462,13 +2462,24 @@ impl Emitter<'_> {
                     "var<uniform> dims: Dims",
                 );
             }
-            Role::Reduce => bind(
-                &mut bindings,
-                &mut declarations,
-                "counters",
-                storage(false),
-                &format!("var<storage, read_write> counters: array<atomic<u32>, {counters}>"),
-            ),
+            Role::Reduce => {
+                bind(
+                    &mut bindings,
+                    &mut declarations,
+                    "counters",
+                    storage(false),
+                    &format!("var<storage, read_write> counters: array<atomic<u32>, {counters}>"),
+                );
+                if !self.sum_lanes.is_empty() {
+                    bind(
+                        &mut bindings,
+                        &mut declarations,
+                        "partials",
+                        storage(false),
+                        "var<storage, read_write> partials: array<f32>",
+                    );
+                }
+            }
             Role::Step { .. } | Role::Action | Role::Color | Role::Merge(_) => {}
         }
 
@@ -2529,10 +2540,19 @@ impl Emitter<'_> {
                 text.push("    textureStore(output, vec2<i32>(henad_id.xy), henad_color);\n}\n");
             }
             Role::Reduce => {
-                text.push(
-                    "fn main(\n    @builtin(global_invocation_id) henad_id: vec3<u32>,\n    @builtin(local_invocation_index) henad_local: u32,\n) {\n",
-                );
+                let lanes = self.sum_lanes.len();
+                let workgroup_line = if lanes > 0 {
+                    "    @builtin(workgroup_id) henad_wid: vec3<u32>,\n"
+                } else {
+                    ""
+                };
+                text.text.push_str(&format!(
+                    "fn main(\n    @builtin(global_invocation_id) henad_id: vec3<u32>,\n    @builtin(local_invocation_index) henad_local: u32,\n{workgroup_line}) {{\n",
+                ));
                 text.text.push_str(&format!("    for (var henad_c = henad_local; henad_c < {counters}u; henad_c = henad_c + {}u) {{\n        atomicStore(&henad_partial[henad_c], 0u);\n    }}\n    workgroupBarrier();\n", WORKGROUP_SIZE * WORKGROUP_SIZE));
+                for lane in 0..lanes {
+                    text.text.push_str(&format!("    var henad_sum_{lane} = 0.0f;\n"));
+                }
                 text.push(&tick_line);
                 text.push("    if (henad_id.x < params.henad_width && henad_id.y < params.henad_height) {\n");
                 if self.uses.neighbors {
@@ -2544,7 +2564,22 @@ impl Emitter<'_> {
                 text.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
                 text.append(body);
                 text.push("    }\n    workgroupBarrier();\n");
-                text.text.push_str(&format!("    for (var henad_c = henad_local; henad_c < {counters}u; henad_c = henad_c + {}u) {{\n        let henad_count = atomicLoad(&henad_partial[henad_c]);\n        if (henad_count > 0u) {{\n            atomicAdd(&counters[henad_c], henad_count);\n        }}\n    }}\n}}\n", WORKGROUP_SIZE * WORKGROUP_SIZE));
+                text.text.push_str(&format!("    for (var henad_c = henad_local; henad_c < {counters}u; henad_c = henad_c + {}u) {{\n        let henad_count = atomicLoad(&henad_partial[henad_c]);\n        if (henad_count > 0u) {{\n            atomicAdd(&counters[henad_c], henad_count);\n        }}\n    }}\n", WORKGROUP_SIZE * WORKGROUP_SIZE));
+                if lanes > 0 {
+                    // Every invocation reaches each `block_sum`, out of the cell's bounds check, since it barriers.
+                    text.text.push_str(&format!(
+                        "    let henad_block = henad_wid.y * ((params.henad_width + {side}u) / {WORKGROUP_SIZE}u) + \
+                         henad_wid.x;\n",
+                        side = WORKGROUP_SIZE - 1
+                    ));
+                }
+                for lane in 0..lanes {
+                    text.text.push_str(&format!(
+                        "    let henad_total_{lane} = block_sum(henad_local, henad_sum_{lane});\n    if (henad_local == \
+                         0u) {{\n        partials[henad_block * {lanes}u + {lane}u] = henad_total_{lane};\n    }}\n"
+                    ));
+                }
+                text.push("}\n");
             }
         }
         Emitted {
@@ -2553,12 +2588,17 @@ impl Emitter<'_> {
             bindings,
             uniform,
             counters,
-            sum_lanes: Vec::new(),
             workgroup_bytes: if self.role == Role::Reduce {
-                counters as u64 * 4
+                let sums = if self.sum_lanes.is_empty() {
+                    0
+                } else {
+                    u64::from(WORKGROUP_SIZE * WORKGROUP_SIZE) * 4
+                };
+                counters as u64 * 4 + sums
             } else {
                 0
             },
+            sum_lanes: self.sum_lanes,
         }
     }
 }

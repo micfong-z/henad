@@ -7,12 +7,12 @@ use henad_core::params::ParamKind;
 
 use super::Checker;
 use super::view::BodyView;
-use crate::catalogue::{ConfigKey, ConfigType, NodeDef, TypeClass};
+use crate::catalogue::{ConfigKey, ConfigType, NodeDef};
 use crate::ids::is_port_segment;
 use crate::limits::{
     MAX_ACCUMULATORS, MAX_EXPRESSION_BYTES, MAX_EXPRESSION_PORTS, MAX_PICK_VALUES, MAX_TRANSITION_RULES,
 };
-use crate::node::{Combine, Node};
+use crate::node::Node;
 use crate::reader::read_u64;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, Literal, MemberName};
@@ -351,7 +351,7 @@ fn check_accumulators(node: &Node, reserved: &[&'static str]) -> Result<(), Stri
         if !names.insert(name) {
             return Err(format!("names the accumulator '{name}' twice"));
         }
-        if !combine_fits(accumulator.combine, &accumulator.value_type) {
+        if !accumulator.combine.applies_to(&accumulator.value_type) {
             return Err(format!(
                 "gives the accumulator '{name}' the combine `{}`, which does not apply to {}",
                 accumulator.combine.as_str(),
@@ -360,26 +360,6 @@ fn check_accumulators(node: &Node, reserved: &[&'static str]) -> Result<(), Stri
         }
     }
     Ok(())
-}
-
-/// Returns whether `combine` applies to `value_type`.
-fn combine_fits(combine: Combine, value_type: &ValueType) -> bool {
-    const NUMERIC: [TypeClass; 8] = [
-        TypeClass::U32,
-        TypeClass::I32,
-        TypeClass::F32,
-        TypeClass::Vec2U,
-        TypeClass::Vec2I,
-        TypeClass::Vec2F,
-        TypeClass::U64,
-        TypeClass::F64,
-    ];
-    match combine {
-        Combine::Sum | Combine::Min | Combine::Max => NUMERIC.iter().any(|class| class.holds(value_type)),
-        Combine::Count => *value_type == ValueType::U32,
-        Combine::Or | Combine::And => *value_type == ValueType::Bool,
-        Combine::Carry => true,
-    }
 }
 
 /// Returns the clause saying how the rules of `value` break the transition rules, or `Ok` when they fit.

@@ -6,7 +6,12 @@
 //! place, so egui-snarl's selection and sizes stay with their nodes.
 //!
 //! A *pin* is a socket as egui-snarl numbers it, by position. A node's pins follow the order of its kind's resolved
-//! ports, outer outputs before inner outputs, and the views below map each pin back to a port name.
+//! ports, and the views below map each pin back to a port name.
+//!
+//! A region draws as two canvas nodes with a frame behind its body: the *input half* carries the region's inputs and
+//! its inner outputs, and the *output half* its accumulator outputs. The frame is painted from the rectangles of the
+//! halves and the body cached in the last frame, and nested frames paint inside the frames around them. A node dropped
+//! with its centre in a region's frame joins that region, and the node menu moves it into a region or out of one.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -22,22 +27,27 @@ use egui_snarl::ui::{
 };
 use egui_snarl::{InPin, InPinId, NodeId as PinNode, OutPin, OutPinId, Snarl};
 use henad_core::params::ParamKind;
-use henad_graph::catalogue::{ConfigType, InputDefault, SocketType, effective_config, lookup};
+use henad_graph::catalogue::{ConfigType, InputDefault, NodeDef, SocketType, effective_config, lookup};
 use henad_graph::check::PassReport;
 use henad_graph::document::{GraphDocument, Pass, PassStage, Stat};
 use henad_graph::edit::{EditCommand, Scope};
 use henad_graph::editor::EditorRegion;
 use henad_graph::ids::NodeId;
-use henad_graph::node::{Node, NodeBody};
+use henad_graph::limits::{MAX_ACCUMULATORS, MAX_REGION_DEPTH, MAX_REPEAT_ITERATIONS};
+use henad_graph::node::{
+    Accumulator, Combine, Node, NodeBody, OP_EXPRESSION, OP_FUNCTION_CALL, OP_FUNCTION_OUTPUT, OP_REGION_REPEAT,
+};
 use henad_graph::types::{Rate, ValueType};
 use henad_graph::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
 
+use super::arrange::{COLUMN_GAP, CanvasKey, NODE_SIZE};
 use super::quick_add::{WireEnd, offered_kinds};
 use super::sockets::{rate_shape, type_color};
 use super::view_pass::can_view;
 use super::{DroppedWire, GraphEdit, GraphRequest, NodeIssues};
-use crate::icons::material_design_icons::MDI_ALERT;
+use crate::icons::material_design_icons::{MDI_ALERT, MDI_CLOSE, MDI_PLUS};
 use crate::ui::mcs;
+use crate::ui::sweep::layout::add_button;
 
 /// Margin in canvas points between a frame and the nodes inside it.
 const FRAME_MARGIN: f32 = 14.0;
@@ -62,6 +72,15 @@ const QUICK_ADD_LIMIT: usize = 80;
 
 /// Width in points of the hover popup and the quick-add list.
 const POPUP_WIDTH: f32 = 320.0;
+
+/// Kind of a neighborhood fold.
+const OP_GRID_FOLD: &str = "grid.fold";
+
+/// Kinds of the regions library 1 nests.
+const REGION_OPS: [&str; 3] = [OP_REGION_REPEAT, OP_GRID_FOLD, "agent.radius_fold"];
+
+/// Width in points of an expression's text field on its node.
+const EXPRESSION_WIDTH: f32 = 260.0;
 
 /// Value an input of a node holds, as the canvas shows it.
 #[derive(Debug, Clone, PartialEq)]
@@ -109,11 +128,24 @@ pub struct OutputView {
     pub inner: bool,
 }
 
+/// Part of a document node that one canvas node draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodePart {
+    /// A node that is no region, whole.
+    Whole,
+    /// The input half of a region: its inputs and its inner outputs.
+    RegionInput,
+    /// The output half of a region: its accumulator outputs.
+    RegionOutput,
+}
+
 /// Node value of a canvas [`Snarl`]: what the viewer draws, and the document node it belongs to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeView {
     /// Id of the node in the document.
     pub id: NodeId,
+    /// Part of the node the canvas node draws.
+    pub part: NodePart,
     /// Kind of the node.
     pub op: String,
     /// Text of the header: the placement's label, or the kind's name.
@@ -139,17 +171,32 @@ pub struct DrawnRect {
     pub position: Pos2,
 }
 
-/// A titled frame behind some nodes: an `[[editor.frame]]` of the file, or a region with its body.
+/// A frame behind some canvas nodes: a titled `[[editor.frame]]` of the file, or a region with its halves and its body.
 #[derive(Debug, Clone)]
 pub struct CanvasFrame {
-    /// Text on the frame.
+    /// Text on the frame, empty for a region.
     pub title: String,
-    /// Members of the frame.
-    pub members: Vec<NodeId>,
-    /// Frames around this one.
+    /// Canvas nodes inside the frame.
+    pub members: Vec<PinNode>,
+    /// Number of region frames around this one, 0 for a frame of the file.
     pub depth: usize,
     /// Fill, stroke and title colours.
     pub colors: [Color32; 3],
+    /// Region whose body the frame holds, `None` for a frame of the file.
+    pub region: Option<NodeId>,
+}
+
+/// Rectangle of a region's frame on the canvas.
+#[derive(Debug, Clone, Copy)]
+pub struct RegionFrameRect {
+    /// Index of the frame in [`BodyCanvas::frames`].
+    pub index: usize,
+    /// Region of the frame.
+    pub region: NodeId,
+    /// Number of region frames around the frame, itself included.
+    pub depth: usize,
+    /// Rectangle in canvas points.
+    pub rect: Rect,
 }
 
 /// Nodes a framing brings into view.
@@ -168,8 +215,12 @@ pub struct BodyCanvas {
     pub canvas_id: Id,
     /// View of the body.
     pub snarl: Snarl<NodeView>,
-    /// [`Snarl`] node of each document node.
+    /// [`Snarl`] node of each document node, the input half for a region.
     pub nodes: BTreeMap<NodeId, PinNode>,
+    /// [`Snarl`] node of the output half of each region.
+    pub output_halves: BTreeMap<NodeId, PinNode>,
+    /// Position each canvas node took at the last sync.
+    placed: HashMap<PinNode, Pos2>,
     /// Rectangle of each node in the last frame.
     pub rects: HashMap<PinNode, DrawnRect>,
     /// Transform of the canvas in the last frame.
@@ -197,6 +248,8 @@ impl BodyCanvas {
             canvas_id,
             snarl: Snarl::new(),
             nodes: BTreeMap::new(),
+            output_halves: BTreeMap::new(),
+            placed: HashMap::new(),
             rects: HashMap::new(),
             transform: TSTransform::IDENTITY,
             canvas_rect: Rect::ZERO,
@@ -222,46 +275,70 @@ impl BodyCanvas {
         report: Option<&PassReport>,
         issues: &BTreeMap<NodeId, NodeIssues>,
     ) {
-        let mut views: BTreeMap<NodeId, NodeView> = BTreeMap::new();
-        let mut order: Vec<NodeId> = Vec::with_capacity(body.nodes.len());
+        let mut views: BTreeMap<CanvasKey, NodeView> = BTreeMap::new();
+        let mut order: Vec<CanvasKey> = Vec::with_capacity(body.nodes.len());
         for node in &body.nodes {
-            if views.contains_key(&node.id) {
+            if views.contains_key(&CanvasKey::main(node.id)) {
                 continue;
             }
             let node_issues = issues.get(&node.id).cloned().unwrap_or_default();
-            views.insert(node.id, node_view(node, body, document, editor, report, node_issues));
-            order.push(node.id);
-        }
-
-        let gone: Vec<NodeId> = self
-            .nodes
-            .keys()
-            .filter(|id| !views.contains_key(id))
-            .copied()
-            .collect();
-        for id in gone {
-            if let Some(pin_node) = self.nodes.remove(&id) {
-                self.snarl.remove_node(pin_node);
-                self.rects.remove(&pin_node);
+            let (main, output) = node_views(node, body, document, editor, report, node_issues);
+            views.insert(CanvasKey::main(node.id), main);
+            order.push(CanvasKey::main(node.id));
+            if let Some(output) = output {
+                views.insert(CanvasKey::output(node.id), output);
+                order.push(CanvasKey::output(node.id));
             }
         }
-        for (index, id) in order.iter().enumerate() {
-            let Some(view) = views.get(id) else { continue };
-            let position = editor.node_layout(*id).map_or_else(
-                || pos2(index as f32 * 30.0, index as f32 * 30.0),
-                |layout| pos2(layout.pos[0] as f32, layout.pos[1] as f32),
-            );
-            if let Some(&pin_node) = self.nodes.get(id) {
+
+        let held: Vec<(CanvasKey, PinNode)> = self
+            .nodes
+            .iter()
+            .map(|(id, pin_node)| (CanvasKey::main(*id), *pin_node))
+            .chain(
+                self.output_halves
+                    .iter()
+                    .map(|(id, pin_node)| (CanvasKey::output(*id), *pin_node)),
+            )
+            .collect();
+        for (key, pin_node) in held {
+            let known = views.get(&key).is_some_and(|view| {
+                self.snarl
+                    .get_node(pin_node)
+                    .is_some_and(|shown| shown.part == view.part)
+            });
+            if !known {
+                self.canvas_nodes_mut(key.output_half).remove(&key.node);
+                self.snarl.remove_node(pin_node);
+                self.rects.remove(&pin_node);
+                self.placed.remove(&pin_node);
+            }
+        }
+        for (index, key) in order.iter().enumerate() {
+            let Some(view) = views.get(key) else { continue };
+            let fallback = pos2(index as f32 * 30.0, index as f32 * 30.0);
+            let position = if key.output_half {
+                output_half_position(key.node, body, editor)
+            } else {
+                editor
+                    .node_layout(key.node)
+                    .map_or(fallback, |layout| pos2(layout.pos[0] as f32, layout.pos[1] as f32))
+            };
+            let existing = self.canvas_nodes(key.output_half).get(&key.node).copied();
+            let pin_node = if let Some(pin_node) = existing {
                 if let Some(info) = self.snarl.get_node_info_mut(pin_node) {
                     if info.value != *view {
                         info.value = view.clone();
                     }
                     info.pos = position;
                 }
+                pin_node
             } else {
                 let pin_node = self.snarl.insert_node(position, view.clone());
-                self.nodes.insert(*id, pin_node);
-            }
+                self.canvas_nodes_mut(key.output_half).insert(key.node, pin_node);
+                pin_node
+            };
+            self.placed.insert(pin_node, position);
         }
 
         let wanted = self.document_wires(body);
@@ -276,10 +353,79 @@ impl BodyCanvas {
         for wire in missing {
             self.snarl.connect(wire.0, wire.1);
         }
-        self.frames = frames_of(scope, document, editor, body);
+        self.frames = self.frames_of(scope, document, editor, body);
+    }
+
+    /// Returns the map of the canvas nodes of document nodes, or of output halves when `output_half` holds.
+    fn canvas_nodes(&self, output_half: bool) -> &BTreeMap<NodeId, PinNode> {
+        if output_half { &self.output_halves } else { &self.nodes }
+    }
+
+    /// Returns the map of the canvas nodes of document nodes, or of output halves when `output_half` holds, for
+    /// writing.
+    fn canvas_nodes_mut(&mut self, output_half: bool) -> &mut BTreeMap<NodeId, PinNode> {
+        if output_half {
+            &mut self.output_halves
+        } else {
+            &mut self.nodes
+        }
+    }
+
+    /// Returns the canvas nodes of the document node `id`: the node, or a region's two halves.
+    pub fn pins_of(&self, id: NodeId) -> impl Iterator<Item = PinNode> + '_ {
+        self.nodes
+            .get(&id)
+            .into_iter()
+            .chain(self.output_halves.get(&id))
+            .copied()
+    }
+
+    /// Returns the frames of the canvas of `scope`: the editor's frames, then one per region, outermost first.
+    fn frames_of(
+        &self,
+        scope: &Scope,
+        document: &GraphDocument,
+        editor: &EditorRegion,
+        body: &NodeBody,
+    ) -> Vec<CanvasFrame> {
+        let canvas = scope.canvas();
+        let mut frames = Vec::new();
+        for frame in editor.frames() {
+            if frame.scope != canvas {
+                continue;
+            }
+            frames.push(CanvasFrame {
+                title: frame.title,
+                members: frame.members.iter().flat_map(|member| self.pins_of(*member)).collect(),
+                depth: 0,
+                colors: hue_colors(&frame.color),
+                region: None,
+            });
+        }
+        for node in &body.nodes {
+            if !lookup(&node.op, document.library).is_some_and(|def| def.is_region) {
+                continue;
+            }
+            let members: Vec<PinNode> = std::iter::once(node.id)
+                .chain(body.region_contents(node.id))
+                .flat_map(|member| self.pins_of(member))
+                .collect();
+            let depth = 1 + body.region_path(node.id).len();
+            frames.push(CanvasFrame {
+                title: String::new(),
+                members,
+                depth,
+                colors: region_colors(depth),
+                region: Some(node.id),
+            });
+        }
+        frames.sort_by_key(|frame| frame.depth);
+        frames
     }
 
     /// Returns the pins of every wire of `body` whose two ends the canvas shows.
+    ///
+    /// A link to a region's inner output leaves its input half, and a link to an accumulator its output half.
     pub fn document_wires(&self, body: &NodeBody) -> HashSet<(OutPinId, InPinId)> {
         let mut wires = HashSet::new();
         for node in &body.nodes {
@@ -293,43 +439,80 @@ impl BodyCanvas {
                 let Some(InputValue::Link(link)) = node.inputs.get(&view.port) else {
                     continue;
                 };
-                let Some(&source) = self.nodes.get(&link.node) else {
-                    continue;
-                };
-                let Some(source_view) = self.snarl.get_node(source) else {
-                    continue;
-                };
-                let output = match &link.port {
-                    Some(port) => source_view.outputs.iter().position(|known| known.port == *port),
-                    None => (!source_view.outputs.is_empty()).then_some(0),
-                };
-                if let Some(output) = output {
-                    wires.insert((OutPinId { node: source, output }, InPinId { node: dest, input }));
+                if let Some(output) = self.output_pin(link) {
+                    wires.insert((output, InPinId { node: dest, input }));
                 }
             }
         }
         wires
     }
 
-    /// Returns the rectangle of the node `id` at its current position.
-    pub fn current_rect(&self, id: NodeId) -> Option<Rect> {
-        let pin_node = *self.nodes.get(&id)?;
-        let position = self.snarl.get_node_info(pin_node)?.pos;
-        Some(self.rects.get(&pin_node).map_or_else(
-            || Rect::from_min_size(position, UNDRAWN_NODE_SIZE),
-            |drawn| drawn.rect.translate(position - drawn.position),
-        ))
+    /// Returns the output pin that `link` reads, `None` when the canvas does not show it.
+    fn output_pin(&self, link: &PortRef) -> Option<OutPinId> {
+        let candidates = self.pins_of(link.node).filter_map(|pin_node| {
+            let view = self.snarl.get_node(pin_node)?;
+            let output = match &link.port {
+                Some(port) => view.outputs.iter().position(|known| known.port == *port)?,
+                None => (!view.outputs.is_empty() && view.part != NodePart::RegionInput).then_some(0)?,
+            };
+            Some(OutPinId { node: pin_node, output })
+        });
+        let mut candidates = candidates;
+        candidates.next()
     }
 
-    /// Returns the rectangle around every node, `None` for an empty canvas.
+    /// Returns the rectangle of the node `id` at its current position, the input half for a region.
+    pub fn current_rect(&self, id: NodeId) -> Option<Rect> {
+        self.pin_rect(*self.nodes.get(&id)?)
+    }
+
+    /// Returns the rectangle of the canvas node `pin_node` at its current position.
+    pub fn pin_rect(&self, pin_node: PinNode) -> Option<Rect> {
+        let position = self.snarl.get_node_info(pin_node)?.pos;
+        Some(drawn_rect(self.rects.get(&pin_node), position))
+    }
+
+    /// Returns the rectangle the node `id` was last drawn in, the input half for a region, `None` before it is drawn.
+    pub fn drawn_rect(&self, id: NodeId) -> Option<Rect> {
+        let pin_node = self.nodes.get(&id)?;
+        self.rects.get(pin_node).map(|drawn| drawn.rect)
+    }
+
+    /// Returns the rectangle the output half of the region `id` was last drawn in, `None` before it is drawn.
+    pub fn drawn_output_half_rect(&self, id: NodeId) -> Option<Rect> {
+        let pin_node = self.output_halves.get(&id)?;
+        self.rects.get(pin_node).map(|drawn| drawn.rect)
+    }
+
+    /// Returns the rectangle of the output half of the region `id` at its current position.
+    pub fn output_half_rect(&self, id: NodeId) -> Option<Rect> {
+        self.pin_rect(*self.output_halves.get(&id)?)
+    }
+
+    /// Returns the rectangle around every canvas node, `None` for an empty canvas.
     pub fn all_rect(&self) -> Option<Rect> {
         self.nodes
-            .keys()
-            .filter_map(|id| self.current_rect(*id))
+            .values()
+            .chain(self.output_halves.values())
+            .filter_map(|pin_node| self.pin_rect(*pin_node))
             .reduce(Rect::union)
     }
 
-    /// Returns the document nodes egui-snarl holds selected, in id order.
+    /// Returns the canvas rectangle around the canvas nodes of `ids`, as `[min, max]`, `None` when none is shown.
+    pub fn bounds_of(&self, ids: &[NodeId]) -> Option<[[f64; 2]; 2]> {
+        let rect = ids
+            .iter()
+            .flat_map(|id| self.pins_of(*id))
+            .filter_map(|pin_node| self.pin_rect(pin_node))
+            .reduce(Rect::union)?;
+        Some([
+            [f64::from(rect.min.x), f64::from(rect.min.y)],
+            [f64::from(rect.max.x), f64::from(rect.max.y)],
+        ])
+    }
+
+    /// Returns the document nodes egui-snarl holds selected, each once, in id order. Either half of a region selects
+    /// the region.
     pub fn selected(&self, ctx: &egui::Context) -> Vec<NodeId> {
         let mut selected: Vec<NodeId> = get_selected_nodes(self.canvas_id, ctx)
             .iter()
@@ -337,10 +520,12 @@ impl BodyCanvas {
             .map(|view| view.id)
             .collect();
         selected.sort_unstable();
+        selected.dedup();
         selected
     }
 
-    /// Returns one [`EditCommand::Move`] per node whose position on the canvas differs from its placement in `editor`.
+    /// Returns one [`EditCommand::Move`] per node whose position on the canvas differs from its placement in `editor`,
+    /// and one [`EditCommand::MoveRegionOutput`] per output half moved since the last sync.
     pub fn moved(&self, editor: &EditorRegion) -> Vec<EditCommand> {
         let mut moves = Vec::new();
         for (id, pin_node) in &self.nodes {
@@ -355,7 +540,97 @@ impl BodyCanvas {
                 moves.push(EditCommand::Move { node: *id, pos });
             }
         }
+        for (id, pin_node) in &self.output_halves {
+            if let Some(pos) = self.moved_since_sync(*pin_node) {
+                moves.push(EditCommand::MoveRegionOutput {
+                    node: *id,
+                    pos: [f64::from(pos.x), f64::from(pos.y)],
+                });
+            }
+        }
         moves
+    }
+
+    /// Returns the position of `pin_node` when it differs from the one the last sync gave it.
+    fn moved_since_sync(&self, pin_node: PinNode) -> Option<Pos2> {
+        let pos = self.snarl.get_node_info(pin_node)?.pos;
+        let placed = self.placed.get(&pin_node)?;
+        ((*placed - pos).length() > 0.01).then_some(pos)
+    }
+
+    /// Returns the rectangle of each region frame at the current positions, drawn without the canvas nodes in
+    /// `without`. A frame left with no member is left out.
+    pub fn region_frame_rects(&self, without: &HashSet<PinNode>) -> Vec<RegionFrameRect> {
+        self.frames
+            .iter()
+            .enumerate()
+            .filter_map(|(index, frame)| {
+                let region = frame.region?;
+                let rect = frame
+                    .members
+                    .iter()
+                    .filter(|pin_node| !without.contains(pin_node))
+                    .filter_map(|pin_node| self.pin_rect(*pin_node))
+                    .reduce(Rect::union)?;
+                Some(RegionFrameRect {
+                    index,
+                    region,
+                    depth: frame.depth,
+                    rect: frame_rect(rect, &frame.title),
+                })
+            })
+            .collect()
+    }
+
+    /// Returns the region that each node moved since the last sync joins when it is dropped where it is now, with the
+    /// index of the region's frame in [`Self::frames`].
+    ///
+    /// A node joins the deepest region whose frame, drawn without the moved canvas nodes, holds the node's centre. It
+    /// joins no region around it, which the node menu's Move out of region reaches, and a node whose region moves with
+    /// it stays in that region.
+    pub fn regions_entered(&self, body: &NodeBody) -> Vec<(NodeId, NodeId, usize)> {
+        let moved: Vec<(PinNode, NodeId)> = self
+            .nodes
+            .iter()
+            .chain(&self.output_halves)
+            .filter(|(_, pin_node)| self.moved_since_sync(**pin_node).is_some())
+            .map(|(id, pin_node)| (*pin_node, *id))
+            .collect();
+        if moved.is_empty() {
+            return Vec::new();
+        }
+        let moved_pins: HashSet<PinNode> = moved.iter().map(|(pin_node, _)| *pin_node).collect();
+        let moved_ids: BTreeSet<NodeId> = moved.iter().map(|(_, id)| *id).collect();
+        let frames = self.region_frame_rects(&moved_pins);
+        let mut entered = Vec::new();
+        let mut seen = BTreeSet::new();
+        for (pin_node, id) in moved {
+            if !seen.insert(id) {
+                continue;
+            }
+            let path = body.region_path(id);
+            if path.iter().any(|region| moved_ids.contains(region)) {
+                continue;
+            }
+            let Some(center) = self.pin_rect(pin_node).map(|rect| rect.center()) else {
+                continue;
+            };
+            let target = frames
+                .iter()
+                .filter(|frame| {
+                    frame.rect.contains(center)
+                        && frame.region != id
+                        && !body.region_path(frame.region).contains(&id)
+                        && can_join(body, id, frame.region)
+                })
+                .max_by_key(|frame| frame.depth);
+            if let Some(frame) = target
+                && !path.contains(&frame.region)
+            {
+                entered.push((id, frame.region, frame.index));
+            }
+        }
+        entered
     }
 
     /// Returns a [`EditCommand::Disconnect`] for each document wire of `body` the [`Snarl`] no longer holds.
@@ -386,15 +661,15 @@ fn wire_order(wire: &(OutPinId, InPinId)) -> [usize; 4] {
     [wire.0.node.0, wire.0.output, wire.1.node.0, wire.1.input]
 }
 
-/// Returns the view of `node` of `body`.
-fn node_view(
+/// Returns the views of `node` of `body`: the whole node, or a region's input half and its output half.
+fn node_views(
     node: &Node,
     body: &NodeBody,
     document: &GraphDocument,
     editor: &EditorRegion,
     report: Option<&PassReport>,
     issues: NodeIssues,
-) -> NodeView {
+) -> (NodeView, Option<NodeView>) {
     let def = lookup(&node.op, document.library);
     let label = editor.node_layout(node.id).and_then(|layout| layout.label);
     let title = label.unwrap_or_else(|| def.map_or_else(|| node.op.clone(), |def| def.label.to_owned()));
@@ -442,36 +717,88 @@ fn node_view(
         }
     }
 
-    let mut outputs = Vec::new();
-    if let Some(def) = def {
-        let ports = def
-            .resolved_outputs(node, document)
-            .into_iter()
-            .map(|output| (output, false))
-            .chain(
-                def.resolved_inner_outputs(node)
-                    .into_iter()
-                    .map(|output| (output, true)),
-            );
-        for (resolved, inner) in ports {
+    let outputs = def.map_or_else(Vec::new, |def| output_views(def, node, document, report));
+
+    let is_region = def.is_some_and(|def| def.is_region);
+    let settings = settings_lines(def, node, body);
+    let semantics = def.map_or("", |def| def.semantics);
+    if !is_region {
+        let view = NodeView {
+            id: node.id,
+            part: NodePart::Whole,
+            op: node.op.clone(),
+            title,
+            semantics,
+            inputs,
+            outputs,
+            settings,
+            issues,
+        };
+        return (view, None);
+    }
+    let (inner, outer): (Vec<OutputView>, Vec<OutputView>) = outputs.into_iter().partition(|output| output.inner);
+    let output_half = NodeView {
+        id: node.id,
+        part: NodePart::RegionOutput,
+        op: node.op.clone(),
+        title: format!("{title} output"),
+        semantics,
+        inputs: Vec::new(),
+        outputs: outer,
+        settings: Vec::new(),
+        issues: NodeIssues::default(),
+    };
+    let input_half = NodeView {
+        id: node.id,
+        part: NodePart::RegionInput,
+        op: node.op.clone(),
+        title,
+        semantics,
+        inputs,
+        outputs: inner,
+        settings,
+        issues,
+    };
+    (input_half, Some(output_half))
+}
+
+/// Returns the output pins of `node` of kind `def`, outer outputs before inner outputs, typed by `report`.
+fn output_views(def: &NodeDef, node: &Node, document: &GraphDocument, report: Option<&PassReport>) -> Vec<OutputView> {
+    let ports = def
+        .resolved_outputs(node, document)
+        .into_iter()
+        .map(|output| (output, false))
+        .chain(
+            def.resolved_inner_outputs(node)
+                .into_iter()
+                .map(|output| (output, true)),
+        );
+    ports
+        .map(|(resolved, inner)| {
             let typed = report.and_then(|report| {
                 let table = if inner { &report.inner_outputs } else { &report.outputs };
-                let ports = table.get(&node.id)?;
-                ports.get(&resolved.name)
+                table.get(&node.id)?.get(&resolved.name)
             });
-            outputs.push(OutputView {
+            OutputView {
                 value_type: typed.and_then(|typed| typed.value_type.clone()).or(resolved.declared),
                 rate: typed.map_or(Rate::Element, |typed| typed.rate),
                 port: resolved.name,
                 inner,
-            });
-        }
-    }
+            }
+        })
+        .collect()
+}
 
+/// Returns the lines of configuration the body of `node`, of kind `def`, shows as `key: value`, and its region.
+///
+/// A region leaves out the keys its controls show: its accumulators, and a Repeat's `max`.
+fn settings_lines(def: Option<&NodeDef>, node: &Node, body: &NodeBody) -> Vec<String> {
     let mut settings = Vec::new();
     if let Some(def) = def {
         for (key, value) in effective_config(def, node) {
-            if key == "key" {
+            let controlled = key == "acc" || (key == "max" && node.op == OP_REGION_REPEAT);
+            let expression = node.op == OP_EXPRESSION && matches!(key.as_str(), "text" | "inputs" | "outputs");
+            if key == "key" || (def.is_region && controlled) || expression {
                 continue;
             }
             settings.push(format!("{key}: {}", config_text(&value)));
@@ -481,15 +808,56 @@ fn node_view(
         let depth = body.region_path(node.id).len();
         settings.push(format!("in region {region}, depth {depth}"));
     }
-    NodeView {
-        id: node.id,
-        op: node.op.clone(),
-        title,
-        semantics: def.map_or("", |def| def.semantics),
-        inputs,
-        outputs,
-        settings,
-        issues,
+    settings
+}
+
+/// Returns the position of the output half of the region `region`: its placement, or one column right of the nodes
+/// inside the region, level with the input half.
+fn output_half_position(region: NodeId, body: &NodeBody, editor: &EditorRegion) -> Pos2 {
+    let layout = editor.node_layout(region);
+    if let Some(pos) = layout.as_ref().and_then(|layout| layout.output_pos) {
+        return pos2(pos[0] as f32, pos[1] as f32);
+    }
+    let start = layout.map_or([0.0, 0.0], |layout| layout.pos);
+    let right = body
+        .region_contents(region)
+        .into_iter()
+        .filter_map(|member| editor.node_layout(member))
+        .map(|member| member.pos[0])
+        .fold(start[0], f64::max);
+    pos2((right + NODE_SIZE[0] + COLUMN_GAP) as f32, start[1] as f32)
+}
+
+/// Returns the rectangle of a canvas node at `position`, from the rectangle it was `drawn` in, or of an assumed size
+/// for a node not drawn yet.
+fn drawn_rect(drawn: Option<&DrawnRect>, position: Pos2) -> Rect {
+    drawn.map_or_else(
+        || Rect::from_min_size(position, UNDRAWN_NODE_SIZE),
+        |drawn| drawn.rect.translate(position - drawn.position),
+    )
+}
+
+/// Returns the rectangle of a frame around the canvas nodes in `members`, with room for a title strip when `title`
+/// is not empty.
+fn frame_rect(members: Rect, title: &str) -> Rect {
+    let top = if title.is_empty() {
+        FRAME_MARGIN
+    } else {
+        FRAME_MARGIN + FRAME_TITLE_HEIGHT
+    };
+    Rect::from_min_max(
+        members.min - vec2(FRAME_MARGIN, top),
+        members.max + vec2(FRAME_MARGIN, FRAME_MARGIN),
+    )
+}
+
+/// Returns the fill, stroke and title colours of a region's frame `depth` region frames deep, counting itself. A
+/// deeper frame takes a lighter fill.
+fn region_colors(depth: usize) -> [Color32; 3] {
+    match depth {
+        0 | 1 => [mcs::GRAY_900, mcs::GRAY_700, mcs::GRAY_300],
+        2 => [mcs::GRAY_800, mcs::GRAY_600, mcs::GRAY_300],
+        _ => [mcs::GRAY_700, mcs::GRAY_500, mcs::GRAY_200],
     }
 }
 
@@ -587,51 +955,6 @@ fn hue_colors(hue: &str) -> [Color32; 3] {
     }
 }
 
-/// Returns the frames of the canvas of `scope`: the editor's frames, then one per region, outermost first.
-fn frames_of(scope: &Scope, document: &GraphDocument, editor: &EditorRegion, body: &NodeBody) -> Vec<CanvasFrame> {
-    let canvas = scope.canvas();
-    let mut frames = Vec::new();
-    for frame in editor.frames() {
-        if frame.scope != canvas {
-            continue;
-        }
-        frames.push(CanvasFrame {
-            title: frame.title,
-            members: frame.members,
-            depth: 0,
-            colors: hue_colors(&frame.color),
-        });
-    }
-    for node in &body.nodes {
-        if !lookup(&node.op, document.library).is_some_and(|def| def.is_region) {
-            continue;
-        }
-        let mut members = Vec::new();
-        let mut stack = vec![node.id];
-        let mut seen = BTreeSet::new();
-        while let Some(region) = stack.pop() {
-            if !seen.insert(region) {
-                continue;
-            }
-            for member in body.region_members(region) {
-                members.push(member.id);
-                stack.push(member.id);
-            }
-        }
-        if members.is_empty() {
-            continue;
-        }
-        frames.push(CanvasFrame {
-            title: format!("Body of {}", node.id),
-            members,
-            depth: 1 + body.region_path(node.id).len(),
-            colors: [mcs::GRAY_800, mcs::GRAY_500, mcs::GRAY_300],
-        });
-    }
-    frames.sort_by_key(|frame| frame.depth);
-    frames
-}
-
 /// Returns the transform that shows `target` at the centre of `canvas`, zoomed to fit with [`FRAMING_MARGIN`].
 pub fn framing_transform(target: Rect, canvas: Rect) -> TSTransform {
     let view = target.expand(FRAMING_MARGIN);
@@ -714,6 +1037,8 @@ pub fn pin_key(canvas_id: Id, node: NodeId, output: bool, index: usize) -> Id {
 pub struct CanvasContext<'a> {
     /// Body the canvas shows.
     pub scope: &'a Scope,
+    /// Nodes of the body.
+    pub body: &'a NodeBody,
     /// Pass of the body, `None` for a function.
     pub pass: Option<&'a Pass>,
     /// Document the body belongs to.
@@ -725,6 +1050,10 @@ struct GraphViewer<'a> {
     canvas_id: Id,
     context: CanvasContext<'a>,
     frames: &'a [CanvasFrame],
+    /// Indices in `frames` of the regions a dragged node would join on release.
+    drop_targets: Vec<usize>,
+    /// Region, depth and canvas rectangle of each region frame painted this frame.
+    region_rects: Vec<(NodeId, usize, Rect)>,
     /// Rectangle to bring into view this frame, with the canvas rectangle.
     framing: Option<(Rect, Rect)>,
     rects: &'a mut HashMap<PinNode, DrawnRect>,
@@ -756,6 +1085,78 @@ impl GraphViewer<'_> {
         self.requests.push(GraphRequest::Edit(GraphEdit { commands, coalesce }));
     }
 
+    /// Returns the moves that place node `id` of `body`, with every node inside it, right of the frame of `region`,
+    /// keeping their places relative to each other. Returns none when no canvas node of them comes within
+    /// `FRAME_MARGIN` of the frame drawn without them, or when the frame holds nothing else.
+    fn moves_out_of_frame(
+        &self,
+        snarl: &Snarl<NodeView>,
+        body: &NodeBody,
+        id: NodeId,
+        region: NodeId,
+    ) -> Vec<EditCommand> {
+        let mut leaving: BTreeSet<NodeId> = body.region_contents(id).into_iter().collect();
+        leaving.insert(id);
+        let moving: Vec<(PinNode, &NodeView, Pos2)> = snarl
+            .nodes_ids_data()
+            .filter(|(_, node)| leaving.contains(&node.value.id))
+            .map(|(pin_node, node)| (pin_node, &node.value, node.pos))
+            .collect();
+        let moving_pins: HashSet<PinNode> = moving.iter().map(|(pin_node, _, _)| *pin_node).collect();
+        let rect_of = |pin_node: PinNode| {
+            let position = snarl.get_node_info(pin_node)?.pos;
+            Some(drawn_rect(self.rects.get(&pin_node), position))
+        };
+        let Some(frame) = self
+            .frames
+            .iter()
+            .find(|frame| frame.region == Some(region))
+            .and_then(|frame| {
+                frame
+                    .members
+                    .iter()
+                    .filter(|pin_node| !moving_pins.contains(pin_node))
+                    .filter_map(|pin_node| rect_of(*pin_node))
+                    .reduce(Rect::union)
+                    .map(|members| frame_rect(members, &frame.title))
+            })
+        else {
+            return Vec::new();
+        };
+        let Some(bounds) = moving
+            .iter()
+            .filter_map(|(pin_node, _, _)| rect_of(*pin_node))
+            .reduce(Rect::union)
+        else {
+            return Vec::new();
+        };
+        // A node within a margin of the frame's edge still reads as a member.
+        if !bounds.intersects(frame.expand(FRAME_MARGIN)) {
+            return Vec::new();
+        }
+        let shift = frame.max.x + COLUMN_GAP as f32 - bounds.min.x;
+        moving
+            .into_iter()
+            .map(|(_, view, pos)| {
+                let pos = [f64::from(pos.x + shift), f64::from(pos.y)];
+                if view.part == NodePart::RegionOutput {
+                    EditCommand::MoveRegionOutput { node: view.id, pos }
+                } else {
+                    EditCommand::Move { node: view.id, pos }
+                }
+            })
+            .collect()
+    }
+
+    /// Returns the region of the deepest region frame painted this frame that holds the canvas position `pos`.
+    fn region_at(&self, pos: Pos2) -> Option<NodeId> {
+        self.region_rects
+            .iter()
+            .filter(|(_, _, rect)| rect.contains(pos))
+            .max_by_key(|(_, depth, _)| *depth)
+            .map(|(region, _, _)| *region)
+    }
+
     /// Returns the port names of the wire between two pins.
     fn wire_ports(source: &OutPin, dest: &InPin, snarl: &Snarl<NodeView>) -> Option<(NodeId, String, PortRef)> {
         let source_view = snarl.get_node(source.id.node)?;
@@ -785,12 +1186,9 @@ impl GraphViewer<'_> {
         self.edit(vec![command], None);
     }
 
-    /// Draws the quick-add list and returns the kind picked.
-    fn quick_add(&mut self, ui: &mut Ui, wire: Option<&WireEnd>) -> Option<&'static str> {
-        let Some(pass) = self.context.pass else {
-            ui.weak("Nodes can be added to passes only.");
-            return None;
-        };
+    /// Draws the quick-add list of the kinds the top of the body, or the body of `region` when set, takes, and
+    /// returns the kind picked. A region kind that cannot nest in `region` is left out.
+    fn quick_add(&mut self, ui: &mut Ui, wire: Option<&WireEnd>, region: Option<NodeId>) -> Option<&'static str> {
         ui.set_max_width(POPUP_WIDTH);
         let field = ui.add(
             TextEdit::singleline(self.query)
@@ -800,7 +1198,17 @@ impl GraphViewer<'_> {
         if !field.has_focus() && self.query.is_empty() {
             field.request_focus();
         }
-        let kinds = offered_kinds(self.context.document, pass, wire, self.query);
+        let body = self.context.body;
+        let kinds: Vec<_> = offered_kinds(
+            self.context.document,
+            self.context.pass,
+            wire,
+            self.query,
+            region.is_some(),
+        )
+        .into_iter()
+        .filter(|def| can_add(body, def.id, region))
+        .collect();
         if kinds.is_empty() {
             ui.weak("No node matches.");
             return None;
@@ -964,6 +1372,21 @@ impl GraphViewer<'_> {
                     .map(|palette| palette.id.clone())
                     .chain(document.categories.iter().map(|category| category.id.clone()))
                     .collect(),
+                ConfigType::FunctionId => document.functions.iter().map(|function| function.id.clone()).collect(),
+                ConfigType::InterfacePort => {
+                    let Scope::Function(id) = self.context.scope else {
+                        continue;
+                    };
+                    let Some(function) = document.functions.iter().find(|function| function.id == *id) else {
+                        continue;
+                    };
+                    let ports = if view.op == OP_FUNCTION_OUTPUT {
+                        &function.outputs
+                    } else {
+                        &function.inputs
+                    };
+                    ports.iter().map(|port| port.port.clone()).collect()
+                }
                 _ => continue,
             };
             ui.menu_button(key.name, |ui| {
@@ -986,6 +1409,556 @@ impl GraphViewer<'_> {
             });
         }
     }
+}
+
+impl GraphViewer<'_> {
+    /// Draws a text field of the canvas whose edit commits when it loses focus, and returns the text then, when it
+    /// differs from `current`.
+    fn commit_text(
+        &self,
+        ui: &mut Ui,
+        key: impl std::hash::Hash + std::fmt::Debug,
+        current: &str,
+        multiline: bool,
+    ) -> Option<String> {
+        let field_id = self.canvas_id.with(key);
+        let mut text = ui
+            .data(|data| data.get_temp::<String>(field_id))
+            .unwrap_or_else(|| current.to_owned());
+        let field = if multiline {
+            TextEdit::multiline(&mut text)
+                .id(field_id)
+                .code_editor()
+                .desired_rows(2)
+                .desired_width(EXPRESSION_WIDTH)
+        } else {
+            TextEdit::singleline(&mut text)
+                .id(field_id)
+                .font(egui::TextStyle::Small)
+                .desired_width(72.0)
+        };
+        let response = ui.add(field);
+        if response.changed() {
+            ui.data_mut(|data| data.insert_temp(field_id, text.clone()));
+        }
+        if response.lost_focus() {
+            ui.data_mut(|data| data.remove::<String>(field_id));
+            return (text != current).then_some(text);
+        }
+        None
+    }
+
+    /// Draws the node menu's entries of the call `id`: Open function and Ungroup.
+    fn call_menus(&mut self, ui: &mut Ui, id: NodeId) {
+        if ui.button("Open function").clicked() {
+            self.requests.push(GraphRequest::OpenCall(id));
+            ui.close();
+        }
+        if ui
+            .button("Ungroup")
+            .on_hover_text("Replace call with copy of function's nodes")
+            .clicked()
+        {
+            self.requests.push(GraphRequest::Ungroup(id));
+            ui.close();
+        }
+    }
+
+    /// Draws the row of the input at `index` of `inputs`, the inputs of the expression `node`: its name, its type and
+    /// Remove. A rename to the name of another input is refused.
+    fn expression_input_row(&mut self, ui: &mut Ui, node: &Node, inputs: &[(String, ValueType)], index: usize) {
+        let id = node.id;
+        let scope = self.context.scope.clone();
+        let set = |value: ConfigValue| EditCommand::SetConfig {
+            scope: scope.clone(),
+            node: id,
+            key: "inputs".to_owned(),
+            value: Some(value),
+        };
+        let (name, value_type) = &inputs[index];
+        let renamed = self.commit_text(ui, ("expression input", id, index), name, false);
+        let taken = |renamed: &str| {
+            inputs
+                .iter()
+                .enumerate()
+                .any(|(other, (known, _))| other != index && known == renamed)
+        };
+        if let Some(renamed) = renamed.as_deref().filter(|renamed| taken(renamed)) {
+            self.requests.push(GraphRequest::Refuse(format!(
+                "Node {id} already has the input '{renamed}'."
+            )));
+        } else if let Some(renamed) = renamed {
+            let mut list = inputs.to_vec();
+            list[index].0.clone_from(&renamed);
+            let mut commands = vec![set(expression_input_list(&list))];
+            commands.extend(moved_input(&scope, node, name, &renamed));
+            self.edit(commands, None);
+        }
+        let mut picked = None;
+        ui.menu_button(RichText::new(value_type.to_string()).small(), |ui| {
+            for choice in value_types(self.context.document) {
+                if ui.button(choice.to_string()).clicked() {
+                    picked = Some(choice);
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Type of the input");
+        if let Some(choice) = picked {
+            let mut list = inputs.to_vec();
+            list[index].1 = choice;
+            self.edit(vec![set(expression_input_list(&list))], None);
+        }
+        let remove = add_button(
+            ui,
+            true,
+            Button::new(RichText::new(MDI_CLOSE).small()).frame(false),
+            "Remove input",
+        );
+        if remove.on_hover_text("Remove input").clicked() {
+            let mut list = inputs.to_vec();
+            list.remove(index);
+            let mut commands = vec![set(expression_input_list(&list))];
+            if node.inputs.contains_key(name) {
+                commands.push(EditCommand::Disconnect {
+                    scope: scope.clone(),
+                    node: id,
+                    port: name.clone(),
+                });
+            }
+            self.edit(commands, None);
+        }
+    }
+
+    /// Draws the editor of the expression `id`: its text, its named inputs with their types, and its outputs.
+    fn expression_editor(&mut self, ui: &mut Ui, id: NodeId) {
+        let Some(node) = self.context.body.node(id) else {
+            return;
+        };
+        let scope = self.context.scope.clone();
+        let set = |key: &str, value: ConfigValue| EditCommand::SetConfig {
+            scope: scope.clone(),
+            node: id,
+            key: key.to_owned(),
+            value: Some(value),
+        };
+        let text = node
+            .config
+            .get("text")
+            .and_then(ConfigValue::as_str)
+            .unwrap_or_default();
+        if let Some(changed) = self.commit_text(ui, ("expression text", id), text, true) {
+            self.edit(vec![set("text", ConfigValue::String(changed))], None);
+        }
+        let inputs = expression_inputs(node);
+        ui.label(RichText::new("Inputs").small().weak());
+        for index in 0..inputs.len() {
+            ui.horizontal(|ui| self.expression_input_row(ui, node, &inputs, index));
+        }
+        let add = add_button(
+            ui,
+            true,
+            Button::new(RichText::new(format!("{MDI_PLUS} Add input")).small()),
+            "Add input",
+        );
+        if add.on_hover_text("Add input of type f32").clicked() {
+            let taken = |candidate: &str| inputs.iter().any(|(known, _)| known == candidate);
+            let name = std::iter::once("x".to_owned())
+                .chain((2..).map(|number| format!("x_{number}")))
+                .find(|candidate| !taken(candidate))
+                .unwrap_or_default();
+            let mut list = inputs.clone();
+            list.push((name, ValueType::F32));
+            self.edit(vec![set("inputs", expression_input_list(&list))], None);
+        }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Outputs").small().weak());
+            let outputs: Vec<&str> = match node.config.get("outputs") {
+                Some(ConfigValue::Array(items)) => items.iter().filter_map(ConfigValue::as_str).collect(),
+                _ => Vec::new(),
+            };
+            let current = outputs.join(", ");
+            if let Some(changed) = self.commit_text(ui, ("expression outputs", id), &current, false) {
+                let list = changed
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(|name| ConfigValue::String(name.to_owned()))
+                    .collect();
+                self.edit(vec![set("outputs", ConfigValue::Array(list))], None);
+            }
+        })
+        .response
+        .on_hover_text("Names the text assigns, separated by commas. Each is an output of the node.");
+    }
+
+    /// Draws the controls of the region `id` in its input half: a Repeat's bound `max`, and the accumulators with
+    /// their names, types and combines.
+    fn region_controls(&mut self, ui: &mut Ui, id: NodeId) {
+        let Some(region) = self.context.body.node(id) else {
+            return;
+        };
+        if region.op == OP_REGION_REPEAT {
+            self.max_control(ui, id, region);
+        }
+        if region.config.contains_key("acc") {
+            let accumulators = region.accumulators().unwrap_or_default();
+            self.accumulator_controls(ui, id, &accumulators);
+        }
+    }
+
+    /// Draws the bound `max` of the Repeat `region`.
+    fn max_control(&mut self, ui: &mut Ui, id: NodeId, region: &Node) {
+        let scope = self.context.scope.clone();
+        let max_now = region.config.get("max").and_then(ConfigValue::as_integer).unwrap_or(1);
+        let mut max = max_now;
+        ui.horizontal(|ui| {
+            ui.add(Label::new(RichText::new("Max").small()).selectable(false))
+                .on_hover_text("Largest number of iterations. A larger count runs this many.");
+            ui.add(
+                DragValue::new(&mut max)
+                    .range(1..=MAX_REPEAT_ITERATIONS as i64)
+                    .clamp_existing_to_range(false)
+                    .speed(0.2),
+            );
+        });
+        if max != max_now {
+            let command = EditCommand::SetConfig {
+                scope: scope.clone(),
+                node: id,
+                key: "max".to_owned(),
+                value: Some(ConfigValue::Integer(max)),
+            };
+            self.edit(vec![command], Some(format!("max {} {id}", scope.canvas())));
+        }
+    }
+
+    /// Draws the accumulator rows of the region `id`, from `accumulators`, and Add accumulator.
+    fn accumulator_controls(&mut self, ui: &mut Ui, id: NodeId, accumulators: &[Accumulator]) {
+        let scope = self.context.scope.clone();
+        for (index, accumulator) in accumulators.iter().enumerate() {
+            ui.horizontal(|ui| self.accumulator_row(ui, id, index, accumulator));
+        }
+        if accumulators.len() < MAX_ACCUMULATORS
+            && ui
+                .add(Button::new(
+                    RichText::new(format!("{MDI_PLUS} Add accumulator")).small(),
+                ))
+                .on_hover_text("Add value carried through iterations")
+                .clicked()
+        {
+            let name = unused_accumulator_name(accumulators);
+            let command = EditCommand::AddAccumulator {
+                scope,
+                node: id,
+                accumulator: Accumulator::new(name, ValueType::F32, Combine::Sum),
+            };
+            self.edit(vec![command], None);
+        }
+    }
+
+    /// Draws one accumulator of the region `id`: its name, its type, its combine and its removal.
+    fn accumulator_row(&mut self, ui: &mut Ui, id: NodeId, index: usize, accumulator: &Accumulator) {
+        let scope = self.context.scope.clone();
+        let field_id = self.canvas_id.with(("accumulator name", id, index));
+        let mut name = ui
+            .data(|data| data.get_temp::<String>(field_id))
+            .unwrap_or_else(|| accumulator.name.clone());
+        let field = ui.add(
+            TextEdit::singleline(&mut name)
+                .id(field_id)
+                .desired_width(72.0)
+                .font(egui::TextStyle::Small),
+        );
+        if field.changed() {
+            ui.data_mut(|data| data.insert_temp(field_id, name.clone()));
+        }
+        if field.lost_focus() {
+            ui.data_mut(|data| data.remove::<String>(field_id));
+            if name != accumulator.name {
+                let command = EditCommand::RenameAccumulator {
+                    scope: scope.clone(),
+                    node: id,
+                    from: accumulator.name.clone(),
+                    to: name,
+                };
+                self.edit(vec![command], None);
+            }
+        }
+        let mut changed: Option<Accumulator> = None;
+        ui.menu_button(RichText::new(accumulator.value_type.to_string()).small(), |ui| {
+            for value_type in value_types(self.context.document) {
+                if ui.button(value_type.to_string()).clicked() {
+                    let combine = if accumulator.combine.applies_to(&value_type) {
+                        accumulator.combine
+                    } else {
+                        Combine::Carry
+                    };
+                    changed = Some(Accumulator::new(accumulator.name.clone(), value_type, combine));
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Type of the value");
+        ui.menu_button(RichText::new(accumulator.combine.as_str()).small(), |ui| {
+            for combine in Combine::ALL {
+                if combine.applies_to(&accumulator.value_type) && ui.button(combine.as_str()).clicked() {
+                    changed = Some(Accumulator::new(
+                        accumulator.name.clone(),
+                        accumulator.value_type.clone(),
+                        combine,
+                    ));
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Rule that combines the values of Accumulate nodes");
+        if let Some(accumulator) = changed {
+            let command = EditCommand::SetAccumulator {
+                scope: scope.clone(),
+                node: id,
+                accumulator,
+            };
+            self.edit(vec![command], None);
+        }
+        let remove = add_button(
+            ui,
+            true,
+            Button::new(RichText::new(MDI_CLOSE).small()).frame(false),
+            "Remove accumulator",
+        );
+        if remove.on_hover_text("Remove accumulator").clicked() {
+            let command = EditCommand::RemoveAccumulator {
+                scope,
+                node: id,
+                name: accumulator.name.clone(),
+            };
+            self.edit(vec![command], None);
+        }
+    }
+
+    /// Draws the node menu's entries that move the node `id` into a region of the body, or out of its region.
+    ///
+    /// A node moved out of its region is also placed right of the region's frame, with every node inside it, when it
+    /// would otherwise still be drawn inside the frame and read as a member.
+    fn region_menus(&mut self, ui: &mut Ui, id: NodeId, snarl: &Snarl<NodeView>) {
+        let body = self.context.body;
+        let document = self.context.document;
+        let Some(node) = body.node(id) else { return };
+        let contents = body.region_contents(id);
+        let targets: Vec<(NodeId, String)> = body
+            .nodes
+            .iter()
+            .filter(|other| {
+                other.id != id
+                    && Some(other.id) != node.region
+                    && !contents.contains(&other.id)
+                    && lookup(&other.op, document.library).is_some_and(|def| def.is_region)
+                    && can_join(body, id, other.id)
+            })
+            .map(|other| {
+                let label = lookup(&other.op, document.library).map_or(other.op.as_str(), |def| def.label);
+                (other.id, format!("{label} {}", other.id))
+            })
+            .collect();
+        let scope = self.context.scope.clone();
+        if !targets.is_empty() {
+            ui.menu_button("Move into region", |ui| {
+                for (region, label) in targets {
+                    if ui.button(label).clicked() {
+                        let command = EditCommand::SetRegion {
+                            scope: scope.clone(),
+                            node: id,
+                            region: Some(region),
+                        };
+                        self.edit(vec![command], None);
+                        ui.close();
+                    }
+                }
+            });
+        }
+        let parent = node
+            .region
+            .and_then(|region| body.node(region))
+            .map(|region| region.region);
+        let can_leave = parent.is_some_and(|parent| parent.is_none_or(|parent| can_join(body, id, parent)));
+        if let Some(region) = node.region
+            && can_leave
+            && ui
+                .button("Move out of region")
+                .on_hover_text(format!("Move node out of region {region}"))
+                .clicked()
+        {
+            let parent = body.node(region).and_then(|known| known.region);
+            let mut commands = vec![EditCommand::SetRegion {
+                scope,
+                node: id,
+                region: parent,
+            }];
+            commands.extend(self.moves_out_of_frame(snarl, body, id, region));
+            self.edit(commands, None);
+            ui.close();
+        }
+    }
+}
+
+/// Returns whether node `node` of `body`, with every node inside it, can move into the region `region`.
+///
+/// A node that is no region joins any region. A region joins as library 1 nests regions: a Repeat holds a Repeat or a
+/// neighborhood fold, a neighborhood fold holds a Repeat, and a radius fold holds no region and sits in none. The
+/// regions around the deepest one inside the moved node number at most [`MAX_REGION_DEPTH`] after the move.
+pub fn can_join(body: &NodeBody, node: NodeId, region: NodeId) -> bool {
+    let (Some(moved), Some(target)) = (body.node(node), body.node(region)) else {
+        return false;
+    };
+    if !REGION_OPS.contains(&moved.op.as_str()) {
+        return true;
+    }
+    let base = body.region_path(node).len();
+    let inside = body
+        .region_contents(node)
+        .into_iter()
+        .filter(|member| {
+            body.node(*member)
+                .is_some_and(|known| REGION_OPS.contains(&known.op.as_str()))
+        })
+        .map(|member| body.region_path(member).len() - base)
+        .max()
+        .unwrap_or(0);
+    nests(body, &moved.op, target, inside)
+}
+
+/// Returns whether a new node of the kind `op` can be added to the region `region` of `body`, or to the top of the
+/// body when `region` is `None`, by the rules of [`can_join`].
+pub fn can_add(body: &NodeBody, op: &str, region: Option<NodeId>) -> bool {
+    let Some(region) = region else {
+        return true;
+    };
+    let Some(target) = body.node(region) else {
+        return false;
+    };
+    !REGION_OPS.contains(&op) || nests(body, op, target, 0)
+}
+
+/// Returns whether a region of the kind `op` can sit in the region `target` of `body`, with regions nested `inside`
+/// levels deep inside it.
+fn nests(body: &NodeBody, op: &str, target: &Node, inside: usize) -> bool {
+    let allowed = matches!(
+        (target.op.as_str(), op),
+        (OP_REGION_REPEAT, OP_REGION_REPEAT | OP_GRID_FOLD) | (OP_GRID_FOLD, OP_REGION_REPEAT)
+    );
+    let depth = body.region_path(target.id).len() + 1 + 1 + inside;
+    allowed && depth <= MAX_REGION_DEPTH
+}
+
+/// Returns the named inputs of the expression `node`, from its `config.inputs`, leaving out an entry that does not
+/// read.
+fn expression_inputs(node: &Node) -> Vec<(String, ValueType)> {
+    let Some(ConfigValue::Array(items)) = node.config.get("inputs") else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let ConfigValue::Table(table) = item else { return None };
+            let name = table.get("name")?.as_str()?;
+            let value_type = table.get("type")?.as_str()?.parse().ok()?;
+            Some((name.to_owned(), value_type))
+        })
+        .collect()
+}
+
+/// Returns the `config.inputs` list of an expression that holds `inputs`.
+fn expression_input_list(inputs: &[(String, ValueType)]) -> ConfigValue {
+    ConfigValue::Array(
+        inputs
+            .iter()
+            .map(|(name, value_type)| {
+                ConfigValue::Table(BTreeMap::from([
+                    ("name".to_owned(), ConfigValue::String(name.clone())),
+                    ("type".to_owned(), ConfigValue::String(value_type.to_string())),
+                ]))
+            })
+            .collect(),
+    )
+}
+
+/// Returns the commands that move the value of the input `from` of `node` to the input `to`.
+fn moved_input(scope: &Scope, node: &Node, from: &str, to: &str) -> Vec<EditCommand> {
+    let Some(value) = node.inputs.get(from) else {
+        return Vec::new();
+    };
+    let port = to.to_owned();
+    let set = match value.clone() {
+        InputValue::Link(source) => EditCommand::Connect {
+            scope: scope.clone(),
+            node: node.id,
+            port,
+            source,
+        },
+        InputValue::Literal(literal) => EditCommand::SetLiteral {
+            scope: scope.clone(),
+            node: node.id,
+            port,
+            literal,
+        },
+        InputValue::Param(param) => EditCommand::BindParam {
+            scope: scope.clone(),
+            node: node.id,
+            port,
+            param,
+        },
+        _ => return Vec::new(),
+    };
+    vec![
+        set,
+        EditCommand::Disconnect {
+            scope: scope.clone(),
+            node: node.id,
+            port: from.to_owned(),
+        },
+    ]
+}
+
+/// Returns whether `view` is the input half of a region, whose body holds the region controls.
+fn is_region_input(view: &NodeView) -> bool {
+    view.part == NodePart::RegionInput
+}
+
+/// Returns `acc`, or `acc` with the first number from 2 that no accumulator in `taken` holds.
+fn unused_accumulator_name(taken: &[Accumulator]) -> String {
+    let free = |name: &str| !taken.iter().any(|known| known.name == name);
+    if free("acc") {
+        return "acc".to_owned();
+    }
+    (2..)
+        .map(|number| format!("acc_{number}"))
+        .find(|name| free(name))
+        .unwrap_or_else(|| "acc".to_owned())
+}
+
+/// Returns the types an accumulator or a function port of a GPU pass takes: the scalars and vectors, then each category
+/// of `document`.
+pub fn value_types(document: &GraphDocument) -> Vec<ValueType> {
+    let mut types = vec![
+        ValueType::Bool,
+        ValueType::U32,
+        ValueType::I32,
+        ValueType::F32,
+        ValueType::Vec2U,
+        ValueType::Vec2I,
+        ValueType::Vec2F,
+    ];
+    types.extend(
+        document
+            .categories
+            .iter()
+            .map(|category| ValueType::Category(category.id.clone())),
+    );
+    types
 }
 
 /// Returns the first variant of the category `value_type` names, as a constant.
@@ -1150,7 +2123,7 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
     }
 
     fn has_body(&mut self, node: &NodeView) -> bool {
-        !node.settings.is_empty()
+        !node.settings.is_empty() || is_region_input(node) || node.op == OP_EXPRESSION
     }
 
     fn show_body(
@@ -1161,7 +2134,9 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
         ui: &mut Ui,
         snarl: &mut Snarl<NodeView>,
     ) {
-        let Some(view) = snarl.get_node(node) else { return };
+        let Some(view) = snarl.get_node(node).cloned() else {
+            return;
+        };
         ui.vertical(|ui| {
             for line in &view.settings {
                 ui.add(
@@ -1169,6 +2144,12 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
                         .selectable(false)
                         .wrap_mode(egui::TextWrapMode::Extend),
                 );
+            }
+            if is_region_input(&view) {
+                self.region_controls(ui, view.id);
+            }
+            if view.op == OP_EXPRESSION {
+                self.expression_editor(ui, view.id);
             }
         });
     }
@@ -1250,40 +2231,38 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
         if let Some(background) = background {
             background.draw(viewport, snarl_style, style, painter);
         }
-        let placed: HashMap<NodeId, (PinNode, Pos2)> = snarl
-            .nodes_pos_ids()
-            .map(|(pin_node, position, view)| (view.id, (pin_node, position)))
-            .collect();
-        let current = |id: &NodeId| -> Option<Rect> {
-            let (pin_node, position) = *placed.get(id)?;
-            Some(self.rects.get(&pin_node).map_or_else(
-                || Rect::from_min_size(position, UNDRAWN_NODE_SIZE),
-                |drawn| drawn.rect.translate(position - drawn.position),
-            ))
-        };
-        for frame in self.frames {
-            let Some(rect) = frame.members.iter().filter_map(current).reduce(Rect::union) else {
+        self.region_rects.clear();
+        for (index, frame) in self.frames.iter().enumerate() {
+            let rect = frame
+                .members
+                .iter()
+                .filter_map(|pin_node| {
+                    let position = snarl.get_node_info(*pin_node)?.pos;
+                    Some(drawn_rect(self.rects.get(pin_node), position))
+                })
+                .reduce(Rect::union);
+            let Some(rect) = rect.map(|rect| frame_rect(rect, &frame.title)) else {
                 continue;
             };
-            let rect = Rect::from_min_max(
-                rect.min - vec2(FRAME_MARGIN, FRAME_MARGIN + FRAME_TITLE_HEIGHT),
-                rect.max + vec2(FRAME_MARGIN, FRAME_MARGIN),
-            );
+            if let Some(region) = frame.region {
+                self.region_rects.push((region, frame.depth, rect));
+            }
             let [fill, stroke, text] = frame.colors;
-            painter.rect(
-                rect,
-                CornerRadius::ZERO,
-                fill,
-                Stroke::new(1.0, stroke),
-                StrokeKind::Inside,
-            );
-            painter.text(
-                rect.left_top() + vec2(6.0, 4.0),
-                Align2::LEFT_TOP,
-                &frame.title,
-                FontId::proportional(11.0),
-                text,
-            );
+            let stroke = if self.drop_targets.contains(&index) {
+                Stroke::new(2.0, mcs::BLUE_500)
+            } else {
+                Stroke::new(1.0, stroke)
+            };
+            painter.rect(rect, CornerRadius::ZERO, fill, stroke, StrokeKind::Inside);
+            if !frame.title.is_empty() {
+                painter.text(
+                    rect.left_top() + vec2(6.0, 4.0),
+                    Align2::LEFT_TOP,
+                    &frame.title,
+                    FontId::proportional(11.0),
+                    text,
+                );
+            }
         }
     }
 
@@ -1300,10 +2279,12 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
 
     fn show_graph_menu(&mut self, pos: Pos2, ui: &mut Ui, _snarl: &mut Snarl<NodeView>) {
         let pos = self.menu_origin(ui, pos);
-        if let Some(op) = self.quick_add(ui, None) {
+        let region = self.region_at(pos);
+        if let Some(op) = self.quick_add(ui, None, region) {
             self.requests.push(GraphRequest::AddNode {
                 op: op.to_owned(),
                 pos: [f64::from(pos.x), f64::from(pos.y)],
+                region,
                 wire: None,
             });
             ui.close();
@@ -1341,10 +2322,12 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
             ui.close();
             return;
         };
-        if let Some(op) = self.quick_add(ui, Some(&dropped.end)) {
+        let region = self.region_at(pos);
+        if let Some(op) = self.quick_add(ui, Some(&dropped.end), region) {
             self.requests.push(GraphRequest::AddNode {
                 op: op.to_owned(),
                 pos: [f64::from(pos.x), f64::from(pos.y)],
+                region,
                 wire: Some(dropped),
             });
             ui.close();
@@ -1378,6 +2361,9 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
             self.requests.push(GraphRequest::Copy(vec![view.id]));
             ui.close();
         }
+        if view.op == OP_FUNCTION_CALL {
+            self.call_menus(ui, view.id);
+        }
         if !view.inputs.is_empty() {
             ui.menu_button("Inputs", |ui| self.input_menus(ui, &view));
         }
@@ -1385,10 +2371,15 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
             def.config
                 .iter()
                 .any(|key| matches!(key.value, ConfigType::Bool | ConfigType::Word(_) | ConfigType::LaneId))
-                || def
-                    .config
-                    .iter()
-                    .any(|key| matches!(key.value, ConfigType::CategoryId | ConfigType::PaletteId))
+                || def.config.iter().any(|key| {
+                    matches!(
+                        key.value,
+                        ConfigType::CategoryId
+                            | ConfigType::PaletteId
+                            | ConfigType::FunctionId
+                            | ConfigType::InterfacePort
+                    )
+                })
         }) {
             ui.menu_button("Settings", |ui| self.setting_menus(ui, &view));
         }
@@ -1443,6 +2434,7 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
                 }
             });
         }
+        self.region_menus(ui, view.id, snarl);
         ui.separator();
         if ui.button("Delete").clicked() {
             self.requests.push(GraphRequest::Delete(vec![view.id]));
@@ -1550,10 +2542,21 @@ pub fn show_canvas(ui: &mut Ui, canvas: &mut BodyCanvas, context: CanvasContext<
         is_plain_click.then_some(held)
     });
     let style = canvas_style(ui.style());
+    let drop_targets = if ui.ctx().input(|input| input.pointer.primary_down()) {
+        canvas
+            .regions_entered(context.body)
+            .into_iter()
+            .map(|(_, _, frame)| frame)
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut viewer = GraphViewer {
         canvas_id: canvas.canvas_id,
         context,
         frames: &canvas.frames,
+        drop_targets,
+        region_rects: Vec::new(),
         framing,
         rects: &mut canvas.rects,
         query: &mut canvas.query,

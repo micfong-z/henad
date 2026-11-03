@@ -115,6 +115,9 @@ pub struct GeneratedShader {
     sides: SideTable,
     cost: u64,
     counters: usize,
+    /// Document position and sum number of each float lane of a grid's reduce shader, a `vec2f` sum taking two.
+    /// Empty for every other shader, and for a shader of an agents world, whose sums are in `agent`.
+    grid_sum_lanes: Vec<(usize, usize)>,
     /// Pass of the spec the shader is, for its uniform block.
     pass_id: GridPassId,
     /// What the agents engine reads of a shader of an agents world, `None` for a grid.
@@ -208,6 +211,12 @@ impl GeneratedShader {
         self.counters
     }
 
+    /// Document position and sum number of each float lane of a grid's reduce shader.
+    #[cfg(test)]
+    pub(crate) fn grid_sum_lanes(&self) -> &[(usize, usize)] {
+        &self.grid_sum_lanes
+    }
+
     /// Returns the shader's uniform block for a grid of `world` with the document's parameters `params` in `context`.
     ///
     /// # Errors
@@ -235,7 +244,13 @@ impl GeneratedShader {
         pass.cost = self.cost;
         pass.uniform_bytes = self.uniform.size as u64;
         if self.role == ShaderRole::Reduce {
-            pass.workgroup_bytes = self.counters as u64 * std::mem::size_of::<u32>() as u64;
+            // `block_sum` keeps one float per invocation of the workgroup.
+            let sums = if self.grid_sum_lanes.is_empty() {
+                0
+            } else {
+                u64::from(WORKGROUP_SIZE * WORKGROUP_SIZE) * std::mem::size_of::<f32>() as u64
+            };
+            pass.workgroup_bytes = self.counters as u64 * std::mem::size_of::<u32>() as u64 + sums;
         }
         pass
     }
@@ -329,6 +344,16 @@ impl henad_compute::gpu::GridHooks for SharedHooks {
     ) -> Vec<henad_core::view::StatValue> {
         self.0.stats(counts, ctx, params)
     }
+
+    fn stats_with_sums(
+        &self,
+        counts: &[u32],
+        sums: &[f32],
+        ctx: henad_compute::gpu::GridPassCtx,
+        params: &[henad_core::params::ParamValue],
+    ) -> Vec<henad_core::view::StatValue> {
+        self.0.stats_with_sums(counts, sums, ctx, params)
+    }
 }
 
 impl GridProgram {
@@ -386,6 +411,7 @@ impl GridProgram {
             .collect();
         let reduce = shaders.iter().find(|shader| shader.role == ShaderRole::Reduce);
         let counters = reduce.map_or(1, GeneratedShader::counters);
+        let sum_lanes = reduce.map(|shader| shader.grid_sum_lanes.clone()).unwrap_or_default();
         let stats = stat_sources(document, &evaluator, reduce);
         let actions = document
             .actions
@@ -408,6 +434,7 @@ impl GridProgram {
             tick_buffer,
             uniforms,
             stats,
+            sum_lanes,
             actions,
         });
 
@@ -550,6 +577,7 @@ impl GridProgram {
             })
             .collect();
         spec.counters = parts.counters;
+        spec.sums = parts.hooks.sum_lanes.len();
         spec.init_cost = parts.init_cost;
         spec
     }
@@ -822,6 +850,7 @@ pub(crate) fn compile_shaders(
             bindings,
             uniform,
             counters,
+            sum_lanes,
             ..
         } = emitted;
         if text.len() > MAX_FILE_BYTES {
@@ -850,6 +879,7 @@ pub(crate) fn compile_shaders(
             sides,
             cost,
             counters,
+            grid_sum_lanes: sum_lanes,
             pass_id,
             agent: None,
         });

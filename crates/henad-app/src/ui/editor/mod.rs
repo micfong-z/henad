@@ -26,7 +26,7 @@ use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::provenance::ModelSource;
 use henad_explore::model_file::ModelFile;
 use henad_graph::GraphFile;
-use henad_graph::starters::{Starter, starters};
+use henad_graph::starters::{Starter, agent_starters, starters};
 
 use crate::icons::material_design_icons::{
     MDI_ALERT, MDI_CHECK, MDI_FILE_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE, MDI_GRAPH_OUTLINE, MDI_INFORMATION,
@@ -228,6 +228,8 @@ enum EditorRequest {
     /// Opens the starter with this file name as a new graph model.
     NewGraphModel(&'static str),
     OpenModel,
+    /// Opens a dialog that picks a model file to import a function from.
+    PickImport,
     SaveModel,
     Apply,
     /// Moves the cursor to a line and a column of the text, both counted from 1.
@@ -306,6 +308,13 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
             code_view::code_view(ui, &mut panel.text, &marked, scroll_to, reset);
         }
     });
+    if panel
+        .graph
+        .as_deref_mut()
+        .is_some_and(graph::GraphEditor::take_pick_import)
+    {
+        request = Some(EditorRequest::PickImport);
+    }
 
     if let Some(request) = request {
         apply_request(ui.ctx(), app, request);
@@ -375,10 +384,11 @@ fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut O
     }
 }
 
-/// Draws one button per starter, labelled with the starter's model name, and returns the file name of the one pressed.
+/// Draws one button per starter, grid starters first, labelled with the starter's model name, and returns the file name
+/// of the one pressed.
 pub fn starter_menu(ui: &mut egui::Ui) -> Option<&'static str> {
     let mut picked = None;
-    for starter in starters() {
+    for starter in starters().iter().chain(agent_starters()) {
         let name = starter_name(starter);
         if ui.button(name).on_hover_text(starter.file_name).clicked() {
             picked = Some(starter.file_name);
@@ -435,13 +445,18 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
         } else {
             ui.visuals().warn_fg_color
         };
-        let place = match (&diagnostic.pass, &diagnostic.node) {
-            (Some(pass), Some(node)) => format!("{pass}, {node}: "),
-            (Some(pass), None) => format!("{pass}: "),
+        let scope = graph.diagnostic_scope(diagnostic);
+        let body = match &scope {
+            Some(henad_graph::edit::Scope::Function(id)) => Some(format!("function {id}")),
+            _ => diagnostic.pass.clone(),
+        };
+        let place = match (&body, &diagnostic.node) {
+            (Some(body), Some(node)) => format!("{body}, {node}: "),
+            (Some(body), None) => format!("{body}: "),
             _ => String::new(),
         };
         let text = RichText::new(format!("{place}{}", diagnostic.message)).color(color);
-        let target = diagnostic.pass.as_ref().zip(
+        let target = scope.zip(
             diagnostic
                 .node
                 .as_ref()
@@ -449,13 +464,10 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
         );
         let label = Label::new(text).selectable(false);
         match target {
-            Some((pass, node)) => {
+            Some((scope, node)) => {
                 let response = ui.add(label.sense(Sense::click())).on_hover_text("Show node on canvas");
                 if response.clicked() {
-                    framing = Some(graph::GraphRequest::Frame {
-                        scope: henad_graph::edit::Scope::pass(pass),
-                        node,
-                    });
+                    framing = Some(graph::GraphRequest::Frame { scope, node });
                 }
             }
             None => {
@@ -478,9 +490,8 @@ fn preview_ui(ui: &mut egui::Ui, state: &PreviewState) {
         }
         PreviewState::Running(run) => {
             ui.label(format!(
-                "{MDI_PLAY_OUTLINE} Preview runs at {} × {} cells from tick 0. Press Apply to run the model at its own \
-                 size.",
-                run.width, run.height
+                "{MDI_PLAY_OUTLINE} Preview runs at {} from tick 0. Press Apply to run the model at its own size.",
+                run.size_text()
             ));
             return;
         }
@@ -549,6 +560,7 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: EditorRequest
         EditorRequest::NewGridRule => new_grid_rule(app),
         EditorRequest::NewGraphModel(file_name) => new_graph_model(app, file_name),
         EditorRequest::OpenModel => open_model(app),
+        EditorRequest::PickImport => app.open_file(OpenTarget::Function),
         EditorRequest::SaveModel => save_model(app),
         EditorRequest::Apply => apply(app),
         EditorRequest::MoveCursor { line, column } => move_cursor_to(ctx, &mut app.editor, line, column),
@@ -691,6 +703,25 @@ pub fn receive_open(app: &mut AppState, result: OpenResult) {
             }
             app.focus_request = Some(Tab::Editor);
         }
+        Err(_) => app.editor.file_status = Some(format!("Open failed: {name} is not UTF-8 text")),
+    }
+}
+
+/// Takes the picked model file as the file the Editor's graph model imports functions from.
+pub fn receive_import(app: &mut AppState, result: OpenResult) {
+    let file = match result {
+        OpenResult::Files(files) => files.into_iter().next(),
+        OpenResult::Failed(message) => {
+            app.editor.file_status = Some(format!("Open failed: {message}"));
+            return;
+        }
+        OpenResult::Folder(_) | OpenResult::Canceled => return,
+    };
+    let (Some(DialogFile { name, bytes, .. }), Some(graph)) = (file, app.editor.graph.as_deref_mut()) else {
+        return;
+    };
+    match String::from_utf8(bytes) {
+        Ok(text) => graph.set_import_source(name, text),
         Err(_) => app.editor.file_status = Some(format!("Open failed: {name} is not UTF-8 text")),
     }
 }

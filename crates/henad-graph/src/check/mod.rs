@@ -35,6 +35,9 @@ pub struct CheckReport {
     pub duplicate_ids: Vec<NodeId>,
     /// One report per pass, in stack order.
     pub passes: Vec<PassReport>,
+    /// One report per function whose body was checked, in file order, with the function's id. A function of a file
+    /// past the node limits has none.
+    pub functions: Vec<PassReport>,
     /// Ids of the lanes with two sides: read at another element in a tick pass that also writes them.
     pub dual_lanes: Vec<String>,
 }
@@ -60,13 +63,13 @@ impl CheckReport {
     }
 }
 
-/// What the checker learned about one pass.
+/// Facts the checker inferred about one body, a pass or a function.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct PassReport {
-    /// Id of the pass.
+    /// Id of the pass or the function.
     pub id: String,
-    /// Cost per element in units, saturated at [`u64::MAX`].
+    /// Cost per element in units, or of one call for a function, saturated at [`u64::MAX`].
     pub cost: u64,
     /// Inferred outputs of each node, by node id and port name. A region's inner outputs are in
     /// [`Self::inner_outputs`].
@@ -133,15 +136,15 @@ pub fn check(file: &GraphFile) -> CheckReport {
     }
     let sized = total <= MAX_NODES_IN_FILE;
     let mut clean = BTreeMap::new();
+    let mut function_ports = Vec::new();
     for function_view in &views.functions {
         if sized
             && function_view.nodes.len() <= MAX_NODES_PER_BODY
             && let view::Owner::Function(function) = function_view.owner
         {
-            clean.insert(
-                function.id.clone(),
-                functions::check_function(&mut checker, function_view),
-            );
+            let (is_clean, ports) = functions::check_function(&mut checker, function_view);
+            clean.insert(function.id.clone(), is_clean);
+            function_ports.push((function.id.clone(), ports));
         }
     }
     agents::check_finishes(&mut checker, &views.functions);
@@ -215,6 +218,15 @@ pub fn check(file: &GraphFile) -> CheckReport {
     report.dual_lanes = passes::check_lanes(&mut checker, &checked);
     passes::check_stats(&mut checker, &checked, &pass_ports);
     agents::check_passes(&mut checker, &checked);
+    report.functions = function_ports
+        .into_iter()
+        .map(|(id, ports)| PassReport {
+            cost: costs.functions.get(&id).copied().unwrap_or_default(),
+            id,
+            outputs: ports.outputs,
+            inner_outputs: ports.inner_outputs,
+        })
+        .collect();
     report.passes = document
         .passes
         .iter()

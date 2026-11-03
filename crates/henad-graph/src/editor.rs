@@ -18,12 +18,13 @@ const TRAILING_TABLES: [&str; 2] = ["frame", "note"];
 /// that a file spelt with dotted keys as one inline value.
 const MAX_INLINE_DEPTH: usize = 64;
 /// Keys of a table inside the region, in the order they are written. A key not listed follows, in lexical order.
-const INLINE_KEY_ORDER: [&str; 11] = [
+const INLINE_KEY_ORDER: [&str; 12] = [
     "scope",
     "title",
     "color",
     "members",
     "pos",
+    "output_pos",
     "collapsed",
     "label",
     "text",
@@ -48,6 +49,8 @@ pub struct NodeLayout {
     pub collapsed: bool,
     /// Display label, `None` to show the kind's own title.
     pub label: Option<String>,
+    /// Position on the canvas in points of a region's output half, `None` when the region has none placed.
+    pub output_pos: Option<[f64; 2]>,
 }
 
 /// A titled frame drawn behind some nodes of one canvas.
@@ -62,6 +65,16 @@ pub struct FrameLayout {
     pub color: String,
     /// Nodes inside the frame. A member that is no node id is left out.
     pub members: Vec<NodeId>,
+}
+
+/// Source of a function that Import function copied into the file.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct FunctionOrigin {
+    /// Name of the model file the function came from.
+    pub name: String,
+    /// FNV-1a hash of the function's canonical text in that file, as 16 lowercase hexadecimal digits.
+    pub hash: String,
 }
 
 impl EditorRegion {
@@ -94,22 +107,65 @@ impl EditorRegion {
                 .as_float()
                 .or_else(|| value.as_integer().map(|whole| whole as f64))
         };
-        let pos = entry
-            .get("pos")
-            .and_then(toml::Value::as_array)
-            .and_then(|pos| match pos.as_slice() {
+        let point = |key: &str| -> Option<[f64; 2]> {
+            match entry.get(key)?.as_array()?.as_slice() {
                 [x, y] => Some([number(x)?, number(y)?]),
                 _ => None,
-            })
-            .unwrap_or_default();
+            }
+        };
         Some(NodeLayout {
-            pos,
+            pos: point("pos").unwrap_or_default(),
             collapsed: entry
                 .get("collapsed")
                 .and_then(toml::Value::as_bool)
                 .unwrap_or_default(),
             label: entry.get("label").and_then(toml::Value::as_str).map(str::to_owned),
+            output_pos: point("output_pos"),
         })
+    }
+
+    /// Origin of the function `id`, `None` when the region records none or a key does not fit.
+    pub fn function_origin(&self, id: &str) -> Option<FunctionOrigin> {
+        let origin = self
+            .table
+            .get("function")?
+            .as_table()?
+            .get(id)?
+            .as_table()?
+            .get("origin")?
+            .as_table()?;
+        Some(FunctionOrigin {
+            name: origin.get("name")?.as_str()?.to_owned(),
+            hash: origin.get("hash")?.as_str()?.to_owned(),
+        })
+    }
+
+    /// Records `origin` as the origin of the function `id`, keeping its other keys.
+    pub fn set_function_origin(&mut self, id: &str, origin: &FunctionOrigin) {
+        let functions = table_entry(&mut self.table, "function");
+        let entry = table_entry(functions, id);
+        let mut table = toml::Table::new();
+        table.insert("name".to_owned(), toml::Value::String(origin.name.clone()));
+        table.insert("hash".to_owned(), toml::Value::String(origin.hash.clone()));
+        entry.insert("origin".to_owned(), toml::Value::Table(table));
+    }
+
+    /// Moves the entry of the function `from` to `to`, and renames its canvas scope.
+    pub fn rename_function(&mut self, from: &str, to: &str) {
+        if let Some(functions) = self.table.get_mut("function").and_then(toml::Value::as_table_mut)
+            && let Some(entry) = functions.remove(from)
+        {
+            functions.insert(to.to_owned(), entry);
+        }
+        self.rename_scope(&format!("function.{from}"), &format!("function.{to}"));
+    }
+
+    /// Removes the entry of the function `id`, and the view, frames and notes of its canvas.
+    pub fn remove_function(&mut self, id: &str) {
+        if let Some(functions) = self.table.get_mut("function").and_then(toml::Value::as_table_mut) {
+            functions.remove(id);
+        }
+        self.remove_scope(&format!("function.{id}"));
     }
 
     /// Returns every `[[editor.frame]]` in file order. A key that does not fit takes its default.
@@ -158,9 +214,23 @@ impl EditorRegion {
         );
     }
 
-    /// Sets the placement of node `id` to `layout`, writing `collapsed` and `label` only when they are set.
+    /// Sets the position of the output half of the region `id` to `pos`, keeping its other placement keys.
+    pub fn set_output_pos(&mut self, id: NodeId, pos: [f64; 2]) {
+        let nodes = table_entry(&mut self.table, "node");
+        let entry = table_entry(nodes, &id.to_string());
+        entry.insert(
+            "output_pos".to_owned(),
+            toml::Value::Array(vec![toml::Value::Float(pos[0]), toml::Value::Float(pos[1])]),
+        );
+    }
+
+    /// Sets the placement of node `id` to `layout`, writing `collapsed`, `label` and `output_pos` only when they are
+    /// set.
     pub fn place_node(&mut self, id: NodeId, layout: &NodeLayout) {
         self.set_node_pos(id, layout.pos);
+        if let Some(pos) = layout.output_pos {
+            self.set_output_pos(id, pos);
+        }
         let entry = table_entry(table_entry(&mut self.table, "node"), &id.to_string());
         if layout.collapsed {
             entry.insert("collapsed".to_owned(), toml::Value::Boolean(true));
@@ -346,13 +416,15 @@ fn array_of_tables(value: &toml::Value) -> Option<Vec<&toml::Table>> {
     items.iter().map(toml::Value::as_table).collect()
 }
 
-/// Returns `entry` with its `pos` key rounded, when it is a table that holds one.
+/// Returns `entry` with its `pos` and `output_pos` keys rounded, when it is a table that holds them.
 fn node_with_rounded_pos(entry: &toml::Value) -> toml::Value {
     let mut entry = entry.clone();
-    if let Some(table) = entry.as_table_mut()
-        && let Some(pos) = table.get_mut("pos")
-    {
-        *pos = rounded(pos);
+    if let Some(table) = entry.as_table_mut() {
+        for key in ["pos", "output_pos"] {
+            if let Some(pos) = table.get_mut(key) {
+                *pos = rounded(pos);
+            }
+        }
     }
     entry
 }

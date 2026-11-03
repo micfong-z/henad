@@ -89,7 +89,12 @@ types an unsuffixed literal falls back to.
   a press, and the tick the reduce pass was recorded at (`stats_tick`) for `GridHooks::stats(counts,
   ctx, params)`, which a graph's stats read through the host. `counters` is the length of the
   reduce shader's `counters` array and of the readback, `stats.len().max(1)` from `new`, and a
-  graph sets its tally count. `init_cost` is the host's cost per cell at build. `from_model` and
+  graph sets its tally count. `sums` (0 from `new`) is the float lanes the reduce shader sums: it
+  then binds `partials` and writes one total per lane per cell workgroup, the engine folds them
+  with `GpuLaneReduce::over_blocks` after the counters' copy, reads both back together, and calls
+  `GridHooks::stats_with_sums` (provided, default `stats`) with each lane's total. A spec with no
+  sums builds no tree and runs as before, and `demand` counts the partials buffer. `init_cost` is
+  the host's cost per cell at build. `from_model` and
   `single_step` put every buffer in the dual set, one step pass labelled `step`, the swapping
   table on step, display and reduce and the in-place table on actions, which is the orientation
   stock shaders assume. `GpuGridEngine` builds every wgpu object from a spec and implements `SimState` and

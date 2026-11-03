@@ -15,7 +15,7 @@ use crate::node::Node;
 use crate::value::{ConfigValue, InputValue, Literal, MemberName};
 
 /// Returns the place of `node` in `scope` as a reference names it, such as `node n5 in pass 'seed'`.
-fn node_place(scope: &Scope, node: NodeId) -> String {
+pub(super) fn node_place(scope: &Scope, node: NodeId) -> String {
     format!("node {node} in {scope}")
 }
 
@@ -76,7 +76,7 @@ fn names_member(literal: &Literal, owner: &str, member: Option<&str>, category: 
 
 impl GraphBuilder {
     /// Returns every node of the document with its scope.
-    fn scoped_nodes(&self) -> Vec<(Scope, &Node)> {
+    pub(super) fn scoped_nodes(&self) -> Vec<(Scope, &Node)> {
         let passes = self
             .document
             .passes
@@ -93,7 +93,7 @@ impl GraphBuilder {
     }
 
     /// Runs `change` on every node of the document.
-    fn for_each_node(&mut self, mut change: impl FnMut(&mut Node)) {
+    pub(super) fn for_each_node(&mut self, mut change: impl FnMut(&mut Node)) {
         let passes = self.document.passes.iter_mut().map(|pass| &mut pass.body);
         let functions = self.document.functions.iter_mut().map(|function| &mut function.body);
         for body in passes.chain(functions) {
@@ -104,7 +104,11 @@ impl GraphBuilder {
     }
 
     /// Returns an error unless `id` follows the id grammar and no other declaration of `kind` holds it.
-    fn check_new_id<'a>(kind: &str, id: &str, mut taken: impl Iterator<Item = &'a str>) -> Result<(), EditError> {
+    pub(super) fn check_new_id<'a>(
+        kind: &str,
+        id: &str,
+        mut taken: impl Iterator<Item = &'a str>,
+    ) -> Result<(), EditError> {
         if !is_id(id) {
             return Err(EditError::Invalid(format!(
                 "'{id}' is no {kind} id, which starts with a lowercase letter and holds lowercase letters, digits and `_`"
@@ -138,7 +142,7 @@ impl GraphBuilder {
     }
 
     /// Returns an error listing `references` when there is any.
-    fn refuse_referenced(subject: String, references: Vec<String>) -> Result<(), EditError> {
+    pub(super) fn refuse_referenced(subject: String, references: Vec<String>) -> Result<(), EditError> {
         if references.is_empty() {
             Ok(())
         } else {

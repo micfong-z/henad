@@ -11,6 +11,10 @@
 
 mod clipboard;
 mod declarations;
+mod functions;
+mod regions;
+
+pub use functions::PortSide;
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -24,7 +28,8 @@ use crate::document::{
 use crate::editor::EditorRegion;
 use crate::file::{GraphFile, GraphFileError};
 use crate::ids::{NodeId, is_port_segment};
-use crate::node::{Node, NodeBody};
+use crate::node::{Accumulator, Node, NodeBody};
+use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, PortRef};
 
 /// A pass or a function, whose nodes form one body.
@@ -137,7 +142,8 @@ pub enum EditCommand {
         /// New value.
         value: Option<ConfigValue>,
     },
-    /// Moves `node` into `region`, or out of every region when `region` is `None`.
+    /// Moves `node` into `region`, or out of every region when `region` is `None`. The nodes inside a region move with
+    /// it.
     SetRegion {
         /// Body that holds the node.
         scope: Scope,
@@ -152,6 +158,61 @@ pub enum EditCommand {
         node: NodeId,
         /// Position on the canvas in points.
         pos: [f64; 2],
+    },
+    /// Places the output half of the region `node` at `pos` on its canvas, which changes the editor region alone.
+    MoveRegionOutput {
+        /// Region whose output half moves.
+        node: NodeId,
+        /// Position on the canvas in points.
+        pos: [f64; 2],
+    },
+    /// Adds an accumulator after the accumulators of the region `node`.
+    AddAccumulator {
+        /// Body that holds the region.
+        scope: Scope,
+        /// Region that takes the accumulator.
+        node: NodeId,
+        /// New accumulator.
+        accumulator: Accumulator,
+    },
+    /// Replaces the type and the combine of the accumulator of the region `node` with the name `accumulator` holds.
+    SetAccumulator {
+        /// Body that holds the region.
+        scope: Scope,
+        /// Region that holds the accumulator.
+        node: NodeId,
+        /// Accumulator with its new type and combine.
+        accumulator: Accumulator,
+    },
+    /// Renames an accumulator of the region `node` and every reference to it.
+    RenameAccumulator {
+        /// Body that holds the region.
+        scope: Scope,
+        /// Region that holds the accumulator.
+        node: NodeId,
+        /// Current name.
+        from: String,
+        /// New name.
+        to: String,
+    },
+    /// Removes an accumulator that nothing names.
+    RemoveAccumulator {
+        /// Body that holds the region.
+        scope: Scope,
+        /// Region that holds the accumulator.
+        node: NodeId,
+        /// Name of the accumulator.
+        name: String,
+    },
+    /// Wraps nodes of a pass or a function in a new Repeat that runs once. Each of their outputs that a node outside
+    /// reads becomes a `carry` accumulator fed by a new put.
+    WrapInRepeat {
+        /// Body that holds the nodes.
+        scope: Scope,
+        /// Nodes to wrap. A node inside a region that is wrapped stays in that region.
+        nodes: Vec<NodeId>,
+        /// Canvas rectangle of the nodes as drawn, `[min, max]` in points, `None` to assume a size for each node.
+        bounds: Option<[[f64; 2]; 2]>,
     },
     /// Draws a titled frame around `members` on the canvas of `scope`.
     Frame {
@@ -273,6 +334,90 @@ pub enum EditCommand {
     SetParam(ParamDescriptor),
     /// Replaces the world table with another of the same topology.
     SetWorld(World),
+    /// Adds an empty function with this id and no ports after the file's functions.
+    AddFunction(String),
+    /// Renames a function, every call of it and its canvas.
+    RenameFunction {
+        /// Current id.
+        from: String,
+        /// New id.
+        to: String,
+    },
+    /// Removes a function that no call names, with its body.
+    RemoveFunction(String),
+    /// Adds a port after the ports of one side of a function. A function that gains a second output first names the
+    /// port on every bare link to each of its calls.
+    AddFunctionPort {
+        /// Id of the function.
+        function: String,
+        /// Side of the port.
+        side: PortSide,
+        /// Name of the port.
+        port: String,
+        /// Type of the port.
+        value_type: ValueType,
+    },
+    /// Renames a port of a function, the `fn.input` or `fn.output` nodes that name it, and each call's input or each
+    /// reader of each call's output.
+    RenameFunctionPort {
+        /// Id of the function.
+        function: String,
+        /// Side of the port.
+        side: PortSide,
+        /// Current name.
+        from: String,
+        /// New name.
+        to: String,
+    },
+    /// Sets the type of a port of a function.
+    SetFunctionPortType {
+        /// Id of the function.
+        function: String,
+        /// Side of the port.
+        side: PortSide,
+        /// Name of the port.
+        port: String,
+        /// New type.
+        value_type: ValueType,
+    },
+    /// Removes a port of a function that no body node names and nothing reads. A removed input leaves every call.
+    RemoveFunctionPort {
+        /// Id of the function.
+        function: String,
+        /// Side of the port.
+        side: PortSide,
+        /// Name of the port.
+        port: String,
+    },
+    /// Moves nodes of a body, with every node inside them, into a new function, and puts a call in their place. Each
+    /// value they read from outside becomes an input, and each output a node outside reads becomes an output.
+    MakeFunction {
+        /// Body that holds the nodes.
+        scope: Scope,
+        /// Nodes to move. A node inside a region that moves stays in that region.
+        nodes: Vec<NodeId>,
+        /// Id of the new function.
+        id: String,
+    },
+    /// Replaces a call with a copy of its function's body, wired to the call's inputs and readers.
+    Ungroup {
+        /// Body that holds the call.
+        scope: Scope,
+        /// The call.
+        node: NodeId,
+    },
+    /// Copies a function of another model file, and every function it calls, into the file with fresh node ids, and
+    /// records where each came from.
+    ImportFunction {
+        /// Text of the model file to import from.
+        text: String,
+        /// Name of that file, which the origin records.
+        source: String,
+        /// Id of the function in that file.
+        function: String,
+        /// Id the function takes in this file, `None` to keep its own. The functions it calls keep theirs.
+        id: Option<String>,
+    },
 }
 
 /// Reason an edit command is refused. A refused command changes nothing.
@@ -292,6 +437,8 @@ pub enum EditError {
     },
     /// A paste of text that is not a graph file.
     Paste(GraphFileError),
+    /// An import from text that is not a graph file.
+    Import(GraphFileError),
 }
 
 impl fmt::Display for EditError {
@@ -302,6 +449,7 @@ impl fmt::Display for EditError {
                 write!(f, "{subject} is still named by {}", references.join(", "))
             }
             Self::Paste(error) => write!(f, "the pasted text is no graph: {error}"),
+            Self::Import(error) => write!(f, "the file to import from is no graph: {error}"),
         }
     }
 }
@@ -503,6 +651,8 @@ impl GraphBuilder {
                 if !is_port_segment(&key) {
                     return Err(EditError::Invalid(format!("'{key}' is no configuration key")));
                 }
+                self.require_node(&scope, node)?;
+                self.name_bare_links(&scope, node);
                 let target = self.node_mut(&scope, node)?;
                 match value {
                     Some(value) => target.config.insert(key, value),
@@ -511,6 +661,12 @@ impl GraphBuilder {
                 Ok(Vec::new())
             }
             EditCommand::SetRegion { scope, node, region } => self.set_region(&scope, node, region),
+            command @ (EditCommand::MoveRegionOutput { .. }
+            | EditCommand::AddAccumulator { .. }
+            | EditCommand::SetAccumulator { .. }
+            | EditCommand::RenameAccumulator { .. }
+            | EditCommand::RemoveAccumulator { .. }
+            | EditCommand::WrapInRepeat { .. }) => self.run_region(command),
             EditCommand::Move { node, pos } => {
                 if !self.all_nodes().any(|known| known.id == node) {
                     return Err(EditError::Missing(format!("the file holds no node {node}")));
@@ -531,6 +687,16 @@ impl GraphBuilder {
                 Ok(Vec::new())
             }
             EditCommand::Paste { scope, text, offset } => self.paste(&scope, &text, offset),
+            command @ (EditCommand::AddFunction(_)
+            | EditCommand::RenameFunction { .. }
+            | EditCommand::RemoveFunction(_)
+            | EditCommand::AddFunctionPort { .. }
+            | EditCommand::RenameFunctionPort { .. }
+            | EditCommand::SetFunctionPortType { .. }
+            | EditCommand::RemoveFunctionPort { .. }
+            | EditCommand::MakeFunction { .. }
+            | EditCommand::Ungroup { .. }
+            | EditCommand::ImportFunction { .. }) => self.run_function(command),
             other => self.run_declaration(other).map(|()| Vec::new()),
         }
     }
@@ -732,15 +898,19 @@ impl GraphBuilder {
         Ok(())
     }
 
-    /// Moves `node` of `scope` into `region`.
+    /// Moves `node` of `scope` into `region`, first naming the port on each bare link from the node's subtree to a
+    /// region it moves under.
     fn set_region(&mut self, scope: &Scope, node: NodeId, region: Option<NodeId>) -> Result<Vec<NodeId>, EditError> {
         self.require_node(scope, node)?;
         if let Some(region) = region {
             self.require_region(scope, region)?;
             let body = self.body(scope)?;
-            if region == node || body.region_path(region).contains(&node) {
+            let mut path = body.region_path(region);
+            if region == node || path.contains(&node) {
                 return Err(EditError::Invalid(format!("node {node} cannot sit inside itself")));
             }
+            path.insert(0, region);
+            self.name_links_into_path(scope, node, &path);
         }
         self.node_mut(scope, node)?.region = region;
         Ok(Vec::new())

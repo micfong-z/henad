@@ -172,6 +172,8 @@ pub enum CaseValue {
     Nan,
     /// An `f32` within `.1` of `.0`.
     Near(f32, f32),
+    /// A `vec2f` whose components are each within `.1` of those of `.0`.
+    NearVec2F([f32; 2], f32),
 }
 
 impl CaseValue {
@@ -186,7 +188,7 @@ impl CaseValue {
             Self::F64(_) => ValueType::F64,
             Self::Vec2U(_) => ValueType::Vec2U,
             Self::Vec2I(_) => ValueType::Vec2I,
-            Self::Vec2F(_) => ValueType::Vec2F,
+            Self::Vec2F(_) | Self::NearVec2F(..) => ValueType::Vec2F,
             Self::Vec2D(_) => ValueType::Vec2D,
             Self::Variant(category, _) => ValueType::Category((*category).to_owned()),
         }

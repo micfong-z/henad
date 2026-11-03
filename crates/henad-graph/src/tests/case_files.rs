@@ -78,7 +78,9 @@ pub(super) fn literal(value: &CaseValue) -> String {
         CaseValue::F64(number) => format!("{{ f64 = {number:?} }}"),
         CaseValue::Vec2U([x, y]) => format!("{{ vec2u = [{x}, {y}] }}"),
         CaseValue::Vec2I([x, y]) => format!("{{ vec2i = [{x}, {y}] }}"),
-        CaseValue::Vec2F([x, y]) => format!("{{ vec2f = [{}, {}] }}", float(*x), float(*y)),
+        CaseValue::Vec2F([x, y]) | CaseValue::NearVec2F([x, y], _) => {
+            format!("{{ vec2f = [{}, {}] }}", float(*x), float(*y))
+        }
         CaseValue::Vec2D([x, _]) => format!("{{ f64 = {x:?} }}"),
         CaseValue::Variant(category, variant) => format!("{{ cat = \"{category}.{variant}\" }}"),
     }

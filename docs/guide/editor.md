@@ -24,7 +24,7 @@ It opens in a panel of its own to the right of the <span class="ui" markdown>:ma
 - Press <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> in the <span class="ui" markdown>:material-cog-outline: Model</span> tab to open the Editor on the Life starter, Conway's Game of Life written as a grid rule.
 - Press <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab to open the Editor on the model file of the selected grid rule.
   The button appears only for a model applied from the Editor.
-- Press <span class="ui" markdown>:material-graph-outline: New graph model</span> in the Editor and pick an example, Game of Life, Vote or SIR Epidemic, to open it as a graph model.
+- Press <span class="ui" markdown>:material-graph-outline: New graph model</span> in the Editor and pick an example to open it as a graph model: Game of Life, Vote or SIR Epidemic on a grid, or Boids Flocking, Ant Foraging or Random Walk of agents.
 - In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New grid rule, New graph model, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab.
 
 New grid rule and Open model replace the Editor's text.
@@ -89,22 +89,23 @@ A fault that no edit of the text can fix, such as a lost device or a device out 
 ## Graph models
 
 A graph model opens on a canvas.
-The panel beside it lists the model's passes by stage, init, tick, stats, view and action, and under them the world: the grid's size and edges, and the parameters, lanes, categories, statistics and actions.
+The panel beside it lists the model's passes by stage, init, tick, stats, view and action, then its functions, and under them the world: the grid's size and edges, or the number of agents and the world's size, and the parameters, lanes, categories, statistics and actions.
 Press a pass to open it on the canvas.
-A tick pass runs once per tick for every cell, an init pass seeds the cells when the model is built, and an action pass runs when its action is pressed.
+A tick pass runs once per tick for every cell or agent, an init pass seeds the cells or agents when the model is built, and an action pass runs when its action is pressed.
 
 On the canvas, a node computes a value from its inputs, and a wire carries a value from an output to an input.
 Right-click empty canvas to add a node, or drop a wire on empty canvas to add a node that takes it.
-Right-click a node's header for its menu: Frame, Copy, Inputs (bind an input to a parameter, set a constant or clear it), Settings, View in viewport and Delete.
+Right-click a node's header for its menu: Frame, Copy, Inputs (bind an input to a parameter, set a constant or clear it), Settings, View in viewport, Move into region, Move out of region and Delete.
 A click selects a node, <kbd>Delete</kbd> removes the selection, and <kbd>Cmd</kbd>+<kbd>Z</kbd> (<kbd>Ctrl</kbd>+<kbd>Z</kbd> outside macOS) undoes an edit.
-The toolbar above the canvas holds Undo, Redo, Copy, Delete, Arrange and Frame all.
+The toolbar above the canvas holds Undo, Redo, Copy, Delete, Repeat, Function, Arrange and Frame all.
 
 ### The preview
 
 The Editor runs the graph as a *preview* in the Viewport while you edit it.
-A preview is the model at a small size: each side of the grid at most 256 cells, with every parameter at its default.
+A preview is the model at a small size: each side of the grid at most 256 cells, or at most 16384 agents in a world of the model's own size, with every parameter at its default.
 After each edit that leaves the graph valid, the preview builds again and starts from tick 0 once you pause for a moment.
-The list under the canvas reads **Preview runs at 256 × 256 cells from tick 0. Press Apply to run the model at its own size.**, and the Playback tab names the preview.
+Moving a node, or pressing Arrange, changes no code and leaves the preview running.
+The list under the canvas reads **Preview runs at 256 × 256 cells from tick 0. Press Apply to run the model at its own size.**, or the number of agents, and the Playback tab names the preview.
 The sizes in the world panel and the values in the Parameters tab are left as they are.
 
 The preview takes the Viewport only when nothing runs, when the run is still at tick 0, or when the run is a preview.
@@ -119,6 +120,58 @@ A pass with problems shows their number beside its name.
 Apply runs the graph at its own size, as for a grid rule, and replaces a preview at any tick.
 A model too heavy for the device at its own size is not built, and the Editor reads **Model build failed. Fix the problem below.** over the work it would need.
 The preview of the same model can still run, since it is smaller.
+
+### Regions and Repeat
+
+A *region* is a node whose body runs many times for each cell or agent, and whose results are gathered into *accumulators*.
+**Repeat** runs its body a counted number of times, a neighbourhood fold runs it once for each neighbouring cell, and a radius fold once for each agent within a radius.
+A region draws as two nodes inside a frame: its input half on the left holds its inputs and the values its body reads, such as `k`, the number of the repetition from 0, and its output half on the right holds its accumulators.
+The nodes of its body sit inside the frame between the halves.
+Each Accumulate node inside the body feeds one accumulator, and the accumulator's rule combines the values: `sum`, `count`, `min`, `max`, `or`, `and`, or `carry`, which keeps the last value and lets the body read it again as `prev.<name>` on the next repetition.
+
+Select nodes and press <span class="ui" markdown>:material-repeat: Repeat</span> to wrap them in a new Repeat that runs once.
+The model computes what it did before, and each value the wrapped nodes passed to a node outside becomes a `carry` accumulator.
+A selection that holds a node a region body cannot hold, such as a lane write, or an Accumulate node without its region, does not wrap.
+Set the Repeat's `count` to a constant, or bind it to a parameter through the node menu's Inputs, and set <span class="ui">Max</span> on its input half, the most repetitions it runs.
+A constant count sets Max for you, and a count that can pass Max shows a warning on the node.
+<span class="ui">Add accumulator</span> on the input half adds an accumulator, whose name, type and rule each have a field beside it.
+
+Drag a node into a region's frame to move it into the region's body, and use the node menu's Move out of region to take it out again.
+A node taken out of a region moves to the right of the region's frame, so it no longer looks like a member.
+The frame a node would join takes a blue outline while you drag it.
+Right-clicking empty canvas inside a frame adds a node to that region.
+Regions nest at most three deep, a Repeat inside a Repeat or a neighbourhood fold and the other way round, and a radius fold neither holds a region nor sits in one.
+The menus and the frames offer only the moves that follow these rules.
+
+### Functions
+
+A *function* is a named graph that passes can call, each call a node with the function's inputs and outputs.
+The functions panel lists the model's functions.
+Press a function to open its body on the canvas, or right-click a call and press Open function, and the toolbar shows where you came from, as in **flock › clamp_speed function**.
+Press a name in that breadcrumb to go back.
+Inside a function, a Function input node reads one of its inputs and a Function output node sets one of its outputs.
+The panel renames the open function, adds, renames, retypes and removes its inputs and outputs, and removes it.
+An edit inside a function changes every call, and the preview restarts as for any edit.
+
+Select nodes and press <span class="ui" markdown>:material-function-variant: Function</span> to move them into a new function, named `function` or `function_2` and so on, with a call in their place.
+Each value they read from outside becomes an input, and each value a node outside reads becomes an output.
+Right-click a call and press Ungroup to put a copy of its function's nodes back in the call's place.
+The function stays in the panel until you remove it.
+A random draw inside a function draws other numbers for each call, so a selection that draws numbers draws different ones once it becomes a function.
+Ungroup keeps the numbers the call drew.
+
+Press <span class="ui" markdown>:material-file-import-outline: Import function</span> and pick another model file to list its functions.
+Press Import beside one to copy it, and every function it calls, into this model, under the name in the field beside it.
+A name the model already uses, or the name of a function the imported one calls, is refused, so type another one.
+The model file records the name of the file each imported function came from.
+An import copies the function alone, so a function that reads a lane or a category of the other model shows a problem until this model declares one with the same id.
+
+### Expressions
+
+An Expression node computes its outputs from a short formula, such as `out = if(count > 0, moved + avg * inv, moved)`.
+Its body holds the formula, its named inputs with their types, and its outputs, separated by commas.
+Each change applies when the field loses focus, and a formula that does not read shows its problem on the node.
+Renaming an input keeps the wire it held.
 
 ### Generated WGSL and View in viewport
 
@@ -150,8 +203,8 @@ A heavy step on a large grid can still take long enough per tick to lose the GPU
 
 ## Limits
 
-- The Editor writes grid rules and graph models on a grid.
-  Agent models and CPU models cannot be written as a model file.
+- The Editor writes grid rules, and graph models on a grid or of agents.
+  CPU models cannot be written as a model file.
 - A step has no initialisation of its own.
   The states' `initial` shares seed the grid at tick 0.
 - A grid rule or a graph model reads its parameters when it is built.

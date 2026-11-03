@@ -1155,6 +1155,7 @@ pub(crate) fn compile_agent_shaders(
             sides,
             cost,
             counters: shader_tallies,
+            grid_sum_lanes: Vec::new(),
             pass_id: henad_compute::gpu::GridPassId::Display,
             agent: Some(AgentShader {
                 pass,

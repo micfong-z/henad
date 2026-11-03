@@ -8,13 +8,13 @@
 //! average speed agrees with the lanes.
 //!
 //! The graphs' radius fold faults past 65536 visits, where the stock port walks on.
-//! [`the_boids_graphs_fault_only_in_the_dense_corner_of_the_stock_bounds`] documents the corner of the stock bounds
-//! where that happens.
+//! [`the_boids_graphs_walk_past_the_cap_only_where_the_budget_refuses_them`] documents the corner of the stock bounds
+//! where a walk passes the cap, and the part of it the submission budget refuses before a build.
 
 use henad_compute::cpu::agent_engine::AgentModelState;
 use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::sim_thread::GpuSimState;
-use henad_compute::gpu::{GpuAgentState, GpuContext};
+use henad_compute::gpu::{GpuAgentState, GpuContext, SUBMISSION_WORK_BUDGET};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::GpuAgentModel as _;
 use henad_core::model::SimState as _;
@@ -373,29 +373,55 @@ fn largest_walk(pos: &[u32], extent: Extent, radius: f32, cell_size: f32) -> u32
 /// Most agents a radius fold visits before it faults, `MAX_FOLD_CANDIDATES` of henad-graph.
 const VISIT_CAP: u32 = 65_536;
 
-/// The corner of the stock boids' bounds where the boids graphs' radius fold faults, measured at tick 0 from the stock
-/// seed, which the graphs share. The bounds are kept: up to a million agents, `visual_range` up to 200, and a world of
-/// 1 to 10000 a side. The fold walks the 7 by 7 cells of a third of the visual range around each boid, so a walk
-/// visits about `num_agents * 49 * (visual_range / 3)^2 / (width * height)` agents of a uniform population.
+/// The corner of the stock boids' bounds where the boids graphs' radius fold would fault, and the part of it the
+/// submission budget refuses before a build. The bounds are kept: up to a million agents, `visual_range` up to 200, and
+/// a world of 1 to 10000 a side.
 ///
-/// A million boids at a visual range of 200 fault in a square world below about 1820 a side, the default 1000
-/// included, and stay under the cap at 2000. At the default range of 50 they fault below about 460 a side. At the
-/// default population of 50000 no world of the bounds reaches the cap at either range, the smallest included. Note
-/// that a flock gathers boids as it steps, so a run's walks grow past these tick-0 values and the corner widens with
-/// time.
+/// The walk is a model on the CPU, not a device run. It counts, from the stock seed at tick 0, which the graphs share,
+/// the agents in the 7 by 7 cells of a third of the visual range around each boid, which a uniform population puts at
+/// about `num_agents * 49 * (visual_range / 3)^2 / (width * height)`. A million boids at a visual range of 200 walk past
+/// the cap in a square world below about 1820 a side, and at the default range of 50 below about 460 a side. At the
+/// default population of 50000 no world reaches the cap. Note that a flock gathers boids as it steps, so a run's walks
+/// grow past these tick-0 values.
+///
+/// The submission budget charges each step the cells and the uniform-spread visits of every walk, at most the cap per
+/// agent, and refuses a graph before it builds. It refuses both graphs in every row whose walk passes the cap, so none
+/// of those configurations runs, and none of them faults. A million boids build only in a large world at the default
+/// range, such as 10000 a side. In the default world at the default range, the budget admits about 195000 boids of
+/// `gpu_boids.toml` and about 201000 of `boids.toml`. A run can still fault where the budget admits it, when a flock
+/// gathers more boids in one walk than the uniform spread the charge assumes.
 #[test]
-#[expect(clippy::print_stderr, reason = "the walks are information for the record")]
-fn the_boids_graphs_fault_only_in_the_dense_corner_of_the_stock_bounds() {
-    for (num_agents, visual_range, side, faults) in [
-        (1_000_000, 200.0f32, 1_000.0f32, true),
-        (1_000_000, 200.0, 1_500.0, true),
-        (1_000_000, 200.0, 2_000.0, false),
-        (1_000_000, 200.0, 10_000.0, false),
-        (1_000_000, 50.0, 400.0, true),
-        (1_000_000, 50.0, 500.0, false),
-        (1_000_000, 50.0, 1_000.0, false),
-        (50_000, 200.0, 1.0, false),
-        (50_000, 200.0, 1_000.0, false),
+#[expect(
+    clippy::print_stderr,
+    reason = "the walks and the charges are information for the record"
+)]
+fn the_boids_graphs_walk_past_the_cap_only_where_the_budget_refuses_them() {
+    let limits = wgpu::Limits {
+        max_storage_buffer_binding_size: u64::MAX,
+        max_buffer_size: u64::MAX,
+        max_storage_buffers_per_shader_stage: 16,
+        ..wgpu::Limits::default()
+    };
+    let graphs = boids_graphs();
+    // Each row reads: agents, visual range, world side, whether the longest walk passes the cap, and whether the
+    // budget refuses `gpu_boids.toml` and `boids.toml`.
+    for (num_agents, visual_range, side, past_cap, refused) in [
+        (1_000_000, 200.0f32, 1_000.0f32, true, [true, true]),
+        (1_000_000, 200.0, 1_500.0, true, [true, true]),
+        (1_000_000, 200.0, 2_000.0, false, [true, true]),
+        (1_000_000, 200.0, 10_000.0, false, [true, true]),
+        (1_000_000, 50.0, 400.0, true, [true, true]),
+        (1_000_000, 50.0, 500.0, false, [true, true]),
+        (1_000_000, 50.0, 1_000.0, false, [true, true]),
+        (1_000_000, 50.0, 10_000.0, false, [false, false]),
+        (190_000, 50.0, 1_000.0, false, [false, false]),
+        (200_000, 50.0, 1_000.0, false, [true, false]),
+        (210_000, 50.0, 1_000.0, false, [true, true]),
+        (100_000, 200.0, 1_000.0, false, [true, true]),
+        (100_000, 200.0, 10_000.0, false, [false, false]),
+        (50_000, 200.0, 1.0, false, [true, true]),
+        (50_000, 200.0, 1_000.0, false, [true, false]),
+        (50_000, 50.0, 1_000.0, false, [false, false]),
     ] {
         let params: Vec<ParamValue> = GpuBoids::param_descriptors()
             .iter()
@@ -414,13 +440,26 @@ fn the_boids_graphs_fault_only_in_the_dense_corner_of_the_stock_bounds() {
             .collect();
         let extent = Extent { w: side, h: side };
         let walk = largest_walk(&pos, extent, visual_range, visual_range / 3.0);
-        eprintln!(
-            "{num_agents} boids, visual range {visual_range}, world {side}: the longest walk visits {walk} agents"
-        );
+        let row = format!("{num_agents} boids, visual range {visual_range}, world {side}");
+        for ((name, entry), refused) in graphs.iter().zip(refused) {
+            let demand = entry.demand(&params, &limits).expect("a GPU entry has a demand");
+            let submission = demand.submission_work();
+            eprintln!("{row}, {name}: the longest walk visits {walk} agents, and a submission is charged {submission}");
+            assert_eq!(
+                submission > SUBMISSION_WORK_BUDGET,
+                refused,
+                "{row}, {name}: a submission is charged {submission}"
+            );
+            assert_eq!(
+                entry.shortfalls(&params, &limits).is_empty(),
+                !refused,
+                "{row}, {name}: the shortfalls and the charge disagree"
+            );
+        }
         assert_eq!(
             walk > VISIT_CAP,
-            faults,
-            "{num_agents} boids, visual range {visual_range}, world {side}: the longest walk visits {walk} agents"
+            past_cap,
+            "{row}: the longest walk visits {walk} agents"
         );
     }
 }

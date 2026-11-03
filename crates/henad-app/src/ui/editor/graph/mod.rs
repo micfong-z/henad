@@ -6,11 +6,13 @@
 //! that is refused changes nothing, and its message shows under the canvas.
 //!
 //! Undo keeps the canonical text of the file before each edit, `[editor]` included. The *revision* counts the
-//! document's changes, and a canvas whose revision is behind is brought to the document before it draws. The compiled
-//! program of the latest revision is kept for the generated WGSL view and the preview.
+//! document's changes, and a canvas whose revision is behind is brought to the document before it draws. The *code
+//! revision* counts the changes of the code alone, which a move of a node leaves alone. The compiled program of the
+//! latest code revision is kept for the generated WGSL view and the preview.
 
 pub mod arrange;
 pub mod canvas;
+pub mod functions;
 pub mod history;
 pub mod passes;
 pub mod quick_add;
@@ -23,25 +25,29 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use egui::{Button, CentralPanel, Event, Frame, Id, Key, KeyboardShortcut, Margin, Modifiers, Panel, ScrollArea};
+use henad_compute::entry::ModelEntry;
 use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
 use henad_core::params::ParamDescriptor;
 use henad_graph::GraphFile;
 use henad_graph::catalogue::lookup;
 use henad_graph::check::CheckReport;
 use henad_graph::document::{GraphDocument, Pass, PassStage, World};
-use henad_graph::edit::{EditCommand, EditError, GraphBuilder, Scope};
+use henad_graph::edit::{EditCommand, EditError, GraphBuilder, PortSide, Scope};
 use henad_graph::ids::NodeId;
-use henad_graph::node::NodeBody;
-use henad_graph::value::PortRef;
-use henad_graph::wgsl::GridProgram;
+use henad_graph::limits::MAX_REPEAT_ITERATIONS;
+use henad_graph::node::{NodeBody, OP_FUNCTION_INPUT, OP_FUNCTION_OUTPUT, OP_REGION_REPEAT};
+use henad_graph::types::ValueType;
+use henad_graph::value::{ConfigValue, Literal, PortRef};
+use henad_graph::wgsl::{AgentProgram, GeneratedShader, GridProgram};
 
-use self::canvas::{BodyCanvas, CanvasContext, Framing, show_canvas};
+use self::arrange::CanvasKey;
+use self::canvas::{BodyCanvas, CanvasContext, Framing, can_add, show_canvas};
 use self::history::History;
 use self::quick_add::{WireEnd, wire_port};
 use self::view_pass::{ViewTarget, view_file};
 use crate::icons::material_design_icons::{
-    MDI_CODE_BRACES, MDI_CONTENT_COPY, MDI_DELETE_OUTLINE, MDI_EYE_OFF_OUTLINE, MDI_EYE_OUTLINE,
-    MDI_FIT_TO_SCREEN_OUTLINE, MDI_REDO, MDI_SITEMAP_OUTLINE, MDI_UNDO,
+    MDI_CHEVRON_RIGHT, MDI_CODE_BRACES, MDI_CONTENT_COPY, MDI_DELETE_OUTLINE, MDI_EYE_OFF_OUTLINE, MDI_EYE_OUTLINE,
+    MDI_FIT_TO_SCREEN_OUTLINE, MDI_FUNCTION_VARIANT, MDI_REDO, MDI_REPEAT, MDI_SITEMAP_OUTLINE, MDI_UNDO,
 };
 use crate::ui::sweep::layout::add_button;
 
@@ -107,6 +113,8 @@ pub enum GraphRequest {
         op: String,
         /// Position on the canvas.
         pos: [f64; 2],
+        /// Region the node joins, `None` for the top of the body.
+        region: Option<NodeId>,
         /// Wire the node takes.
         wire: Option<DroppedWire>,
     },
@@ -127,6 +135,8 @@ pub enum GraphRequest {
     },
     /// Removes nodes of the open body.
     Delete(Vec<NodeId>),
+    /// Wraps nodes of the open pass in a new Repeat, placed around them as the canvas draws them.
+    WrapInRepeat(Vec<NodeId>),
     /// Places the nodes of the open body in layers from left to right.
     Arrange,
     /// Opens a body on the canvas.
@@ -151,6 +161,45 @@ pub enum GraphRequest {
     StopViewing,
     /// Shows or hides the generated WGSL beside the canvas.
     ShowWgsl(bool),
+    /// Opens the function a call of the open body names, with the open body as its parent in the breadcrumb.
+    OpenCall(NodeId),
+    /// Opens the body at this position of the breadcrumb, and drops the bodies after it.
+    OpenParent(usize),
+    /// Moves nodes of the open body into a new function, with a call in their place.
+    MakeFunction(Vec<NodeId>),
+    /// Replaces a call of the open body with a copy of its function's body.
+    Ungroup(NodeId),
+    /// Adds a port to one side of a function, and a node of its body that names it.
+    AddFunctionPort {
+        /// Id of the function.
+        function: String,
+        /// Side of the port.
+        side: PortSide,
+    },
+    /// Opens a dialog that picks a model file to import a function from.
+    PickImport,
+    /// Copies the function `function` of the picked file into the document, under `id` or its own id.
+    Import {
+        /// Id of the function in the picked file.
+        function: String,
+        /// Id in this document, `None` to keep its own.
+        id: Option<String>,
+    },
+    /// Forgets the picked file.
+    CloseImport,
+    /// Shows a refused gesture's message in the status line.
+    Refuse(String),
+}
+
+/// A model file picked to import functions from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportSource {
+    /// Name of the file.
+    pub name: String,
+    /// Text of the file.
+    pub text: String,
+    /// Ids of the file's functions, in file order.
+    pub functions: Vec<String>,
 }
 
 /// Line under the canvas about the last gesture: a refusal, or a note such as a copy.
@@ -180,8 +229,79 @@ impl GraphStatus {
     }
 }
 
+/// A Repeat that a wrap made, whose halves move clear of the wrapped nodes once the canvas has drawn them.
+#[derive(Debug, Clone)]
+struct WrapFit {
+    /// Body of the Repeat.
+    scope: Scope,
+    /// The Repeat.
+    repeat: NodeId,
+    /// Puts the wrap made.
+    puts: Vec<NodeId>,
+    /// Canvas rectangle of the wrapped nodes.
+    bounds: egui::Rect,
+    /// Sizes of the input half and the puts at the last frame, which have to hold for two frames.
+    sizes: Vec<egui::Vec2>,
+}
+
+/// Compiled program of a graph model of either topology.
+#[derive(Clone)]
+pub enum GraphProgram {
+    /// A model on a grid.
+    Grid(GridProgram),
+    /// A model of agents.
+    Agents(AgentProgram),
+}
+
+/// Prints the model's id and the topology.
+impl std::fmt::Debug for GraphProgram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (topology, id) = match self {
+            Self::Grid(program) => ("grid", program.id()),
+            Self::Agents(program) => ("agents", program.id()),
+        };
+        f.debug_struct("GraphProgram")
+            .field("topology", &topology)
+            .field("id", &id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl GraphProgram {
+    /// Compiles `file` through the compiler of its topology.
+    ///
+    /// # Errors
+    ///
+    /// Returns the problems that stop the file compiling.
+    pub fn compile(file: &GraphFile) -> CompiledProgram {
+        match file.document().world {
+            World::Grid(_) => GridProgram::compile(file).map(Self::Grid),
+            World::Agents(_) => AgentProgram::compile(file).map(Self::Agents),
+            _ => Err(vec![CodeDiagnostic::error(
+                "The Editor runs graphs on a grid or of agents.",
+            )]),
+        }
+    }
+
+    /// Generated shaders, in the order the engine runs them.
+    pub fn shaders(&self) -> &[GeneratedShader] {
+        match self {
+            Self::Grid(program) => program.shaders(),
+            Self::Agents(program) => program.shaders(),
+        }
+    }
+
+    /// Returns the model entry that builds the program.
+    pub fn entry(&self) -> ModelEntry {
+        match self {
+            Self::Grid(program) => program.entry(),
+            Self::Agents(program) => program.entry(),
+        }
+    }
+}
+
 /// Program of one revision of the document: the compiled model, or the problems that stop it compiling.
-pub type CompiledProgram = Result<GridProgram, Vec<CodeDiagnostic>>;
+pub type CompiledProgram = Result<GraphProgram, Vec<CodeDiagnostic>>;
 
 /// A graph model under edit.
 pub struct GraphEditor {
@@ -189,16 +309,22 @@ pub struct GraphEditor {
     history: History,
     /// Body on the canvas.
     scope: Scope,
+    /// Bodies the open function was entered from through its calls, outermost first, which the breadcrumb shows.
+    trail: Vec<Scope>,
     /// Canvas of each body opened so far.
     canvases: BTreeMap<Scope, BodyCanvas>,
     /// Report of the last check.
     report: CheckReport,
     /// Problem of a document whose canonical text does not read back, which no command should make.
     read_error: Option<CodeDiagnostic>,
-    /// Problems of each pass's nodes, by pass id.
-    issues: BTreeMap<String, BTreeMap<NodeId, NodeIssues>>,
+    /// Problems of each body's nodes, by body.
+    issues: BTreeMap<Scope, BTreeMap<NodeId, NodeIssues>>,
     /// Number of changes of the document so far.
     revision: u64,
+    /// Number of changes of the document's code so far, which placement leaves alone.
+    code_revision: u64,
+    /// Hash of the document's code at the last check, `None` while the document does not read back.
+    code_hash: Option<u64>,
     /// Number of the load, which salts the egui ids of the canvases.
     load: u64,
     /// Number of canvases made so far, which gives each canvas an egui id of its own.
@@ -209,7 +335,7 @@ pub struct GraphEditor {
     pressed: bool,
     /// Widget with keyboard focus at the last [`Self::settle`].
     focused: Option<Id>,
-    /// Program of the document, with the revision it was compiled at.
+    /// Program of the document, with the code revision it was compiled at.
     program: Option<(u64, CompiledProgram)>,
     /// Output shown in the Viewport in place of the model's view passes.
     viewing: Option<ViewTarget>,
@@ -219,6 +345,12 @@ pub struct GraphEditor {
     pub show_wgsl: bool,
     /// Line about the last refused edit or the last copy, `None` once another edit runs.
     pub status: Option<GraphStatus>,
+    /// Repeat of the last wrap, until its halves sit clear of the wrapped nodes.
+    wrap_fit: Option<WrapFit>,
+    /// Model file picked to import functions from.
+    import: Option<ImportSource>,
+    /// Whether a dialog that picks a file to import from waits to open.
+    pick_import: bool,
 }
 
 /// Prints the graph's id, the open body and the revision.
@@ -248,11 +380,14 @@ impl GraphEditor {
             builder,
             history: History::default(),
             scope,
+            trail: Vec::new(),
             canvases: BTreeMap::new(),
             report: CheckReport::default(),
             read_error: None,
             issues: BTreeMap::new(),
             revision: 0,
+            code_revision: 0,
+            code_hash: None,
             load: LOADS.fetch_add(1, Ordering::Relaxed),
             canvases_made: 0,
             pending: Vec::new(),
@@ -263,6 +398,9 @@ impl GraphEditor {
             view_changes: 0,
             show_wgsl: false,
             status: None,
+            wrap_fit: None,
+            import: None,
+            pick_import: false,
         };
         editor.refresh();
         editor
@@ -277,6 +415,11 @@ impl GraphEditor {
     /// Document under edit.
     pub fn document(&self) -> &GraphDocument {
         self.builder.document()
+    }
+
+    /// Editor region of the document under edit.
+    pub fn editor_region(&self) -> &henad_graph::editor::EditorRegion {
+        self.builder.editor()
     }
 
     /// Returns the canonical text of the file, `[editor]` included.
@@ -300,10 +443,10 @@ impl GraphEditor {
         self.read_error.is_some() || self.report.has_errors()
     }
 
-    /// Returns the key of what the preview shows: the load, the revision and the changes of the viewed output. A
-    /// preview built under another key is out of date.
+    /// Returns the key of what the preview shows: the load, the code revision and the changes of the viewed output. A
+    /// preview built under another key is out of date, and a move of a node keeps the key.
     pub fn preview_key(&self) -> [u64; 3] {
-        [self.load, self.revision, self.view_changes]
+        [self.load, self.code_revision, self.view_changes]
     }
 
     /// Output shown in the Viewport in place of the model's view passes.
@@ -313,14 +456,14 @@ impl GraphEditor {
 
     /// Returns the program of the document as it is now, compiled on first use after each change.
     pub fn program(&mut self) -> &CompiledProgram {
-        let revision = self.revision;
+        let revision = self.code_revision;
         let stale = self.program.as_ref().is_none_or(|(compiled, _)| *compiled != revision);
         if stale {
             let program = self
                 .builder
                 .to_file()
                 .map_err(|error| vec![error.diagnostic().clone()])
-                .and_then(|file| GridProgram::compile(&file));
+                .and_then(|file| GraphProgram::compile(&file));
             self.program = Some((revision, program));
         }
         match &self.program {
@@ -339,7 +482,7 @@ impl GraphEditor {
     pub fn preview_program(&mut self) -> CompiledProgram {
         if let Some(target) = self.viewing.clone() {
             match view_file(&self.builder, &self.report, &target) {
-                Ok(file) => return GridProgram::compile(&file),
+                Ok(file) => return GraphProgram::compile(&file),
                 Err(message) => {
                     self.status = Some(GraphStatus::warning(format!(
                         "Stopped viewing {}. {message}",
@@ -377,12 +520,12 @@ impl GraphEditor {
         self.read_error.iter().chain(&self.report.diagnostics)
     }
 
-    /// Returns the number of errors and warnings in the pass `id`.
-    pub fn pass_issue_counts(&self, id: &str) -> (usize, usize) {
+    /// Returns the number of errors and warnings in the body `scope`.
+    pub fn issue_counts(&self, scope: &Scope) -> (usize, usize) {
         self.report
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.pass.as_deref() == Some(id))
+            .filter(|diagnostic| self.diagnostic_scope(diagnostic).as_ref() == Some(scope))
             .fold((0, 0), |(errors, warnings), diagnostic| {
                 if diagnostic.severity == DiagnosticSeverity::Error {
                     (errors + 1, warnings)
@@ -390,6 +533,56 @@ impl GraphEditor {
                     (errors, warnings + 1)
                 }
             })
+    }
+
+    /// Returns the body a diagnostic is in: its pass, or the function that holds its node.
+    pub fn diagnostic_scope(&self, diagnostic: &CodeDiagnostic) -> Option<Scope> {
+        if let Some(pass) = &diagnostic.pass {
+            return Some(Scope::pass(pass));
+        }
+        let node: NodeId = diagnostic.node.as_ref()?.parse().ok()?;
+        self.document()
+            .functions
+            .iter()
+            .find(|function| function.body.node(node).is_some())
+            .map(|function| Scope::Function(function.id.clone()))
+    }
+
+    /// Bodies the open function was entered from, outermost first.
+    pub fn trail(&self) -> &[Scope] {
+        &self.trail
+    }
+
+    /// Model file picked to import functions from.
+    pub fn import_source(&self) -> Option<&ImportSource> {
+        self.import.as_ref()
+    }
+
+    /// Returns whether a dialog that picks a file to import from waits to open, and clears the wait.
+    pub fn take_pick_import(&mut self) -> bool {
+        std::mem::take(&mut self.pick_import)
+    }
+
+    /// Takes the model file `text`, named `name`, as the file to import functions from, or names the reason it cannot.
+    pub fn set_import_source(&mut self, name: String, text: String) {
+        match GraphFile::parse(&text) {
+            Ok(file) if file.document().functions.is_empty() => {
+                self.status = Some(GraphStatus::warning(format!("{name} holds no function.")));
+            }
+            Ok(file) => {
+                let functions = file
+                    .document()
+                    .functions
+                    .iter()
+                    .map(|function| function.id.clone())
+                    .collect();
+                self.status = None;
+                self.import = Some(ImportSource { name, text, functions });
+            }
+            Err(error) => {
+                self.status = Some(GraphStatus::warning(format!("{name} is no graph model. {error}")));
+            }
+        }
     }
 
     /// Returns the pass on the canvas, `None` for a function.
@@ -425,7 +618,7 @@ impl GraphEditor {
                 self.edit(edit.commands, edit.coalesce.as_deref());
             }
 
-            GraphRequest::AddNode { op, pos, wire } => self.add_node(&op, pos, wire.as_ref()),
+            GraphRequest::AddNode { op, pos, region, wire } => self.add_node(&op, pos, region, wire.as_ref()),
             GraphRequest::Undo => {
                 let current = self.text();
                 if let Some(text) = self.history.undo(current) {
@@ -448,32 +641,67 @@ impl GraphEditor {
             }
             GraphRequest::Paste { text, at } => self.paste(&text, at),
             GraphRequest::Delete(nodes) => self.delete(&nodes),
+            GraphRequest::WrapInRepeat(nodes) => self.wrap(nodes),
             GraphRequest::Arrange => {
                 let Some(body) = self.body(&self.scope) else { return };
-                let sizes: BTreeMap<NodeId, [f64; 2]> = self
+                let sizes: BTreeMap<CanvasKey, [f64; 2]> = self
                     .canvases
                     .get(&self.scope)
                     .map(|canvas| {
-                        canvas
+                        let mains = canvas
                             .nodes
                             .keys()
-                            .filter_map(|id| {
-                                let size = canvas.current_rect(*id)?.size();
-                                Some((*id, [f64::from(size.x), f64::from(size.y)]))
+                            .map(|id| (CanvasKey::main(*id), canvas.current_rect(*id)));
+                        let outputs = canvas
+                            .output_halves
+                            .keys()
+                            .map(|id| (CanvasKey::output(*id), canvas.output_half_rect(*id)));
+                        mains
+                            .chain(outputs)
+                            .filter_map(|(key, rect)| {
+                                let size = rect?.size();
+                                Some((key, [f64::from(size.x), f64::from(size.y)]))
                             })
                             .collect()
                     })
                     .unwrap_or_default();
-                let moves = arrange::arrange(body, [0.0, 0.0], &sizes)
+                let library = self.document().library;
+                let moves = arrange::arrange(body, library, [0.0, 0.0], &sizes)
                     .into_iter()
-                    .map(|(node, pos)| EditCommand::Move { node, pos })
+                    .map(|(key, pos)| place_command(key, pos))
                     .collect();
                 if self.edit(moves, None) {
                     self.canvas_mut().framing = Some(Framing::All);
                 }
             }
-            GraphRequest::Open(scope) => self.open(scope),
+            GraphRequest::Open(scope) => {
+                self.trail.clear();
+                self.open(scope);
+            }
+            GraphRequest::OpenCall(node) => self.open_call(node),
+            GraphRequest::OpenParent(index) => {
+                if let Some(scope) = self.trail.get(index).cloned() {
+                    self.trail.truncate(index);
+                    self.open(scope);
+                }
+            }
+            GraphRequest::MakeFunction(nodes) => self.make_function(nodes),
+            GraphRequest::Ungroup(node) => {
+                let command = EditCommand::Ungroup {
+                    scope: self.scope.clone(),
+                    node,
+                };
+                self.edit(vec![command], None);
+            }
+            GraphRequest::AddFunctionPort { function, side } => self.add_function_port(&function, side),
+            GraphRequest::PickImport => self.pick_import = true,
+            GraphRequest::Import { function, id } => self.import_function(function, id),
+            GraphRequest::CloseImport => self.import = None,
+            GraphRequest::Refuse(message) => self.status = Some(GraphStatus::warning(message)),
             GraphRequest::Frame { scope, node } => {
+                if scope != self.scope {
+                    self.trail.clear();
+                }
                 self.open(scope);
                 self.canvas_mut().framing = Some(Framing::Node(node));
             }
@@ -484,6 +712,102 @@ impl GraphEditor {
                 self.status = None;
             }
             GraphRequest::ShowWgsl(show) => self.show_wgsl = show,
+        }
+    }
+
+    /// Wraps `nodes` of the open pass in a new Repeat, placed around them as the canvas draws them.
+    fn wrap(&mut self, nodes: Vec<NodeId>) {
+        let bounds = self
+            .canvases
+            .get(&self.scope)
+            .and_then(|canvas| canvas.bounds_of(&nodes));
+        let scope = self.scope.clone();
+        let command = EditCommand::WrapInRepeat {
+            scope: scope.clone(),
+            nodes,
+            bounds,
+        };
+        let mut draft = self.builder.clone();
+        let made = match draft.apply(command) {
+            Ok(made) => made,
+            Err(error) => {
+                self.status = Some(GraphStatus::warning(edit_message(&error)));
+                self.history.end_gesture();
+                self.mark_canvases();
+                return;
+            }
+        };
+        place_unplaced(&mut draft);
+        self.history.record(self.text(), None);
+        self.builder = draft;
+        self.status = None;
+        self.refresh();
+        if let (Some(bounds), [repeat, puts @ ..]) = (bounds, made.as_slice()) {
+            let [min, max] = bounds.map(|corner| egui::pos2(corner[0] as f32, corner[1] as f32));
+            self.wrap_fit = Some(WrapFit {
+                scope,
+                repeat: *repeat,
+                puts: puts.to_vec(),
+                bounds: egui::Rect::from_min_max(min, max),
+                sizes: Vec::new(),
+            });
+        }
+    }
+
+    /// Moves the halves of the last wrap's Repeat clear of the wrapped nodes and the puts, once the canvas has drawn
+    /// them at one size for two frames. The moves join the wrap's undo step.
+    fn fit_wrap(&mut self) {
+        let Some(mut fit) = self.wrap_fit.take() else { return };
+        if fit.scope != self.scope {
+            return;
+        }
+        let Some(canvas) = self.canvases.get(&fit.scope) else {
+            return;
+        };
+        let rects: Option<Vec<egui::Rect>> = std::iter::once(canvas.drawn_rect(fit.repeat))
+            .chain(fit.puts.iter().map(|put| canvas.drawn_rect(*put)))
+            .chain(std::iter::once(canvas.drawn_output_half_rect(fit.repeat)))
+            .collect();
+        let Some(rects) = rects else {
+            self.wrap_fit = Some(fit);
+            return;
+        };
+        let sizes: Vec<egui::Vec2> = rects.iter().map(|rect| rect.size()).collect();
+        if sizes != fit.sizes {
+            fit.sizes = sizes;
+            self.wrap_fit = Some(fit);
+            return;
+        }
+        let gap = arrange::COLUMN_GAP as f32;
+        let mut moves = Vec::new();
+        if let Some(input) = rects.first()
+            && input.max.x > fit.bounds.min.x - gap
+        {
+            let pos = input.min - egui::vec2(input.max.x - (fit.bounds.min.x - gap), 0.0);
+            moves.push(EditCommand::Move {
+                node: fit.repeat,
+                pos: [f64::from(pos.x), f64::from(pos.y)],
+            });
+        }
+        let right = rects[1..rects.len() - 1]
+            .iter()
+            .map(|rect| rect.max.x)
+            .fold(fit.bounds.max.x, f32::max);
+        if let Some(output) = rects.last()
+            && output.min.x < right + gap
+        {
+            moves.push(EditCommand::MoveRegionOutput {
+                node: fit.repeat,
+                pos: [f64::from(right + gap), f64::from(output.min.y)],
+            });
+        }
+        if moves.is_empty() {
+            return;
+        }
+        let mut draft = self.builder.clone();
+        if moves.into_iter().all(|command| draft.apply(command).is_ok()) {
+            self.builder = draft;
+            self.refresh();
         }
     }
 
@@ -503,6 +827,99 @@ impl GraphEditor {
                 self.set_viewing(Some(target));
             }
             Err(message) => self.status = Some(GraphStatus::warning(message)),
+        }
+    }
+
+    /// Opens the function the call `node` of the open body names, with the open body last in the breadcrumb.
+    fn open_call(&mut self, node: NodeId) {
+        let function = self
+            .body(&self.scope)
+            .and_then(|body| body.node(node))
+            .and_then(|call| call.config.get("function"))
+            .and_then(ConfigValue::as_str)
+            .map(|id| Scope::Function(id.to_owned()));
+        let Some(function) = function.filter(|function| self.body(function).is_some()) else {
+            self.status = Some(GraphStatus::warning(format!(
+                "Node {node} calls no function the file declares."
+            )));
+            return;
+        };
+        let parent = self.scope.clone();
+        self.trail.push(parent);
+        self.open(function);
+    }
+
+    /// Moves `nodes` of the open body into a new function named `function`, or `function_<n>` when that is taken.
+    fn make_function(&mut self, nodes: Vec<NodeId>) {
+        let taken = |id: &str| self.document().functions.iter().any(|function| function.id == id);
+        let id = std::iter::once("function".to_owned())
+            .chain((2..).map(|number| format!("function_{number}")))
+            .find(|id| !taken(id))
+            .unwrap_or_default();
+        let command = EditCommand::MakeFunction {
+            scope: self.scope.clone(),
+            nodes,
+            id: id.clone(),
+        };
+        if self.edit(vec![command], None) {
+            self.status = Some(GraphStatus::note(format!(
+                "Made function '{id}'. Rename it in the Functions panel."
+            )));
+        }
+    }
+
+    /// Adds a port to `side` of the function `function`, with an unused name and type `f32`, and a node of its body
+    /// that names it.
+    fn add_function_port(&mut self, function: &str, side: PortSide) {
+        let Some(declared) = self.document().functions.iter().find(|known| known.id == function) else {
+            return;
+        };
+        let (ports, word, op) = match side {
+            PortSide::Input => (&declared.inputs, "input", OP_FUNCTION_INPUT),
+            _ => (&declared.outputs, "output", OP_FUNCTION_OUTPUT),
+        };
+        let taken = |name: &str| ports.iter().any(|port| port.port == name);
+        let port = std::iter::once(word.to_owned())
+            .chain((2..).map(|number| format!("{word}_{number}")))
+            .find(|name| !taken(name))
+            .unwrap_or_default();
+        let scope = Scope::Function(function.to_owned());
+        let mut draft = self.builder.clone();
+        let added = draft
+            .apply(EditCommand::AddFunctionPort {
+                function: function.to_owned(),
+                side,
+                port: port.clone(),
+                value_type: ValueType::F32,
+            })
+            .and_then(|_| draft.add_node(&scope, op, &[("port", ConfigValue::String(port))], &[]));
+        match added {
+            Ok(_) => {
+                place_unplaced(&mut draft);
+                self.history.record(self.text(), None);
+                self.builder = draft;
+                self.status = None;
+                self.refresh();
+            }
+            Err(error) => self.status = Some(GraphStatus::warning(edit_message(&error))),
+        }
+    }
+
+    /// Copies `function` of the picked file into the document, under `id` or its own id.
+    fn import_function(&mut self, function: String, id: Option<String>) {
+        let Some(source) = self.import.clone() else { return };
+        let command = EditCommand::ImportFunction {
+            text: source.text,
+            source: source.name.clone(),
+            function: function.clone(),
+            id: id.clone(),
+        };
+        if self.edit(vec![command], None) {
+            let id = id.unwrap_or(function);
+            self.status = Some(GraphStatus::note(format!(
+                "Imported function '{id}' from {}.",
+                source.name
+            )));
         }
     }
 
@@ -529,15 +946,24 @@ impl GraphEditor {
 
     /// Runs `commands` as one edit, and returns whether they ran. A refused command changes nothing and sets the
     /// status to its message.
+    ///
+    /// A constant `count` of a Repeat also sets its `max`, clamped to the limit. A node the commands leave with no
+    /// placement, such as one pasted or imported from a file with none, is placed as at load. Otherwise the canvas
+    /// would report the place it draws the node at as a move, an edit of its own.
     pub fn edit(&mut self, commands: Vec<EditCommand>, coalesce: Option<&str>) -> bool {
         if commands.is_empty() {
             return true;
         }
+        let commands = fill_repeat_max(commands, self.document());
         let mut draft = self.builder.clone();
-        let mut renamed = None;
+        let mut renamed = Vec::new();
         for command in commands {
-            if let EditCommand::RenamePass { from, to } = &command {
-                renamed = Some((from.clone(), to.clone()));
+            match &command {
+                EditCommand::RenamePass { from, to } => renamed.push((Scope::pass(from), Scope::pass(to))),
+                EditCommand::RenameFunction { from, to } => {
+                    renamed.push((Scope::Function(from.clone()), Scope::Function(to.clone())));
+                }
+                _ => {}
             }
             if let Err(error) = draft.apply(command) {
                 self.status = Some(GraphStatus::warning(edit_message(&error)));
@@ -546,15 +972,20 @@ impl GraphEditor {
                 return false;
             }
         }
+        place_unplaced(&mut draft);
         self.history.record(self.text(), coalesce);
         self.builder = draft;
-        if let Some((from, to)) = renamed {
-            let old = Scope::pass(&from);
+        for (old, new) in renamed {
             if let Some(canvas) = self.canvases.remove(&old) {
-                self.canvases.insert(Scope::pass(&to), canvas);
+                self.canvases.insert(new.clone(), canvas);
             }
             if self.scope == old {
-                self.scope = Scope::pass(&to);
+                self.scope = new.clone();
+            }
+            for scope in &mut self.trail {
+                if *scope == old {
+                    *scope = new.clone();
+                }
             }
         }
         self.status = None;
@@ -562,14 +993,25 @@ impl GraphEditor {
         true
     }
 
-    /// Adds a node of kind `op` at `pos`, and wires it to `wire` when the kind has a socket that takes it.
-    fn add_node(&mut self, op: &str, pos: [f64; 2], wire: Option<&DroppedWire>) {
+    /// Adds a node of kind `op` at `pos` in `region`, and wires it to `wire` when the kind has a socket that takes it.
+    ///
+    /// A new Repeat runs once, with no accumulator. A region kind that cannot nest in `region` is refused, by the rules
+    /// of [`canvas::can_join`].
+    fn add_node(&mut self, op: &str, pos: [f64; 2], region: Option<NodeId>, wire: Option<&DroppedWire>) {
         let scope = self.scope.clone();
+        if let Some(region) = region
+            && self.body(&scope).is_some_and(|body| !can_add(body, op, Some(region)))
+        {
+            self.status = Some(GraphStatus::warning(format!(
+                "Region {region} cannot hold a node of kind {op}."
+            )));
+            return;
+        }
         let mut draft = self.builder.clone();
         let made = draft.apply(EditCommand::AddNode {
             scope: scope.clone(),
             op: op.to_owned(),
-            region: None,
+            region,
             pos: Some(pos),
         });
         let node = match made.map(|made| made.first().copied()) {
@@ -580,6 +1022,33 @@ impl GraphEditor {
                 return;
             }
         };
+        if op == OP_REGION_REPEAT {
+            let defaults = [
+                EditCommand::SetConfig {
+                    scope: scope.clone(),
+                    node,
+                    key: "max".to_owned(),
+                    value: Some(ConfigValue::Integer(1)),
+                },
+                EditCommand::SetConfig {
+                    scope: scope.clone(),
+                    node,
+                    key: "acc".to_owned(),
+                    value: Some(ConfigValue::Array(Vec::new())),
+                },
+                EditCommand::SetLiteral {
+                    scope: scope.clone(),
+                    node,
+                    port: "count".to_owned(),
+                    literal: Literal::U32(1),
+                },
+            ];
+            for command in defaults {
+                if let Err(error) = draft.apply(command) {
+                    self.status = Some(GraphStatus::warning(edit_message(&error)));
+                }
+            }
+        }
         let def = lookup(op, draft.document().library);
         let connect = wire.zip(def).and_then(|(wire, def)| {
             let port = wire_port(def, &wire.end)?.to_owned();
@@ -606,6 +1075,7 @@ impl GraphEditor {
         {
             self.status = Some(GraphStatus::warning(edit_message(&error)));
         }
+        place_unplaced(&mut draft);
         self.history.record(self.text(), None);
         self.builder = draft;
         self.refresh();
@@ -674,11 +1144,13 @@ impl GraphEditor {
         );
     }
 
-    /// Replaces the document with the one `text` holds, a snapshot of the history.
+    /// Replaces the document with the one `text` holds, a snapshot of the history, and places any node it leaves
+    /// unplaced.
     fn restore(&mut self, text: &str) {
         match GraphFile::parse(text) {
             Ok(file) => {
                 self.builder = GraphBuilder::from_file(&file);
+                place_unplaced(&mut self.builder);
                 self.status = None;
                 self.refresh();
             }
@@ -699,21 +1171,28 @@ impl GraphEditor {
         self.mark_canvases();
         match self.builder.to_file() {
             Ok(file) => {
+                let hash = file.code().hash();
+                if self.code_hash != Some(hash) {
+                    self.code_hash = Some(hash);
+                    self.code_revision += 1;
+                }
                 self.report = file.check();
                 self.read_error = None;
             }
             Err(error) => {
+                self.code_hash = None;
+                self.code_revision += 1;
                 self.report = CheckReport::default();
                 self.read_error = Some(error.diagnostic().clone());
             }
         }
         self.issues.clear();
         for diagnostic in &self.report.diagnostics {
-            let (Some(pass), Some(node)) = (&diagnostic.pass, &diagnostic.node) else {
+            let (Some(scope), Some(node)) = (self.diagnostic_scope(diagnostic), &diagnostic.node) else {
                 continue;
             };
             let Ok(node) = node.parse::<NodeId>() else { continue };
-            let issues = self.issues.entry(pass.clone()).or_default().entry(node).or_default();
+            let issues = self.issues.entry(scope).or_default().entry(node).or_default();
             if diagnostic.severity == DiagnosticSeverity::Error {
                 issues.errors.push(diagnostic.message.clone());
             } else {
@@ -725,7 +1204,10 @@ impl GraphEditor {
             if let Some(first) = first {
                 self.scope = first;
             }
+            self.trail.clear();
         }
+        let trail = std::mem::take(&mut self.trail);
+        self.trail = trail.into_iter().filter(|scope| self.body(scope).is_some()).collect();
         let known: Vec<Scope> = self.canvases.keys().cloned().collect();
         for scope in known {
             if self.body(&scope).is_none() {
@@ -745,13 +1227,13 @@ impl GraphEditor {
             return;
         };
         if let Some(body) = self.body(&scope) {
-            let pass_id = match &scope {
-                Scope::Pass(id) => id.as_str(),
-                _ => "",
-            };
             let empty = BTreeMap::new();
-            let issues = self.issues.get(pass_id).unwrap_or(&empty);
-            let report = self.report.passes.iter().find(|pass| pass.id == pass_id);
+            let issues = self.issues.get(&scope).unwrap_or(&empty);
+            let report = match &scope {
+                Scope::Pass(id) => self.report.passes.iter().find(|pass| pass.id == *id),
+                Scope::Function(id) => self.report.functions.iter().find(|function| function.id == *id),
+                _ => None,
+            };
             canvas.sync(
                 &scope,
                 self.builder.document(),
@@ -791,6 +1273,16 @@ impl GraphEditor {
             && canvas.revision == self.revision
         {
             gesture.extend(canvas.moved(self.builder.editor()));
+            gesture.extend(
+                canvas
+                    .regions_entered(body)
+                    .into_iter()
+                    .map(|(node, region, _)| EditCommand::SetRegion {
+                        scope: self.scope.clone(),
+                        node,
+                        region: Some(region),
+                    }),
+            );
             gesture.extend(canvas.lost_wires(&self.scope, body));
         }
         if !gesture.is_empty() {
@@ -802,6 +1294,7 @@ impl GraphEditor {
         if released {
             self.history.end_gesture();
         }
+        self.fit_wrap();
         self.sync_open_canvas();
     }
 
@@ -862,6 +1355,59 @@ fn sentence(text: &str) -> String {
     message
 }
 
+/// Returns the command that places the canvas node `key` at `pos`: a move of a node, or of a region's output half.
+fn place_command(key: CanvasKey, pos: [f64; 2]) -> EditCommand {
+    if key.output_half {
+        EditCommand::MoveRegionOutput { node: key.node, pos }
+    } else {
+        EditCommand::Move { node: key.node, pos }
+    }
+}
+
+/// Returns `commands` with a `max` after each constant `count` of a Repeat of `document`, the count clamped to
+/// 1 to [`MAX_REPEAT_ITERATIONS`].
+fn fill_repeat_max(commands: Vec<EditCommand>, document: &GraphDocument) -> Vec<EditCommand> {
+    let is_repeat = |scope: &Scope, node: NodeId| {
+        let body = match scope {
+            Scope::Pass(id) => document
+                .passes
+                .iter()
+                .find(|pass| pass.id == *id)
+                .map(|pass| &pass.body),
+            Scope::Function(id) => document
+                .functions
+                .iter()
+                .find(|function| function.id == *id)
+                .map(|function| &function.body),
+            _ => None,
+        };
+        body.and_then(|body| body.node(node))
+            .is_some_and(|known| known.op == OP_REGION_REPEAT)
+    };
+    let mut filled = Vec::with_capacity(commands.len());
+    for command in commands {
+        let max = match &command {
+            EditCommand::SetLiteral {
+                scope,
+                node,
+                port,
+                literal: Literal::U32(count),
+            } if port == "count" && is_repeat(scope, *node) => Some(EditCommand::SetConfig {
+                scope: scope.clone(),
+                node: *node,
+                key: "max".to_owned(),
+                value: Some(ConfigValue::Integer(i64::from(
+                    (*count).clamp(1, MAX_REPEAT_ITERATIONS),
+                ))),
+            }),
+            _ => None,
+        };
+        filled.push(command);
+        filled.extend(max);
+    }
+    filled
+}
+
 /// Places every body of `builder` that holds no placement in layers, and the nodes of other bodies that have none to
 /// the right of their placed nodes.
 fn place_unplaced(builder: &mut GraphBuilder) {
@@ -883,6 +1429,8 @@ fn place_unplaced(builder: &mut GraphBuilder) {
         if placed.len() == body.nodes.len() {
             continue;
         }
+        // An output half takes the layout's place only in a body placed from scratch. Otherwise it follows its body.
+        let placed_none = placed.is_empty();
         let origin = placed
             .iter()
             .map(|pos| pos[0])
@@ -890,9 +1438,15 @@ fn place_unplaced(builder: &mut GraphBuilder) {
             .map_or([0.0, 0.0], |right| {
                 [right + arrange::NODE_SIZE[0] + arrange::COLUMN_GAP, 0.0]
             });
-        for (node, pos) in arrange::arrange(body, origin, &BTreeMap::new()) {
-            if editor.node_layout(node).is_none() {
-                moves.push(EditCommand::Move { node, pos });
+        for (key, pos) in arrange::arrange(body, document.library, origin, &BTreeMap::new()) {
+            let layout = editor.node_layout(key.node);
+            let placed = if key.output_half {
+                layout.is_some_and(|layout| layout.output_pos.is_some())
+            } else {
+                layout.is_some()
+            };
+            if !placed && (!key.output_half || placed_none) {
+                moves.push(place_command(key, pos));
             }
         }
     }
@@ -915,6 +1469,8 @@ pub fn graph_ui(ui: &mut egui::Ui, graph: &mut GraphEditor) {
                 .id_salt("henad_graph_sidebar_scroll")
                 .show(ui, |ui| {
                     passes::passes_ui(ui, graph, &mut requests);
+                    ui.add_space(8.0);
+                    functions::functions_ui(ui, graph, &mut requests);
                     ui.add_space(8.0);
                     world::world_ui(ui, graph, &mut requests);
                 });
@@ -954,12 +1510,15 @@ pub fn graph_ui(ui: &mut egui::Ui, graph: &mut GraphEditor) {
             Scope::Pass(id) => document.passes.iter().find(|pass| pass.id == *id),
             _ => None,
         };
-        let context = CanvasContext {
-            scope: &scope,
-            pass,
-            document,
-        };
-        requests.extend(show_canvas(ui, &mut canvas, context));
+        if let Some(body) = graph.body(&scope) {
+            let context = CanvasContext {
+                scope: &scope,
+                body,
+                pass,
+                document,
+            };
+            requests.extend(show_canvas(ui, &mut canvas, context));
+        }
         graph.canvases.insert(scope, canvas);
     });
     graph.settle(ui.ctx(), requests);
@@ -1012,8 +1571,42 @@ fn keyboard_requests(ctx: &egui::Context, graph: &GraphEditor) -> Vec<GraphReque
     requests
 }
 
-/// Draws the toolbar above the canvas: the open body, Undo, Redo, Copy, Delete, Arrange, Frame all, the WGSL switch,
-/// and the output shown in the Viewport with Stop viewing.
+/// Draws the breadcrumb of the open body: the bodies it was entered from, each of which opens again, then its own
+/// name and kind.
+fn breadcrumb_ui(ui: &mut egui::Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>) {
+    for (index, scope) in graph.trail().iter().enumerate() {
+        let name = match scope {
+            Scope::Pass(id) | Scope::Function(id) => id.as_str(),
+            _ => "",
+        };
+        if ui.link(name).on_hover_text("Open this body").clicked() {
+            requests.push(GraphRequest::OpenParent(index));
+        }
+        ui.weak(MDI_CHEVRON_RIGHT);
+    }
+    match graph.scope() {
+        Scope::Function(id) => {
+            ui.strong(id);
+            ui.weak("function");
+        }
+        _ => {
+            if let Some(pass) = graph.open_pass() {
+                ui.strong(&pass.id);
+                ui.weak(match pass.stage {
+                    PassStage::Init => "init pass",
+                    PassStage::Tick => "tick pass",
+                    PassStage::View => "view pass",
+                    PassStage::Stats => "stats pass",
+                    PassStage::Action => "action pass",
+                    _ => "pass",
+                });
+            }
+        }
+    }
+}
+
+/// Draws the toolbar above the canvas: the breadcrumb of the open body, Undo, Redo, Copy, Delete, Repeat, Function,
+/// Arrange, Frame all, the WGSL switch, and the output shown in the Viewport with Stop viewing.
 fn toolbar_ui(ui: &mut egui::Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>) {
     let selected = graph
         .canvases
@@ -1021,18 +1614,8 @@ fn toolbar_ui(ui: &mut egui::Ui, graph: &GraphEditor, requests: &mut Vec<GraphRe
         .map(|canvas| canvas.selected(ui.ctx()))
         .unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
-        if let Some(pass) = graph.open_pass() {
-            ui.strong(&pass.id);
-            ui.weak(match pass.stage {
-                PassStage::Init => "init pass",
-                PassStage::Tick => "tick pass",
-                PassStage::View => "view pass",
-                PassStage::Stats => "stats pass",
-                PassStage::Action => "action pass",
-                _ => "pass",
-            });
-            ui.separator();
-        }
+        breadcrumb_ui(ui, graph, requests);
+        ui.separator();
         let buttons = [
             (
                 MDI_UNDO,
@@ -1061,6 +1644,20 @@ fn toolbar_ui(ui: &mut egui::Ui, graph: &GraphEditor, requests: &mut Vec<GraphRe
                 !selected.is_empty(),
                 "Delete selected nodes",
                 GraphRequest::Delete(selected.clone()),
+            ),
+            (
+                MDI_REPEAT,
+                "Repeat",
+                !selected.is_empty(),
+                "Wrap selected nodes in Repeat",
+                GraphRequest::WrapInRepeat(selected.clone()),
+            ),
+            (
+                MDI_FUNCTION_VARIANT,
+                "Function",
+                !selected.is_empty(),
+                "Move selected nodes into new function",
+                GraphRequest::MakeFunction(selected.clone()),
             ),
             (
                 MDI_SITEMAP_OUTLINE,

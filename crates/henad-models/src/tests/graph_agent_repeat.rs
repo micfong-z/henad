@@ -744,6 +744,138 @@ fn a_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit() {
     }
 }
 
+/// A deterministic float body, `prev * 1.1 + k` from the agent's index, carried through a Repeat of [`CHAIN_LINKS`]
+/// iterations into the lane `number`.
+const FLOAT_LOOP: &str = r#"
+[[pass]]
+id = "float"
+stage = "tick"
+kind = "map"
+domain = "agents"
+
+[[pass.node]]
+id = "n50"
+op = "ctx.index"
+
+[[pass.node]]
+id = "n51"
+op = "conv.to_f32"
+in.a = "n50"
+
+[[pass.node]]
+id = "n52"
+op = "region.repeat"
+config.max = 8
+config.acc = [{ name = "number", type = "f32", combine = "carry" }]
+in.count = { u32 = 5 }
+in.init.number = "n51"
+
+[[pass.node]]
+id = "n53"
+op = "math.mul"
+in.a = "n52.prev.number"
+in.b = { f32 = 1.1 }
+region = "n52"
+
+[[pass.node]]
+id = "n54"
+op = "conv.to_f32"
+in.a = "n52.k"
+region = "n52"
+
+[[pass.node]]
+id = "n55"
+op = "math.add"
+in.a = "n53"
+in.b = "n54"
+region = "n52"
+
+[[pass.node]]
+id = "n56"
+op = "region.put"
+config.acc = "number"
+in.value = "n55"
+region = "n52"
+
+[[pass.node]]
+id = "n57"
+op = "lane.set"
+config.lane = "number"
+in.value = "n52.number"
+"#;
+
+/// Returns the graph of a float pass: [`FLOAT_LOOP`], or its body copied [`CHAIN_LINKS`] times by hand with each `k`
+/// a literal.
+fn float_text(copied: bool) -> String {
+    let pass = if copied {
+        let mut text =
+            String::from("\n[[pass]]\nid = \"float\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n");
+        text.push_str("\n[[pass.node]]\nid = \"n50\"\nop = \"ctx.index\"\n");
+        text.push_str("\n[[pass.node]]\nid = \"n51\"\nop = \"conv.to_f32\"\nin.a = \"n50\"\n");
+        let mut previous = "n51".to_owned();
+        for k in 0..CHAIN_LINKS {
+            let (product, sum) = (100 + 2 * k, 101 + 2 * k);
+            text.push_str(&format!(
+                "\n[[pass.node]]\nid = \"n{product}\"\nop = \"math.mul\"\nin.a = \"{previous}\"\nin.b = {{ f32 = 1.1 }}\n"
+            ));
+            text.push_str(&format!(
+                "\n[[pass.node]]\nid = \"n{sum}\"\nop = \"math.add\"\nin.a = \"n{product}\"\nin.b = {{ f32 = {k}.0 }}\n"
+            ));
+            previous = format!("n{sum}");
+        }
+        text.push_str(&format!(
+            "\n[[pass.node]]\nid = \"n57\"\nop = \"lane.set\"\nconfig.lane = \"number\"\nin.value = \"{previous}\"\n"
+        ));
+        text
+    } else {
+        FLOAT_LOOP.to_owned()
+    };
+    format!("{HEAD}{}{pass}", f32_lane("number"))
+}
+
+/// The float body of [`FLOAT_LOOP`] replays on one device over agents: two runs of the loop leave the same words, as
+/// do two runs of its hand-chained copies. The host runs the loop and the copies alike.
+#[test]
+fn a_float_repeat_over_agents_replays_on_the_device() {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+        log::warn!("skipping a_float_repeat_over_agents_replays_on_the_device: no adapter");
+        return;
+    };
+    for copied in [false, true] {
+        let text = float_text(copied);
+        let first = on_device(&ctx, &text, Some(3), 1);
+        assert_eq!(first, on_device(&ctx, &text, Some(3), 1), "one device replays:\n{text}");
+        assert_ne!(lane(&first, "number")[3], 3.0f32.to_bits(), "the body ran");
+    }
+    assert_eq!(
+        on_host(&float_text(false), Some(3)),
+        on_host(&float_text(true), Some(3)),
+        "the host's loop and copies"
+    );
+}
+
+/// The float body of [`FLOAT_LOOP`] over agents equals its hand-chained copies bit for bit on the device, and both
+/// equal the host.
+///
+/// Note that this fails on an Apple M4 Pro, as the grid version in henad-graph does. wgpu compiles Metal shaders with
+/// fast math on, and the device rounds the loop and the copies, whose `k` are literals, otherwise. Records #66, #67
+/// and #70 hold the probes.
+#[test]
+#[ignore = "fails on Metal, which compiles with fast math; records #66, #67 and #70"]
+fn a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit() {
+    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+        log::warn!("skipping a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit: no adapter");
+        return;
+    };
+    let looped = on_device(&ctx, &float_text(false), Some(3), 1);
+    assert_eq!(
+        looped,
+        on_device(&ctx, &float_text(true), Some(3), 1),
+        "the loop and its copies"
+    );
+    assert_eq!(looped, on_host(&float_text(false), Some(3)), "the device and the host");
+}
+
 /// Two iterations of one draw differ for nearly every agent, two runs at one seed are equal, another seed draws
 /// otherwise, and each draw on the device equals the host's.
 #[test]

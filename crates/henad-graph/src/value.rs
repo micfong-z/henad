@@ -14,7 +14,7 @@ pub type Color = [u8; 4];
 ///
 /// `"n12"` names the node's only output. Inside a region body `"n7.delta"` names the region's inner output `delta`, and
 /// outside it `"n7.sum"` names the accumulator output `sum`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PortRef {
     /// Node that holds the port.
     pub node: NodeId,

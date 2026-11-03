@@ -557,7 +557,7 @@ pub(super) static A2_KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.clamp",
         label: "Clamp",
-        semantics: "`min(max(x, lo), hi)` per component, composed of `math.max` and `math.min`, so `lo` wins when `lo > hi`. On the host a NaN `x` gives `lo`, where `f32::clamp` gives NaN, and a shader leaves it indeterminate.",
+        semantics: "`min(max(x, lo), hi)` per component, composed of `math.max` and `math.min`, so `hi` wins when `lo > hi`. On the host a NaN `x` gives `lo`, where `f32::clamp` gives NaN, and a shader leaves it indeterminate.",
         group: "Arithmetic",
         type_var: NUMERIC,
         inputs: &[

@@ -1059,7 +1059,7 @@ pub fn receive_open(app: &mut AppState, target: OpenTarget, result: OpenResult) 
     match target {
         OpenTarget::SweepSpec => load_spec(app, &file),
         OpenTarget::DesignTable => load_table(app, file),
-        OpenTarget::OutputFolder | OpenTarget::Results | OpenTarget::Model => {}
+        OpenTarget::OutputFolder | OpenTarget::Results | OpenTarget::Model | OpenTarget::Function => {}
     }
 }
 

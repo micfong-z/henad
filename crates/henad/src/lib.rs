@@ -280,9 +280,10 @@ pub mod rules {
 ///
 /// A [`GraphFile`](graph::GraphFile) reads a graph and writes its canonical text, and
 /// [`GraphFile::check`](graph::GraphFile::check) reports every problem at once. [`starters`](graph::starters::starters)
-/// returns the graph files a new graph model begins from. [`GridProgram`](graph::wgsl::GridProgram) compiles a graph
-/// on a grid to WGSL and builds its entry. A [`ModelFile`](rules::ModelFile) of kind `graph` holds a
-/// [`GraphFile`](graph::GraphFile).
+/// and [`agent_starters`](graph::starters::agent_starters) return the graph files a new graph model begins from.
+/// [`GridProgram`](graph::wgsl::GridProgram) compiles a graph on a grid to WGSL and builds its entry, and
+/// [`AgentProgram`](graph::wgsl::AgentProgram) does the same for a graph of agents. A [`ModelFile`](rules::ModelFile)
+/// of kind `graph` holds a [`GraphFile`](graph::GraphFile).
 #[cfg(feature = "model-files")]
 #[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
 pub mod graph {

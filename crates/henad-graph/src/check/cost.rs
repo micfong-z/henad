@@ -28,18 +28,21 @@ impl FunctionSize {
     };
 }
 
-/// Costs of a file's passes, and whether its inlined size is within [`MAX_NODES_INLINED`].
+/// Costs of a file's passes and functions, and whether its inlined size is within [`MAX_NODES_INLINED`].
 pub(super) struct Costs {
     /// Cost of each pass per element, in stack order.
     pub passes: Vec<u64>,
+    /// Cost of each function per element, by function id.
+    pub functions: BTreeMap<String, u64>,
     /// Whether the file holds at most [`MAX_NODES_INLINED`] nodes once its calls and expressions are inlined.
     pub inlinable: bool,
 }
 
-/// Checks the costs of the file's passes, the shape of its call graph and its size once its calls and expressions are
-/// inlined.
+/// Checks the costs of the file's passes and functions, the shape of its call graph and its size once its calls and
+/// expressions are inlined.
 pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Costs {
     let sizes = function_sizes(checker, views);
+    let function_costs = sizes.iter().map(|(id, size)| ((*id).to_owned(), size.cost)).collect();
     let mut costs = Vec::with_capacity(views.passes.len());
     let mut inlined = 0u64;
     for (index, view) in views.passes.iter().enumerate() {
@@ -62,6 +65,7 @@ pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Costs {
     }
     Costs {
         passes: costs,
+        functions: function_costs,
         inlinable,
     }
 }

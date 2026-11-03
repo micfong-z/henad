@@ -76,11 +76,13 @@ which the device runs stock `gpu_boids`.
 `a_radius_fold_over_the_whole_world_is_refused_or_faults_with_its_place` holds a world-wide walk to
 the budget over coarse cells and to the cell cap over fine ones, and
 `a_field_update_reads_each_layer_at_its_own_cell` holds a `finish` to its own cell in each layer.
-`graph_agent_parity.rs` also measures where the boids graphs' radius fold reaches its 65536-visit
-cap inside the stock bounds, at tick 0 from the stock seed
-(`the_boids_graphs_fault_only_in_the_dense_corner_of_the_stock_bounds`): a million boids at
-`visual_range` 200 below about 1820 a side, at 50 below about 460. The stock port has no cap. The
-same file holds both boids graphs to the cross-engine gate of `tests/consistency_boids.rs` (its two
+`graph_agent_parity.rs` also models on the CPU where the boids graphs' radius fold reaches its
+65536-visit cap inside the stock bounds, at tick 0 from the stock seed
+(`the_boids_graphs_walk_past_the_cap_only_where_the_budget_refuses_them`): a million boids at
+`visual_range` 200 below about 1820 a side, at 50 below about 460. It holds the submission budget
+to refusing both graphs in every such row, and per row and graph whether the budget refuses
+(about 195000 boids of `gpu_boids.toml` and 201000 of `boids.toml` in the default world). No
+device runs there. The stock port has no cap and no budget. The same file holds both boids graphs to the cross-engine gate of `tests/consistency_boids.rs` (its two
 scenarios planted, one tick within 1e-5 of the CPU `boids` and of every engine's fixture) and to
 that file's speed and position bounds over 50 ticks. `graph_agent_corpus.rs` holds every agents
 corpus schema to stock `gpu_boids` and `boids`, or `gpu_ants` and `ants`, hashed under the stock id.
@@ -97,7 +99,13 @@ the device and the host: known answers (zero iterations, `when` false, a clamped
 agent, an inner count reading the outer `k`), a hash chain equal to its hand-chained copies and to
 `pcg_hash`, two iterations of one draw differing and replaying, a `grid.fold` in a Repeat and a
 Repeat in a `grid.fold` at their closed forms, the random walk's replay, step length and mean
-squared step, and a Repeat of 16384 refused by the budget at a million agents. Keep these files.
+squared step, and a Repeat of 16384 refused by the budget at a million agents. Its float body
+(`FLOAT_LOOP`, `prev * 1.1 + k`) replays on the device, and
+`a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit` is `#[ignore]`d: on Metal's
+fast math the loop and its copies differ by up to 2 units in the last place (record #70).
+`src/tests/graph_grid_sums.rs` reduces a grid graph's `stat.sum` and `stat.mean` of an `f32` lane
+and a `vec2f` sum on the device through the engine's `partials` tree, at sizes from 1 by 1 to 300
+by 211, to closed forms that every order of addition reaches exactly. Keep these files.
 
 ## Adding a new model
 

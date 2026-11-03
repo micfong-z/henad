@@ -175,6 +175,7 @@ fn undo_and_redo_restore_the_canonical_text() {
         GraphRequest::AddNode {
             op: "math.sin".to_owned(),
             pos: [10.0, 10.0],
+            region: None,
             wire: None,
         },
     );
@@ -215,6 +216,7 @@ fn a_node_added_from_a_dropped_wire_takes_the_wire() {
         GraphRequest::AddNode {
             op: "logic.not".to_owned(),
             pos: [0.0, 0.0],
+            region: None,
             wire: Some(crate::ui::editor::graph::DroppedWire {
                 node: n(17),
                 port: "out".to_owned(),
@@ -252,7 +254,7 @@ fn renaming_or_removing_the_open_pass_keeps_a_pass_open() {
 #[test]
 fn issue_counts_follow_the_checker_per_pass() {
     let mut graph = editor("sir.toml");
-    assert_eq!(graph.pass_issue_counts("step"), (0, 0));
+    assert_eq!(graph.issue_counts(&Scope::pass("step")), (0, 0));
     run(
         &mut graph,
         GraphRequest::Edit(GraphEdit::one(EditCommand::Disconnect {
@@ -261,9 +263,9 @@ fn issue_counts_follow_the_checker_per_pass() {
             port: "b".to_owned(),
         })),
     );
-    let (errors, _) = graph.pass_issue_counts("step");
+    let (errors, _) = graph.issue_counts(&Scope::pass("step"));
     assert_eq!(errors, 1);
-    assert_eq!(graph.pass_issue_counts("counts"), (0, 0));
+    assert_eq!(graph.issue_counts(&Scope::pass("counts")), (0, 0));
     let problem = graph
         .diagnostics()
         .find(|diagnostic| diagnostic.node.as_deref() == Some("n15"))

@@ -67,6 +67,8 @@ pub enum OpenTarget {
     Results,
     /// A TOML model file, for the Editor.
     Model,
+    /// A TOML model file to import a function from, for the Editor's graph model.
+    Function,
 }
 
 /// A file the user picked, read into memory.

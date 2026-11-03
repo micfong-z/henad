@@ -25,9 +25,8 @@ and `GraphBuilder`. henad-graph takes henad-compute with `runtime-wgsl` on, for 
 one GPU target with `node_<model>` ids and no `apply` key. `starters.rs` embeds them with
 `include_str!` (`scripts/check_packaging.sh` refuses a path out of the crate) and returns the grid
 ones through `starters()`, the agent ones through `agent_starters()`, and either through
-`starter(file_name)`. `starters()` leaves agents out, which keeps them out of the Editor's starter
-menu and the grid-only tests over it, until the Editor's graph editor handles agents. Both compile
-to WGSL.
+`starter(file_name)`. The Editor's starter menu lists both, grid first, and the
+grid-only tests read `starters()`. Both compile to WGSL.
 Game of Life's Randomise is the 9-node press-seed form (`ctx.press_seed`, `ctx.index`,
 `rng.hash`, `bits.xor`, `rng.hash`, `rng.threshold`, `rng.below`, `logic.select`, `lane.set`).
 The exact ports (`gpu_sir_exact.toml`) sit in henad-models' `tests/fixtures/graphs/`, and
@@ -161,31 +160,13 @@ column and staged copy is reserved with `try_reserve_exact`, so a failed allocat
 and no abort. Host init has no work bound yet: `cost * elements` of the init and rerun passes is
 for G2's `Demand` to count.
 
-**Edit commands** (`edit/`). `GraphBuilder` holds a `GraphDocument` and an `EditorRegion` and
-runs `EditCommand`s: `AddNode`, `RemoveNode`, `Connect`, `Disconnect`, `SetLiteral`,
-`BindParam`, `SetConfig`, `SetRegion`, `Move`, `Frame`, `Paste`, and the declaration edits
-(add a category or palette, add, rename and remove a lane, variant, parameter, statistic,
-action or pass, and `MovePass` within its stage), and three edits in place for the Editor's forms:
-`SetPassEnabled` (a parameter it binds must exist), `SetParam` (the descriptor with the same id,
-in its place in the schema) and `SetWorld` (the same topology). `apply` runs on a copy, so a refused command
-changes nothing. Commands check structure only (ids, grammars, the body a node is in, region
-cycles) and leave meaning to the checker. A new node takes `max(highest + 1, next_id)` and
-writes `next_id` (an `[editor]` region is made if absent), and a kind with a `key` config gets
-a random key distinct from the file's (`with_key_seed` fixes the stream for tests). A stream
-draw joins its pass's `draw_order`. `RemoveNode` drops wires from the node and its placement,
-moves a region's members to the region around it, and is refused while a `[[stat]]` reads it.
-A rename rewrites every reference: `config.lane`, category literals, `dead`/`alive`, rule
-`from`/`to`, `case.<v>` ports, `stat.count_by` ports and `[[stat]] from`, parameter bindings,
-`enabled`, option literals, `action`, `runs` and the canvas scope `pass.<id>`. A remove with
-references returns `EditError::Referenced` with each place. `copy(scope, nodes)` returns a whole
-graph file (declarations, one pass or function of the copied nodes, their placement, no stats,
-empty `runs`). `Paste` mints ids and keys, keeps wires inside the copy, drops the rest and drops
-a binding of a parameter the target lacks. Category rename and remove, palette edits and
-function edits are not written yet.
+**Edit commands** (`edit/`) and the editor region (`editor.rs`) are in
+`agents/henad-graph-edit.md`.
 
 **The checker** (`check/`). `GraphFile::check()` returns a `CheckReport`: every diagnostic in file
 order, `duplicate_ids` (the repair state), a `PassReport` per pass (cost, and the inferred
-`PortType` of each output and inner output) and `dual_lanes`. `view.rs` builds a `BodyView` per
+`PortType` of each output and inner output), one per function body checked (`functions`, the cost
+of one call) and `dual_lanes`. `view.rs` builds a `BodyView` per
 body: positions by id, defs, and the region tree (`parents`, `depths`) built in one linear walk
 that reports a cycle and nesting past `MAX_REGION_DEPTH`. `body.rs` types each body in link order
 (sources first, nodes on a cycle last, reading holes), checks contexts, backends (init runs on the
@@ -212,14 +193,6 @@ signature's `Debug`, the semantics and the cases' `Debug`, parity, cost) and one
 differs. `HENAD_WRITE_LIBRARY_LOCK=1` writes it. Renaming a catalogue field moves every signature
 hash. The test prints the corpus files that use each kind (`--nocapture`), which is the "Used by"
 information, and a coverage line, the kinds the corpus uses out of every kind.
-
-**The editor region** keeps a `toml::Table`, never refuses a value and never fails a read.
-`frames()` reads every `[[editor.frame]]` as a `FrameLayout` for the Editor's canvas. Its
-writer orders the keys and rounds `pos` to whole points, and `to_text` is a fixed point for any
-table, which `a_strange_editor_region_stays_readable_and_a_fixed_point` holds. The writer leaves
-out a value nested deeper than `MAX_INLINE_DEPTH` (64) arrays and inline tables, since the `toml`
-reader refuses nesting past 80 and a dotted key in the source is written as nested inline tables
-(`a_deep_dotted_editor_key_still_has_a_canonical_text_that_reads`).
 
 **Code identity.** `GraphFile::code` is `ModelCode::new(CODE_FORMAT, semantic_text)`, and
 `GraphFile::source` is `ModelSource::runtime(target id, code)`, which records
@@ -280,15 +253,19 @@ the stock models every tick, `graph_sir_parity.rs` the SIR files, and `graph_rep
 Tests sit in `src/tests/`: `file_format.rs` with `full_graph.toml` as a file in a hand-written
 spelling, `catalogue.rs`, `known_answers.rs`, `checker.rs`, `host.rs` (corpus inits replay,
 reruns, a Repeat equals its hand-chained copies bit for bit, mixed-radix draws), `edit.rs`,
-`library_lock.rs`, `mutation.rs`, `wgsl.rs` (every starter compiles, the range table, region
-forms, uniform body values, and files past the workgroup, uniform and shader-size limits built
-in the test), `gpu_cases.rs`, `gpu_repeat.rs` and `agent_wgsl.rs` (agents' budgets, uniform and workgroup
-limits, the replay flag, a float sum refused on a grid). `HENAD_DUMP_GRAPH_WGSL=<dir>` makes
-`every_starter_compiles` and `every_agents_graph_compiles` write each shader's text there.
+`library_lock.rs`, `mutation.rs`, `regions.rs` (the region edits), `wgsl.rs` (every starter
+compiles, the range table, region forms, uniform body values, and files past the workgroup,
+uniform and shader-size limits built in the test), `gpu_cases.rs`, `gpu_repeat.rs` and
+`agent_wgsl.rs` (agents' budgets, uniform and workgroup limits, the replay flag, a float sum on
+a grid writing `partials`). `HENAD_DUMP_GRAPH_WGSL=<dir>` makes `every_starter_compiles` and
+`every_agents_graph_compiles` write each shader's text there.
 `gpu_cases.rs` runs every `Both` case on the device, an agents pass case through
 `run_agent_pass_case` (the buffers of `compile_parts`, an index built on the CPU, `counters`,
-`partials` and `agent_colors` read back), and a grid stats case that sums floats as an agents world
-of one agent per cell. `support.rs`'s device raises `max_storage_buffers_per_shader_stage` to 16,
+`partials` and `agent_colors` read back), and a grid stats case that sums floats on the grid, with a
+`partials` buffer of one float per lane per 16 by 16 block summed on the host, and again as an
+agents world of one agent per cell. It also fails on a kind with a WGSL form outside init passes
+whose own cases never ran on the device (`vec.from_angle` had a host case alone until the round 3
+audit). `CaseValue::NearVec2F` compares a `vec2f` per component within a tolerance. `support.rs`'s device raises `max_storage_buffers_per_shader_stage` to 16,
 since a radius fold case binds 9. `gpu_repeat.rs` runs `host.rs`'s Repeat
 bodies (`CARRIED`, `chained()`, `TWO_DRAWS`, `NESTED_DRAW`, `pub(super)` there) in a tick pass,
 once through the step shader on the device and once through `run_pass`: the integer half of
@@ -402,7 +379,13 @@ the pass, `field.deposit` is `atomicMax` of the value's bits when it is above 0,
 `atomicMax(&counters[0], code)` past `MAX_VISITS` (code `2p + 1` for the fold at position `p` of the
 plan's faults), or `2p + 2` before the walk when `walk_cells` of its bounds passes `MAX_WALK_CELLS`.
 `AgentGraphHooks::fault` turns the code into the pass and node as written (through
-`HostEvaluator::origin`, the outermost call for a copy) and the line of that node's table. A float sum on a grid is refused: the grid engine reduces counts alone.
+`HostEvaluator::origin`, the outermost call for a copy) and the line of that node's table.
+A grid's reduce shader sums floats as the agents leaf does: `var henad_sum_<k>` before the cell's
+bounds check, `block_sum(henad_local, ...)` after the counters, and the total of workgroup
+`wid.y * ceil(width / 16) + wid.x` at `partials[block * lanes + k]`. `GeneratedShader`'s
+`grid_sum_lanes` maps the lanes back, `GridProgram::spec` sets `GpuGridSpec::sums`, and
+`GraphHooks::stats_with_sums` (forwarded by `SharedHooks`) feeds each total to `run::finish`.
+The reduce pass's workgroup bytes add 1024 for `block_sum`'s scratch.
 `replays_exactly` is false when a tick pass's radius fold holds a `carry`, a float `sum`, or reads
 its `k` or any `prev.<acc>`. The entry prepends `num_agents` (1 to `max_count`), `world_width` and
 `world_height` (1 to 10000, step 50) as `agent_model_param_descriptors` does, and its spec carries

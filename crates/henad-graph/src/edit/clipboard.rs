@@ -167,6 +167,7 @@ impl GraphBuilder {
             }
             if let Some(mut layout) = file.editor().and_then(|editor| editor.node_layout(node.id)) {
                 layout.pos = [layout.pos[0] + offset[0], layout.pos[1] + offset[1]];
+                layout.output_pos = layout.output_pos.map(|pos| [pos[0] + offset[0], pos[1] + offset[1]]);
                 self.editor.place_node(id, &layout);
             }
             pasted.push(copy);

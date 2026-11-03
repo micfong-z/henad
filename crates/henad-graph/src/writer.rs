@@ -162,6 +162,13 @@ fn write_lane(text: &mut String, lane: &Lane) {
     }
 }
 
+/// Returns the canonical text of the `[[function]]` tables of `function` in `document`, its ports and body.
+pub(crate) fn function_text(document: &GraphDocument, function: &Function) -> String {
+    let mut text = String::new();
+    write_function(&mut text, document, function);
+    text
+}
+
 fn write_function(text: &mut String, document: &GraphDocument, function: &Function) {
     text.push_str("\n[[function]]\n");
     key(text, "id", &toml_string(&function.id));

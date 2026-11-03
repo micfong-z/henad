@@ -95,10 +95,9 @@ fn preview_line(ui: &mut egui::Ui, app: &AppState) {
     };
     ui.separator();
     ui.label(format!(
-        "{MDI_GRAPH_OUTLINE} Preview of {} at {} × {} cells",
+        "{MDI_GRAPH_OUTLINE} Preview of {} at {}",
         entry.name(),
-        run.width,
-        run.height
+        run.size_text()
     ))
     .on_hover_text(preview_hover(app));
 }

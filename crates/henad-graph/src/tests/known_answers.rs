@@ -25,7 +25,7 @@ pub(super) fn input_literal(value: CaseValue) -> Literal {
         CaseValue::F64(number) => Literal::F64(number),
         CaseValue::Vec2U(pair) => Literal::Vec2U(pair),
         CaseValue::Vec2I(pair) => Literal::Vec2I(pair),
-        CaseValue::Vec2F(pair) => Literal::Vec2F(pair),
+        CaseValue::Vec2F(pair) | CaseValue::NearVec2F(pair, _) => Literal::Vec2F(pair),
         CaseValue::Vec2D([x, _]) => Literal::F64(x),
         CaseValue::Variant(category, variant) => Literal::Category(MemberName {
             owner: category.to_owned(),
@@ -39,6 +39,10 @@ pub(super) fn meets(expected: CaseValue, found: HostValue, document: &GraphDocum
     match (expected, found) {
         (CaseValue::Nan, HostValue::F32(value)) => value.is_nan(),
         (CaseValue::Near(target, within), HostValue::F32(value)) => (value - target).abs() <= within,
+        (CaseValue::NearVec2F(target, within), HostValue::Vec2F(value)) => target
+            .iter()
+            .zip(value)
+            .all(|(left, right)| (right - left).abs() <= within),
         (CaseValue::F32(expected), HostValue::F32(value)) => expected.to_bits() == value.to_bits(),
         (CaseValue::Vec2F(expected), HostValue::Vec2F(value)) => expected
             .iter()

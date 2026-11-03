@@ -1,10 +1,11 @@
 //! Live preview of the Editor's graph model: a run of the document at a small size, rebuilt from tick 0 after each
 //! valid edit.
 //!
-//! A *preview* runs the document's compiled program with its parameters at their defaults, and each side of the grid at
-//! the smaller of the model's own side and [`PREVIEW_SIDE`]. The values of the next Build stay as they are. Edits are
-//! *debounced*: the preview builds once [`DEBOUNCE`] has passed without another edit, on the build thread on native and
-//! inline in a browser.
+//! A *preview* runs the document's compiled program with its parameters at their defaults, each side of a grid at the
+//! smaller of the model's own side and [`PREVIEW_SIDE`], and the agents of an agent model at the smaller of the model's
+//! own count and [`PREVIEW_AGENTS`], in a world of the model's own size. The values of the next Build stay as they
+//! are. Edits are *debounced*: the preview builds once [`DEBOUNCE`] has passed without another edit, on the build
+//! thread on native and inline in a browser.
 //!
 //! The preview replaces the live simulation only when nothing is loaded, when the loaded run is at tick 0, or when the
 //! loaded run is a preview. Otherwise it waits for that run to end, and a Build started after the edit replaces the
@@ -24,6 +25,9 @@ use crate::state::{AppState, PreviewRun, setup_message, too_large_message};
 
 /// Largest side of a preview's grid in cells.
 pub const PREVIEW_SIDE: u32 = 256;
+
+/// Largest number of a preview's agents.
+pub const PREVIEW_AGENTS: u32 = 16384;
 
 /// Time without an edit after which the preview builds.
 pub const DEBOUNCE: Duration = Duration::from_millis(250);
@@ -173,28 +177,33 @@ fn build_preview(app: &mut AppState) {
     }
 }
 
-/// Returns the values a preview of `entry` builds with, each parameter's default with each side of the grid at most
-/// [`PREVIEW_SIDE`], and the preview's size.
+/// Returns the values a preview of `entry` builds with, each parameter's default with each side of a grid at most
+/// [`PREVIEW_SIDE`] and the number of agents at most [`PREVIEW_AGENTS`], and the preview's size.
 pub fn preview_values(entry: &ModelEntry) -> (Vec<ParamValue>, PreviewRun) {
-    let mut run = PreviewRun { width: 0, height: 0 };
+    let (mut width, mut height, mut agents) = (0, 0, None);
     let values = entry
         .param_descriptors()
         .iter()
         .map(|descriptor| {
             let value = descriptor.kind().default_value();
-            let side = match descriptor.id() {
-                "grid_width" => &mut run.width,
-                "grid_height" => &mut run.height,
+            let (size, limit) = match descriptor.id() {
+                "grid_width" => (&mut width, PREVIEW_SIDE),
+                "grid_height" => (&mut height, PREVIEW_SIDE),
+                "num_agents" => (agents.insert(0), PREVIEW_AGENTS),
                 _ => return value,
             };
             match value {
                 ParamValue::U32(default) => {
-                    *side = default.min(PREVIEW_SIDE);
-                    ParamValue::U32(*side)
+                    *size = default.min(limit);
+                    ParamValue::U32(*size)
                 }
                 other => other,
             }
         })
         .collect();
+    let run = match agents {
+        Some(count) => PreviewRun::Agents { count },
+        None => PreviewRun::Grid { width, height },
+    };
     (values, run)
 }

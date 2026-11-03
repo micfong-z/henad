@@ -11,6 +11,7 @@ mod graph_agent_runs;
 mod graph_ants_parity;
 mod graph_corpus;
 mod graph_grid_parity;
+mod graph_grid_sums;
 mod graph_repeat;
 mod graph_sir_parity;
 mod registry;

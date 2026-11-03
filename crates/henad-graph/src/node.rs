@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::catalogue::TypeClass;
 use crate::ids::NodeId;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue};
@@ -87,6 +88,27 @@ pub struct Accumulator {
 }
 
 impl Accumulator {
+    /// Returns the accumulator `name` of type `value_type`, merged by `combine`.
+    pub fn new(name: impl Into<String>, value_type: ValueType, combine: Combine) -> Self {
+        Self {
+            name: name.into(),
+            value_type,
+            combine,
+        }
+    }
+
+    /// Returns the element of a `config.acc` list that declares the accumulator.
+    pub fn to_config(&self) -> ConfigValue {
+        ConfigValue::Table(BTreeMap::from([
+            ("name".to_owned(), ConfigValue::String(self.name.clone())),
+            ("type".to_owned(), ConfigValue::String(self.value_type.to_string())),
+            (
+                "combine".to_owned(),
+                ConfigValue::String(self.combine.as_str().to_owned()),
+            ),
+        ]))
+    }
+
     /// Returns the accumulator one element of a `config.acc` list declares.
     fn from_config(item: &ConfigValue) -> Result<Self, String> {
         let table = item
@@ -127,6 +149,17 @@ pub enum Combine {
 }
 
 impl Combine {
+    /// Every rule, in the order the catalogue lists them.
+    pub const ALL: [Self; 7] = [
+        Self::Sum,
+        Self::Count,
+        Self::Min,
+        Self::Max,
+        Self::Or,
+        Self::And,
+        Self::Carry,
+    ];
+
     /// Returns the rule named `name` in a file.
     ///
     /// # Errors
@@ -142,6 +175,27 @@ impl Combine {
             "and" => Ok(Self::And),
             "carry" => Ok(Self::Carry),
             _ => Err(format!("'{name}' is no combine rule")),
+        }
+    }
+
+    /// Returns whether the rule applies to values of `value_type`: `sum`, `min` and `max` to numbers and vectors,
+    /// `count` to `u32`, `or` and `and` to `bool`, and `carry` to every type.
+    pub fn applies_to(self, value_type: &ValueType) -> bool {
+        const NUMERIC: [TypeClass; 8] = [
+            TypeClass::U32,
+            TypeClass::I32,
+            TypeClass::F32,
+            TypeClass::Vec2U,
+            TypeClass::Vec2I,
+            TypeClass::Vec2F,
+            TypeClass::U64,
+            TypeClass::F64,
+        ];
+        match self {
+            Self::Sum | Self::Min | Self::Max => NUMERIC.iter().any(|class| class.holds(value_type)),
+            Self::Count => *value_type == ValueType::U32,
+            Self::Or | Self::And => *value_type == ValueType::Bool,
+            Self::Carry => true,
         }
     }
 
@@ -177,6 +231,29 @@ impl NodeBody {
     /// Returns the nodes whose innermost region is `region`.
     pub fn region_members(&self, region: NodeId) -> impl Iterator<Item = &Node> {
         self.nodes.iter().filter(move |node| node.region == Some(region))
+    }
+
+    /// Returns every node whose region path holds `region`, members of nested regions included, in body order.
+    ///
+    /// A cycle of regions in a broken file ends the walk at a node it has already reached.
+    pub fn region_contents(&self, region: NodeId) -> Vec<NodeId> {
+        let mut reached = std::collections::BTreeSet::from([region]);
+        let mut stack = vec![region];
+        while let Some(current) = stack.pop() {
+            for member in self.region_members(current) {
+                if reached.insert(member.id) {
+                    stack.push(member.id);
+                }
+            }
+        }
+        reached.remove(&region);
+        let mut contents: Vec<NodeId> = Vec::with_capacity(reached.len());
+        for node in &self.nodes {
+            if reached.remove(&node.id) {
+                contents.push(node.id);
+            }
+        }
+        contents
     }
 
     /// Returns the regions around node `id`, innermost first.

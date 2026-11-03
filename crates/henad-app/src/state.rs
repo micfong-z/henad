@@ -254,13 +254,32 @@ impl OpenedRun {
     }
 }
 
-/// Preview of the Editor's graph model, as the live simulation runs it.
+/// Size of a preview of the Editor's graph model, as the live simulation runs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PreviewRun {
-    /// Width of the preview's grid in cells.
-    pub width: u32,
-    /// Height of the preview's grid in cells.
-    pub height: u32,
+pub enum PreviewRun {
+    /// A grid model.
+    Grid {
+        /// Width of the preview's grid in cells.
+        width: u32,
+        /// Height of the preview's grid in cells.
+        height: u32,
+    },
+    /// An agent model.
+    Agents {
+        /// Number of the preview's agents.
+        count: u32,
+    },
+}
+
+impl PreviewRun {
+    /// Returns the size as the app shows it, such as `256 × 256 cells` or `4096 agents`.
+    pub fn size_text(self) -> String {
+        match self {
+            Self::Grid { width, height } => format!("{width} × {height} cells"),
+            Self::Agents { count: 1 } => "1 agent".to_owned(),
+            Self::Agents { count } => format!("{count} agents"),
+        }
+    }
 }
 
 /// Draw style for an agent population in the viewport.
@@ -1034,6 +1053,7 @@ impl AppState {
                 }
                 OpenTarget::Results => crate::ui::results::receive_open(self, result),
                 OpenTarget::Model => crate::ui::editor::receive_open(self, result),
+                OpenTarget::Function => crate::ui::editor::receive_import(self, result),
             }
         }
     }

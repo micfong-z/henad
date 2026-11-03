@@ -14,6 +14,7 @@ use crate::gpu::capacity::{Demand, layout_entry};
 use crate::gpu::grid_spec::{GpuGridSpec, GridPassCtx, GridPassId, GridPassSpec, GridPress};
 use crate::gpu::primitives::pipeline::{compute_pipeline, uniform_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll, read_words};
+use crate::gpu::primitives::reduce::GpuLaneReduce;
 use crate::gpu::shader_spec::ShaderBinding;
 use crate::gpu::sides::BufferSide;
 use crate::gpu::sim_thread::GpuSimState;
@@ -118,6 +119,8 @@ pub(crate) struct GpuGridEngine {
     display: Arc<GpuDisplay>,
     reduce: BuiltPass,
     readback: CounterReadback,
+    /// Float sums of the reduce pass, `None` when the spec sums no lane.
+    lane_reduce: Option<GpuLaneReduce>,
 
     /// Passes of each action, in the spec's order.
     actions: Vec<Vec<BuiltPass>>,
@@ -253,6 +256,9 @@ impl GpuGridEngine {
         );
 
         let readback = CounterReadback::new(device, &format!("{id}_counters"), spec.counters.max(1));
+        let cell_workgroups = workgroups((width, height), spec.workgroup_size);
+        let lane_reduce = (spec.sums > 0)
+            .then(|| GpuLaneReduce::over_blocks(device, queue, id, spec.sums, cell_workgroups.0 * cell_workgroups.1));
 
         // The seed is truncated from the stream the CPU engines use, as the WGSL generator is 32 bit. Each action
         // uniform is rewritten with a fresh seed on every press.
@@ -297,6 +303,10 @@ impl GpuGridEngine {
                         .as_entire_binding(),
                     "dims" => dims_buffer.as_entire_binding(),
                     "counters" => readback.binding(),
+                    "partials" => lane_reduce
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("{id}: `partials` is bound, and the spec sums no lane"))
+                        .partials_binding(),
                     "output" => wgpu::BindingResource::TextureView(&display_view),
                     other => panic!("{id}: `{other}` is reserved but the engine has no resource for it"),
                 }
@@ -371,7 +381,6 @@ impl GpuGridEngine {
             .collect();
 
         let step_workgroups = workgroups(spec.hooks.step_dims(width, height), spec.workgroup_size);
-        let cell_workgroups = workgroups((width, height), spec.workgroup_size);
         let texel_workgroups = workgroups(tex, spec.workgroup_size);
         let buffer_bytes = buffer_lens
             .iter()
@@ -398,6 +407,7 @@ impl GpuGridEngine {
             display,
             reduce,
             readback,
+            lane_reduce,
             actions,
             press,
             action_stream: henad_core::action::action_seed(seed),
@@ -472,7 +482,12 @@ impl SimState for GpuGridEngine {
         };
         stat_entries(
             &self.spec.stats,
-            self.spec.hooks.stats(self.readback.values(), ctx, &self.params),
+            self.spec.hooks.stats_with_sums(
+                self.readback.values(),
+                &self.lane_reduce.as_ref().map(GpuLaneReduce::sums).unwrap_or_default(),
+                ctx,
+                &self.params,
+            ),
         )
     }
 
@@ -496,9 +511,10 @@ impl SimState for GpuGridEngine {
     }
 
     fn heap_bytes(&self) -> usize {
-        // The ping-ponged buffers, plus the capped RGBA display texture.
+        // The ping-ponged buffers, plus the capped RGBA display texture and the partials of any float sums.
         let display_texture = (self.tex.0 as usize) * (self.tex.1 as usize) * 4;
-        self.buffer_bytes + display_texture
+        let sums = self.lane_reduce.as_ref().map_or(0, GpuLaneReduce::heap_bytes);
+        self.buffer_bytes + display_texture + sums
     }
 }
 
@@ -595,22 +611,36 @@ impl GpuSimState for GpuGridEngine {
             None,
         );
         self.readback.encode_copy(encoder);
+        if let Some(lane_reduce) = &mut self.lane_reduce {
+            lane_reduce.encode(encoder);
+        }
     }
 
     fn begin_stats_readback(&mut self) {
         self.readback.begin_map();
+        if let Some(lane_reduce) = &mut self.lane_reduce {
+            lane_reduce.begin_readback();
+        }
     }
 
     fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
-        if block {
+        let counters = if block {
             self.readback.poll_blocking(device)
         } else {
             self.readback.poll(device)
+        };
+        let Some(lane_reduce) = &mut self.lane_reduce else {
+            return counters;
+        };
+        match (counters, lane_reduce.poll_readback(device, block)) {
+            (StatsPoll::Pending, _) | (_, StatsPoll::Pending) => StatsPoll::Pending,
+            (StatsPoll::Failed, _) | (_, StatsPoll::Failed) => StatsPoll::Failed,
+            (StatsPoll::Landed, StatsPoll::Landed) => StatsPoll::Landed,
         }
     }
 
     fn stats_readback_pending(&self) -> bool {
-        self.readback.is_pending()
+        self.readback.is_pending() || self.lane_reduce.as_ref().is_some_and(GpuLaneReduce::readback_pending)
     }
 
     fn view(&self) -> GpuSnapshot {

@@ -20,7 +20,7 @@ use web_time::Instant;
 use crate::state::{AppState, PreviewRun};
 use crate::tests::support::step_past;
 use crate::ui::editor::graph::{GraphEdit, GraphEditor, GraphRequest};
-use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_SIDE, PreviewState, poll_at, preview_values};
+use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at, preview_values};
 use crate::ui::editor::{ApplyOutcome, apply, new_graph_model, new_grid_rule};
 use crate::ui::playback::{PREVIEW_APPLY, PREVIEW_ORPHANED, preview_hover};
 
@@ -100,9 +100,10 @@ fn a_new_graph_model_previews_at_the_preview_size() {
     assert_eq!(app.preview(), None);
 
     poll_at(&ctx, &mut app, now + DEBOUNCE);
-    let run = PreviewRun {
-        width: PREVIEW_SIDE.min(1024),
-        height: PREVIEW_SIDE.min(1024),
+    let side = PREVIEW_SIDE.min(1024);
+    let run = PreviewRun::Grid {
+        width: side,
+        height: side,
     };
     assert_eq!(app.preview(), Some(run));
     assert_eq!(app.editor.preview.state, PreviewState::Running(run));
@@ -114,10 +115,7 @@ fn a_new_graph_model_previews_at_the_preview_size() {
         "a preview leaves the next build's values alone"
     );
     assert!(!app.selection_is_loaded());
-    assert_eq!(
-        &app.loaded_values[..2],
-        &[ParamValue::U32(run.width), ParamValue::U32(run.height)]
-    );
+    assert_eq!(&app.loaded_values[..2], &[ParamValue::U32(side), ParamValue::U32(side)]);
     app.wait_for_build();
     assert!(
         app.sim_thread.is_some() && app.fault.is_none(),
@@ -344,6 +342,61 @@ fn apply_replaces_a_running_preview_with_the_full_size_run() {
 }
 
 #[test]
+fn an_agents_graph_previews_at_the_preview_count_and_applies_at_its_own() {
+    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+        return;
+    };
+    new_graph_model(&mut app, "boids.toml");
+    settle(&mut app);
+    assert_eq!(app.preview(), Some(PreviewRun::Agents { count: PREVIEW_AGENTS }));
+    assert_eq!(app.loaded_id(), Some("node_boids"));
+    assert_eq!(app.loaded_values[0], ParamValue::U32(PREVIEW_AGENTS));
+    app.wait_for_build();
+    assert!(
+        app.sim_thread.is_some() && app.fault.is_none(),
+        "the preview failed to build"
+    );
+    let shaders = graph(&mut app).program().clone().expect("the starter compiles");
+    assert!(
+        shaders
+            .shaders()
+            .iter()
+            .any(|shader| shader.passes().iter().any(|pass| pass == "flock")),
+        "the WGSL view finds the shader of the tick pass"
+    );
+    apply(&mut app);
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    assert_eq!(app.preview(), None);
+    assert_eq!(app.loaded_values[0], ParamValue::U32(50000));
+    app.wait_for_build();
+    assert!(app.sim_thread.is_some() && app.fault.is_none());
+}
+
+#[test]
+fn moving_a_node_leaves_the_preview_running() {
+    let Some(mut app) = app_with_sir() else {
+        return;
+    };
+    settle(&mut app);
+    let run = app.preview().expect("the preview runs");
+    let key = graph(&mut app).preview_key();
+    assert!(graph(&mut app).edit(
+        vec![EditCommand::Move {
+            node: n(12),
+            pos: [400.0, 300.0],
+        }],
+        None
+    ));
+    assert_eq!(graph(&mut app).preview_key(), key, "placement is outside the code");
+    let ctx = egui::Context::default();
+    poll_at(&ctx, &mut app, Instant::now());
+    assert!(!app.editor.preview.is_due(), "no preview waits to rebuild");
+    assert_eq!(app.preview(), Some(run));
+    bind_new_parameter(&mut app);
+    assert_ne!(graph(&mut app).preview_key(), key, "an edit of the code moves the key");
+}
+
+#[test]
 fn a_preview_keeps_a_side_below_the_limit() {
     let Some(mut app) = app_with_sir() else {
         return;
@@ -356,7 +409,7 @@ fn a_preview_keeps_a_side_below_the_limit() {
     settle(&mut app);
     assert_eq!(
         app.preview(),
-        Some(PreviewRun {
+        Some(PreviewRun::Grid {
             width: 100,
             height: PREVIEW_SIDE.min(1024)
         })
@@ -574,9 +627,10 @@ fn the_submission_budget_refuses_apply_at_full_size_and_lets_the_preview_run() {
 
 #[test]
 fn every_starter_previews_within_the_device_limits_and_the_work_budget() {
-    for starter in henad_graph::starters::starters() {
+    let starters = henad_graph::starters::starters().iter();
+    for starter in starters.chain(henad_graph::starters::agent_starters()) {
         let file = henad_graph::GraphFile::parse(starter.text).expect("a starter reads");
-        let entry = henad_graph::wgsl::GridProgram::compile(&file)
+        let entry = crate::ui::editor::graph::GraphProgram::compile(&file)
             .expect("a starter compiles")
             .entry();
         let (values, _) = crate::ui::editor::preview::preview_values(&entry);

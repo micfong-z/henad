@@ -153,6 +153,13 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
         .uniform_bytes(&evaluator, world, &params, &context)
         .unwrap_or_else(|error| panic!("{what}: {error}"));
     let (words, labels) = buffers(&compiled, &lanes, 0);
+    // A reduce shader that sums floats writes one partial per lane per workgroup of 16 by 16 cells.
+    let groups = (case.width.div_ceil(16), case.height.div_ceil(16));
+    let sum_lanes = shader.grid_sum_lanes();
+    let named = [(
+        "partials",
+        vec![0; (groups.0 * groups.1) as usize * sum_lanes.len().max(1)],
+    )];
     let result = run_shader(
         device,
         shader,
@@ -162,7 +169,11 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
             buffers: &words,
             labels: &labels,
             uniform: &uniform,
-            agents: None,
+            agents: (!sum_lanes.is_empty()).then_some(AgentShape {
+                groups,
+                texture: (case.width, case.height),
+                named: &named,
+            }),
         },
     );
     for (lane, expected) in case.after {
@@ -195,8 +206,26 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
             .iter()
             .map(|&count| u64::from(count))
             .collect();
+        let lane_total = |lane: usize| -> f64 {
+            (0..(groups.0 * groups.1) as usize)
+                .map(|block| f64::from(f32::from_bits(result.named[0][block * sum_lanes.len() + lane])))
+                .sum()
+        };
+        let sums = (0..program.sums.len())
+            .map(|sum| {
+                let mine: Vec<usize> = sum_lanes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (known, number))| *known == position && *number == sum)
+                    .map(|(lane, _)| lane)
+                    .collect();
+                let total = |k: usize| mine.get(k).map_or(0.0, |&lane| lane_total(lane));
+                ([total(0), total(1)], mine.len() > 1)
+            })
+            .collect();
         let readback = run::Readback {
             tallies,
+            sums,
             ..run::Readback::default()
         };
         let frame = run::finish(program, &params, &context, world, Some(&readback))
@@ -562,7 +591,7 @@ fn run_agent_pass_case(
 }
 
 /// Returns the text of a grid pass case that sums floats as a case of an agents world, one agent per cell and its
-/// lanes and passes over agents, with the number of agents. The GPU reduces floats in an agents world alone.
+/// lanes and passes over agents, with the number of agents.
 fn as_agents_world(case: &PassCase) -> (String, u32) {
     let agents = case.width * case.height;
     let mut text = super::case_files::agents_header(agents, case.width, case.height);
@@ -773,8 +802,9 @@ fn sums_floats(case: &PassCase) -> bool {
 }
 
 /// Every known answer of scope `Both` holds on the device as it does on the host, except a case in the init stage,
-/// which only the host runs. A pass case of a grid whose stats pass sums floats runs in an agents world over the same
-/// cells, where the GPU reduces floats.
+/// which only the host runs. A pass case of a grid whose stats pass sums floats runs on the grid, and again in an agents
+/// world over the same cells. Every kind with a WGSL form outside init passes runs at least one of its own
+/// cases on the device.
 #[test]
 #[expect(
     clippy::print_stderr,
@@ -786,7 +816,9 @@ fn every_known_answer_of_both_scopes_holds_on_the_device() {
         return;
     };
     let (mut ran, mut on_host) = (0, Vec::new());
+    let mut without_device_case = Vec::new();
     for def in definitions() {
+        let ran_before = ran;
         for case in def.cases {
             if case.scope != CaseScope::Both {
                 continue;
@@ -802,7 +834,8 @@ fn every_known_answer_of_both_scopes_holds_on_the_device() {
                 ),
                 CaseForm::Pass(pass_case) if sums_floats(pass_case) => {
                     let (text, agents) = as_agents_world(pass_case);
-                    run_agent_pass_case(&device, def, case.name, pass_case, (&text, agents))
+                    let on_agents = run_agent_pass_case(&device, def, case.name, pass_case, (&text, agents));
+                    run_pass_case(&device, def, case.name, pass_case) && on_agents
                 }
                 CaseForm::Pass(pass_case) => run_pass_case(&device, def, case.name, pass_case),
             };
@@ -812,7 +845,16 @@ fn every_known_answer_of_both_scopes_holds_on_the_device() {
                 on_host.push(format!("{} '{}'", def.id, case.name));
             }
         }
+        let contexts = def.contexts;
+        let runs_on_device = contexts.tick || contexts.action || contexts.view || contexts.stats;
+        if def.backends.wgsl && runs_on_device && ran == ran_before {
+            without_device_case.push(def.id);
+        }
     }
     eprintln!("{ran} cases ran on the device, and these init cases on the host alone: {on_host:?}");
     assert!(ran > 300, "only {ran} cases ran on the device");
+    assert!(
+        without_device_case.is_empty(),
+        "these kinds have a WGSL form outside init passes and no case that ran on the device: {without_device_case:?}"
+    );
 }

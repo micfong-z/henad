@@ -8,7 +8,7 @@
 use super::cases::{case, host_case, pass_case};
 use super::{
     BASE, BOOL_TYPE,
-    CaseValue::{Bool, F32, F64, I32, U32, Vec2D, Vec2F, Vec2I, Vec2U},
+    CaseValue::{Bool, F32, F64, I32, NearVec2F, U32, Vec2D, Vec2F, Vec2I, Vec2U},
     ConfigDefault, ConfigKey, ConfigType, Domain, F32_TYPE, NodeCost, NodeDef, Parity, PassCase, SocketType, TypeClass,
     U32_TYPE, input, output, pinned,
 };
@@ -474,11 +474,32 @@ pub(super) static KINDS: &[NodeDef] = &[
         outputs: &[output("out", VEC2F)],
         parity: Parity::Approx,
         cost: NodeCost::Units(8),
-        cases: &[host_case(
-            "east",
-            &[("angle", F32(0.0)), ("length", F32(2.0))],
-            &[("out", Vec2F([2.0, 0.0]))],
-        )],
+        cases: &[
+            case(
+                "east",
+                &[("angle", F32(0.0)), ("length", F32(2.0))],
+                &[("out", NearVec2F([2.0, 0.0], 1e-5))],
+            ),
+            case(
+                "north",
+                &[("angle", F32(core::f32::consts::FRAC_PI_2)), ("length", F32(3.0))],
+                &[("out", NearVec2F([0.0, 3.0], 1e-5))],
+            ),
+            case(
+                "south west",
+                &[
+                    ("angle", F32(-3.0 * core::f32::consts::FRAC_PI_4)),
+                    ("length", F32(1.0)),
+                ],
+                &[(
+                    "out",
+                    NearVec2F(
+                        [-core::f32::consts::FRAC_1_SQRT_2, -core::f32::consts::FRAC_1_SQRT_2],
+                        1e-5,
+                    ),
+                )],
+            ),
+        ],
         ..BASE
     },
     NodeDef {

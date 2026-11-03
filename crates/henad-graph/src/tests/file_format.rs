@@ -616,6 +616,7 @@ fn the_editor_accessors_read_what_fits() {
             pos: [40.4, 60.6],
             collapsed: false,
             label: Some("This cell".to_owned()),
+            output_pos: None,
         })
     );
     assert!(editor.node_layout(id(99)).is_none());

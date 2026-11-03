@@ -5,7 +5,7 @@ use henad_compute::gpu::wgpu;
 use henad_core::params::ParamValue;
 
 use crate::GraphFile;
-use crate::wgsl::{AgentProgram, GridProgram};
+use crate::wgsl::{AgentProgram, GridProgram, ShaderRole};
 
 /// Returns a node `id` of kind `op` with the further lines `lines`.
 fn node(id: usize, op: &str, lines: &str) -> String {
@@ -237,10 +237,10 @@ fn the_replay_flag_follows_the_radius_folds() {
     assert!(!program.replays_exactly(), "a read of `prev` depends on the order");
 }
 
-/// A stats pass of a grid that sums floats is refused, with its pass and node, since the GPU grid engine reduces
-/// counts alone.
+/// A stats pass of a grid that sums floats compiles to a reduce shader that binds `partials` and folds each lane with
+/// `block_sum`, and the spec declares one summed lane.
 #[test]
-fn a_float_sum_on_a_grid_is_refused() {
+fn a_float_sum_on_a_grid_writes_partials() {
     let text = "format = \"henad-model\"\nformat_version = 1\nkind = \"graph\"\nid = \"node_sums\"\n\n[graph]\n\
                 topology = \"grid\"\nlibrary = 1\n\n[[target]]\nbackend = \"gpu\"\n\n[grid]\nwidth = 8\nheight = 8\n\
                 boundary = \"torus\"\n\n[[lane]]\nid = \"x\"\ndomain = \"cells\"\ntype = \"f32\"\n\n[[stat]]\n\
@@ -252,12 +252,27 @@ fn a_float_sum_on_a_grid_is_refused() {
                 [[pass.node]]\nid = \"n4\"\nop = \"lane.set\"\nconfig.lane = \"x\"\nin.value = \"n3\"\n";
     let file = GraphFile::parse(text).expect("the file reads");
     assert!(!file.check().has_errors(), "{:#?}", file.check().diagnostics);
-    let problems = GridProgram::compile(&file).expect_err("a float sum on a grid compiled");
-    assert!(
-        problems.iter().any(|problem| problem.message.contains("sums floats")
-            && problem.pass.as_deref() == Some("totals")
-            && problem.node.as_deref() == Some("n2")),
-        "{problems:#?}"
+    let program = GridProgram::compile(&file).unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let reduce = program
+        .shaders()
+        .iter()
+        .find(|shader| shader.role() == &ShaderRole::Reduce)
+        .expect("a reduce shader");
+    for expected in [
+        "#import henad::reduce_tree::block_sum",
+        "var<storage, read_write> partials: array<f32>",
+        "henad_sum_0 = henad_sum_0 + ",
+        "let henad_total_0 = block_sum(henad_local, henad_sum_0);",
+        "partials[henad_block * 1u + 0u] = henad_total_0;",
+    ] {
+        assert!(reduce.text().contains(expected), "{expected}\n{}", reduce.text());
+    }
+    let spec = program.spec();
+    assert_eq!(spec.sums, 1);
+    assert_eq!(
+        spec.reduce.workgroup_bytes,
+        4 + 256 * 4,
+        "the counter and the scratch of `block_sum`"
     );
 }
 

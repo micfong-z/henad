@@ -55,18 +55,15 @@ const AGENT_STARTERS: [Starter; 3] = [
     },
 ];
 
-/// Returns every starter of the grid topology, in the order an editor lists them.
-///
-/// The starters of agents are in [`agent_starters`], since the Editor's graph editor does not edit a graph of agents
-/// yet.
+/// Returns every starter of the grid topology, in the order an editor lists them. The starters of agents are in
+/// [`agent_starters`].
 pub fn starters() -> &'static [Starter] {
     &STARTERS
 }
 
-/// Returns every starter of the agents topology, in the order an editor lists them.
+/// Returns every starter of the agents topology, in the order an editor lists them after the grid starters.
 ///
-/// Each compiles to WGSL through [`crate::wgsl::AgentProgram`]. [`starters`] leaves these out, which keeps them out of
-/// the Editor's starter menu until its graph editor edits a graph of agents.
+/// Each compiles to WGSL through [`crate::wgsl::AgentProgram`].
 pub fn agent_starters() -> &'static [Starter] {
     &AGENT_STARTERS
 }

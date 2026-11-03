@@ -1060,12 +1060,6 @@ in.value = "n2"
 
 #[test]
 fn a_count_that_can_pass_max_warns() {
-    let can_reach = |tables: &str| {
-        warnings(tables)
-            .into_iter()
-            .filter(|message| message.contains("can reach"))
-            .collect::<Vec<_>>()
-    };
     let found = can_reach(&repeat("64", "{ param = \"steps\" }", ""));
     assert_eq!(
         found,
@@ -1105,6 +1099,73 @@ fn a_count_that_can_pass_max_warns() {
     assert_eq!(
         can_reach(&outer_k),
         ["Repeat n4: `count` can reach 9, and `max` is 5, so the loop stops at 5"]
+    );
+}
+
+/// Returns the warnings of `tables` that a Repeat's `count` can pass its `max`.
+fn can_reach(tables: &str) -> Vec<String> {
+    warnings(tables)
+        .into_iter()
+        .filter(|message| message.contains("can reach"))
+        .collect()
+}
+
+#[test]
+fn a_count_bound_follows_max_and_clamp() {
+    let max_of = |a: &str, b: &str| {
+        format!(
+            "\n[[pass.node]]\nid = \"n4\"\nop = \"math.max\"\nin.a = {a}\nin.b = {b}\n\n[[pass.node]]\nid = \"n5\"\nop = \"ctx.index\"\n"
+        )
+    };
+    assert_eq!(
+        can_reach(&repeat(
+            "64",
+            "\"n4\"",
+            &max_of("{ param = \"steps\" }", "{ u32 = 10 }")
+        )),
+        ["Repeat n1: `count` can reach 100, and `max` is 64, so the loop stops at 64"],
+        "a max is bound by its larger side"
+    );
+    assert_eq!(
+        can_reach(&repeat("5", "\"n4\"", &max_of("{ u32 = 3 }", "{ u32 = 10 }"))),
+        ["Repeat n1: `count` can reach 10, and `max` is 5, so the loop stops at 5"]
+    );
+    assert!(can_reach(&repeat("10", "\"n4\"", &max_of("{ u32 = 3 }", "{ u32 = 10 }"))).is_empty());
+    assert!(
+        can_reach(&repeat("5", "\"n4\"", &max_of("{ u32 = 10 }", "\"n5\""))).is_empty(),
+        "a max with an unknown side has no bound"
+    );
+    let clamp_of = |x: &str, lo: &str, hi: &str| {
+        format!(
+            "\n[[pass.node]]\nid = \"n4\"\nop = \"math.clamp\"\nin.x = {x}\nin.lo = {lo}\nin.hi = {hi}\n\n[[pass.node]]\nid = \"n5\"\nop = \"ctx.index\"\n"
+        )
+    };
+    assert_eq!(
+        can_reach(&repeat(
+            "64",
+            "\"n4\"",
+            &clamp_of("\"n5\"", "{ u32 = 1 }", "{ param = \"steps\" }")
+        )),
+        ["Repeat n1: `count` can reach 100, and `max` is 64, so the loop stops at 64"],
+        "a clamp is bound by its `hi`, whatever its `x`"
+    );
+    assert!(
+        can_reach(&repeat(
+            "64",
+            "\"n4\"",
+            &clamp_of("{ param = \"steps\" }", "{ u32 = 0 }", "{ u32 = 10 }")
+        ))
+        .is_empty(),
+        "a clamp below `max` bounds a parameter that passes it"
+    );
+    assert_eq!(
+        can_reach(&repeat(
+            "8",
+            "\"n4\"",
+            &clamp_of("\"n5\"", "{ u32 = 20 }", "{ u32 = 9 }")
+        )),
+        ["Repeat n1: `count` can reach 9, and `max` is 8, so the loop stops at 8"],
+        "`hi` wins when `lo` passes it"
     );
 }
 

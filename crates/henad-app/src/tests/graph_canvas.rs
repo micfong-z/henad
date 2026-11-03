@@ -17,22 +17,22 @@ use crate::ui::mcs;
 const SETTLE_FRAMES: usize = 4;
 
 /// Returns node `number`'s id.
-fn n(number: u32) -> NodeId {
+pub(super) fn n(number: u32) -> NodeId {
     NodeId::new(number).expect("an id")
 }
 
 /// An egui context that draws a [`GraphEditor`] of a starter, driven by synthetic input.
-struct Harness {
-    context: Context,
-    graph: GraphEditor,
+pub(super) struct Harness {
+    pub(super) context: Context,
+    pub(super) graph: GraphEditor,
     time: f64,
     /// Modifiers held in the coming frames.
-    modifiers: Modifiers,
+    pub(super) modifiers: Modifiers,
 }
 
 impl Harness {
     /// Returns a harness over the starter `name`, its tick pass open and arranged, and every node in view.
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         let text = henad_graph::starters::starter(name).expect("a starter").text;
         let file = GraphFile::parse(text).expect("the starter reads");
         let mut harness = Self {
@@ -50,7 +50,7 @@ impl Harness {
     }
 
     /// Runs frames until the framing of the open canvas has settled, or panics after twenty.
-    fn settle_framing(&mut self) {
+    pub(super) fn settle_framing(&mut self) {
         for _ in 0..20 {
             let scope = self.scope();
             if self.graph.canvas(&scope).is_some_and(|canvas| canvas.framing.is_none()) {
@@ -62,7 +62,7 @@ impl Harness {
     }
 
     /// Returns the nodes selected on the open canvas.
-    fn selected(&self) -> Vec<NodeId> {
+    pub(super) fn selected(&self) -> Vec<NodeId> {
         self.graph
             .canvas(&self.scope())
             .expect("a canvas")
@@ -70,7 +70,7 @@ impl Harness {
     }
 
     /// Runs one frame with `events`, and returns its output.
-    fn frame_output(&mut self, mut events: Vec<Event>) -> FullOutput {
+    pub(super) fn frame_output(&mut self, mut events: Vec<Event>) -> FullOutput {
         self.time += 0.016;
         events.insert(0, Event::ModifiersChanged(self.modifiers));
         let input = RawInput {
@@ -86,28 +86,28 @@ impl Harness {
     }
 
     /// Runs one frame with `events`.
-    fn frame(&mut self, events: Vec<Event>) {
+    pub(super) fn frame(&mut self, events: Vec<Event>) {
         drop(self.frame_output(events));
     }
 
     /// Runs frames with no input.
-    fn settle(&mut self) {
+    pub(super) fn settle(&mut self) {
         for _ in 0..SETTLE_FRAMES {
             self.frame(Vec::new());
         }
     }
 
-    fn scope(&self) -> Scope {
+    pub(super) fn scope(&self) -> Scope {
         self.graph.scope().clone()
     }
 
     /// Returns the screen position of a canvas position.
-    fn screen(&self, canvas: Pos2) -> Pos2 {
+    pub(super) fn screen(&self, canvas: Pos2) -> Pos2 {
         self.graph.canvas(&self.scope()).expect("a canvas").transform * canvas
     }
 
     /// Returns the screen position of the top of node `id`, a point on its header that holds no widget.
-    fn node_grip(&self, id: NodeId) -> Pos2 {
+    pub(super) fn node_grip(&self, id: NodeId) -> Pos2 {
         let rect = self
             .graph
             .canvas(&self.scope())
@@ -117,7 +117,7 @@ impl Harness {
     }
 
     /// Returns the screen position of the centre of a pin of node `id`.
-    fn pin(&self, id: NodeId, output: bool, index: usize) -> Pos2 {
+    pub(super) fn pin(&self, id: NodeId, output: bool, index: usize) -> Pos2 {
         let canvas = self.graph.canvas(&self.scope()).expect("a canvas");
         let key = pin_key(canvas.canvas_id, id, output, index);
         let rect = self
@@ -128,7 +128,7 @@ impl Harness {
     }
 
     /// Returns the index of the input `port` of node `id` on the canvas.
-    fn input_index(&self, id: NodeId, port: &str) -> usize {
+    pub(super) fn input_index(&self, id: NodeId, port: &str) -> usize {
         let canvas = self.graph.canvas(&self.scope()).expect("a canvas");
         let view = canvas.snarl.get_node(canvas.nodes[&id]).expect("a view");
         view.inputs
@@ -137,7 +137,7 @@ impl Harness {
             .expect("the port")
     }
 
-    fn button(&self, position: Pos2, pressed: bool) -> Event {
+    pub(super) fn button(&self, position: Pos2, pressed: bool) -> Event {
         Event::PointerButton {
             pos: position,
             button: PointerButton::Primary,
@@ -147,7 +147,7 @@ impl Harness {
     }
 
     /// Drags the primary button from `start` to `end` in screen points.
-    fn drag(&mut self, start: Pos2, end: Pos2) {
+    pub(super) fn drag(&mut self, start: Pos2, end: Pos2) {
         self.frame(vec![Event::PointerMoved(start)]);
         self.frame(vec![self.button(start, true)]);
         for step in 1..=6 {
@@ -159,7 +159,7 @@ impl Harness {
     }
 
     /// Presses the primary button on `pin` and moves far enough to start a wire, and leaves the button down.
-    fn start_wire(&mut self, pin: Pos2) {
+    pub(super) fn start_wire(&mut self, pin: Pos2) {
         self.frame(vec![Event::PointerMoved(pin)]);
         self.frame(vec![self.button(pin, true)]);
         for step in 1..=3 {
@@ -168,7 +168,7 @@ impl Harness {
     }
 
     /// Clicks the primary button with no modifier.
-    fn click(&mut self, position: Pos2) {
+    pub(super) fn click(&mut self, position: Pos2) {
         self.frame(vec![Event::PointerMoved(position)]);
         self.frame(vec![self.button(position, true)]);
         self.frame(vec![self.button(position, false)]);
@@ -176,7 +176,7 @@ impl Harness {
     }
 
     /// Presses `key` with `modifiers`.
-    fn press(&mut self, key: Key, modifiers: Modifiers) {
+    pub(super) fn press(&mut self, key: Key, modifiers: Modifiers) {
         let event = |pressed| Event::Key {
             key,
             physical_key: None,
@@ -189,7 +189,7 @@ impl Harness {
     }
 
     /// Returns a screen position on the canvas background, in its bottom right corner.
-    fn background(&self) -> Pos2 {
+    pub(super) fn background(&self) -> Pos2 {
         self.graph
             .canvas(&self.scope())
             .expect("a canvas")
@@ -199,26 +199,73 @@ impl Harness {
     }
 
     /// Returns the value of the input `port` of node `id` in the document.
-    fn input(&self, id: NodeId, port: &str) -> Option<InputValue> {
+    pub(super) fn input(&self, id: NodeId, port: &str) -> Option<InputValue> {
         let pass = self.graph.open_pass().expect("a pass");
         let node = pass.body.node(id)?;
         node.inputs.get(port).cloned()
     }
 
     /// Returns whether the open body holds node `id`.
-    fn holds(&self, id: NodeId) -> bool {
+    pub(super) fn holds(&self, id: NodeId) -> bool {
         self.graph.open_pass().expect("a pass").body.node(id).is_some()
     }
 
+    /// Clicks the secondary button at `position`, which opens a menu of the canvas.
+    pub(super) fn secondary_click(&mut self, position: Pos2) {
+        let button = |pressed| Event::PointerButton {
+            pos: position,
+            button: PointerButton::Secondary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        self.frame(vec![Event::PointerMoved(position)]);
+        self.frame(vec![button(true)]);
+        self.frame(vec![button(false)]);
+        self.settle();
+    }
+
+    /// Returns the screen rectangle of the one widget whose accessible label or value is `label`.
+    pub(super) fn accessible(&mut self, label: &str) -> Rect {
+        self.accessible_with_role(label, None)
+    }
+
+    /// Returns the screen rectangle of the one widget of role `role`, when set, whose accessible label or value is
+    /// `label`.
+    pub(super) fn accessible_with_role(&mut self, label: &str, role: Option<egui::accesskit::Role>) -> Rect {
+        self.context.enable_accesskit();
+        self.frame(Vec::new());
+        let output = self.frame_output(Vec::new());
+        let update = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .expect("an AccessKit update");
+        let found: Vec<Rect> = update
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.label() == Some(label) || node.value() == Some(label))
+            .filter(|(_, node)| role.is_none_or(|role| node.role() == role))
+            .filter_map(|(_, node)| node.bounds())
+            .map(|rect| {
+                Rect::from_min_max(
+                    Pos2::new(rect.x0 as f32, rect.y0 as f32),
+                    Pos2::new(rect.x1 as f32, rect.y1 as f32),
+                )
+            })
+            .collect();
+        assert_eq!(found.len(), 1, "one widget reads {label}: {found:?}");
+        found[0]
+    }
+
     /// Runs `request` now and lets the canvas follow.
-    fn run(&mut self, request: GraphRequest) {
+    pub(super) fn run(&mut self, request: GraphRequest) {
         self.graph.request(request);
         self.settle();
     }
 }
 
 /// Returns the link to the output `port` of node `node`.
-fn link(node: NodeId, port: &str) -> InputValue {
+pub(super) fn link(node: NodeId, port: &str) -> InputValue {
     InputValue::Link(PortRef {
         node,
         port: Some(port.to_owned()),
@@ -370,6 +417,7 @@ fn a_keyboard_undo_during_a_wire_drag_waits_for_the_release() {
     harness.run(GraphRequest::AddNode {
         op: "math.sin".to_owned(),
         pos: [0.0, 600.0],
+        region: None,
         wire: None,
     });
     let added = n(52);
@@ -402,6 +450,7 @@ fn a_node_with_an_error_draws_the_red_stroke() {
     harness.run(GraphRequest::AddNode {
         op: "math.sin".to_owned(),
         pos: [0.0, 600.0],
+        region: None,
         wire: None,
     });
     harness.run(GraphRequest::FrameAll);
@@ -411,7 +460,7 @@ fn a_node_with_an_error_draws_the_red_stroke() {
         .filter(|clipped| matches!(&clipped.shape, Shape::Rect(rect) if rect.stroke.color == mcs::RED_500))
         .count();
     assert_eq!(red, 1, "one node has an error");
-    assert_eq!(harness.graph.pass_issue_counts("step").0, 1);
+    assert_eq!(harness.graph.issue_counts(&Scope::pass("step")).0, 1);
 }
 
 #[test]
@@ -481,7 +530,7 @@ fn copied_nodes_paste_with_fresh_ids_and_their_wire() {
 }
 
 /// Returns the text of every text shape in `shapes`, nested shapes included.
-fn texts(shapes: &[ClippedShape]) -> Vec<String> {
+pub(super) fn texts(shapes: &[ClippedShape]) -> Vec<String> {
     fn collect(shape: &Shape, texts: &mut Vec<String>) {
         match shape {
             Shape::Text(text) => texts.push(text.galley.text().to_owned()),
@@ -508,6 +557,7 @@ fn a_body_opened_again_after_its_canvas_went_shows_no_stale_selection() {
     harness.run(GraphRequest::AddNode {
         op: "math.sin".to_owned(),
         pos: [0.0, 600.0],
+        region: None,
         wire: None,
     });
     let added = n(52);
