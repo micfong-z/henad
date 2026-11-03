@@ -125,6 +125,32 @@ types an unsuffixed literal falls back to.
   (`henad-models/src/tests/gpu_agent_adapter.rs`) holds `gpu_ants` and `gpu_boids` built through
   the public constructors from owned strings equal to their registered entries in `Debug`, schema
   hash, needs, demand and stepped stats. Keep it.
+  `GpuAgentSpec` also holds `color`, a pass run before the display in every snapshot that writes
+  the colour buffer (`None` for a model whose steps write it), `cleared_counters`, a range of the
+  counters the engine clears before each reduce leaf for counts taken afresh, and `init_cost`. Each
+  pass spec holds a `cost`, `uniform_bytes` and `workgroup_bytes`, and an action a `rerun_cost`, all
+  zero for a hand-written model. `demand` counts a pass's work as its cost times its invocations
+  (texels for the display), and host work as the init or rerun cost times the larger of agents and
+  cells, so `Demand::shortfalls` holds an agents graph to the submission and host budgets and to the
+  uniform and workgroup limits as it does a grid. Each step's cost also adds
+  `hooks.step_cost(step, geom, params)`, the work that depends on the parameters (a graph's radius
+  walks), which the steps, first in `declared_passes`, take by position. `AgentHooks` has provided
+  methods for a model composed at run time. The engine calls `run_params_bytes(AgentPassId, ctx,
+  AgentRun, params)`, a `Result`, and `run_stats(.., AgentRun, params)`, which forward to
+  `pass_params_bytes` and `stats` by default (16 zero bytes for the colour pass, which
+  `AgentPassId::Color` names). An `Err` block panics the build with the model id (the build's
+  scope reports it), and at a press is a refused fault with no pass run. A press calls `rerun`
+  before its pass: the `AgentUploads` go to the current sides, and an `Err` is a refused fault
+  with no pass run. After each stats readback lands, the engine reads `fault(counters)`. A `Some`
+  sets the context's fault sink once, prefixed with the model id, and the poll and every later one
+  return `Failed`, which ends a run in the runner and in `stepping::sample_stats`. When
+  `reports_faults()` holds, `GpuSimState::read_fault` (default nothing) reads the counters back
+  through `CounterReadback::read_blocking`, a staging buffer of its own, and reports a fault the
+  same way. `stepping::wait_for(state, ctx)` polls, calls it and returns the sink's fault, and
+  `run_steps`, `run_steps_acting` and the benchmark's last wait use it, so a run that reads no
+  stats still ends with the fault (`a_recorded_fault_ends_a_run_that_reads_no_stats`).
+  `AgentRun` holds the seed, the presses so far and the tick. The engine counts presses and keeps
+  the action stream from `action_seed(seed)`, as the grid engine does.
   `gpu/tests/parity.wgsl` is the parity test's shader, with a `CODES` array that references
   each boundary and table code the test reads.
   `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`

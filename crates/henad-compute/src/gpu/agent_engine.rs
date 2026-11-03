@@ -3,12 +3,13 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use henad_core::authoring::model::gpu_agent_model::{Geometry, GpuAgentModel, PassCtx, PassId};
+use henad_core::authoring::model::gpu_agent_model::{Geometry, GpuAgentModel, PassCtx};
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::{StatEntry, stat_entries};
 
-use crate::gpu::agent_spec::GpuAgentSpec;
+use crate::fault::{Fault, FaultSink, STEPPING};
+use crate::gpu::agent_spec::{AgentPassId, AgentRun, GpuAgentSpec};
 use crate::gpu::capacity::{Demand, layout_entry};
 use crate::gpu::primitives::dispatch::linear_dispatch;
 use crate::gpu::primitives::pipeline::{compute_pipeline, lane_buffer, storage_buffer, uniform_buffer};
@@ -145,6 +146,22 @@ pub(crate) struct GpuAgentEngine {
     action_seed: u32,
     /// Parameter values, kept to rewrite the action uniforms on each press.
     params: Vec<ParamValue>,
+    /// Pass that writes the colour buffer before each snapshot, when the spec declares one.
+    color: Option<EncodedPass>,
+    /// Seed of the run, `None` for the model's default seed.
+    seed: Option<u64>,
+    /// Presses of any action so far.
+    presses: u32,
+    /// Stream a rerun on the host advances, started from `action_seed(seed)`.
+    action_stream: u64,
+    /// Steps done when the reduce leaf was last recorded.
+    stats_tick: u64,
+    /// Length in words of each buffer, in the order of [`GpuAgentSpec::buffers`].
+    buffer_lens: Vec<usize>,
+    /// Sink of a fault the counters report or a rerun returns.
+    faults: FaultSink,
+    /// Whether the counters reported a fault, which ends the run.
+    faulted: bool,
 
     agents: Sides<Arc<GpuAgents>>,
 }
@@ -298,6 +315,7 @@ impl GpuAgentEngine {
             counters: counters.as_ref(),
             display_view: display_view.as_ref(),
             reduce: &reduce,
+            run: AgentRun::new(seed, 0, 0),
         };
 
         let steps: Vec<EncodedPass> = spec
@@ -307,7 +325,7 @@ impl GpuAgentEngine {
             .map(|(i, pass)| {
                 let invocations = pass.domain.invocations(&geom);
                 build.pass(
-                    PassId::Step(i),
+                    AgentPassId::Step(i),
                     &pass.label,
                     &pass.shader,
                     &pass.sides,
@@ -323,7 +341,7 @@ impl GpuAgentEngine {
             let (tex_w, tex_h) = geom.display;
             let groups = (tex_w.div_ceil(pass.workgroup), tex_h.div_ceil(pass.workgroup));
             let encoded = build.pass(
-                PassId::Display,
+                AgentPassId::Display,
                 "display",
                 &pass.shader,
                 &pass.sides,
@@ -334,8 +352,21 @@ impl GpuAgentEngine {
             (encoded, handle)
         });
 
+        let color = spec.color.as_ref().map(|pass| {
+            let invocations = pass.domain.invocations(&geom);
+            build.pass(
+                AgentPassId::Color,
+                "color",
+                &pass.shader,
+                &pass.sides,
+                linear_dispatch(invocations),
+                invocations,
+                0,
+            )
+        });
+
         let reduce_pass = build.pass(
-            PassId::Reduce,
+            AgentPassId::Reduce,
             "reduce_leaf",
             &spec.reduce.shader,
             &spec.reduce.sides,
@@ -358,7 +389,7 @@ impl GpuAgentEngine {
             .enumerate()
             .map(|(i, (action, &invocations))| {
                 build.pass(
-                    PassId::Action(i),
+                    AgentPassId::Action(i),
                     &format!("action_{}", action.id),
                     &action.shader,
                     &action.sides,
@@ -406,6 +437,14 @@ impl GpuAgentEngine {
             action_seed,
             params: params.to_vec(),
             agents,
+            color,
+            seed,
+            presses: 0,
+            action_stream: henad_core::action::action_seed(seed),
+            stats_tick: 0,
+            buffer_lens: lens,
+            faults: ctx.faults.clone(),
+            faulted: false,
         }
     }
 
@@ -445,7 +484,47 @@ impl GpuAgentEngine {
         let (buffer, _) = self.buffers[index].sides(self.current_is_a);
         read_words(&self.device, &self.queue, buffer)
     }
+
+    /// Runs the rerun of action `index` on the host and uploads the buffers it writes to their current sides.
+    ///
+    /// Returns whether the rerun succeeded. A fault goes to the context's fault sink.
+    fn rerun(&mut self, index: usize, run: AgentRun) -> bool {
+        let id = &self.spec.id;
+        let uploads = match self
+            .spec
+            .hooks
+            .rerun(index, &self.geom, run, &self.params, &mut self.action_stream)
+        {
+            Ok(uploads) => uploads,
+            Err(message) => {
+                self.faults.set_once(Fault::refused(PRESSING, message));
+                return false;
+            }
+        };
+        for (k, words) in uploads {
+            let Some(&len) = self.buffer_lens.get(k) else {
+                self.faults.set_once(Fault::refused(
+                    PRESSING,
+                    format!("{id}: a rerun wrote buffer {k}, which does not exist"),
+                ));
+                return false;
+            };
+            if words.len() != len {
+                self.faults.set_once(Fault::refused(
+                    PRESSING,
+                    format!("{id}: a rerun wrote {} words to buffer {k} of {len}", words.len()),
+                ));
+                return false;
+            }
+            let (current, _) = self.buffers[k].sides(self.current_is_a);
+            self.queue.write_buffer(current, 0, bytemuck::cast_slice(&words));
+        }
+        true
+    }
 }
+
+/// Phase of a fault a press raises.
+const PRESSING: &str = "pressing an action";
 
 /// Carries what every pass needs to resolve its bindings into wgpu objects.
 struct PassBuilder<'a> {
@@ -460,6 +539,7 @@ struct PassBuilder<'a> {
     counters: Option<&'a CounterReadback>,
     display_view: Option<&'a wgpu::TextureView>,
     reduce: &'a GpuLaneReduce,
+    run: AgentRun,
 }
 
 impl PassBuilder<'_> {
@@ -473,7 +553,7 @@ impl PassBuilder<'_> {
     )]
     fn pass(
         &self,
-        id: PassId,
+        id: AgentPassId,
         label: &str,
         shader: &ShaderSpec,
         sides: &SideTable,
@@ -487,16 +567,21 @@ impl PassBuilder<'_> {
             self.device,
             self.queue,
             &format!("{label}_params"),
-            &self.spec.hooks.pass_params_bytes(
-                id,
-                PassCtx {
-                    geom: self.geom,
-                    invocations,
-                    groups_x: groups.0,
-                    seed,
-                },
-                self.params,
-            ),
+            &self
+                .spec
+                .hooks
+                .run_params_bytes(
+                    id,
+                    PassCtx {
+                        geom: self.geom,
+                        invocations,
+                        groups_x: groups.0,
+                        seed,
+                    },
+                    self.run,
+                    self.params,
+                )
+                .unwrap_or_else(|message| panic!("{}: {message}", self.spec.id)),
         );
 
         let entries: Vec<wgpu::BindGroupLayoutEntry> = shader
@@ -597,7 +682,13 @@ impl SimState for GpuAgentEngine {
         let counters = self.counters.as_ref().map_or(&[][..], CounterReadback::values);
         stat_entries(
             &self.spec.stats,
-            self.spec.hooks.stats(&self.reduce.sums(), counters, &self.geom),
+            self.spec.hooks.run_stats(
+                &self.reduce.sums(),
+                counters,
+                &self.geom,
+                AgentRun::new(self.seed, self.presses, self.stats_tick),
+                &self.params,
+            ),
         )
     }
 
@@ -683,31 +774,47 @@ impl GpuSimState for GpuAgentEngine {
     }
 
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
-        let Some(action) = self.actions.get(index) else {
+        if index >= self.actions.len() {
             return false;
-        };
+        }
         // A fresh seed per press, so pressing twice draws twice. The write is queued before the
         // encoder is submitted, so the pass reads the new value.
         self.action_seed = self.action_seed.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
-        self.queue.write_buffer(
-            &action.uniform,
-            0,
-            &self.spec.hooks.pass_params_bytes(
-                PassId::Action(index),
-                PassCtx {
-                    geom: &self.geom,
-                    invocations: self.action_invocations[index],
-                    groups_x: action.groups.0,
-                    seed: self.action_seed,
-                },
-                &self.params,
-            ),
+        self.presses = self.presses.wrapping_add(1);
+        let run = AgentRun::new(self.seed, self.presses, self.tick);
+        if !self.rerun(index, run) {
+            return true;
+        }
+        let Some(action) = self.actions.get(index) else {
+            return false;
+        };
+        let block = self.spec.hooks.run_params_bytes(
+            AgentPassId::Action(index),
+            PassCtx {
+                geom: &self.geom,
+                invocations: self.action_invocations[index],
+                groups_x: action.groups.0,
+                seed: self.action_seed,
+            },
+            run,
+            &self.params,
         );
+        match block {
+            Ok(block) => self.queue.write_buffer(&action.uniform, 0, &block),
+            Err(message) => {
+                self.faults
+                    .set_once(Fault::refused(PRESSING, format!("{}: {message}", self.spec.id)));
+                return true;
+            }
+        }
         action.encode(encoder, self.current_is_a, None);
         true
     }
 
     fn encode_snapshot_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(pass) = &self.color {
+            pass.encode(encoder, self.current_is_a, None);
+        }
         if let Some((pass, _)) = &self.display {
             pass.encode(encoder, self.current_is_a, None);
         }
@@ -715,6 +822,13 @@ impl GpuSimState for GpuAgentEngine {
     }
 
     fn encode_stats_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        let cleared = self.spec.cleared_counters.clone();
+        if let Some(counters) = &self.counters
+            && !cleared.is_empty()
+        {
+            counters.encode_clear_range(encoder, cleared);
+        }
+        self.stats_tick = self.tick;
         self.reduce_pass.encode(encoder, self.current_is_a, None);
         self.reduce.encode(encoder);
         if let Some(counters) = &mut self.counters {
@@ -736,10 +850,39 @@ impl GpuSimState for GpuAgentEngine {
             Some(readback) => readback.poll(device),
             None => StatsPoll::Landed,
         };
-        match (sums_poll, counters_poll) {
+        let poll = match (sums_poll, counters_poll) {
             (StatsPoll::Pending, _) | (_, StatsPoll::Pending) => StatsPoll::Pending,
             (StatsPoll::Failed, _) | (_, StatsPoll::Failed) => StatsPoll::Failed,
             (StatsPoll::Landed, StatsPoll::Landed) => StatsPoll::Landed,
+        };
+        if poll == StatsPoll::Landed && !self.faulted {
+            let counters = self.counters.as_ref().map_or(&[][..], CounterReadback::values);
+            if let Some(message) = self.spec.hooks.fault(counters) {
+                self.faulted = true;
+                self.faults
+                    .set_once(Fault::refused(STEPPING, format!("{}: {message}", self.spec.id)));
+            }
+        }
+        if self.faulted { StatsPoll::Failed } else { poll }
+    }
+
+    /// Reads the counters back when the hooks report faults through them, and reports a fault they hold.
+    fn read_fault(&mut self) {
+        if self.faulted || !self.spec.hooks.reports_faults() {
+            return;
+        }
+        let Some(counters) = &self.counters else { return };
+        let Some(words) = counters.read_blocking(&self.device, &self.queue) else {
+            self.faults.set_once(Fault::refused(
+                STEPPING,
+                format!("{}: the GPU did not read the counters back", self.spec.id),
+            ));
+            return;
+        };
+        if let Some(message) = self.spec.hooks.fault(&words) {
+            self.faulted = true;
+            self.faults
+                .set_once(Fault::refused(STEPPING, format!("{}: {message}", self.spec.id)));
         }
     }
 
@@ -916,6 +1059,10 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
 
     fn stats_readback_pending(&self) -> bool {
         self.engine.stats_readback_pending()
+    }
+
+    fn read_fault(&mut self) {
+        self.engine.read_fault();
     }
 
     fn view(&self) -> GpuSnapshot {

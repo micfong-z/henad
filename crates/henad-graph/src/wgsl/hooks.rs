@@ -96,9 +96,13 @@ impl GraphHooks {
             return Ok(vec![0; 16]);
         };
         let world = self.world(ctx.width, ctx.height);
-        uniform
-            .block
-            .bytes(&self.evaluator, world, &self.own(params), &Self::context(id, ctx))
+        uniform.block.bytes(
+            &self.evaluator,
+            world,
+            &self.own(params),
+            &Self::context(id, ctx),
+            &super::uniform::Dispatch::default(),
+        )
     }
 }
 
@@ -214,10 +218,13 @@ impl GridHooks for GraphHooks {
                     {
                         let frame = match self.evaluator.program_at(position) {
                             Some(Ok(program)) => {
-                                let tallies: Vec<u64> = (0..program.tallies)
-                                    .map(|k| u64::from(counts.get(source.first_counter + k).copied().unwrap_or(0)))
-                                    .collect();
-                                run::finish(program, &own, &context, world, Some(&tallies)).ok()
+                                let readback = run::Readback {
+                                    tallies: (0..program.tallies)
+                                        .map(|k| u64::from(counts.get(source.first_counter + k).copied().unwrap_or(0)))
+                                        .collect(),
+                                    ..run::Readback::default()
+                                };
+                                run::finish(program, &own, &context, world, Some(&readback)).ok()
                             }
                             _ => None,
                         };

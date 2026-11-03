@@ -144,7 +144,12 @@ pub fn check(file: &GraphFile) -> CheckReport {
             );
         }
     }
+    agents::check_finishes(&mut checker, &views.functions);
     let inlinable = functions::inlinable(&views, &clean);
+    // The size once inlined is known before anything is inlined. A file past it is checked as written alone, so a
+    // small file cannot make the checker build an expansion that large.
+    let costs = cost::check(&mut checker, &views);
+    let sized = sized && costs.inlinable;
     passes::check_keys(&mut checker, &views);
     // Each pass is checked after normalisation when every call it makes reaches clean functions and every expression
     // expands. Otherwise the pass as written is checked, a call standing for its function's ports.
@@ -210,12 +215,11 @@ pub fn check(file: &GraphFile) -> CheckReport {
     report.dual_lanes = passes::check_lanes(&mut checker, &checked);
     passes::check_stats(&mut checker, &checked, &pass_ports);
     agents::check_passes(&mut checker, &checked);
-    let costs = cost::check(&mut checker, &views);
     report.passes = document
         .passes
         .iter()
         .zip(pass_ports)
-        .zip(costs)
+        .zip(costs.passes)
         .map(|((pass, ports), cost)| PassReport {
             id: pass.id.clone(),
             cost,

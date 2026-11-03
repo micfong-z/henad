@@ -34,7 +34,8 @@ pub use agent_engine::GpuAgentState;
 #[cfg(feature = "runtime-wgsl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
 pub use agent_spec::{
-    AgentActionSpec, AgentBufferSpec, AgentDisplaySpec, AgentHooks, AgentPassSpec, AgentReduceSpec, GpuAgentSpec,
+    AgentActionSpec, AgentBufferSpec, AgentDisplaySpec, AgentHooks, AgentPassId, AgentPassSpec, AgentReduceSpec,
+    AgentRun, AgentUploads, GpuAgentSpec,
 };
 pub use capacity::{Demand, HOST_WORK_BUDGET, HostWork, PassBindings, PassKind, SUBMISSION_WORK_BUDGET};
 pub use grid_engine::GpuGridState;

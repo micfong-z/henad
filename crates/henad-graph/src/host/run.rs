@@ -11,7 +11,7 @@ use super::value::{BinaryOp, HostValue, binary, convert, order, shift, unary};
 use super::{HostError, HostLanes, HostWorld, LaneColumn, PassOutcome, RunContext};
 use crate::draw::{draw_bits, fold32, iteration_word, key_word, press_word};
 use crate::ids::NodeId;
-use crate::limits::MAX_FOLD_CANDIDATES;
+use crate::limits::{MAX_FOLD_CANDIDATES, MAX_WALK_CELLS};
 use crate::node::Combine;
 
 /// State of one run of a pass.
@@ -220,10 +220,21 @@ pub(crate) fn prelude(
     finish(program, params, context, world, None)
 }
 
-/// Returns the frame of `program` after its prelude and, when `tallies` is `Some`, its post block, with each tally's
-/// count in place of the elements.
+/// What the GPU reads back of a stats pass, in place of the elements.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Readback {
+    /// Count of each tally, by tally number.
+    pub tallies: Vec<u64>,
+    /// Total of each float sum by sum number, and whether it sums `vec2f` values. A sum the readback leaves out is 0.
+    pub sums: Vec<([f64; 2], bool)>,
+    /// Value of each counter, in `[[counter]]` order.
+    pub counters: Vec<u32>,
+}
+
+/// Returns the frame of `program` after its prelude and, when `readback` is `Some`, its post block, with each tally's
+/// count, each sum's total and each counter in place of the elements.
 ///
-/// The GPU counts the tallies of a stats pass, and the host runs the values computed from them.
+/// The GPU counts and sums the reducers of a stats pass, and the host runs the values computed from them.
 ///
 /// # Errors
 ///
@@ -233,14 +244,16 @@ pub(crate) fn finish(
     params: &[HostValue],
     context: &RunContext,
     world: HostWorld,
-    tallies: Option<&[u64]>,
+    readback: Option<&Readback>,
 ) -> Result<Vec<HostValue>, HostError> {
     let lanes = HostLanes {
         world,
         columns: Vec::new(),
         lanes: 0,
         deposits: Vec::new(),
-        counters: Vec::new(),
+        counters: readback.map_or_else(Vec::new, |readback| {
+            readback.counters.iter().map(|value| (String::new(), *value)).collect()
+        }),
     };
     let mut frame = vec![HostValue::Bool(false); program.slots];
     for (slot, value) in &program.constants {
@@ -254,6 +267,7 @@ pub(crate) fn finish(
         })?;
     }
     let mut stream = 0;
+    let (width, height, boundary) = world.domain_grid();
     let mut machine = Machine {
         program,
         lanes: &lanes,
@@ -268,9 +282,9 @@ pub(crate) fn finish(
         tallies: vec![0; program.tallies],
         colors: Vec::new(),
         stream: &mut stream,
-        width: 0,
-        height: 0,
-        bounded: false,
+        width,
+        height,
+        bounded: boundary == Boundary::Bounded,
         element: 0,
         iteration: None,
         world,
@@ -281,10 +295,27 @@ pub(crate) fn finish(
         index: None,
     };
     machine.execute(&program.prelude, &mut frame)?;
-    if let Some(tallies) = tallies {
-        for (slot, count) in program.tally_slots.iter().zip(tallies) {
+    if let Some(readback) = readback {
+        for (slot, count) in program.tally_slots.iter().zip(&readback.tallies) {
             if let Some(target) = frame.get_mut(*slot) {
                 *target = HostValue::U64(*count);
+            }
+        }
+        let elements = program
+            .domain
+            .and_then(|domain| world.elements(domain))
+            .unwrap_or(0)
+            .max(1) as f64;
+        for (number, spec) in program.sums.iter().enumerate() {
+            let ([x, y], vector) = readback.sums.get(number).copied().unwrap_or(([0.0, 0.0], false));
+            let scale = if spec.mean { 1.0 / elements } else { 1.0 };
+            let value = if spec.vector.unwrap_or(vector) {
+                HostValue::Vec2D([x * scale, y * scale])
+            } else {
+                HostValue::F64(x * scale)
+            };
+            if let Some(target) = frame.get_mut(spec.slot) {
+                *target = value;
             }
         }
         machine.execute(&program.post, &mut frame)?;
@@ -1018,11 +1049,21 @@ impl Machine<'_> {
             };
             walk(index, cx, cy, radius, &positions, world_w, world_h)
         };
-        let Some(visits) = visits else {
-            return Err(self.fault(
-                node,
-                format!("Agents in radius visited more than {MAX_FOLD_CANDIDATES} agents"),
-            ));
+        let visits = match visits {
+            Ok(visits) => visits,
+            Err(WalkEnd::Cells) => {
+                return Err(self.fault(
+                    node,
+                    format!("Agents in radius would walk more than {MAX_WALK_CELLS} cells"),
+                ));
+            }
+            Err(WalkEnd::Visits) => {
+                return Err(self.fault(
+                    node,
+                    format!("Agents in radius visited more than {MAX_FOLD_CANDIDATES} agents"),
+                ));
+            }
+            Err(WalkEnd::Broken) => return Err(self.fault(node, "walks an index that does not hold its positions")),
         };
         let mut k = 0u32;
         for (other, dx, dy, dist_sq) in visits {
@@ -1149,9 +1190,24 @@ fn clamp_to_i32(x: f32) -> i32 {
     (if x > top { top } else { x }) as i32
 }
 
+/// Reason a walk of [`walk`] stops before its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WalkEnd {
+    /// The walk would cover more than [`MAX_WALK_CELLS`] cells, and stops before the first.
+    Cells,
+    /// The walk met more than [`MAX_FOLD_CANDIDATES`] candidates.
+    Visits,
+    /// The index does not hold a cell or an agent the walk reaches.
+    Broken,
+}
+
 /// Returns the agents within `radius` of `(x, y)` in the walk order of [`SpatialHash::for_each_within`], each with the
-/// toroidal deltas to it and their squared length, or `None` when the walk meets more than [`MAX_FOLD_CANDIDATES`]
-/// candidates.
+/// toroidal deltas to it and their squared length.
+///
+/// # Errors
+///
+/// Returns [`WalkEnd::Cells`] for a walk over more than [`MAX_WALK_CELLS`] cells, as `henad::hash::walk_cells` counts
+/// them, and [`WalkEnd::Visits`] when the walk meets more than [`MAX_FOLD_CANDIDATES`] candidates.
 fn walk(
     index: &SpatialHash,
     x: f32,
@@ -1160,7 +1216,7 @@ fn walk(
     positions: &[[f32; 2]],
     world_w: f32,
     world_h: f32,
-) -> Option<Vec<(u32, f32, f32, f32)>> {
+) -> Result<Vec<(u32, f32, f32, f32)>, WalkEnd> {
     let (grid_w, grid_h) = index.grid_dims();
     let (cell_w, cell_h) = index.cell_extents();
     let (cell_start, sorted) = index.buckets();
@@ -1169,16 +1225,22 @@ fn walk(
     let cell_radius_y = (radius / cell_h).ceil() as i32;
     let cell_x = ((x * (1.0 / cell_w)).floor() as i32).rem_euclid(grid_w as i32);
     let cell_y = ((y * (1.0 / cell_h)).floor() as i32).rem_euclid(grid_h as i32);
-    let (y_lo, y_hi) = if 2 * cell_radius_y + 1 > grid_h as i32 {
+    // `2 * reach + 1 > side`, written so that no reach overflows it, as `henad::hash::walk_bounds` writes it.
+    let (y_lo, y_hi) = if cell_radius_y > (grid_h as i32 - 1) / 2 {
         (0, grid_h as i32 - 1)
     } else {
         (cell_y - cell_radius_y, cell_y + cell_radius_y)
     };
-    let (x_lo, x_hi) = if 2 * cell_radius_x + 1 > grid_w as i32 {
+    let (x_lo, x_hi) = if cell_radius_x > (grid_w as i32 - 1) / 2 {
         (0, grid_w as i32 - 1)
     } else {
         (cell_x - cell_radius_x, cell_x + cell_radius_x)
     };
+    // A negative radius covers no cell, as `henad::hash::walk_cells` counts it.
+    let cells = (i64::from(x_hi) - i64::from(x_lo) + 1).max(0) * (i64::from(y_hi) - i64::from(y_lo) + 1).max(0);
+    if cells > i64::from(MAX_WALK_CELLS) {
+        return Err(WalkEnd::Cells);
+    }
     let mut candidates = 0u32;
     let mut found = Vec::new();
     for grid_y in y_lo..=y_hi {
@@ -1186,13 +1248,14 @@ fn walk(
         for grid_x in x_lo..=x_hi {
             let wrapped_x = grid_x.rem_euclid(grid_w as i32) as u32;
             let cell = (wrapped_y * grid_w + wrapped_x) as usize;
-            let (start, end) = (*cell_start.get(cell)? as usize, *cell_start.get(cell + 1)? as usize);
-            for &agent in sorted.get(start..end)? {
+            let bound = |cell: usize| cell_start.get(cell).map(|&start| start as usize).ok_or(WalkEnd::Broken);
+            let (start, end) = (bound(cell)?, bound(cell + 1)?);
+            for &agent in sorted.get(start..end).ok_or(WalkEnd::Broken)? {
                 candidates += 1;
                 if candidates > MAX_FOLD_CANDIDATES {
-                    return None;
+                    return Err(WalkEnd::Visits);
                 }
-                let [ox, oy] = *positions.get(agent as usize)?;
+                let [ox, oy] = *positions.get(agent as usize).ok_or(WalkEnd::Broken)?;
                 let dx = axis_delta(x, ox, world_w, Boundary::Torus);
                 let dy = axis_delta(y, oy, world_h, Boundary::Torus);
                 let d2 = dx * dx + dy * dy;
@@ -1202,5 +1265,5 @@ fn walk(
             }
         }
     }
-    Some(found)
+    Ok(found)
 }

@@ -75,6 +75,19 @@ impl CounterReadback {
         encoder.clear_buffer(&self.storage, 0, None);
     }
 
+    /// Clears the counters at `range` to zero, leaving the others. Record it before the pass that counts into them.
+    pub fn encode_clear_range(&self, encoder: &mut wgpu::CommandEncoder, range: std::ops::Range<usize>) {
+        let word = size_of::<u32>() as u64;
+        let end = range.end.min(self.values.len());
+        if range.start < end {
+            encoder.clear_buffer(
+                &self.storage,
+                range.start as u64 * word,
+                Some((end - range.start) as u64 * word),
+            );
+        }
+    }
+
     /// Copies the accumulated totals into the staging buffer. Record it after the model's
     /// reduce pass, in the same encoder, where wgpu inserts the barrier between the pass and the copy.
     ///
@@ -101,6 +114,34 @@ impl CounterReadback {
             drop(tx.send(result));
         });
         self.pending = Some(rx);
+    }
+
+    /// Returns the accumulator's words, read through a staging buffer of their own and blocking on the GPU, or `None`
+    /// when the readback fails.
+    ///
+    /// The staging buffer of [`Self::begin_map`] and the values it holds are left alone.
+    pub(crate) fn read_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<u32>> {
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("henad_gpu_counter_check"),
+            size: self.size(),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("henad_gpu_counter_check"),
+        });
+        encoder.copy_buffer_to_buffer(&self.storage, 0, &staging, 0, self.size());
+        queue.submit(Some(encoder.finish()));
+        let (tx, rx) = flume::bounded(1);
+        staging
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| drop(tx.send(result)));
+        // The wait runs the map's callback on native. A browser cannot wait, and the readback fails there.
+        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        rx.try_recv().ok()?.ok()?;
+        let words = bytemuck::cast_slice::<u8, u32>(&staging.slice(..).get_mapped_range().ok()?).to_vec();
+        staging.unmap();
+        Some(words)
     }
 
     /// Returns whether a map started by [`Self::begin_map`] has not been consumed yet.

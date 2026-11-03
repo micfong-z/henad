@@ -76,6 +76,7 @@ fn on_device(device: &TestDevice, nodes: &str, seed: Option<u64>, tick: u32) -> 
             buffers: &buffers,
             labels: &labels,
             uniform: &uniform,
+            agents: None,
         },
     );
     result.buffers[..lanes.columns().len()].to_vec()
@@ -520,6 +521,7 @@ fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
                 buffers: &buffers,
                 labels: &labels,
                 uniform: &uniform,
+                agents: None,
             },
         );
         let mut lanes = start.clone();
@@ -541,7 +543,11 @@ fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
         .iter()
         .map(|&count| u64::from(count))
         .collect();
-    let frame = crate::host::run::finish(program, &params, &tick, WORLD, Some(&tallies))
+    let readback = crate::host::run::Readback {
+        tallies,
+        ..crate::host::run::Readback::default()
+    };
+    let frame = crate::host::run::finish(program, &params, &tick, WORLD, Some(&readback))
         .unwrap_or_else(|error| panic!("{error}"));
     let stat = |node: u32| -> HostValue {
         let mut ports = outcome.values[&crate::ids::NodeId::new(node).expect("an id")].iter();

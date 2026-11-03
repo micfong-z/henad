@@ -5,9 +5,12 @@
 //! stock model, and its oracle is the walk's init written out on the agent init stream.
 
 use henad_compute::cpu::agent_engine::agent_init_rng;
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuAgentState;
 use henad_core::authoring::model::gpu_agent_model::GpuAgentModel as _;
 use henad_core::authoring::primitives::rng::next_float;
+use henad_core::explore::fingerprint::schema_hash;
+use henad_core::explore::plan::ModelSchema;
 use henad_core::params::ParamValue;
 use henad_explore::model_file::ModelFile;
 use henad_graph::GraphFile;
@@ -253,4 +256,53 @@ fn the_ants_reset_reruns_the_colony_on_the_host() {
             );
         }
     }
+}
+
+/// Returns the schema hash of the schema of `entry` under the model id `id`.
+fn hash_under(entry: &ModelEntry, id: &str) -> u64 {
+    let schema = entry.schema();
+    schema_hash(&ModelSchema {
+        id,
+        params: schema.params,
+        stats: schema.stats,
+        actions: schema.actions,
+    })
+}
+
+/// [`schema_hash`] reads the model id, so a graph's `node_<model>` id hashes apart from the stock model. Every other
+/// part of the schema is held equal here: the entry each agents corpus file builds hashes as the stock GPU port and the
+/// stock CPU model of its oracle under the stock id. The random walk has no stock model.
+#[test]
+fn every_agent_corpus_schema_hashes_like_the_stock_models_under_their_ids() {
+    let models = crate::example_models();
+    let mut checked = 0;
+    for (name, file) in agent_corpus() {
+        let stock_ids: &[&str] = match Oracle::of(&name) {
+            Oracle::Boids => &["gpu_boids", "boids"],
+            Oracle::Ants | Oracle::AntsWithRng => &["gpu_ants", "ants"],
+            Oracle::RandomWalk => continue,
+        };
+        let entry = ModelFile::parse(&file.to_toml())
+            .and_then(|model_file| model_file.entry())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(entry.id(), file.document().target.id, "{name}");
+        for &stock_id in stock_ids {
+            let stock = models.get(stock_id).expect("a stock model");
+            assert_eq!(
+                hash_under(&entry, stock_id),
+                schema_hash(&stock.schema()),
+                "{name}: the schema differs from {stock_id}"
+            );
+            assert_ne!(
+                schema_hash(&entry.schema()),
+                schema_hash(&stock.schema()),
+                "{name}: the hash reads the model id"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(
+        checked, 8,
+        "every agents corpus file with a stock model, against both stock backends"
+    );
 }

@@ -1046,10 +1046,17 @@ impl<'a> Compiler<'a> {
                     .outputs
                     .iter()
                     .any(|output| matches!(output.rate, OutputRate::Pinned(rate) if rate >= Rate::Element));
-            let own = if per_element { Timing::Element } else { Timing::Prelude };
+            // A counter total is known only from the readback after the elements, so it runs in the post block.
+            let own = if per_element {
+                Timing::Element
+            } else if def.is_ready_after_elements() {
+                Timing::Post
+            } else {
+                Timing::Prelude
+            };
             let mut timing = own;
             let mut reads_element = own == Timing::Element;
-            let mut reads_post = false;
+            let mut reads_post = own == Timing::Post;
             for link in self.body_links(position) {
                 let Some(&source) = self.positions.get(&link.node) else {
                     continue;
@@ -1058,7 +1065,7 @@ impl<'a> Compiler<'a> {
                     continue;
                 }
                 let source_node = nodes[source].id;
-                let source_reduces = self.defs[source].has_effect(Effect::Reduce);
+                let source_reduces = self.defs[source].is_ready_after_elements();
                 match timing_of.get(&source_node) {
                     _ if source_reduces => reads_post = true,
                     Some(Timing::Post) => reads_post = true,

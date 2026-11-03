@@ -396,7 +396,10 @@ fn life_with(step: &str) -> GridRule {
 /// entry under its target's id, which records the graph's code.
 #[test]
 fn every_graph_starter_reads_checks_and_builds_an_entry() {
-    for starter in henad_graph::starters::starters() {
+    let starters = henad_graph::starters::starters()
+        .iter()
+        .chain(henad_graph::starters::agent_starters());
+    for starter in starters {
         let name = starter.file_name;
         let file = ModelFile::parse(starter.text).unwrap_or_else(|error| panic!("{name}: {error}"));
         let graph = file.graph().unwrap_or_else(|| panic!("{name} reads as a graph"));
@@ -412,18 +415,14 @@ fn every_graph_starter_reads_checks_and_builds_an_entry() {
     }
 }
 
-/// A graph of agents that checks is refused with one placed diagnostic, since this build compiles graphs on a grid
-/// alone.
+/// A graph of agents of one position lane and no pass builds an entry under its target's id.
 #[test]
-fn a_graph_of_agents_is_refused_to_run() {
+fn a_graph_of_agents_builds_an_entry() {
     let text = "format = \"henad-model\"\nformat_version = 1\nkind = \"graph\"\nid = \"node_flock\"\n\n[graph]\ntopology = \"agents\"\nlibrary = 1\n\n[[target]]\nbackend = \"gpu\"\n\n[agents]\ncount = 50\nwidth = 200\n\n[[lane]]\nid = \"position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n";
     let file = ModelFile::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    let error = file.entry().err().unwrap_or_else(|| panic!("a graph of agents built"));
-    let ModelFileError::Unsupported(diagnostic) = &error else {
-        panic!("{error:?}");
-    };
-    assert!(diagnostic.message.contains("on a grid alone"), "{diagnostic}");
-    assert!(diagnostic.line.is_some(), "{diagnostic}");
+    let entry = file.entry().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(entry.id(), "node_flock");
+    assert_eq!(entry.param_descriptors()[0].id(), "num_agents");
 }
 
 /// A graph that does not check returns the checker's errors, placed in the file with their pass and node.

@@ -572,6 +572,16 @@ pub(super) static KINDS: &[NodeDef] = &[
                 },
             ),
             pass_case(
+                "starts at positive zero in f64",
+                PassCase {
+                    width: 2,
+                    tables: reduce!("f32", "stat.sum", "f64"),
+                    before: &[("x", &[F32(-0.0), F32(-0.0)])],
+                    stats: &[("n2", F64(0.0))],
+                    ..PassCase::EMPTY
+                },
+            ),
+            pass_case(
                 "a vector",
                 PassCase {
                     width: 2,

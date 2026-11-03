@@ -69,6 +69,14 @@ pub trait GpuSimState: SimState {
     /// readback arrives and the loop has to come back for it.
     fn stats_readback_pending(&self) -> bool;
 
+    /// Reads back a fault the model's shaders recorded in the work submitted so far, and reports it to the context's
+    /// fault sink. It blocks on the GPU.
+    ///
+    /// A stats readback reports such a fault too. A caller that steps without reading stats calls this once the steps
+    /// have finished, so a faulted run does not end as a success. The default reads nothing, for a model whose shaders
+    /// record no fault.
+    fn read_fault(&mut self) {}
+
     /// Returns the layers the UI draws.
     ///
     /// The result is cloned into every snapshot. Keep it to `Arc` clones of things built once at construction.

@@ -57,6 +57,47 @@ within five standard deviations, each device tick to the host evaluator's `run_p
 pass cell for cell, and a copy with `max = 140` refused by `Demand::shortfalls` at 4096 by 4096 and
 by `build` before the engine allocates. `repeat_trials.toml` keeps `max = 4`, the largest bound
 whose submission at 16384 by 16384 fits `SUBMISSION_WORK_BUDGET`. Keep these files.
+The agents corpus (`graph_agent_corpus.rs` holds its tick-0 lanes) builds through `ModelFile::entry`.
+`src/tests/graph_agent_parity.rs` holds `gpu_boids.toml` and the starter `boids.toml` to stock
+`gpu_boids`: position and velocity buffers equal at tick 0 on the device, every statistic within
+`STATS_TOLERANCE` (0.002 of the larger of the stock value and 1) over 8 steps at two seeds, the
+stock port's invariants (in the world, speeds in the band, the reduced average speed against the
+lanes, 300037 agents), and `gpu_boids.toml`'s sweep equal to the stock sweep of
+`interleaved_gpu_boids_runs_commit_in_plan_order` in its engine-owned fields on one and four tracks,
+`run_key` aside since it hashes the schema, which reads the model id. Neither graph replays, as the
+stock port does not. `src/tests/graph_agent_runs.rs` runs the testing kit over every agents entry,
+holds each at its `max_count` to the work budgets (which the boids graphs fail since the A2 review
+charged their walks, record #68), holds `random_walk.toml`'s Repeat on the device
+to the host's `run_pass` within 1e-4 world units over three ticks (not bit for bit: after one tick
+36 of 1554 words differed by one unit in the last place on an Apple M4 Pro), and builds a crowd of
+70000 agents at the origin of a world of 1000, wide so the budget admits it, whose radius fold
+faults with its pass, node and line at the next stats read and in a run that reads none, after
+which the device runs stock `gpu_boids`.
+`a_radius_fold_over_the_whole_world_is_refused_or_faults_with_its_place` holds a world-wide walk to
+the budget over coarse cells and to the cell cap over fine ones, and
+`a_field_update_reads_each_layer_at_its_own_cell` holds a `finish` to its own cell in each layer.
+`graph_agent_parity.rs` also measures where the boids graphs' radius fold reaches its 65536-visit
+cap inside the stock bounds, at tick 0 from the stock seed
+(`the_boids_graphs_fault_only_in_the_dense_corner_of_the_stock_bounds`): a million boids at
+`visual_range` 200 below about 1820 a side, at 50 below about 460. The stock port has no cap. The
+same file holds both boids graphs to the cross-engine gate of `tests/consistency_boids.rs` (its two
+scenarios planted, one tick within 1e-5 of the CPU `boids` and of every engine's fixture) and to
+that file's speed and position bounds over 50 ticks. `graph_agent_corpus.rs` holds every agents
+corpus schema to stock `gpu_boids` and `boids`, or `gpu_ants` and `ants`, hashed under the stock id.
+`src/tests/graph_ants_parity.rs` runs a contraction probe (the stock deposit's `max(best, field *
+cut + reward)` in one expression against the generated two `let`s, equal on the device, and fused on
+an Apple M4 Pro), holds `gpu_ants.toml` to stock `gpu_ants` bit for bit every tick in every lane,
+both layers, the sites, the colours and the three statistics, across a Reset colony press (1540
+ticks at 2000 ants reach the first deliveries), and holds the starter `ants.toml` to `gpu_ants` at
+tick 0 on the device, to the CPU `ants` under the cross-engine gate of `tests/consistency_ants.rs`
+bit for bit (the gate's ants and field planted through `planted_entry`, whose `PlantedHooks` wrap
+the graph's `AgentHooks`), to exact decay of every cell no ant stands on, and to that file's other
+checks. `src/tests/graph_agent_repeat.rs` holds the Repeat tests of the plan over agents, each on
+the device and the host: known answers (zero iterations, `when` false, a clamped count, a count per
+agent, an inner count reading the outer `k`), a hash chain equal to its hand-chained copies and to
+`pcg_hash`, two iterations of one draw differing and replaying, a `grid.fold` in a Repeat and a
+Repeat in a `grid.fold` at their closed forms, the random walk's replay, step length and mean
+squared step, and a Repeat of 16384 refused by the budget at a million agents. Keep these files.
 
 ## Adding a new model
 

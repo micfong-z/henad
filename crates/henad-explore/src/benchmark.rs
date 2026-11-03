@@ -282,7 +282,7 @@ fn gpu_repetition(
     let elapsed = start.elapsed();
     refusals.note(&refused);
     refusals.note(&stepping::run_due(state, ctx, schedule));
-    stepping::wait(ctx)?;
+    stepping::wait_for(state, ctx)?;
     refusals.check()?;
     Ok(RepetitionReport {
         index,

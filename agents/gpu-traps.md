@@ -103,7 +103,9 @@ is about not undoing them.
   unaffected, and so are the draws of henad-graph's tests. A graph equals a stock port on one device
   when both write the same float expression, as `gpu_sir_exact.toml` and `gpu_sir` do with `pow`.
   henad-graph's `a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` is `#[ignore]`d
-  for it, and A2's contraction probe meets it again.
+  for it. A2's contraction probe (henad-models' `graph_ants_parity.rs`) found `a * b + c` written
+  as one expression and as two `let`s rounded alike, both fused, on every one of 6216 inputs where
+  a fused and a rounded result differ, so a `let` boundary does not stop contraction.
 - **wgpu checks no shader's workgroup memory against the device.** A generated reduce shader with
   `var<workgroup>` past `max_compute_workgroup_storage_size` built on Metal with no error and
   counted wrong: 66560 bytes on a 16 KiB device reported 8192 for a stat of 4096 cells. A uniform

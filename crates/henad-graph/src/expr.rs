@@ -215,6 +215,9 @@ enum Tree {
 }
 
 /// Deepest nesting a parse follows, which keeps a hostile text from running out of stack.
+///
+/// Each parenthesis, unary operator, operand of a chain such as `a + b + c` and component read counts one level, since
+/// each is one level of the tree that the expansion and the drop of the tree recurse through.
 const MAX_DEPTH: usize = 64;
 
 /// Recursive descent over the tokens of one expression.
@@ -283,17 +286,19 @@ impl Parser {
     }
 
     fn or(&mut self, depth: usize) -> Result<Tree, String> {
-        let depth = Self::deeper(depth)?;
+        let mut depth = Self::deeper(depth)?;
         let mut left = self.and(depth)?;
         while self.keyword("or") {
+            depth = Self::deeper(depth)?;
             left = Tree::Or(Box::new(left), Box::new(self.and(depth)?));
         }
         Ok(left)
     }
 
-    fn and(&mut self, depth: usize) -> Result<Tree, String> {
+    fn and(&mut self, mut depth: usize) -> Result<Tree, String> {
         let mut left = self.comparison(depth)?;
         while self.keyword("and") {
+            depth = Self::deeper(depth)?;
             left = Tree::And(Box::new(left), Box::new(self.comparison(depth)?));
         }
         Ok(left)
@@ -325,19 +330,21 @@ impl Parser {
         Ok(Tree::Binary(op, Box::new(left), Box::new(right)))
     }
 
-    fn sum(&mut self, depth: usize) -> Result<Tree, String> {
+    fn sum(&mut self, mut depth: usize) -> Result<Tree, String> {
         let mut left = self.product(depth)?;
         while let Some(token @ (Token::Plus | Token::Minus)) = self.peek().cloned() {
             self.at += 1;
+            depth = Self::deeper(depth)?;
             left = Tree::Binary(token, Box::new(left), Box::new(self.product(depth)?));
         }
         Ok(left)
     }
 
-    fn product(&mut self, depth: usize) -> Result<Tree, String> {
+    fn product(&mut self, mut depth: usize) -> Result<Tree, String> {
         let mut left = self.unary(depth)?;
         while let Some(token @ (Token::Star | Token::Slash | Token::Percent)) = self.peek().cloned() {
             self.at += 1;
+            depth = Self::deeper(depth)?;
             left = Tree::Binary(token, Box::new(left), Box::new(self.unary(depth)?));
         }
         Ok(left)
@@ -355,10 +362,11 @@ impl Parser {
         self.postfix(depth)
     }
 
-    fn postfix(&mut self, depth: usize) -> Result<Tree, String> {
+    fn postfix(&mut self, mut depth: usize) -> Result<Tree, String> {
         let mut tree = self.primary(depth)?;
         while self.peek() == Some(&Token::Dot) {
             self.at += 1;
+            depth = Self::deeper(depth)?;
             let component = self.name()?;
             if component != "x" && component != "y" {
                 return Err(format!(

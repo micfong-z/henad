@@ -190,7 +190,13 @@ impl GraphFile {
     /// [`GraphFileError::Toml`] for text that is not a graph file. Each diagnostic is placed in `text` when it has a
     /// place.
     pub fn parse(text: &str) -> Result<Self, GraphFileError> {
-        if text.len() > MAX_FILE_BYTES {
+        Self::parse_within(text, true)
+    }
+
+    /// Reads the graph file held in `text` as [`Self::parse`] does, holding the text and its canonical text to
+    /// [`MAX_FILE_BYTES`] when `bounded` is set.
+    fn parse_within(text: &str, bounded: bool) -> Result<Self, GraphFileError> {
+        if bounded && text.len() > MAX_FILE_BYTES {
             return Err(GraphFileError::Format(Box::new(CodeDiagnostic::error(format!(
                 "the file holds {} bytes, and a graph file holds at most {MAX_FILE_BYTES}",
                 text.len()
@@ -212,7 +218,11 @@ impl GraphFile {
             }
         })?;
         // Every file this reads has a canonical text that reads back.
-        let canonical = canonical_text(&file.document, file.editor.as_ref()).len();
+        let canonical = if bounded {
+            canonical_text(&file.document, file.editor.as_ref()).len()
+        } else {
+            0
+        };
         if canonical > MAX_FILE_BYTES {
             return Err(GraphFileError::Format(Box::new(CodeDiagnostic::error(format!(
                 "the file's canonical text holds {canonical} bytes, and a graph file holds at most {MAX_FILE_BYTES}"
@@ -251,6 +261,18 @@ impl GraphFile {
     /// finite.
     pub fn from_document(document: &GraphDocument, editor: Option<&EditorRegion>) -> Result<Self, GraphFileError> {
         Self::parse(&canonical_text(document, editor))
+    }
+
+    /// Returns the file of `document`, a normalised document, through its canonical text with no limit on its size.
+    ///
+    /// The checker bounds the nodes a file holds after its calls and expressions are inlined, which bounds this text
+    /// too. That text can pass [`MAX_FILE_BYTES`] for a file that holds far less.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`Self::parse`] but the two of size, when the canonical text does not read back.
+    pub(crate) fn from_normalised(document: &GraphDocument) -> Result<Self, GraphFileError> {
+        Self::parse_within(&canonical_text(document, None), false)
     }
 
     /// Semantic document of the file.
@@ -353,7 +375,7 @@ impl Placer<'_> {
 }
 
 /// Returns the canonical text of `document` and `editor`.
-fn canonical_text(document: &GraphDocument, editor: Option<&EditorRegion>) -> String {
+pub(crate) fn canonical_text(document: &GraphDocument, editor: Option<&EditorRegion>) -> String {
     let mut text = writer::semantic_text(document);
     if let Some(editor) = editor {
         text.push('\n');

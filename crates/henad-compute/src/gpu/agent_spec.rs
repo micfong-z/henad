@@ -11,6 +11,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::marker::PhantomData;
+use std::ops::Range;
 
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{
@@ -71,6 +72,15 @@ pub struct AgentPassSpec {
     pub domain: Domain,
     /// Sides the pass binds.
     pub sides: SideTable,
+    /// Cost of one invocation in work units, as a graph model's checker counts it. Zero when the cost is unknown, as
+    /// for a hand-written shader, and [`Self::new`] leaves it at zero.
+    pub cost: u64,
+    /// Size in bytes of the uniform block the shader binds. Zero when unknown, as for a hand-written shader, and
+    /// [`Self::new`] leaves it at zero.
+    pub uniform_bytes: u64,
+    /// Bytes of the shader's `var<workgroup>` declarations. Zero when unknown, as for a hand-written shader, and
+    /// [`Self::new`] leaves it at zero.
+    pub workgroup_bytes: u64,
 }
 
 impl AgentPassSpec {
@@ -81,6 +91,9 @@ impl AgentPassSpec {
             shader,
             domain,
             sides,
+            cost: 0,
+            uniform_bytes: 0,
+            workgroup_bytes: 0,
         }
     }
 
@@ -105,6 +118,15 @@ pub struct AgentDisplaySpec {
     pub workgroup: u32,
     /// Sides the pass binds.
     pub sides: SideTable,
+    /// Cost of one invocation in work units, as a graph model's checker counts it. Zero when the cost is unknown, as
+    /// for a hand-written shader, and [`Self::new`] leaves it at zero.
+    pub cost: u64,
+    /// Size in bytes of the uniform block the shader binds. Zero when unknown, as for a hand-written shader, and
+    /// [`Self::new`] leaves it at zero.
+    pub uniform_bytes: u64,
+    /// Bytes of the shader's `var<workgroup>` declarations. Zero when unknown, as for a hand-written shader, and
+    /// [`Self::new`] leaves it at zero.
+    pub workgroup_bytes: u64,
 }
 
 impl AgentDisplaySpec {
@@ -114,6 +136,9 @@ impl AgentDisplaySpec {
             shader,
             workgroup,
             sides,
+            cost: 0,
+            uniform_bytes: 0,
+            workgroup_bytes: 0,
         }
     }
 }
@@ -130,6 +155,15 @@ pub struct AgentReduceSpec {
     pub domain: Domain,
     /// Sides the leaf binds.
     pub sides: SideTable,
+    /// Cost of one invocation in work units, as a graph model's checker counts it. Zero when the cost is unknown, as
+    /// for a hand-written shader, and [`Self::new`] leaves it at zero.
+    pub cost: u64,
+    /// Size in bytes of the uniform block the shader binds. Zero when unknown, as for a hand-written shader, and
+    /// [`Self::new`] leaves it at zero.
+    pub uniform_bytes: u64,
+    /// Bytes of the shader's `var<workgroup>` declarations. Zero when unknown, as for a hand-written shader, and
+    /// [`Self::new`] leaves it at zero.
+    pub workgroup_bytes: u64,
 }
 
 impl AgentReduceSpec {
@@ -140,6 +174,9 @@ impl AgentReduceSpec {
             lanes,
             domain,
             sides,
+            cost: 0,
+            uniform_bytes: 0,
+            workgroup_bytes: 0,
         }
     }
 }
@@ -156,6 +193,18 @@ pub struct AgentActionSpec {
     pub domain: Domain,
     /// Sides the pass binds, usually [`SideTable::in_place`], since nothing swaps after an action.
     pub sides: SideTable,
+    /// Cost of one invocation in work units, as a graph model's checker counts it. Zero when the cost is unknown, as
+    /// for a hand-written shader, and [`Self::new`] leaves it at zero.
+    pub cost: u64,
+    /// Size in bytes of the uniform block the shader binds. Zero when unknown, as for a hand-written shader, and
+    /// [`Self::new`] leaves it at zero.
+    pub uniform_bytes: u64,
+    /// Bytes of the shader's `var<workgroup>` declarations. Zero when unknown, as for a hand-written shader, and
+    /// [`Self::new`] leaves it at zero.
+    pub workgroup_bytes: u64,
+    /// Cost per element of the init passes a press reruns on the host before the pass, in work units. Zero when
+    /// the press reruns nothing, and [`Self::new`] leaves it at zero.
+    pub rerun_cost: u64,
 }
 
 impl AgentActionSpec {
@@ -166,15 +215,77 @@ impl AgentActionSpec {
             shader,
             domain,
             sides,
+            cost: 0,
+            uniform_bytes: 0,
+            workgroup_bytes: 0,
+            rerun_cost: 0,
         }
     }
 }
+
+/// Pass whose uniform block [`AgentHooks::run_params_bytes`] returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AgentPassId {
+    /// Entry of [`GpuAgentSpec::steps`] at this index.
+    Step(usize),
+    /// The [`GpuAgentSpec::color`] pass.
+    Color,
+    /// The [`GpuAgentSpec::display`] pass.
+    Display,
+    /// The [`GpuAgentSpec::reduce`] leaf.
+    Reduce,
+    /// Entry of [`GpuAgentSpec::actions`] at this index.
+    Action(usize),
+}
+
+impl AgentPassId {
+    /// Returns the [`PassId`] a [`GpuAgentModel`] knows this pass by, `None` for the colour pass, which no such model
+    /// declares.
+    pub fn model_pass(self) -> Option<PassId> {
+        match self {
+            Self::Step(index) => Some(PassId::Step(index)),
+            Self::Color => None,
+            Self::Display => Some(PassId::Display),
+            Self::Reduce => Some(PassId::Reduce),
+            Self::Action(index) => Some(PassId::Action(index)),
+        }
+    }
+}
+
+/// Values of a run that a uniform block, a rerun or the stat values can read besides the parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AgentRun {
+    /// Seed of the run, `None` for the model's fixed default seed.
+    pub seed: Option<u64>,
+    /// Number of presses of any action so far, the press being run included. Zero before the first press.
+    pub presses: u32,
+    /// Steps done when the hook runs: zero at construction, the engine's tick at a press, and for the stat values the
+    /// steps done when the reduce leaf was recorded.
+    pub tick: u64,
+}
+
+impl AgentRun {
+    /// Creates the values of a run on `seed` after `presses` presses and `tick` steps.
+    pub fn new(seed: Option<u64>, presses: u32, tick: u64) -> Self {
+        Self { seed, presses, tick }
+    }
+}
+
+/// Buffers that a rerun on the host wrote, each as its buffer's position in [`GpuAgentSpec::buffers`] and its new
+/// words.
+pub type AgentUploads = Vec<(usize, Vec<u32>)>;
 
 /// Functions of a GPU agent model that the engine calls, each the counterpart of the [`GpuAgentModel`] function of the
 /// same name.
 ///
 /// The engine calls no hook per step or per element. It reads the sizes and seeds once at construction, a uniform block
 /// once per build or action press, and the stat values once per read.
+///
+/// The methods with a default body serve a model composed at run time. [`Self::run_params_bytes`] and
+/// [`Self::run_stats`] forward to [`Self::pass_params_bytes`] and [`Self::stats`] by default, and the engine calls
+/// them in their place.
 pub trait AgentHooks: Send + Sync {
     /// Returns the population and the world extent for `params`, before the engine clamps each to at least 1.
     fn dims(&self, params: &[ParamValue]) -> (u32, Extent);
@@ -198,6 +309,85 @@ pub trait AgentHooks: Send + Sync {
 
     /// Turns the reduction and the counters into values, in [`GpuAgentSpec::stats`] order.
     fn stats(&self, sums: &[f32], counters: &[u32], geom: &Geometry) -> Vec<StatValue>;
+
+    /// Returns the uniform block of `pass` in the run `run` as raw bytes.
+    ///
+    /// The default forwards to [`Self::pass_params_bytes`], and returns 16 zero bytes for the colour pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason the block has no value, such as a fault of the host evaluation it needs. A build then fails
+    /// with the reason, and a press is refused with it.
+    fn run_params_bytes(
+        &self,
+        pass: AgentPassId,
+        ctx: PassCtx<'_>,
+        _run: AgentRun,
+        params: &[ParamValue],
+    ) -> Result<Vec<u8>, String> {
+        Ok(match pass.model_pass() {
+            Some(pass) => self.pass_params_bytes(pass, ctx, params),
+            None => vec![0; 16],
+        })
+    }
+
+    /// Turns the reduction and the counters into values in the run `run` with parameters `params`, in
+    /// [`GpuAgentSpec::stats`] order.
+    ///
+    /// The default forwards to [`Self::stats`].
+    fn run_stats(
+        &self,
+        sums: &[f32],
+        counters: &[u32],
+        geom: &Geometry,
+        _run: AgentRun,
+        _params: &[ParamValue],
+    ) -> Vec<StatValue> {
+        self.stats(sums, counters, geom)
+    }
+
+    /// Runs on the host what a press of action `action` reruns before its pass, advancing `stream`, and returns the
+    /// buffers to upload to their current sides.
+    ///
+    /// The default reruns nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason the press is refused. The engine then runs none of the action's passes.
+    fn rerun(
+        &self,
+        _action: usize,
+        _geom: &Geometry,
+        _run: AgentRun,
+        _params: &[ParamValue],
+        _stream: &mut u64,
+    ) -> Result<AgentUploads, String> {
+        Ok(Vec::new())
+    }
+
+    /// Returns the fault the counters read back report, `None` when they report none.
+    ///
+    /// The engine reads it after each stats readback and ends the run with the fault. The default reports none.
+    fn fault(&self, _counters: &[u32]) -> Option<String> {
+        None
+    }
+
+    /// Returns the work units one invocation of the step pass at `step` of [`GpuAgentSpec::steps`] adds to the cost
+    /// the pass declares, for `params` over `geom`.
+    ///
+    /// A model composed at run time adds here the work that depends on the parameters, such as the cells and agents a
+    /// radius query walks, so [`GpuAgentSpec::demand`] counts it. The default adds none.
+    fn step_cost(&self, _step: usize, _geom: &Geometry, _params: &[ParamValue]) -> u64 {
+        0
+    }
+
+    /// Returns whether a shader of the model can record a fault in the counters, which [`Self::fault`] reads.
+    ///
+    /// When it can, the engine also reads the counters back once the steps a caller waits for have finished, so a run
+    /// that reads no stats still ends with the fault. The default returns false.
+    fn reports_faults(&self) -> bool {
+        false
+    }
 }
 
 /// Hooks of model `M`, each calling the associated function of the same name.
@@ -229,6 +419,39 @@ impl<M: GpuAgentModel> AgentHooks for AgentModelHooks<M> {
     }
 }
 
+/// One pass as [`GpuAgentSpec::demand`] counts it.
+struct DeclaredPass {
+    label: String,
+    kind: PassKind,
+    storage: u32,
+    /// Invocation domain, `None` for the display pass, which runs once per texel.
+    domain: Option<Domain>,
+    cost: u64,
+    uniform_bytes: u64,
+    workgroup_bytes: u64,
+}
+
+/// Facts of one pass that its demand reads.
+struct PassFacts<'a> {
+    shader: &'a ShaderSpec,
+    domain: Option<Domain>,
+    cost: u64,
+    uniform_bytes: u64,
+    workgroup_bytes: u64,
+}
+
+impl<'a> From<&'a AgentPassSpec> for PassFacts<'a> {
+    fn from(pass: &'a AgentPassSpec) -> Self {
+        Self {
+            shader: &pass.shader,
+            domain: Some(pass.domain),
+            cost: pass.cost,
+            uniform_bytes: pass.uniform_bytes,
+            workgroup_bytes: pass.workgroup_bytes,
+        }
+    }
+}
+
 /// Declarations of a GPU agent model, held as values.
 ///
 /// Each label the engine gives a wgpu object starts with [`Self::id`].
@@ -255,6 +478,15 @@ pub struct GpuAgentSpec {
     pub reduce: AgentReduceSpec,
     /// One-off passes the user can trigger, in the order of their buttons. [`Self::new`] leaves this empty.
     pub actions: Vec<AgentActionSpec>,
+    /// Pass that writes the colour buffer, run before the display pass of every snapshot. A model whose steps write
+    /// the colours has none, and [`Self::new`] leaves this `None`.
+    pub color: Option<AgentPassSpec>,
+    /// Range of [`Self::counters`] that the engine clears before every reduce leaf, for counts that the leaf takes
+    /// afresh. [`Self::new`] leaves this empty.
+    pub cleared_counters: Range<usize>,
+    /// Cost per element of the init passes the host runs at build, in work units. Zero for a model seeded otherwise,
+    /// and [`Self::new`] leaves it at zero.
+    pub init_cost: u64,
     /// Stat series, in the order of the values [`AgentHooks::stats`] returns.
     pub stats: Cow<'static, [StatDescriptor]>,
     /// Functions the engine calls for the sizes, the seeds, the uniform blocks and the stat values.
@@ -275,6 +507,9 @@ impl fmt::Debug for GpuAgentSpec {
             .field("display", &self.display)
             .field("reduce", &self.reduce)
             .field("actions", &self.actions)
+            .field("color", &self.color)
+            .field("cleared_counters", &self.cleared_counters)
+            .field("init_cost", &self.init_cost)
             .field("stats", &self.stats)
             .finish_non_exhaustive()
     }
@@ -304,6 +539,9 @@ impl GpuAgentSpec {
             display: None,
             reduce,
             actions: Vec::new(),
+            color: None,
+            cleared_counters: 0..0,
+            init_cost: 0,
             stats: stats.into(),
             hooks,
         }
@@ -424,44 +662,91 @@ impl GpuAgentSpec {
         if self.display.is_some() {
             demand.set_display(geom.width, geom.height, limits);
         }
-        // A hand-written shader has no cost, and its work counts as zero.
-        for (label, kind, storage) in self.declared_passes() {
-            demand.push_pass(label, kind, storage, 0);
+        // A hand-written shader has no cost, and its work counts as zero. The steps come first.
+        for (position, pass) in self.declared_passes().into_iter().enumerate() {
+            let invocations = match pass.kind {
+                PassKind::Display if pass.domain.is_none() => u64::from(geom.display.0) * u64::from(geom.display.1),
+                _ => pass.domain.map_or(0, |domain| u64::from(domain.invocations(&geom))),
+            };
+            let cost = if position < self.steps.len() {
+                pass.cost.saturating_add(self.hooks.step_cost(position, &geom, params))
+            } else {
+                pass.cost
+            };
+            let recorded = demand.push_pass(pass.label, pass.kind, pass.storage, cost.saturating_mul(invocations));
+            recorded.uniform_bytes = pass.uniform_bytes;
+            recorded.workgroup_bytes = pass.workgroup_bytes;
+        }
+        // A pass on the host runs over agents or cells, and the larger of the two bounds either.
+        let elements = u64::from(geom.num_agents.max(geom.n_cells));
+        if self.init_cost > 0 {
+            demand.push_host(format!("{}_init", self.id), self.init_cost.saturating_mul(elements));
+        }
+        for action in self.actions.iter().filter(|action| action.rerun_cost > 0) {
+            demand.push_host(
+                format!("{}_action_{}_rerun", self.id, action.id),
+                action.rerun_cost.saturating_mul(elements),
+            );
         }
         demand
     }
 
-    /// Storage buffers each declared pass binds. Read by both [`Self::demand`] and [`Self::max_storage_bindings`], so
-    /// the device that a host requests and the shortfall that the UI reports cannot disagree.
-    fn declared_passes(&self) -> Vec<(String, PassKind, u32)> {
-        let mut passes: Vec<(String, PassKind, u32)> = self
+    /// Every pass with its kind, the storage buffers it binds, its domain, its cost per invocation and its memory
+    /// sizes. Read by both [`Self::demand`] and [`Self::max_storage_bindings`], so the device that a host requests and
+    /// the shortfall that the UI reports cannot disagree.
+    fn declared_passes(&self) -> Vec<DeclaredPass> {
+        let declared = |label: String, kind: PassKind, pass: PassFacts<'_>| DeclaredPass {
+            label,
+            kind,
+            storage: storage_bindings(&pass.shader.bindings),
+            domain: pass.domain,
+            cost: pass.cost,
+            uniform_bytes: pass.uniform_bytes,
+            workgroup_bytes: pass.workgroup_bytes,
+        };
+        let mut passes: Vec<DeclaredPass> = self
             .steps
             .iter()
-            .map(|pass| {
-                (
-                    format!("{}_{}", self.id, pass.label),
-                    PassKind::Step,
-                    storage_bindings(&pass.shader.bindings),
-                )
-            })
+            .map(|pass| declared(format!("{}_{}", self.id, pass.label), PassKind::Step, pass.into()))
             .collect();
+        if let Some(color) = &self.color {
+            passes.push(declared(format!("{}_color", self.id), PassKind::Display, color.into()));
+        }
         if let Some(display) = &self.display {
-            passes.push((
+            passes.push(declared(
                 format!("{}_display", self.id),
                 PassKind::Display,
-                storage_bindings(&display.shader.bindings),
+                PassFacts {
+                    shader: &display.shader,
+                    domain: None,
+                    cost: display.cost,
+                    uniform_bytes: display.uniform_bytes,
+                    workgroup_bytes: display.workgroup_bytes,
+                },
             ));
         }
-        passes.push((
+        passes.push(declared(
             format!("{}_reduce_leaf", self.id),
             PassKind::Reduce,
-            storage_bindings(&self.reduce.shader.bindings),
+            PassFacts {
+                shader: &self.reduce.shader,
+                domain: Some(self.reduce.domain),
+                cost: self.reduce.cost,
+                uniform_bytes: self.reduce.uniform_bytes,
+                workgroup_bytes: self.reduce.workgroup_bytes,
+            },
         ));
         for (index, action) in self.actions.iter().enumerate() {
-            passes.push((
+            passes.push(declared(
                 format!("{}_action_{}", self.id, action.id),
                 PassKind::Action(index),
-                storage_bindings(&action.shader.bindings),
+                PassFacts {
+                    shader: &action.shader,
+                    domain: Some(action.domain),
+                    cost: action.cost,
+                    uniform_bytes: action.uniform_bytes,
+                    workgroup_bytes: action.workgroup_bytes,
+                },
             ));
         }
         passes
@@ -472,7 +757,7 @@ impl GpuAgentSpec {
     pub fn max_storage_bindings(&self) -> u32 {
         self.declared_passes()
             .into_iter()
-            .map(|(_, _, storage)| storage)
+            .map(|pass| pass.storage)
             .max()
             .unwrap_or(0)
     }
@@ -485,6 +770,11 @@ impl GpuAgentSpec {
         self.steps
             .iter()
             .map(move |pass| (pass.label.as_ref(), &pass.shader, &pass.sides, linear))
+            .chain(
+                self.color
+                    .iter()
+                    .map(move |pass| ("colour", &pass.shader, &pass.sides, linear)),
+            )
             .chain([("reduce leaf", &self.reduce.shader, &self.reduce.sides, linear)])
             .chain(
                 self.actions

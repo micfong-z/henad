@@ -73,7 +73,28 @@ pub fn wait(ctx: &GpuContext) -> Result<(), Fault> {
     ctx.device
         .poll(wgpu::PollType::wait_indefinitely())
         .map_err(poll_fault)?;
+    reported(ctx)
+}
 
+/// Blocks as [`wait`] does, then has `state` read back a fault its shaders recorded, and reports any fault.
+///
+/// A run that reads no stats ends here, so a fault the model recorded on the device still ends it.
+///
+/// # Errors
+///
+/// Returns the fault [`wait`] reports, or the fault `state` recorded, through [`GpuSimState::read_fault`].
+pub fn wait_for(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Result<(), Fault> {
+    ctx.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(poll_fault)?;
+    if !ctx.is_lost() {
+        state.read_fault();
+    }
+    reported(ctx)
+}
+
+/// Returns the loss of the device, or the first fault the context's sink holds.
+fn reported(ctx: &GpuContext) -> Result<(), Fault> {
     // wgpu reports a loss to the callback alone, and polls go on succeeding.
     if ctx.is_lost() {
         return Err(Fault::device_lost(STEPPING));
@@ -112,13 +133,13 @@ fn poll_fault(error: wgpu::PollError) -> Fault {
 ///
 /// # Errors
 ///
-/// Returns the fault [`wait`] reports.
+/// Returns the fault [`wait_for`] reports.
 pub fn run_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> Result<(), Fault> {
     if count == 0 {
         return Ok(());
     }
     submit_steps(state, ctx, count);
-    wait(ctx)
+    wait_for(state, ctx)
 }
 
 /// Runs steps as [`run_steps`] does, stopping at each tick that has a scheduled action to encode.
@@ -133,7 +154,7 @@ pub fn run_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
 ///
 /// # Errors
 ///
-/// Returns the fault [`wait`] reports.
+/// Returns the fault [`wait_for`] reports.
 pub fn run_steps_acting<'s>(
     state: &mut dyn GpuSimState,
     ctx: &GpuContext,
@@ -153,7 +174,7 @@ pub fn run_steps_acting<'s>(
     }
     let now = state.tick();
     submit_steps(state, ctx, end - now);
-    wait(ctx)?;
+    wait_for(state, ctx)?;
     Ok(refused)
 }
 

@@ -66,7 +66,7 @@ fn lock_text() -> String {
         text.push_str(&line);
         text.push('\n');
     }
-    let limits: [(&str, u64); 27] = [
+    let limits: [(&str, u64); 28] = [
         ("MAX_FILE_BYTES", limits::MAX_FILE_BYTES as u64),
         ("MAX_NODES_PER_BODY", limits::MAX_NODES_PER_BODY as u64),
         ("MAX_NODES_IN_FILE", limits::MAX_NODES_IN_FILE as u64),
@@ -92,6 +92,7 @@ fn lock_text() -> String {
         ("MAX_REPEAT_ITERATIONS", u64::from(limits::MAX_REPEAT_ITERATIONS)),
         ("MAX_REGION_DEPTH", limits::MAX_REGION_DEPTH as u64),
         ("MAX_FOLD_CANDIDATES", u64::from(limits::MAX_FOLD_CANDIDATES)),
+        ("MAX_WALK_CELLS", u64::from(limits::MAX_WALK_CELLS)),
         ("MAX_PASS_COST", u64::from(limits::MAX_PASS_COST)),
         ("MAX_GRID_SIDE", u64::from(limits::MAX_GRID_SIDE)),
     ];

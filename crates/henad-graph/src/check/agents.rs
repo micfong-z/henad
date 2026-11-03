@@ -151,6 +151,53 @@ fn check_nesting(checker: &mut Checker<'_>, view: &BodyView<'_>, position: usize
     );
 }
 
+/// Reports a `field.get` of a field in its own `finish` function, or in a function that function calls.
+///
+/// The update of a field runs the `finish` once per cell of each layer and writes the result in place, so a read of
+/// the same field in that pass would race with the invocations that write it.
+pub(super) fn check_finishes(checker: &mut Checker<'_>, functions: &[BodyView<'_>]) {
+    let document = checker.file.document();
+    for field in document.fields.iter().filter(|field| !field.is_static) {
+        let Some(finish) = field.finish.as_deref() else {
+            continue;
+        };
+        // The functions the update reaches, each visited once, so a cycle of calls ends.
+        let mut reached: Vec<&str> = vec![finish];
+        let mut next = 0;
+        while let Some(&id) = reached.get(next) {
+            next += 1;
+            let Some(view) = functions
+                .iter()
+                .find(|view| matches!(view.owner, super::view::Owner::Function(function) if function.id == id))
+            else {
+                continue;
+            };
+            for (position, node) in view.nodes.iter().enumerate() {
+                let config = |key: &str| node.config.get(key).and_then(ConfigValue::as_str);
+                if node.op == crate::node::OP_FUNCTION_CALL
+                    && let Some(callee) = config("function")
+                    && !reached.contains(&callee)
+                {
+                    reached.push(callee);
+                }
+                if node.op == "field.get" && config("field") == Some(field.id.as_str()) {
+                    view.error(
+                        checker,
+                        position,
+                        format!(
+                            "{} reads the field '{}' in the update that runs its `finish` '{finish}', which writes \
+                             that field in place. The merged value arrives as the input `value`",
+                            view.name(position),
+                            field.id
+                        ),
+                        view.config_place(position, "field"),
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Checks the rules across the passes of an agents model: V12, V14, and the uniqueness of the keys normalisation
 /// composes (V18).
 pub(super) fn check_passes(checker: &mut Checker<'_>, views: &[BodyView<'_>]) {

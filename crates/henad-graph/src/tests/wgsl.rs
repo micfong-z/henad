@@ -22,6 +22,30 @@ fn every_starter_compiles() {
     }
 }
 
+/// Every agent starter and every agents fixture compiles, and `HENAD_DUMP_GRAPH_WGSL` writes each shader's text.
+#[test]
+fn every_agents_graph_compiles() {
+    let fixtures = super::corpus::fixtures();
+    let files = crate::starters::agent_starters()
+        .iter()
+        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()))
+        .chain(fixtures);
+    for (name, text) in files {
+        let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        if !matches!(file.document().world, crate::document::World::Agents(_)) {
+            continue;
+        }
+        let program =
+            crate::wgsl::AgentProgram::compile(&file).unwrap_or_else(|problems| panic!("{name}: {problems:#?}"));
+        if let Some(directory) = std::env::var_os("HENAD_DUMP_GRAPH_WGSL") {
+            for shader in program.shaders() {
+                let path = std::path::Path::new(&directory).join(format!("{}_{}.wgsl", program.id(), shader.label()));
+                std::fs::write(path, shader.text()).expect("a dump");
+            }
+        }
+    }
+}
+
 /// Every node of a pass names the text it wrote, and a byte of a line of the step names the node that wrote it.
 #[test]
 fn every_node_owns_the_text_it_wrote() {

@@ -4,7 +4,8 @@
 //! The *top* of a pass is its nodes outside every region. A region stands for its body here, so a link from a body
 //! node to a node at the top is a link of the region. A top node runs once before the elements when it reads only
 //! values the same for every element, per element when it or a source runs per element, and once after the elements
-//! when it reads a reducer's result. The host evaluator splits a pass the same way.
+//! when it reads a reducer's result or a counter total, both ready only after the elements. The host evaluator splits
+//! a pass the same way.
 
 use std::collections::BTreeMap;
 
@@ -119,13 +120,19 @@ fn runs_per_element(def: &NodeDef) -> bool {
 /// computed from it.
 fn check_reducers(checker: &mut Checker<'_>, view: &BodyView<'_>, order: &[usize], incoming: &[Vec<TopLink<'_>>]) {
     let mut timings = vec![Timing::Prelude; view.nodes.len()];
-    let reduces = |position: usize| view.defs[position].is_some_and(|def| def.has_effect(Effect::Reduce));
+    // Whether each node is a counter total or a value computed from one alone, for the message.
+    let mut counted = vec![false; view.nodes.len()];
+    let reduces = |position: usize| view.defs[position].is_some_and(NodeDef::is_ready_after_elements);
     for &position in order {
         // A kind this build does not define has a diagnostic of its own.
         let Some(def) = view.defs[position] else { continue };
+        counted[position] = def.id == "stat.counter";
         let reduced = incoming[position]
             .iter()
             .find(|link| reduces(link.source) || timings[link.source] == Timing::Post);
+        if let Some(link) = reduced {
+            counted[position] = counted[link.source];
+        }
         // A reducer runs per element, and its result is read after the elements.
         let per_element = runs_per_element(def)
             || incoming[position]
@@ -137,10 +144,15 @@ fn check_reducers(checker: &mut Checker<'_>, view: &BodyView<'_>, order: &[usize
                     checker,
                     link.reader,
                     format!(
-                        "{}: the input `{}` reads the result of a reducer of this pass, which is ready only \
-                         after every element, and the node runs per element",
+                        "{}: the input `{}` reads {} of this pass, which is ready only after every element, and \
+                         the node runs per element",
                         view.name(link.reader),
-                        link.port
+                        link.port,
+                        if counted[link.source] {
+                            "a counter total"
+                        } else {
+                            "the result of a reducer"
+                        }
                     ),
                     view.input_place(link.reader, link.port),
                 );

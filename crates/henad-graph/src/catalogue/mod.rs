@@ -637,6 +637,14 @@ impl NodeDef {
         self.effects.contains(&effect)
     }
 
+    /// Returns whether the kind's outputs are ready only after every element of its pass.
+    ///
+    /// A reducer's result is one such output. So is `stat.counter`'s total, which the host learns from the readback
+    /// that follows the elements, since a tick pass on the device counts into it.
+    pub(crate) fn is_ready_after_elements(&self) -> bool {
+        self.has_effect(Effect::Reduce) || self.id == "stat.counter"
+    }
+
     /// Returns the inputs of `node` in the order the canonical text writes them: the fixed ports, then the ports
     /// configuration makes, in the order of their configuration.
     ///

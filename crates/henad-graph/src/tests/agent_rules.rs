@@ -787,3 +787,159 @@ fn a_radius_fold_past_its_candidate_cap_faults_with_its_place() {
         Some(crate::host::HostValue::F32(2.0))
     );
 }
+
+/// A stats pass over agents named `tally`, whose `n1` reads the counter `c` and `n2` its total as a `u32`.
+const COUNTER_TALLY: &str = r#"
+[[pass]]
+id = "tally"
+stage = "stats"
+kind = "map"
+domain = "agents"
+
+[[pass.node]]
+id = "n1"
+op = "stat.counter"
+config.counter = "c"
+
+[[pass.node]]
+id = "n2"
+op = "conv.to_u32"
+in.a = "n1"
+
+[[pass.node]]
+id = "n3"
+op = "lane.get"
+config.lane = "v"
+
+[[pass.node]]
+id = "n4"
+op = "cmp.gt"
+in.a = "n3"
+in.b = { f32 = 0.0 }
+"#;
+
+/// A counter total is ready only after the elements, as a reducer's result is, so a node per element cannot read it
+/// and a value computed from it alone runs once after the elements.
+#[test]
+fn a_counter_total_is_read_after_the_elements_alone() {
+    let per_element = format!(
+        "{COUNTER_TALLY}\n[[pass.node]]\nid = \"n5\"\nop = \"cmp.gt\"\nin.a = \"n2\"\nin.b = {{ u32 = 0 }}\n\n\
+         [[pass.node]]\nid = \"n6\"\nop = \"logic.and\"\nin.a = \"n4\"\nin.b = \"n5\"\n\n[[pass.node]]\nid = \
+         \"n7\"\nop = \"stat.count_where\"\nin.pred = \"n6\"\n"
+    );
+    refuses(&per_element, "the input `b` reads a counter total of this pass");
+
+    let after = format!(
+        "\n[[stat]]\nlabel = \"Twice\"\nfrom = \"n6\"\ncolor = [1, 2, 3, 255]\n{COUNTER_TALLY}\n[[pass.node]]\nid = \
+         \"n5\"\nop = \"stat.count_where\"\nin.pred = \"n4\"\n\n[[pass.node]]\nid = \"n6\"\nop = \"math.mul\"\n\
+         in.a = \"n2\"\nin.b = {{ u32 = 2 }}\n"
+    );
+    accepts(&after);
+    let text = format!("{AGENTS}\n{after}");
+    let evaluator = HostEvaluator::new(&GraphFile::parse(&text).expect("the file reads")).expect("the file runs");
+    let world = HostWorld::Agents {
+        count: 3,
+        width: 20.0,
+        height: 10.0,
+    };
+    let mut lanes = evaluator.init(world, &[], None).expect("the init runs");
+    assert!(lanes.set_counter("c", 21));
+    let outcome = evaluator
+        .run_pass("tally", &mut lanes, &[], &RunContext::tick(None, 0), &mut 1)
+        .expect("the pass runs");
+    let n6 = crate::ids::NodeId::new(6).and_then(|id| outcome.values.get(&id)?.get("out"));
+    assert_eq!(n6, Some(&crate::host::HostValue::U32(42)));
+}
+
+/// A flat chain of operators is as deep a tree as the same chain written in parentheses, so a long chain is refused
+/// with a message, and neither the check nor the drop of its tree runs out of a small stack.
+#[test]
+fn a_long_flat_expression_is_refused_within_a_small_stack() {
+    let refusal = |text: String| {
+        let tables = format!(
+            "{}\n[[pass.node]]\nid = \"n2\"\nop = \"math.expr\"\nconfig.text = \"{text}\"\n\
+             config.inputs = [{{ name = \"a\", type = \"f32\" }}]\nconfig.outputs = [\"o\"]\nin.a = \"n1\"\n\n\
+             [[pass.node]]\nid = \"n3\"\nop = \"lane.set\"\nconfig.lane = \"v\"\nin.value = \"n2.o\"\n",
+            tick!(
+                "long",
+                "\n[[pass.node]]\nid = \"n1\"\nop = \"lane.get\"\nconfig.lane = \"v\"\n"
+            )
+        );
+        // A thread of 256 KiB, an eighth of a test thread's, would overflow on a recursion as deep as the chain.
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || errors(&tables))
+            .expect("a thread")
+            .join()
+            .expect("the check returns")
+    };
+    for chain in [" + a", " * a", " - a", " / a"] {
+        let found = refusal(format!("o = a{}", chain.repeat(20_000)));
+        assert!(
+            found
+                .iter()
+                .any(|message| message.contains("nests deeper than 64 levels")),
+            "{chain}: {found:?}"
+        );
+    }
+    let found = refusal(format!("o = a < a{}", " and a < a".repeat(20_000)));
+    assert!(
+        found
+            .iter()
+            .any(|message| message.contains("nests deeper than 64 levels")),
+        "{found:?}"
+    );
+    let found = refusal(format!("o = vec(a, a){}", ".x".repeat(20_000)));
+    assert!(
+        found
+            .iter()
+            .any(|message| message.contains("nests deeper than 64 levels")),
+        "{found:?}"
+    );
+    // A chain of 40 operands expands.
+    accepts(&format!(
+        "{}\n[[pass.node]]\nid = \"n2\"\nop = \"math.expr\"\nconfig.text = \"o = a{}\"\n\
+         config.inputs = [{{ name = \"a\", type = \"f32\" }}]\nconfig.outputs = [\"o\"]\nin.a = \"n1\"\n\n\
+         [[pass.node]]\nid = \"n3\"\nop = \"lane.set\"\nconfig.lane = \"v\"\nin.value = \"n2.o\"\n",
+        tick!(
+            "long",
+            "\n[[pass.node]]\nid = \"n1\"\nop = \"lane.get\"\nconfig.lane = \"v\"\n"
+        ),
+        " + a".repeat(39)
+    ));
+}
+
+/// A radius fold whose walk would cover more than 65536 cells of the index faults on the host before it starts, as on
+/// the device, and a narrower walk over the same index runs.
+#[test]
+fn a_radius_fold_past_its_cell_cap_faults_before_it_walks() {
+    let text = |radius: &str| {
+        format!(
+            "{AGENTS}{}{}",
+            tick!("flock", ""),
+            fold!("n10", "n11", "n12", "n13", "{ f32 = 0.05 }").replace("in.radius = { f32 = 2.0 }", radius)
+        )
+    };
+    let world = HostWorld::Agents {
+        count: 3,
+        width: 20.0,
+        height: 10.0,
+    };
+    // Cells 0.05 wide make an index of 400 by 200 cells, and a radius of 20 covers all 80000 of them.
+    let evaluator = HostEvaluator::new(&GraphFile::parse(&text("in.radius = { f32 = 20.0 }")).expect("the file reads"))
+        .expect("the file runs");
+    let mut lanes = evaluator.init(world, &[], None).expect("the init runs");
+    let error = evaluator
+        .run_pass("flock", &mut lanes, &[], &RunContext::tick(None, 0), &mut 1)
+        .expect_err("the walk passes its cell cap");
+    let message = error.to_string();
+    assert!(message.contains("would walk more than 65536 cells"), "{message}");
+    assert!(message.contains("node n11") && message.contains("'flock'"), "{message}");
+    // A radius of 2 covers 81 by 81 cells.
+    let evaluator = HostEvaluator::new(&GraphFile::parse(&text("in.radius = { f32 = 2.0 }")).expect("the file reads"))
+        .expect("the file runs");
+    let mut lanes = evaluator.init(world, &[], None).expect("the init runs");
+    evaluator
+        .run_pass("flock", &mut lanes, &[], &RunContext::tick(None, 0), &mut 1)
+        .expect("a narrower walk runs");
+}

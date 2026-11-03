@@ -14,12 +14,12 @@ use henad_core::view::{StatDescriptor, StatValue};
 
 use crate::gpu::agent_engine::GpuAgentEngine;
 use crate::gpu::agent_spec::{
-    AgentActionSpec, AgentBufferSpec, AgentHooks, AgentPassSpec, AgentReduceSpec, GpuAgentSpec,
+    AgentActionSpec, AgentBufferSpec, AgentHooks, AgentPassId, AgentPassSpec, AgentReduceSpec, AgentRun, GpuAgentSpec,
 };
 use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
 use crate::gpu::sides::{BufferSide, SideRow, SideTable};
 use crate::gpu::sim_thread::GpuSimState as _;
-use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION, headless_context};
+use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION, headless_context, stepping};
 
 /// Number of agents of the test model. One workgroup covers them.
 const AGENTS: u32 = 16;
@@ -87,6 +87,19 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
             total += f32(count[i]);
         }
         partials[0] = total;
+    }
+}
+";
+
+/// Records the fault code 3 in word 0 of the counters, as a graph model's radius fold records its fault.
+const FAULT_SHADER: &str = r"
+@group(0) @binding(0) var<storage, read_write> counters: array<atomic<u32>>;
+@group(0) @binding(1) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
+    if (lid.x == 0u && params.n > 0u) {
+        atomicMax(&counters[0], 3u);
     }
 }
 ";
@@ -375,4 +388,166 @@ fn the_runner_interface_reads_a_buffer() {
     );
     assert_eq!(crate::gpu::GpuSimState::read_buffer(&engine, TIMES_TEN + 1), None);
     assert_eq!(engine.population(), u64::from(AGENTS));
+}
+
+/// Where the hooks of [`faulting_spec`] cannot compute a uniform block.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockFault {
+    /// Every block has a value.
+    None,
+    /// The step's block, at the build.
+    Step,
+    /// The action's block, from the first press on.
+    Pressed,
+}
+
+/// Hooks of a model whose shaders record faults in the counters, whose blocks fail as `block_fault` says.
+struct FaultHooks {
+    block_fault: BlockFault,
+}
+
+impl AgentHooks for FaultHooks {
+    fn dims(&self, _params: &[ParamValue]) -> (u32, Extent) {
+        (AGENTS, Extent { w: 8.0, h: 8.0 })
+    }
+
+    fn buffer_lens(&self, geom: &Geometry) -> Vec<usize> {
+        let agents = geom.num_agents as usize;
+        vec![agents * 2, agents, agents, agents]
+    }
+
+    fn seed_buffers(&self, _geom: &Geometry, _params: &[ParamValue], _seed: Option<u64>) -> Vec<Vec<u8>> {
+        vec![Vec::new(); 4]
+    }
+
+    fn index_cell_size(&self, _params: &[ParamValue]) -> f32 {
+        1.0
+    }
+
+    fn pass_params_bytes(&self, _pass: PassId, _ctx: PassCtx<'_>, _params: &[ParamValue]) -> Vec<u8> {
+        [AGENTS, 0, 0, 0].iter().flat_map(|word| word.to_le_bytes()).collect()
+    }
+
+    fn stats(&self, sums: &[f32], _counters: &[u32], _geom: &Geometry) -> Vec<StatValue> {
+        vec![StatValue::Scalar(f64::from(sums[0]))]
+    }
+
+    fn run_params_bytes(
+        &self,
+        pass: AgentPassId,
+        ctx: PassCtx<'_>,
+        run: AgentRun,
+        params: &[ParamValue],
+    ) -> Result<Vec<u8>, String> {
+        let fails = match (pass, self.block_fault) {
+            (AgentPassId::Step(_), BlockFault::Step) => true,
+            (AgentPassId::Action(_), BlockFault::Pressed) => run.presses > 0,
+            _ => false,
+        };
+        if fails {
+            return Err("node n9 in pass 'probe' faulted: the block has no value".to_owned());
+        }
+        Ok(self.pass_params_bytes(PassId::Display, ctx, params))
+    }
+
+    fn fault(&self, counters: &[u32]) -> Option<String> {
+        let code = *counters.first()?;
+        (code != 0).then(|| format!("the pass 'probe' recorded the fault {code}"))
+    }
+
+    fn reports_faults(&self) -> bool {
+        true
+    }
+}
+
+/// Returns a model whose one step records a fault in the counters, with the buffers and action of [`spec`], `count`
+/// on one side, and the hooks [`FaultHooks`].
+fn faulting_spec(block_fault: BlockFault) -> Arc<GpuAgentSpec> {
+    let uniform = || ShaderBinding::new("params", BindingKind::Uniform);
+    let buffers = vec![
+        AgentBufferSpec::new("pos".to_owned(), false, true),
+        AgentBufferSpec::new("color".to_owned(), false, true),
+        AgentBufferSpec::new("count".to_owned(), false, false),
+        AgentBufferSpec::new("times_ten".to_owned(), false, false),
+    ];
+    let reduce = AgentReduceSpec::new(
+        shader(
+            REDUCE_SHADER,
+            vec![storage("count", true), storage("partials", false), uniform()],
+        ),
+        1,
+        Domain::Agents,
+        SideTable::swapping(buffers.len()),
+    );
+    let mut spec = GpuAgentSpec::new(
+        "fault_probe".to_owned(),
+        buffers,
+        POS,
+        COLOR,
+        reduce,
+        Cow::Owned(vec![StatDescriptor::owned("Total".to_owned(), [1, 2, 3, 255])]),
+        Box::new(FaultHooks { block_fault }),
+    );
+    spec.counters = 1;
+    spec.steps = vec![AgentPassSpec::new(
+        "probe".to_owned(),
+        shader(FAULT_SHADER, vec![storage("counters", false), uniform()]),
+        Domain::Agents,
+        SideTable::swapping(spec.buffers.len()),
+    )];
+    spec.actions = vec![AgentActionSpec::new(
+        "bump".to_owned(),
+        shader(ACTION_SHADER, vec![storage("count", false), uniform()]),
+        Domain::Agents,
+        SideTable::in_place(spec.buffers.len()),
+    )];
+    Arc::new(spec)
+}
+
+/// A fault a shader records ends a run that steps and reads no stats, as a benchmark runs, with the hooks' message.
+#[test]
+fn a_recorded_fault_ends_a_run_that_reads_no_stats() {
+    let Some(ctx) = context() else {
+        log::warn!("skipping a_recorded_fault_ends_a_run_that_reads_no_stats: no adapter");
+        return;
+    };
+    let mut engine = GpuAgentEngine::new(&ctx, faulting_spec(BlockFault::None), &[], None);
+    let fault = stepping::run_steps(&mut engine, &ctx, 3).expect_err("the recorded fault ends the run");
+    let message = fault.to_string();
+    assert!(
+        message.contains("fault_probe: the pass 'probe' recorded the fault 3"),
+        "{message}"
+    );
+}
+
+/// A step's uniform block the hooks cannot compute fails the build with the hooks' reason.
+#[test]
+#[should_panic(expected = "fault_probe: node n9 in pass 'probe' faulted: the block has no value")]
+fn a_step_block_the_hooks_cannot_compute_fails_the_build() {
+    let Some(ctx) = context() else {
+        log::warn!("skipping a_step_block_the_hooks_cannot_compute_fails_the_build: no adapter");
+        panic!("fault_probe: node n9 in pass 'probe' faulted: the block has no value (no adapter)");
+    };
+    drop(GpuAgentEngine::new(&ctx, faulting_spec(BlockFault::Step), &[], None));
+}
+
+/// An action's uniform block the hooks cannot compute refuses the press with the hooks' reason, and the action does
+/// not run.
+#[test]
+fn an_action_block_the_hooks_cannot_compute_refuses_the_press() {
+    let Some(ctx) = context() else {
+        log::warn!("skipping an_action_block_the_hooks_cannot_compute_refuses_the_press: no adapter");
+        return;
+    };
+    let mut engine = GpuAgentEngine::new(&ctx, faulting_spec(BlockFault::Pressed), &[], None);
+    let before = words(&engine, COUNT);
+    assert!(engine.act(0), "action 0 is declared");
+    let fault = ctx.faults.take().expect("the press is refused");
+    assert!(
+        fault
+            .to_string()
+            .contains("fault_probe: node n9 in pass 'probe' faulted"),
+        "{fault}"
+    );
+    assert_eq!(words(&engine, COUNT), before, "the action did not run");
 }

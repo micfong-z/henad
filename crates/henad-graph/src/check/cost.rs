@@ -10,7 +10,7 @@ use super::Checker;
 use super::view::{BodyView, BodyViews};
 use crate::catalogue::NodeCost;
 use crate::limits::{MAX_CALL_DEPTH, MAX_NODES_INLINED, MAX_PASS_COST};
-use crate::node::OP_FUNCTION_CALL;
+use crate::node::{OP_EXPRESSION, OP_FUNCTION_CALL};
 use crate::value::ConfigValue;
 
 /// Cost and inlined size of a function.
@@ -28,8 +28,17 @@ impl FunctionSize {
     };
 }
 
-/// Checks the costs of the file's passes and the shape of its call graph, and returns each pass's cost in stack order.
-pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Vec<u64> {
+/// Costs of a file's passes, and whether its inlined size is within [`MAX_NODES_INLINED`].
+pub(super) struct Costs {
+    /// Cost of each pass per element, in stack order.
+    pub passes: Vec<u64>,
+    /// Whether the file holds at most [`MAX_NODES_INLINED`] nodes once its calls and expressions are inlined.
+    pub inlinable: bool,
+}
+
+/// Checks the costs of the file's passes, the shape of its call graph and its size once its calls and expressions are
+/// inlined.
+pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Costs {
     let sizes = function_sizes(checker, views);
     let mut costs = Vec::with_capacity(views.passes.len());
     let mut inlined = 0u64;
@@ -41,15 +50,20 @@ pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Vec<u64
             report_pass_cost(checker, view, index, body.cost, &sizes);
         }
     }
-    if inlined > MAX_NODES_INLINED as u64 {
+    let inlinable = inlined <= MAX_NODES_INLINED as u64;
+    if !inlinable {
         checker.error(
             format!(
-                "the file holds {inlined} nodes after its function calls are inlined, and a file holds at most {MAX_NODES_INLINED}"
+                "the file holds {inlined} nodes after its function calls and expressions are inlined, and a file holds \
+                 at most {MAX_NODES_INLINED}"
             ),
             Some(checker.file.places().id.clone()),
         );
     }
-    costs
+    Costs {
+        passes: costs,
+        inlinable,
+    }
 }
 
 /// Reports a pass over the limit, and names its heaviest node.
@@ -234,7 +248,13 @@ fn body_size(view: &BodyView<'_>, sizes: &BTreeMap<&str, FunctionSize>) -> Funct
         if view.parents[position].is_none() {
             size.cost = size.cost.saturating_add(costs[position]);
         }
-        size.nodes = size.nodes.saturating_add(1);
+        // An expression stands for the nodes it expands into, or for itself when it does not expand.
+        let own = if node.op == OP_EXPRESSION {
+            crate::expr::expanded_nodes(node).len().max(1) as u64
+        } else {
+            1
+        };
+        size.nodes = size.nodes.saturating_add(own);
         if node.op == OP_FUNCTION_CALL {
             let callee = node
                 .config

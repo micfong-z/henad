@@ -33,8 +33,15 @@ pub(super) fn test_device() -> Option<TestDevice> {
             return None;
         }
     };
+    // A case of a radius fold binds its output lanes, the index and the counters, past the baseline's 8 storage
+    // buffers, as a model raises the device for its widest pass.
+    let required_limits = wgpu::Limits {
+        max_storage_buffers_per_shader_stage: adapter.limits().max_storage_buffers_per_shader_stage.min(16),
+        ..wgpu::Limits::default()
+    };
     match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("henad_graph_tests"),
+        required_limits,
         ..Default::default()
     })) {
         Ok((device, queue)) => Some(TestDevice { device, queue }),
@@ -60,6 +67,19 @@ pub(super) struct ShaderRun<'a> {
     pub labels: &'a [String],
     /// Uniform block bound as `params`.
     pub uniform: &'a [u8],
+    /// Shape of a run of a shader of an agents world, `None` for a grid's.
+    pub agents: Option<AgentShape<'a>>,
+}
+
+/// Dispatch and resources of a run of a shader of an agents world.
+pub(super) struct AgentShape<'a> {
+    /// Workgroups the run dispatches.
+    pub groups: (u32, u32),
+    /// Size of the display texture.
+    pub texture: (u32, u32),
+    /// Words of each resource the engine owns that the shader may bind, by binding name, such as `counters`,
+    /// `partials` or `cell_start`.
+    pub named: &'a [(&'a str, Vec<u32>)],
 }
 
 /// What one run of a shader leaves.
@@ -70,6 +90,8 @@ pub(super) struct ShaderResult {
     pub counters: Vec<u32>,
     /// RGBA of each texel of a display shader, in row-major order.
     pub texels: Vec<[u8; 4]>,
+    /// Words of each named resource of an agents run after the run, in the order of [`AgentShape::named`].
+    pub named: Vec<Vec<u32>>,
 }
 
 /// Returns the layout entry of `binding` at `index`.
@@ -194,11 +216,26 @@ pub(super) fn run_shader(device: &TestDevice, shader: &GeneratedShader, run: &Sh
         buffer
     };
     let counters = storage(device, "counters", &vec![0; shader.counters()]);
+    let named: Vec<(&str, wgpu::Buffer)> = run
+        .agents
+        .as_ref()
+        .map(|shape| {
+            shape
+                .named
+                .iter()
+                .map(|(name, words)| (*name, storage(device, name, words)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let (texture_width, texture_height) = run
+        .agents
+        .as_ref()
+        .map_or((run.width, run.height), |shape| shape.texture);
     let texture = device.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("output"),
         size: wgpu::Extent3d {
-            width: run.width,
-            height: run.height,
+            width: texture_width,
+            height: texture_height,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -238,6 +275,8 @@ pub(super) fn run_shader(device: &TestDevice, shader: &GeneratedShader, run: &Sh
                     BufferSide::Next => sides[buffer].1.as_entire_binding(),
                     _ => sides[buffer].0.as_entire_binding(),
                 }
+            } else if let Some((_, buffer)) = named.iter().find(|(name, _)| *name == binding.name.as_ref()) {
+                buffer.as_entire_binding()
             } else {
                 match binding.name.as_ref() {
                     "params" => uniform.as_entire_binding(),
@@ -282,12 +321,17 @@ pub(super) fn run_shader(device: &TestDevice, shader: &GeneratedShader, run: &Sh
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group, &[]);
-        pass.dispatch_workgroups(run.width.div_ceil(16), run.height.div_ceil(16), 1);
+        let (x, y) = run
+            .agents
+            .as_ref()
+            .map_or((run.width.div_ceil(16), run.height.div_ceil(16)), |shape| shape.groups);
+        pass.dispatch_workgroups(x, y, 1);
     }
-    let bytes_per_row = (run.width * 4).next_multiple_of(256);
+    let (width, height) = (texture_width, texture_height);
+    let bytes_per_row = (width * 4).next_multiple_of(256);
     let texels = device.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("texels"),
-        size: u64::from(bytes_per_row * run.height),
+        size: u64::from(bytes_per_row * height),
         usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
         mapped_at_creation: false,
     });
@@ -302,8 +346,8 @@ pub(super) fn run_shader(device: &TestDevice, shader: &GeneratedShader, run: &Sh
             },
         },
         wgpu::Extent3d {
-            width: run.width,
-            height: run.height,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
     );
@@ -324,8 +368,8 @@ pub(super) fn run_shader(device: &TestDevice, shader: &GeneratedShader, run: &Sh
         })
         .collect();
     let texel_bytes = read_bytes(device, &texels);
-    let texels = (0..run.height as usize)
-        .flat_map(|y| (0..run.width as usize).map(move |x| (y, x)))
+    let texels = (0..height as usize)
+        .flat_map(|y| (0..width as usize).map(move |x| (y, x)))
         .map(|(y, x)| {
             let start = y * bytes_per_row as usize + x * 4;
             [
@@ -340,5 +384,6 @@ pub(super) fn run_shader(device: &TestDevice, shader: &GeneratedShader, run: &Sh
         buffers,
         counters: read_words(device, &counters),
         texels,
+        named: named.iter().map(|(_, buffer)| read_words(device, buffer)).collect(),
     }
 }

@@ -5,6 +5,9 @@
 //! pass bound to a parameter runs. Members follow WGSL's layout rules for the uniform address space: a scalar takes 4
 //! bytes, a `vec2` takes 8 bytes at an 8-byte offset, and a table takes 16 bytes per four entries at a 16-byte offset.
 
+use henad_core::spatial_hash::HashGrid;
+
+use crate::document::Domain;
 use crate::draw::key_word;
 use crate::host::compile::Program;
 use crate::host::value::HostValue;
@@ -29,7 +32,9 @@ impl WgslType {
         use crate::types::ValueType;
         Some(match value_type {
             ValueType::Bool => Self::Bool,
-            ValueType::U32 | ValueType::Category(_) => Self::U32,
+            ValueType::U32 | ValueType::Category(_) | ValueType::Layer(_) | ValueType::Cell | ValueType::Agent => {
+                Self::U32
+            }
             ValueType::I32 => Self::I32,
             ValueType::F32 => Self::F32,
             ValueType::Vec2U => Self::Vec2U,
@@ -43,7 +48,11 @@ impl WgslType {
     pub(crate) fn of_value(value: HostValue) -> Option<Self> {
         Some(match value {
             HostValue::Bool(_) => Self::Bool,
-            HostValue::U32(_) | HostValue::Category(_) => Self::U32,
+            HostValue::U32(_)
+            | HostValue::Category(_)
+            | HostValue::Layer(_)
+            | HostValue::Cell(_)
+            | HostValue::Agent(_) => Self::U32,
             HostValue::I32(_) => Self::I32,
             HostValue::F32(_) => Self::F32,
             HostValue::Vec2U(_) => Self::Vec2U,
@@ -74,6 +83,20 @@ impl WgslType {
         }
     }
 
+    /// Returns the WGSL literal of the type's zero.
+    pub(crate) fn zero(self) -> String {
+        match self {
+            Self::Bool => "false",
+            Self::U32 => "0u",
+            Self::I32 => "0i",
+            Self::F32 => "0.0f",
+            Self::Vec2U => "vec2<u32>(0u, 0u)",
+            Self::Vec2I => "vec2<i32>(0i, 0i)",
+            Self::Vec2F => "vec2<f32>(0.0f, 0.0f)",
+        }
+        .to_owned()
+    }
+
     /// Returns whether the type is a vector.
     pub(crate) fn is_vector(self) -> bool {
         matches!(self, Self::Vec2U | Self::Vec2I | Self::Vec2F)
@@ -102,6 +125,31 @@ pub(crate) enum FieldSource {
     Table { position: usize, base: usize, max: u32 },
     /// Whether the pass at a document position runs, 1 or 0.
     Enabled { position: usize },
+    /// Number of elements of a domain of the world.
+    Count(Domain),
+    /// Fold width of the dispatch, which `henad::dispatch::linear_index` reads.
+    GroupsX,
+    /// Size of an agents world in world units.
+    World,
+    /// Size of the neighbour index in cells.
+    HashGrid,
+    /// Size of one cell of the neighbour index in world units.
+    HashCell,
+    /// Inverse of the size of one cell of the neighbour index, as the host computes it.
+    HashInverse,
+    /// Size of the display texture in texels.
+    Texture,
+}
+
+/// Values of the engine's dispatch of a pass that a uniform block of an agents world reads.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Dispatch {
+    /// Fold width of the dispatch.
+    pub groups_x: u32,
+    /// Cell geometry of the neighbour index, when the model has one.
+    pub hash: Option<HashGrid>,
+    /// Size of the display texture.
+    pub texture: [u32; 2],
 }
 
 /// Shape of a uniform field.
@@ -192,8 +240,8 @@ impl UniformBlock {
         text
     }
 
-    /// Returns the bytes of the block for a grid of `width` by `height` with the document's parameters `params`, in
-    /// `context`.
+    /// Returns the bytes of the block over `world` with the document's parameters `params`, in `context`, for a pass
+    /// the engine dispatches as `dispatch` says.
     ///
     /// # Errors
     ///
@@ -204,17 +252,34 @@ impl UniformBlock {
         world: HostWorld,
         params: &[HostValue],
         context: &RunContext,
+        dispatch: &Dispatch,
     ) -> Result<Vec<u8>, String> {
-        let (width, height) = match world {
-            HostWorld::Grid { width, height, .. } => (width, height),
-            HostWorld::Agents { count, .. } => (count, 1),
-        };
+        let (width, height, _) = world.domain_grid();
+        let hash = dispatch.hash.unwrap_or(HashGrid {
+            grid_w: 1,
+            grid_h: 1,
+            cell_w: 1.0,
+            cell_h: 1.0,
+        });
         let mut frames: Vec<(usize, Vec<HostValue>)> = Vec::new();
         let mut bytes = vec![0u8; self.size];
         for field in &self.fields {
             let words: Vec<u32> = match &field.source {
                 FieldSource::Width => vec![width],
                 FieldSource::Height => vec![height],
+                FieldSource::Count(domain) => {
+                    vec![
+                        world
+                            .elements(*domain)
+                            .map_or(0, |count| u32::try_from(count).unwrap_or(u32::MAX)),
+                    ]
+                }
+                FieldSource::GroupsX => vec![dispatch.groups_x],
+                FieldSource::World => world.extent().iter().map(|side| side.to_bits()).collect(),
+                FieldSource::HashGrid => vec![hash.grid_w, hash.grid_h],
+                FieldSource::HashCell => vec![hash.cell_w.to_bits(), hash.cell_h.to_bits()],
+                FieldSource::HashInverse => vec![(1.0 / hash.cell_w).to_bits(), (1.0 / hash.cell_h).to_bits()],
+                FieldSource::Texture => dispatch.texture.to_vec(),
                 FieldSource::Press => vec![context.press],
                 FieldSource::Enabled { position } => vec![u32::from(evaluator.is_enabled(*position, params))],
                 FieldSource::Key { position, draw } => {

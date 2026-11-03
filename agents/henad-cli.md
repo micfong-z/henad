@@ -36,8 +36,8 @@ read and the device acquired. It reads each file through `ModelFile::parse` and 
 `ModelSet::replace`s its entry into a clone of the options' set, and the set is cloned only when a
 file is given. A graph file's warnings print to stderr first, each through `located`, which adds the
 file and a note naming the diagnostic's pass and node. A graph on a grid then builds through
-henad-graph's `GridProgram`. Checker, host and compiler errors come as `ModelFileError::Graph`, and
-a graph of agents that checks as `ModelFileError::Unsupported`. A file whose id the set holds
+henad-graph's `GridProgram`, and a graph of agents through its `AgentProgram`. Checker, host and
+compiler errors come as `ModelFileError::Graph`. A file whose id the set holds
 prints a note on stderr in text mode and nothing under `--json`, and two files of one id are
 refused. A file that does not load is an
 error whose cause lists each `CodeDiagnostic` with the path as its file, `path:line:column: error:

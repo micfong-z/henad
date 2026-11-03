@@ -68,6 +68,8 @@ pub const MAX_REPEAT_ITERATIONS: u32 = 65536;
 pub const MAX_REGION_DEPTH: usize = 3;
 /// Number of candidates one `agent.radius_fold` invocation visits before it faults.
 pub const MAX_FOLD_CANDIDATES: u32 = 65536;
+/// Number of cells of the neighbour index one `agent.radius_fold` invocation walks before it faults.
+pub const MAX_WALK_CELLS: u32 = 65536;
 /// Cost units per element of one pass.
 pub const MAX_PASS_COST: u32 = 65536;
 

@@ -561,6 +561,7 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 | Need | Where |
 |---|---|
 | Agents within a radius | `SpatialHash::query_radius`, on `henad::authoring::SpatialHash`. Takes a caller-provided result buffer, so a query does not allocate |
+| Agents within a radius, in WGSL | `henad::hash`. `walk_bounds` returns the columns and rows of cells a walk of `SpatialHash::for_each_within` covers, and `walk_cell` the index of one of them, whose agents a shader reads from the engine's `cell_start` and `sorted`. `MAX_VISITS` (65536) is the cap a graph model's radius fold faults past, `walk_cells` the number of cells a walk covers and `MAX_WALK_CELLS` (65536) the cap a fold faults past before it walks |
 | World size | `henad::authoring::Extent`. The engine prepends world size to every agent model's params |
 | A per-chunk RNG | The `run_pass` that `agent_lanes!` generates passes the kernel its chunk's generator, seeded from the tick and the chunk's index |
 | Counting cells | `henad::authoring::reduce_chunks` |

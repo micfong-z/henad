@@ -13,9 +13,13 @@ one per (topology × backend): `GridModel` (`authoring/model/grid_model.rs`) for
 the grid slot an `AgentModel` sits over. `authoring/primitives/` is the primitive vocabulary those
 kernels call — wrapping, neighbourhoods, distances, random draws — most paired with a WGSL twin
 under `authoring/primitives/wgsl/`, and each pure one pinned to its twin by a parity test.
-`wgsl/` holds the five shared modules a shader imports as `henad::dispatch`, `henad::dims`,
-`henad::rng`, `henad::space` and `henad::reduce_tree`, as text in `SHARED_WGSL_MODULES`, with
-their `SHARED_WGSL_FNV1A64` computed by a `const` FNV-1a (`Fnv1a64`'s writes are `const fn`).
+`wgsl/` holds the six shared modules a shader imports as `henad::dispatch`, `henad::dims`,
+`henad::rng`, `henad::space`, `henad::reduce_tree` and `henad::hash`, as text in
+`SHARED_WGSL_MODULES`, with their `SHARED_WGSL_FNV1A64` computed by a `const` FNV-1a (`Fnv1a64`'s
+writes are `const fn`). `henad::hash` is the walk of `SpatialHash::for_each_within`
+(`walk_bounds`, `walk_cell`, `walk_cells`, `MAX_VISITS` = 65536, `MAX_WALK_CELLS` = 65536) that
+henad-graph's radius fold writes its loops around. `walk_cells` saturates past the cap and counts no
+cell for a negative radius. Stock `gpu_boids` keeps its own hand-written walk.
 An interface change to one ships only in a breaking release. User shaders import these paths.
 `space::offsets`, `space::for_each_neighbor`, `rng::mix_seed` and `rng::next_index` are Rust
 only. `next_index`'s redraw needs a 64-bit product, and WGSL has no 64-bit integers.

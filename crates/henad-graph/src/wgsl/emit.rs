@@ -3,6 +3,10 @@
 //! The body of a pass is its host program, the instructions the host evaluator runs, written as WGSL. Every value is a
 //! `let` named `n<id>_<port>`, with each `.` of a dotted port written `__`. The prelude values the host can evaluate at
 //! build come in through the uniform block, and the prelude values that read the tick are computed in the shader.
+//!
+//! A shader of a grid runs one invocation per cell in workgroups of 16 by 16. A shader of an agents world, the display
+//! pass aside, is a *linear pass*: one invocation per element of its domain in workgroups of 256, the index folded
+//! with `henad::dispatch::linear_index`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,9 +20,11 @@ use super::uniform::{FieldShape, FieldSource, UniformBlock, WgslType};
 use super::{NodeRange, WORKGROUP_SIZE};
 use crate::catalogue::effective_config;
 use crate::check::CheckReport;
-use crate::document::{GraphDocument, Pass, PassEnabled};
+use crate::document::{Domain, GraphDocument, Pass, PassEnabled};
 use crate::host::HostEvaluator;
-use crate::host::compile::{CompareOp, DrawForm, Instruction, LogicOp, Operation, Program, Repeat};
+use crate::host::compile::{
+    CompareOp, DrawForm, Instruction, LogicOp, Operation, Program, RadiusFold, Repeat, RepeatAccumulator, StencilFold,
+};
 use crate::host::value::{BinaryOp, Conversion, HostValue, UnaryOp};
 use crate::ids::NodeId;
 use crate::node::Combine;
@@ -35,15 +41,106 @@ pub(crate) enum Role {
     Reduce,
     /// A pass of the action at this position of the document's actions.
     Action,
+    /// The snapshot colour pass of an agents world, which runs the view passes over agents and writes each agent's
+    /// colour.
+    Color,
+    /// The field update of the field at this position of the agents plan's fields, one invocation per cell of each
+    /// layer, its slot `layer * cells + cell`.
+    ///
+    /// The body's element is the slot's cell, and a draw's element word is the slot.
+    Merge(usize),
 }
+
+/// Side `N` of the `@workgroup_size(N)` of every linear pass.
+pub(crate) const LINEAR_WORKGROUP: u32 = 256;
+
+/// Word of an agents world's `counters` that a radius fold past its visit cap sets to its fault code.
+pub(crate) const FAULT_WORD: usize = 0;
+
+/// Word of an agents world's `counters` that holds the tick, which the last pass of a step advances.
+pub(crate) const TICK_WORD: usize = 1;
+
+/// Word of an agents world's `counters` that holds the document's first counter.
+pub(crate) const FIRST_COUNTER: usize = 2;
+
+/// Label of the buffer of packed RGBA words that the colour pass of an agents world writes and the point view draws.
+pub(crate) const AGENT_COLORS: &str = "agent_colors";
 
 /// How a lane is held on the device.
 #[derive(Debug, Clone)]
 pub(crate) struct LanePlan {
     /// Id of the lane.
     pub id: String,
+    /// Label of its buffer, `lane_<id>_<domain>`.
+    pub label: String,
     /// Type a shader holds the lane's values in, `None` for a lane only the host holds.
     pub wgsl: Option<WgslType>,
+    /// Position among the agents plan's fields of the field whose merged value this lane stands for in a merge pass,
+    /// `None` for a lane of the document.
+    pub merged: Option<usize>,
+}
+
+/// How a field is held on the device: one buffer of its layers one after another, and for a field that takes
+/// deposits one buffer of their merged deposits.
+#[derive(Debug, Clone)]
+pub(crate) struct FieldPlan {
+    /// Id of the field.
+    pub id: String,
+    /// Number of layers.
+    pub layers: u32,
+    /// Type of a cell, `f32` or a category's variant number.
+    pub wgsl: WgslType,
+    /// Position of the field's first layer among the columns of the host lanes.
+    pub first: usize,
+    /// Whether the field takes deposits.
+    pub dynamic: bool,
+    /// Position of the field's first layer among the deposit columns of the host lanes.
+    pub first_deposit: usize,
+}
+
+impl FieldPlan {
+    /// Label of the buffer of the field's layers.
+    pub(crate) fn label(&self) -> String {
+        format!("field_{}_cells", self.id)
+    }
+
+    /// Label of the buffer of the field's deposits.
+    pub(crate) fn accum_label(&self) -> String {
+        format!("accum_{}_cells", self.id)
+    }
+}
+
+/// What every shader of an agents world shares beside the lanes.
+#[derive(Debug, Clone)]
+pub(crate) struct AgentPlan {
+    /// Fields in `[[field]]` order.
+    pub fields: Vec<FieldPlan>,
+    /// Number of the document's counters, which take the words after the fault word of `counters`.
+    pub counters: usize,
+    /// Words of the `counters` buffer: the fault word, the document's counters, then the reduce leaf's tallies.
+    pub counter_words: usize,
+    /// Each radius fold that can fault, as its pass id and node. At position `p`, its fault code past its visit cap is
+    /// `2 * p + 1`, and past its cell cap `2 * p + 2`.
+    pub faults: Vec<(String, NodeId)>,
+    /// Position of the position lane.
+    pub position_lane: Option<usize>,
+}
+
+impl AgentPlan {
+    /// Returns the field whose layers sit at the column `column` of the host lanes, with the layer's number.
+    fn field_of(&self, column: usize) -> Option<(usize, u32)> {
+        self.fields.iter().enumerate().find_map(|(index, field)| {
+            let layer = column.checked_sub(field.first)?;
+            (layer < field.layers as usize).then_some((index, layer as u32))
+        })
+    }
+
+    /// Returns the field whose deposits sit at the deposit column `column`.
+    fn field_of_deposit(&self, column: usize) -> Option<usize> {
+        self.fields.iter().position(|field| {
+            field.dynamic && column >= field.first_deposit && column < field.first_deposit + field.layers as usize
+        })
+    }
 }
 
 /// Declarations every shader of one graph shares.
@@ -56,6 +153,8 @@ pub(crate) struct EmitInput<'a> {
     pub tick_buffer: bool,
     /// Iteration word of a region around the top of every pass, for a test that probes a draw inside one.
     pub outer_iteration: Option<u32>,
+    /// Plan of an agents world, `None` for a grid.
+    pub agents: Option<&'a AgentPlan>,
 }
 
 /// One shader written out.
@@ -71,6 +170,11 @@ pub(crate) struct Emitted {
     pub uniform: UniformBlock,
     /// Number of counters of a reduce shader, at least 1.
     pub counters: usize,
+    /// Number of `f32` lanes a reduce leaf of an agents world sums, each by the document position of its pass and the
+    /// number of its sum, in lane order. A `vec2f` sum takes two lanes in a row.
+    pub sum_lanes: Vec<(usize, usize)>,
+    /// Bytes of the shader's `var<workgroup>` declarations.
+    pub workgroup_bytes: u64,
 }
 
 /// Text with the byte ranges each node wrote in it.
@@ -165,10 +269,22 @@ pub(crate) fn literal(value: HostValue) -> Option<String> {
 /// Returns the slots `instruction` fills.
 fn defined(instruction: &Instruction) -> Vec<usize> {
     let mut slots = vec![instruction.out];
-    if let Operation::Transition { fired, .. } = &instruction.operation {
-        slots.extend(fired.iter().copied());
+    match &instruction.operation {
+        Operation::Transition { fired, .. } => slots.extend(fired.iter().copied()),
+        Operation::VecSplit { y_out, .. } => slots.push(*y_out),
+        Operation::CellIndex { valid_out, .. } => slots.push(*valid_out),
+        Operation::CellOf { xy_out, valid_out, .. } => slots.extend([*xy_out, *valid_out]),
+        Operation::Offset {
+            cell_out, valid_out, ..
+        } => slots.extend([*cell_out, *valid_out]),
+        _ => {}
     }
     slots
+}
+
+/// Returns the packed RGBA of `color`, the word the point view reads.
+pub(crate) fn packed_color(color: Color) -> u32 {
+    u32::from_le_bytes(color)
 }
 
 /// Shared modules and helpers a shader uses.
@@ -179,6 +295,18 @@ struct Uses {
     draw_core: bool,
     neighbors: bool,
     threshold: bool,
+    /// `henad::space` functions besides the stencil's.
+    space: BTreeSet<&'static str>,
+    /// `henad::rng` functions besides `pcg_hash` and `random_float`.
+    rng: BTreeSet<&'static str>,
+    /// The helper `henad_step` of a stencil fold or an offset.
+    step: bool,
+    /// The neighbour index, its walk and the fault word.
+    hash: bool,
+    /// The `counters` buffer.
+    counters: bool,
+    /// The element's own cell, `henad_own_cell`.
+    own_cell: bool,
 }
 
 /// State of the emission of one shader.
@@ -199,6 +327,18 @@ struct Emitter<'a> {
     problems: Vec<CodeDiagnostic>,
     /// Counters before the current pass's tallies.
     tally_offset: usize,
+    /// Fields some pass of the shader reads, by position among the agents plan's fields.
+    fields_read: BTreeSet<usize>,
+    /// Fields some pass of the shader writes.
+    fields_written: BTreeSet<usize>,
+    /// Fields some pass of the shader deposits into.
+    deposited: BTreeSet<usize>,
+    /// Lanes of a reduce leaf, by the document position of the pass and the number of the sum, with the first lane.
+    sum_lanes: Vec<(usize, usize)>,
+    /// Lanes some pass reads at another element, which a pass over agents bounds-checks.
+    reads_other: BTreeSet<usize>,
+    /// Palettes the colour pass reads as packed RGBA words, by constant name.
+    packed: BTreeMap<String, Vec<Color>>,
 }
 
 /// State of the emission of one pass's body.
@@ -217,6 +357,8 @@ struct Block<'a> {
     owners: BTreeMap<usize, NodeId>,
     /// Iteration word of the innermost region being written.
     iteration: String,
+    /// Stores of field writes, run at the end of the pass, each as its line.
+    deferred: Vec<String>,
 }
 
 /// Returns the shader of `role` that runs the passes at `positions` of the document, each bound through `sides`.
@@ -237,7 +379,7 @@ pub(crate) fn emit(
         shared: positions.len() > 1,
         writes: BTreeSet::new(),
         reads: BTreeSet::new(),
-        reads_tick: matches!(role, Role::Step { writes_tick: true }),
+        reads_tick: matches!(role, Role::Step { writes_tick: true }) && input.agents.is_none(),
         uses: Uses::default(),
         palettes: BTreeMap::new(),
         fields: vec![
@@ -254,7 +396,16 @@ pub(crate) fn emit(
         ],
         problems: Vec::new(),
         tally_offset: 0,
+        fields_read: BTreeSet::new(),
+        fields_written: BTreeSet::new(),
+        deposited: BTreeSet::new(),
+        sum_lanes: Vec::new(),
+        reads_other: BTreeSet::new(),
+        packed: BTreeMap::new(),
     };
+    if input.agents.is_some() {
+        emitter.agent_fields(role);
+    }
     let mut programs = Vec::with_capacity(positions.len());
     for &position in positions {
         let pass = &input.document.passes[position];
@@ -272,8 +423,11 @@ pub(crate) fn emit(
         let block = emitter.block(k, position, pass, program);
         body.append(block);
     }
-    if role == Role::Display && positions.is_empty() {
+    if role == Role::Display && positions.is_empty() && input.agents.is_none() {
         body.push(&emitter.default_view());
+    }
+    if role == Role::Color && positions.is_empty() {
+        body.push(&emitter.default_agent_color());
     }
     if !emitter.problems.is_empty() {
         return Err(emitter.problems);
@@ -307,10 +461,32 @@ impl Emitter<'_> {
         }
     }
 
+    /// Adds the uniform members every shader of an agents world reads in its template.
+    fn agent_fields(&mut self, role: Role) {
+        if role == Role::Display {
+            self.field(
+                "henad_texture",
+                FieldShape::Value(WgslType::Vec2U),
+                FieldSource::Texture,
+            );
+        } else {
+            self.field("henad_groups_x", FieldShape::Value(WgslType::U32), FieldSource::GroupsX);
+            self.field(
+                "henad_agents",
+                FieldShape::Value(WgslType::U32),
+                FieldSource::Count(Domain::Agents),
+            );
+        }
+        self.field(
+            "henad_cells",
+            FieldShape::Value(WgslType::U32),
+            FieldSource::Count(Domain::Cells),
+        );
+    }
+
     /// Returns the binding name a lane's reads use, and the one its writes use.
     fn lane_bindings(&self, lane: usize) -> (String, String) {
-        let id = &self.input.lanes[lane].id;
-        let base = format!("lane_{id}_cells");
+        let base = self.input.lanes[lane].label.clone();
         let row = self.sides.rows().get(lane).copied();
         let writes = self.writes.contains(&lane);
         if writes && row.is_some_and(|row| row.write == BufferSide::Next) {
@@ -322,12 +498,27 @@ impl Emitter<'_> {
 
     /// Returns the expression that loads `lane` at the element `index`.
     fn load(&mut self, lane: usize, index: &str) -> String {
+        if self.input.lanes.get(lane).is_some_and(|plan| plan.merged.is_some()) {
+            return "henad_merged".to_owned();
+        }
         self.reads.insert(lane);
         let (read, _) = self.lane_bindings(lane);
         match self.input.lanes[lane].wgsl {
             Some(WgslType::Bool) => format!("({read}[{index}] != 0u)"),
             _ => format!("{read}[{index}]"),
         }
+    }
+
+    /// Returns the expression that loads `lane` at the element `index` of another element, the type's zero past the
+    /// end of the lane.
+    fn load_other(&mut self, lane: usize, index: &str) -> String {
+        self.reads_other.insert(lane);
+        let load = self.load(lane, index);
+        let (read, _) = self.lane_bindings(lane);
+        let zero = self.input.lanes[lane]
+            .wgsl
+            .map_or_else(|| "0u".to_owned(), WgslType::zero);
+        format!("select({zero}, {load}, {index} < arrayLength(&{read}))")
     }
 
     /// Returns the body of one pass, in a block of its own.
@@ -409,6 +600,7 @@ impl Emitter<'_> {
                 .input
                 .outer_iteration
                 .map_or_else(|| "0u".to_owned(), |word| format!("{word}u")),
+            deferred: Vec::new(),
         };
         if !program.post.is_empty() && self.role != Role::Reduce {
             self.refuse(
@@ -422,7 +614,13 @@ impl Emitter<'_> {
         for instruction in &device_prelude {
             self.instruction(&mut block, instruction, indent, &mut inner);
         }
-        let written: Vec<usize> = program.written.clone();
+        // A field layer sits after the lanes, and its write is a deferred store of its own.
+        let written: Vec<usize> = program
+            .written
+            .iter()
+            .copied()
+            .filter(|&lane| lane < self.input.lanes.len())
+            .collect();
         for &lane in &written {
             let Some(wgsl) = self.input.lanes.get(lane).and_then(|plan| plan.wgsl) else {
                 self.refuse(
@@ -446,14 +644,26 @@ impl Emitter<'_> {
             let Some(wgsl) = self.input.lanes.get(lane).and_then(|plan| plan.wgsl) else {
                 continue;
             };
-            let (_, write) = self.lane_bindings(lane);
             let id = &self.input.lanes[lane].id;
             let value = if wgsl == WgslType::Bool {
                 format!("u32(henad_write_{id})")
             } else {
                 format!("henad_write_{id}")
             };
+            if let Some(field) = self.input.lanes[lane].merged {
+                let label = self
+                    .input
+                    .agents
+                    .map(|plan| plan.fields[field].label())
+                    .unwrap_or_default();
+                inner.push(&format!("{indent}{label}[henad_slot] = {value};\n"));
+                continue;
+            }
+            let (_, write) = self.lane_bindings(lane);
             inner.push(&format!("{indent}{write}[henad_index] = {value};\n"));
+        }
+        for line in std::mem::take(&mut block.deferred) {
+            inner.push(&format!("{indent}{line}\n"));
         }
         self.tally_offset += program.tallies;
         let mut text = Text::default();
@@ -470,9 +680,33 @@ impl Emitter<'_> {
             PassEnabled::Literal(_) => None,
         };
         text.text.push_str(&format!("    // Pass '{}'.\n", pass.id));
-        match &enabled {
-            Some(name) => text.push(&format!("    if (params.{name} != 0u) {{\n")),
+        // A pass of an agents world runs over its own domain, and a shader can run more invocations than it has.
+        let guard = match (self.input.agents, self.role, pass.domain) {
+            (Some(_), Role::Step { .. } | Role::Reduce | Role::Action | Role::Color, Some(Domain::Agents)) => {
+                Some("henad_index < params.henad_agents")
+            }
+            (Some(_), Role::Step { .. } | Role::Reduce | Role::Action | Role::Color, Some(Domain::Cells)) => {
+                Some("henad_index < params.henad_cells")
+            }
+            _ => None,
+        };
+        let condition = match (&enabled, guard) {
+            (Some(name), Some(guard)) => Some(format!("params.{name} != 0u && {guard}")),
+            (Some(name), None) => Some(format!("params.{name} != 0u")),
+            (None, Some(guard)) => Some(guard.to_owned()),
+            (None, None) => None,
+        };
+        match &condition {
+            Some(condition) => text.push(&format!("    if ({condition}) {{\n")),
             None => text.push("    {\n"),
+        }
+        if self.input.agents.is_some() && pass.domain == Some(Domain::Cells) && self.role != Role::Display {
+            text.push(&format!(
+                "{indent}let henad_own_cell = vec2<u32>(henad_index % params.henad_width, henad_index / params.henad_width);\n"
+            ));
+            if self.uses.neighbors {
+                text.push(&format!("{indent}henad_cell = henad_own_cell;\n"));
+            }
         }
         for slot in block.used_host.clone() {
             let (shape, source) = block.host[&slot].clone();
@@ -566,7 +800,7 @@ impl Emitter<'_> {
                 // Both are prelude values the host evaluates, and a shader never computes them.
                 self.refuse(&pass_id, Some(node), "is a value the host computes, met in a shader");
             }
-            Operation::StreamBits { .. } => {
+            Operation::StreamBits { .. } | Operation::StreamFloat { .. } => {
                 self.refuse(
                     &pass_id,
                     Some(node),
@@ -774,8 +1008,17 @@ impl Emitter<'_> {
             Operation::Convert { target, a } => {
                 let source = Self::type_of(block, *a);
                 let a = self.slot(block, *a, node);
+                let reference =
+                    matches!(Self::type_of(block, out), Some(WgslType::U32)) && matches!(target, Conversion::ToU32);
                 let expression = match (target, source) {
+                    // A cell or an agent is its index, a `u32` already.
+                    (Conversion::ToU32, Some(WgslType::U32)) if reference => a,
                     (Conversion::ToF32, Some(WgslType::U32 | WgslType::I32 | WgslType::Bool)) => format!("f32({a})"),
+                    (Conversion::ToVec2F, Some(WgslType::Vec2I | WgslType::Vec2U)) => format!("vec2<f32>({a})"),
+                    (Conversion::ToVec2I, Some(WgslType::Vec2F)) => format!("vec2<i32>({a})"),
+                    (Conversion::ToVec2I, Some(WgslType::Vec2U)) => format!("bitcast<vec2<i32>>({a})"),
+                    (Conversion::ToVec2U, Some(WgslType::Vec2F)) => format!("vec2<u32>({a})"),
+                    (Conversion::ToVec2U, Some(WgslType::Vec2I)) => format!("bitcast<vec2<u32>>({a})"),
                     (Conversion::ToU32, Some(WgslType::F32 | WgslType::Bool)) => format!("u32({a})"),
                     (Conversion::ToU32, Some(WgslType::I32)) => format!("bitcast<u32>({a})"),
                     (Conversion::ToI32, Some(WgslType::F32 | WgslType::Bool)) => format!("i32({a})"),
@@ -815,7 +1058,13 @@ impl Emitter<'_> {
                     "henad_tick".to_owned()
                 };
                 self.uses.draw_core = true;
-                let bits = format!("draw_core(params.{key}, henad_index, {tick}, {}, 0u)", block.iteration);
+                // Two layers of one cell draw apart in a merge, keyed on the slot.
+                let element = if matches!(self.role, Role::Merge(_)) {
+                    "henad_slot"
+                } else {
+                    "henad_index"
+                };
+                let bits = format!("draw_core(params.{key}, {element}, {tick}, {}, 0u)", block.iteration);
                 let expression = match form {
                     DrawForm::Float => {
                         self.uses.random_float = true;
@@ -946,6 +1195,18 @@ impl Emitter<'_> {
                     "{indent}if ({value} < {variants}u) {{ atomicAdd(&henad_partial[{first}u + {value}], 1u); }}\n"
                 ));
             }
+            Operation::Color { index, len } if self.role == Role::Color => {
+                let index = self.slot(block, *index, node);
+                match self.packed_palette_of(block, node) {
+                    Some(constant) if *len > 0 => {
+                        lines.push_str(&format!(
+                            "{indent}henad_color = {constant}[min({index}, {}u)];\n",
+                            len - 1
+                        ));
+                    }
+                    _ => self.refuse(&pass_id, Some(node), "colours from an empty or unknown palette"),
+                }
+            }
             Operation::Color { index, len } => {
                 if self.role != Role::Display {
                     self.refuse(&pass_id, Some(node), "colours outside a view pass");
@@ -974,7 +1235,295 @@ impl Emitter<'_> {
                     *len as f32
                 ));
             }
-            _ => self.refuse(&pass_id, Some(node), "has no WGSL form in this build"),
+            Operation::World => {
+                self.field("henad_world", FieldShape::Value(WgslType::Vec2F), FieldSource::World);
+                let_out!("params.henad_world".to_owned());
+            }
+            Operation::Grid => let_out!("vec2<u32>(params.henad_width, params.henad_height)".to_owned()),
+            Operation::CellXy => {
+                self.uses.own_cell = true;
+                let_out!("henad_own_cell".to_owned());
+            }
+            Operation::LaneGetAt { lane, at } => {
+                let at = self.slot(block, *at, node);
+                let load = self.load_other(*lane, &at);
+                let_out!(load);
+            }
+            Operation::FieldGet {
+                first,
+                layers,
+                layer,
+                at,
+                zero,
+            } => {
+                let Some((field, _)) = self.input.agents.and_then(|plan| plan.field_of(*first)) else {
+                    self.refuse(&pass_id, Some(node), "reads a field the GPU does not hold");
+                    return;
+                };
+                if self.role == Role::Merge(field) {
+                    // Every slot of the field is written in place by its own invocation of the same pass.
+                    self.refuse(
+                        &pass_id,
+                        Some(node),
+                        "reads the field that its `finish` updates while the update writes that field in place. \
+                         The merged value arrives as the input `value`",
+                    );
+                    return;
+                }
+                let layer = self.slot(block, *layer, node);
+                let cell = match at {
+                    Some(slot) => self.slot(block, *slot, node),
+                    None => "henad_index".to_owned(),
+                };
+                let label = self.field_label(field);
+                self.fields_read.insert(field);
+                let zero = literal(*zero).unwrap_or_else(|| "0u".to_owned());
+                let n = node.number();
+                lines.push_str(&format!(
+                    "{indent}let henad_cell_n{n} = {cell};\n{indent}let henad_layer_n{n} = {layer};\n"
+                ));
+                let_out!(format!(
+                    "select({zero}, {label}[henad_layer_n{n} * params.henad_cells + henad_cell_n{n}], \
+                     henad_cell_n{n} < params.henad_cells && henad_layer_n{n} < {layers}u)"
+                ));
+            }
+            Operation::FieldSet {
+                first,
+                layers,
+                layer,
+                value,
+            } => {
+                let Some((field, _)) = self.input.agents.and_then(|plan| plan.field_of(*first)) else {
+                    self.refuse(&pass_id, Some(node), "writes a field the GPU does not hold");
+                    return;
+                };
+                let layer = self.slot(block, *layer, node);
+                let value = self.slot(block, *value, node);
+                let label = self.field_label(field);
+                self.fields_written.insert(field);
+                let n = node.number();
+                lines.push_str(&format!("{indent}let henad_set_layer_n{n} = {layer};\n"));
+                block.deferred.push(format!(
+                    "if (henad_set_layer_n{n} < {layers}u) {{ {label}[henad_set_layer_n{n} * params.henad_cells + \
+                     henad_index] = {value}; }}"
+                ));
+            }
+            Operation::Deposit {
+                first,
+                layers,
+                layer,
+                at,
+                value,
+            } => {
+                let Some(field) = self.input.agents.and_then(|plan| plan.field_of_deposit(*first)) else {
+                    self.refuse(&pass_id, Some(node), "deposits into a field the GPU does not hold");
+                    return;
+                };
+                let layer = self.slot(block, *layer, node);
+                let at = self.slot(block, *at, node);
+                let value = self.slot(block, *value, node);
+                let label = self.accum_label(field);
+                self.deposited.insert(field);
+                let n = node.number();
+                // A deposit of zero, of a negative value or of a NaN adds 0, and the bits of every other value order as
+                // the value.
+                lines.push_str(&format!(
+                    "{indent}let henad_deposit_layer_n{n} = {layer};\n\
+                     {indent}let henad_deposit_cell_n{n} = {at};\n\
+                     {indent}let henad_deposit_n{n} = {value};\n\
+                     {indent}if (henad_deposit_cell_n{n} < params.henad_cells && henad_deposit_layer_n{n} < {layers}u) \
+                     {{\n\
+                     {indent}    atomicMax(&{label}[henad_deposit_layer_n{n} * params.henad_cells + \
+                     henad_deposit_cell_n{n}], select(0u, bitcast<u32>(henad_deposit_n{n}), henad_deposit_n{n} > \
+                     0.0f));\n\
+                     {indent}}}\n"
+                ));
+            }
+            Operation::CounterAdd { counter, amount } => {
+                let amount = self.slot(block, *amount, node);
+                self.uses.counters = true;
+                lines.push_str(&format!(
+                    "{indent}atomicAdd(&counters[{}u], {amount});\n",
+                    FIRST_COUNTER + counter
+                ));
+            }
+            Operation::CounterTotal { .. } | Operation::Midpoint { .. } => {
+                // Both read only values at the tick rate or slower, which the host computes.
+                self.refuse(&pass_id, Some(node), "is a value the host computes, met in a shader");
+            }
+            Operation::Clamp { x, lo, hi } => {
+                let (x, lo, hi) = (
+                    self.slot(block, *x, node),
+                    self.slot(block, *lo, node),
+                    self.slot(block, *hi, node),
+                );
+                let_out!(format!("min(max({x}, {lo}), {hi})"));
+            }
+            Operation::VecMake { x, y } => {
+                let (x, y) = (self.slot(block, *x, node), self.slot(block, *y, node));
+                match Self::type_of(block, out) {
+                    Some(wgsl) if wgsl.is_vector() => let_out!(format!("{}({x}, {y})", wgsl.name())),
+                    _ => self.refuse(&pass_id, Some(node), "makes a vector the GPU cannot hold"),
+                }
+            }
+            Operation::VecSplit { v, y_out } => {
+                let v = self.slot(block, *v, node);
+                let y_name = self.target(block, *y_out, node);
+                let_out!(format!("{v}.x"));
+                lines.push_str(&format!("{indent}let {y_name} = {v}.y;\n"));
+            }
+            Operation::VecScale { v, s } => {
+                let (v, s) = (self.slot(block, *v, node), self.slot(block, *s, node));
+                let_out!(format!("{v} * {s}"));
+            }
+            Operation::VecDot { a, b } => {
+                let (a, b) = (self.slot(block, *a, node), self.slot(block, *b, node));
+                let_out!(format!("{a}.x * {b}.x + {a}.y * {b}.y"));
+            }
+            Operation::VecLength { v } => {
+                let v = self.slot(block, *v, node);
+                let_out!(format!("sqrt({v}.x * {v}.x + {v}.y * {v}.y)"));
+            }
+            Operation::FromAngle { angle, length } => {
+                let (angle, length) = (self.slot(block, *angle, node), self.slot(block, *length, node));
+                let_out!(format!("vec2<f32>(cos({angle}) * {length}, sin({angle}) * {length})"));
+            }
+            Operation::Wrap { v, world } => {
+                let vector = Self::type_of(block, *v).is_some_and(WgslType::is_vector);
+                let (v, world) = (self.slot(block, *v, node), self.slot(block, *world, node));
+                self.uses.space.insert("wrap_coord");
+                if vector {
+                    let_out!(format!(
+                        "vec2<f32>(wrap_coord({v}.x, {world}.x), wrap_coord({v}.y, {world}.y))"
+                    ));
+                } else {
+                    let_out!(format!("wrap_coord({v}, {world})"));
+                }
+            }
+            Operation::Delta { a, b, world, squared } => {
+                let (a, b, world) = (
+                    self.slot(block, *a, node),
+                    self.slot(block, *b, node),
+                    self.slot(block, *world, node),
+                );
+                self.uses.space.insert("axis_delta");
+                self.uses.space.insert("TORUS");
+                let delta = format!("henad_delta_n{}", node.number());
+                lines.push_str(&format!(
+                    "{indent}let {delta} = vec2<f32>(axis_delta({a}.x, {b}.x, {world}.x, TORUS), axis_delta({a}.y, \
+                     {b}.y, {world}.y, TORUS));\n"
+                ));
+                if *squared {
+                    let_out!(format!("{delta}.x * {delta}.x + {delta}.y * {delta}.y"));
+                } else {
+                    let_out!(delta);
+                }
+            }
+            Operation::CellIndex { xy, valid_out } => {
+                let signed = Self::type_of(block, *xy) == Some(WgslType::Vec2I);
+                let xy = self.slot(block, *xy, node);
+                let valid = self.target(block, *valid_out, node);
+                lines.push_str(&format!("{indent}let {valid} = {};\n", inside(&xy, signed)));
+                let_out!(format!(
+                    "select(4294967295u, u32({xy}.y) * params.henad_width + u32({xy}.x), {valid})"
+                ));
+            }
+            Operation::CellOf { p, xy_out, valid_out } => {
+                let p = self.slot(block, *p, node);
+                let xy = self.target(block, *xy_out, node);
+                let valid = self.target(block, *valid_out, node);
+                lines.push_str(&format!("{indent}let {xy} = vec2<i32>(i32({p}.x), i32({p}.y));\n"));
+                lines.push_str(&format!("{indent}let {valid} = {};\n", inside(&xy, true)));
+                let_out!(format!(
+                    "select(4294967295u, u32({xy}.y) * params.henad_width + u32({xy}.x), {valid})"
+                ));
+            }
+            Operation::CellXyOf { cell } => {
+                let cell = self.slot(block, *cell, node);
+                let_out!(format!(
+                    "vec2<u32>({cell} % params.henad_width, {cell} / params.henad_width)"
+                ));
+            }
+            Operation::Offset {
+                xy,
+                by,
+                bounded,
+                cell_out,
+                valid_out,
+            } => {
+                let (xy, by) = (self.slot(block, *xy, node), self.slot(block, *by, node));
+                let cell = self.target(block, *cell_out, node);
+                let valid = self.target(block, *valid_out, node);
+                let bounded = self.bounded(*bounded);
+                self.uses.step = true;
+                let step = format!("henad_step_n{}", node.number());
+                lines.push_str(&format!("{indent}let {step} = henad_step({xy}, {by}, {bounded});\n"));
+                lines.push_str(&format!("{indent}let {valid} = {step}.z != 0i;\n"));
+                lines.push_str(&format!(
+                    "{indent}let {cell} = select(4294967295u, u32({step}.y) * params.henad_width + u32({step}.x), \
+                     {valid});\n"
+                ));
+                let_out!(format!("{step}.xy"));
+            }
+            Operation::HeadingOctant { v } => {
+                let v = self.slot(block, *v, node);
+                self.uses.space.insert("heading_octant");
+                let_out!(format!("heading_octant({v}.x, {v}.y)"));
+            }
+            Operation::StepCode { d } => {
+                let d = self.slot(block, *d, node);
+                let_out!(format!("bitcast<u32>(({d}.x + 1i) * 3i + ({d}.y + 1i))"));
+            }
+            Operation::StepOffset { code } => {
+                let code = self.slot(block, *code, node);
+                let_out!(format!(
+                    "vec2<i32>(bitcast<i32>({code} / 3u) - 1i, bitcast<i32>({code} % 3u) - 1i)"
+                ));
+            }
+            Operation::Choice3 { bits } => {
+                let bits = self.slot(block, *bits, node);
+                let_out!(format!("i32({bits} % 3u) - 1i"));
+            }
+            Operation::Reservoir { bits, count } => {
+                let (bits, count) = (self.slot(block, *bits, node), self.slot(block, *count, node));
+                self.uses.random_float = true;
+                let_out!(format!("random_float({bits}, 1.0f) < 1.0f / f32({count})"));
+            }
+            Operation::GridFold(fold) => {
+                text.push(&lines);
+                lines.clear();
+                self.grid_fold(block, node, fold, indent, text);
+            }
+            Operation::RadiusFold(fold) => {
+                text.push(&lines);
+                lines.clear();
+                self.radius_fold(block, node, fold, indent, text);
+            }
+            Operation::Sum { value, sum } => {
+                if self.role != Role::Reduce || self.input.agents.is_none() {
+                    self.refuse(
+                        &pass_id,
+                        Some(node),
+                        "sums floats, which the GPU reduces in a stats pass of an agents world alone",
+                    );
+                    return;
+                }
+                let vector = Self::type_of(block, *value).is_some_and(WgslType::is_vector);
+                let value = self.slot(block, *value, node);
+                let lane = self.sum_lanes.len();
+                self.sum_lanes.push((block.position, *sum));
+                if vector {
+                    self.sum_lanes.push((block.position, *sum));
+                    lines.push_str(&format!(
+                        "{indent}henad_sum_{lane} = henad_sum_{lane} + {value}.x;\n{indent}henad_sum_{} = \
+                         henad_sum_{} + {value}.y;\n",
+                        lane + 1,
+                        lane + 1
+                    ));
+                } else {
+                    lines.push_str(&format!("{indent}henad_sum_{lane} = henad_sum_{lane} + {value};\n"));
+                }
+            }
         }
         if !lines.is_empty() {
             text.node_line(&pass_id, node, &lines);
@@ -984,19 +1533,7 @@ impl Emitter<'_> {
     /// Writes a Repeat and its body as a counted loop.
     fn repeat(&mut self, block: &mut Block<'_>, node: NodeId, repeat: &Repeat, indent: &str, text: &mut Text) {
         let pass_id = block.pass.id.clone();
-        let mut head = String::new();
-        for accumulator in &repeat.accumulators {
-            let running = self.target(block, accumulator.running, node);
-            let start = match accumulator.init {
-                Some(slot) => self.slot(block, slot, node),
-                None => literal(accumulator.identity).unwrap_or_else(|| {
-                    self.refuse(&pass_id, Some(node), "holds an accumulator the GPU cannot hold");
-                    "0u".to_owned()
-                }),
-            };
-            let type_name = WgslType::of_value(accumulator.identity).map_or("u32", WgslType::name);
-            head.push_str(&format!("{indent}var {running}: {type_name} = {start};\n"));
-        }
+        let mut head = self.seed_accumulators(block, node, &repeat.accumulators, indent);
         let count = self.slot(block, repeat.count, node);
         let when = self.slot(block, repeat.when, node);
         let total = self.target(block, repeat.total, node);
@@ -1009,11 +1546,7 @@ impl Emitter<'_> {
             "{indent}for (var {k} = 0u; {k} < {total}; {k} = {k} + 1u) {{\n"
         ));
         let inner = format!("{indent}    ");
-        for accumulator in &repeat.accumulators {
-            let prev = self.target(block, accumulator.prev, node);
-            let running = self.target(block, accumulator.running, node);
-            head.push_str(&format!("{inner}let {prev} = {running};\n"));
-        }
+        head.push_str(&self.remember_accumulators(block, node, &repeat.accumulators, &inner));
         let iteration = format!("henad_iteration_n{}", node.number());
         let word = if block.iteration == "0u" && self.input.outer_iteration.is_none() {
             k.clone()
@@ -1028,6 +1561,337 @@ impl Emitter<'_> {
         }
         block.iteration = outer;
         text.node_line(&pass_id, node, &format!("{indent}}}\n"));
+    }
+
+    /// Returns the label of the buffer of the field at `field` of the agents plan.
+    fn field_label(&self, field: usize) -> String {
+        self.input
+            .agents
+            .and_then(|plan| plan.fields.get(field))
+            .map(FieldPlan::label)
+            .unwrap_or_default()
+    }
+
+    /// Returns the label of the buffer of the deposits of the field at `field` of the agents plan.
+    fn accum_label(&self, field: usize) -> String {
+        self.input
+            .agents
+            .and_then(|plan| plan.fields.get(field))
+            .map(FieldPlan::accum_label)
+            .unwrap_or_default()
+    }
+
+    /// Returns the WGSL `bool` of whether a stencil skips the positions past the edge, `bounded` or the domain grid's
+    /// own boundary when it is `None`.
+    fn bounded(&self, bounded: Option<bool>) -> &'static str {
+        let own = matches!(
+            self.input.document.world,
+            crate::document::World::Grid(grid) if grid.boundary == Boundary::Bounded
+        );
+        if bounded.unwrap_or(own) { "true" } else { "false" }
+    }
+
+    /// Writes the head of a region's accumulators: one `var` each, seeded from its `init` or its identity.
+    fn seed_accumulators(
+        &mut self,
+        block: &mut Block<'_>,
+        node: NodeId,
+        accumulators: &[RepeatAccumulator],
+        indent: &str,
+    ) -> String {
+        let mut head = String::new();
+        for accumulator in accumulators {
+            let running = self.target(block, accumulator.running, node);
+            let start = match accumulator.init {
+                Some(slot) => self.slot(block, slot, node),
+                None => literal(accumulator.identity).unwrap_or_else(|| {
+                    self.refuse(&block.pass.id, Some(node), "holds an accumulator the GPU cannot hold");
+                    "0u".to_owned()
+                }),
+            };
+            let type_name = WgslType::of_value(accumulator.identity).map_or("u32", WgslType::name);
+            head.push_str(&format!("{indent}var {running}: {type_name} = {start};\n"));
+        }
+        head
+    }
+
+    /// Returns the lines that copy each accumulator's running value to its `prev.<acc>`.
+    fn remember_accumulators(
+        &mut self,
+        block: &Block<'_>,
+        node: NodeId,
+        accumulators: &[RepeatAccumulator],
+        indent: &str,
+    ) -> String {
+        let mut lines = String::new();
+        for accumulator in accumulators {
+            let prev = self.target(block, accumulator.prev, node);
+            let running = self.target(block, accumulator.running, node);
+            lines.push_str(&format!("{indent}let {prev} = {running};\n"));
+        }
+        lines
+    }
+
+    /// Writes a stencil fold and its body as a loop over its offsets, each position past the edge skipped.
+    fn grid_fold(&mut self, block: &mut Block<'_>, node: NodeId, fold: &StencilFold, indent: &str, text: &mut Text) {
+        let pass_id = block.pass.id.clone();
+        let n = node.number();
+        let mut head = self.seed_accumulators(block, node, &fold.accumulators, indent);
+        let when = self.slot(block, fold.when, node);
+        let center = if let Some(slot) = fold.at {
+            self.slot(block, slot, node)
+        } else {
+            self.uses.own_cell = true;
+            "vec2<i32>(henad_own_cell)".to_owned()
+        };
+        let bounded = self.bounded(fold.bounded);
+        self.uses.step = true;
+        let radix = fold.offsets.len();
+        let offsets: Vec<String> = fold
+            .offsets
+            .iter()
+            .map(|(dx, dy)| format!("vec2<i32>({dx}i, {dy}i)"))
+            .collect();
+        let [k_slot, offset_slot, xy_slot, cell_slot, diagonal_slot] = fold.inner;
+        let k = self.target(block, k_slot, node);
+        let offset = self.target(block, offset_slot, node);
+        let xy = self.target(block, xy_slot, node);
+        let cell = self.target(block, cell_slot, node);
+        let diagonal = self.target(block, diagonal_slot, node);
+        head.push_str(&format!(
+            "{indent}var henad_offsets_n{n} = array<vec2<i32>, {radix}>({});\n",
+            offsets.join(", ")
+        ));
+        head.push_str(&format!("{indent}if ({when}) {{\n"));
+        head.push_str(&format!("{indent}    let henad_center_n{n} = {center};\n"));
+        head.push_str(&format!(
+            "{indent}    for (var {k} = 0u; {k} < {radix}u; {k} = {k} + 1u) {{\n"
+        ));
+        let inner = format!("{indent}        ");
+        head.push_str(&format!("{inner}let {offset} = henad_offsets_n{n}[{k}];\n"));
+        head.push_str(&format!(
+            "{inner}let henad_at_n{n} = henad_step(henad_center_n{n}, {offset}, {bounded});\n"
+        ));
+        head.push_str(&format!(
+            "{inner}if (henad_at_n{n}.z == 0i) {{\n{inner}    continue;\n{inner}}}\n"
+        ));
+        head.push_str(&format!("{inner}let {xy} = henad_at_n{n}.xy;\n"));
+        head.push_str(&format!(
+            "{inner}let {cell} = u32({xy}.y) * params.henad_width + u32({xy}.x);\n"
+        ));
+        head.push_str(&format!(
+            "{inner}let {diagonal} = {offset}.x != 0i && {offset}.y != 0i;\n"
+        ));
+        head.push_str(&self.remember_accumulators(block, node, &fold.accumulators, &inner));
+        let iteration = format!("henad_iteration_n{n}");
+        let word = if block.iteration == "0u" && self.input.outer_iteration.is_none() {
+            k.clone()
+        } else {
+            format!("{} * {radix}u + {k}", block.iteration)
+        };
+        head.push_str(&format!("{inner}let {iteration} = {word};\n"));
+        text.node_line(&pass_id, node, &head);
+        let outer = std::mem::replace(&mut block.iteration, iteration);
+        for instruction in &fold.body {
+            self.instruction(block, instruction, &inner, text);
+        }
+        block.iteration = outer;
+        text.node_line(&pass_id, node, &format!("{indent}    }}\n{indent}}}\n"));
+    }
+
+    /// Writes a radius fold and its body as the walk of `henad::hash` over the neighbour index, which stops and sets
+    /// the fold's fault code past [`crate::limits::MAX_FOLD_CANDIDATES`] candidates, and does not start past
+    /// [`crate::limits::MAX_WALK_CELLS`] cells, setting the code after it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the walk and the visit of one candidate read in order"
+    )]
+    fn radius_fold(&mut self, block: &mut Block<'_>, node: NodeId, fold: &RadiusFold, indent: &str, text: &mut Text) {
+        let pass_id = block.pass.id.clone();
+        let n = node.number();
+        let code = self
+            .input
+            .agents
+            .and_then(|plan| {
+                plan.faults
+                    .iter()
+                    .position(|(pass, fault)| *pass == pass_id && *fault == node)
+            })
+            .map(|position| 2 * position + 1);
+        let Some(code) = code else {
+            self.refuse(
+                &pass_id,
+                Some(node),
+                "walks a neighbour index outside a tick pass of an agents world",
+            );
+            return;
+        };
+        let mut head = self.seed_accumulators(block, node, &fold.accumulators, indent);
+        let center = self.slot(block, fold.center, node);
+        let radius = self.slot(block, fold.radius, node);
+        let when = self.slot(block, fold.when, node);
+        self.uses.hash = true;
+        self.uses.counters = true;
+        self.uses.space.insert("axis_delta");
+        self.uses.space.insert("TORUS");
+        self.field("henad_world", FieldShape::Value(WgslType::Vec2F), FieldSource::World);
+        self.field(
+            "henad_hash_grid",
+            FieldShape::Value(WgslType::Vec2U),
+            FieldSource::HashGrid,
+        );
+        self.field(
+            "henad_hash_cell",
+            FieldShape::Value(WgslType::Vec2F),
+            FieldSource::HashCell,
+        );
+        self.field(
+            "henad_hash_inv",
+            FieldShape::Value(WgslType::Vec2F),
+            FieldSource::HashInverse,
+        );
+        let [k_slot, other_slot, delta_slot, dist_slot] = fold.inner;
+        let k = self.target(block, k_slot, node);
+        let other = self.target(block, other_slot, node);
+        let delta = self.target(block, delta_slot, node);
+        let dist = self.target(block, dist_slot, node);
+        let position = format!("henad_there_n{n}");
+        let load = if let Some(lane) = self.input.agents.and_then(|plan| plan.position_lane) {
+            self.load(lane, &format!("henad_other_n{n}"))
+        } else {
+            self.refuse(
+                &pass_id,
+                Some(node),
+                "walks the agents of a world with no position lane",
+            );
+            "vec2<f32>(0.0f, 0.0f)".to_owned()
+        };
+        let skip_self = if fold.exclude_self {
+            format!(" && henad_other_n{n} != henad_index")
+        } else {
+            String::new()
+        };
+        let i1 = format!("{indent}    ");
+        let i2 = format!("{indent}        ");
+        let i3 = format!("{indent}            ");
+        let i4 = format!("{indent}                ");
+        head.push_str(&format!("{indent}var henad_found_n{n} = 0u;\n"));
+        head.push_str(&format!("{indent}if ({when}) {{\n"));
+        head.push_str(&format!("{i1}let henad_center_n{n} = {center};\n"));
+        head.push_str(&format!("{i1}let henad_reach_n{n} = {radius} * {radius};\n"));
+        head.push_str(&format!(
+            "{i1}let henad_bounds_n{n} = walk_bounds(henad_center_n{n}.x, henad_center_n{n}.y, {radius}, \
+             params.henad_hash_grid, params.henad_hash_cell, params.henad_hash_inv);\n"
+        ));
+        head.push_str(&format!(
+            "{i1}var henad_visits_n{n} = 0u;\n{i1}var henad_over_n{n} = false;\n"
+        ));
+        head.push_str(&format!(
+            "{i1}if (walk_cells(henad_bounds_n{n}) > MAX_WALK_CELLS) {{\n{i1}    atomicMax(&counters[{FAULT_WORD}u], \
+             {}u);\n{i1}    henad_over_n{n} = true;\n{i1}}}\n",
+            code + 1
+        ));
+        head.push_str(&format!(
+            "{i1}for (var henad_row_n{n} = henad_bounds_n{n}.z; henad_row_n{n} <= henad_bounds_n{n}.w && \
+             !henad_over_n{n}; henad_row_n{n} = henad_row_n{n} + 1i) {{\n"
+        ));
+        head.push_str(&format!(
+            "{i2}for (var henad_column_n{n} = henad_bounds_n{n}.x; henad_column_n{n} <= henad_bounds_n{n}.y && \
+             !henad_over_n{n}; henad_column_n{n} = henad_column_n{n} + 1i) {{\n"
+        ));
+        head.push_str(&format!(
+            "{i3}let henad_walk_cell_n{n} = walk_cell(henad_column_n{n}, henad_row_n{n}, params.henad_hash_grid);\n"
+        ));
+        head.push_str(&format!(
+            "{i3}let henad_end_n{n} = cell_start[henad_walk_cell_n{n} + 1u];\n"
+        ));
+        head.push_str(&format!(
+            "{i3}for (var henad_slot_n{n} = cell_start[henad_walk_cell_n{n}]; henad_slot_n{n} < henad_end_n{n}; \
+             henad_slot_n{n} = henad_slot_n{n} + 1u) {{\n"
+        ));
+        head.push_str(&format!("{i4}henad_visits_n{n} = henad_visits_n{n} + 1u;\n"));
+        head.push_str(&format!(
+            "{i4}if (henad_visits_n{n} > MAX_VISITS) {{\n{i4}    atomicMax(&counters[{FAULT_WORD}u], {code}u);\n{i4}    \
+             henad_over_n{n} = true;\n{i4}    break;\n{i4}}}\n"
+        ));
+        head.push_str(&format!("{i4}let henad_other_n{n} = sorted[henad_slot_n{n}];\n"));
+        head.push_str(&format!("{i4}let {position} = {load};\n"));
+        head.push_str(&format!(
+            "{i4}let henad_delta_n{n} = vec2<f32>(axis_delta(henad_center_n{n}.x, {position}.x, params.henad_world.x, \
+             TORUS), axis_delta(henad_center_n{n}.y, {position}.y, params.henad_world.y, TORUS));\n"
+        ));
+        head.push_str(&format!(
+            "{i4}let henad_dist_n{n} = henad_delta_n{n}.x * henad_delta_n{n}.x + henad_delta_n{n}.y * \
+             henad_delta_n{n}.y;\n"
+        ));
+        head.push_str(&format!("{i4}if (henad_dist_n{n} <= henad_reach_n{n}{skip_self}) {{\n"));
+        let inner = format!("{indent}                    ");
+        head.push_str(&format!("{inner}let {k} = henad_found_n{n};\n"));
+        head.push_str(&format!("{inner}let {other} = henad_other_n{n};\n"));
+        head.push_str(&format!("{inner}let {delta} = henad_delta_n{n};\n"));
+        head.push_str(&format!("{inner}let {dist} = henad_dist_n{n};\n"));
+        head.push_str(&self.remember_accumulators(block, node, &fold.accumulators, &inner));
+        let iteration = format!("henad_iteration_n{n}");
+        head.push_str(&format!("{inner}let {iteration} = henad_other_n{n};\n"));
+        text.node_line(&pass_id, node, &head);
+        let outer = std::mem::replace(&mut block.iteration, iteration);
+        for instruction in &fold.body {
+            self.instruction(block, instruction, &inner, text);
+        }
+        block.iteration = outer;
+        text.node_line(
+            &pass_id,
+            node,
+            &format!("{inner}henad_found_n{n} = henad_found_n{n} + 1u;\n{i4}}}\n{i3}}}\n{i2}}}\n{i1}}}\n{indent}}}\n"),
+        );
+    }
+
+    /// Returns the constant of the packed RGBA words of the palette that the `view.color` node `node` names, declaring
+    /// it once.
+    fn packed_palette_of(&mut self, block: &Block<'_>, node: NodeId) -> Option<String> {
+        let found = block.pass.body.nodes.iter().find(|candidate| candidate.id == node)?;
+        let def = crate::catalogue::lookup(&found.op, self.input.document.library)?;
+        let config = effective_config(def, found);
+        let id = config.get("palette").and_then(ConfigValue::as_str)?;
+        let constant = self.palette(id)?;
+        let colors = self.palettes.remove(&constant)?;
+        let packed = constant.replacen("henad_", "henad_packed_", 1);
+        self.packed.insert(packed.clone(), colors);
+        Some(packed)
+    }
+
+    /// Returns the colour pass of an agents world with no view pass over agents: the first category lane over agents
+    /// coloured by its category, or white.
+    fn default_agent_color(&mut self) -> String {
+        let document = self.input.document;
+        let lane = document
+            .lanes
+            .iter()
+            .enumerate()
+            .find_map(|(position, lane)| match &lane.value_type {
+                crate::types::ValueType::Category(category) if lane.domain == Domain::Agents => {
+                    Some((position, category.clone()))
+                }
+                _ => None,
+            });
+        let Some((position, category)) = lane else {
+            return "    // No view pass over agents and no category lane: every agent is white.\n".to_owned();
+        };
+        let Some(constant) = self.palette(&category) else {
+            return String::new();
+        };
+        let Some(colors) = self.palettes.remove(&constant) else {
+            return String::new();
+        };
+        let last = colors.len() - 1;
+        let packed = constant.replacen("henad_", "henad_packed_", 1);
+        self.packed.insert(packed.clone(), colors);
+        let load = self.load(position, "henad_index");
+        format!(
+            "    // No view pass over agents: the lane '{}' coloured by its category.\n    if (henad_index < \
+             params.henad_agents) {{\n        henad_color = {packed}[min({load}, {last}u)];\n    }}\n",
+            document.lanes[position].id
+        )
     }
 
     /// Returns the constant of the palette that the `view.color` node `node` names, declaring it once.
@@ -1083,12 +1947,434 @@ impl Emitter<'_> {
         )
     }
 
+    /// Writes the head of a shader into `text`: its comment, imports, uniform block, bindings, palettes and helpers.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each import and helper reads best beside the others"
+    )]
+    fn header(&mut self, text: &mut Text, uniform: &UniformBlock, declarations: &str) {
+        let agents = self.input.agents.is_some();
+        text.push("// Generated by henad-graph. Every value is named after its node, n<id>_<port>.\n");
+        let mut rng = Vec::new();
+        if self.uses.pcg_hash {
+            rng.push("pcg_hash");
+        }
+        if self.uses.random_float {
+            rng.push("random_float");
+        }
+        rng.extend(self.uses.rng.iter().copied());
+        if !rng.is_empty() {
+            text.text
+                .push_str(&format!("#import henad::rng::{{{}}}\n", rng.join(", ")));
+        }
+        if self.uses.draw_core {
+            text.push("#import henad_graph::draw::draw_core\n");
+        }
+        let mut space: Vec<&str> = if self.uses.neighbors {
+            vec!["offset_cell", "TORUS", "BOUNDED"]
+        } else {
+            Vec::new()
+        };
+        if self.uses.step {
+            self.uses.space.insert("wrap_index");
+        }
+        for name in &self.uses.space {
+            if !space.contains(name) {
+                space.push(name);
+            }
+        }
+        if !space.is_empty() {
+            text.text
+                .push_str(&format!("#import henad::space::{{{}}}\n", space.join(", ")));
+        }
+        if self.role == Role::Display {
+            text.push("#import henad::dims::{Dims, cell_at}\n");
+        }
+        if agents && self.role != Role::Display {
+            text.push("#import henad::dispatch::linear_index\n");
+        }
+        if agents && self.role == Role::Reduce && !self.sum_lanes.is_empty() {
+            text.push("#import henad::reduce_tree::block_sum\n");
+        }
+        if self.uses.hash {
+            text.push("#import henad::hash::{walk_bounds, walk_cell, walk_cells, MAX_VISITS, MAX_WALK_CELLS}\n");
+        }
+        text.push("\n");
+        text.push(&uniform.declaration());
+        text.push("\n");
+        text.push(declarations);
+        text.push("\n");
+        for (constant, colors) in &self.palettes {
+            text.text
+                .push_str(&format!("const {constant} = array<vec4<f32>, {}>(\n", colors.len()));
+            for [red, green, blue, alpha] in colors {
+                text.text.push_str(&format!(
+                    "    vec4<f32>({red}.0 / 255.0, {green}.0 / 255.0, {blue}.0 / 255.0, {alpha}.0 / 255.0),\n"
+                ));
+            }
+            text.push(");\n\n");
+        }
+        for (constant, colors) in &self.packed {
+            let words: Vec<String> = colors
+                .iter()
+                .map(|color| format!("{:#010x}u", packed_color(*color)))
+                .collect();
+            text.text.push_str(&format!(
+                "const {constant} = array<u32, {}>({});\n\n",
+                colors.len(),
+                words.join(", ")
+            ));
+        }
+        if self.uses.threshold {
+            text.push(
+                "// The word below which a draw is a success at probability p, as the host computes it: p times 2^32,\n\
+                 // saturating at the top.\n\
+                 fn henad_threshold(p: f32) -> u32 {\n    \
+                 let scaled = p * 4294967296.0f;\n    \
+                 return select(u32(scaled), 4294967295u, scaled >= 4294967296.0f);\n\
+                 }\n\n",
+            );
+        }
+        if self.uses.neighbors {
+            let boundary = match self.input.document.world {
+                crate::document::World::Grid(grid) if grid.boundary == Boundary::Bounded => "BOUNDED",
+                _ => "TORUS",
+            };
+            text.text.push_str(&format!("var<private> henad_cell: vec2<u32>;\n\n\
+                 // The cell dx east and dy south of this cell, and whether it is on the grid.\n\
+                 fn henad_at(dx: i32, dy: i32) -> vec3<i32> {{\n    \
+                 return offset_cell(henad_cell.x, henad_cell.y, dx, dy, params.henad_width, params.henad_height, {boundary});\n\
+                 }}\n\n"));
+        }
+        if self.uses.step {
+            text.push(
+                "// The position `by` away from `xy`, wrapped unless `bounded`, and in `.z` whether it is on the domain\n\
+                 // grid.\n\
+                 fn henad_step(xy: vec2<i32>, by: vec2<i32>, bounded: bool) -> vec3<i32> {\n    \
+                 var next = xy + by;\n    \
+                 let side = vec2<i32>(i32(params.henad_width), i32(params.henad_height));\n    \
+                 if (!bounded) {\n        \
+                 next = vec2<i32>(wrap_index(next.x, side.x), wrap_index(next.y, side.y));\n    \
+                 }\n    \
+                 let on_grid = next.x >= 0i && next.y >= 0i && next.x < side.x && next.y < side.y;\n    \
+                 return vec3<i32>(next, select(0i, 1i, on_grid));\n\
+                 }\n\n",
+            );
+        }
+    }
+
+    /// Returns the shader of an agents world: its imports, uniform block, bindings and helpers, then `main` around
+    /// `body`, a linear pass for every role but the display.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the bindings and the template of every role read best in one place"
+    )]
+    fn assemble_agents(mut self, body: Text) -> Emitted {
+        let Some(plan) = self.input.agents else {
+            unreachable!("an agents shader has a plan");
+        };
+        let tallies = self.tally_offset;
+        let tally_base = FIRST_COUNTER + plan.counters;
+        let mut bindings: Vec<ShaderBinding> = Vec::new();
+        let mut declarations = String::new();
+        let storage = |read_only: bool| BindingKind::Storage { read_only };
+        let bind = |bindings: &mut Vec<ShaderBinding>, declarations: &mut String, name: &str, kind, wgsl: &str| {
+            declarations.push_str(&format!("@group(0) @binding({}) {wgsl};\n", bindings.len()));
+            bindings.push(ShaderBinding::new(name.to_owned(), kind));
+        };
+        let lanes: BTreeSet<usize> = self.reads.union(&self.writes).copied().collect();
+        for lane in lanes {
+            let Some(plan_lane) = self.input.lanes.get(lane) else {
+                continue;
+            };
+            let Some(wgsl) = plan_lane.wgsl else {
+                continue;
+            };
+            if plan_lane.merged.is_some() {
+                continue;
+            }
+            let element = wgsl.stored();
+            let (read, write) = self.lane_bindings(lane);
+            let writes = self.writes.contains(&lane);
+            if read == write {
+                let access = if writes { "read_write" } else { "read" };
+                bind(
+                    &mut bindings,
+                    &mut declarations,
+                    &read,
+                    storage(!writes),
+                    &format!("var<storage, {access}> {read}: array<{element}>"),
+                );
+            } else {
+                bind(
+                    &mut bindings,
+                    &mut declarations,
+                    &read,
+                    storage(true),
+                    &format!("var<storage, read> {read}: array<{element}>"),
+                );
+                bind(
+                    &mut bindings,
+                    &mut declarations,
+                    &write,
+                    storage(false),
+                    &format!("var<storage, read_write> {write}: array<{element}>"),
+                );
+            }
+        }
+        let merged = match self.role {
+            Role::Merge(field) => Some(field),
+            _ => None,
+        };
+        for (index, field) in plan.fields.iter().enumerate() {
+            let read = self.fields_read.contains(&index);
+            let written = self.fields_written.contains(&index) || merged == Some(index);
+            if read || written {
+                let access = if written { "read_write" } else { "read" };
+                let label = field.label();
+                bind(
+                    &mut bindings,
+                    &mut declarations,
+                    &label,
+                    storage(!written),
+                    &format!("var<storage, {access}> {label}: array<{}>", field.wgsl.stored()),
+                );
+            }
+            if self.deposited.contains(&index) || merged == Some(index) {
+                let label = field.accum_label();
+                bind(
+                    &mut bindings,
+                    &mut declarations,
+                    &label,
+                    storage(false),
+                    &format!("var<storage, read_write> {label}: array<atomic<u32>>"),
+                );
+            }
+        }
+        // The tick lives in the counters, read with an atomic load, and the step's last pass advances it.
+        let writes_tick = matches!(self.role, Role::Step { writes_tick: true });
+        if self.reads_tick || writes_tick {
+            self.uses.counters = true;
+        }
+        if self.uses.hash {
+            bind(
+                &mut bindings,
+                &mut declarations,
+                "cell_start",
+                storage(true),
+                "var<storage, read> cell_start: array<u32>",
+            );
+            bind(
+                &mut bindings,
+                &mut declarations,
+                "sorted",
+                storage(true),
+                "var<storage, read> sorted: array<u32>",
+            );
+        }
+        if self.uses.counters || (self.role == Role::Reduce && tallies > 0) {
+            bind(
+                &mut bindings,
+                &mut declarations,
+                "counters",
+                storage(false),
+                &format!(
+                    "var<storage, read_write> counters: array<atomic<u32>, {}>",
+                    plan.counter_words.max(1)
+                ),
+            );
+        }
+        if self.role == Role::Reduce && !self.sum_lanes.is_empty() {
+            bind(
+                &mut bindings,
+                &mut declarations,
+                "partials",
+                storage(false),
+                "var<storage, read_write> partials: array<f32>",
+            );
+        }
+        if self.role == Role::Color {
+            bind(
+                &mut bindings,
+                &mut declarations,
+                AGENT_COLORS,
+                storage(false),
+                &format!("var<storage, read_write> {AGENT_COLORS}: array<u32>"),
+            );
+        }
+        if self.role == Role::Display {
+            bind(
+                &mut bindings,
+                &mut declarations,
+                "output",
+                BindingKind::StorageTexture,
+                "var output: texture_storage_2d<rgba8unorm, write>",
+            );
+        }
+        let uniform = UniformBlock::new(std::mem::take(&mut self.fields));
+        bind(
+            &mut bindings,
+            &mut declarations,
+            "params",
+            BindingKind::Uniform,
+            "var<uniform> params: HenadParams",
+        );
+
+        let mut text = Text::default();
+        self.header(&mut text, &uniform, &declarations);
+        if self.role == Role::Reduce && tallies > 0 {
+            text.text.push_str(&format!(
+                "var<workgroup> henad_partial: array<atomic<u32>, {tallies}>;\n\n"
+            ));
+        }
+        let tick_line = if self.reads_tick {
+            format!("    let henad_tick = atomicLoad(&counters[{TICK_WORD}u]);\n")
+        } else {
+            String::new()
+        };
+        if self.role == Role::Display {
+            text.text.push_str(&format!(
+                "@compute @workgroup_size({WORKGROUP_SIZE}, {WORKGROUP_SIZE})\n"
+            ));
+            text.push("fn main(@builtin(global_invocation_id) henad_id: vec3<u32>) {\n");
+            text.push(
+                "    if (henad_id.x >= params.henad_texture.x || henad_id.y >= params.henad_texture.y) {\n        \
+                 return;\n    }\n",
+            );
+            text.push(
+                "    let henad_xy = cell_at(henad_id.xy, Dims(vec2<u32>(params.henad_width, params.henad_height), \
+                 params.henad_texture));\n",
+            );
+            if self.uses.neighbors {
+                text.push("    henad_cell = henad_xy;\n");
+            }
+            if self.uses.own_cell {
+                text.push("    let henad_own_cell = henad_xy;\n");
+            }
+            text.push(&tick_line);
+            text.push("    let henad_index = henad_xy.y * params.henad_width + henad_xy.x;\n");
+            text.push("    var henad_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);\n");
+            text.append(body);
+            text.push("    textureStore(output, vec2<i32>(henad_id.xy), henad_color);\n}\n");
+        } else {
+            text.text
+                .push_str(&format!("@compute @workgroup_size({LINEAR_WORKGROUP})\n"));
+            text.push(
+                "fn main(\n    @builtin(local_invocation_id) henad_lid: vec3<u32>,\n    \
+                 @builtin(workgroup_id) henad_wid: vec3<u32>,\n) {\n",
+            );
+            // A merge runs once per cell of each layer, its slot. Its body sees the slot's cell as its element.
+            let invocation = if matches!(self.role, Role::Merge(_)) {
+                "henad_slot"
+            } else {
+                "henad_index"
+            };
+            text.text.push_str(&format!(
+                "    let {invocation} = linear_index(henad_lid, henad_wid, params.henad_groups_x);\n"
+            ));
+            text.push(&tick_line);
+            if writes_tick {
+                text.text.push_str(&format!(
+                    "    if ({invocation} == 0u) {{\n        atomicAdd(&counters[{TICK_WORD}u], 1u);\n    }}\n"
+                ));
+            }
+            match self.role {
+                Role::Reduce => {
+                    if tallies > 0 {
+                        text.text.push_str(&format!(
+                            "    for (var henad_c = henad_lid.x; henad_c < {tallies}u; henad_c = henad_c + \
+                             {LINEAR_WORKGROUP}u) {{\n        atomicStore(&henad_partial[henad_c], 0u);\n    }}\n    \
+                             workgroupBarrier();\n"
+                        ));
+                    }
+                    for lane in 0..self.sum_lanes.len() {
+                        text.text.push_str(&format!("    var henad_sum_{lane} = 0.0f;\n"));
+                    }
+                    text.append(body);
+                    if tallies > 0 {
+                        text.text.push_str(&format!(
+                            "    workgroupBarrier();\n    for (var henad_c = henad_lid.x; henad_c < {tallies}u; \
+                             henad_c = henad_c + {LINEAR_WORKGROUP}u) {{\n        let henad_count = \
+                             atomicLoad(&henad_partial[henad_c]);\n        if (henad_count > 0u) {{\n            \
+                             atomicAdd(&counters[{tally_base}u + henad_c], henad_count);\n        }}\n    }}\n"
+                        ));
+                    }
+                    let lanes = self.sum_lanes.len();
+                    if lanes > 0 {
+                        text.push("    let henad_block = henad_wid.y * params.henad_groups_x + henad_wid.x;\n");
+                    }
+                    for lane in 0..lanes {
+                        text.text.push_str(&format!(
+                            "    let henad_total_{lane} = block_sum(henad_lid.x, henad_sum_{lane});\n    if \
+                             (henad_lid.x == 0u) {{\n        partials[henad_block * {lanes}u + {lane}u] = \
+                             henad_total_{lane};\n    }}\n"
+                        ));
+                    }
+                }
+                Role::Color => {
+                    text.push("    var henad_color = 4294967295u;\n");
+                    text.append(body);
+                    text.text.push_str(&format!(
+                        "    if (henad_index < params.henad_agents) {{\n        {AGENT_COLORS}[henad_index] = \
+                         henad_color;\n    }}\n"
+                    ));
+                }
+                Role::Merge(field) => {
+                    let field = &plan.fields[field];
+                    let label = field.label();
+                    let accum = field.accum_label();
+                    text.text.push_str(&format!(
+                        "    if (henad_slot >= params.henad_cells * {}u) {{\n        return;\n    }}\n    let \
+                         henad_index = henad_slot % params.henad_cells;\n",
+                        field.layers
+                    ));
+                    text.text.push_str(&format!(
+                        "    let henad_deposit = bitcast<f32>(atomicLoad(&{accum}[henad_slot]));\n    \
+                         atomicStore(&{accum}[henad_slot], 0u);\n    let henad_merged = max({label}[henad_slot], \
+                         henad_deposit);\n"
+                    ));
+                    if body.text.is_empty() {
+                        text.text
+                            .push_str(&format!("    {label}[henad_slot] = henad_merged;\n"));
+                    } else {
+                        text.append(body);
+                    }
+                }
+                _ => text.append(body),
+            }
+            text.push("}\n");
+        }
+        let workgroup_bytes = match self.role {
+            Role::Reduce => {
+                let sums = if self.sum_lanes.is_empty() {
+                    0
+                } else {
+                    u64::from(LINEAR_WORKGROUP) * 4
+                };
+                tallies as u64 * 4 + sums
+            }
+            _ => 0,
+        };
+        Emitted {
+            text: text.text,
+            ranges: text.ranges,
+            bindings,
+            uniform,
+            counters: tallies,
+            sum_lanes: self.sum_lanes,
+            workgroup_bytes,
+        }
+    }
+
     /// Returns the shader: its imports, uniform block, bindings and helpers, then `main` around `body`.
     #[expect(
         clippy::too_many_lines,
         reason = "the template of every role reads best in one place"
     )]
     fn assemble(mut self, body: Text) -> Emitted {
+        if self.input.agents.is_some() {
+            return self.assemble_agents(body);
+        }
         let counters = self.tally_offset.max(1);
         let mut bindings: Vec<ShaderBinding> = Vec::new();
         let mut declarations = String::new();
@@ -1183,67 +2469,11 @@ impl Emitter<'_> {
                 storage(false),
                 &format!("var<storage, read_write> counters: array<atomic<u32>, {counters}>"),
             ),
-            Role::Step { .. } | Role::Action => {}
+            Role::Step { .. } | Role::Action | Role::Color | Role::Merge(_) => {}
         }
 
         let mut text = Text::default();
-        text.push("// Generated by henad-graph. Every value is named after its node, n<id>_<port>.\n");
-        let mut rng = Vec::new();
-        if self.uses.pcg_hash {
-            rng.push("pcg_hash");
-        }
-        if self.uses.random_float {
-            rng.push("random_float");
-        }
-        if !rng.is_empty() {
-            text.text
-                .push_str(&format!("#import henad::rng::{{{}}}\n", rng.join(", ")));
-        }
-        if self.uses.draw_core {
-            text.push("#import henad_graph::draw::draw_core\n");
-        }
-        if self.uses.neighbors {
-            text.push("#import henad::space::{offset_cell, TORUS, BOUNDED}\n");
-        }
-        if self.role == Role::Display {
-            text.push("#import henad::dims::{Dims, cell_at}\n");
-        }
-        text.push("\n");
-        text.push(&uniform.declaration());
-        text.push("\n");
-        text.push(&declarations);
-        text.push("\n");
-        for (constant, colors) in &self.palettes {
-            text.text
-                .push_str(&format!("const {constant} = array<vec4<f32>, {}>(\n", colors.len()));
-            for [red, green, blue, alpha] in colors {
-                text.text.push_str(&format!(
-                    "    vec4<f32>({red}.0 / 255.0, {green}.0 / 255.0, {blue}.0 / 255.0, {alpha}.0 / 255.0),\n"
-                ));
-            }
-            text.push(");\n\n");
-        }
-        if self.uses.threshold {
-            text.push(
-                "// The word below which a draw is a success at probability p, as the host computes it: p times 2^32,\n\
-                 // saturating at the top.\n\
-                 fn henad_threshold(p: f32) -> u32 {\n    \
-                 let scaled = p * 4294967296.0f;\n    \
-                 return select(u32(scaled), 4294967295u, scaled >= 4294967296.0f);\n\
-                 }\n\n",
-            );
-        }
-        if self.uses.neighbors {
-            let boundary = match self.input.document.world {
-                crate::document::World::Grid(grid) if grid.boundary == Boundary::Bounded => "BOUNDED",
-                _ => "TORUS",
-            };
-            text.text.push_str(&format!("var<private> henad_cell: vec2<u32>;\n\n\
-                 // The cell dx east and dy south of this cell, and whether it is on the grid.\n\
-                 fn henad_at(dx: i32, dy: i32) -> vec3<i32> {{\n    \
-                 return offset_cell(henad_cell.x, henad_cell.y, dx, dy, params.henad_width, params.henad_height, {boundary});\n\
-                 }}\n\n"));
-        }
+        self.header(&mut text, &uniform, &declarations);
         if self.role == Role::Reduce {
             text.text.push_str(&format!(
                 "var<workgroup> henad_partial: array<atomic<u32>, {counters}>;\n\n"
@@ -1263,7 +2493,7 @@ impl Emitter<'_> {
             String::new()
         };
         match self.role {
-            Role::Step { .. } | Role::Action => {
+            Role::Step { .. } | Role::Action | Role::Color | Role::Merge(_) => {
                 text.push("fn main(@builtin(global_invocation_id) henad_id: vec3<u32>) {\n");
                 text.push(&tick_line);
                 if writes_tick {
@@ -1275,6 +2505,9 @@ impl Emitter<'_> {
                     "    if (henad_id.x >= params.henad_width || henad_id.y >= params.henad_height) {\n        return;\n    }\n",
                 );
                 text.push(cell_line);
+                if self.uses.own_cell {
+                    text.push("    let henad_own_cell = henad_id.xy;\n");
+                }
                 text.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
                 text.append(body);
                 text.push("}\n");
@@ -1287,6 +2520,9 @@ impl Emitter<'_> {
                     text.push("    henad_cell = henad_xy;\n");
                 }
                 text.push(&tick_line);
+                if self.uses.own_cell {
+                    text.push("    let henad_own_cell = henad_xy;\n");
+                }
                 text.push("    let henad_index = henad_xy.y * params.henad_width + henad_xy.x;\n");
                 text.push("    var henad_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);\n");
                 text.append(body);
@@ -1302,6 +2538,9 @@ impl Emitter<'_> {
                 if self.uses.neighbors {
                     text.push("    henad_cell = henad_id.xy;\n");
                 }
+                if self.uses.own_cell {
+                    text.push("    let henad_own_cell = henad_id.xy;\n");
+                }
                 text.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
                 text.append(body);
                 text.push("    }\n    workgroupBarrier();\n");
@@ -1314,23 +2553,43 @@ impl Emitter<'_> {
             bindings,
             uniform,
             counters,
+            sum_lanes: Vec::new(),
+            workgroup_bytes: if self.role == Role::Reduce {
+                counters as u64 * 4
+            } else {
+                0
+            },
         }
     }
 }
 
-/// Names the running value of every accumulator of every Repeat in `block` after the accumulator's output, which takes
-/// the running value once the loop ends.
+/// Names the running value of every accumulator of every region in `block` after the accumulator's output, which
+/// takes the running value once the loop ends.
 fn name_running(block: &[Instruction], names: &mut [SlotName], types: &mut [Option<WgslType>]) {
     for instruction in block {
-        if let Operation::Repeat(repeat) = &instruction.operation {
-            for accumulator in &repeat.accumulators {
-                if let Some(name) = names.get(accumulator.out).cloned() {
-                    names[accumulator.running] = name;
-                }
-                types[accumulator.running] = WgslType::of_value(accumulator.identity);
+        let (accumulators, body) = match &instruction.operation {
+            Operation::Repeat(repeat) => (&repeat.accumulators, &repeat.body),
+            Operation::GridFold(fold) => (&fold.accumulators, &fold.body),
+            Operation::RadiusFold(fold) => (&fold.accumulators, &fold.body),
+            _ => continue,
+        };
+        for accumulator in accumulators {
+            if let Some(name) = names.get(accumulator.out).cloned() {
+                names[accumulator.running] = name;
             }
-            name_running(&repeat.body, names, types);
+            types[accumulator.running] = WgslType::of_value(accumulator.identity);
         }
+        name_running(body, names, types);
+    }
+}
+
+/// Returns the WGSL `bool` of whether the cell `xy`, a `vec2<i32>` when `signed` and a `vec2<u32>` otherwise, lies on
+/// the domain grid.
+fn inside(xy: &str, signed: bool) -> String {
+    if signed {
+        format!("{xy}.x >= 0i && {xy}.y >= 0i && u32({xy}.x) < params.henad_width && u32({xy}.y) < params.henad_height")
+    } else {
+        format!("{xy}.x < params.henad_width && {xy}.y < params.henad_height")
     }
 }
 

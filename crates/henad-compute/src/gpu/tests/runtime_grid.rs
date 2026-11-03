@@ -81,7 +81,8 @@ fn naga_oil_span_encoding_is_unchanged() {
     let (composition, start) = composed(&rule).unwrap_or_else(|problems| panic!("{problems:#?}"));
     let module = &composition.module;
 
-    // The shared modules take indices 1 to 5 in `SHARED_WGSL_MODULES` order: dispatch, dims, rng, space, reduce_tree.
+    // The shared modules take indices 1 to 6 in `SHARED_WGSL_MODULES` order: dispatch, dims, rng, space, reduce_tree,
+    // hash.
     let index_of = |name: &str| {
         let (handle, _) = module
             .functions

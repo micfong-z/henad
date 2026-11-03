@@ -1,5 +1,8 @@
-//! WGSL compiler of graph models on a grid: the shaders of every pass the GPU runs, the [`GpuGridSpec`] that runs
-//! them, and the [`ModelEntry`] a host builds.
+//! WGSL compiler of graph models: the shaders of every pass the GPU runs, the [`GpuGridSpec`] or
+//! [`GpuAgentSpec`](henad_compute::gpu::GpuAgentSpec) that runs them, and the [`ModelEntry`] a host builds.
+//!
+//! [`GridProgram`] compiles a graph on a grid, and [`AgentProgram`] a graph of agents. What follows describes the
+//! grid's compiler, and the agents' extends it in `agents.rs`.
 //!
 //! [`GridProgram::compile`] checks a graph and writes one shader per *role*: one per tick pass, a display shader for
 //! the view passes, a reduce shader for the stats passes, and one per action pass. Each shader is the engine's template
@@ -20,9 +23,13 @@
 //! *Regions.* A Repeat is a counted `for` loop that the compiler writes, with its accumulators as `var`s before it. A
 //! grid count is unrolled over its stencil, one test per neighbour.
 
-mod emit;
+pub(crate) mod agent_hooks;
+pub(crate) mod agents;
+pub(crate) mod emit;
 mod hooks;
-mod uniform;
+pub(crate) mod uniform;
+
+pub use agents::AgentProgram;
 
 use std::borrow::Cow;
 use std::fmt;
@@ -88,6 +95,10 @@ pub enum ShaderRole {
     Reduce,
     /// A pass of the action with this id.
     Action(String),
+    /// The snapshot colour pass of an agents world, which runs the view passes over agents.
+    Color,
+    /// The field update of the field with this id, in an agents world.
+    Merge(String),
 }
 
 /// One shader the compiler wrote, before and after composition.
@@ -106,6 +117,8 @@ pub struct GeneratedShader {
     counters: usize,
     /// Pass of the spec the shader is, for its uniform block.
     pass_id: GridPassId,
+    /// What the agents engine reads of a shader of an agents world, `None` for a grid.
+    agent: Option<agents::AgentShader>,
 }
 
 /// Prints the role, the label, the passes and the byte lengths of the texts.
@@ -166,6 +179,18 @@ impl GeneratedShader {
         self.cost
     }
 
+    /// What the agents engine reads of the shader, `None` for a shader of a grid.
+    #[cfg(test)]
+    pub(crate) fn agent(&self) -> Option<&agents::AgentShader> {
+        self.agent.as_ref()
+    }
+
+    /// Uniform block of the shader.
+    #[cfg(test)]
+    pub(crate) fn uniform(&self) -> &UniformBlock {
+        &self.uniform
+    }
+
     /// Bindings of the shader in `@binding` order.
     #[cfg(test)]
     pub(crate) fn bindings(&self) -> &[ShaderBinding] {
@@ -196,7 +221,8 @@ impl GeneratedShader {
         params: &[crate::host::HostValue],
         context: &RunContext,
     ) -> Result<Vec<u8>, String> {
-        self.uniform.bytes(evaluator, world, params, context)
+        self.uniform
+            .bytes(evaluator, world, params, context, &uniform::Dispatch::default())
     }
 
     /// Returns the spec of the pass.
@@ -324,7 +350,8 @@ impl GridProgram {
         let document = file.document();
         let World::Grid(grid) = document.world else {
             return Err(vec![CodeDiagnostic::error(
-                "the graph models agents, and this build compiles graphs on a grid alone",
+                "the graph models agents, and `GridProgram` compiles graphs on a grid. Compile it with \
+                 `AgentProgram`",
             )]);
         };
         let compiled = compile_shaders(document, &report, &evaluator, None).map_err(|problems| {
@@ -557,10 +584,15 @@ pub(crate) struct Compiled {
 }
 
 /// Returns whether an instruction of `block`, or of a region body in it, meets `test`.
-fn any_instruction(block: &[Instruction], test: &impl Fn(&Operation) -> bool) -> bool {
+pub(crate) fn any_instruction(block: &[Instruction], test: &impl Fn(&Operation) -> bool) -> bool {
     block.iter().any(|instruction| {
         test(&instruction.operation)
-            || matches!(&instruction.operation, Operation::Repeat(repeat) if any_instruction(&repeat.body, test))
+            || match &instruction.operation {
+                Operation::Repeat(repeat) => any_instruction(&repeat.body, test),
+                Operation::GridFold(fold) => any_instruction(&fold.body, test),
+                Operation::RadiusFold(fold) => any_instruction(&fold.body, test),
+                _ => false,
+            }
     })
 }
 
@@ -606,7 +638,9 @@ pub(crate) fn compile_shaders(
             }
             LanePlan {
                 id: lane.id.clone(),
+                label: format!("lane_{}_cells", lane.id),
                 wgsl: WgslType::of(&lane.value_type),
+                merged: None,
             }
         })
         .collect();
@@ -690,6 +724,7 @@ pub(crate) fn compile_shaders(
         lanes: &lanes,
         tick_buffer,
         outer_iteration,
+        agents: None,
     };
     let cost_of = |positions: &[usize]| {
         positions
@@ -787,6 +822,7 @@ pub(crate) fn compile_shaders(
             bindings,
             uniform,
             counters,
+            ..
         } = emitted;
         if text.len() > MAX_FILE_BYTES {
             problems.push(oversized(&label, text.len(), &ranges));
@@ -815,6 +851,7 @@ pub(crate) fn compile_shaders(
             cost,
             counters,
             pass_id,
+            agent: None,
         });
     }
     if !problems.is_empty() {
@@ -830,7 +867,7 @@ pub(crate) fn compile_shaders(
 
 /// Returns `problem` placed on the table of its node in `file`, or on its pass's table, when it names them and has no
 /// place of its own.
-fn place(file: &GraphFile, problem: CodeDiagnostic) -> CodeDiagnostic {
+pub(crate) fn place(file: &GraphFile, problem: CodeDiagnostic) -> CodeDiagnostic {
     if problem.span.is_some() {
         return problem;
     }
@@ -860,7 +897,7 @@ fn place(file: &GraphFile, problem: CodeDiagnostic) -> CodeDiagnostic {
 
 /// Returns the problem of the shader `label`, whose text of `bytes` bytes is past [`MAX_FILE_BYTES`], placed on the
 /// pass whose nodes wrote the most of it in `ranges`.
-fn oversized(label: &str, bytes: usize, ranges: &[NodeRange]) -> CodeDiagnostic {
+pub(crate) fn oversized(label: &str, bytes: usize, ranges: &[NodeRange]) -> CodeDiagnostic {
     let mut written: Vec<(&str, usize)> = Vec::new();
     for range in ranges {
         let length = range.range.len();
@@ -887,7 +924,7 @@ const COMPILER_FAULT_NOTE: &str = "in WGSL the compiler generated, which is a fa
 
 /// Returns `text` composed with the shared modules and `henad_graph::draw`, or its problems, each against the node
 /// that wrote the line it is placed on.
-fn compose(label: &str, text: &str, ranges: &[NodeRange]) -> Result<String, Vec<CodeDiagnostic>> {
+pub(crate) fn compose(label: &str, text: &str, ranges: &[NodeRange]) -> Result<String, Vec<CodeDiagnostic>> {
     compose_wgsl(
         WgslFile { path: label, text },
         &[WgslFile {

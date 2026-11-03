@@ -1,6 +1,7 @@
 //! Tests of the reader, the canonical writer, the code identity, the catalogue, the library lock and the checker.
 
 mod agent_rules;
+mod agent_wgsl;
 mod case_files;
 mod catalogue;
 mod checker;
