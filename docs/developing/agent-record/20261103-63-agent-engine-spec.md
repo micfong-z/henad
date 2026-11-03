@@ -6,7 +6,7 @@ icon: material/expansion-card-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "spec, engine, adapter and public constructors built, every check.sh step passing with HENAD_REQUIRE_GPU=1 apart from cargo deny's three zbus advisories, which stop the script as they did before this change, the interleaved benchmark gate not run and waiting for an idle machine, the review's five findings fixed, committed as drafts on top of e816b44"
+state: "spec, engine, adapter and public constructors built, every check.sh step passing with HENAD_REQUIRE_GPU=1 apart from cargo deny's three zbus advisories, which stop the script as they did before this change, the interleaved benchmark gate met on an overnight run (median paired ratios 0.977 to 1.036), the review's five findings fixed, committed as drafts on top of e816b44"
 baseline_commit: e816b44
 delta_state: "two unsigned draft commits on `37-a1`, the milestone and its review fixes"
 ---
@@ -19,7 +19,7 @@ delta_state: "two unsigned draft commits on `37-a1`, the milestone and its revie
 > Each pass binds through a `SideTable`, which lets a later milestone commit a writer's output to the passes after it.
 > The specs and hooks of both engines are public behind `runtime-wgsl`.
 > `Structure::GpuGrid` and `Structure::GpuAgents` hold `Cow`s, a breaking change for 0.4.
-> The stock `gpu_ants` steps byte for byte as it did before the change, and the interleaved benchmark gate waits for an idle machine.
+> The stock `gpu_ants` steps byte for byte as it did before the change, and the interleaved benchmark gate passes, with every median paired ratio at most 1.036.
 
 ## State before
 
@@ -219,7 +219,37 @@ A build through `GpuSimThread` drew the flock and ran to tick 716, with the stat
 
 The gate of the milestone has two halves.
 The adapter half has a test, above, and passes.
-The interleaved benchmark half has not run, by instruction, and the milestone's gate stays open until it does.
+The interleaved benchmark half passes, with the results below.
+
+### Benchmark results
+
+The runs below were made overnight on 2026-11-03, on an Apple M4 Pro with no cooling beyond its own, by an agent and not by the maintainer.
+The maintainer may repeat them with the commands that follow.
+The old binary is a release build of henad-cli at `e816b44`.
+The new one is a release build that an earlier agent of the same job made at 04:08 from the round 1 branch, A1 and its review fix included, and copied aside before the runs.
+That agent did not record its exact commit.
+Each model and size ran five rounds, old then new in each round, and each figure below is the median over rounds of the new round's median rep time over the old round's.
+
+A stray debug henad-app, left running by an earlier agent of the same job, was using about 280% CPU when this step started.
+Its simulation was paused through its own pause button before any run below, and it stayed at 0% CPU throughout.
+
+Three configurations were scaled down to stay near 1000 s in total.
+`gpu_boids` at 100000 agents ran 400 steps and 3 reps, and at 1000000 agents 8 steps and 3 reps, since one step there takes about 2.6 s.
+Every other configuration ran 2000 steps and 5 reps, as the commands below give.
+
+| Model | Agents | Median paired ratio | Ratio per round | Old median | New median |
+|---|---|---|---|---|---|
+| `gpu_boids` | 4096 | 0.977 | 0.977, 0.962, 0.979, 0.980, 0.975 | 0.3267 s | 0.3172 s |
+| `gpu_boids` | 100000 | 0.996 | 0.975, 0.996, 1.004, 1.008, 0.993 | 5.5394 s | 5.5152 s |
+| `gpu_boids` | 1000000 | 1.007 | 1.067, 0.984, 1.020, 0.991, 1.007 | 21.2150 s | 21.3258 s |
+| `gpu_ants` | 4096 | 1.036 | 0.996, 1.061, 1.036, 0.950, 1.090 | 0.0520 s | 0.0535 s |
+| `gpu_ants` | 100000 | 1.001 | 1.001, 0.995, 1.007, 1.001, 1.001 | 0.1299 s | 0.1301 s |
+| `gpu_ants` | 1000000 | 1.000 | 1.000, 0.999, 1.000, 1.001, 1.001 | 1.2317 s | 1.2319 s |
+
+Every ratio is within the gate of 1.05, and none needed a rerun.
+`gpu_ants` at 4096 agents is the widest spread, with reps of about 50 ms.
+A `--export-stats` run of 2000 steps of `gpu_ants` on each build gave byte-identical CSVs.
+The blocking-sample timings and the sweep comparison below were not run.
 
 ### Benchmark gate, for an idle machine
 

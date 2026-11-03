@@ -53,7 +53,7 @@ fn case_shader<'a>(compiled: &'a Compiled, what: &str) -> &'a GeneratedShader {
 }
 
 /// Returns the palette index of `texel` in the palette `id` of `document`.
-fn color_index(document: &GraphDocument, id: &str, texel: [u8; 4]) -> Option<u32> {
+pub(super) fn color_index(document: &GraphDocument, id: &str, texel: [u8; 4]) -> Option<u32> {
     let colors: Vec<[u8; 4]> = document
         .palettes
         .iter()

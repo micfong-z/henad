@@ -98,6 +98,10 @@ pub struct AppState {
     /// Entry the live simulation was built from. It stays the running model's entry after the set's entry under its
     /// id is replaced, until a build replaces the simulation.
     loaded: Option<ModelEntry>,
+    /// Preview of the Editor's graph model that the live simulation runs, `None` for any other run.
+    preview: Option<PreviewRun>,
+    /// Number of builds started that were no preview.
+    builds: u64,
     pub pending_reload: Vec<bool>,
     /// Seed of the next build, `None` for the model's default seed.
     pub seed: Option<u64>,
@@ -128,6 +132,9 @@ pub struct AppState {
     pub sim_thread: Option<SimRunner>,
     /// Build of the live simulation on its own thread. Always `None` in a browser, where builds run inline.
     building: Option<PendingBuild>,
+    /// Whether builds run inline on the calling thread, as they do in a browser. Test builds only.
+    #[cfg(test)]
+    pub inline_builds: bool,
     /// Runs and builds that did not stop in time, kept until their threads end. A build started meanwhile holds them
     /// too, and waits for them.
     stopping: Vec<Arc<Stopping>>,
@@ -247,6 +254,15 @@ impl OpenedRun {
     }
 }
 
+/// Preview of the Editor's graph model, as the live simulation runs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviewRun {
+    /// Width of the preview's grid in cells.
+    pub width: u32,
+    /// Height of the preview's grid in cells.
+    pub height: u32,
+}
+
 /// Draw style for an agent population in the viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PointRenderMode {
@@ -288,6 +304,8 @@ impl AppState {
             selected_model,
             param_values,
             loaded: None,
+            preview: None,
+            builds: 0,
             seed: None,
             seed_text: String::new(),
             loaded_values: Vec::new(),
@@ -303,6 +321,8 @@ impl AppState {
             focus_request: None,
             sim_thread: None,
             building: None,
+            #[cfg(test)]
+            inline_builds: false,
             stopping: Vec::new(),
             pools,
             ui_pool: UiPool::default(),
@@ -379,6 +399,49 @@ impl AppState {
     /// runner. A build that fails goes to the fault modal, or to the Editor for a fault of the code the Editor
     /// applied, and leaves no model loaded.
     fn load(&mut self, setup: Option<RunSetup>) {
+        self.load_setup(setup, None);
+    }
+
+    /// Tears down the live simulation and builds `setup` as the Editor's preview `preview`, which neither the
+    /// selection nor the next build's fields follow.
+    ///
+    /// The preview plays from tick 0 once it is built. A build that fails goes to the Editor.
+    ///
+    /// Note that a build can fail before this returns: inline in a browser, or natively when the build thread does
+    /// not start. The fault then offloads the preview, which stays paused with nothing loaded.
+    pub fn load_preview(&mut self, setup: RunSetup, preview: PreviewRun) {
+        self.load_setup(Some(setup), Some(preview));
+        if self.preview.is_some() && self.has_simulation() {
+            self.sim_running = true;
+            self.send_command(SimCommand::Play);
+        }
+    }
+
+    /// Preview of the Editor's graph model that the live simulation runs or builds, `None` for any other run.
+    pub fn preview(&self) -> Option<PreviewRun> {
+        self.preview
+    }
+
+    /// Number of builds started so far that were no preview. A preview that waits compares it, and gives way to a
+    /// build started after its edit.
+    pub fn builds(&self) -> u64 {
+        self.builds
+    }
+
+    /// Returns whether the Editor's preview can replace the live simulation: nothing is loaded, the loaded run is a
+    /// preview, or the loaded run has built and is at tick 0.
+    pub fn preview_can_load(&self) -> bool {
+        if self.preview.is_some() {
+            return true;
+        }
+        match &self.loaded {
+            None => !self.has_simulation(),
+            Some(_) => !self.is_building() && self.pending_rebuild.is_none() && self.run_at_start(),
+        }
+    }
+
+    /// Tears down the live simulation and builds `setup`, as the preview `preview` when set.
+    fn load_setup(&mut self, setup: Option<RunSetup>, preview: Option<PreviewRun>) {
         self.settle_opened_run(setup.as_ref());
         self.stop_recording();
         // A runner that stops releases a GPU model's buffers and pipelines, and the build waits for one that has not
@@ -393,6 +456,7 @@ impl AppState {
         self.density_max = 4.0;
         self.ticks_per_snapshot = 1;
         self.loaded = None;
+        self.preview = preview;
         self.pending_rebuild = None;
         self.export_status = None;
         self.run_to_target = None;
@@ -410,9 +474,12 @@ impl AppState {
             self.history_capacity,
         ));
         self.sim_running = false;
+        if preview.is_none() {
+            self.builds += 1;
+        }
         // The fields of the next build are the setup's only for the selected model. A rebuild of a model loaded
-        // while another one is selected leaves them alone.
-        if self.selected_model.as_deref() == Some(setup.entry().id()) {
+        // while another one is selected leaves them alone, and so does a preview.
+        if preview.is_none() && self.selected_model.as_deref() == Some(setup.entry().id()) {
             self.pending_reload = vec![false; self.param_values.len()];
         }
         self.loaded_values = setup.values().to_vec();
@@ -663,11 +730,19 @@ impl AppState {
     /// Offloads the live simulation and passes the fault to the modal, naming `model` as the model it stopped.
     ///
     /// A fault of a run built from the code the Editor applied last, before the run passes tick 0, goes to the Editor
-    /// instead, as the outcome of the edit, when an edit of the code can fix it ([`EditorPanel::claims`]).
+    /// instead, as the outcome of the edit, when an edit of the code can fix it ([`EditorPanel::claims`]). So does a
+    /// fault of the Editor's preview at any tick, while the Editor holds a graph to show it under. The fault of a
+    /// preview that outlived its graph goes to the modal.
     ///
     /// On native the build thread returns the fault of a build in a later frame than the press that started it, and in
     /// a browser the device reports a shader it refuses after the build that created it.
     fn show_fault(&mut self, fault: Fault, model: Option<&ModelEntry>) {
+        if self.preview.is_some() && self.editor.graph.is_some() && EditorPanel::is_code_fault(&fault) {
+            log::error!("{fault}");
+            self.offload_simulation();
+            self.editor.show_preview_fault(&fault);
+            return;
+        }
         let at_start = self.snapshot.as_ref().is_none_or(|snapshot| snapshot.tick == 0);
         let claimed = at_start && model.is_some_and(|entry| self.editor.claims(entry.source(), &fault));
         if claimed {
@@ -705,6 +780,7 @@ impl AppState {
         self.last_rendered_serial = None;
         self.stats_history = None;
         self.loaded = None;
+        self.preview = None;
         self.opened_run = None;
         self.pending_rebuild = None;
         self.run_to_target = None;
@@ -732,21 +808,23 @@ impl AppState {
     /// same code, as [`same_code`] compares it.
     ///
     /// Note that a model whose code the set has replaced since its build is not the selection, and live edits and
-    /// actions do not reach it.
+    /// actions do not reach it. Neither is the Editor's preview.
     pub fn selection_is_loaded(&self) -> bool {
-        self.loaded.as_ref().is_some_and(|loaded| {
-            self.selected_entry()
-                .is_some_and(|selected| selected.id() == loaded.id() && same_code(loaded, selected))
-        })
+        self.preview.is_none()
+            && self.loaded.as_ref().is_some_and(|loaded| {
+                self.selected_entry()
+                    .is_some_and(|selected| selected.id() == loaded.id() && same_code(loaded, selected))
+            })
     }
 
     /// Returns whether the live simulation runs the selected model under code that the set has replaced since its
-    /// build.
+    /// build. Always false for the Editor's preview.
     pub fn code_pending(&self) -> bool {
-        self.loaded.as_ref().is_some_and(|loaded| {
-            self.selected_entry()
-                .is_some_and(|selected| selected.id() == loaded.id() && !same_code(loaded, selected))
-        })
+        self.preview.is_none()
+            && self.loaded.as_ref().is_some_and(|loaded| {
+                self.selected_entry()
+                    .is_some_and(|selected| selected.id() == loaded.id() && !same_code(loaded, selected))
+            })
     }
 
     /// Entry of the selected model.
@@ -796,7 +874,7 @@ impl AppState {
     }
 
     /// Selects model `id` with its default values and no scheduled actions, or the values, seed and actions the
-    /// loaded model runs with when `id` is the loaded model.
+    /// loaded model runs with when `id` is the loaded model and the run is no preview.
     ///
     /// An already selected model keeps its values. An id missing from the set leaves no values. The values and actions
     /// of a loaded model whose code the set has replaced are carried to the set's entry by id, as
@@ -808,7 +886,8 @@ impl AppState {
         self.selected_model = Some(id.to_owned());
         self.opening_refusal = None;
         self.schedule_action_input = 0;
-        if let Some(loaded) = self.loaded.as_ref().filter(|loaded| loaded.id() == id) {
+        let previewing = self.preview.is_some();
+        if let Some(loaded) = self.loaded.as_ref().filter(|loaded| loaded.id() == id && !previewing) {
             let current = self.models.get(id).unwrap_or(loaded);
             self.param_values = remap_values(
                 loaded.param_descriptors(),

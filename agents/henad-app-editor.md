@@ -1,11 +1,15 @@
 # henad-app: the Editor tab
 
-`ui/editor/` is the Editor tab, the in-app editor of a grid rule's model file, a test harness
-that #37's node editor replaces. `mod.rs` holds `EditorPanel` (`AppState::editor`: the text as
-typed, the file name, the `ApplyOutcome` of the last Apply, the open and save status, and the
-`ModelSource` applied last) and `editor_ui`: a header of New grid rule, Open model, Save model and
-Apply, the code, and a list of the outcome and each `CodeDiagnostic` as a selectable `Label`
-reading `<line>:<column> <message>`, whose press moves the cursor there (`move_cursor_to`).
+`ui/editor/` is the Editor tab, the in-app editor of one model file: a grid rule as text in the
+code view, or a graph model on the canvas of `ui/editor/graph/` (below). `mod.rs` holds
+`EditorPanel` (`AppState::editor`: a grid rule's text as typed, the graph under edit as
+`graph: Option<Box<GraphEditor>>`, the file name, the `ApplyOutcome` of the last Apply, the open
+and save status, and the `ModelSource` applied last) and `editor_ui`, which dispatches on `graph`:
+a header of New grid rule, New graph model (a menu of henad-graph's `starters()`, labelled by
+each starter's model name), Open model, Save model and Apply, then the code view or the graph
+editor. For a grid rule the list under the code holds the outcome and each `CodeDiagnostic` as a
+selectable `Label` reading `<line>:<column> <message>`, whose press moves the cursor there
+(`move_cursor_to`).
 `code_view.rs` draws one `TextEdit::multiline(..).code_editor()` with a layouter that never wraps,
 in one `ScrollArea::both`, beside a gutter outside it. The gutter's numbers come from the galley's
 rows (`gutter_numbers`) and follow them up and down, and stay in place while a long line scrolls
@@ -57,27 +61,136 @@ page.
 `a_diagnostic_moves_the_cursor_to_its_line` and `edit_model_shows_the_code_the_rule_runs`. Keep
 them.
 
-## The egui-snarl spike
+## The graph editor
 
-`ui/editor/scratch.rs`, behind henad-app's `snarl-spike` feature (off by default, the only reason
-egui-snarl is in the graph), is the scratch canvas of milestone E0, which E1 replaces. A Scratch
-canvas checkbox in the tab's header shows it in place of the code view. `src/tests/scratch_canvas.rs`
-holds its headless tests over a plain `egui::Context`, which pin egui-snarl 0.12's behaviour: reused
-node ids, one `Move` per drag, the command-drag that drops wires with no viewer callback, and the
-rest. Record #62 holds the findings.
+`ui/editor/graph/` edits a graph model through henad-graph's `GraphBuilder` and `EditCommand`s,
+never by writing the document. `EditorPanel::file_text` is the graph's canonical text, which Apply,
+Save model and `save_name` read, so Apply runs the same path as a grid rule (`ModelFile::parse`,
+`entry`, `install_models`, the Rebuild model modal past tick 0, fault claiming). A grid graph
+installs as a GPU grid entry at its own size, and a shortfall of `Demand::shortfalls` (the
+submission budget included) is `ApplyOutcome::Faulted`, as for a grid rule. Apply also replaces a
+running preview at any tick: `runs_source` never holds for a preview, and `install`'s
+`settle_loaded` leaves a preview alone. `receive_open` opens a file that `GraphFile::parse` reads
+on the canvas, and any other text in the code view, a graph that does not read included, where Apply
+places its problems. `new_graph_model(app, file_name)` opens a starter, and Edit model opens a
+runtime entry whose code is `henad-graph/1` (`editable_graph`, `can_edit`). `GraphEditor::new`
+places every body without placement through `arrange` (no undo step) and opens the first tick pass.
 
-A wire in flight is a process-killing trap. `SnarlState` keeps the dragged pins, and `show` panics
-at `src/ui.rs:1333` or `:1352` of egui-snarl with "no entry found for key" once `remove_node` has
-taken a pin's node away. The canvas reaches `remove_node` only from menu commands, and the secondary
-press that opens a menu cancels the wire. A keyboard undo needs no pointer, so E1 holds document
-edits while the primary button is down and runs them after `show`, since the release frame already
-reports the button as up. The other guard is a new canvas id for that rebuild, which drops the
-transform and the selection. Plain click can select without a fork, through a modifier write around
-`show` on a click's release frame (`draw_with_plain_click` in the tests). Only pasted nodes or Select
-all starting selected remain out of reach.
+`mod.rs` holds `GraphEditor`: the builder, `History`, the open `Scope`, one `BodyCanvas` per body
+opened (keyed by scope), the `CheckReport` and a per-pass map of `NodeIssues` from diagnostics that
+carry a pass and a node. Each canvas takes an egui id of its own from the load counter and the
+editor's count of canvases made (`canvases_made`), never from the scope's name. egui-snarl keeps
+the selection, the transform and the node sizes under that id, and a body reopened after its canvas
+was dropped, or a new pass that takes a renamed pass's id, would otherwise read a stale selection
+by pin index. Every gesture is a `GraphRequest`
+(`Edit(GraphEdit)` of commands with a coalesce key, `AddNode` with an optional `DroppedWire`,
+`Undo`, `Redo`, `Copy`, `Cut`, `Paste`, `Delete`, `Arrange`, `Open`, `Frame`, `FrameAll`).
+`graph_ui` draws the side panel (`passes.rs`, `world.rs`), the toolbar and the canvas, then
+`settle` runs the requests: while the primary button is down they wait in `pending`, and once it
+is up a drag's `Move`s and any wire egui-snarl dropped without a callback (`lost_wires`) commit
+first, then the requests, then the open canvas syncs. This order is the guard of trap 8 of record
+#62: a removal while a wire is in flight panics egui-snarl. `edit` runs commands on a clone, so a
+refused command changes nothing, and its message (capitalised, with a full stop) is `status`, a
+`GraphStatus` whose `warning` draws it in the theme's warn colour. A copy's "Copied N nodes." is a
+note (`GraphStatus::note`) in the text colour.
+`refresh` checks again, rebuilds `issues` and reopens the first pass when the open one is gone.
+Undo keeps the canonical text before each edit, `[editor]` included (`history.rs`, 200 snapshots),
+and consecutive edits with one coalesce key make one step (a literal dragged, a parameter's range,
+the world table) until the gesture ends. `settle` ends it when the primary button goes up, before
+and after the batch the release runs, and when keyboard focus moves (`pressed`, `focused`), so two
+drags of one field are two steps. The world table and a parameter's range and default show
+`shown_world` and `shown_param`, the last waiting `SetWorld` or `SetParam`, so a dragged field
+shows its value while the requests wait for the release. Keys over the canvas while no field has
+focus: command Z, command shift Z or command Y, Delete or Backspace on the selection, and egui's
+`Copy`, `Cut` and `Paste` events. Copy puts
+`GraphBuilder::copy` text on the clipboard, and Paste places the nodes' top left at the pointer.
 
-Driving the canvas through the egui MCP server: widget bounds inside the canvas are in graph space,
-so a locator misses and a click takes a raw `pos` at `scale * graph + translation`. The readouts print
-the transform and each pin's screen position. `click` and `drag` modifiers never reach
-`InputState::modifiers`, which egui-snarl reads, so Hold shift and Hold command write it before the
-canvas draws. Command with `scroll` zooms, and the transform settles over a few frames.
+`canvas.rs` holds `BodyCanvas` (the `Snarl<NodeView>`, the `NodeId` to egui-snarl node map, the
+drawn rectangles, the transform, `framing`), the viewer and `show_canvas`. `sync` brings the
+`Snarl` to the document by difference (remove, insert, update in place, then wires sorted by
+`wire_order` so a run is reproducible), never by rebuilding, which would move the selection. A
+`NodeView` holds the pins in the order of the kind's resolved ports, outer outputs before inner
+outputs, so a pin index maps back to a port name, and types and rates come from the report's
+`PassReport`. The colour of a pin is its type and its shape its rate (`sockets.rs`, a data palette
+outside MCS). A constant input edits in place (`DragValue`, a checkbox, a variant menu), a bound
+parameter shows as a chip, and the node menu holds Frame, Copy, Inputs (bind to a parameter, set a
+constant, clear), Settings (configuration keys with a short list of values), Add statistic (a
+tick-rate output in a stats pass) and Delete. A node with an error takes a red 500 stroke and a
+red 900 badge, a warning alone orange, and the badge's press frames the node, as does a press on a
+problem in the list under the canvas. A framing holds over frames until the target's rectangle
+stops changing. A plain click selects through the modifier write of record #62 around `show`.
+Quick-add (`quick_add.rs`) opens on the background and on a dropped wire, and adds the node where
+the pointer was when the menu opened (`menu_origin`), since egui-snarl passes the menu's top left: `offered_kinds` keeps the
+kinds the pass's stage, backend and domain take (no region-only kind), that have a socket for the
+wire's type, and that match every word of the query or a synonym. Arrange (`arrange.rs`) places
+the body in columns by longest path, each as wide as its widest drawn node.
+
+`GraphEditor::program` compiles the document through `GridProgram::compile` once per revision
+(`CompiledProgram`), for the generated WGSL view and the preview. `wgsl_view.rs` is a right panel,
+toggled by the toolbar's WGSL switch (`GraphRequest::ShowWgsl`), that shows `GeneratedShader::text`
+of each shader whose `passes` hold the open pass as a selectable non-wrapping monospace label, and
+`HOST_PASS`, `DISABLED_PASS` or `NOT_COMPILED` otherwise. View in viewport (`view_pass.rs`) is a
+node-menu submenu over the outputs `can_view` accepts (element rate, `f32`, `u32`, `i32`, `bool` or
+a category) of a node outside every region. `GraphRequest::View` sets `viewing` (a `ViewTarget`)
+when `view_file` builds and checks: on a copy of the builder it switches every view pass off, adds
+the palette `view_ramp` (`RAMP`, nine viridis stops, a data palette) and the view pass
+`view_in_viewport`, pastes `upstream` (the node and everything it reads, regions whole) into it,
+and colours the value (a category by its own palette, a `u32` as an index, an `i32` and an `f32`
+through `view.ramp`, a flag as 0 or 8). The document never changes, and a refusal (a draw, which a
+view pass cannot make) is `status`. `preview_program` compiles the view file while `viewing` holds,
+and drops a view the document no longer allows with "Stopped viewing ...". `preview_key` (load,
+revision, view changes) is what the preview compares.
+
+## The live preview
+
+`ui/editor/preview.rs`: `EditorPanel::preview` (`Preview`), and `poll`/`poll_at`, which
+`HenadApp::logic` calls every frame after `report_fault`. A new `preview_key` with no errors sets
+`due` to now plus `DEBOUNCE` (250 ms) and records `AppState::builds`; one with errors drops `due`
+and leaves the running preview alone. Once due, a build counted since the edit (Build, Apply)
+drops the preview to `Idle`, `preview_can_load` false leaves it `Waiting` (`PREVIEW_WAITS`, "Preview
+waits for the running model."), and otherwise `build_preview` compiles `preview_program`, takes
+`preview_values` (defaults, `grid_width` and `grid_height` at most `PREVIEW_SIDE`, 256), refuses a
+shortfall or a `SetupError` as `Refused`, and calls `AppState::load_preview`, which plays the run.
+`AppState::preview` (`PreviewRun`, the size) marks a loaded preview, and `load` clears it.
+`load_preview` plays the run only when the preview is still loaded after `load_setup`: a build that
+fails inline (a browser, or a test with `AppState::inline_builds`) or whose thread does not start
+has already offloaded it. `EditorPanel::load` and `load_graph` reset `preview` to its default, so a
+state of the last document never shows over the next.
+`preview_can_load` holds with nothing loaded and no build, with a preview loaded, or with a built
+run at tick 0 and no Rebuild model modal. A preview is never the selection: `selection_is_loaded`
+and `code_pending` are false, `select_model` does not restore its values, the next build's fields
+stay, and `settle_outcome` sees no loaded source, so "Model applied." becomes "Press Build to run
+it." behind a preview. A code fault of a preview (any tick) goes to `Preview::show_fault`
+(`Faulted`) through `show_fault` while the Editor holds a graph, and the modal keeps the rest,
+the fault of a preview that outlived its graph included. Playback's `preview_line` names the
+preview and its size, with the hover `preview_hover`: `PREVIEW_APPLY`, or `PREVIEW_ORPHANED` once
+the Editor holds no graph.
+
+`src/tests/graph_editor.rs` holds the state tests (starters, open by kind, Apply installs at full
+size, the Rebuild model modal past tick 0, refused edits, undo, coalescing, dropped wires, pass
+renames, issue counts, parameters, Arrange, opening without placement, the colour of a copy's
+status),
+`src/tests/graph_preview.rs` the preview, the WGSL view, View in viewport and the budget
+(`a_new_graph_model_previews_at_the_preview_size`, `binding_a_parameter_restarts_the_preview`,
+`an_invalid_edit_leaves_the_preview_running`,
+`an_edit_during_a_full_size_run_past_tick_zero_leaves_that_run_going`,
+`a_build_after_the_edit_replaces_the_waiting_preview`,
+`a_run_at_tick_zero_gives_way_to_the_preview`,
+`apply_replaces_a_running_preview_with_the_full_size_run`,
+`a_preview_keeps_a_side_below_the_limit`, `the_wgsl_view_reads_the_shaders_of_the_open_pass`,
+`a_preview_whose_build_fails_at_once_stays_paused_with_nothing_loaded`,
+`another_document_clears_the_state_of_the_preview`,
+`a_preview_that_outlived_its_graph_reports_to_the_fault_dialog`,
+`view_in_viewport_previews_a_view_pass_of_the_output`,
+`the_submission_budget_refuses_apply_at_full_size_and_lets_the_preview_run`,
+`every_starter_previews_within_the_device_limits_and_the_work_budget`), and
+`src/tests/graph_canvas.rs` the canvas over a headless `egui::Context` (a fresh egui state per
+canvas, two drags as two undo steps, a dragged world field and the accessible bounds of a node
+among them), which arranges the starter first, since the starters' placement puts pins of
+neighbouring nodes on top of each other. In a test build each pin records its rectangle under
+`canvas::pin_key`. egui writes AccessKit bounds in a layer's own coordinates and ignores its
+transform, so `show_canvas` ends with `place_accessible_nodes`, which moves the bounds of every
+widget on egui-snarl's layer to the screen. Driving the canvas through the egui MCP server: a
+locator finds a widget on a node, and a drag between pins still takes raw positions.
+`click` and `drag` modifiers never reach `InputState::modifiers`, which egui-snarl reads, but a
+plain click selects anyway. Command with `scroll` zooms.

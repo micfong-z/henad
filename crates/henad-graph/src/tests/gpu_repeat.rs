@@ -1,8 +1,9 @@
 //! The Repeat tests of the plan's "Finite loops" section on a device, through the compiler's own shaders.
 //!
-//! Each graph is one of the host tests' bodies in a tick pass, since a model's init passes never run on the device.
+//! Most graphs are one of the host tests' bodies in a tick pass, since a model's init passes never run on the device.
 //! The device runs the pass's step shader once over lanes that start at their declared initial values, and the host
-//! evaluator runs the same pass with [`HostEvaluator::run_pass`] in the same context.
+//! evaluator runs the same pass with [`HostEvaluator::run_pass`] in the same context. One graph holds a Repeat in a
+//! stats, a view and an action pass, the other map passes a Repeat can sit in.
 
 use henad_core::authoring::primitives::rng::random_float;
 use henad_core::params::ParamValue;
@@ -119,9 +120,10 @@ fn a_repeat_body_equals_its_hand_chained_copies_on_the_device() {
 ///
 /// Note that this fails on an Apple M4 Pro. wgpu compiles Metal shaders with fast math on, and the device contracts,
 /// reassociates and folds the float half differently in the loop and in the copies, whose `k` are literals. The integer
-/// half holds. Record #66 holds the probes.
+/// half holds. Compiled with `MTLMathMode.safe`, the same shaders equal each other and the host. Records #66 and #67
+/// hold the probes.
 #[test]
-#[ignore = "fails on Metal, which compiles with fast math; record #66"]
+#[ignore = "fails on Metal, which compiles with fast math; records #66 and #67"]
 fn a_float_repeat_body_equals_its_hand_chained_copies_on_the_device() {
     let Some(device) = device_for("a_float_repeat_body_equals_its_hand_chained_copies_on_the_device") else {
         return;
@@ -133,6 +135,24 @@ fn a_float_repeat_body_equals_its_hand_chained_copies_on_the_device() {
         "the loop and its hand-chained copies"
     );
     assert_eq!(looped, on_host(CARRIED, None, 0), "the device and the host");
+}
+
+/// The float half of [`CARRIED`] replays on one device: two runs of the loop leave the same words, as do two runs of
+/// its hand-chained copies.
+#[test]
+fn a_float_repeat_body_replays_on_the_device() {
+    let Some(device) = device_for("a_float_repeat_body_replays_on_the_device") else {
+        return;
+    };
+    for nodes in [CARRIED.to_owned(), chained()] {
+        let first = on_device(&device, &nodes, None, 0);
+        assert_eq!(
+            first,
+            on_device(&device, &nodes, None, 0),
+            "one device replays:\n{nodes}"
+        );
+        assert_ne!(first[1][3], 3.0f32.to_bits(), "the body ran:\n{nodes}");
+    }
 }
 
 /// The two iterations of one draw in a Repeat differ at every cell on the device, two runs at one seed are equal, and
@@ -183,6 +203,401 @@ fn nested_iterations_combine_in_mixed_radix_on_the_device() {
             "the draw of cell {element}"
         );
     }
+}
+
+/// Tables appended to [`GRID`]: a palette of nine colours, three statistics, an action `poke`, and four passes that
+/// each hold a Repeat whose count is the cell's `x`.
+///
+/// The tick pass keeps `x`. The stats pass `counts` sums `k`, carries a hash chain started from the cell's index and
+/// counts its iterations, then counts the cells whose sum is 6, whose chain ends odd and whose count was clamped to
+/// `max`. The view pass `paint` counts the even iterations, with `when` false at `x = 3`, and colours the cell by that
+/// count. The action pass `poke` carries `3 * prev + k` from the cell's index and writes it to `x`.
+const CONTEXTS: &str = r#"
+[[palette]]
+id = "ramp"
+colors = [[0, 0, 0], [30, 0, 0], [60, 0, 0], [90, 0, 0], [120, 0, 0], [150, 0, 0], [180, 0, 0], [210, 0, 0], [240, 0, 0]]
+
+[[stat]]
+label = "SumIsSix"
+from = "n28"
+color = [242, 166, 59, 255]
+
+[[stat]]
+label = "ChainOdd"
+from = "n31"
+color = [242, 166, 59, 255]
+
+[[stat]]
+label = "Clamped"
+from = "n33"
+color = [242, 166, 59, 255]
+
+[[action]]
+id = "poke"
+label = "Poke"
+runs = []
+
+[[pass]]
+id = "step"
+stage = "tick"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n1"
+op = "lane.get"
+config.lane = "x"
+
+[[pass.node]]
+id = "n2"
+op = "lane.set"
+config.lane = "x"
+in.value = "n1"
+
+[[pass]]
+id = "counts"
+stage = "stats"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n20"
+op = "lane.get"
+config.lane = "x"
+
+[[pass.node]]
+id = "n21"
+op = "region.repeat"
+config.max = 8
+config.acc = [
+  { name = "s", type = "u32", combine = "sum" },
+  { name = "w", type = "u32", combine = "carry" },
+  { name = "n", type = "u32", combine = "count" },
+]
+in.count = "n20"
+in.init.w = "n22"
+
+[[pass.node]]
+id = "n22"
+op = "ctx.index"
+
+[[pass.node]]
+id = "n23"
+op = "region.put"
+config.acc = "s"
+in.value = "n21.k"
+region = "n21"
+
+[[pass.node]]
+id = "n24"
+op = "bits.xor"
+in.a = "n21.prev.w"
+in.b = "n21.k"
+region = "n21"
+
+[[pass.node]]
+id = "n25"
+op = "rng.hash"
+in.x = "n24"
+region = "n21"
+
+[[pass.node]]
+id = "n26"
+op = "region.put"
+config.acc = "w"
+in.value = "n25"
+region = "n21"
+
+[[pass.node]]
+id = "n34"
+op = "region.put"
+config.acc = "n"
+region = "n21"
+
+[[pass.node]]
+id = "n27"
+op = "cmp.eq"
+in.a = "n21.s"
+in.b = { u32 = 6 }
+
+[[pass.node]]
+id = "n28"
+op = "stat.count_where"
+in.pred = "n27"
+
+[[pass.node]]
+id = "n29"
+op = "bits.and"
+in.a = "n21.w"
+in.b = { u32 = 1 }
+
+[[pass.node]]
+id = "n30"
+op = "cmp.eq"
+in.a = "n29"
+in.b = { u32 = 1 }
+
+[[pass.node]]
+id = "n31"
+op = "stat.count_where"
+in.pred = "n30"
+
+[[pass.node]]
+id = "n32"
+op = "cmp.eq"
+in.a = "n21.n"
+in.b = { u32 = 8 }
+
+[[pass.node]]
+id = "n33"
+op = "stat.count_where"
+in.pred = "n32"
+
+[[pass]]
+id = "paint"
+stage = "view"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n40"
+op = "lane.get"
+config.lane = "x"
+
+[[pass.node]]
+id = "n41"
+op = "region.repeat"
+config.max = 8
+config.acc = [{ name = "c", type = "u32", combine = "count" }]
+in.count = "n40"
+in.when = "n42"
+
+[[pass.node]]
+id = "n42"
+op = "cmp.ne"
+in.a = "n40"
+in.b = { u32 = 3 }
+
+[[pass.node]]
+id = "n43"
+op = "bits.and"
+in.a = "n41.k"
+in.b = { u32 = 1 }
+region = "n41"
+
+[[pass.node]]
+id = "n44"
+op = "cmp.eq"
+in.a = "n43"
+in.b = { u32 = 0 }
+region = "n41"
+
+[[pass.node]]
+id = "n45"
+op = "region.put"
+config.acc = "c"
+in.when = "n44"
+region = "n41"
+
+[[pass.node]]
+id = "n46"
+op = "view.color"
+config.palette = "ramp"
+in.index = "n41.c"
+
+[[pass]]
+id = "poke_cells"
+stage = "action"
+action = "poke"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n50"
+op = "lane.get"
+config.lane = "x"
+
+[[pass.node]]
+id = "n51"
+op = "region.repeat"
+config.max = 8
+config.acc = [{ name = "v", type = "u32", combine = "carry" }]
+in.count = "n50"
+in.init.v = "n52"
+
+[[pass.node]]
+id = "n52"
+op = "ctx.index"
+
+[[pass.node]]
+id = "n53"
+op = "math.mul"
+in.a = "n51.prev.v"
+in.b = { u32 = 3 }
+region = "n51"
+
+[[pass.node]]
+id = "n54"
+op = "math.add"
+in.a = "n53"
+in.b = "n51.k"
+region = "n51"
+
+[[pass.node]]
+id = "n55"
+op = "region.put"
+config.acc = "v"
+in.value = "n54"
+region = "n51"
+
+[[pass.node]]
+id = "n56"
+op = "lane.set"
+config.lane = "x"
+in.value = "n51.v"
+"#;
+
+/// Returns the `x` of cell `element` in the lanes of [`a_repeat_runs_in_stats_view_and_action_passes_on_the_device`],
+/// past `max = 8` at three cells in eleven.
+fn context_x(element: usize) -> u32 {
+    (element % 11) as u32
+}
+
+/// A Repeat whose count varies per cell runs in a stats, a view and an action pass on the device, and each pass
+/// leaves what the host's run of it leaves: the three statistics, the colour of every cell and the lane `x`.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the three passes and their known values read in order"
+)]
+fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
+    let Some(device) = device_for("a_repeat_runs_in_stats_view_and_action_passes_on_the_device") else {
+        return;
+    };
+    let text = format!("{GRID}\n{CONTEXTS}");
+    let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("the file reads: {error}"));
+    let report = file.check();
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+    let evaluator = HostEvaluator::new(&file).unwrap_or_else(|error| panic!("{:?}", error.diagnostics()));
+    let document = evaluator.document();
+    let compiled =
+        compile_shaders(document, &report, &evaluator, None).unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let HostWorld::Grid { width, height, .. } = WORLD else {
+        unreachable!("the tests' world is a grid");
+    };
+    let mut start = HostLanes::new(document, WORLD).expect("the lanes");
+    let column = start.column_mut("x").expect("the lane x");
+    for element in 0..(width * height) as usize {
+        assert!(column.set(element, HostValue::U32(context_x(element))), "an x");
+    }
+    let params = evaluator.param_values(&[]);
+    let no_params: [ParamValue; 0] = [];
+    let run = |pass: &str, context: &RunContext| {
+        let shader = compiled
+            .shaders
+            .iter()
+            .find(|shader| shader.passes().iter().any(|known| known == pass))
+            .unwrap_or_else(|| panic!("no shader runs `{pass}`"));
+        let mut buffers: Vec<Vec<u32>> = start.columns().iter().map(|column| column.words().to_vec()).collect();
+        let mut labels: Vec<String> = start
+            .columns()
+            .iter()
+            .map(|column| format!("lane_{}_cells", column.id()))
+            .collect();
+        if compiled.tick_buffer {
+            buffers.push(vec![context.tick]);
+            labels.push("henad_tick".to_owned());
+        }
+        let uniform = shader
+            .uniform_bytes(&evaluator, WORLD, &params, context)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let result = run_shader(
+            &device,
+            shader,
+            &ShaderRun {
+                width,
+                height,
+                buffers: &buffers,
+                labels: &labels,
+                uniform: &uniform,
+            },
+        );
+        let mut lanes = start.clone();
+        let outcome = evaluator
+            .run_pass(pass, &mut lanes, &no_params, context, &mut 0)
+            .unwrap_or_else(|error| panic!("{error}"));
+        (shader, result, lanes, outcome)
+    };
+
+    // The stats pass: the device counts the tallies, and the host finishes the statistics from them.
+    let tick = RunContext::tick(None, 0);
+    let (shader, result, _, outcome) = run("counts", &tick);
+    let mut first = 0;
+    for pass in shader.passes().iter().take_while(|pass| *pass != "counts") {
+        first += evaluator.program(pass).expect("a stats pass").1.tallies;
+    }
+    let (_, program) = evaluator.program("counts").expect("the stats pass");
+    let tallies: Vec<u64> = result.counters[first..first + program.tallies]
+        .iter()
+        .map(|&count| u64::from(count))
+        .collect();
+    let frame = crate::host::run::finish(program, &params, &tick, WORLD, Some(&tallies))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let stat = |node: u32| -> HostValue {
+        let mut ports = outcome.values[&crate::ids::NodeId::new(node).expect("an id")].iter();
+        let (port, host) = ports.next().expect("a statistic");
+        assert!(ports.next().is_none(), "one output of n{node}");
+        let slot = program.outputs[&(crate::ids::NodeId::new(node).expect("an id"), port.clone())];
+        assert_eq!(
+            frame[slot],
+            *host,
+            "n{node} on the device and the host\n{}",
+            shader.text()
+        );
+        *host
+    };
+    let cells = (0..(width * height) as usize).map(context_x);
+    let count = |pred: &dyn Fn(u32) -> bool| HostValue::U64(cells.clone().filter(|&x| pred(x)).count() as u64);
+    assert_eq!(stat(28), count(&|x| x == 4), "the sum of k is 6 at a count of 4");
+    assert_eq!(stat(33), count(&|x| x >= 8), "a count of 8 or more is clamped to 8");
+    let odd = stat(31);
+    assert!(
+        odd != HostValue::U64(0) && odd != HostValue::U64(u64::from(width * height)),
+        "the chains end odd at some cells and not at others: {odd:?}"
+    );
+
+    // The view pass: the colour of each cell is its count of even iterations, none where `when` is false.
+    let (_, result, _, outcome) = run("paint", &tick);
+    let colors = outcome.colors.expect("the view pass colours");
+    let found: Vec<Option<u32>> = result
+        .texels
+        .iter()
+        .map(|texel| super::gpu_cases::color_index(document, "ramp", *texel))
+        .collect();
+    assert_eq!(
+        found,
+        colors.iter().map(|&index| Some(index)).collect::<Vec<_>>(),
+        "colours"
+    );
+    let expected: Vec<u32> = cells
+        .clone()
+        .map(|x| if x == 3 { 0 } else { x.min(8).div_ceil(2) })
+        .collect();
+    assert_eq!(colors, expected, "each cell's count of even iterations");
+
+    // The action pass: `x` holds the carry after `min(x, 8)` steps of `3 * prev + k` from the cell's index.
+    let (_, result, lanes, _) = run("poke_cells", &RunContext::action(None, 0, 1, 0));
+    let position = document
+        .lanes
+        .iter()
+        .position(|lane| lane.id == "x")
+        .expect("the lane x");
+    assert_eq!(result.buffers[position], lanes.columns()[position].words(), "x");
+    let expected: Vec<u32> = cells
+        .enumerate()
+        .map(|(element, x)| (0..x.min(8)).fold(element as u32, |prev, k| prev.wrapping_mul(3).wrapping_add(k)))
+        .collect();
+    assert_eq!(lanes.columns()[position].words(), expected, "each cell's carry");
 }
 
 /// A Repeat body whose lane seed and powi base are the same in every iteration runs on the device, reading both from

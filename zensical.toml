@@ -149,7 +149,9 @@ nav = [
             { "#62, 2026-11-03" = "developing/agent-record/20261103-62-snarl-spike.md" },
             { "#63, 2026-11-03" = "developing/agent-record/20261103-63-agent-engine-spec.md" },
             { "#64, 2026-11-03" = "developing/agent-record/20261103-64-round-1-audit.md" },
+            { "#65, 2026-11-03" = "developing/agent-record/20261103-65-graph-editor.md" },
             { "#66, 2026-11-03" = "developing/agent-record/20261103-66-gpu-grids.md" },
+            { "#67, 2026-11-03" = "developing/agent-record/20261103-67-round-2-audit.md" },
         ] },
     ] },
 ]

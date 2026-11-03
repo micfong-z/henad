@@ -50,6 +50,20 @@ pub struct NodeLayout {
     pub label: Option<String>,
 }
 
+/// A titled frame drawn behind some nodes of one canvas.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct FrameLayout {
+    /// Canvas the frame is on, such as `pass.step`.
+    pub scope: String,
+    /// Title.
+    pub title: String,
+    /// MCS hue name, such as `blue`.
+    pub color: String,
+    /// Nodes inside the frame. A member that is no node id is left out.
+    pub members: Vec<NodeId>,
+}
+
 impl EditorRegion {
     /// Returns the region that `table` holds.
     pub fn from_table(table: toml::Table) -> Self {
@@ -96,6 +110,36 @@ impl EditorRegion {
                 .unwrap_or_default(),
             label: entry.get("label").and_then(toml::Value::as_str).map(str::to_owned),
         })
+    }
+
+    /// Returns every `[[editor.frame]]` in file order. A key that does not fit takes its default.
+    pub fn frames(&self) -> Vec<FrameLayout> {
+        let Some(frames) = self.table.get("frame").and_then(toml::Value::as_array) else {
+            return Vec::new();
+        };
+        let text = |frame: &toml::Table, key: &str| {
+            frame
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        frames
+            .iter()
+            .filter_map(toml::Value::as_table)
+            .map(|frame| FrameLayout {
+                scope: text(frame, "scope"),
+                title: text(frame, "title"),
+                color: text(frame, "color"),
+                members: frame
+                    .get("members")
+                    .and_then(toml::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|member| member.as_str()?.parse().ok())
+                    .collect(),
+            })
+            .collect()
     }
 
     /// Sets the next node number to `next`.

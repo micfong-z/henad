@@ -131,11 +131,17 @@ impl AppState {
     /// Rebuilds the loaded model under the set's entry for its id once its code differs from the loaded code: at once
     /// while the run is at tick 0 and the new code can rebuild it, and otherwise after the Rebuild model modal.
     ///
-    /// The modal counts what the new code does not take from the run, its values and its scheduled actions.
+    /// The modal counts what the new code does not take from the run, its values and its scheduled actions. The
+    /// Editor's preview is left alone.
     pub fn settle_loaded(&mut self) {
         let Some(loaded) = self.loaded.clone() else {
             return;
         };
+        // Apply and the next preview replace a preview. It never waits on the modal.
+        if self.preview.is_some() {
+            self.pending_rebuild = None;
+            return;
+        }
         let Some(current) = self.models.get(loaded.id()).cloned() else {
             return;
         };

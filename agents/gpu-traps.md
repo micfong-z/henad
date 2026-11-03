@@ -97,7 +97,9 @@ is about not undoing them.
   may contract a multiply and an add into one rounding, reassociate a chain of adds, and replace a
   division with a multiply by the reciprocal. The same arithmetic then rounds differently in two
   code shapes: a Repeat of `prev * 1.1 + f32(k)` and its five copies with `k` as literals differ in
-  the last bit of some cells on an Apple M4 Pro (record #66). Integer arithmetic and comparisons are
+  the last bit of some cells on an Apple M4 Pro (record #66). naga's MSL of both, compiled with
+  `MTLMathMode.safe`, equals itself and the host bit for bit, and compiled with Metal's default
+  reproduces wgpu's words exactly (record #67). Integer arithmetic and comparisons are
   unaffected, and so are the draws of henad-graph's tests. A graph equals a stock port on one device
   when both write the same float expression, as `gpu_sir_exact.toml` and `gpu_sir` do with `pow`.
   henad-graph's `a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` is `#[ignore]`d

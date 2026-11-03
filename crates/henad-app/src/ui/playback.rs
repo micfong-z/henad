@@ -1,6 +1,6 @@
 use crate::icons::material_design_icons::{
-    MDI_ALERT, MDI_FAST_FORWARD, MDI_FLASK_OUTLINE, MDI_INFORMATION, MDI_PAUSE, MDI_PLAY, MDI_RESTART, MDI_SKIP_NEXT,
-    MDI_TRAY_REMOVE,
+    MDI_ALERT, MDI_FAST_FORWARD, MDI_FLASK_OUTLINE, MDI_GRAPH_OUTLINE, MDI_INFORMATION, MDI_PAUSE, MDI_PLAY,
+    MDI_RESTART, MDI_SKIP_NEXT, MDI_TRAY_REMOVE,
 };
 use crate::state::{AppState, BUILDING_MODEL, DID_NOT_STOP};
 use crate::ui::results::table::INEXACT_REPLAY;
@@ -79,6 +79,37 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     stopping_line(ui, app);
     opened_run_line(ui, app);
+    preview_line(ui, app);
+}
+
+/// Hover text of the preview line while the Editor holds the previewed graph.
+pub const PREVIEW_APPLY: &str = "Press Apply in the Editor to run the model at its own size.";
+
+/// Hover text of the preview line once the Editor holds a grid rule or nothing.
+pub const PREVIEW_ORPHANED: &str = "Editor holds another model. Press Offload to stop preview.";
+
+/// Draws the line that names the Editor's preview while it runs.
+fn preview_line(ui: &mut egui::Ui, app: &AppState) {
+    let (Some(run), Some(entry)) = (app.preview(), app.loaded_entry()) else {
+        return;
+    };
+    ui.separator();
+    ui.label(format!(
+        "{MDI_GRAPH_OUTLINE} Preview of {} at {} × {} cells",
+        entry.name(),
+        run.width,
+        run.height
+    ))
+    .on_hover_text(preview_hover(app));
+}
+
+/// Returns the hover text of the preview line. Apply runs the graph only while the Editor holds one.
+pub fn preview_hover(app: &AppState) -> &'static str {
+    if app.editor.graph.is_some() {
+        PREVIEW_APPLY
+    } else {
+        PREVIEW_ORPHANED
+    }
 }
 
 /// Reason shown for the disabled Build button while a build runs.

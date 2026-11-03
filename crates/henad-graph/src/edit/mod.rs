@@ -18,7 +18,9 @@ use std::fmt;
 use henad_core::params::ParamDescriptor;
 
 use crate::catalogue::{Effect, lookup};
-use crate::document::{Action, Category, GraphDocument, Lane, Palette, Pass, PassStage, Stat, Variant, World};
+use crate::document::{
+    Action, Category, GraphDocument, Lane, Palette, Pass, PassEnabled, PassStage, Stat, Variant, World,
+};
 use crate::editor::EditorRegion;
 use crate::file::{GraphFile, GraphFileError};
 use crate::ids::{NodeId, is_port_segment};
@@ -260,6 +262,17 @@ pub enum EditCommand {
         /// New position within its stage, clamped to the last.
         index: usize,
     },
+    /// Sets whether a pass runs: a constant, or a binding to a `bool` parameter.
+    SetPassEnabled {
+        /// Id of the pass.
+        id: String,
+        /// New `enabled` value.
+        enabled: PassEnabled,
+    },
+    /// Replaces the parameter with the descriptor's id by the descriptor, in its place in the schema.
+    SetParam(ParamDescriptor),
+    /// Replaces the world table with another of the same topology.
+    SetWorld(World),
 }
 
 /// Reason an edit command is refused. A refused command changes nothing.

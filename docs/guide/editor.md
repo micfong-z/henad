@@ -1,14 +1,16 @@
 ---
 title: Editor
-description: Writing a grid rule in the app's Editor tab, and running it without a restart.
+description: Writing a grid rule or a graph model in the app's Editor tab, previewing it, and running it without a restart.
 icon: material/code-braces
 ---
 
 # Editor
 
-The <span class="ui" markdown>:material-code-braces: Editor</span> tab edits a *grid rule*, a GPU grid model written as data, and runs it in the app without a restart.
-A grid rule lives in a *model file*, one TOML file that holds the rule's states, parameters and grid, and its step in WGSL.
-The app compiles the step while it runs, in the official app and in a browser alike, and the rule runs on the same GPU engine as the compiled GPU models.
+The <span class="ui" markdown>:material-code-braces: Editor</span> tab edits a model file and runs its model in the app without a restart.
+A *model file* is one TOML file, and it holds one of two kinds of model.
+A *grid rule* is a GPU grid model written as data, with its step in WGSL, and the Editor shows it as text.
+A *graph model* is built from nodes on a canvas, and the Editor shows it as [a graph](#graph-models) with a live preview beside it.
+The app compiles either kind while it runs, in the official app and in a browser alike, and the model runs on the same GPU engine as the compiled GPU models.
 
 !!! info "Henad 0.4"
 
@@ -22,7 +24,8 @@ It opens in a panel of its own to the right of the <span class="ui" markdown>:ma
 - Press <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> in the <span class="ui" markdown>:material-cog-outline: Model</span> tab to open the Editor on the Life starter, Conway's Game of Life written as a grid rule.
 - Press <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab to open the Editor on the model file of the selected grid rule.
   The button appears only for a model applied from the Editor.
-- In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New grid rule, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab.
+- Press <span class="ui" markdown>:material-graph-outline: New graph model</span> in the Editor and pick an example, Game of Life, Vote or SIR Epidemic, to open it as a graph model.
+- In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New grid rule, New graph model, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab.
 
 New grid rule and Open model replace the Editor's text.
 Edit model replaces it too, but keeps the text, your edits since the last Apply included, while the selected rule runs the code the Editor applied last.
@@ -83,13 +86,61 @@ The message appears a moment after the build starts, in place of **Model applied
 Fix the text and press Apply to build it again.
 A fault that no edit of the text can fix, such as a lost device or a device out of memory, opens the app's fault dialog instead.
 
+## Graph models
+
+A graph model opens on a canvas.
+The panel beside it lists the model's passes by stage, init, tick, stats, view and action, and under them the world: the grid's size and edges, and the parameters, lanes, categories, statistics and actions.
+Press a pass to open it on the canvas.
+A tick pass runs once per tick for every cell, an init pass seeds the cells when the model is built, and an action pass runs when its action is pressed.
+
+On the canvas, a node computes a value from its inputs, and a wire carries a value from an output to an input.
+Right-click empty canvas to add a node, or drop a wire on empty canvas to add a node that takes it.
+Right-click a node's header for its menu: Frame, Copy, Inputs (bind an input to a parameter, set a constant or clear it), Settings, View in viewport and Delete.
+A click selects a node, <kbd>Delete</kbd> removes the selection, and <kbd>Cmd</kbd>+<kbd>Z</kbd> (<kbd>Ctrl</kbd>+<kbd>Z</kbd> outside macOS) undoes an edit.
+The toolbar above the canvas holds Undo, Redo, Copy, Delete, Arrange and Frame all.
+
+### The preview
+
+The Editor runs the graph as a *preview* in the Viewport while you edit it.
+A preview is the model at a small size: each side of the grid at most 256 cells, with every parameter at its default.
+After each edit that leaves the graph valid, the preview builds again and starts from tick 0 once you pause for a moment.
+The list under the canvas reads **Preview runs at 256 × 256 cells from tick 0. Press Apply to run the model at its own size.**, and the Playback tab names the preview.
+The sizes in the world panel and the values in the Parameters tab are left as they are.
+
+The preview takes the Viewport only when nothing runs, when the run is still at tick 0, or when the run is a preview.
+A run past tick 0 keeps going, and the Editor reads **Preview waits for the running model.** until the run ends.
+Pressing <span class="ui" markdown>:material-restart: Build</span> after the edit keeps the Viewport for that run.
+
+An edit that leaves the graph invalid leaves the preview running.
+The node with the problem takes a red frame and a badge, and the list under the canvas names the problem with its pass and node, as in **step, n16: Greater n16: the input `b` is f32, and the node needs u32**.
+Press the badge, or the problem in the list, to bring the node into view.
+A pass with problems shows their number beside its name.
+
+Apply runs the graph at its own size, as for a grid rule, and replaces a preview at any tick.
+A model too heavy for the device at its own size is not built, and the Editor reads **Model build failed. Fix the problem below.** over the work it would need.
+The preview of the same model can still run, since it is smaller.
+
+### Generated WGSL and View in viewport
+
+Press <span class="ui" markdown>:material-code-braces: WGSL</span> in the canvas toolbar to show the WGSL compiled for the open pass, read-only, beside the canvas.
+Each value is named after its node, so `n13_out` is the output of node n13.
+An init pass runs on the host when the model is built and has no WGSL.
+
+Right-click a node and pick an output under **View in viewport** to colour the preview by that value, one cell at a time.
+A number goes through a colour ramp, a flag shows as the ramp's two ends, and a category shows in its own colours.
+The toolbar reads **Viewing n11.count of pass step**, and <span class="ui" markdown>:material-eye-off-outline: Stop viewing</span> returns to the model's own colours.
+Viewing changes nothing in the model file.
+The value is computed from the cells as they are after each tick, so a value that reads a random draw cannot be viewed.
+
 ## Saving and opening model files
 
 Press <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the Editor's text as written, comments included.
+A graph model is saved in its canonical form, with the canvas layout in its `[editor]` table.
 The desktop app asks where to save, and suggests the name of the file you opened or the rule's id.
 A browser downloads the file.
 
 Press <span class="ui" markdown>:material-folder-open-outline: Open model</span> to read a `.toml` model file into the Editor.
+A graph model opens on the canvas, and any other file opens as text.
 Opening a file does not apply it.
 Press Apply to install it.
 
@@ -99,19 +150,20 @@ A heavy step on a large grid can still take long enough per tick to lose the GPU
 
 ## Limits
 
-- The Editor writes grid rules alone.
+- The Editor writes grid rules and graph models on a grid.
   Agent models and CPU models cannot be written as a model file.
 - A step has no initialisation of its own.
   The states' `initial` shares seed the grid at tick 0.
-- A grid rule reads its parameters when it is built.
+- A grid rule or a graph model reads its parameters when it is built.
   An edited parameter applies after <span class="ui" markdown>:material-restart: Build</span>.
 - The Editor has no syntax highlighting, and checks the text only when you press Apply.
 - The text is not kept when the app closes.
   Save it first.
 - The shaders of the compiled GPU models cannot be edited here.
 - A results folder of a grid rule cannot rebuild the rule in the app.
-- A grid rule needs a GPU with compute support.
-  On a device without it, the Editor reads **Grid rules cannot run on this device. They need a GPU with compute support.**
+- A GPU model runs many ticks per frame, so a small preview can reach the end of its run within a second.
+- A grid rule or a graph model needs a GPU with compute support.
+  On a device without it, the Editor reads **Grid rules and graph models cannot run on this device. They need a GPU with compute support.**
 
 *[GPU]: Graphics processing unit
 *[CPU]: Central processing unit

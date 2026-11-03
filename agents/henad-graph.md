@@ -161,7 +161,9 @@ for G2's `Demand` to count.
 runs `EditCommand`s: `AddNode`, `RemoveNode`, `Connect`, `Disconnect`, `SetLiteral`,
 `BindParam`, `SetConfig`, `SetRegion`, `Move`, `Frame`, `Paste`, and the declaration edits
 (add a category or palette, add, rename and remove a lane, variant, parameter, statistic,
-action or pass, and `MovePass` within its stage). `apply` runs on a copy, so a refused command
+action or pass, and `MovePass` within its stage), and three edits in place for the Editor's forms:
+`SetPassEnabled` (a parameter it binds must exist), `SetParam` (the descriptor with the same id,
+in its place in the schema) and `SetWorld` (the same topology). `apply` runs on a copy, so a refused command
 changes nothing. Commands check structure only (ids, grammars, the body a node is in, region
 cycles) and leave meaning to the checker. A new node takes `max(highest + 1, next_id)` and
 writes `next_id` (an `[editor]` region is made if absent), and a kind with a `key` config gets
@@ -205,7 +207,8 @@ differs. `HENAD_WRITE_LIBRARY_LOCK=1` writes it. Renaming a catalogue field move
 hash. The test prints the corpus files that use each kind (`--nocapture`), which is the "Used by"
 information, and a coverage line, the kinds the corpus uses out of every kind.
 
-**The editor region** keeps a `toml::Table`, never refuses a value and never fails a read. Its
+**The editor region** keeps a `toml::Table`, never refuses a value and never fails a read.
+`frames()` reads every `[[editor.frame]]` as a `FrameLayout` for the Editor's canvas. Its
 writer orders the keys and rounds `pos` to whole points, and `to_text` is a fixed point for any
 table, which `a_strange_editor_region_stays_readable_and_a_fixed_point` holds. The writer leaves
 out a value nested deeper than `MAX_INLINE_DEPTH` (64) arrays and inline tables, since the `toml`
@@ -245,7 +248,7 @@ its span. A text past `compose::MAX_FILE_BYTES` (1 MiB) is checked first and ref
 problem of the file, placed on the pass whose ranges hold the most bytes (`oversized`), since a
 checked file of many grid counts can expand that far.
 `GeneratedShader` exposes `text` (before composition), `composed`, `ranges`,
-`node_at(offset)`, `role`, `passes`, `label` and `cost`, the API of E1's generated WGSL view.
+`node_at(offset)`, `role`, `passes`, `label` and `cost`, which the Editor's WGSL view reads.
 `GridProgram::spec` builds the `GpuGridSpec` (workgroup 16, `counters` the reduce tallies,
 `init_cost` and each action's `rerun_cost` from the checker's costs, each pass's
 `uniform_bytes` its block's size, and the reduce pass's `workgroup_bytes` four a tally, which
@@ -279,9 +282,12 @@ bodies (`CARRIED`, `chained()`, `TWO_DRAWS`, `NESTED_DRAW`, `pub(super)` there) 
 once through the step shader on the device and once through `run_pass`: the integer half of
 `CARRIED` equals its hand-chained copies and the host bit for bit, two iterations of one draw
 differ and replay, and draws read the mixed-radix iteration word, each equal to the host's. Its
-float half differs on Metal (`agents/gpu-traps.md`), so
+float half replays on one device but differs from its copies on Metal (`agents/gpu-traps.md`), so
 `a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` is `#[ignore]`d with that
 reason. Run it with `--ignored` on another backend before calling the gate met there.
+`a_repeat_runs_in_stats_view_and_action_passes_on_the_device` holds a Repeat with a per-cell count
+in the other map passes to the host: the statistics finished from the device's tallies, every
+cell's colour and the action's lane.
 `corpus.rs` reads the starters through `starters()` and, at run time, the graphs in
 `crates/henad-models/tests/fixtures/graphs/`, since a packaged crate has no path out of itself.
 `two_spellings_of_one_graph_hash_alike`, `a_canonical_text_reads_back_to_itself` and

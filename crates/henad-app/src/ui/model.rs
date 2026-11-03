@@ -118,7 +118,7 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
 /// Draws New grid rule, and Edit model for a selected model whose code the Editor can show. Both open the Editor.
 fn editor_buttons(ui: &mut egui::Ui, app: &mut AppState) {
-    let editable = app.selected_entry().and_then(editor::editable_text).is_some();
+    let editable = app.selected_entry().is_some_and(editor::can_edit);
     ui.horizontal_wrapped(|ui| {
         let new = add_button(
             ui,

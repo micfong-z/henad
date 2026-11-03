@@ -305,6 +305,16 @@ impl AppState {
             self.finish_build(built, Vec::new(), &model);
         }
 
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        if self.inline_builds {
+            let built = Built {
+                runner: job.run_here(None),
+                generation: self.pools.current().0,
+            };
+            self.finish_build(built, Vec::new(), &model);
+            return;
+        }
+
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_build(job, model);
     }

@@ -33,8 +33,6 @@ example-models = ["dep:henad-models", "dep:env_logger"]
 # Lets an external inspector (egui_mcp) drive the app. Off by default, and inert at runtime
 # until EGUI_INSPECTION is set.
 inspection = ["eframe/inspection"]
-# The scratch canvas of the egui-snarl spike, a checkbox in the Editor tab.
-snarl-spike = ["dep:egui-snarl"]
 
 [dependencies]
 henad-core = { workspace = true }
@@ -48,7 +46,7 @@ egui_dock = { workspace = true }
 egui_extras = { workspace = true }
 eframe = { workspace = true }
 egui_plot = { workspace = true }
-egui-snarl = { workspace = true, optional = true }
+egui-snarl = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }

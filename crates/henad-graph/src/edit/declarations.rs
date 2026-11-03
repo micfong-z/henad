@@ -289,6 +289,35 @@ impl GraphBuilder {
             EditCommand::RenamePass { from, to } => self.rename_pass(&from, &to),
             EditCommand::RemovePass(id) => self.remove_pass(&id),
             EditCommand::MovePass { id, index } => self.move_pass(&id, index),
+            EditCommand::SetPassEnabled { id, enabled } => {
+                if let PassEnabled::Param(param) = &enabled {
+                    self.param_position(param)?;
+                }
+                let pass = self
+                    .document
+                    .passes
+                    .iter_mut()
+                    .find(|pass| pass.id == id)
+                    .ok_or_else(|| EditError::Missing(format!("the file declares no pass '{id}'")))?;
+                pass.enabled = enabled;
+                Ok(())
+            }
+            EditCommand::SetParam(descriptor) => {
+                let position = self.param_position(descriptor.id())?;
+                self.document.params[position] = descriptor;
+                Ok(())
+            }
+            EditCommand::SetWorld(world) => {
+                if world.topology() != self.document.world.topology() {
+                    return Err(EditError::Invalid(format!(
+                        "a {} graph keeps its topology, and the new world is {}",
+                        self.document.world.topology().as_str(),
+                        world.topology().as_str()
+                    )));
+                }
+                self.document.world = world;
+                Ok(())
+            }
             other => Err(EditError::Invalid(format!("{other:?} is no declaration edit"))),
         }
     }

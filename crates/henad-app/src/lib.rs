@@ -149,9 +149,6 @@ impl HenadApp {
 
 impl eframe::App for HenadApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        #[cfg(feature = "snarl-spike")]
-        self.state.editor.scratch.record_frame_cost(_frame.info().cpu_usage);
-
         // Takes the runner of a build that has finished on its thread, with its first snapshot.
         self.state.poll_build();
         self.state.poll_stopping(ctx);
@@ -200,6 +197,7 @@ impl eframe::App for HenadApp {
         {
             self.state.report_fault(fault);
         }
+        ui::editor::preview::poll(ctx, &mut self.state);
 
         self.state.poll_saves();
         self.state.poll_opens();

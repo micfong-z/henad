@@ -3,8 +3,9 @@
 pub mod support;
 
 mod editor;
+mod graph_canvas;
+mod graph_editor;
+mod graph_preview;
 mod install;
 mod runaway;
-#[cfg(feature = "snarl-spike")]
-mod scratch_canvas;
 mod threads;

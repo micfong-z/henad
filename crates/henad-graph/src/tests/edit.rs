@@ -5,7 +5,9 @@ use henad_core::authoring::primitives::space::Boundary;
 use henad_core::params::{ParamDescriptor, ParamKind};
 
 use crate::GraphFile;
-use crate::document::{Category, Domain, GridWorld, Lane, Pass, PassStage, Stat, Variant, World};
+use crate::document::{
+    AgentsWorld, Category, Domain, GridWorld, Lane, Pass, PassEnabled, PassStage, Stat, Variant, World,
+};
 use crate::edit::{EditCommand, EditError, GraphBuilder, Scope};
 use crate::host::{HostEvaluator, HostValue, HostWorld};
 use crate::ids::NodeId;
@@ -574,6 +576,79 @@ fn passes_move_within_their_stage() {
 }
 
 #[test]
+fn a_pass_switch_a_parameter_and_the_world_change_in_place() {
+    let mut builder = starter("sir.toml");
+    builder
+        .apply(EditCommand::AddParam(ParamDescriptor::new(
+            "outbreaks",
+            "Outbreaks",
+            ParamKind::Bool { default: true },
+        )))
+        .expect("adds");
+    builder
+        .apply(EditCommand::SetPassEnabled {
+            id: "counts".to_owned(),
+            enabled: PassEnabled::Param("outbreaks".to_owned()),
+        })
+        .expect("binds");
+    assert_eq!(
+        builder.document().passes[2].enabled,
+        PassEnabled::Param("outbreaks".to_owned())
+    );
+    let unknown = builder.apply(EditCommand::SetPassEnabled {
+        id: "seed".to_owned(),
+        enabled: PassEnabled::Param("missing".to_owned()),
+    });
+    assert!(matches!(unknown, Err(EditError::Missing(_))), "{unknown:?}");
+
+    let order: Vec<String> = builder
+        .document()
+        .params
+        .iter()
+        .map(|param| param.id().to_owned())
+        .collect();
+    builder
+        .apply(EditCommand::SetParam(
+            ParamDescriptor::new(
+                "infection_rate",
+                "Infection",
+                ParamKind::F32 {
+                    min: 0.0,
+                    max: 0.5,
+                    default: 0.2,
+                    step: None,
+                },
+            )
+            .percent(),
+        ))
+        .expect("replaces");
+    let after: Vec<String> = builder
+        .document()
+        .params
+        .iter()
+        .map(|param| param.id().to_owned())
+        .collect();
+    assert_eq!(after, order, "the schema keeps its order");
+    assert_eq!(builder.document().params[0].label(), "Infection");
+    let missing = builder.apply(EditCommand::SetParam(ParamDescriptor::new(
+        "missing",
+        "Missing",
+        ParamKind::Bool { default: false },
+    )));
+    assert!(matches!(missing, Err(EditError::Missing(_))), "{missing:?}");
+
+    let World::Grid(mut grid) = builder.document().world else {
+        panic!("SIR is a grid");
+    };
+    grid.width = 64;
+    builder.apply(EditCommand::SetWorld(World::Grid(grid))).expect("sets");
+    assert_eq!(builder.document().world, World::Grid(grid));
+    let agents = builder.apply(EditCommand::SetWorld(World::Agents(AgentsWorld::default())));
+    assert!(matches!(agents, Err(EditError::Invalid(_))), "{agents:?}");
+    assert_checks(&builder);
+}
+
+#[test]
 fn a_frame_and_a_move_change_the_editor_region_alone() {
     let mut builder = starter("vote.toml");
     let code = builder.to_file().expect("reads").code();
@@ -594,6 +669,13 @@ fn a_frame_and_a_move_change_the_editor_region_alone() {
     let file = builder.to_file().expect("reads");
     assert_eq!(file.code(), code, "the code identity stays");
     assert!(file.to_toml().contains("title = \"Count\""));
+    let frames = builder.editor().frames();
+    let added = frames.last().expect("a frame");
+    assert_eq!(
+        (added.scope.as_str(), added.title.as_str(), added.color.as_str()),
+        ("pass.step", "Count", "blue")
+    );
+    assert_eq!(added.members, [n(10)]);
 }
 
 /// A graph whose category `kind` holds one variant, counted by `n21`, which a stat reads.
