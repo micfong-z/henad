@@ -253,7 +253,7 @@ fn write_node(
                 .inputs
                 .get(&input.name)
                 .cloned()
-                .or_else(|| def.input_default(&input.name))
+                .or_else(|| def.input_default(node, document, &input.name))
                 .or_else(|| default_put_value(body, node, &input.name));
             if let Some(value) = value {
                 key(

@@ -138,6 +138,20 @@ pub struct NodePlaces {
     pub inputs: BTreeMap<String, Range<usize>>,
 }
 
+impl NodePlaces {
+    /// Returns the places of a node with every key at `table`, for a node the file does not write.
+    pub(crate) fn at(table: Range<usize>) -> Self {
+        Self {
+            id: table.clone(),
+            op: table.clone(),
+            region: None,
+            config: BTreeMap::new(),
+            inputs: BTreeMap::new(),
+            table,
+        }
+    }
+}
+
 /// A graph read from a model file of kind `graph`, with the text it was read from.
 #[derive(Clone)]
 pub struct GraphFile {

@@ -3,8 +3,8 @@
 use super::cases::{case, config_case, host_case};
 use super::{
     BASE,
-    CaseValue::{Bool, F32, F64, I32, U32, U64, Variant},
-    ConfigType, F32_TYPE, NodeDef, SocketType, TypeClass, U32_TYPE, config, input, output,
+    CaseValue::{Bool, F32, F64, I32, U32, U64, Variant, Vec2F, Vec2I, Vec2U},
+    ConfigType, ContextSet, F32_TYPE, NodeDef, SocketType, TypeClass, U32_TYPE, config, input, output,
 };
 
 /// Conversions of one input `a` to one output `out`.
@@ -43,13 +43,15 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "conv.to_u32",
         label: "To u32",
-        semantics: "`a` as a `u32`. From a float it truncates toward zero and clamps to the values of the float's type that a `u32` holds exactly, as WGSL converts: 0 to 4294967040 (`0x4f7fffff`, the largest `f32` below 2^32) from an `f32`, and 0 to `u32::MAX` from an `f64`. A NaN gives 0 on the host and is indeterminate in a shader, since a shader may assume no NaN. From an `i32` it reinterprets the bits, from a `bool` it gives 0 or 1, and from a `u64` it keeps the low 32 bits.",
+        semantics: "`a` as a `u32`. From a float it truncates toward zero and clamps to the values of the float's type that a `u32` holds exactly, as WGSL converts: 0 to 4294967040 (`0x4f7fffff`, the largest `f32` below 2^32) from an `f32`, and 0 to `u32::MAX` from an `f64`. A NaN gives 0 on the host and is indeterminate in a shader, since a shader may assume no NaN. From an `i32` it reinterprets the bits, from a `bool` it gives 0 or 1, from a `u64` it keeps the low 32 bits, and from a cell or agent reference it gives the index, `u32::MAX` for the reference to no cell.",
         type_var: &[
             TypeClass::F32,
             TypeClass::I32,
             TypeClass::Bool,
             TypeClass::U64,
             TypeClass::F64,
+            TypeClass::Cell,
+            TypeClass::Agent,
         ],
         outputs: &[output("out", U32_TYPE)],
         cases: &[
@@ -133,6 +135,90 @@ pub(super) static KINDS: &[NodeDef] = &[
         cases: &[
             case("first", &[("a", Variant("health", "S"))], &[("out", U32(0))]),
             case("last", &[("a", Variant("health", "R"))], &[("out", U32(2))]),
+        ],
+        ..CONVERSION
+    },
+];
+
+/// 2^64, the nearest `f64` to `u64::MAX`.
+const TWO_POW_64: f64 = 65_536.0 * 65_536.0 * 65_536.0 * 65_536.0;
+
+pub(super) static A2_KINDS: &[NodeDef] = &[
+    NodeDef {
+        id: "conv.to_f64",
+        label: "To f64",
+        semantics: "`a` as an `f64`: exact from an `f32`, a `u32` and an `i32`, and the nearest `f64` from a `u64`. An `f64` exists on the host alone, so the kind runs in an init pass, where it is a value per element, and in the post block of a stats pass.",
+        type_var: &[TypeClass::F32, TypeClass::U32, TypeClass::I32, TypeClass::U64],
+        outputs: &[output("out", SocketType::Fixed(TypeClass::F64))],
+        backends: super::Backends::HOST,
+        contexts: ContextSet {
+            init: true,
+            stats: true,
+            region: true,
+            ..ContextSet::NONE
+        },
+        cases: &[
+            super::cases::host_case("f32 exactly", &[("a", F32(0.1))], &[("out", F64(0.1f32 as f64))]),
+            super::cases::host_case("i32", &[("a", I32(-2))], &[("out", F64(-2.0))]),
+            super::cases::host_case("u32", &[("a", U32(u32::MAX))], &[("out", F64(4_294_967_295.0))]),
+            super::cases::host_case("u64 nearest", &[("a", U64(u64::MAX))], &[("out", F64(TWO_POW_64))]),
+        ],
+        ..CONVERSION
+    },
+    NodeDef {
+        id: "conv.to_vec2f",
+        label: "To vec2f",
+        semantics: "`a` as a `vec2f`, each component the nearest `f32`, exact below 2^24.",
+        type_var: &[TypeClass::Vec2I, TypeClass::Vec2U],
+        outputs: &[output("out", SocketType::Fixed(TypeClass::Vec2F))],
+        cases: &[
+            case("vec2i", &[("a", Vec2I([-1, 2]))], &[("out", Vec2F([-1.0, 2.0]))]),
+            case(
+                "vec2u",
+                &[("a", Vec2U([3, 16_777_217]))],
+                &[("out", Vec2F([3.0, 16_777_216.0]))],
+            ),
+        ],
+        ..CONVERSION
+    },
+    NodeDef {
+        id: "conv.to_vec2i",
+        label: "To vec2i",
+        semantics: "`a` as a `vec2i`, per component as `conv.to_i32`: a float truncates toward zero and clamps to `i32::MIN` to 2147483520, and a `u32` reinterprets the bits. A NaN component gives 0 on the host and is indeterminate in a shader.",
+        type_var: &[TypeClass::Vec2F, TypeClass::Vec2U],
+        outputs: &[output("out", SocketType::Fixed(TypeClass::Vec2I))],
+        cases: &[
+            case(
+                "truncates toward zero",
+                &[("a", Vec2F([-1.5, 2.5]))],
+                &[("out", Vec2I([-1, 2]))],
+            ),
+            case(
+                "clamps",
+                &[("a", Vec2F([3e9, -3e9]))],
+                &[("out", Vec2I([2_147_483_520, i32::MIN]))],
+            ),
+            case(
+                "vec2u keeps the bits",
+                &[("a", Vec2U([u32::MAX, 1]))],
+                &[("out", Vec2I([-1, 1]))],
+            ),
+        ],
+        ..CONVERSION
+    },
+    NodeDef {
+        id: "conv.to_vec2u",
+        label: "To vec2u",
+        semantics: "`a` as a `vec2u`, per component as `conv.to_u32`: a float truncates toward zero and clamps to 0 to 4294967040, and an `i32` reinterprets the bits. A NaN component gives 0 on the host and is indeterminate in a shader.",
+        type_var: &[TypeClass::Vec2F, TypeClass::Vec2I],
+        outputs: &[output("out", SocketType::Fixed(TypeClass::Vec2U))],
+        cases: &[
+            case("truncates", &[("a", Vec2F([-1.0, 3.9]))], &[("out", Vec2U([0, 3]))]),
+            case(
+                "vec2i keeps the bits",
+                &[("a", Vec2I([-1, 2]))],
+                &[("out", Vec2U([u32::MAX, 2]))],
+            ),
         ],
         ..CONVERSION
     },

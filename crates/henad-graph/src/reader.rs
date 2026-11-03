@@ -1056,7 +1056,7 @@ fn read_inputs(inputs: &Spanned<RawValue>, node: &mut Node, places: &mut NodePla
     let RawValue::Table(entries) = inputs.get_ref() else {
         return Err(Placed("`in` is a table of ports".to_owned(), inputs.span()));
     };
-    let bare = node.op == OP_FUNCTION_CALL;
+    let bare = node.op == OP_FUNCTION_CALL || node.op == crate::node::OP_EXPRESSION;
     for (key, value) in entries {
         check_segment(key)?;
         let depth = if bare { 0 } else { config_port_depth(key.get_ref()) };

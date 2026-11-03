@@ -277,7 +277,7 @@ impl BodyWalk<'_, '_, '_, '_> {
     /// Returns the type variable as configuration fixes it: the lane of a stencil read, the values of a pick.
     fn seed_var(&mut self, position: usize, def: &NodeDef) -> Option<ValueType> {
         let node = &self.view.nodes[position];
-        if def.has_effect(Effect::ReadsOtherLane) {
+        if def.has_effect(Effect::ReadsOtherLane) && !def.type_var.is_empty() {
             let lane_type = self.lane_type(position)?;
             if !def.type_var.iter().any(|class| class.holds(&lane_type)) {
                 self.view.error(
@@ -340,11 +340,46 @@ impl BodyWalk<'_, '_, '_, '_> {
     fn socket_type(&self, position: usize, socket: SocketType) -> Option<ValueType> {
         match socket {
             SocketType::Fixed(class) => class.value_type(),
-            SocketType::Var => None,
             SocketType::Lane => self.lane_type(position),
             SocketType::ConfigCategory => self.config_category(position),
             SocketType::Accumulator => self.put_accumulator(position).map(|accumulator| accumulator.value_type),
+            SocketType::Field => self.field(position).map(|field| field.value_type.clone()),
+            SocketType::FieldLayer => self.field(position).map(|field| ValueType::Layer(field.id.clone())),
+            SocketType::LaneElement => {
+                let id = self.view.nodes[position].config.get("lane")?.as_str()?;
+                let lane = self.view.document.lanes.iter().find(|lane| lane.id == id)?;
+                Some(match lane.domain {
+                    crate::document::Domain::Cells => ValueType::Cell,
+                    crate::document::Domain::Agents => ValueType::Agent,
+                })
+            }
+            SocketType::InterfacePort => self.interface_port(position),
+            SocketType::Var | SocketType::Vector | SocketType::Scalar | SocketType::Wide => None,
         }
+    }
+
+    /// Returns the field `config.field` of the node at `position` names.
+    fn field(&self, position: usize) -> Option<&crate::document::Field> {
+        let id = self.view.nodes[position].config.get("field")?.as_str()?;
+        self.view.document.fields.iter().find(|field| field.id == id)
+    }
+
+    /// Returns the type of the function port `config.port` of a `fn.input` or `fn.output` at `position` names.
+    fn interface_port(&self, position: usize) -> Option<ValueType> {
+        let super::view::Owner::Function(function) = self.view.owner else {
+            return None;
+        };
+        let node = &self.view.nodes[position];
+        let name = node.config.get("port")?.as_str()?;
+        let ports = if node.op == crate::node::OP_FUNCTION_OUTPUT {
+            &function.outputs
+        } else {
+            &function.inputs
+        };
+        ports
+            .iter()
+            .find(|port| port.port == name)
+            .map(|port| port.value_type.clone())
     }
 
     /// Checks every input, and returns the join of their rates (V4, V5, V6, V7).
@@ -435,6 +470,7 @@ impl BodyWalk<'_, '_, '_, '_> {
             _ if node.op == OP_REGION_PUT && input.name == "value" => self
                 .put_accumulator(position)
                 .is_some_and(|accumulator| accumulator.combine != Combine::Count),
+            _ if input.default == InputDefault::OwnCell => super::agents::own_cell_missing(self.view),
             _ => input.default == InputDefault::Required,
         }
     }
@@ -657,6 +693,9 @@ impl BodyWalk<'_, '_, '_, '_> {
     fn port_type(&self, position: usize, output: &ResolvedOutput, var: &Option<ValueType>, joined: Rate) -> PortType {
         let value_type = output.declared.clone().or_else(|| match output.value_type {
             Some(SocketType::Var) => var.clone(),
+            Some(SocketType::Vector) => var.as_ref().and_then(crate::catalogue::vector_of),
+            Some(SocketType::Scalar) => var.as_ref().and_then(crate::catalogue::component_of),
+            Some(SocketType::Wide) => var.as_ref().and_then(crate::catalogue::wide_of),
             Some(socket) => self.socket_type(position, socket),
             None => None,
         });
@@ -769,12 +808,21 @@ fn warn_unreached(checker: &mut Checker<'_>, view: &BodyView<'_>) {
         .filter(|&position| {
             view.defs[position].is_some_and(|def| {
                 def.has_effect(Effect::WritesLane)
+                    || def.has_effect(Effect::WritesField)
+                    || def.has_effect(Effect::Deposits)
+                    || def.has_effect(Effect::Counts)
                     || def.has_effect(Effect::View)
                     || def.has_effect(Effect::Reduce)
                     || def.has_effect(Effect::DrawsStream)
             })
         })
         .collect();
+    // A node a `[[stat]]` reads is kept, as a reducer is.
+    for stat in &view.document.stats {
+        if let Some(&position) = view.positions.get(&stat.from.node) {
+            pending.push(position);
+        }
+    }
     let mut puts: Vec<Vec<usize>> = vec![Vec::new(); count];
     for position in 0..count {
         if let Some(region) = view.parents[position]

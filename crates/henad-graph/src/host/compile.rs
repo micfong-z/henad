@@ -45,8 +45,12 @@ pub(crate) struct Program {
     pub tallies: usize,
     /// Slot each tally lands in after the elements, by tally number.
     pub tally_slots: Vec<usize>,
-    /// Positions of the lanes the pass writes, in document order.
+    /// Each float sum, by sum number.
+    pub sums: Vec<SumSpec>,
+    /// Positions of the lanes and field layers the pass writes, in the order of [`super::HostLanes`].
     pub written: Vec<usize>,
+    /// Positions among the deposit columns of the layers the pass deposits into.
+    pub deposited: Vec<usize>,
     /// Whether the pass sets a colour per element.
     pub colors: bool,
     /// Outputs of the prelude and the post block, by node and port, with their slots.
@@ -105,6 +109,10 @@ pub(crate) enum DrawForm {
     Below,
     /// `random_float(bits, 1.0) < p`.
     Chance,
+    /// The bits as they are.
+    Bits,
+    /// `bits % 3 - 1`.
+    Choice3,
 }
 
 /// One rule of a `cat.transition`.
@@ -158,9 +166,183 @@ pub(crate) struct Repeat {
     pub body: Vec<Instruction>,
 }
 
+/// One float sum of `stat.sum` or `stat.mean`.
+#[derive(Debug, Clone)]
+pub(crate) struct SumSpec {
+    /// Slot the result lands in after the elements.
+    pub slot: usize,
+    /// Whether each chunk sums in `f64`, where it otherwise sums in `f32`.
+    pub wide_chunks: bool,
+    /// Whether the result is the mean, the sum times `1 / max(n, 1)`.
+    pub mean: bool,
+    /// Whether the summed values are `vec2f`, `None` when only the values tell, which a sum over no element reads as
+    /// a scalar.
+    pub vector: Option<bool>,
+}
+
+/// A stencil fold and its body.
+#[derive(Debug, Clone)]
+pub(crate) struct StencilFold {
+    /// Stencil in table order.
+    pub offsets: Vec<(i32, i32)>,
+    /// Whether a position past the edge of the domain grid is skipped, `None` for the domain grid's own boundary.
+    pub bounded: Option<bool>,
+    /// Slot of `at`, `None` for the element's own cell.
+    pub at: Option<usize>,
+    /// Slot of `when`.
+    pub when: usize,
+    /// Slots of the inner outputs `k`, `offset`, `xy`, `cell` and `diagonal`.
+    pub inner: [usize; 5],
+    /// Accumulators in `config.acc` order.
+    pub accumulators: Vec<RepeatAccumulator>,
+    /// Body, run per position.
+    pub body: Vec<Instruction>,
+}
+
+/// A radius fold and its body.
+#[derive(Debug, Clone)]
+pub(crate) struct RadiusFold {
+    /// Position of the position lane among the lanes.
+    pub position_lane: usize,
+    /// Slots of `center`, `radius`, `cell_size` and `when`.
+    pub center: usize,
+    pub radius: usize,
+    pub cell_size: usize,
+    pub when: usize,
+    /// Whether the agent itself is left out.
+    pub exclude_self: bool,
+    /// Slots of the inner outputs `k`, `other`, `delta` and `dist_sq`.
+    pub inner: [usize; 4],
+    /// Accumulators in `config.acc` order.
+    pub accumulators: Vec<RepeatAccumulator>,
+    /// Body, run per agent visited.
+    pub body: Vec<Instruction>,
+}
+
 /// What an instruction does. Every operand is a slot.
 #[derive(Debug, Clone)]
 pub(crate) enum Operation {
+    World,
+    Grid,
+    CellXy,
+    LaneGetAt {
+        lane: usize,
+        at: usize,
+    },
+    FieldGet {
+        first: usize,
+        layers: u32,
+        layer: usize,
+        at: Option<usize>,
+        zero: HostValue,
+    },
+    FieldSet {
+        first: usize,
+        layers: u32,
+        layer: usize,
+        value: usize,
+    },
+    Deposit {
+        first: usize,
+        layers: u32,
+        layer: usize,
+        at: usize,
+        value: usize,
+    },
+    CounterAdd {
+        counter: usize,
+        amount: usize,
+    },
+    CounterTotal {
+        counter: usize,
+    },
+    Clamp {
+        x: usize,
+        lo: usize,
+        hi: usize,
+    },
+    Midpoint {
+        a: usize,
+        b: usize,
+    },
+    VecMake {
+        x: usize,
+        y: usize,
+    },
+    VecSplit {
+        v: usize,
+        y_out: usize,
+    },
+    VecScale {
+        v: usize,
+        s: usize,
+    },
+    VecDot {
+        a: usize,
+        b: usize,
+    },
+    VecLength {
+        v: usize,
+    },
+    FromAngle {
+        angle: usize,
+        length: usize,
+    },
+    Wrap {
+        v: usize,
+        world: usize,
+    },
+    Delta {
+        a: usize,
+        b: usize,
+        world: usize,
+        squared: bool,
+    },
+    CellIndex {
+        xy: usize,
+        valid_out: usize,
+    },
+    CellOf {
+        p: usize,
+        xy_out: usize,
+        valid_out: usize,
+    },
+    CellXyOf {
+        cell: usize,
+    },
+    Offset {
+        xy: usize,
+        by: usize,
+        bounded: Option<bool>,
+        cell_out: usize,
+        valid_out: usize,
+    },
+    HeadingOctant {
+        v: usize,
+    },
+    StepCode {
+        d: usize,
+    },
+    StepOffset {
+        code: usize,
+    },
+    Choice3 {
+        bits: usize,
+    },
+    Reservoir {
+        bits: usize,
+        count: usize,
+    },
+    StreamFloat {
+        max: usize,
+        when: usize,
+    },
+    GridFold(Box<StencilFold>),
+    RadiusFold(Box<RadiusFold>),
+    Sum {
+        value: usize,
+        sum: usize,
+    },
     Index,
     Tick,
     PressSeed,
@@ -303,11 +485,68 @@ pub(crate) enum Operation {
 
 impl Operation {
     /// Returns the slots the operation reads, its region body included.
+    #[expect(clippy::too_many_lines, reason = "one arm per operation reads best as one table")]
     pub(crate) fn operands(&self) -> Vec<usize> {
         match self {
-            Self::Index | Self::Tick | Self::PressSeed | Self::LaneGet { .. } | Self::LaneSeed { .. } => Vec::new(),
+            Self::Index
+            | Self::Tick
+            | Self::PressSeed
+            | Self::LaneGet { .. }
+            | Self::LaneSeed { .. }
+            | Self::World
+            | Self::Grid
+            | Self::CellXy
+            | Self::CounterTotal { .. } => Vec::new(),
+            Self::FieldGet { layer, at, .. } => std::iter::once(*layer).chain(*at).collect(),
+            Self::Deposit { layer, at, value, .. } => vec![*layer, *at, *value],
+            Self::Clamp { x, lo, hi } => vec![*x, *lo, *hi],
+            Self::Midpoint { a, b }
+            | Self::VecDot { a, b }
+            | Self::FieldSet { layer: a, value: b, .. }
+            | Self::Reservoir { bits: a, count: b }
+            | Self::Offset { xy: a, by: b, .. }
+            | Self::Wrap { v: a, world: b }
+            | Self::VecScale { v: a, s: b }
+            | Self::FromAngle { angle: a, length: b }
+            | Self::StreamFloat { max: a, when: b }
+            | Self::VecMake { x: a, y: b }
+            | Self::Binary { a, b, .. }
+            | Self::Shift { a, b, .. }
+            | Self::Compare { a, b, .. } => vec![*a, *b],
+            Self::Delta { a, b, world, .. } => vec![*a, *b, *world],
+            Self::LaneGetAt { at: a, .. }
+            | Self::CounterAdd { amount: a, .. }
+            | Self::VecSplit { v: a, .. }
+            | Self::VecLength { v: a }
+            | Self::HeadingOctant { v: a }
+            | Self::CellIndex { xy: a, .. }
+            | Self::CellOf { p: a, .. }
+            | Self::CellXyOf { cell: a }
+            | Self::StepCode { d: a }
+            | Self::StepOffset { code: a }
+            | Self::Choice3 { bits: a }
+            | Self::Sum { value: a, .. } => vec![*a],
+            Self::GridFold(fold) => {
+                let mut found: Vec<usize> = fold.at.into_iter().chain([fold.when]).collect();
+                found.extend(fold.accumulators.iter().filter_map(|accumulator| accumulator.init));
+                found.extend(
+                    fold.body
+                        .iter()
+                        .flat_map(|instruction| instruction.operation.operands()),
+                );
+                found
+            }
+            Self::RadiusFold(fold) => {
+                let mut found = vec![fold.center, fold.radius, fold.cell_size, fold.when];
+                found.extend(fold.accumulators.iter().filter_map(|accumulator| accumulator.init));
+                found.extend(
+                    fold.body
+                        .iter()
+                        .flat_map(|instruction| instruction.operation.operands()),
+                );
+                found
+            }
             Self::LaneSet { value, .. } | Self::CountBy { value, .. } => vec![*value],
-            Self::Binary { a, b, .. } | Self::Shift { a, b, .. } | Self::Compare { a, b, .. } => vec![*a, *b],
             Self::Unary { a, .. } | Self::Convert { a, .. } | Self::U32ToCat { a, .. } | Self::CatToU32 { a } => {
                 vec![*a]
             }
@@ -381,7 +620,33 @@ impl Operation {
                 | Self::Hash { .. }
                 | Self::ToFloat { .. }
                 | Self::Below { .. }
+                | Self::World
+                | Self::Grid
+                | Self::Clamp { .. }
+                | Self::Midpoint { .. }
+                | Self::VecMake { .. }
+                | Self::VecScale { .. }
+                | Self::VecDot { .. }
+                | Self::VecLength { .. }
+                | Self::FromAngle { .. }
+                | Self::Wrap { .. }
+                | Self::Delta { .. }
+                | Self::HeadingOctant { .. }
+                | Self::StepCode { .. }
+                | Self::StepOffset { .. }
+                | Self::Choice3 { .. }
+                | Self::Reservoir { .. }
         )
+    }
+
+    /// Returns the body of a region's operation for writing.
+    fn body_mut(&mut self) -> Option<&mut Vec<Instruction>> {
+        match self {
+            Self::Repeat(repeat) => Some(&mut repeat.body),
+            Self::GridFold(fold) => Some(&mut fold.body),
+            Self::RadiusFold(fold) => Some(&mut fold.body),
+            _ => None,
+        }
     }
 }
 
@@ -405,8 +670,8 @@ fn hoist_uniform_body_values(program: &mut Program) {
     }
     let mut hoisted = Vec::new();
     for instruction in &mut program.element {
-        if let Operation::Repeat(repeat) = &mut instruction.operation {
-            hoist_from_body(repeat, &mut uniform, &mut hoisted);
+        if let Some(body) = instruction.operation.body_mut() {
+            hoist_from_body(body, &mut uniform, &mut hoisted);
         }
     }
     program.prelude.extend(hoisted);
@@ -414,10 +679,10 @@ fn hoist_uniform_body_values(program: &mut Program) {
 
 /// Moves the instructions of `repeat`'s body, and of the bodies nested in it, that are pure and read only `uniform`
 /// slots into `hoisted`, and adds the slots they fill to `uniform`.
-fn hoist_from_body(repeat: &mut Repeat, uniform: &mut BTreeSet<usize>, hoisted: &mut Vec<Instruction>) {
-    let body = std::mem::take(&mut repeat.body);
-    for mut instruction in body {
-        if let Operation::Repeat(inner) = &mut instruction.operation {
+fn hoist_from_body(body: &mut Vec<Instruction>, uniform: &mut BTreeSet<usize>, hoisted: &mut Vec<Instruction>) {
+    let taken = std::mem::take(body);
+    for mut instruction in taken {
+        if let Some(inner) = instruction.operation.body_mut() {
             hoist_from_body(inner, uniform, hoisted);
         }
         let operation = &instruction.operation;
@@ -425,7 +690,7 @@ fn hoist_from_body(repeat: &mut Repeat, uniform: &mut BTreeSet<usize>, hoisted: 
             uniform.insert(instruction.out);
             hoisted.push(instruction);
         } else {
-            repeat.body.push(instruction);
+            body.push(instruction);
         }
     }
 }
@@ -467,7 +732,9 @@ struct Compiler<'a> {
     draw_keys: Vec<u32>,
     tallies: usize,
     tally_slots: Vec<usize>,
+    sums: Vec<SumSpec>,
     written: BTreeSet<usize>,
+    deposited: BTreeSet<usize>,
     colors: bool,
 }
 
@@ -506,7 +773,9 @@ pub(crate) fn compile(document: &GraphDocument, pass: &Pass) -> Result<Program, 
         draw_keys: Vec::new(),
         tallies: 0,
         tally_slots: Vec::new(),
+        sums: Vec::new(),
         written: BTreeSet::new(),
+        deposited: BTreeSet::new(),
         colors: false,
     };
     compiler.assign_output_slots();
@@ -525,7 +794,9 @@ pub(crate) fn compile(document: &GraphDocument, pass: &Pass) -> Result<Program, 
         post: Vec::new(),
         tallies: 0,
         tally_slots: Vec::new(),
+        sums: Vec::new(),
         written: Vec::new(),
+        deposited: Vec::new(),
         colors: false,
         uniform_outputs: Vec::new(),
         outputs: BTreeMap::new(),
@@ -553,12 +824,23 @@ pub(crate) fn compile(document: &GraphDocument, pass: &Pass) -> Result<Program, 
     program.draw_keys = compiler.draw_keys;
     program.tallies = compiler.tallies;
     program.tally_slots = compiler.tally_slots;
+    program.sums = compiler.sums;
     program.written = compiler.written.into_iter().collect();
+    program.deposited = compiler.deposited.into_iter().collect();
     program.colors = compiler.colors;
     program.outputs = compiler.outputs;
     program.inner_outputs = compiler.inner_outputs;
     hoist_uniform_body_values(&mut program);
     Ok(program)
+}
+
+/// Returns whether a stencil's boundary word skips positions past the edge, `None` for the domain grid's own.
+fn boundary_of(word: &str) -> Option<bool> {
+    match word {
+        "torus" => Some(false),
+        "bounded" => Some(true),
+        _ => None,
+    }
 }
 
 /// Returns the error for a pass the host cannot run.
@@ -578,7 +860,7 @@ fn links(node: &Node) -> impl Iterator<Item = &PortRef> {
     })
 }
 
-impl Compiler<'_> {
+impl<'a> Compiler<'a> {
     /// Returns a fresh slot.
     fn slot(&mut self) -> usize {
         self.slots += 1;
@@ -848,7 +1130,7 @@ impl Compiler<'_> {
         let node = &self.pass.body.nodes[position];
         let value = match node.inputs.get(name) {
             Some(value) => value.clone(),
-            None => match self.defs[position].input_default(name) {
+            None => match self.defs[position].input_default(node, self.document, name) {
                 Some(value) => value,
                 None => return Ok(None),
             },
@@ -977,6 +1259,188 @@ impl Compiler<'_> {
         let integer = |key: &str| config.get(key).and_then(ConfigValue::as_integer).unwrap_or_default();
         let out = self.first_outputs.get(&id).copied().unwrap_or(usize::MAX);
         let operation = match def.id {
+            "ctx.world" => Operation::World,
+            "ctx.grid" => Operation::Grid,
+            "ctx.cell_xy" => Operation::CellXy,
+            "lane.get_at" => Operation::LaneGetAt {
+                lane: self.lane(position, &text("lane"))?,
+                at: self.required(position, "at")?,
+            },
+            "field.get" => {
+                let (first, layers, field) = self.field(position, &text("field"))?;
+                let zero = HostValue::zero_of(&field.value_type)
+                    .ok_or_else(|| unsupported(self.pass, Some(id), "reads a field with no host value".to_owned()))?;
+                Operation::FieldGet {
+                    first,
+                    layers,
+                    layer: self.layer_input(position)?,
+                    at: self.input(position, "at")?,
+                    zero,
+                }
+            }
+            "field.set" => {
+                let (first, layers, _) = self.field(position, &text("field"))?;
+                for layer in 0..layers as usize {
+                    self.written.insert(first + layer);
+                }
+                Operation::FieldSet {
+                    first,
+                    layers,
+                    layer: self.layer_input(position)?,
+                    value: self.required(position, "value")?,
+                }
+            }
+            "field.deposit" => {
+                let field_id = text("field");
+                let (_, layers, _) = self.field(position, &field_id)?;
+                let first = self.first_deposit(position, &field_id)?;
+                for layer in 0..layers as usize {
+                    self.deposited.insert(first + layer);
+                }
+                Operation::Deposit {
+                    first,
+                    layers,
+                    layer: self.layer_input(position)?,
+                    at: self.required(position, "at")?,
+                    value: self.required(position, "value")?,
+                }
+            }
+            "counter.add" => Operation::CounterAdd {
+                counter: self.counter(position, &text("counter"))?,
+                amount: self.required(position, "amount")?,
+            },
+            "stat.counter" => Operation::CounterTotal {
+                counter: self.counter(position, &text("counter"))?,
+            },
+            "math.neg" | "math.floor" | "math.sqrt" | "math.recip" | "math.log2" | "math.log10" => Operation::Unary {
+                op: match def.id {
+                    "math.neg" => UnaryOp::Neg,
+                    "math.floor" => UnaryOp::Floor,
+                    "math.sqrt" => UnaryOp::Sqrt,
+                    "math.recip" => UnaryOp::Recip,
+                    "math.log2" => UnaryOp::Log2,
+                    _ => UnaryOp::Log10,
+                },
+                a: self.required(position, "a")?,
+            },
+            "math.clamp" => Operation::Clamp {
+                x: self.required(position, "x")?,
+                lo: self.required(position, "lo")?,
+                hi: self.required(position, "hi")?,
+            },
+            "math.midpoint" => Operation::Midpoint {
+                a: self.required(position, "a")?,
+                b: self.required(position, "b")?,
+            },
+            "conv.to_f64" | "conv.to_vec2f" | "conv.to_vec2i" | "conv.to_vec2u" => Operation::Convert {
+                target: match def.id {
+                    "conv.to_f64" => Conversion::ToF64,
+                    "conv.to_vec2f" => Conversion::ToVec2F,
+                    "conv.to_vec2i" => Conversion::ToVec2I,
+                    _ => Conversion::ToVec2U,
+                },
+                a: self.required(position, "a")?,
+            },
+            "vec.make" => Operation::VecMake {
+                x: self.required(position, "x")?,
+                y: self.required(position, "y")?,
+            },
+            "vec.split" => Operation::VecSplit {
+                v: self.required(position, "v")?,
+                y_out: self.output_slot(id, "y")?,
+            },
+            "vec.scale" => Operation::VecScale {
+                v: self.required(position, "v")?,
+                s: self.required(position, "s")?,
+            },
+            "vec.dot" => Operation::VecDot {
+                a: self.required(position, "a")?,
+                b: self.required(position, "b")?,
+            },
+            "vec.length" => Operation::VecLength {
+                v: self.required(position, "v")?,
+            },
+            "vec.from_angle" => Operation::FromAngle {
+                angle: self.required(position, "angle")?,
+                length: self.required(position, "length")?,
+            },
+            "space.wrap" => Operation::Wrap {
+                v: self.required(position, "v")?,
+                world: self.required(position, "world")?,
+            },
+            "space.delta" | "space.dist_sq" => Operation::Delta {
+                a: self.required(position, "a")?,
+                b: self.required(position, "b")?,
+                world: self.required(position, "world")?,
+                squared: def.id == "space.dist_sq",
+            },
+            "space.cell_index" => Operation::CellIndex {
+                xy: self.required(position, "xy")?,
+                valid_out: self.output_slot(id, "valid")?,
+            },
+            "space.cell_of" => Operation::CellOf {
+                p: self.required(position, "p")?,
+                xy_out: self.output_slot(id, "xy")?,
+                valid_out: self.output_slot(id, "valid")?,
+            },
+            "space.cell_xy" => Operation::CellXyOf {
+                cell: self.required(position, "cell")?,
+            },
+            "space.offset" => Operation::Offset {
+                xy: self.required(position, "xy")?,
+                by: self.required(position, "by")?,
+                bounded: boundary_of(&text("boundary")),
+                cell_out: self.output_slot(id, "cell")?,
+                valid_out: self.output_slot(id, "valid")?,
+            },
+            "space.heading_octant" => Operation::HeadingOctant {
+                v: self.required(position, "v")?,
+            },
+            "space.step_code" => Operation::StepCode {
+                d: self.required(position, "d")?,
+            },
+            "space.step_offset" => Operation::StepOffset {
+                code: self.required(position, "code")?,
+            },
+            "rand.bits" | "rand.choice3" => {
+                self.draw_keys.push(u32::try_from(integer("key")).unwrap_or(0));
+                let always = self.constant(HostValue::Bool(true));
+                Operation::Draw {
+                    form: if def.id == "rand.bits" {
+                        DrawForm::Bits
+                    } else {
+                        DrawForm::Choice3
+                    },
+                    draw: self.draw_keys.len() - 1,
+                    input: always,
+                }
+            }
+            "rng.choice3" => Operation::Choice3 {
+                bits: self.required(position, "bits")?,
+            },
+            "rng.reservoir" => Operation::Reservoir {
+                bits: self.required(position, "bits")?,
+                count: self.required(position, "count")?,
+            },
+            "stream.float" => Operation::StreamFloat {
+                max: self.required(position, "max")?,
+                when: self.required(position, "when")?,
+            },
+            "grid.fold" => self.grid_fold(position, order)?,
+            "agent.radius_fold" => self.radius_fold(position, order)?,
+            "stat.sum" | "stat.mean" => {
+                let vector = self.vector_input(position);
+                self.sums.push(SumSpec {
+                    slot: out,
+                    wide_chunks: text("chunk_acc") != "f32",
+                    mean: def.id == "stat.mean",
+                    vector,
+                });
+                Operation::Sum {
+                    value: self.required(position, "value")?,
+                    sum: self.sums.len() - 1,
+                }
+            }
             "ctx.index" => Operation::Index,
             "ctx.tick" => Operation::Tick,
             "ctx.press_seed" => Operation::PressSeed,
@@ -1275,6 +1739,199 @@ impl Compiler<'_> {
             out,
             operation,
         })
+    }
+
+    /// Returns the slot of output `port` of node `id`.
+    fn output_slot(&self, id: NodeId, port: &str) -> Result<usize, HostError> {
+        self.outputs
+            .get(&(id, port.to_owned()))
+            .copied()
+            .ok_or_else(|| unsupported(self.pass, Some(id), format!("has no output `{port}`")))
+    }
+
+    /// Returns the position among the columns of the field `id`'s first layer, its number of layers and the field.
+    fn field(&self, position: usize, id: &str) -> Result<(usize, u32, &'a crate::document::Field), HostError> {
+        let mut first = self.document.lanes.len();
+        for field in &self.document.fields {
+            if field.id == id {
+                return Ok((first, u32::try_from(field.layers.len()).unwrap_or(u32::MAX), field));
+            }
+            first += field.layers.len();
+        }
+        Err(unsupported(
+            self.pass,
+            Some(self.pass.body.nodes[position].id),
+            format!("names the field '{id}'"),
+        ))
+    }
+
+    /// Returns the position among the deposit columns of the first layer of the field `id`, which takes deposits.
+    fn first_deposit(&self, position: usize, id: &str) -> Result<usize, HostError> {
+        let mut first = 0;
+        for field in self.document.fields.iter().filter(|field| !field.is_static) {
+            if field.id == id {
+                return Ok(first);
+            }
+            first += field.layers.len();
+        }
+        Err(unsupported(
+            self.pass,
+            Some(self.pass.body.nodes[position].id),
+            format!("deposits into '{id}', which takes no deposits"),
+        ))
+    }
+
+    /// Returns the slot of the `layer` input of the field kind at `position`, its first layer when unwritten.
+    fn layer_input(&mut self, position: usize) -> Result<usize, HostError> {
+        match self.input(position, "layer")? {
+            Some(slot) => Ok(slot),
+            None => Ok(self.constant(HostValue::Layer(0))),
+        }
+    }
+
+    /// Returns the position of the counter `id`.
+    fn counter(&self, position: usize, id: &str) -> Result<usize, HostError> {
+        self.document
+            .counters
+            .iter()
+            .position(|counter| counter.id == id)
+            .ok_or_else(|| {
+                unsupported(
+                    self.pass,
+                    Some(self.pass.body.nodes[position].id),
+                    format!("names the counter '{id}'"),
+                )
+            })
+    }
+
+    /// Returns whether the `value` input of the reducer at `position` reads a `vec2f`, where a lane read tells it.
+    fn vector_input(&self, position: usize) -> Option<bool> {
+        let node = &self.pass.body.nodes[position];
+        let Some(InputValue::Link(link)) = node.inputs.get("value") else {
+            return None;
+        };
+        let source_node = &self.pass.body.nodes[*self.positions.get(&link.node)?];
+        if source_node.op != "lane.get" {
+            return None;
+        }
+        let id = source_node.config.get("lane").and_then(ConfigValue::as_str)?;
+        let lane = self.document.lanes.iter().find(|lane| lane.id == id)?;
+        Some(lane.value_type == crate::types::ValueType::Vec2F)
+    }
+
+    /// Returns the accumulators of the region at `position`, each running value given a slot.
+    fn accumulators(&mut self, position: usize) -> Result<Vec<RepeatAccumulator>, HostError> {
+        let node = &self.pass.body.nodes[position];
+        let id = node.id;
+        let declared = node
+            .accumulators()
+            .map_err(|reason| unsupported(self.pass, Some(id), reason))?;
+        let mut accumulators = Vec::with_capacity(declared.len());
+        for accumulator in &declared {
+            let identity = match accumulator.combine {
+                Combine::Min => extreme_of(&accumulator.value_type, true),
+                Combine::Max => extreme_of(&accumulator.value_type, false),
+                Combine::And => Some(HostValue::Bool(true)),
+                _ => HostValue::zero_of(&accumulator.value_type),
+            }
+            .ok_or_else(|| {
+                unsupported(
+                    self.pass,
+                    Some(id),
+                    format!(
+                        "holds the accumulator '{}' of a type with no host value",
+                        accumulator.name
+                    ),
+                )
+            })?;
+            let running = self.slot();
+            self.running
+                .insert((id, accumulator.name.clone()), (running, accumulator.combine));
+            accumulators.push(RepeatAccumulator {
+                init: self.input(position, &format!("init.{}", accumulator.name))?,
+                identity,
+                prev: self.inner_slot(id, &format!("prev.{}", accumulator.name))?,
+                running,
+                out: self.output_slot(id, &accumulator.name)?,
+            });
+        }
+        Ok(accumulators)
+    }
+
+    /// Returns the slot of the inner output `port` of the region `id`.
+    fn inner_slot(&self, id: NodeId, port: &str) -> Result<usize, HostError> {
+        self.inner_outputs
+            .get(&(id, port.to_owned()))
+            .copied()
+            .ok_or_else(|| unsupported(self.pass, Some(id), format!("has no inner output `{port}`")))
+    }
+
+    /// Returns the operation of the stencil fold at `position`, its body compiled.
+    fn grid_fold(
+        &mut self,
+        position: usize,
+        order: &BTreeMap<Option<usize>, Vec<usize>>,
+    ) -> Result<Operation, HostError> {
+        let node = &self.pass.body.nodes[position];
+        let id = node.id;
+        let config = effective_config(self.defs[position], node);
+        let offsets = crate::catalogue::stencil_offsets(&self.pass.body.nodes[position]);
+        let boundary = config.get("boundary").and_then(ConfigValue::as_str).unwrap_or("domain");
+        let accumulators = self.accumulators(position)?;
+        let fold = StencilFold {
+            offsets,
+            bounded: boundary_of(boundary),
+            at: self.input(position, "at")?,
+            when: self.required(position, "when")?,
+            inner: [
+                self.inner_slot(id, "k")?,
+                self.inner_slot(id, "offset")?,
+                self.inner_slot(id, "xy")?,
+                self.inner_slot(id, "cell")?,
+                self.inner_slot(id, "diagonal")?,
+            ],
+            accumulators,
+            body: self.block(position, order)?,
+        };
+        Ok(Operation::GridFold(Box::new(fold)))
+    }
+
+    /// Returns the operation of the radius fold at `position`, its body compiled.
+    fn radius_fold(
+        &mut self,
+        position: usize,
+        order: &BTreeMap<Option<usize>, Vec<usize>>,
+    ) -> Result<Operation, HostError> {
+        let node = &self.pass.body.nodes[position];
+        let id = node.id;
+        let config = effective_config(self.defs[position], node);
+        let position_lane = self
+            .document
+            .lanes
+            .iter()
+            .position(|lane| lane.role == Some(crate::document::LaneRole::Position))
+            .ok_or_else(|| unsupported(self.pass, Some(id), "needs a position lane".to_owned()))?;
+        let accumulators = self.accumulators(position)?;
+        let fold = RadiusFold {
+            position_lane,
+            center: self.required(position, "center")?,
+            radius: self.required(position, "radius")?,
+            cell_size: self.required(position, "cell_size")?,
+            when: self.required(position, "when")?,
+            exclude_self: config
+                .get("exclude_self")
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(true),
+            inner: [
+                self.inner_slot(id, "k")?,
+                self.inner_slot(id, "other")?,
+                self.inner_slot(id, "delta")?,
+                self.inner_slot(id, "dist_sq")?,
+            ],
+            accumulators,
+            body: self.block(position, order)?,
+        };
+        Ok(Operation::RadiusFold(Box::new(fold)))
     }
 
     /// Returns a fresh tally whose count lands in `slot`.

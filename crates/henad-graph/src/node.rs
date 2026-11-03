@@ -16,6 +16,12 @@ pub const OP_REGION_REPEAT: &str = "region.repeat";
 pub const OP_REGION_PUT: &str = "region.put";
 /// Kind of the call of an embedded function, whose interface ports are all bare.
 pub const OP_FUNCTION_CALL: &str = "fn.call";
+/// Kind of a function's input inside its body.
+pub const OP_FUNCTION_INPUT: &str = "fn.input";
+/// Kind of a function's output inside its body.
+pub const OP_FUNCTION_OUTPUT: &str = "fn.output";
+/// Kind of the expression node, whose input ports are all bare.
+pub const OP_EXPRESSION: &str = "math.expr";
 
 /// One node of a pass or a function.
 ///

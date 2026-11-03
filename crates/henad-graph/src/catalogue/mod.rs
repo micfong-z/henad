@@ -7,9 +7,13 @@
 mod bits_logic;
 mod cases;
 mod conv;
+mod fields;
+mod folds;
+mod functions;
 mod math;
 mod random;
 mod region;
+mod space;
 mod state;
 mod view;
 
@@ -21,16 +25,24 @@ use crate::types::{Rate, ValueType};
 use crate::value::{ConfigValue, InputValue, Literal};
 
 pub use cases::{CaseContext, CaseForm, CaseScope, CaseValue, KnownAnswer, NodeCase, PassCase};
+pub use folds::stencil_offsets;
 
 /// Every definition of the catalogue, grouped as the palette groups them.
-static GROUPS: [&[NodeDef]; 7] = [
+static GROUPS: [&[NodeDef]; 14] = [
     state::KINDS,
+    space::KINDS,
+    fields::KINDS,
     math::KINDS,
+    math::A2_KINDS,
     bits_logic::KINDS,
     conv::KINDS,
+    conv::A2_KINDS,
     random::KINDS,
+    random::A2_KINDS,
     region::KINDS,
+    folds::KINDS,
     view::KINDS,
+    functions::KINDS,
 ];
 
 /// Returns every definition of the catalogue.
@@ -138,6 +150,12 @@ pub enum TypeClass {
     Vec2D,
     /// Any declared category.
     Category,
+    /// A layer of any declared field.
+    Layer,
+    /// A reference to a cell.
+    Cell,
+    /// A reference to an agent.
+    Agent,
 }
 
 impl TypeClass {
@@ -155,11 +173,13 @@ impl TypeClass {
             ValueType::F64 => Self::F64,
             ValueType::Vec2D => Self::Vec2D,
             ValueType::Category(_) => Self::Category,
-            _ => return false,
+            ValueType::Layer(_) => Self::Layer,
+            ValueType::Cell => Self::Cell,
+            ValueType::Agent => Self::Agent,
         }
     }
 
-    /// Returns the one type of the class, or `None` for [`Self::Category`], which holds many.
+    /// Returns the one type of the class, or `None` for [`Self::Category`] and [`Self::Layer`], which hold many.
     pub fn value_type(self) -> Option<ValueType> {
         Some(match self {
             Self::Bool => ValueType::Bool,
@@ -172,7 +192,9 @@ impl TypeClass {
             Self::U64 => ValueType::U64,
             Self::F64 => ValueType::F64,
             Self::Vec2D => ValueType::Vec2D,
-            Self::Category => return None,
+            Self::Cell => ValueType::Cell,
+            Self::Agent => ValueType::Agent,
+            Self::Category | Self::Layer => return None,
         })
     }
 }
@@ -191,6 +213,53 @@ pub enum SocketType {
     ConfigCategory,
     /// Type of the accumulator of the enclosing region that `config.acc` names.
     Accumulator,
+    /// Value type of the field that `config.field` names: `f32` or its category.
+    Field,
+    /// `layer:<id>` for the field that `config.field` names.
+    FieldLayer,
+    /// Reference to an element of the domain of the lane that `config.lane` names: `cell` or `agent`.
+    LaneElement,
+    /// Two components of the type variable, a scalar: `vec2u` of `u32`, `vec2i` of `i32`, `vec2f` of `f32` and
+    /// `vec2d` of `f64`.
+    Vector,
+    /// One component of the type variable, a vector.
+    Scalar,
+    /// The `f64` form of the type variable: `f64` of `f32` and `vec2d` of `vec2f`.
+    Wide,
+    /// Type of the port `config.port` of the function the node sits in, an input for `fn.input` and an output for
+    /// `fn.output`.
+    InterfacePort,
+}
+
+/// Returns the vector of two `scalar` components, or `None` for a type with no vector.
+pub fn vector_of(scalar: &ValueType) -> Option<ValueType> {
+    Some(match scalar {
+        ValueType::U32 => ValueType::Vec2U,
+        ValueType::I32 => ValueType::Vec2I,
+        ValueType::F32 => ValueType::Vec2F,
+        ValueType::F64 => ValueType::Vec2D,
+        _ => return None,
+    })
+}
+
+/// Returns the `f64` form of `value_type`: `f64` of `f32` and `vec2d` of `vec2f`.
+pub fn wide_of(value_type: &ValueType) -> Option<ValueType> {
+    Some(match value_type {
+        ValueType::F32 => ValueType::F64,
+        ValueType::Vec2F => ValueType::Vec2D,
+        _ => return None,
+    })
+}
+
+/// Returns the component type of `vector`, or `None` for a type that is no vector.
+pub fn component_of(vector: &ValueType) -> Option<ValueType> {
+    Some(match vector {
+        ValueType::Vec2U => ValueType::U32,
+        ValueType::Vec2I => ValueType::I32,
+        ValueType::Vec2F => ValueType::F32,
+        ValueType::Vec2D => ValueType::F64,
+        _ => return None,
+    })
 }
 
 /// Shorthand for a socket of type `bool`.
@@ -210,6 +279,11 @@ pub enum InputDefault {
     Optional,
     /// The input takes this `bool` literal, and the canonical text writes it.
     Bool(bool),
+    /// The input takes the first layer of the field `config.field` names, and the canonical text writes it.
+    FirstLayer,
+    /// The input is the element's own cell in a pass over cells, and is required in a pass over agents. The canonical
+    /// text leaves it unwritten, since an own cell has no literal.
+    OwnCell,
 }
 
 /// One fixed input socket.
@@ -309,6 +383,11 @@ pub enum ConfigPorts {
     TransitionRules,
     /// For each variant of `config.category`: the `u64` output `<variant>` at the tick rate.
     VariantCounts,
+    /// The inputs and outputs of the function `config.function` names, in its order, of its port types.
+    FunctionInterface,
+    /// The inputs of `config.inputs`, of their declared types, and the outputs of `config.outputs`, whose types the
+    /// expression's expansion decides.
+    Expression,
 }
 
 /// Places a kind may appear.
@@ -376,6 +455,16 @@ pub enum Effect {
     View,
     /// Feeds an accumulator of the enclosing region.
     RegionSink,
+    /// Reads a layer of the field `config.field` at a cell, as it was at the start of the tick.
+    ReadsField,
+    /// Writes the element's own cell of a layer of the field `config.field`.
+    WritesField,
+    /// Deposits into a layer of the field `config.field`, merged at the field update.
+    Deposits,
+    /// Adds to the counter `config.counter`.
+    Counts,
+    /// Reads the position lane at other agents, which can make the position lane dual.
+    ReadsOtherPosition,
 }
 
 /// Backends that can run a kind.
@@ -418,6 +507,14 @@ pub enum NodeCost {
     PerRule(u32),
     /// `1 + max * (body cost + 1)`, for a region with the iteration bound `config.max`.
     Repeat,
+    /// `1 + positions * (body cost + 1)`, for a stencil region with as many positions as its `config.order` and
+    /// `config.include_center` give.
+    Stencil,
+    /// The cost of the kinds an expression expands into.
+    Expression,
+    /// `8 + body cost`, for the radius fold. Its candidate count is dynamic and capped by a fault, so the body counts
+    /// once.
+    RadiusFold,
 }
 
 /// One configuration key of a kind.
@@ -490,6 +587,20 @@ pub enum ConfigType {
     AccumulatorName,
     /// A list of `{ id, from, to, phase }` tables, `to` optional when the input `rule.<id>.to` is written.
     TransitionRules,
+    /// The id of a declared field.
+    FieldId,
+    /// The id of a declared counter.
+    CounterId,
+    /// The id of a declared function.
+    FunctionId,
+    /// The name of a port of the function the node sits in.
+    InterfacePort,
+    /// The text of an expression.
+    ExpressionText,
+    /// A list of `{ name, type }` tables naming an expression's inputs.
+    ExpressionInputs,
+    /// A list of names of an expression's outputs.
+    NameList,
 }
 
 /// One input of a node as its configuration makes it: fixed or from configuration.
@@ -544,6 +655,18 @@ impl NodeDef {
             .collect();
         match self.config_ports {
             ConfigPorts::None | ConfigPorts::VariantCounts => {}
+            ConfigPorts::FunctionInterface => {
+                if let Some(function) = called_function(node, document) {
+                    for port in &function.inputs {
+                        inputs.push(declared_input(&port.port, port.value_type.clone()));
+                    }
+                }
+            }
+            ConfigPorts::Expression => {
+                for (name, value_type) in expression_inputs(node) {
+                    inputs.push(declared_input(&name, value_type));
+                }
+            }
             ConfigPorts::Accumulators => {
                 for accumulator in node.accumulators().unwrap_or_default() {
                     inputs.push(ResolvedInput {
@@ -606,6 +729,28 @@ impl NodeDef {
             .collect();
         match self.config_ports {
             ConfigPorts::None | ConfigPorts::CategoryCases => {}
+            ConfigPorts::FunctionInterface => {
+                if let Some(function) = called_function(node, document) {
+                    for port in &function.outputs {
+                        outputs.push(ResolvedOutput {
+                            name: port.port.clone(),
+                            value_type: None,
+                            declared: Some(port.value_type.clone()),
+                            rate: OutputRate::Join,
+                        });
+                    }
+                }
+            }
+            ConfigPorts::Expression => {
+                for name in name_list(node, "outputs") {
+                    outputs.push(ResolvedOutput {
+                        name,
+                        value_type: None,
+                        declared: None,
+                        rate: OutputRate::Join,
+                    });
+                }
+            }
             ConfigPorts::Accumulators => {
                 for accumulator in node.accumulators().unwrap_or_default() {
                     outputs.push(ResolvedOutput {
@@ -666,17 +811,73 @@ impl NodeDef {
         outputs
     }
 
-    /// Returns the value the canonical text writes for an unwritten input `name`, or `None` for an input without a
-    /// literal default.
-    pub(crate) fn input_default(&self, name: &str) -> Option<InputValue> {
+    /// Returns the value the canonical text writes for an unwritten input `name` of `node`, or `None` for an input
+    /// without a literal default.
+    pub(crate) fn input_default(&self, node: &Node, document: &GraphDocument, name: &str) -> Option<InputValue> {
         self.inputs
             .iter()
             .find(|socket| socket.name == name)
             .and_then(|socket| match socket.default {
                 InputDefault::Bool(value) => Some(InputValue::Literal(Literal::Bool(value))),
-                InputDefault::Required | InputDefault::Optional => None,
+                InputDefault::FirstLayer => first_layer_of(node, document).map(InputValue::Literal),
+                InputDefault::Required | InputDefault::Optional | InputDefault::OwnCell => None,
             })
     }
+}
+
+/// Returns the first layer of the field `config.field` of `node` names in `document`, as a literal.
+pub(crate) fn first_layer_of(node: &Node, document: &GraphDocument) -> Option<Literal> {
+    let id = node.config.get("field")?.as_str()?;
+    let field = document.fields.iter().find(|field| field.id == id)?;
+    Some(Literal::Layer(crate::value::MemberName {
+        owner: field.id.clone(),
+        member: field.layers.first()?.clone(),
+    }))
+}
+
+/// Returns an input of a port that configuration makes, of `value_type`, required and of any rate.
+fn declared_input(name: &str, value_type: ValueType) -> ResolvedInput {
+    ResolvedInput {
+        name: name.to_owned(),
+        value_type: None,
+        declared: Some(value_type),
+        max_rate: Rate::Pair,
+        default: InputDefault::Required,
+    }
+}
+
+/// Returns the function `config.function` of `node` names in `document`.
+pub(crate) fn called_function<'a>(node: &Node, document: &'a GraphDocument) -> Option<&'a crate::document::Function> {
+    let id = node.config.get("function")?.as_str()?;
+    document.functions.iter().find(|function| function.id == id)
+}
+
+/// Returns the `{ name, type }` inputs of an expression node, in list order, leaving out a broken entry.
+pub(crate) fn expression_inputs(node: &Node) -> Vec<(String, ValueType)> {
+    let Some(items) = node.config.get("inputs").and_then(ConfigValue::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let table = item.as_table()?;
+            let name = table.get("name")?.as_str()?;
+            let value_type = table.get("type")?.as_str()?.parse().ok()?;
+            Some((name.to_owned(), value_type))
+        })
+        .collect()
+}
+
+/// Returns the strings of the list `config.<key>` of `node`, leaving out an entry that is no string.
+pub(crate) fn name_list(node: &Node, key: &str) -> Vec<String> {
+    node.config
+        .get(key)
+        .and_then(ConfigValue::as_array)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(ConfigValue::as_str)
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Returns the variant names of the category that `config.category` of `node` names, in numbering order.

@@ -58,6 +58,8 @@ pub const MAX_PICK_VALUES: usize = 256;
 pub const MAX_POWI_EXPONENT: u32 = 64;
 /// Size in bytes of the text of a `math.expr` node.
 pub const MAX_EXPRESSION_BYTES: usize = 4096;
+/// Number of inputs, and of outputs, of one `math.expr` node.
+pub const MAX_EXPRESSION_PORTS: usize = 16;
 
 // Regions and cost
 /// Largest `max` of a `region.repeat` node.

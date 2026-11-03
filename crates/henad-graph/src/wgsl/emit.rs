@@ -148,7 +148,11 @@ pub(crate) fn literal(value: HostValue) -> Option<String> {
     };
     Some(match value {
         HostValue::Bool(flag) => flag.to_string(),
-        HostValue::U32(number) | HostValue::Category(number) => format!("{number}u"),
+        HostValue::U32(number)
+        | HostValue::Category(number)
+        | HostValue::Layer(number)
+        | HostValue::Cell(number)
+        | HostValue::Agent(number) => format!("{number}u"),
         HostValue::I32(number) => signed(number),
         HostValue::F32(number) => float(number),
         HostValue::Vec2U([x, y]) => format!("vec2<u32>({x}u, {y}u)"),
@@ -610,6 +614,12 @@ impl Emitter<'_> {
                     UnaryOp::Sin => format!("sin({a})"),
                     UnaryOp::Cos => format!("cos({a})"),
                     UnaryOp::Not => format!("~{a}"),
+                    UnaryOp::Neg => format!("-({a})"),
+                    UnaryOp::Floor => format!("floor({a})"),
+                    UnaryOp::Sqrt => format!("sqrt({a})"),
+                    UnaryOp::Recip => format!("1.0f / ({a})"),
+                    UnaryOp::Log2 => format!("log2({a})"),
+                    UnaryOp::Log10 => format!("log2({a}) * 0.30102999566398120f"),
                 });
             }
             Operation::Powi { base, exponent, max } => {
@@ -812,6 +822,8 @@ impl Emitter<'_> {
                         format!("random_float({bits}, {input})")
                     }
                     DrawForm::Below => format!("{bits} < {input}"),
+                    DrawForm::Bits => bits,
+                    DrawForm::Choice3 => format!("i32(({bits}) % 3u) - 1i"),
                     DrawForm::Chance => {
                         self.uses.random_float = true;
                         format!("random_float({bits}, 1.0f) < {input}")
@@ -962,6 +974,7 @@ impl Emitter<'_> {
                     *len as f32
                 ));
             }
+            _ => self.refuse(&pass_id, Some(node), "has no WGSL form in this build"),
         }
         if !lines.is_empty() {
             text.node_line(&pass_id, node, &lines);

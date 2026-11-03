@@ -137,16 +137,20 @@ fn the_corpus_checks_without_an_error_or_a_warning() {
         let found: Vec<String> = report.diagnostics.iter().map(ToString::to_string).collect();
         assert!(found.is_empty(), "{name}:\n{}", found.join("\n"));
         assert!(report.duplicate_ids.is_empty());
-        let step = report
-            .passes
-            .iter()
-            .find(|pass| pass.id == "step")
-            .expect("a step pass");
-        assert!(
-            step.cost > 0 && step.cost <= u64::from(MAX_PASS_COST),
-            "{name}: {}",
-            step.cost
-        );
+        let document = GraphFile::parse(&text).expect("the file reads").document().clone();
+        let mut ticks = 0;
+        for (pass, pass_report) in document.passes.iter().zip(&report.passes) {
+            if pass.stage == crate::document::PassStage::Tick {
+                ticks += 1;
+                assert!(
+                    pass_report.cost > 0 && pass_report.cost <= u64::from(MAX_PASS_COST),
+                    "{name} {}: {}",
+                    pass.id,
+                    pass_report.cost
+                );
+            }
+        }
+        assert!(ticks > 0, "{name} has a tick pass");
     }
 }
 
@@ -157,7 +161,8 @@ fn a_lane_read_at_neighbours_in_the_pass_that_writes_it_is_dual() {
         let expected: &[&str] = match name.as_str() {
             "game_of_life.toml" => &["state"],
             "vote.toml" => &["vote"],
-            "repeat_trials.toml" => &[],
+            "repeat_trials.toml" | "ants.toml" | "gpu_ants.toml" | "random_walk.toml" => &[],
+            "boids.toml" | "gpu_boids.toml" => &["pos", "vel"],
             _ => &["health"],
         };
         assert_eq!(report.dual_lanes, expected, "{name}");

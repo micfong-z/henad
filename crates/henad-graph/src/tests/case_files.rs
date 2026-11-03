@@ -52,6 +52,13 @@ fn header(width: u32, height: u32, bounded: bool) -> String {
     )
 }
 
+/// Returns the header of a case file over `agents` agents in a world of `width` by `height` world units.
+fn agents_header(agents: u32, width: u32, height: u32) -> String {
+    format!(
+        "format = \"henad-model\"\nformat_version = 1\nkind = \"graph\"\nid = \"case\"\n\n[graph]\ntopology = \"agents\"\nlibrary = 1\n\n[[target]]\nbackend = \"gpu\"\n\n[agents]\ncount = {agents}\nmax_count = {agents}\nwidth = {width}.0\nheight = {height}.0\n{CASE_WORLD}"
+    )
+}
+
 /// Returns the literal a case value is written as, with a float the format cannot hold written as 0.
 pub(super) fn literal(value: &CaseValue) -> String {
     let float = |number: f32| {
@@ -72,6 +79,7 @@ pub(super) fn literal(value: &CaseValue) -> String {
         CaseValue::Vec2U([x, y]) => format!("{{ vec2u = [{x}, {y}] }}"),
         CaseValue::Vec2I([x, y]) => format!("{{ vec2i = [{x}, {y}] }}"),
         CaseValue::Vec2F([x, y]) => format!("{{ vec2f = [{}, {}] }}", float(*x), float(*y)),
+        CaseValue::Vec2D([x, _]) => format!("{{ f64 = {x:?} }}"),
         CaseValue::Variant(category, variant) => format!("{{ cat = \"{category}.{variant}\" }}"),
     }
 }
@@ -123,7 +131,11 @@ pub(super) fn node_case_file(def: &NodeDef, case: &NodeCase) -> String {
 
 /// Returns the file of a pass case.
 pub(super) fn pass_case_file(case: &PassCase) -> String {
-    let mut text = header(case.width, case.height, case.bounded);
+    let mut text = if case.agents > 0 {
+        agents_header(case.agents, case.width, case.height)
+    } else {
+        header(case.width, case.height, case.bounded)
+    };
     text.push('\n');
     text.push_str(case.tables);
     text

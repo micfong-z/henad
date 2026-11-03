@@ -12,6 +12,7 @@ use crate::file::{BodyPlaces, NodePlaces};
 use crate::ids::NodeId;
 use crate::limits::MAX_REGION_DEPTH;
 use crate::node::Node;
+use crate::normal::Origin;
 
 /// Every body of a file.
 pub(super) struct BodyViews<'a> {
@@ -63,6 +64,8 @@ pub(super) struct BodyView<'a> {
     pub parents: Vec<Option<usize>>,
     /// Number of regions around each node.
     pub depths: Vec<usize>,
+    /// Origin of each node normalisation added, for a pass checked after normalisation.
+    pub origins: Option<&'a BTreeMap<NodeId, Origin>>,
 }
 
 impl<'a> BodyView<'a> {
@@ -84,10 +87,72 @@ impl<'a> BodyView<'a> {
             defs: nodes.iter().map(|node| lookup(&node.op, document.library)).collect(),
             parents: vec![None; nodes.len()],
             depths: vec![0; nodes.len()],
+            origins: None,
         };
         view.report_unknown_kinds(checker);
         view.build_region_tree(checker);
         view
+    }
+
+    /// Returns the view of a pass after normalisation: `nodes` with `origins` for the nodes normalisation added, placed
+    /// at `places`.
+    ///
+    /// The pass as written was viewed already, which reported its unknown kinds and its broken region tree, so this
+    /// reports a region tree problem only at a node normalisation added.
+    pub fn normalised(
+        checker: &mut Checker<'a>,
+        document: &'a GraphDocument,
+        pass: &'a Pass,
+        nodes: &'a [Node],
+        places: &'a BodyPlaces,
+        origins: &'a BTreeMap<NodeId, Origin>,
+    ) -> Self {
+        let mut positions = BTreeMap::new();
+        for (position, node) in nodes.iter().enumerate() {
+            positions.entry(node.id).or_insert(position);
+        }
+        let mut view = Self {
+            document,
+            owner: Owner::Pass(pass),
+            nodes,
+            places,
+            positions,
+            defs: nodes.iter().map(|node| lookup(&node.op, document.library)).collect(),
+            parents: vec![None; nodes.len()],
+            depths: vec![0; nodes.len()],
+            origins: Some(origins),
+        };
+        let before = checker.diagnostics.len();
+        view.build_region_tree(checker);
+        let mut kept = Vec::with_capacity(checker.diagnostics.len());
+        for (index, diagnostic) in checker.diagnostics.drain(..).enumerate() {
+            let copied = diagnostic.notes.iter().any(|note| note.starts_with("in node "));
+            if index < before || copied {
+                kept.push(diagnostic);
+            }
+        }
+        checker.diagnostics = kept;
+        view
+    }
+
+    /// Returns a copy of the view, for a pass checked as written.
+    pub fn clone_view(&self) -> Self {
+        Self {
+            document: self.document,
+            owner: self.owner,
+            nodes: self.nodes,
+            places: self.places,
+            positions: self.positions.clone(),
+            defs: self.defs.clone(),
+            parents: self.parents.clone(),
+            depths: self.depths.clone(),
+            origins: self.origins,
+        }
+    }
+
+    /// Returns the origin of the node at `position` when normalisation added it.
+    pub fn origin(&self, position: usize) -> Option<&'a Origin> {
+        self.origins?.get(&self.nodes[position].id)
     }
 
     /// Reports each node whose kind does not resolve at the file's library.
@@ -188,10 +253,17 @@ impl<'a> BodyView<'a> {
 
     /// Returns the name a message gives the node at `position`, such as `Add n3`.
     pub fn name(&self, position: usize) -> String {
-        match self.defs[position] {
-            Some(def) => format!("{} {}", def.label, self.nodes[position].id),
-            None => format!("node {}", self.nodes[position].id),
+        let id = self
+            .origin(position)
+            .map_or(self.nodes[position].id, |origin| origin.node);
+        let mut name = match self.defs[position] {
+            Some(def) => format!("{} {id}", def.label),
+            None => format!("node {id}"),
+        };
+        if let Some(function) = self.origin(position).and_then(|origin| origin.function.as_ref()) {
+            name.push_str(&format!(" of the function '{function}'"));
         }
+        name
     }
 
     /// Returns the stage's pass, `None` in a function body.
@@ -260,7 +332,17 @@ impl<'a> BodyView<'a> {
     }
 
     fn add(&self, checker: &mut Checker<'_>, position: usize, diagnostic: CodeDiagnostic, place: Option<Range<usize>>) {
-        let mut diagnostic = diagnostic.with_node(self.nodes[position].id.to_string());
+        let mut diagnostic = match self.origin(position) {
+            Some(origin) => {
+                let written = origin.calls.first().copied().unwrap_or(origin.node);
+                let note = match &origin.function {
+                    Some(function) => format!("in node {} of the function '{function}'", origin.node),
+                    None => format!("in node {} as expanded", origin.node),
+                };
+                diagnostic.with_node(written.to_string()).with_note(note)
+            }
+            None => diagnostic.with_node(self.nodes[position].id.to_string()),
+        };
         if let Owner::Pass(pass) = self.owner {
             diagnostic = diagnostic.with_pass(pass.id.clone());
         }

@@ -74,9 +74,66 @@ const G1_KINDS: [&str; 64] = [
     "view.ramp",
 ];
 
+/// Kinds of milestone A2, as the plan's table lists them, its vector and space kinds spelled out.
+const A2_KINDS: [&str; 52] = [
+    "ctx.world",
+    "ctx.grid",
+    "ctx.cell_xy",
+    "lane.get_at",
+    "field.get",
+    "field.set",
+    "field.deposit",
+    "counter.add",
+    "math.neg",
+    "math.clamp",
+    "math.sqrt",
+    "math.recip",
+    "math.log2",
+    "math.log10",
+    "math.floor",
+    "math.midpoint",
+    "math.expr",
+    "conv.to_f64",
+    "conv.to_vec2f",
+    "conv.to_vec2i",
+    "conv.to_vec2u",
+    "vec.make",
+    "vec.split",
+    "vec.scale",
+    "vec.dot",
+    "vec.length",
+    "vec.from_angle",
+    "space.wrap",
+    "space.cell_index",
+    "space.cell_of",
+    "space.heading_octant",
+    "space.step_code",
+    "space.step_offset",
+    "space.delta",
+    "space.dist_sq",
+    "space.cell_xy",
+    "space.offset",
+    "rand.bits",
+    "rand.choice3",
+    "rng.reservoir",
+    "rng.choice3",
+    "stream.float",
+    "grid.fold",
+    "agent.radius_fold",
+    "stat.sum",
+    "stat.mean",
+    "stat.counter",
+    "fn.input",
+    "fn.output",
+    "fn.call",
+    "region.repeat",
+    "region.put",
+];
+
 #[test]
-fn the_catalogue_holds_every_kind_of_milestone_g1_and_no_other() {
-    let listed: BTreeSet<&str> = G1_KINDS.into_iter().collect();
+fn the_catalogue_holds_every_kind_of_milestones_g1_and_a2_and_no_other() {
+    // `region.repeat` and `region.put` sit in both lists, since A2 adds their use in agent models.
+    let listed: BTreeSet<&str> = G1_KINDS.into_iter().chain(A2_KINDS).collect();
     let defined: BTreeSet<&str> = definitions().map(|def| def.id).collect();
     assert_eq!(listed, defined);
     assert_eq!(definitions().count(), defined.len(), "a kind is defined twice");
@@ -156,14 +213,23 @@ fn a_pass_case_runs_a_pass_named_case_and_names_only_its_lanes() {
             case.name
         );
         let cells = (pass.width * pass.height) as usize;
-        for (lane, values) in pass.before.iter().chain(pass.after) {
-            assert!(
-                document.lanes.iter().any(|known| known.id == *lane),
-                "{} '{}': {lane}",
-                def.id,
-                case.name
-            );
-            assert_eq!(values.len(), cells, "{} '{}': {lane}", def.id, case.name);
+        for (lane, values) in pass.before.iter().chain(pass.after).chain(pass.deposits) {
+            let elements = if let Some(known) = document.lanes.iter().find(|known| known.id == *lane) {
+                match known.domain {
+                    crate::document::Domain::Agents => pass.agents as usize,
+                    crate::document::Domain::Cells => cells,
+                }
+            } else {
+                let layer = document.fields.iter().any(|field| {
+                    field
+                        .layers
+                        .iter()
+                        .any(|layer| format!("{}.{layer}", field.id) == *lane)
+                });
+                assert!(layer, "{} '{}': {lane}", def.id, case.name);
+                cells
+            };
+            assert_eq!(values.len(), elements, "{} '{}': {lane}", def.id, case.name);
         }
         if !pass.colors.is_empty() {
             assert_eq!(pass.colors.len(), cells, "{} '{}'", def.id, case.name);

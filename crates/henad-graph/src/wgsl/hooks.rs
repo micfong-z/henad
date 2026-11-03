@@ -239,7 +239,11 @@ impl GridHooks for GraphHooks {
 pub(crate) fn stat_value(value: HostValue) -> StatValue {
     match value {
         HostValue::Bool(flag) => StatValue::Scalar(f64::from(u8::from(flag))),
-        HostValue::U32(number) | HostValue::Category(number) => StatValue::Scalar(f64::from(number)),
+        HostValue::U32(number)
+        | HostValue::Category(number)
+        | HostValue::Layer(number)
+        | HostValue::Cell(number)
+        | HostValue::Agent(number) => StatValue::Scalar(f64::from(number)),
         HostValue::I32(number) => StatValue::Scalar(f64::from(number)),
         HostValue::F32(number) => StatValue::Scalar(f64::from(number)),
         HostValue::U64(number) => StatValue::Scalar(number as f64),

@@ -38,6 +38,12 @@ pub enum HostValue {
     F64(f64),
     /// Two `f64` components.
     Vec2D([f64; 2]),
+    /// The layer with this number within its field.
+    Layer(u32),
+    /// The cell with this index of the domain grid, or `u32::MAX` for no cell.
+    Cell(u32),
+    /// The agent with this index.
+    Agent(u32),
 }
 
 impl HostValue {
@@ -79,6 +85,11 @@ impl HostValue {
                     .position(|variant| variant.name == name.member)?;
                 Self::Category(u32::try_from(position).ok()?)
             }
+            Literal::Layer(name) => {
+                let field = document.fields.iter().find(|field| field.id == name.owner)?;
+                let position = field.layers.iter().position(|layer| *layer == name.member)?;
+                Self::Layer(u32::try_from(position).ok()?)
+            }
             Literal::ChoiceOption(name) => {
                 let param = document.params.iter().find(|param| param.id() == name.owner)?;
                 let henad_core::params::ParamKind::Choice { options, .. } = param.kind() else {
@@ -86,7 +97,6 @@ impl HostValue {
                 };
                 Self::U32(u32::try_from(options.position(&name.member)?).ok()?)
             }
-            _ => return None,
         })
     }
 
@@ -120,6 +130,22 @@ impl HostValue {
     pub fn as_f32(self) -> Option<f32> {
         match self {
             Self::F32(number) => Some(number),
+            _ => None,
+        }
+    }
+
+    /// Returns the value as a `vec2f`, or `None` for another type.
+    pub fn as_vec2f(self) -> Option<[f32; 2]> {
+        match self {
+            Self::Vec2F(pair) => Some(pair),
+            _ => None,
+        }
+    }
+
+    /// Returns the value as a `vec2i`, or `None` for another type.
+    pub fn as_vec2i(self) -> Option<[i32; 2]> {
+        match self {
+            Self::Vec2I(pair) => Some(pair),
             _ => None,
         }
     }
@@ -440,6 +466,12 @@ pub(crate) enum UnaryOp {
     Sin,
     Cos,
     Not,
+    Neg,
+    Floor,
+    Sqrt,
+    Recip,
+    Log2,
+    Log10,
 }
 
 /// Applies `op` to `a`, per component on vectors, or returns `None` for a value it does not take.
@@ -455,6 +487,12 @@ pub(crate) fn unary(op: UnaryOp, a: HostValue) -> Option<HostValue> {
             UnaryOp::Sin => x.sin(),
             UnaryOp::Cos => x.cos(),
             UnaryOp::Not => f32::NAN,
+            UnaryOp::Neg => -x,
+            UnaryOp::Floor => x.floor(),
+            UnaryOp::Sqrt => x.sqrt(),
+            UnaryOp::Recip => 1.0 / x,
+            UnaryOp::Log2 => x.log2(),
+            UnaryOp::Log10 => x.log10(),
         }
     };
     let double = |x: f64| -> f64 {
@@ -468,6 +506,12 @@ pub(crate) fn unary(op: UnaryOp, a: HostValue) -> Option<HostValue> {
             UnaryOp::Sin => x.sin(),
             UnaryOp::Cos => x.cos(),
             UnaryOp::Not => f64::NAN,
+            UnaryOp::Neg => -x,
+            UnaryOp::Floor => x.floor(),
+            UnaryOp::Sqrt => x.sqrt(),
+            UnaryOp::Recip => 1.0 / x,
+            UnaryOp::Log2 => x.log2(),
+            UnaryOp::Log10 => x.log10(),
         }
     };
     Some(match (op, a) {
@@ -477,6 +521,8 @@ pub(crate) fn unary(op: UnaryOp, a: HostValue) -> Option<HostValue> {
         (UnaryOp::Not, _) => return None,
         (UnaryOp::Abs, HostValue::I32(x)) => HostValue::I32(x.wrapping_abs()),
         (UnaryOp::Abs, HostValue::Vec2I([x, y])) => HostValue::Vec2I([x.wrapping_abs(), y.wrapping_abs()]),
+        (UnaryOp::Neg, HostValue::I32(x)) => HostValue::I32(x.wrapping_neg()),
+        (UnaryOp::Neg, HostValue::Vec2I([x, y])) => HostValue::Vec2I([x.wrapping_neg(), y.wrapping_neg()]),
         (_, HostValue::F32(x)) => HostValue::F32(float(x)),
         (_, HostValue::Vec2F([x, y])) => HostValue::Vec2F([float(x), float(y)]),
         (_, HostValue::F64(x)) => HostValue::F64(double(x)),
@@ -503,6 +549,10 @@ pub(crate) enum Conversion {
     ToF32,
     ToU32,
     ToI32,
+    ToF64,
+    ToVec2F,
+    ToVec2I,
+    ToVec2U,
 }
 
 /// Largest `f32` below 2^32, the top of the range WGSL clamps an `f32` to before converting it to a `u32`.
@@ -535,6 +585,23 @@ pub(crate) fn convert(target: Conversion, a: HostValue) -> Option<HostValue> {
         (Conversion::ToI32, HostValue::F32(x)) => HostValue::I32(clamp_above(x, LARGEST_F32_BELOW_2_POW_31) as i32),
         (Conversion::ToI32, HostValue::U32(x)) => HostValue::I32(x as i32),
         (Conversion::ToI32, HostValue::Bool(x)) => HostValue::I32(i32::from(x)),
+        (Conversion::ToU32, HostValue::Cell(x) | HostValue::Agent(x)) => HostValue::U32(x),
+        (Conversion::ToF64, HostValue::F32(x)) => HostValue::F64(f64::from(x)),
+        (Conversion::ToF64, HostValue::U32(x)) => HostValue::F64(f64::from(x)),
+        (Conversion::ToF64, HostValue::I32(x)) => HostValue::F64(f64::from(x)),
+        (Conversion::ToF64, HostValue::U64(x)) => HostValue::F64(x as f64),
+        (Conversion::ToVec2F, HostValue::Vec2I([x, y])) => HostValue::Vec2F([x as f32, y as f32]),
+        (Conversion::ToVec2F, HostValue::Vec2U([x, y])) => HostValue::Vec2F([x as f32, y as f32]),
+        (Conversion::ToVec2I, HostValue::Vec2F([x, y])) => HostValue::Vec2I([
+            clamp_above(x, LARGEST_F32_BELOW_2_POW_31) as i32,
+            clamp_above(y, LARGEST_F32_BELOW_2_POW_31) as i32,
+        ]),
+        (Conversion::ToVec2I, HostValue::Vec2U([x, y])) => HostValue::Vec2I([x as i32, y as i32]),
+        (Conversion::ToVec2U, HostValue::Vec2F([x, y])) => HostValue::Vec2U([
+            clamp_above(x, LARGEST_F32_BELOW_2_POW_32) as u32,
+            clamp_above(y, LARGEST_F32_BELOW_2_POW_32) as u32,
+        ]),
+        (Conversion::ToVec2U, HostValue::Vec2I([x, y])) => HostValue::Vec2U([x as u32, y as u32]),
         _ => return None,
     })
 }

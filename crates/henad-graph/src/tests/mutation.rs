@@ -119,7 +119,11 @@ fn exercise(text: &str) -> bool {
                     height: 3,
                     boundary,
                 },
-                _ => HostWorld::Agents { count: 12 },
+                _ => HostWorld::Agents {
+                    count: 12,
+                    width: 6.0,
+                    height: 5.0,
+                },
             };
             HOST_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if let Ok(mut lanes) = evaluator.init(world, &[], Some(1)) {

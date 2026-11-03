@@ -103,6 +103,7 @@ fn lock_text() -> String {
         ("MAX_LABEL_BYTES", limits::MAX_LABEL_BYTES as u64),
         ("MAX_DESCRIPTION_BYTES", limits::MAX_DESCRIPTION_BYTES as u64),
         ("MAX_EXPRESSION_BYTES", limits::MAX_EXPRESSION_BYTES as u64),
+        ("MAX_EXPRESSION_PORTS", limits::MAX_EXPRESSION_PORTS as u64),
         ("MAX_AGENTS", u64::from(limits::MAX_AGENTS)),
     ] {
         writeln!(text, "limit 1 {name}={value}").expect("a string takes every write");

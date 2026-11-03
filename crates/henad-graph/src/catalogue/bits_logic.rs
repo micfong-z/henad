@@ -31,6 +31,23 @@ const ANY_VALUE: &[TypeClass] = &[
     TypeClass::Category,
 ];
 const COMPARED: &[TypeClass] = ANY_VALUE;
+/// Types a choice passes through: every value, and the layers and references of agent models.
+const CHOSEN: &[TypeClass] = &[
+    TypeClass::Bool,
+    TypeClass::U32,
+    TypeClass::I32,
+    TypeClass::F32,
+    TypeClass::Vec2U,
+    TypeClass::Vec2I,
+    TypeClass::Vec2F,
+    TypeClass::U64,
+    TypeClass::F64,
+    TypeClass::Vec2D,
+    TypeClass::Category,
+    TypeClass::Layer,
+    TypeClass::Cell,
+    TypeClass::Agent,
+];
 
 /// Bit kinds on two integers of one type.
 const BITS: NodeDef = NodeDef {
@@ -345,7 +362,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         label: "Select",
         semantics: "`if_true` when `cond` holds, otherwise `if_false`. Both arms are computed, and a draw in the arm not returned changes nothing, since a counter-based draw is a function of its key.",
         group: "Logic",
-        type_var: ANY_VALUE,
+        type_var: CHOSEN,
         inputs: &[
             input("cond", BOOL_TYPE),
             input("if_true", SocketType::Var),

@@ -6,7 +6,7 @@
 use super::cases::{CaseContext, CaseForm, CaseScope, KnownAnswer, NodeCase, case, full_case};
 use super::{
     BASE, BOOL_TYPE,
-    CaseValue::{Bool, F32, U32},
+    CaseValue::{Bool, F32, I32, U32},
     ConfigType, ContextSet, Effect, F32_TYPE, NodeDef, U32_TYPE, WHEN, config, input, input_up_to, output, pinned,
 };
 use crate::types::Rate;
@@ -322,6 +322,126 @@ pub(super) static KINDS: &[NodeDef] = &[
                         ..CaseContext::NONE
                     },
                     outputs: &[("bits", U32(0))],
+                    stream_after: Some(0x1234_5678_9ABC_DEF0),
+                }),
+            },
+        ],
+        ..BASE
+    },
+];
+
+pub(super) static A2_KINDS: &[NodeDef] = &[
+    NodeDef {
+        id: "rand.bits",
+        label: "Random bits",
+        semantics: "The 32 bits of one draw: a pure function of the run seed, `key`, the phase, the element, the tick or press, and the region iteration.",
+        outputs: &[pinned("bits", U32_TYPE, Rate::Element)],
+        cases: &[
+            draw_case("one", &[], AT_ELEMENT_THREE, &[("bits", U32(0x0af7_ca7f))]),
+            draw_case("in a region", &[], ON_ITERATION_TWO, &[("bits", U32(0xca02_e006))]),
+        ],
+        ..DRAW
+    },
+    NodeDef {
+        id: "rand.choice3",
+        label: "Random step",
+        semantics: "`bits % 3 - 1` of one draw, as an `i32`: -1, 0 or 1.",
+        outputs: &[pinned(
+            "out",
+            super::SocketType::Fixed(super::TypeClass::I32),
+            Rate::Element,
+        )],
+        cases: &[
+            draw_case("one", &[], AT_ELEMENT_THREE, &[("out", I32(0))]),
+            draw_case("in a region", &[], ON_ITERATION_TWO, &[("out", I32(1))]),
+        ],
+        ..DRAW
+    },
+    NodeDef {
+        id: "rng.choice3",
+        label: "Step from bits",
+        semantics: "`bits % 3 - 1` on a given word, as an `i32`: -1, 0 or 1.",
+        inputs: &[input("bits", U32_TYPE)],
+        outputs: &[output("out", super::SocketType::Fixed(super::TypeClass::I32))],
+        cases: &[
+            case("zero", &[("bits", U32(0))], &[("out", I32(-1))]),
+            case("one", &[("bits", U32(1))], &[("out", I32(0))]),
+            case("five", &[("bits", U32(5))], &[("out", I32(1))]),
+            case("all bits", &[("bits", U32(u32::MAX))], &[("out", I32(-1))]),
+        ],
+        ..PRIMITIVE
+    },
+    NodeDef {
+        id: "rng.reservoir",
+        label: "Reservoir accept",
+        semantics: "`random_float(bits, 1.0) < 1.0 / count` on a given word, with `count` converted to the nearest `f32`: whether reservoir sampling keeps the `count`-th candidate of a run. A `count` of 0 or 1 always holds.",
+        inputs: &[input("bits", U32_TYPE), input("count", U32_TYPE)],
+        outputs: &[output("out", BOOL_TYPE)],
+        cost: super::NodeCost::Units(3),
+        cases: &[
+            case(
+                "the first",
+                &[("bits", U32(u32::MAX)), ("count", U32(1))],
+                &[("out", Bool(true))],
+            ),
+            case(
+                "zero",
+                &[("bits", U32(u32::MAX)), ("count", U32(0))],
+                &[("out", Bool(true))],
+            ),
+            case(
+                "at a half",
+                &[("bits", U32(0x8000_0000)), ("count", U32(2))],
+                &[("out", Bool(false))],
+            ),
+            case(
+                "below a half",
+                &[("bits", U32(0x7FFF_FF00)), ("count", U32(2))],
+                &[("out", Bool(true))],
+            ),
+        ],
+        ..PRIMITIVE
+    },
+    NodeDef {
+        id: "stream.float",
+        group: "Random",
+        label: "Next number",
+        semantics: "`next_float(max)` of the stage's serial stream: advance `xorshift64`, then `random_float` of the top 32 bits, in `[0, max)`. With `when` false the draw consumes nothing and returns 0. A pass lists each stream node once in `draw_order`, the order each element draws them.",
+        contexts: ContextSet {
+            init: true,
+            action: true,
+            ..ContextSet::NONE
+        },
+        inputs: &[input("max", F32_TYPE), WHEN],
+        outputs: &[pinned("value", F32_TYPE, Rate::Element)],
+        effects: &[Effect::DrawsStream],
+        backends: super::Backends::HOST,
+        cases: &[
+            KnownAnswer {
+                name: "draws",
+                scope: CaseScope::Host,
+                form: CaseForm::Node(NodeCase {
+                    config: "",
+                    inputs: &[("max", F32(2.0)), ("when", Bool(true))],
+                    context: CaseContext {
+                        stream: 0x1234_5678_9ABC_DEF0,
+                        ..CaseContext::NONE
+                    },
+                    outputs: &[("value", F32(unit_float(0xfe80_0d65) * 2.0))],
+                    stream_after: Some(0xfe80_0d65_69fa_1b4d),
+                }),
+            },
+            KnownAnswer {
+                name: "when false consumes nothing",
+                scope: CaseScope::Host,
+                form: CaseForm::Node(NodeCase {
+                    config: "",
+                    inputs: &[("max", F32(2.0)), ("when", Bool(false))],
+                    context: CaseContext {
+                        stream: 0x1234_5678_9ABC_DEF0,
+                        ..CaseContext::NONE
+                    },
+                    outputs: &[("value", F32(0.0))],
                     stream_after: Some(0x1234_5678_9ABC_DEF0),
                 }),
             },

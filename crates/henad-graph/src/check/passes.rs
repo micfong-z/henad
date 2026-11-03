@@ -193,12 +193,11 @@ fn check_lane_domains(checker: &mut Checker<'_>, view: &BodyView<'_>) {
 }
 
 /// Checks the rules across the tick passes, and returns the dual lanes in declaration order (V11, V29, V30, V31).
-pub(super) fn check_lanes(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Vec<String> {
+pub(super) fn check_lanes(checker: &mut Checker<'_>, passes: &[BodyView<'_>]) -> Vec<String> {
     let document = checker.file.document();
     let places = checker.file.places();
     let mut dual = BTreeSet::new();
-    for view in views
-        .passes
+    for view in passes
         .iter()
         .filter(|view| view.pass().is_some_and(|pass| pass.stage == PassStage::Tick))
     {
@@ -210,9 +209,22 @@ pub(super) fn check_lanes(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> V
                 dual.insert(lane.to_owned());
             }
         }
+        // A radius fold reads the position lane at other agents.
+        let position = document
+            .lanes
+            .iter()
+            .find(|lane| lane.role == Some(crate::document::LaneRole::Position));
+        let folds = (0..view.nodes.len())
+            .any(|index| view.defs[index].is_some_and(|def| def.has_effect(Effect::ReadsOtherPosition)));
+        if let Some(position) = position
+            && folds
+            && written.contains(position.id.as_str())
+        {
+            dual.insert(position.id.clone());
+        }
     }
     let mut writers: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (index, view) in views.passes.iter().enumerate() {
+    for (index, view) in passes.iter().enumerate() {
         let Some(pass) = view.pass() else { continue };
         let writes: BTreeSet<&str> = lanes_with_effect(view, Effect::WritesLane)
             .map(|(_, lane)| lane)
@@ -265,7 +277,7 @@ pub(super) fn check_lanes(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> V
             }
         }
     }
-    check_tick_passes(checker, views);
+    check_tick_passes(checker, passes);
     document
         .lanes
         .iter()
@@ -275,11 +287,10 @@ pub(super) fn check_lanes(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> V
 }
 
 /// Reports a grid without exactly one tick pass, and a tick pass of agents over another domain (V29).
-fn check_tick_passes(checker: &mut Checker<'_>, views: &BodyViews<'_>) {
+fn check_tick_passes(checker: &mut Checker<'_>, passes: &[BodyView<'_>]) {
     let document = checker.file.document();
     let places = checker.file.places();
-    let tick_passes: Vec<usize> = views
-        .passes
+    let tick_passes: Vec<usize> = passes
         .iter()
         .enumerate()
         .filter(|(_, view)| view.pass().is_some_and(|pass| pass.stage == PassStage::Tick))
@@ -299,7 +310,7 @@ fn check_tick_passes(checker: &mut Checker<'_>, views: &BodyViews<'_>) {
         ),
         Topology::Agents => {
             for index in tick_passes {
-                if views.passes[index]
+                if passes[index]
                     .pass()
                     .is_some_and(|pass| pass.domain != Some(Domain::Agents))
                 {
@@ -344,11 +355,11 @@ pub(super) fn check_keys(checker: &mut Checker<'_>, views: &BodyViews<'_>) {
 }
 
 /// Checks each `[[stat]]` table against the stats passes (V23).
-pub(super) fn check_stats(checker: &mut Checker<'_>, views: &BodyViews<'_>, ports: &[BodyPorts]) {
+pub(super) fn check_stats(checker: &mut Checker<'_>, passes: &[BodyView<'_>], ports: &[BodyPorts]) {
     let document = checker.file.document();
     for (index, stat) in document.stats.iter().enumerate() {
         let place = checker.file.places().stats.get(index).cloned();
-        let found = views.passes.iter().zip(ports).find(|(view, _)| {
+        let found = passes.iter().zip(ports).find(|(view, _)| {
             view.pass().is_some_and(|pass| pass.stage == PassStage::Stats)
                 && view.positions.contains_key(&stat.from.node)
         });

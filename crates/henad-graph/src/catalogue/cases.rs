@@ -88,9 +88,10 @@ impl CaseContext {
     };
 }
 
-/// One pass over a small grid and what it leaves.
+/// One pass over a small grid or population and what it leaves.
 ///
-/// The case file is a grid header of the given size, then [`Self::tables`]. The case runs the pass with the id `case`.
+/// The case file is a grid header of the given size, or with [`Self::agents`] set an agents header over a world of the
+/// given size, then [`Self::tables`]. The case runs the pass with the id `case`.
 /// The tables can hold other passes for the file to check, and the case does not run them.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
@@ -101,12 +102,22 @@ pub struct PassCase {
     pub height: u32,
     /// Whether the grid's boundary is bounded, where a stencil sees nothing past the edge, in place of a torus.
     pub bounded: bool,
+    /// Number of agents of an agents topology, whose world is [`Self::width`] by [`Self::height`] world units. 0 for a
+    /// grid.
+    pub agents: u32,
     /// Tables after the world table: declarations and passes.
     pub tables: &'static str,
-    /// Lane values before the pass, in row-major order, by lane id. A lane left out holds its initial value.
+    /// Lane values before the pass, in element order, by lane id, or by `<field>.<layer>` for a field layer. A lane
+    /// left out holds its initial value.
     pub before: &'static [(&'static str, &'static [CaseValue])],
-    /// Lane values after the pass, in row-major order, by lane id.
+    /// Lane values after the pass, in element order, by lane id, or by `<field>.<layer>` for a field layer.
     pub after: &'static [(&'static str, &'static [CaseValue])],
+    /// Deposits the pass leaves for the field update, per cell, by `<field>.<layer>`.
+    pub deposits: &'static [(&'static str, &'static [CaseValue])],
+    /// Counter values before the pass, by counter id. A counter left out starts at 0.
+    pub counters_before: &'static [(&'static str, u32)],
+    /// Counter values after the pass, by counter id.
+    pub counters_after: &'static [(&'static str, u32)],
     /// Expected tick-rate outputs by port reference such as `n2.S`, for a stats pass.
     pub stats: &'static [(&'static str, CaseValue)],
     /// Expected palette index per element, for a view pass.
@@ -119,9 +130,13 @@ impl PassCase {
         width: 1,
         height: 1,
         bounded: false,
+        agents: 0,
         tables: "",
         before: &[],
         after: &[],
+        deposits: &[],
+        counters_before: &[],
+        counters_after: &[],
         stats: &[],
         colors: &[],
     };
@@ -149,6 +164,8 @@ pub enum CaseValue {
     Vec2I([i32; 2]),
     /// A `vec2f`, compared bit for bit.
     Vec2F([f32; 2]),
+    /// A `vec2d`, compared bit for bit.
+    Vec2D([f64; 2]),
     /// The variant `.1` of the category `.0`.
     Variant(&'static str, &'static str),
     /// An `f32` that is any NaN.
@@ -170,6 +187,7 @@ impl CaseValue {
             Self::Vec2U(_) => ValueType::Vec2U,
             Self::Vec2I(_) => ValueType::Vec2I,
             Self::Vec2F(_) => ValueType::Vec2F,
+            Self::Vec2D(_) => ValueType::Vec2D,
             Self::Variant(category, _) => ValueType::Category((*category).to_owned()),
         }
     }

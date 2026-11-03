@@ -26,6 +26,7 @@ pub(super) fn input_literal(value: CaseValue) -> Literal {
         CaseValue::Vec2U(pair) => Literal::Vec2U(pair),
         CaseValue::Vec2I(pair) => Literal::Vec2I(pair),
         CaseValue::Vec2F(pair) => Literal::Vec2F(pair),
+        CaseValue::Vec2D([x, _]) => Literal::F64(x),
         CaseValue::Variant(category, variant) => Literal::Category(MemberName {
             owner: category.to_owned(),
             member: variant.to_owned(),
@@ -44,6 +45,10 @@ pub(super) fn meets(expected: CaseValue, found: HostValue, document: &GraphDocum
             .zip(value)
             .all(|(left, right)| left.to_bits() == right.to_bits()),
         (CaseValue::F64(expected), HostValue::F64(value)) => expected.to_bits() == value.to_bits(),
+        (CaseValue::Vec2D(expected), HostValue::Vec2D(value)) => expected
+            .iter()
+            .zip(value)
+            .all(|(left, right)| left.to_bits() == right.to_bits()),
         (expected, found) => {
             HostValue::from_literal(&input_literal(expected), document).is_some_and(|value| value == found)
         }
@@ -71,7 +76,7 @@ fn run_node_case(def: &NodeDef, name: &str, case: &NodeCase) {
         node.inputs
             .insert((*port).to_owned(), InputValue::Literal(input_literal(*value)));
     }
-    let evaluator = HostEvaluator::from_document(document).expect("the case compiles");
+    let evaluator = HostEvaluator::from_document(&document).expect("the case compiles");
     let lanes = HostLanes::new(evaluator.document(), HostWorld::of(evaluator.document())).expect("the lanes");
     let context = &case.context;
     let run_context = RunContext {
@@ -125,16 +130,15 @@ fn run_pass_case(def: &NodeDef, name: &str, case: &PassCase) {
     let evaluator =
         HostEvaluator::new(&file).unwrap_or_else(|error| panic!("{} '{name}': {:?}", def.id, error.diagnostics()));
     let document = evaluator.document();
-    let world = HostWorld::Grid {
-        width: case.width,
-        height: case.height,
-        boundary: if case.bounded {
-            Boundary::Bounded
-        } else {
-            Boundary::Torus
-        },
-    };
+    let world = case_world(case);
     let mut lanes = HostLanes::new(document, world).expect("the lanes");
+    for (counter, value) in case.counters_before {
+        assert!(
+            lanes.set_counter(counter, *value),
+            "{} '{name}': counter {counter}",
+            def.id
+        );
+    }
     for (lane, values) in case.before {
         let column = lanes.column_mut(lane).expect("a lane of the case");
         for (index, value) in values.iter().enumerate() {
@@ -180,6 +184,25 @@ fn run_pass_case(def: &NodeDef, name: &str, case: &PassCase) {
             def.id
         );
     }
+    for (layer, expected) in case.deposits {
+        let column = lanes.deposits(layer).expect("a layer that takes deposits");
+        for (index, value) in expected.iter().enumerate() {
+            let found = column.get(index).expect("a cell");
+            assert!(
+                meets(*value, found, document),
+                "{} '{name}': deposits {layer}[{index}] are {found:?}, and the case expects {value:?}",
+                def.id
+            );
+        }
+    }
+    for (counter, expected) in case.counters_after {
+        assert_eq!(
+            lanes.counter(counter),
+            Some(*expected),
+            "{} '{name}': counter {counter}",
+            def.id
+        );
+    }
     if !case.colors.is_empty() {
         assert_eq!(
             outcome.colors.as_deref(),
@@ -187,6 +210,26 @@ fn run_pass_case(def: &NodeDef, name: &str, case: &PassCase) {
             "{} '{name}': colours",
             def.id
         );
+    }
+}
+
+/// Returns the world of a pass case: a grid, or agents in a world of the case's size.
+pub(super) fn case_world(case: &PassCase) -> HostWorld {
+    if case.agents > 0 {
+        return HostWorld::Agents {
+            count: case.agents,
+            width: case.width as f32,
+            height: case.height as f32,
+        };
+    }
+    HostWorld::Grid {
+        width: case.width,
+        height: case.height,
+        boundary: if case.bounded {
+            Boundary::Bounded
+        } else {
+            Boundary::Torus
+        },
     }
 }
 

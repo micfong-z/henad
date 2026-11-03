@@ -3,12 +3,12 @@
 //! Integer operations follow WGSL's total definitions on both backends. A shader may assume no NaN and no infinity, so
 //! a case with one of those on either side of a float kind holds on the host alone.
 
-use super::cases::{case, config_case, host_case};
+use super::cases::{case, config_case, host_case, pass_case};
 use super::{
     BASE,
-    CaseValue::{F32, I32, Nan, Near, U32, U64, Vec2F, Vec2I, Vec2U},
-    ConfigType, F32_TYPE, NodeCost, NodeDef, Parity, SocketType, TypeClass, U32_TYPE, config, input, input_up_to,
-    output,
+    CaseValue::{Bool, F32, I32, Nan, Near, U32, U64, Vec2F, Vec2I, Vec2U},
+    ConfigPorts, ConfigType, F32_TYPE, NodeCost, NodeDef, Parity, PassCase, SocketType, TypeClass, U32_TYPE, config,
+    input, input_up_to, output,
 };
 use crate::limits::MAX_POWI_EXPONENT;
 use crate::types::Rate;
@@ -425,5 +425,333 @@ pub(super) static KINDS: &[NodeDef] = &[
             ),
         ],
         ..FLOAT_FUNCTION
+    },
+];
+
+/// A lane `out` of `$type`, lanes `a` and `b` of `f32`, and a pass writing the expression `$text` of `a` and `b` to
+/// `out`.
+macro_rules! expression_case {
+    ($type:literal, $text:literal) => {
+        concat!(
+            r#"[[lane]]
+id = "a"
+domain = "cells"
+type = "f32"
+
+[[lane]]
+id = "b"
+domain = "cells"
+type = "f32"
+
+[[lane]]
+id = "out"
+domain = "cells"
+type = ""#,
+            $type,
+            r#""
+
+[[pass]]
+id = "case"
+stage = "tick"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n1"
+op = "lane.get"
+config.lane = "a"
+
+[[pass.node]]
+id = "n2"
+op = "lane.get"
+config.lane = "b"
+
+[[pass.node]]
+id = "n3"
+op = "math.expr"
+config.text = '"#,
+            $text,
+            r#"'
+config.inputs = [{ name = "a", type = "f32" }, { name = "b", type = "f32" }]
+config.outputs = ["out"]
+in.a = "n1"
+in.b = "n2"
+
+[[pass.node]]
+id = "n4"
+op = "lane.set"
+config.lane = "out"
+in.value = "n3.out"
+"#
+        )
+    };
+}
+
+/// Two outputs of one expression, one reading the other.
+const TWO_OUTPUTS: &str = r#"[[lane]]
+id = "a"
+domain = "cells"
+type = "vec2f"
+
+[[lane]]
+id = "x"
+domain = "cells"
+type = "f32"
+
+[[lane]]
+id = "v"
+domain = "cells"
+type = "vec2f"
+
+[[pass]]
+id = "case"
+stage = "tick"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n1"
+op = "lane.get"
+config.lane = "a"
+
+[[pass.node]]
+id = "n2"
+op = "math.expr"
+config.text = "x = a.x * 2.0 + 1; v = vec(x, a.y) * 0.5"
+config.inputs = [{ name = "a", type = "vec2f" }]
+config.outputs = ["x", "v"]
+in.a = "n1"
+
+[[pass.node]]
+id = "n3"
+op = "lane.set"
+config.lane = "x"
+in.value = "n2.x"
+
+[[pass.node]]
+id = "n4"
+op = "lane.set"
+config.lane = "v"
+in.value = "n2.v"
+"#;
+
+pub(super) static A2_KINDS: &[NodeDef] = &[
+    NodeDef {
+        id: "math.neg",
+        label: "Negate",
+        semantics: "`-a`, per component on vectors. Integers wrap, so `-i32::MIN` is `i32::MIN`. On floats it flips the sign, so `-0.0` is `0.0`.",
+        type_var: SIGNED,
+        cases: &[
+            case("i32", &[("a", I32(3))], &[("out", I32(-3))]),
+            case("i32 wraps", &[("a", I32(i32::MIN))], &[("out", I32(i32::MIN))]),
+            case("f32", &[("a", F32(1.5))], &[("out", F32(-1.5))]),
+            case("zero flips its sign", &[("a", F32(0.0))], &[("out", F32(-0.0))]),
+            case(
+                "vec2f per component",
+                &[("a", Vec2F([1.0, -2.0]))],
+                &[("out", Vec2F([-1.0, 2.0]))],
+            ),
+        ],
+        ..UNARY
+    },
+    NodeDef {
+        id: "math.clamp",
+        label: "Clamp",
+        semantics: "`min(max(x, lo), hi)` per component, composed of `math.max` and `math.min`, so `lo` wins when `lo > hi`. On the host a NaN `x` gives `lo`, where `f32::clamp` gives NaN, and a shader leaves it indeterminate.",
+        group: "Arithmetic",
+        type_var: NUMERIC,
+        inputs: &[
+            input("x", SocketType::Var),
+            input("lo", SocketType::Var),
+            input("hi", SocketType::Var),
+        ],
+        outputs: &[output("out", SocketType::Var)],
+        cost: NodeCost::Units(2),
+        cases: &[
+            case(
+                "inside",
+                &[("x", U32(4)), ("lo", U32(1)), ("hi", U32(6))],
+                &[("out", U32(4))],
+            ),
+            case(
+                "below",
+                &[("x", F32(-0.5)), ("lo", F32(0.0)), ("hi", F32(1.0))],
+                &[("out", F32(0.0))],
+            ),
+            case(
+                "above",
+                &[("x", F32(1.5)), ("lo", F32(0.0)), ("hi", F32(1.0))],
+                &[("out", F32(1.0))],
+            ),
+            case(
+                "lo past hi",
+                &[("x", I32(5)), ("lo", I32(3)), ("hi", I32(1))],
+                &[("out", I32(1))],
+            ),
+            case(
+                "vec2i per component",
+                &[("x", Vec2I([-5, 5])), ("lo", Vec2I([0, 0])), ("hi", Vec2I([3, 3]))],
+                &[("out", Vec2I([0, 3]))],
+            ),
+            host_case(
+                "NaN gives lo",
+                &[("x", F32(f32::NAN)), ("lo", F32(0.0)), ("hi", F32(1.0))],
+                &[("out", F32(0.0))],
+            ),
+        ],
+        ..BASE
+    },
+    NodeDef {
+        id: "math.floor",
+        label: "Floor",
+        semantics: "Rounds `a` toward minus infinity, per component on vectors. A NaN input stays NaN on the host and is indeterminate in a shader.",
+        type_var: FLOATS,
+        cases: &[
+            case("down", &[("a", F32(1.75))], &[("out", F32(1.0))]),
+            case("negative", &[("a", F32(-1.25))], &[("out", F32(-2.0))]),
+            case(
+                "vec2f per component",
+                &[("a", Vec2F([0.5, -0.5]))],
+                &[("out", Vec2F([0.0, -1.0]))],
+            ),
+            host_case("NaN", &[("a", F32(f32::NAN))], &[("out", Nan)]),
+        ],
+        ..UNARY
+    },
+    NodeDef {
+        id: "math.sqrt",
+        label: "Square root",
+        semantics: "Square root of `a`, per component on vectors. The host rounds correctly, and a shader is within 2.5 ULP, so parity is approximate. A negative input is NaN on the host and indeterminate in a shader.",
+        type_var: FLOATS,
+        parity: Parity::Approx,
+        cost: NodeCost::Units(4),
+        cases: &[
+            case("a square", &[("a", F32(4.0))], &[("out", Near(2.0, 1e-6))]),
+            case(
+                "two",
+                &[("a", F32(2.0))],
+                &[("out", Near(core::f32::consts::SQRT_2, 1e-6))],
+            ),
+            host_case(
+                "exact on the host",
+                &[("a", F32(2.0))],
+                &[("out", F32(core::f32::consts::SQRT_2))],
+            ),
+            host_case("negative", &[("a", F32(-1.0))], &[("out", Nan)]),
+        ],
+        ..UNARY
+    },
+    NodeDef {
+        id: "math.recip",
+        label: "Reciprocal",
+        semantics: "`1 / a`, per component on vectors. Parity is approximate, since WGSL float division is within 2.5 ULP. On the host `1 / 0` is infinite, and a shader leaves it indeterminate.",
+        type_var: FLOATS,
+        parity: Parity::Approx,
+        cost: NodeCost::Units(2),
+        cases: &[
+            case("a quarter", &[("a", F32(4.0))], &[("out", Near(0.25, 1e-7))]),
+            host_case("exact on the host", &[("a", F32(3.0))], &[("out", F32(1.0 / 3.0))]),
+            host_case("zero", &[("a", F32(0.0))], &[("out", F32(f32::INFINITY))]),
+        ],
+        ..UNARY
+    },
+    NodeDef {
+        id: "math.log2",
+        label: "Log base 2",
+        semantics: "Logarithm of `a` to base 2. On the host `log2(0)` is minus infinity and a negative or NaN input is NaN, and a shader leaves all three indeterminate.",
+        cases: &[
+            case("eight", &[("a", F32(8.0))], &[("out", Near(3.0, 1e-5))]),
+            case("a half", &[("a", F32(0.5))], &[("out", Near(-1.0, 1e-5))]),
+            host_case("zero", &[("a", F32(0.0))], &[("out", F32(f32::NEG_INFINITY))]),
+            host_case("negative", &[("a", F32(-1.0))], &[("out", Nan)]),
+        ],
+        ..FLOAT_FUNCTION
+    },
+    NodeDef {
+        id: "math.log10",
+        label: "Log base 10",
+        semantics: "Logarithm of `a` to base 10. The host computes `f32::log10`, and a shader `log2(a) * 0.30102999566398120`, so parity is approximate. On the host `log10(0)` is minus infinity and a negative or NaN input is NaN, and a shader leaves all three indeterminate.",
+        cases: &[
+            case("a thousand", &[("a", F32(1000.0))], &[("out", Near(3.0, 1e-5))]),
+            case("a tenth", &[("a", F32(0.1))], &[("out", Near(-1.0, 1e-5))]),
+            host_case("zero", &[("a", F32(0.0))], &[("out", F32(f32::NEG_INFINITY))]),
+            host_case("negative", &[("a", F32(-1.0))], &[("out", Nan)]),
+        ],
+        ..FLOAT_FUNCTION
+    },
+    NodeDef {
+        id: "math.midpoint",
+        label: "Midpoint",
+        semantics: "`f32::midpoint(a, b)`, the point halfway between `a` and `b`, which does not overflow for large inputs and is not `(a + b) * 0.5` written out. The host computes it when the model is built, so both inputs take a constant or a parameter, and parity is exact.",
+        group: "Arithmetic",
+        inputs: &[
+            input_up_to("a", F32_TYPE, Rate::Parameter),
+            input_up_to("b", F32_TYPE, Rate::Parameter),
+        ],
+        outputs: &[output("out", F32_TYPE)],
+        cases: &[
+            case("between", &[("a", F32(3.0)), ("b", F32(15.0))], &[("out", F32(9.0))]),
+            case(
+                "no overflow",
+                &[("a", F32(f32::MAX)), ("b", F32(f32::MAX))],
+                &[("out", F32(f32::MAX))],
+            ),
+        ],
+        ..BASE
+    },
+    NodeDef {
+        id: "math.expr",
+        label: "Expression",
+        semantics: "An expression over the inputs `config.inputs`, each `{ name, type }`, that sets the outputs `config.outputs`. The text is a list of assignments `name = expression`, separated by `;` or a new line, each setting an output once, in an order where an assignment reads only the inputs and the outputs set before it. An expression holds number literals, input and output names, `+ - * / %`, unary `-`, the comparisons `< <= > >= == !=`, `and`, `or`, `not`, `true`, `false`, the components `.x` and `.y` of a vector, `if(cond, a, b)` and calls of `min`, `max`, `clamp`, `abs`, `floor`, `ceil`, `trunc`, `round`, `sqrt`, `recip`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `pow`, `vec`, `dot` and `length`. Operators bind as in Rust, `not` above the comparisons, and `and` above `or`. A whole-number literal takes the type of the other operand, `u32` when that is no number, and a literal with a point is `f32`, or `f64` beside an `f64`. A vector times or by a scalar scales it. The node expands into the arithmetic, comparison, logic and vector kinds it names, operand order kept, before the file is checked, and has their semantics.",
+        group: "Arithmetic",
+        config: &[
+            config("text", ConfigType::ExpressionText),
+            config("inputs", ConfigType::ExpressionInputs),
+            config("outputs", ConfigType::NameList),
+        ],
+        config_ports: ConfigPorts::Expression,
+        cost: NodeCost::Expression,
+        cases: &[
+            pass_case(
+                "operators bind as in Rust",
+                PassCase {
+                    width: 2,
+                    tables: expression_case!("f32", "out = a + b * 2.0 - 1"),
+                    before: &[("a", &[F32(1.0), F32(0.5)]), ("b", &[F32(3.0), F32(0.25)])],
+                    after: &[("out", &[F32(6.0), F32(0.0)])],
+                    ..PassCase::EMPTY
+                },
+            ),
+            pass_case(
+                "a choice and a call",
+                PassCase {
+                    width: 2,
+                    tables: expression_case!("f32", "out = if(a > b and not (a == 0), max(a, b), -b)"),
+                    before: &[("a", &[F32(4.0), F32(0.5)]), ("b", &[F32(3.0), F32(2.0)])],
+                    after: &[("out", &[F32(4.0), F32(-2.0)])],
+                    ..PassCase::EMPTY
+                },
+            ),
+            pass_case(
+                "a comparison",
+                PassCase {
+                    width: 2,
+                    tables: expression_case!("bool", "out = a <= b or a % 2 == 1"),
+                    before: &[("a", &[F32(5.0), F32(4.0)]), ("b", &[F32(3.0), F32(3.0)])],
+                    after: &[("out", &[Bool(true), Bool(false)])],
+                    ..PassCase::EMPTY
+                },
+            ),
+            pass_case(
+                "two outputs and a vector",
+                PassCase {
+                    tables: TWO_OUTPUTS,
+                    before: &[("a", &[Vec2F([1.5, 4.0])])],
+                    after: &[("x", &[F32(4.0)]), ("v", &[Vec2F([2.0, 2.0])])],
+                    ..PassCase::EMPTY
+                },
+            ),
+        ],
+        ..BASE
     },
 ];

@@ -21,9 +21,12 @@ the counter-based draw words and `draw.wgsl` their WGSL twin, `check/` the check
 host evaluator, `wgsl/` the WGSL compiler of grid graphs and `edit/` the edit commands and
 `GraphBuilder`. henad-graph takes henad-compute with `runtime-wgsl` on, for the public specs and
 `compose_wgsl`. `starters/` at the crate root holds the grid starters
-(`game_of_life`, `vote`, `sir`), ported to one GPU target with `node_<model>` ids and no `apply`
-key. `starters.rs` embeds them with `include_str!` (`scripts/check_packaging.sh` refuses a path
-out of the crate) and returns them through `starters()` in editor order and `starter(file_name)`.
+(`game_of_life`, `vote`, `sir`) and the agent starters (`boids`, `ants`, `random_walk`), ported to
+one GPU target with `node_<model>` ids and no `apply` key. `starters.rs` embeds them with
+`include_str!` (`scripts/check_packaging.sh` refuses a path out of the crate) and returns the grid
+ones through `starters()`, the agent ones through `agent_starters()`, and either through
+`starter(file_name)`. `starters()` leaves agents out while the compiler builds grids alone, which
+keeps them out of the Editor's starter menu and the grid-only tests over it.
 Game of Life's Randomise is the 9-node press-seed form (`ctx.press_seed`, `ctx.index`,
 `rng.hash`, `bits.xor`, `rng.hash`, `rng.threshold`, `rng.below`, `logic.select`, `lane.set`).
 The exact ports (`gpu_sir_exact.toml`) sit in henad-models' `tests/fixtures/graphs/`, and
@@ -77,7 +80,7 @@ returns the newest with `since <= library`. A def holds: one type variable (`typ
 region, `ContextSet` (stages plus a `region` flag), an optional `Domain`, `Effect`s, `Backends`,
 `Parity`, `NodeCost` and `KnownAnswer`s. `resolved_inputs`, `resolved_outputs` and
 `resolved_inner_outputs` expand a node's ports, and the writer, the checker and every later
-consumer read ports through them. The milestone G1 kinds are all in: 64. A kind with no row in
+consumer read ports through them. The kinds of G1 and A2 are all in: 114. A kind with no row in
 `node-catalogue.md` has its definition written here, with WGSL's integer rules and the NaN
 behaviour stated, and the definitions say a shader may assume no NaN or infinity. A float to
 integer conversion follows WGSL, which naga emits as a clamp before the cast: `conv.to_u32` from an
@@ -197,8 +200,7 @@ error at the input that reads it (`ir-spec.md` section 6.1, reducers end a map p
 arithmetic after a reducer is allowed. It also reports a stream draw whose sources reach a draw
 that `draw_order` lists after it (V17). `lane.set` is allowed in init, tick and action passes
 only, never in a view or stats pass or a region body. Diagnostics of a node
-carry its pass and node id. `fn.call`, `fn.input` and `fn.output` are A2 kinds: today they report
-as unknown, while cost, call depth, call cycles and inlined size already follow `fn.call`.
+carry its pass and node id. Function bodies, normalised passes and the agent rules are below.
 
 **The library lock.** `library.lock` at the crate root, one line per definition (hashes of the
 signature's `Debug`, the semantics and the cases' `Debug`, parity, cost) and one per limit.
@@ -295,3 +297,68 @@ cell's colour and the action's lane.
 `the_reader_and_checker_never_panic_on_the_mutation_corpus` and
 `a_hostile_region_tree_or_call_graph_is_reported_without_a_panic` the gate of the checker. Keep
 them.
+
+**Agent models, milestone A2 on the host.** The kinds of A2's row sit in `catalogue/space.rs`
+(world, vector and space kinds), `fields.rs` (`lane.get_at`, fields, counters, `stat.sum`,
+`stat.mean`, `stat.counter`), `folds.rs` (`grid.fold`, `agent.radius_fold`, `stencil_offsets`),
+`functions.rs` (`fn.*`) and the `A2_KINDS` tables of `math.rs`, `conv.rs` and `random.rs`.
+`vec.hypot` is left out: a CPU oracle's quirk with no WGSL form. The *domain grid* is the grid, or
+an agents world's field grid, `max(side, 1)` truncated per axis, which wraps as the world does. A
+cell reference is `y * width + x`, and `u32::MAX` is no cell: `field.get` there reads 0, a deposit
+there is dropped. New socket types: `Field`, `FieldLayer`, `LaneElement`, `Vector`, `Scalar`,
+`Wide`, `InterfacePort`. `InputDefault::FirstLayer` is written as the field's first layer literal,
+and `OwnCell` is never written and required in a pass over agents. `PassCase` gained `agents` (an
+agents header over a world of `width` by `height`), `deposits` and the counters before and after,
+and a lane id of a case may be a field layer `<field>.<layer>`.
+
+**Normalisation** (`normal.rs`, `expr.rs`). `normalise_body` replaces each `math.expr` by its
+expansion and each `fn.call` by a copy of its function's body, through a queue, so nested calls and
+expressions in functions settle without recursion, and stops past `MAX_NODES_INLINED`. Copies take
+ids from `first_free_id`, sit in the call's region, and keep an `Origin` (the calls, outermost
+first, the function and the node as written). A draw's key becomes `compose_key(call, key)` per
+enclosing call, innermost first. `replaced` holds each replaced node's output values with links
+resolved. The expression language is `math.expr`'s semantics: assignments to `config.outputs`, Rust
+precedence, literals typed by their neighbour, `vec * f32` as `vec.scale`, `vec / f32` as `math.div`
+by `vec.make(s, s)`. `HostEvaluator::from_document` normalises first and reports a fault or a
+refusal at the node as written (`located`), and `document()` is the normalised document.
+
+**The checker over functions and agents.** `check()` checks each function body alone
+(`functions::check_function`: types with `fn.input` at the constant rate, no sink, one `fn.output`
+per output), then `functions::inlinable` finds the functions whose bodies and callees hold no error.
+A pass whose calls all reach those and whose expressions expand is checked normalised
+(`BodyView::normalised`, places from `normal_places`): a problem in a copy is reported at the
+outermost call with a note `in node nK of the function 'f'`, and the call's ports are typed from the
+values its outputs take (`replaced_ports`). Any other pass is checked as written, a call standing
+for its function's ports (`ConfigPorts::FunctionInterface`). Context sets, rates and nesting
+therefore reach a call site through its copies. `agents.rs`: field writes (static fields in init
+alone, one write per layer, no deposit into a static field), `lane.get_at` reading only `cell` or
+`other` of a fold around it, nesting (Repeat holds Repeat or `grid.fold`, `grid.fold` holds Repeat,
+a radius fold holds and sits in no region), V12 (no radius fold after the tick pass that writes
+positions), V14 (one `cell_size` source, compared structurally), and V18 after inlining (a composed
+key that meets another draw's key). A radius fold reading the positions its tick pass writes makes
+the position lane dual. The written keys stay checked by `passes::check_keys`, and cost through
+calls by `cost.rs`, with `math.expr` costing its expansion.
+
+**The host over agents.** `HostWorld::Agents` holds the count and the world's width and height.
+`HostLanes` holds the lanes, then each field's layers (`layers()`, `column("<field>.<layer>")`), the
+deposits of each dynamic layer (`deposits(id)`, merged by the engine's field update, not here) and
+the counters (`counter`, `set_counter`, wrapping `u32`). The radius fold builds a `SpatialHash` of
+the start-of-pass positions per cell size and walks it in `for_each_within`'s order (`run::walk`),
+counting candidates and faulting past `MAX_FOLD_CANDIDATES` with the node. A draw in a radius fold's
+body reads the other agent's index as its iteration word, and one in a `grid.fold` its table
+position, mixed radix under a Repeat. `stat.sum` and `stat.mean` fold chunks of 8192 from `+0.0`.
+`stream.float` draws `next_float` on the stage's stream.
+
+**WGSL.** The emitter writes none of the A2 operations yet and refuses each with "has no WGSL form
+in this build", placed on its node. `gpu_cases.rs` lists the A2 kinds in `WITHOUT_A_WGSL_FORM` and
+leaves their `Both` cases to the host until their forms land, printing their number.
+
+**The agent corpus.** `boids.toml` writes its steering as one `math.expr`, and `ants.toml` its
+neighbour pick (`best_neighbour`, holding the `grid.fold`), its two moves (`move_if_passable`) and
+its delivery (`math.expr`) apart, so `walk` holds 37 nodes, down from the corpus file's 62. A host
+run of every pass equals the corpus files' form on the same lanes. The ants' lane `reward` is
+`reward_held`, since the parameter `reward` takes that id. `gpu_boids.toml` and `gpu_ants.toml` sit
+in henad-models' fixtures. henad-models' `graph_agent_corpus.rs` holds every agent file's init to
+the stock `GpuBoids` and `GpuAnts` seed buffers (the random walk to its init written out) at three
+worlds, both parameter sets and four seeds, and the ants' reset rerun to the init. Tests of the
+rules sit in `src/tests/agent_rules.rs`.

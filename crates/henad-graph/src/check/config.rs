@@ -9,14 +9,13 @@ use super::Checker;
 use super::view::BodyView;
 use crate::catalogue::{ConfigKey, ConfigType, NodeDef, TypeClass};
 use crate::ids::is_port_segment;
-use crate::limits::{MAX_ACCUMULATORS, MAX_PICK_VALUES, MAX_TRANSITION_RULES};
+use crate::limits::{
+    MAX_ACCUMULATORS, MAX_EXPRESSION_BYTES, MAX_EXPRESSION_PORTS, MAX_PICK_VALUES, MAX_TRANSITION_RULES,
+};
 use crate::node::{Combine, Node};
 use crate::reader::read_u64;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, Literal, MemberName};
-
-/// Inner output names that an accumulator cannot take.
-const RESERVED_ACCUMULATOR_NAMES: [&str; 2] = ["k", "total"];
 
 /// Checks the configuration of the node at `position`, and returns whether every key fits.
 pub(super) fn check_node(checker: &mut Checker<'_>, view: &BodyView<'_>, position: usize, def: &NodeDef) -> bool {
@@ -62,6 +61,10 @@ pub(super) fn check_node(checker: &mut Checker<'_>, view: &BodyView<'_>, positio
 }
 
 /// Returns the clause saying how `value` breaks `key`, or `Ok` when it fits.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per configuration type reads best as one table"
+)]
 fn check_value(view: &BodyView<'_>, node: &Node, key: &ConfigKey, value: &ConfigValue) -> Result<(), String> {
     let document = view.document;
     let word = |what: &str| {
@@ -139,10 +142,150 @@ fn check_value(view: &BodyView<'_>, node: &Node, key: &ConfigKey, value: &Config
         }
         ConfigType::CountList { max } => check_counts(value, max),
         ConfigType::Literals => check_literals(view, value),
-        ConfigType::Accumulators => check_accumulators(node),
+        ConfigType::Accumulators => check_accumulators(node, &def_inner_outputs(node)),
         ConfigType::AccumulatorName => word("accumulator name").map(|_| ()),
         ConfigType::TransitionRules => check_rules(view, node, value),
+        ConfigType::FieldId => {
+            let text = word("field id")?;
+            if document.fields.iter().any(|field| field.id == text) {
+                Ok(())
+            } else {
+                Err(format!("names the field '{text}', and the file declares no such field"))
+            }
+        }
+        ConfigType::CounterId => {
+            let text = word("counter id")?;
+            if document.counters.iter().any(|counter| counter.id == text) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "names the counter '{text}', and the file declares no such counter"
+                ))
+            }
+        }
+        ConfigType::FunctionId => {
+            let text = word("function id")?;
+            if document.functions.iter().any(|function| function.id == text) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "names the function '{text}', and the file declares no such function"
+                ))
+            }
+        }
+        ConfigType::InterfacePort => {
+            let text = word("port name")?;
+            let super::view::Owner::Function(function) = view.owner else {
+                // A node outside a function body has its own diagnostic.
+                return Ok(());
+            };
+            let ports = if node.op == crate::node::OP_FUNCTION_OUTPUT {
+                &function.outputs
+            } else {
+                &function.inputs
+            };
+            if ports.iter().any(|port| port.port == text) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "names the port '{text}', and the function '{}' has no such {}",
+                    function.id,
+                    if node.op == crate::node::OP_FUNCTION_OUTPUT {
+                        "output"
+                    } else {
+                        "input"
+                    }
+                ))
+            }
+        }
+        ConfigType::ExpressionText => {
+            let text = word("expression")?;
+            if text.len() > MAX_EXPRESSION_BYTES {
+                Err(format!(
+                    "holds {} bytes, and an expression holds at most {MAX_EXPRESSION_BYTES}",
+                    text.len()
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        ConfigType::ExpressionInputs => check_expression_inputs(value),
+        ConfigType::NameList => check_names(value),
     }
+}
+
+/// Returns the names of the inner outputs of the region `node` is, which its accumulators cannot take.
+fn def_inner_outputs(node: &Node) -> Vec<&'static str> {
+    crate::catalogue::lookup(&node.op, crate::LIBRARY)
+        .map(|def| def.inner_outputs.iter().map(|output| output.name).collect())
+        .unwrap_or_default()
+}
+
+/// Returns the clause saying how `value` breaks a list of `{ name, type }` inputs, or `Ok` when it fits.
+fn check_expression_inputs(value: &ConfigValue) -> Result<(), String> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| "is no list of `{ name, type }` inputs".to_owned())?;
+    if items.len() > MAX_EXPRESSION_PORTS {
+        return Err(format!(
+            "holds {} inputs, and an expression takes at most {MAX_EXPRESSION_PORTS}",
+            items.len()
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for item in items {
+        let table = item
+            .as_table()
+            .ok_or_else(|| "holds an input that is no `{ name, type }` table".to_owned())?;
+        if table.keys().any(|key| key != "name" && key != "type") {
+            return Err("holds an input with a key other than `name` and `type`".to_owned());
+        }
+        let name = table
+            .get("name")
+            .and_then(ConfigValue::as_str)
+            .ok_or_else(|| "holds an input with no `name`".to_owned())?;
+        if !is_port_segment(name) {
+            return Err(format!("names the input '{name}', outside the grammar of a port name"));
+        }
+        if !names.insert(name) {
+            return Err(format!("names the input '{name}' twice"));
+        }
+        let value_type: ValueType = table
+            .get("type")
+            .and_then(ConfigValue::as_str)
+            .ok_or_else(|| format!("gives the input '{name}' no `type`"))?
+            .parse()?;
+        if !crate::expr::takes_type(&value_type) {
+            return Err(format!(
+                "gives the input '{name}' the type {value_type}, which an expression does not take"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Returns the clause saying how `value` breaks a list of distinct port names, or `Ok` when it fits.
+fn check_names(value: &ConfigValue) -> Result<(), String> {
+    let items = value.as_array().ok_or_else(|| "is no list of names".to_owned())?;
+    if items.is_empty() || items.len() > MAX_EXPRESSION_PORTS {
+        return Err(format!(
+            "holds {} names, and holds 1 to {MAX_EXPRESSION_PORTS}",
+            items.len()
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for item in items {
+        let name = item
+            .as_str()
+            .ok_or_else(|| "holds a name that is no string".to_owned())?;
+        if !is_port_segment(name) {
+            return Err(format!("holds '{name}', outside the grammar of a port name"));
+        }
+        if !names.insert(name) {
+            return Err(format!("holds '{name}' twice"));
+        }
+    }
+    Ok(())
 }
 
 /// Returns the clause saying how `value` breaks a list of counts from 0 to `max`, or `Ok` when it fits.
@@ -184,7 +327,7 @@ fn check_literals(view: &BodyView<'_>, value: &ConfigValue) -> Result<(), String
 }
 
 /// Returns the clause saying how the accumulators of `node` break the region rules, or `Ok` when they fit.
-fn check_accumulators(node: &Node) -> Result<(), String> {
+fn check_accumulators(node: &Node, reserved: &[&'static str]) -> Result<(), String> {
     let accumulators = node.accumulators().map_err(|reason| format!("is broken: {reason}"))?;
     if accumulators.len() > MAX_ACCUMULATORS {
         return Err(format!(
@@ -200,7 +343,7 @@ fn check_accumulators(node: &Node) -> Result<(), String> {
                 "names the accumulator '{name}', outside the grammar of a port name"
             ));
         }
-        if RESERVED_ACCUMULATOR_NAMES.contains(&name) {
+        if reserved.contains(&name) {
             return Err(format!(
                 "names an accumulator '{name}', which an inner output of the region holds"
             ));

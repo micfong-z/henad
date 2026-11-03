@@ -210,6 +210,19 @@ fn node_cost(view: &BodyView<'_>, position: usize, body: u64, sizes: &BTreeMap<&
                 .unwrap_or(u64::from(crate::limits::MAX_REPEAT_ITERATIONS));
             max.saturating_mul(body.saturating_add(1)).saturating_add(1)
         }
+        NodeCost::Stencil => {
+            let positions = crate::catalogue::stencil_offsets(node).len() as u64;
+            positions.saturating_mul(body.saturating_add(1)).saturating_add(1)
+        }
+        NodeCost::RadiusFold => body.saturating_add(8),
+        NodeCost::Expression => crate::expr::expanded_nodes(node)
+            .iter()
+            .filter_map(|expanded| crate::catalogue::lookup(&expanded.op, crate::LIBRARY))
+            .map(|def| match def.cost {
+                NodeCost::Units(units) => u64::from(units),
+                _ => 1,
+            })
+            .fold(0u64, u64::saturating_add),
     }
 }
 

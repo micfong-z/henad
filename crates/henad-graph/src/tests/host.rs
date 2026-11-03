@@ -111,6 +111,14 @@ fn every_corpus_init_runs_on_the_host_and_replays() {
         let file = GraphFile::parse(&text).expect("the corpus reads");
         let evaluator = HostEvaluator::new(&file).unwrap_or_else(|error| panic!("{name}: {error}"));
         let document = evaluator.document();
+        let world = match document.world {
+            crate::document::World::Agents(_) => HostWorld::Agents {
+                count: 40,
+                width: 30.0,
+                height: 20.0,
+            },
+            _ => world,
+        };
         let first = evaluator.init(world, &[], Some(7)).expect("the init runs");
         let again = evaluator.init(world, &[], Some(7)).expect("the init runs");
         let other = evaluator.init(world, &[], Some(8)).expect("the init runs");
@@ -118,8 +126,21 @@ fn every_corpus_init_runs_on_the_host_and_replays() {
             lanes.columns().iter().map(|column| column.words().to_vec()).collect()
         };
         assert_eq!(words(&first), words(&again), "{name}: one seed gives one init");
-        // `repeat_trials.toml` has no init pass, and its cells start at their declared initial value at any seed.
-        if document.passes.iter().any(|pass| pass.stage == PassStage::Init) {
+        // `repeat_trials.toml` has no init pass, and the ants' init draws nothing, so their lanes start alike at any seed.
+        let draws = document
+            .passes
+            .iter()
+            .filter(|pass| pass.stage == PassStage::Init)
+            .any(|pass| {
+                pass.body.nodes.iter().any(|node| {
+                    node.op == "rng.lane_seed"
+                        || crate::catalogue::lookup(&node.op, 1).is_some_and(|def| {
+                            def.has_effect(crate::catalogue::Effect::DrawsStream)
+                                || def.has_effect(crate::catalogue::Effect::DrawsCounter)
+                        })
+                })
+            });
+        if draws {
             assert_ne!(words(&first), words(&other), "{name}: another seed gives another init");
         }
         for pass in &document.passes {
@@ -131,7 +152,7 @@ fn every_corpus_init_runs_on_the_host_and_replays() {
             let outcome = evaluator
                 .run_pass(&pass.id, &mut lanes, &[], &context, &mut 1)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            if pass.stage == PassStage::Stats {
+            if pass.stage == PassStage::Stats && matches!(document.world, crate::document::World::Grid(_)) {
                 let total: u64 = outcome
                     .values
                     .values()

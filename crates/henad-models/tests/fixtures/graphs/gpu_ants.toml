@@ -1,0 +1,1534 @@
+# The exact port of the stock gpu_ants as a graph model: an `rng` lane advanced by `pcg_hash` per draw, as the
+# stock step.wgsl does.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "node_gpu_ants"
+name = "Ant Foraging (GPU)"
+description = "Ants lay and follow pheromone trails between a nest and a food source, stepped entirely on the GPU"
+
+[graph]
+topology = "agents"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "node_gpu_ants"
+name = "Ant Foraging (GPU)"
+description = "Ants lay and follow pheromone trails between a nest and a food source, stepped entirely on the GPU"
+
+[agents]
+count = 2000
+max_count = 5000000
+width = 200.0
+height = 200.0
+
+[[category]]
+id = "cargo"
+variants = [
+  { name = "Searching", label = "Searching", color = [232, 232, 240, 255] },
+  { name = "Carrying", label = "Carrying food", color = [61, 213, 140, 255] },
+]
+
+[[category]]
+id = "site"
+variants = [
+  { name = "Empty", label = "Empty", color = [14, 14, 18, 255] },
+  { name = "Obstacle", label = "Obstacle", color = [90, 90, 98, 255] },
+  { name = "Food", label = "Food source", color = [61, 213, 140, 255] },
+  { name = "Home", label = "Nest", color = [242, 228, 92, 255] },
+]
+
+[[palette]]
+id = "cells"
+colors = [
+  [14, 14, 18, 255],
+  [16, 28, 48, 255],
+  [18, 42, 76, 255],
+  [20, 60, 110, 255],
+  [22, 82, 150, 255],
+  [26, 107, 192, 255],
+  [46, 139, 232, 255],
+  [48, 30, 16, 255],
+  [74, 44, 18, 255],
+  [108, 62, 20, 255],
+  [148, 84, 22, 255],
+  [190, 110, 26, 255],
+  [232, 140, 46, 255],
+  [90, 90, 98, 255],
+  [61, 213, 140, 255],
+  [242, 228, 92, 255],
+]
+
+[[lane]]
+id = "pos"
+domain = "agents"
+type = "vec2f"
+initial = { vec2f = [0.0, 0.0] }
+role = "position"
+
+[[lane]]
+id = "last_step"
+domain = "agents"
+type = "u32"
+storage = "u8"
+initial = { u32 = 255 }
+
+[[lane]]
+id = "cargo"
+domain = "agents"
+type = "cat:cargo"
+storage = "u8"
+initial = { cat = "cargo.Searching" }
+
+[[lane]]
+id = "reward_held"
+domain = "agents"
+type = "f32"
+initial = { f32 = 0.0 }
+
+[[lane]]
+id = "rng"
+domain = "agents"
+type = "u32"
+initial = { u32 = 0 }
+
+[[field]]
+id = "pheromone"
+type = "f32"
+layers = ["to_food", "to_home"]
+static = false
+combine = "max"
+finish = "decay"
+initial = { f32 = 0.0 }
+
+[[field]]
+id = "sites"
+type = "cat:site"
+layers = ["value"]
+static = true
+initial = { cat = "site.Empty" }
+
+[[counter]]
+id = "deliveries"
+
+[[param]]
+id = "update_cutdown"
+label = "Trail Falloff"
+kind = "f32"
+min = 0.5
+max = 1.0
+default = 0.9
+step = 0.01
+
+[[param]]
+id = "reward"
+label = "Site Reward"
+kind = "f32"
+min = 0.1
+max = 10.0
+default = 1.0
+step = 0.1
+
+[[param]]
+id = "momentum"
+label = "Momentum Probability"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.8
+step = 0.01
+
+[[param]]
+id = "random_action"
+label = "Random Action Probability"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.1
+step = 0.01
+
+[[param]]
+id = "evaporation"
+label = "Evaporation"
+kind = "f32"
+min = 0.9
+max = 1.0
+default = 0.999
+step = 0.001
+
+[[stat]]
+label = "Carrying Food"
+from = "n162.count"
+color = [61, 213, 140, 255]
+
+[[stat]]
+label = "Deliveries"
+from = "n163.total"
+color = [242, 228, 92, 255]
+
+[[stat]]
+label = "Total Pheromone"
+from = "n175.sum"
+color = [46, 139, 232, 255]
+
+[[action]]
+id = "reset_colony"
+label = "Reset colony"
+runs = ["colony"]
+
+[[function]]
+id = "site_xy"
+kind = "pure"
+
+[[function.input]]
+port = "frac"
+type = "f32"
+
+[[function.output]]
+port = "xy"
+type = "vec2u"
+
+[[function.node]]
+id = "n201"
+op = "fn.input"
+config.port = "frac"
+
+[[function.node]]
+id = "n202"
+op = "ctx.grid"
+
+[[function.node]]
+id = "n203"
+op = "vec.split"
+in.v = "n202"
+
+[[function.node]]
+id = "n204"
+op = "conv.to_f32"
+in.a = "n203.x"
+
+[[function.node]]
+id = "n205"
+op = "conv.to_f32"
+in.a = "n203.y"
+
+[[function.node]]
+id = "n206"
+op = "math.mul"
+in.a = "n201"
+in.b = "n204"
+
+[[function.node]]
+id = "n207"
+op = "math.mul"
+in.a = "n201"
+in.b = "n205"
+
+[[function.node]]
+id = "n208"
+op = "conv.to_u32"
+in.a = "n206"
+
+[[function.node]]
+id = "n209"
+op = "conv.to_u32"
+in.a = "n207"
+
+[[function.node]]
+id = "n210"
+op = "vec.make"
+in.x = "n208"
+in.y = "n209"
+
+[[function.node]]
+id = "n211"
+op = "fn.output"
+config.port = "xy"
+in.value = "n210"
+
+[[function]]
+id = "passable"
+kind = "pure"
+
+[[function.input]]
+port = "xy"
+type = "vec2i"
+
+[[function.output]]
+port = "ok"
+type = "bool"
+
+[[function.node]]
+id = "n220"
+op = "fn.input"
+config.port = "xy"
+
+[[function.node]]
+id = "n221"
+op = "space.cell_index"
+in.xy = "n220"
+
+[[function.node]]
+id = "n222"
+op = "field.get"
+config.field = "sites"
+in.layer = { layer = "sites.value" }
+in.at = "n221.cell"
+
+[[function.node]]
+id = "n223"
+op = "cmp.ne"
+in.a = "n222"
+in.b = { cat = "site.Obstacle" }
+
+[[function.node]]
+id = "n224"
+op = "logic.and"
+in.a = "n221.valid"
+in.b = "n223"
+
+[[function.node]]
+id = "n225"
+op = "fn.output"
+config.port = "ok"
+in.value = "n224"
+
+[[function]]
+id = "decay"
+kind = "pure"
+
+[[function.input]]
+port = "value"
+type = "f32"
+
+[[function.output]]
+port = "value"
+type = "f32"
+
+[[function.node]]
+id = "n230"
+op = "fn.input"
+config.port = "value"
+
+[[function.node]]
+id = "n231"
+op = "math.mul"
+in.a = "n230"
+in.b = { param = "evaporation" }
+
+[[function.node]]
+id = "n232"
+op = "cmp.lt"
+in.a = "n231"
+in.b = { f32 = 1e-14 }
+
+[[function.node]]
+id = "n233"
+op = "logic.select"
+in.cond = "n232"
+in.if_true = { f32 = 0.0 }
+in.if_false = "n231"
+
+[[function.node]]
+id = "n234"
+op = "fn.output"
+config.port = "value"
+in.value = "n233"
+
+[[function]]
+id = "blob"
+kind = "pure"
+
+[[function.input]]
+port = "x"
+type = "f64"
+
+[[function.input]]
+port = "y"
+type = "f64"
+
+[[function.input]]
+port = "cx"
+type = "f64"
+
+[[function.input]]
+port = "cy"
+type = "f64"
+
+[[function.input]]
+port = "size"
+type = "f64"
+
+[[function.output]]
+port = "inside"
+type = "bool"
+
+[[function.node]]
+id = "n240"
+op = "fn.input"
+config.port = "x"
+
+[[function.node]]
+id = "n241"
+op = "fn.input"
+config.port = "y"
+
+[[function.node]]
+id = "n242"
+op = "fn.input"
+config.port = "cx"
+
+[[function.node]]
+id = "n243"
+op = "fn.input"
+config.port = "cy"
+
+[[function.node]]
+id = "n244"
+op = "fn.input"
+config.port = "size"
+
+[[function.node]]
+id = "n245"
+op = "math.sub"
+in.a = "n240"
+in.b = "n242"
+
+[[function.node]]
+id = "n246"
+op = "math.sub"
+in.a = "n241"
+in.b = "n243"
+
+[[function.node]]
+id = "n247"
+op = "math.add"
+in.a = "n245"
+in.b = "n246"
+
+[[function.node]]
+id = "n248"
+op = "math.mul"
+in.a = "n247"
+in.b = "n244"
+
+[[function.node]]
+id = "n249"
+op = "math.sub"
+in.a = "n245"
+in.b = "n246"
+
+[[function.node]]
+id = "n250"
+op = "math.mul"
+in.a = "n249"
+in.b = "n244"
+
+[[function.node]]
+id = "n251"
+op = "math.mul"
+in.a = "n248"
+in.b = "n248"
+
+[[function.node]]
+id = "n252"
+op = "math.div"
+in.a = "n251"
+in.b = { f64 = 36.0 }
+
+[[function.node]]
+id = "n253"
+op = "math.mul"
+in.a = "n250"
+in.b = "n250"
+
+[[function.node]]
+id = "n254"
+op = "math.div"
+in.a = "n253"
+in.b = { f64 = 1024.0 }
+
+[[function.node]]
+id = "n255"
+op = "math.add"
+in.a = "n252"
+in.b = "n254"
+
+[[function.node]]
+id = "n256"
+op = "cmp.le"
+in.a = "n255"
+in.b = { f64 = 1.0 }
+
+[[function.node]]
+id = "n257"
+op = "fn.output"
+config.port = "inside"
+in.value = "n256"
+
+[[pass]]
+id = "colony"
+stage = "init"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n1"
+op = "fn.call"
+config.function = "site_xy"
+config.key = 2525531934
+in.frac = { f32 = 0.875 }
+
+[[pass.node]]
+id = "n2"
+op = "conv.to_vec2f"
+in.a = "n1"
+
+[[pass.node]]
+id = "n3"
+op = "lane.set"
+config.lane = "pos"
+in.value = "n2"
+
+[[pass.node]]
+id = "n4"
+op = "lane.set"
+config.lane = "reward_held"
+in.value = { param = "reward" }
+
+[[pass.node]]
+id = "n258"
+op = "lane.set"
+config.lane = "cargo"
+in.value = { cat = "cargo.Searching" }
+
+[[pass.node]]
+id = "n259"
+op = "lane.set"
+config.lane = "last_step"
+in.value = { u32 = 255 }
+
+[[pass]]
+id = "seed_rng"
+stage = "init"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n196"
+op = "rng.lane_seed"
+config.salt = "0xff98aef730385eec"
+
+[[pass.node]]
+id = "n197"
+op = "ctx.index"
+
+[[pass.node]]
+id = "n198"
+op = "bits.xor"
+in.a = "n196"
+in.b = "n197"
+
+[[pass.node]]
+id = "n199"
+op = "rng.hash"
+in.x = "n198"
+
+[[pass.node]]
+id = "n200"
+op = "lane.set"
+config.lane = "rng"
+in.value = "n199"
+
+[[pass]]
+id = "terrain"
+stage = "init"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n5"
+op = "ctx.cell_xy"
+
+[[pass.node]]
+id = "n6"
+op = "vec.split"
+in.v = "n5"
+
+[[pass.node]]
+id = "n7"
+op = "conv.to_f64"
+in.a = "n6.x"
+
+[[pass.node]]
+id = "n8"
+op = "conv.to_f64"
+in.a = "n6.y"
+
+[[pass.node]]
+id = "n9"
+op = "ctx.grid"
+
+[[pass.node]]
+id = "n10"
+op = "vec.split"
+in.v = "n9"
+
+[[pass.node]]
+id = "n11"
+op = "conv.to_f64"
+in.a = "n10.x"
+
+[[pass.node]]
+id = "n12"
+op = "conv.to_f64"
+in.a = "n10.y"
+
+[[pass.node]]
+id = "n13"
+op = "math.div"
+in.a = { f64 = 200.0 }
+in.b = "n11"
+
+[[pass.node]]
+id = "n14"
+op = "math.mul"
+in.a = { f64 = 0.407 }
+in.b = "n13"
+
+[[pass.node]]
+id = "n15"
+op = "math.mul"
+in.a = { f64 = 0.5 }
+in.b = "n11"
+
+[[pass.node]]
+id = "n16"
+op = "math.mul"
+in.a = { f64 = 0.725 }
+in.b = "n12"
+
+[[pass.node]]
+id = "n17"
+op = "math.mul"
+in.a = { f64 = 0.45 }
+in.b = "n11"
+
+[[pass.node]]
+id = "n18"
+op = "math.mul"
+in.a = { f64 = 0.275 }
+in.b = "n12"
+
+[[pass.node]]
+id = "n19"
+op = "fn.call"
+config.function = "blob"
+config.key = 1106103714
+in.x = "n7"
+in.y = "n8"
+in.cx = "n15"
+in.cy = "n16"
+in.size = "n14"
+
+[[pass.node]]
+id = "n20"
+op = "fn.call"
+config.function = "blob"
+config.key = 579972514
+in.x = "n7"
+in.y = "n8"
+in.cx = "n17"
+in.cy = "n18"
+in.size = "n14"
+
+[[pass.node]]
+id = "n21"
+op = "logic.or"
+in.a = "n19"
+in.b = "n20"
+
+[[pass.node]]
+id = "n22"
+op = "logic.select"
+in.cond = "n21"
+in.if_true = { cat = "site.Obstacle" }
+in.if_false = { cat = "site.Empty" }
+
+[[pass.node]]
+id = "n23"
+op = "fn.call"
+config.function = "site_xy"
+config.key = 123269414
+in.frac = { f32 = 0.125 }
+
+[[pass.node]]
+id = "n24"
+op = "fn.call"
+config.function = "site_xy"
+config.key = 1886095910
+in.frac = { f32 = 0.875 }
+
+[[pass.node]]
+id = "n25"
+op = "cmp.eq"
+in.a = "n5"
+in.b = "n23"
+
+[[pass.node]]
+id = "n26"
+op = "cmp.eq"
+in.a = "n5"
+in.b = "n24"
+
+[[pass.node]]
+id = "n27"
+op = "logic.select"
+in.cond = "n25"
+in.if_true = { cat = "site.Food" }
+in.if_false = "n22"
+
+[[pass.node]]
+id = "n28"
+op = "logic.select"
+in.cond = "n26"
+in.if_true = { cat = "site.Home" }
+in.if_false = "n27"
+
+[[pass.node]]
+id = "n29"
+op = "field.set"
+config.field = "sites"
+in.layer = { layer = "sites.value" }
+in.value = "n28"
+
+[[pass]]
+id = "lay"
+stage = "tick"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n30"
+op = "lane.get"
+config.lane = "pos"
+
+[[pass.node]]
+id = "n31"
+op = "space.cell_of"
+in.p = "n30"
+
+[[pass.node]]
+id = "n32"
+op = "lane.get"
+config.lane = "cargo"
+
+[[pass.node]]
+id = "n33"
+op = "cmp.eq"
+in.a = "n32"
+in.b = { cat = "cargo.Carrying" }
+
+[[pass.node]]
+id = "n34"
+op = "logic.select"
+in.cond = "n33"
+in.if_true = { layer = "pheromone.to_food" }
+in.if_false = { layer = "pheromone.to_home" }
+
+[[pass.node]]
+id = "n35"
+op = "lane.get"
+config.lane = "reward_held"
+
+[[pass.node]]
+id = "n36"
+op = "math.pow"
+in.base = { param = "update_cutdown" }
+in.exponent = { f32 = 1.4142135 }
+
+[[pass.node]]
+id = "n37"
+op = "field.get"
+config.field = "pheromone"
+in.layer = "n34"
+in.at = "n31.cell"
+
+[[pass.node]]
+id = "n40"
+op = "grid.fold"
+config.order = "moore_column_major"
+config.include_center = true
+config.boundary = "bounded"
+config.acc = [
+  { name = "best", type = "f32", combine = "max" },
+]
+in.at = "n31.xy"
+in.when = { bool = true }
+in.init.best = "n37"
+
+[[pass.node]]
+id = "n41"
+op = "field.get"
+config.field = "pheromone"
+in.layer = "n34"
+in.at = "n40.cell"
+region = "n40"
+
+[[pass.node]]
+id = "n42"
+op = "logic.select"
+in.cond = "n40.diagonal"
+in.if_true = "n36"
+in.if_false = { param = "update_cutdown" }
+region = "n40"
+
+[[pass.node]]
+id = "n43"
+op = "math.mul"
+in.a = "n41"
+in.b = "n42"
+region = "n40"
+
+[[pass.node]]
+id = "n44"
+op = "math.add"
+in.a = "n43"
+in.b = "n35"
+region = "n40"
+
+[[pass.node]]
+id = "n45"
+op = "region.put"
+config.acc = "best"
+in.value = "n44"
+in.when = { bool = true }
+region = "n40"
+
+[[pass.node]]
+id = "n46"
+op = "field.deposit"
+config.field = "pheromone"
+in.layer = "n34"
+in.at = "n31.cell"
+in.value = "n40.best"
+
+[[pass]]
+id = "walk"
+stage = "tick"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n50"
+op = "lane.get"
+config.lane = "pos"
+
+[[pass.node]]
+id = "n51"
+op = "space.cell_of"
+in.p = "n50"
+
+[[pass.node]]
+id = "n52"
+op = "lane.get"
+config.lane = "cargo"
+
+[[pass.node]]
+id = "n53"
+op = "lane.get"
+config.lane = "last_step"
+
+[[pass.node]]
+id = "n54"
+op = "cmp.eq"
+in.a = "n52"
+in.b = { cat = "cargo.Carrying" }
+
+[[pass.node]]
+id = "n55"
+op = "logic.select"
+in.cond = "n54"
+in.if_true = { layer = "pheromone.to_home" }
+in.if_false = { layer = "pheromone.to_food" }
+
+[[pass.node]]
+id = "n56"
+op = "grid.fold"
+config.order = "moore_column_major"
+config.include_center = false
+config.boundary = "bounded"
+config.acc = [
+  { name = "best", type = "f32", combine = "carry" },
+  { name = "bxy", type = "vec2i", combine = "carry" },
+  { name = "count", type = "u32", combine = "carry" },
+  { name = "rng", type = "u32", combine = "carry" },
+]
+in.at = "n51.xy"
+in.when = { bool = true }
+in.init.best = { f32 = -1.0 }
+in.init.bxy = "n51.xy"
+in.init.count = { u32 = 2 }
+in.init.rng = "n113"
+
+[[pass.node]]
+id = "n57"
+op = "fn.call"
+config.function = "passable"
+config.key = 3637234858
+in.xy = "n56.xy"
+region = "n56"
+
+[[pass.node]]
+id = "n58"
+op = "field.get"
+config.field = "pheromone"
+in.layer = "n55"
+in.at = "n56.cell"
+region = "n56"
+
+[[pass.node]]
+id = "n59"
+op = "cmp.gt"
+in.a = "n58"
+in.b = "n56.prev.best"
+region = "n56"
+
+[[pass.node]]
+id = "n60"
+op = "cmp.eq"
+in.a = "n58"
+in.b = "n56.prev.best"
+region = "n56"
+
+[[pass.node]]
+id = "n61"
+op = "logic.select"
+in.cond = "n59"
+in.if_true = { u32 = 2 }
+in.if_false = "n56.prev.count"
+region = "n56"
+
+[[pass.node]]
+id = "n62"
+op = "rng.hash"
+in.x = "n56.prev.rng"
+region = "n56"
+
+[[pass.node]]
+id = "n63"
+op = "rng.reservoir"
+in.bits = "n62"
+in.count = "n61"
+region = "n56"
+
+[[pass.node]]
+id = "n64"
+op = "logic.and"
+in.a = "n60"
+in.b = "n63"
+region = "n56"
+
+[[pass.node]]
+id = "n65"
+op = "logic.or"
+in.a = "n59"
+in.b = "n64"
+region = "n56"
+
+[[pass.node]]
+id = "n66"
+op = "logic.select"
+in.cond = "n65"
+in.if_true = "n58"
+in.if_false = "n56.prev.best"
+region = "n56"
+
+[[pass.node]]
+id = "n67"
+op = "logic.select"
+in.cond = "n65"
+in.if_true = "n56.xy"
+in.if_false = "n56.prev.bxy"
+region = "n56"
+
+[[pass.node]]
+id = "n68"
+op = "math.add"
+in.a = "n61"
+in.b = { u32 = 1 }
+region = "n56"
+
+[[pass.node]]
+id = "n69"
+op = "region.put"
+config.acc = "best"
+in.value = "n66"
+in.when = "n57"
+region = "n56"
+
+[[pass.node]]
+id = "n70"
+op = "region.put"
+config.acc = "bxy"
+in.value = "n67"
+in.when = "n57"
+region = "n56"
+
+[[pass.node]]
+id = "n71"
+op = "region.put"
+config.acc = "count"
+in.value = "n68"
+in.when = "n57"
+region = "n56"
+
+[[pass.node]]
+id = "n72"
+op = "cmp.eq"
+in.a = "n56.best"
+in.b = { f32 = 0.0 }
+
+[[pass.node]]
+id = "n73"
+op = "cmp.ne"
+in.a = "n53"
+in.b = { u32 = 255 }
+
+[[pass.node]]
+id = "n74"
+op = "logic.and"
+in.a = "n72"
+in.b = "n73"
+
+[[pass.node]]
+id = "n75"
+op = "rng.hash"
+in.x = "n56.rng"
+
+[[pass.node]]
+id = "n76"
+op = "cmp.lt"
+in.a = "n116"
+in.b = { param = "momentum" }
+
+[[pass.node]]
+id = "n77"
+op = "space.step_offset"
+in.code = "n53"
+
+[[pass.node]]
+id = "n78"
+op = "math.add"
+in.a = "n51.xy"
+in.b = "n77"
+
+[[pass.node]]
+id = "n79"
+op = "fn.call"
+config.function = "passable"
+config.key = 3660430379
+in.xy = "n78"
+
+[[pass.node]]
+id = "n80"
+op = "logic.and"
+in.a = "n76"
+in.b = "n79"
+
+[[pass.node]]
+id = "n81"
+op = "logic.select"
+in.cond = "n80"
+in.if_true = "n78"
+in.if_false = "n56.bxy"
+
+[[pass.node]]
+id = "n82"
+op = "cmp.lt"
+in.a = "n116"
+in.b = { param = "random_action" }
+
+[[pass.node]]
+id = "n83"
+op = "rng.hash"
+in.x = "n75"
+
+[[pass.node]]
+id = "n84"
+op = "rng.hash"
+in.x = "n83"
+
+[[pass.node]]
+id = "n85"
+op = "vec.make"
+in.x = "n117"
+in.y = "n118"
+
+[[pass.node]]
+id = "n86"
+op = "cmp.ne"
+in.a = "n85"
+in.b = { vec2i = [0, 0] }
+
+[[pass.node]]
+id = "n87"
+op = "math.add"
+in.a = "n51.xy"
+in.b = "n85"
+
+[[pass.node]]
+id = "n88"
+op = "fn.call"
+config.function = "passable"
+config.key = 3268857770
+in.xy = "n87"
+
+[[pass.node]]
+id = "n89"
+op = "logic.and"
+in.a = "n82"
+in.b = "n86"
+
+[[pass.node]]
+id = "n90"
+op = "logic.and"
+in.a = "n89"
+in.b = "n88"
+
+[[pass.node]]
+id = "n91"
+op = "logic.select"
+in.cond = "n90"
+in.if_true = "n87"
+in.if_false = "n56.bxy"
+
+[[pass.node]]
+id = "n92"
+op = "logic.select"
+in.cond = "n74"
+in.if_true = "n81"
+in.if_false = "n91"
+
+[[pass.node]]
+id = "n93"
+op = "math.sub"
+in.a = "n92"
+in.b = "n51.xy"
+
+[[pass.node]]
+id = "n94"
+op = "space.step_code"
+in.d = "n93"
+
+[[pass.node]]
+id = "n95"
+op = "space.cell_index"
+in.xy = "n92"
+
+[[pass.node]]
+id = "n96"
+op = "field.get"
+config.field = "sites"
+in.layer = { layer = "sites.value" }
+in.at = "n95.cell"
+
+[[pass.node]]
+id = "n97"
+op = "cmp.eq"
+in.a = "n96"
+in.b = { cat = "site.Home" }
+
+[[pass.node]]
+id = "n98"
+op = "logic.and"
+in.a = "n97"
+in.b = "n54"
+
+[[pass.node]]
+id = "n99"
+op = "cmp.eq"
+in.a = "n96"
+in.b = { cat = "site.Food" }
+
+[[pass.node]]
+id = "n100"
+op = "logic.not"
+in.a = "n54"
+
+[[pass.node]]
+id = "n101"
+op = "logic.and"
+in.a = "n99"
+in.b = "n100"
+
+[[pass.node]]
+id = "n102"
+op = "logic.or"
+in.a = "n98"
+in.b = "n101"
+
+[[pass.node]]
+id = "n103"
+op = "logic.select"
+in.cond = "n102"
+in.if_true = { param = "reward" }
+in.if_false = { f32 = 0.0 }
+
+[[pass.node]]
+id = "n104"
+op = "logic.select"
+in.cond = "n101"
+in.if_true = { cat = "cargo.Carrying" }
+in.if_false = "n52"
+
+[[pass.node]]
+id = "n105"
+op = "logic.select"
+in.cond = "n98"
+in.if_true = { cat = "cargo.Searching" }
+in.if_false = "n104"
+
+[[pass.node]]
+id = "n106"
+op = "conv.to_u32"
+in.a = "n98"
+
+[[pass.node]]
+id = "n107"
+op = "counter.add"
+config.counter = "deliveries"
+in.amount = "n106"
+
+[[pass.node]]
+id = "n108"
+op = "conv.to_vec2f"
+in.a = "n92"
+
+[[pass.node]]
+id = "n109"
+op = "lane.set"
+config.lane = "pos"
+in.value = "n108"
+
+[[pass.node]]
+id = "n110"
+op = "lane.set"
+config.lane = "last_step"
+in.value = "n94"
+
+[[pass.node]]
+id = "n111"
+op = "lane.set"
+config.lane = "cargo"
+in.value = "n105"
+
+[[pass.node]]
+id = "n112"
+op = "lane.set"
+config.lane = "reward_held"
+in.value = "n103"
+
+[[pass.node]]
+id = "n113"
+op = "lane.get"
+config.lane = "rng"
+
+[[pass.node]]
+id = "n114"
+op = "logic.select"
+in.cond = "n60"
+in.if_true = "n62"
+in.if_false = "n56.prev.rng"
+region = "n56"
+
+[[pass.node]]
+id = "n115"
+op = "region.put"
+config.acc = "rng"
+in.value = "n114"
+in.when = "n57"
+region = "n56"
+
+[[pass.node]]
+id = "n116"
+op = "rng.to_float"
+in.bits = "n75"
+in.max = { f32 = 1.0 }
+
+[[pass.node]]
+id = "n117"
+op = "rng.choice3"
+in.bits = "n83"
+
+[[pass.node]]
+id = "n118"
+op = "rng.choice3"
+in.bits = "n84"
+
+[[pass.node]]
+id = "n123"
+op = "logic.not"
+in.a = "n74"
+
+[[pass.node]]
+id = "n124"
+op = "logic.and"
+in.a = "n123"
+in.b = "n82"
+
+[[pass.node]]
+id = "n125"
+op = "logic.select"
+in.cond = "n124"
+in.if_true = "n84"
+in.if_false = "n75"
+
+[[pass.node]]
+id = "n126"
+op = "lane.set"
+config.lane = "rng"
+in.value = "n125"
+
+[[pass]]
+id = "trails"
+stage = "view"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n132"
+op = "field.get"
+config.field = "pheromone"
+in.layer = { layer = "pheromone.to_food" }
+
+[[pass.node]]
+id = "n133"
+op = "field.get"
+config.field = "pheromone"
+in.layer = { layer = "pheromone.to_home" }
+
+[[pass.node]]
+id = "n134"
+op = "cmp.gt"
+in.a = "n132"
+in.b = "n133"
+
+[[pass.node]]
+id = "n135"
+op = "logic.select"
+in.cond = "n134"
+in.if_true = "n132"
+in.if_false = "n133"
+
+[[pass.node]]
+id = "n136"
+op = "logic.select"
+in.cond = "n134"
+in.if_true = { u32 = 6 }
+in.if_false = { u32 = 0 }
+
+[[pass.node]]
+id = "n137"
+op = "math.log2"
+in.a = "n135"
+
+[[pass.node]]
+id = "n138"
+op = "math.mul"
+in.a = "n137"
+in.b = { f32 = 0.30103 }
+
+[[pass.node]]
+id = "n139"
+op = "math.div"
+in.a = "n138"
+in.b = { f32 = 3.0 }
+
+[[pass.node]]
+id = "n140"
+op = "math.add"
+in.a = "n139"
+in.b = { f32 = 1.0 }
+
+[[pass.node]]
+id = "n141"
+op = "math.mul"
+in.a = "n140"
+in.b = { f32 = 6.0 }
+
+[[pass.node]]
+id = "n142"
+op = "math.clamp"
+in.x = "n141"
+in.lo = { f32 = 0.0 }
+in.hi = { f32 = 6.0 }
+
+[[pass.node]]
+id = "n143"
+op = "conv.to_u32"
+in.a = "n142"
+
+[[pass.node]]
+id = "n144"
+op = "math.clamp"
+in.x = "n143"
+in.lo = { u32 = 1 }
+in.hi = { u32 = 6 }
+
+[[pass.node]]
+id = "n145"
+op = "cmp.le"
+in.a = "n135"
+in.b = { f32 = 1e-14 }
+
+[[pass.node]]
+id = "n146"
+op = "cmp.le"
+in.a = "n140"
+in.b = { f32 = 0.0 }
+
+[[pass.node]]
+id = "n147"
+op = "logic.or"
+in.a = "n145"
+in.b = "n146"
+
+[[pass.node]]
+id = "n149"
+op = "math.add"
+in.a = "n136"
+in.b = "n144"
+
+[[pass.node]]
+id = "n151"
+op = "logic.select"
+in.cond = "n147"
+in.if_true = { u32 = 0 }
+in.if_false = "n149"
+
+[[pass.node]]
+id = "n152"
+op = "field.get"
+config.field = "sites"
+in.layer = { layer = "sites.value" }
+
+[[pass.node]]
+id = "n153"
+op = "cat.switch"
+config.category = "site"
+in.select = "n152"
+in.case.Empty = "n151"
+in.case.Obstacle = { u32 = 13 }
+in.case.Food = { u32 = 14 }
+in.case.Home = { u32 = 15 }
+
+[[pass.node]]
+id = "n154"
+op = "view.color"
+config.palette = "cells"
+in.index = "n153"
+
+[[pass]]
+id = "colony_stats"
+stage = "stats"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n160"
+op = "lane.get"
+config.lane = "cargo"
+
+[[pass.node]]
+id = "n161"
+op = "cmp.ne"
+in.a = "n160"
+in.b = { cat = "cargo.Searching" }
+
+[[pass.node]]
+id = "n162"
+op = "stat.count_where"
+in.pred = "n161"
+
+[[pass.node]]
+id = "n163"
+op = "stat.counter"
+config.counter = "deliveries"
+
+[[pass]]
+id = "field_stats"
+stage = "stats"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n172"
+op = "field.get"
+config.field = "pheromone"
+in.layer = { layer = "pheromone.to_food" }
+
+[[pass.node]]
+id = "n173"
+op = "field.get"
+config.field = "pheromone"
+in.layer = { layer = "pheromone.to_home" }
+
+[[pass.node]]
+id = "n174"
+op = "math.add"
+in.a = "n172"
+in.b = "n173"
+
+[[pass.node]]
+id = "n175"
+op = "stat.sum"
+config.chunk_acc = "f32"
+in.value = "n174"
+
+[[pass]]
+id = "clear_trails"
+stage = "action"
+action = "reset_colony"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n180"
+op = "field.set"
+config.field = "pheromone"
+in.layer = { layer = "pheromone.to_food" }
+in.value = { f32 = 0.0 }
+
+[[pass.node]]
+id = "n181"
+op = "field.set"
+config.field = "pheromone"
+in.layer = { layer = "pheromone.to_home" }
+in.value = { f32 = 0.0 }
+
+[editor]
+version = 1
+next_id = 260
+
+[[editor.frame]]
+scope = "pass.walk"
+title = "Pick the best neighbor"
+color = "blue"
+members = ["n56", "n57", "n58", "n59", "n60", "n61", "n62", "n63", "n64", "n65", "n66", "n67", "n68", "n69", "n70", "n71", "n113", "n114", "n115"]
+
+[[editor.frame]]
+scope = "pass.walk"
+title = "Draws after the fold"
+color = "purple"
+members = ["n75", "n83", "n84", "n116", "n117", "n118", "n123", "n124", "n125", "n126"]

@@ -33,7 +33,7 @@ pub use value::{HostValue, LaneColumn};
 use compile::Program;
 
 /// Elements of a world: the cells of a grid or the agents of a population.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum HostWorld {
     /// A grid of cells.
@@ -49,6 +49,10 @@ pub enum HostWorld {
     Agents {
         /// Number of agents.
         count: u32,
+        /// Width of the world in world units.
+        width: f32,
+        /// Height of the world in world units.
+        height: f32,
     },
 }
 
@@ -61,16 +65,49 @@ impl HostWorld {
                 height: grid.height,
                 boundary: grid.boundary,
             },
-            World::Agents(agents) => Self::Agents { count: agents.count },
+            World::Agents(agents) => Self::Agents {
+                count: agents.count,
+                width: agents.width,
+                height: agents.height,
+            },
         }
     }
 
     /// Returns the number of elements of `domain`, or `None` for a domain the world does not hold.
+    ///
+    /// The cells of an agents world are the cells of its field grid.
     pub fn elements(&self, domain: Domain) -> Option<usize> {
         match (self, domain) {
-            (Self::Grid { width, height, .. }, Domain::Cells) => (*width as usize).checked_mul(*height as usize),
-            (Self::Agents { count }, Domain::Agents) => Some(*count as usize),
+            (Self::Agents { count, .. }, Domain::Agents) => Some(*count as usize),
+            (_, Domain::Cells) => {
+                let (width, height, _) = self.domain_grid();
+                (width as usize).checked_mul(height as usize)
+            }
             _ => None,
+        }
+    }
+
+    /// Returns the width and height in cells of the domain grid, and whether a stencil sees past its edge.
+    ///
+    /// The domain grid of a grid is the grid itself. The domain grid of an agents world is its field grid, which tiles
+    /// the world at one cell per world unit, `max(side, 1)` truncated toward zero, and wraps as the world does.
+    pub fn domain_grid(&self) -> (u32, u32, Boundary) {
+        match *self {
+            Self::Grid {
+                width,
+                height,
+                boundary,
+            } => (width, height, boundary),
+            Self::Agents { width, height, .. } => (width.max(1.0) as u32, height.max(1.0) as u32, Boundary::Torus),
+        }
+    }
+
+    /// Returns the size of the world as `ctx.world` gives it: the world units of an agents world, and the cells of a
+    /// grid as `f32`.
+    pub fn extent(&self) -> [f32; 2] {
+        match *self {
+            Self::Grid { width, height, .. } => [width as f32, height as f32],
+            Self::Agents { width, height, .. } => [width, height],
         }
     }
 }
@@ -81,11 +118,22 @@ impl HostWorld {
 /// holds a copy of each until its end, so a run can take twice this.
 pub const MAX_HOST_LANE_BYTES: u64 = 1 << 32;
 
-/// Every lane of a world, in the document's `[[lane]]` order.
+/// Every lane, field layer and counter of a world.
+///
+/// The lanes come in the document's `[[lane]]` order, then the layers of each field in `[[field]]` order, each a
+/// column over the cells of the domain grid with the id `<field>.<layer>`. A field that takes deposits also has a
+/// column of deposits per layer, which the field update merges.
 #[derive(Debug, Clone)]
 pub struct HostLanes {
     world: HostWorld,
+    /// Lanes, then field layers.
     columns: Vec<LaneColumn>,
+    /// Number of lanes at the front of [`Self::columns`].
+    lanes: usize,
+    /// Deposits per layer of a field that takes deposits, with the id of the layer.
+    deposits: Vec<LaneColumn>,
+    /// Value of each counter, in `[[counter]]` order.
+    counters: Vec<(String, u32)>,
 }
 
 impl HostLanes {
@@ -110,6 +158,11 @@ impl HostLanes {
                 .and_then(|(elements, stride)| u64::try_from(elements).ok()?.checked_mul(stride as u64 * 4));
             bytes = bytes.saturating_add(lane_bytes.unwrap_or(0));
         }
+        let cells = world.elements(Domain::Cells).unwrap_or(0) as u64;
+        for field in &document.fields {
+            let copies = if field.is_static { 1 } else { 2 };
+            bytes = bytes.saturating_add(cells.saturating_mul(4 * copies * field.layers.len() as u64));
+        }
         if bytes > MAX_HOST_LANE_BYTES {
             return Err(refused(format!(
                 "the lanes take {bytes} bytes over this world, and the host holds at most {MAX_HOST_LANE_BYTES}"
@@ -130,7 +183,40 @@ impl HostLanes {
                 .ok_or_else(|| refused(format!("the lane '{}' does not fit the host", lane.id)))?;
             columns.push(column);
         }
-        Ok(Self { world, columns })
+        let lanes = columns.len();
+        let mut deposits = Vec::new();
+        for field in &document.fields {
+            let elements = world.elements(Domain::Cells).unwrap_or(0);
+            let initial = field
+                .initial
+                .as_ref()
+                .and_then(|literal| HostValue::from_literal(literal, document))
+                .or_else(|| HostValue::zero_of(&field.value_type))
+                .ok_or_else(|| refused(format!("the field '{}' has a type with no host value", field.id)))?;
+            for layer in &field.layers {
+                let id = format!("{}.{layer}", field.id);
+                let column = LaneColumn::filled(&id, &field.value_type, elements, initial)
+                    .ok_or_else(|| refused(format!("the field '{}' does not fit the host", field.id)))?;
+                columns.push(column);
+                if !field.is_static {
+                    let column = LaneColumn::filled(&id, &field.value_type, elements, HostValue::F32(0.0))
+                        .ok_or_else(|| refused(format!("the field '{}' does not fit the host", field.id)))?;
+                    deposits.push(column);
+                }
+            }
+        }
+        let counters = document
+            .counters
+            .iter()
+            .map(|counter| (counter.id.clone(), 0))
+            .collect();
+        Ok(Self {
+            world,
+            columns,
+            lanes,
+            deposits,
+            counters,
+        })
     }
 
     /// World the lanes cover.
@@ -138,19 +224,48 @@ impl HostLanes {
         &self.world
     }
 
-    /// Every column, in the document's `[[lane]]` order.
+    /// Column of every lane, in the document's `[[lane]]` order.
     pub fn columns(&self) -> &[LaneColumn] {
-        &self.columns
+        &self.columns[..self.lanes]
     }
 
-    /// Returns the column of the lane `id`.
+    /// Column of every field layer, the layers of each field in order, in `[[field]]` order.
+    pub fn layers(&self) -> &[LaneColumn] {
+        &self.columns[self.lanes..]
+    }
+
+    /// Returns the column of the lane `id`, or of the field layer `<field>.<layer>`.
     pub fn column(&self, id: &str) -> Option<&LaneColumn> {
         self.columns.iter().find(|column| column.id() == id)
     }
 
-    /// Returns the column of the lane `id` for writing.
+    /// Returns the column of the lane `id`, or of the field layer `<field>.<layer>`, for writing.
     pub fn column_mut(&mut self, id: &str) -> Option<&mut LaneColumn> {
         self.columns.iter_mut().find(|column| column.id() == id)
+    }
+
+    /// Returns the deposits of the field layer `<field>.<layer>` that the field update has not merged.
+    pub fn deposits(&self, id: &str) -> Option<&LaneColumn> {
+        self.deposits.iter().find(|column| column.id() == id)
+    }
+
+    /// Returns the value of the counter `id`.
+    pub fn counter(&self, id: &str) -> Option<u32> {
+        self.counters
+            .iter()
+            .find(|(known, _)| known == id)
+            .map(|(_, value)| *value)
+    }
+
+    /// Sets the counter `id` to `value`, and returns whether the world holds the counter.
+    pub fn set_counter(&mut self, id: &str, value: u32) -> bool {
+        match self.counters.iter_mut().find(|(known, _)| known == id) {
+            Some((_, slot)) => {
+                *slot = value;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Replaces the column at `position` with `column`.
@@ -340,6 +455,8 @@ impl std::error::Error for HostError {}
 pub struct HostEvaluator {
     document: GraphDocument,
     programs: Vec<Result<Program, HostError>>,
+    /// Origin of each node normalisation added, by its id.
+    origins: BTreeMap<NodeId, crate::normal::Origin>,
 }
 
 /// Prints the graph's id and the number of passes.
@@ -367,7 +484,7 @@ impl HostEvaluator {
         if report.has_errors() {
             return Err(HostError::Checked(report.errors().cloned().collect()));
         }
-        Self::from_document(file.document().clone())
+        Self::from_document(file.document())
     }
 
     /// Returns the evaluator of `document`, which the caller has checked.
@@ -375,24 +492,71 @@ impl HostEvaluator {
     /// # Errors
     ///
     /// Returns [`HostError::Unsupported`] when an init pass or a pass an action reruns holds what the host cannot run.
-    pub(crate) fn from_document(document: GraphDocument) -> Result<Self, HostError> {
-        let programs: Vec<Result<Program, HostError>> = document
+    pub(crate) fn from_document(document: &GraphDocument) -> Result<Self, HostError> {
+        let (document, origins) =
+            crate::normal::normalise(document).map_err(|(pass, error)| HostError::Unsupported {
+                pass,
+                node: Some(error.node),
+                reason: error.reason,
+            })?;
+        let evaluator = Self {
+            programs: Vec::new(),
+            document,
+            origins,
+        };
+        let programs: Vec<Result<Program, HostError>> = evaluator
+            .document
             .passes
             .iter()
-            .map(|pass| compile::compile(&document, pass))
+            .map(|pass| compile::compile(&evaluator.document, pass).map_err(|error| evaluator.located(error)))
             .collect();
-        for (pass, program) in document.passes.iter().zip(&programs) {
-            let rerun = document.actions.iter().any(|action| action.runs.contains(&pass.id));
+        for (pass, program) in evaluator.document.passes.iter().zip(&programs) {
+            let rerun = evaluator
+                .document
+                .actions
+                .iter()
+                .any(|action| action.runs.contains(&pass.id));
             if let Err(error) = program
                 && (pass.stage == PassStage::Init || rerun)
             {
                 return Err(error.clone());
             }
         }
-        Ok(Self { document, programs })
+        Ok(Self { programs, ..evaluator })
     }
 
-    /// Document the evaluator runs.
+    /// Returns `error` with a node that normalisation added replaced by the node as written that holds it: the
+    /// outermost call it was inlined through, or the expression it expands.
+    fn located(&self, error: HostError) -> HostError {
+        let written = |node: Option<NodeId>| {
+            node.map(|id| {
+                self.origins
+                    .get(&id)
+                    .map_or(id, |origin| origin.calls.first().copied().unwrap_or(origin.node))
+            })
+        };
+        match error {
+            HostError::Unsupported { pass, node, reason } => HostError::Unsupported {
+                pass,
+                node: written(node),
+                reason,
+            },
+            HostError::Fault { pass, node, reason } => HostError::Fault {
+                pass,
+                node: written(node),
+                reason,
+            },
+            other => other,
+        }
+    }
+
+    /// Returns the origin of the node `id`, which normalisation added: the calls it was inlined through and the node
+    /// as written it comes from. `None` for a node as written.
+    pub fn origin(&self, id: NodeId) -> Option<&crate::normal::Origin> {
+        self.origins.get(&id)
+    }
+
+    /// Document the evaluator runs, with every expression expanded and every function call inlined.
     pub fn document(&self) -> &GraphDocument {
         &self.document
     }
@@ -444,14 +608,15 @@ impl HostEvaluator {
             reason,
         };
         let declared = &self.document.lanes;
-        if lanes.columns.len() != declared.len() {
+        let layers: usize = self.document.fields.iter().map(|field| field.layers.len()).sum();
+        if lanes.lanes != declared.len() || lanes.columns.len() != declared.len() + layers {
             return Err(fault(format!(
-                "the lanes hold {} columns, and the file declares {} lanes",
+                "the lanes hold {} columns, and the file declares {} lanes and {layers} field layers",
                 lanes.columns.len(),
                 declared.len()
             )));
         }
-        for (column, lane) in lanes.columns.iter().zip(declared) {
+        for (column, lane) in lanes.columns().iter().zip(declared) {
             if column.id() != lane.id || *column.value_type() != lane.value_type {
                 return Err(fault(format!(
                     "the lanes hold the column '{}' of {} where the file declares the lane '{}' of {}",
@@ -510,7 +675,7 @@ impl HostEvaluator {
                 continue;
             }
             let program = self.programs[position].as_ref().map_err(Clone::clone)?;
-            run::run(program, &mut lanes, &values, &context, &mut stream)?;
+            run::run(program, &mut lanes, &values, &context, &mut stream).map_err(|error| self.located(error))?;
         }
         Ok(lanes)
     }
@@ -553,7 +718,11 @@ impl HostEvaluator {
             if self.document.passes[position].stage != PassStage::Init {
                 continue;
             }
-            written.extend(run::run(program, lanes, &values, &context, stream)?.written);
+            written.extend(
+                run::run(program, lanes, &values, &context, stream)
+                    .map_err(|error| self.located(error))?
+                    .written,
+            );
         }
         written.sort_unstable();
         written.dedup();
@@ -581,7 +750,7 @@ impl HostEvaluator {
         let (_, program) = self.program(pass)?;
         self.check_lanes(pass, lanes)?;
         let values = self.param_values(params);
-        run::run(program, lanes, &values, context, stream)
+        run::run(program, lanes, &values, context, stream).map_err(|error| self.located(error))
     }
 
     /// Returns every value the element block of the pass `pass` computes at `element`, by node and port, with

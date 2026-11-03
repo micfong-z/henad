@@ -1,0 +1,657 @@
+# Boids as a graph model. The step follows the stock CPU boids expression tree, its steering written as one
+# expression, and the action uses the press-seed form of the stock randomise_headings.wgsl.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "node_boids"
+name = "Boids Flocking"
+description = "A simulation of flocking behavior in a group of boids."
+
+[graph]
+topology = "agents"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "node_boids"
+name = "Boids Flocking (GPU)"
+description = "A simulation of flocking behavior in a group of boids, stepped entirely on the GPU"
+
+[agents]
+count = 50000
+max_count = 1000000
+width = 1000.0
+height = 1000.0
+
+[[palette]]
+id = "heading"
+colors = [
+  [228, 55, 72, 255],
+  [240, 122, 40, 255],
+  [255, 193, 7, 255],
+  [139, 195, 74, 255],
+  [30, 168, 124, 255],
+  [0, 158, 200, 255],
+  [0, 122, 245, 255],
+  [142, 84, 216, 255],
+]
+
+[[lane]]
+id = "pos"
+domain = "agents"
+type = "vec2f"
+initial = { vec2f = [0.0, 0.0] }
+role = "position"
+
+[[lane]]
+id = "vel"
+domain = "agents"
+type = "vec2f"
+initial = { vec2f = [0.0, 0.0] }
+
+[[param]]
+id = "visual_range"
+label = "Visual Range"
+kind = "f32"
+min = 1.0
+max = 200.0
+default = 50.0
+step = 1.0
+
+[[param]]
+id = "protected_range"
+label = "Protected Range"
+kind = "f32"
+min = 0.5
+max = 50.0
+default = 8.0
+step = 0.5
+
+[[param]]
+id = "separation"
+label = "Separation"
+kind = "f32"
+min = 0.0
+max = 2.0
+default = 0.05
+step = 0.01
+
+[[param]]
+id = "alignment"
+label = "Alignment"
+kind = "f32"
+min = 0.0
+max = 2.0
+default = 0.05
+step = 0.01
+
+[[param]]
+id = "cohesion"
+label = "Cohesion"
+kind = "f32"
+min = 0.0
+max = 0.01
+default = 0.0005
+step = 0.0001
+
+[[param]]
+id = "max_speed"
+label = "Max Speed"
+kind = "f32"
+min = 1.0
+max = 50.0
+default = 15.0
+step = 0.5
+
+[[param]]
+id = "min_speed"
+label = "Min Speed"
+kind = "f32"
+min = 0.5
+max = 20.0
+default = 3.0
+step = 0.5
+
+[[stat]]
+label = "Average Speed"
+from = "n72.mean"
+color = [255, 193, 7, 255]
+
+[[stat]]
+label = "Average Velocity"
+from = "n73.mean"
+color = [0, 122, 245, 255]
+
+[[action]]
+id = "randomise_headings"
+label = "Randomise headings"
+runs = []
+
+[[function]]
+id = "clamp_speed"
+kind = "pure"
+
+[[function.input]]
+port = "v"
+type = "vec2f"
+
+[[function.input]]
+port = "min"
+type = "f32"
+
+[[function.input]]
+port = "max"
+type = "f32"
+
+[[function.output]]
+port = "out"
+type = "vec2f"
+
+[[function.node]]
+id = "n101"
+op = "fn.input"
+config.port = "v"
+
+[[function.node]]
+id = "n102"
+op = "fn.input"
+config.port = "min"
+
+[[function.node]]
+id = "n103"
+op = "fn.input"
+config.port = "max"
+
+[[function.node]]
+id = "n104"
+op = "vec.dot"
+in.a = "n101"
+in.b = "n101"
+
+[[function.node]]
+id = "n105"
+op = "math.sqrt"
+in.a = "n104"
+
+[[function.node]]
+id = "n106"
+op = "vec.make"
+in.x = "n105"
+in.y = "n105"
+
+[[function.node]]
+id = "n107"
+op = "math.div"
+in.a = "n101"
+in.b = "n106"
+
+[[function.node]]
+id = "n108"
+op = "vec.scale"
+in.v = "n107"
+in.s = "n103"
+
+[[function.node]]
+id = "n109"
+op = "vec.scale"
+in.v = "n107"
+in.s = "n102"
+
+[[function.node]]
+id = "n110"
+op = "cmp.gt"
+in.a = "n105"
+in.b = "n103"
+
+[[function.node]]
+id = "n111"
+op = "cmp.lt"
+in.a = "n105"
+in.b = "n102"
+
+[[function.node]]
+id = "n112"
+op = "logic.select"
+in.cond = "n111"
+in.if_true = "n109"
+in.if_false = "n101"
+
+[[function.node]]
+id = "n113"
+op = "logic.select"
+in.cond = "n110"
+in.if_true = "n108"
+in.if_false = "n112"
+
+[[function.node]]
+id = "n114"
+op = "cmp.gt"
+in.a = "n104"
+in.b = { f32 = 0.0 }
+
+[[function.node]]
+id = "n115"
+op = "vec.make"
+in.x = "n102"
+in.y = { f32 = 0.0 }
+
+[[function.node]]
+id = "n116"
+op = "logic.select"
+in.cond = "n114"
+in.if_true = "n113"
+in.if_false = "n115"
+
+[[function.node]]
+id = "n117"
+op = "fn.output"
+config.port = "out"
+in.value = "n116"
+
+[[pass]]
+id = "spawn"
+stage = "init"
+kind = "map"
+domain = "agents"
+enabled = true
+draw_order = ["n3", "n4", "n5"]
+
+[[pass.node]]
+id = "n1"
+op = "ctx.world"
+
+[[pass.node]]
+id = "n2"
+op = "vec.split"
+in.v = "n1"
+
+[[pass.node]]
+id = "n3"
+op = "stream.float"
+in.max = "n2.x"
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n4"
+op = "stream.float"
+in.max = "n2.y"
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n5"
+op = "stream.float"
+in.max = { f32 = 6.2831855 }
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n6"
+op = "math.midpoint"
+in.a = { param = "min_speed" }
+in.b = { param = "max_speed" }
+
+[[pass.node]]
+id = "n7"
+op = "vec.from_angle"
+in.angle = "n5"
+in.length = "n6"
+
+[[pass.node]]
+id = "n8"
+op = "vec.make"
+in.x = "n3"
+in.y = "n4"
+
+[[pass.node]]
+id = "n9"
+op = "lane.set"
+config.lane = "pos"
+in.value = "n8"
+
+[[pass.node]]
+id = "n10"
+op = "lane.set"
+config.lane = "vel"
+in.value = "n7"
+
+[[pass]]
+id = "flock"
+stage = "tick"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n20"
+op = "lane.get"
+config.lane = "pos"
+
+[[pass.node]]
+id = "n21"
+op = "lane.get"
+config.lane = "vel"
+
+[[pass.node]]
+id = "n22"
+op = "math.div"
+in.a = { param = "visual_range" }
+in.b = { f32 = 3.0 }
+
+[[pass.node]]
+id = "n23"
+op = "math.mul"
+in.a = { param = "protected_range" }
+in.b = { param = "protected_range" }
+
+[[pass.node]]
+id = "n24"
+op = "math.mul"
+in.a = { param = "visual_range" }
+in.b = { param = "visual_range" }
+
+[[pass.node]]
+id = "n25"
+op = "agent.radius_fold"
+config.exclude_self = true
+config.acc = [
+  { name = "close", type = "vec2f", combine = "sum" },
+  { name = "avg_vel", type = "vec2f", combine = "sum" },
+  { name = "avg_pos", type = "vec2f", combine = "sum" },
+  { name = "count", type = "u32", combine = "count" },
+]
+in.center = "n20"
+in.radius = { param = "visual_range" }
+in.cell_size = "n22"
+in.when = { bool = true }
+in.init.close = { vec2f = [0.0, 0.0] }
+in.init.avg_vel = { vec2f = [0.0, 0.0] }
+in.init.avg_pos = { vec2f = [0.0, 0.0] }
+in.init.count = { u32 = 0 }
+
+[[pass.node]]
+id = "n26"
+op = "cmp.lt"
+in.a = "n25.dist_sq"
+in.b = "n23"
+region = "n25"
+
+[[pass.node]]
+id = "n27"
+op = "math.neg"
+in.a = "n25.delta"
+region = "n25"
+
+[[pass.node]]
+id = "n28"
+op = "region.put"
+config.acc = "close"
+in.value = "n27"
+in.when = "n26"
+region = "n25"
+
+[[pass.node]]
+id = "n29"
+op = "cmp.lt"
+in.a = "n25.dist_sq"
+in.b = "n24"
+region = "n25"
+
+[[pass.node]]
+id = "n30"
+op = "lane.get_at"
+config.lane = "vel"
+in.at = "n25.other"
+region = "n25"
+
+[[pass.node]]
+id = "n31"
+op = "region.put"
+config.acc = "avg_vel"
+in.value = "n30"
+in.when = "n29"
+region = "n25"
+
+[[pass.node]]
+id = "n32"
+op = "math.add"
+in.a = "n20"
+in.b = "n25.delta"
+region = "n25"
+
+[[pass.node]]
+id = "n33"
+op = "region.put"
+config.acc = "avg_pos"
+in.value = "n32"
+in.when = "n29"
+region = "n25"
+
+[[pass.node]]
+id = "n34"
+op = "region.put"
+config.acc = "count"
+in.value = { u32 = 1 }
+in.when = "n29"
+region = "n25"
+
+[[pass.node]]
+id = "n35"
+op = "math.expr"
+config.text = "moved = v + close * separation; inv = recip(count_f); out = if(count > 0, moved + ((avg_vel * inv - v) * alignment + (avg_pos * inv - p) * cohesion), moved)"
+config.inputs = [
+  { name = "v", type = "vec2f" },
+  { name = "p", type = "vec2f" },
+  { name = "close", type = "vec2f" },
+  { name = "avg_vel", type = "vec2f" },
+  { name = "avg_pos", type = "vec2f" },
+  { name = "count", type = "u32" },
+  { name = "count_f", type = "f32" },
+  { name = "separation", type = "f32" },
+  { name = "alignment", type = "f32" },
+  { name = "cohesion", type = "f32" },
+]
+config.outputs = ["moved", "inv", "out"]
+in.v = "n21"
+in.p = "n20"
+in.close = "n25.close"
+in.avg_vel = "n25.avg_vel"
+in.avg_pos = "n25.avg_pos"
+in.count = "n25.count"
+in.count_f = "n37"
+in.separation = { param = "separation" }
+in.alignment = { param = "alignment" }
+in.cohesion = { param = "cohesion" }
+
+[[pass.node]]
+id = "n37"
+op = "conv.to_f32"
+in.a = "n25.count"
+
+[[pass.node]]
+id = "n49"
+op = "fn.call"
+config.function = "clamp_speed"
+config.key = 723148165
+in.v = "n35.out"
+in.min = { param = "min_speed" }
+in.max = { param = "max_speed" }
+
+[[pass.node]]
+id = "n50"
+op = "math.add"
+in.a = "n20"
+in.b = "n49"
+
+[[pass.node]]
+id = "n51"
+op = "ctx.world"
+
+[[pass.node]]
+id = "n52"
+op = "space.wrap"
+in.v = "n50"
+in.world = "n51"
+
+[[pass.node]]
+id = "n53"
+op = "lane.set"
+config.lane = "pos"
+in.value = "n52"
+
+[[pass.node]]
+id = "n54"
+op = "lane.set"
+config.lane = "vel"
+in.value = "n49"
+
+[[pass]]
+id = "heading"
+stage = "view"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n60"
+op = "lane.get"
+config.lane = "vel"
+
+[[pass.node]]
+id = "n61"
+op = "space.heading_octant"
+in.v = "n60"
+
+[[pass.node]]
+id = "n62"
+op = "view.color"
+config.palette = "heading"
+in.index = "n61"
+
+[[pass]]
+id = "speeds"
+stage = "stats"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n70"
+op = "lane.get"
+config.lane = "vel"
+
+[[pass.node]]
+id = "n71"
+op = "vec.length"
+in.v = "n70"
+
+[[pass.node]]
+id = "n72"
+op = "stat.mean"
+config.chunk_acc = "f32"
+in.value = "n71"
+
+[[pass.node]]
+id = "n73"
+op = "stat.mean"
+config.chunk_acc = "f64"
+in.value = "n70"
+
+[[pass]]
+id = "turn"
+stage = "action"
+action = "randomise_headings"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n80"
+op = "lane.get"
+config.lane = "vel"
+
+[[pass.node]]
+id = "n81"
+op = "vec.length"
+in.v = "n80"
+
+[[pass.node]]
+id = "n82"
+op = "math.midpoint"
+in.a = { param = "min_speed" }
+in.b = { param = "max_speed" }
+
+[[pass.node]]
+id = "n83"
+op = "cmp.gt"
+in.a = "n81"
+in.b = { f32 = 0.0 }
+
+[[pass.node]]
+id = "n84"
+op = "logic.select"
+in.cond = "n83"
+in.if_true = "n81"
+in.if_false = "n82"
+
+[[pass.node]]
+id = "n86"
+op = "vec.from_angle"
+in.angle = "n123"
+in.length = "n84"
+
+[[pass.node]]
+id = "n87"
+op = "lane.set"
+config.lane = "vel"
+in.value = "n86"
+
+[[pass.node]]
+id = "n118"
+op = "ctx.press_seed"
+
+[[pass.node]]
+id = "n119"
+op = "ctx.index"
+
+[[pass.node]]
+id = "n120"
+op = "rng.hash"
+in.x = "n119"
+
+[[pass.node]]
+id = "n121"
+op = "bits.xor"
+in.a = "n118"
+in.b = "n120"
+
+[[pass.node]]
+id = "n122"
+op = "rng.hash"
+in.x = "n121"
+
+[[pass.node]]
+id = "n123"
+op = "rng.to_float"
+in.bits = "n122"
+in.max = { f32 = 6.2831855 }
+
+[editor]
+version = 1
+next_id = 124
+
+[[editor.frame]]
+scope = "pass.flock"
+title = "Read neighbors"
+color = "blue"
+members = ["n20", "n21", "n22", "n23", "n24", "n25", "n26", "n27", "n28", "n29", "n30", "n31", "n32", "n33", "n34"]
+
+[[editor.frame]]
+scope = "pass.flock"
+title = "Steer"
+color = "gray"
+members = ["n35", "n37", "n49"]
+
+[[editor.frame]]
+scope = "pass.flock"
+title = "Move"
+color = "green"
+members = ["n50", "n51", "n52", "n53", "n54"]

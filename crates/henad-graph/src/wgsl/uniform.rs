@@ -207,7 +207,7 @@ impl UniformBlock {
     ) -> Result<Vec<u8>, String> {
         let (width, height) = match world {
             HostWorld::Grid { width, height, .. } => (width, height),
-            HostWorld::Agents { count } => (count, 1),
+            HostWorld::Agents { count, .. } => (count, 1),
         };
         let mut frames: Vec<(usize, Vec<HostValue>)> = Vec::new();
         let mut bytes = vec![0u8; self.size];
@@ -283,7 +283,11 @@ fn frame_of<'a>(
 fn value_words(value: HostValue) -> Vec<u32> {
     match value {
         HostValue::Bool(flag) => vec![u32::from(flag)],
-        HostValue::U32(word) | HostValue::Category(word) => vec![word],
+        HostValue::U32(word)
+        | HostValue::Category(word)
+        | HostValue::Layer(word)
+        | HostValue::Cell(word)
+        | HostValue::Agent(word) => vec![word],
         HostValue::I32(word) => vec![word as u32],
         HostValue::F32(word) => vec![word.to_bits()],
         HostValue::Vec2U([x, y]) => vec![x, y],
