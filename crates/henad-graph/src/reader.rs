@@ -1171,7 +1171,7 @@ fn read_pair<T>(
 }
 
 /// Returns the `u64` a string holds, in decimal or `0x` hexadecimal.
-fn read_u64(text: &str) -> Option<u64> {
+pub(crate) fn read_u64(text: &str) -> Option<u64> {
     let (digits, radix) = match text.strip_prefix("0x") {
         Some(digits) => (digits, 16),
         None => (text, 10),

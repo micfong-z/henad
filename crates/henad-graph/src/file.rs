@@ -256,9 +256,30 @@ impl GraphFile {
         problem.at(&self.text, self.line_ends.original_range(span))
     }
 
+    /// Returns a placer that places many diagnostics as [`Self::place`] does, each without a scan of the text.
+    pub(crate) fn placer(&self) -> Placer<'_> {
+        let mut line_starts = vec![0];
+        line_starts.extend(
+            self.text
+                .bytes()
+                .enumerate()
+                .filter(|(_, byte)| *byte == b'\n')
+                .map(|(index, _)| index + 1),
+        );
+        Placer {
+            file: self,
+            line_starts,
+        }
+    }
+
     /// Returns the file's canonical text: every table and key in a fixed order and every value in one form.
     pub fn to_toml(&self) -> String {
         canonical_text(&self.document, self.editor.as_ref())
+    }
+
+    /// Runs the checker over the file: every validation rule, every failure reported at once.
+    pub fn check(&self) -> crate::check::CheckReport {
+        crate::check::check(self)
     }
 
     /// Returns the canonical text up to, not including, `[editor]`.
@@ -277,6 +298,34 @@ impl GraphFile {
     /// [`CodeOrigin::Runtime`](henad_core::provenance::CodeOrigin::Runtime), under the target's id.
     pub fn source(&self) -> ModelSource {
         ModelSource::runtime(&self.document.target.id, self.code())
+    }
+}
+
+/// Places diagnostics in the text of a [`GraphFile`], with the start of every line found once.
+pub(crate) struct Placer<'a> {
+    file: &'a GraphFile,
+    /// Offset of the first byte of each line of the file's text.
+    line_starts: Vec<usize>,
+}
+
+impl Placer<'_> {
+    /// Returns `problem` placed at `span`, equal to what [`GraphFile::place`] returns.
+    pub(crate) fn place(&self, problem: CodeDiagnostic, span: Range<usize>) -> CodeDiagnostic {
+        let text = &self.file.text;
+        let span = self.file.line_ends.original_range(span);
+        let mut start = span.start.min(text.len());
+        while !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        let end = span.end.clamp(start, text.len());
+        let line = self.line_starts.partition_point(|&line_start| line_start <= start);
+        let line_start = self.line_starts.get(line.saturating_sub(1)).copied().unwrap_or(0);
+        let column = text[line_start..start].chars().count() + 1;
+        problem.with_span(
+            start..end,
+            u32::try_from(line).unwrap_or(u32::MAX),
+            u32::try_from(column).unwrap_or(u32::MAX),
+        )
     }
 }
 

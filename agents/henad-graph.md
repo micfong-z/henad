@@ -15,7 +15,10 @@ file shares (`LineEnds`, `toml_string`, `ParamTable`, `write_param`), and henad-
 `model_file.rs` reads them from here. `reader.rs` is private and turns text into the document and
 `Places`. `writer.rs` is private and writes the semantic text. `editor.rs` holds `EditorRegion`.
 `file.rs` holds `GraphFile`, `GraphFileError`, `Places` and the constants `FORMAT`,
-`FORMAT_VERSION`, `KIND_GRAPH`, `LIBRARY` and `CODE_FORMAT`.
+`FORMAT_VERSION`, `KIND_GRAPH`, `LIBRARY` and `CODE_FORMAT`, and the crate-private `Placer`, which
+places many diagnostics with one scan of the text. `catalogue/` holds the node kinds, `draw.rs`
+the counter-based draw words, and `check/` the checker. `starters/` at the crate root holds the
+grid starters, ported to one GPU target with `node_<model>` ids.
 
 **The reader** checks the header first, as `model_file.rs` does: `format`, `format_version`,
 `kind` and `[graph] library`, ignoring other keys. It checks `MAX_FILE_BYTES` before any of that.
@@ -36,9 +39,64 @@ accumulator named `param` or `u32` therefore reads correctly, and a test holds t
 **The canonical writer.** `GraphFile::to_toml` is `semantic_text` plus the region's text. Rules
 kept from `ir-spec.md` section 10: `runs = []` is written, an optional key without a default is
 not, `draw_order` only when non-empty, colours as four bytes, `u64` as lowercase `0x`, floats in
-`{:?}` form. A node's config keys and inputs are written in lexical order, since no catalogue
-exists yet. A `ConfigValue::Table` follows `INLINE_KEY_ORDER`, then lexical order. Config values
-are written as read, so a `u64` string in `config.salt` has as many spellings as the file uses.
+`{:?}` form. `write_node` reads the node's definition: config keys in definition order with their
+defaults filled (`effective_config`), then inputs in `resolved_inputs` order (fixed ports, then
+ports configuration makes, in the configuration's order) with a literal default filled, and a
+`region.put` feeding a `count` accumulator gets `in.value = { u32 = 1 }`. A key the definition
+does not name, or a kind with no definition, follows in lexical order, so a broken file still has
+one text. `normal_config` writes a `U64Text` value as lowercase hexadecimal. A `ConfigValue::Table`
+follows `INLINE_KEY_ORDER`, then lexical order. An `init.<acc>` stays unwritten when absent, since
+a float `min` identity has no literal form.
+
+**The catalogue.** One `NodeDef` per kind, `static` tables in `catalogue/state.rs`, `math.rs`,
+`bits_logic.rs`, `conv.rs`, `random.rs`, `region.rs` and `view.rs`, filled from the `BASE`
+constant and group constants with `..`. `definitions()` lists them, and `lookup(op, library)`
+returns the newest with `since <= library`. A def holds: one type variable (`type_var`, a set of
+`TypeClass`), `ConfigKey`s with a `ConfigType` and an optional default, fixed `InputSocket`s
+(type, fastest accepted `Rate`, `InputDefault`), `OutputSocket`s (`OutputRate::Join` or
+`Pinned`), `ConfigPorts` for ports configuration makes, `inner_outputs` and `is_region` for a
+region, `ContextSet` (stages plus a `region` flag), an optional `Domain`, `Effect`s, `Backends`,
+`Parity`, `NodeCost` and `KnownAnswer`s. `resolved_inputs`, `resolved_outputs` and
+`resolved_inner_outputs` expand a node's ports, and the writer, the checker and every later
+consumer read ports through them. The milestone G1 kinds are all in: 64. A kind with no row in
+`node-catalogue.md` has its definition written here, with WGSL's integer rules and the NaN
+behaviour stated, and the definitions say a shader may assume no NaN or infinity.
+
+**Known-answer cases** (`catalogue/cases.rs`). `CaseForm::Node` gives config lines, input values,
+a `CaseContext` (seed, phase, element, tick, iteration, press, stream state) and expected outputs.
+`CaseForm::Pass` gives tables after a grid header, the lanes before, and lanes, stats and colours
+after the pass with id `case`, other passes being there only so the file checks. `CaseScope::Host`
+marks an answer WGSL leaves indeterminate (NaN, infinity, `0^0`). `CaseValue::Nan` and `Near`
+compare loosely, and every other float compares by bits. `src/tests/case_files.rs` builds a file
+from each case over a fixed case world (categories `health` S, I, R and `life` Dead, Alive, the
+palette `ramp` of four colours). `known_answers.rs` holds every node case to a test-only
+reference evaluation. Pass cases wait for the host evaluator, which must run every case.
+
+**Draws** (`draw.rs`). `key_word(key, phase, seed)`, `draw_bits(k, element, tick, iteration,
+sub_draw)` and `press_word(seed, press)`, with `GRAPH_DEFAULT_SEED` and `GRAPH_SEED_SALT`. The
+core is the provisional `chainm` of the PractRand gate, which failed both candidates: the
+maintainer chooses the core, and the `rand.*` cases and their lock lines move with it.
+
+**The checker** (`check/`). `GraphFile::check()` returns a `CheckReport`: every diagnostic in file
+order, `duplicate_ids` (the repair state), a `PassReport` per pass (cost, and the inferred
+`PortType` of each output and inner output) and `dual_lanes`. `view.rs` builds a `BodyView` per
+body: positions by id, defs, and the region tree (`parents`, `depths`) built in one linear walk
+that reports a cycle and nesting past `MAX_REGION_DEPTH`. `body.rs` types each body in link order
+(sources first, nodes on a cycle last, reading holes), checks contexts, backends (init runs on the
+host, every other pass on the GPU), configuration (`config.rs`), inputs, rates, link visibility
+across regions, puts, host types, and warns of unreached nodes. `bounds.rs` warns when a Repeat's
+`count` can pass `max`. `cost.rs` sums costs bottom-up with saturating `u64`, functions first in
+call order with Kahn's algorithm, so no step recurses on a hostile file. `passes.rs` holds the
+rules across a pass and across passes, and `declarations.rs` the tables. Diagnostics of a node
+carry its pass and node id. `fn.call`, `fn.input` and `fn.output` are A2 kinds: today they report
+as unknown, while cost, call depth, call cycles and inlined size already follow `fn.call`.
+
+**The library lock.** `library.lock` at the crate root, one line per definition (hashes of the
+signature's `Debug`, the semantics and the cases' `Debug`, parity, cost) and one per limit.
+`the_library_lock_matches_the_catalogue` fails on a kind without cases and on any line that
+differs. `HENAD_WRITE_LIBRARY_LOCK=1` writes it. Renaming a catalogue field moves every signature
+hash. The test prints the corpus files that use each kind (`--nocapture`), which is the "Used by"
+information.
 
 **The editor region** keeps a `toml::Table`, never refuses a value and never fails a read. Its
 writer orders the keys and rounds `pos` to whole points, and `to_text` is a fixed point for any
@@ -49,6 +107,12 @@ table, which `a_strange_editor_region_stays_readable_and_a_fixed_point` holds.
 `CodeOrigin::Runtime`. `from_code` refuses another format with the message
 `Recorded under X, and this build runs henad-graph/1`.
 
-Tests sit in `src/tests/file_format.rs`, with `src/tests/full_graph.toml` as a file in a hand-written
-spelling. `two_spellings_of_one_graph_hash_alike`, `a_canonical_text_reads_back_to_itself` and
-`moving_a_node_changes_the_text_and_leaves_the_hash` are the gate of the file format. Keep them.
+Tests sit in `src/tests/`: `file_format.rs` with `full_graph.toml` as a file in a hand-written
+spelling, `catalogue.rs`, `known_answers.rs`, `checker.rs`, `library_lock.rs` and `mutation.rs`.
+`corpus.rs` reads the starters and, at run time, the graphs in
+`crates/henad-models/tests/fixtures/graphs/`, since a packaged crate has no path out of itself.
+`two_spellings_of_one_graph_hash_alike`, `a_canonical_text_reads_back_to_itself` and
+`moving_a_node_changes_the_text_and_leaves_the_hash` are the gate of the file format, and
+`the_reader_and_checker_never_panic_on_the_mutation_corpus` and
+`a_hostile_region_tree_or_call_graph_is_reported_without_a_panic` the gate of the checker. Keep
+them.

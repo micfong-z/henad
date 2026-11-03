@@ -8,10 +8,12 @@ use std::collections::BTreeMap;
 
 use henad_core::authoring::primitives::space::Boundary;
 
+use crate::catalogue::{ConfigType, NodeDef, effective_config, lookup};
 use crate::document::{Category, Function, GraphDocument, Lane, Pass, PassEnabled, World};
 use crate::file::{FORMAT, FORMAT_VERSION, KIND_GRAPH};
 use crate::model_text::{toml_string, write_param};
-use crate::node::{Node, NodeBody};
+use crate::node::{Combine, Node, NodeBody, OP_REGION_PUT};
+use crate::reader::read_u64;
 use crate::value::{Color, ConfigValue, InputValue, Literal};
 
 /// Keys of an inline table of a node's configuration, in the order they are written. A key not listed follows, in
@@ -72,12 +74,12 @@ pub(crate) fn semantic_text(document: &GraphDocument) -> String {
         key(&mut text, "runs", &strings(&action.runs));
     }
     for function in &document.functions {
-        write_function(&mut text, function);
+        write_function(&mut text, document, function);
     }
     let mut passes: Vec<&Pass> = document.passes.iter().collect();
     passes.sort_by_key(|pass| pass.stage);
     for pass in passes {
-        write_pass(&mut text, pass);
+        write_pass(&mut text, document, pass);
     }
     text
 }
@@ -155,7 +157,7 @@ fn write_lane(text: &mut String, lane: &Lane) {
     }
 }
 
-fn write_function(text: &mut String, function: &Function) {
+fn write_function(text: &mut String, document: &GraphDocument, function: &Function) {
     text.push_str("\n[[function]]\n");
     key(text, "id", &toml_string(&function.id));
     key(text, "kind", "\"pure\"");
@@ -166,10 +168,10 @@ fn write_function(text: &mut String, function: &Function) {
             key(text, "type", &toml_string(&port.value_type.to_string()));
         }
     }
-    write_body(text, "function", &function.body);
+    write_body(text, document, "function", &function.body);
 }
 
-fn write_pass(text: &mut String, pass: &Pass) {
+fn write_pass(text: &mut String, document: &GraphDocument, pass: &Pass) {
     text.push_str("\n[[pass]]\n");
     key(text, "id", &toml_string(&pass.id));
     key(text, "stage", &toml_string(pass.stage.as_str()));
@@ -189,29 +191,88 @@ fn write_pass(text: &mut String, pass: &Pass) {
         let ids: Vec<String> = pass.draw_order.iter().map(ToString::to_string).collect();
         key(text, "draw_order", &strings(&ids));
     }
-    write_body(text, "pass", &pass.body);
+    write_body(text, document, "pass", &pass.body);
 }
 
-fn write_body(text: &mut String, parent: &str, body: &NodeBody) {
+fn write_body(text: &mut String, document: &GraphDocument, parent: &str, body: &NodeBody) {
     let mut nodes: Vec<&Node> = body.nodes.iter().collect();
     nodes.sort_by_key(|node| node.id);
     for node in nodes {
         text.push_str(&format!("\n[[{parent}.node]]\n"));
-        write_node(text, node);
+        write_node(text, document, body, node);
     }
 }
 
-fn write_node(text: &mut String, node: &Node) {
+/// Writes a node's keys: configuration in the order of its definition, then inputs in the order of its definition, each
+/// with its default when the file leaves it unwritten. A key the definition does not name, or a kind with no definition,
+/// follows in lexical order, so a broken file still has one canonical text.
+fn write_node(text: &mut String, document: &GraphDocument, body: &NodeBody, node: &Node) {
     key(text, "id", &toml_string(&node.id.to_string()));
     key(text, "op", &toml_string(&node.op));
-    for (name, value) in &node.config {
+    let def = lookup(&node.op, document.library);
+    let config = def.map_or_else(|| node.config.clone(), |def| effective_config(def, node));
+    let mut written = Vec::with_capacity(config.len());
+    for name in def
+        .into_iter()
+        .flat_map(|def| def.config)
+        .map(|config_key| config_key.name)
+    {
+        if let Some(value) = config.get(name) {
+            let normal = def.and_then(|def| normal_config(def, name, value));
+            key(
+                text,
+                &format!("config.{name}"),
+                &config_value(normal.as_ref().unwrap_or(value)),
+            );
+            written.push(name.to_owned());
+        }
+    }
+    for (name, value) in config.iter().filter(|(name, _)| !written.contains(name)) {
         key(text, &format!("config.{name}"), &config_value(value));
     }
-    for (port, value) in &node.inputs {
+    let mut written: Vec<String> = Vec::with_capacity(node.inputs.len());
+    if let Some(def) = def {
+        for input in def.resolved_inputs(node, document) {
+            let value = node
+                .inputs
+                .get(&input.name)
+                .cloned()
+                .or_else(|| def.input_default(&input.name))
+                .or_else(|| default_put_value(body, node, &input.name));
+            if let Some(value) = value {
+                key(text, &format!("in.{}", input.name), &input_value(&value));
+                written.push(input.name);
+            }
+        }
+    }
+    for (port, value) in node.inputs.iter().filter(|(port, _)| !written.contains(port)) {
         key(text, &format!("in.{port}"), &input_value(value));
     }
     if let Some(region) = node.region {
         key(text, "region", &toml_string(&region.to_string()));
+    }
+}
+
+/// Returns the value of an unwritten `value` of a `region.put` that feeds a `count` accumulator, which is 1.
+fn default_put_value(body: &NodeBody, node: &Node, port: &str) -> Option<InputValue> {
+    if node.op != OP_REGION_PUT || port != "value" {
+        return None;
+    }
+    let name = node.config.get("acc")?.as_str()?;
+    let accumulators = body.node(node.region?)?.accumulators().ok()?;
+    let accumulator = accumulators.iter().find(|accumulator| accumulator.name == name)?;
+    (accumulator.combine == Combine::Count).then_some(InputValue::Literal(Literal::U32(1)))
+}
+
+/// Returns the one form of a configuration value that has several spellings, or `None` when `value` is in that form.
+fn normal_config(def: &NodeDef, name: &str, value: &ConfigValue) -> Option<ConfigValue> {
+    let config_key = def.config.iter().find(|config_key| config_key.name == name)?;
+    match config_key.value {
+        ConfigType::U64Text => {
+            let number = read_u64(value.as_str()?)?;
+            Some(ConfigValue::String(format!("{number:#x}")))
+        }
+        _ => None,
     }
 }
 

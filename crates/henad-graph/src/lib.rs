@@ -38,7 +38,10 @@
 // limit of 128.
 #![recursion_limit = "256"]
 
+pub mod catalogue;
+pub mod check;
 pub mod document;
+pub mod draw;
 pub mod editor;
 pub mod file;
 pub mod ids;
