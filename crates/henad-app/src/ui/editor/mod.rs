@@ -13,6 +13,8 @@
 //! dialog as before.
 
 pub mod code_view;
+#[cfg(feature = "snarl-spike")]
+pub mod scratch;
 
 use egui::{Button, CentralPanel, Frame, Label, Margin, Panel, RichText, ScrollArea, Sense};
 use henad_compute::entry::{ModelEntry, ModelSet};
@@ -63,6 +65,12 @@ pub struct EditorPanel {
     reset_history: bool,
     /// Whether the code view returns to the top left on its next frame, after another file's text replaced the text.
     reset_scroll: bool,
+    /// Whether the tab shows the scratch canvas in place of the code.
+    #[cfg(feature = "snarl-spike")]
+    pub scratch_open: bool,
+    /// State of the scratch canvas.
+    #[cfg(feature = "snarl-spike")]
+    pub scratch: scratch::ScratchCanvas,
 }
 
 /// Outcome of a press on Apply.
@@ -199,6 +207,8 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 header_buttons(ui, compute, empty, &mut request);
+                #[cfg(feature = "snarl-spike")]
+                ui.checkbox(&mut panel.scratch_open, "Scratch canvas");
             });
             if let Some(name) = &panel.file_name {
                 ui.weak(name);
@@ -239,6 +249,11 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         scroll: std::mem::take(&mut panel.reset_scroll),
     };
     CentralPanel::no_frame().show(ui, |ui| {
+        #[cfg(feature = "snarl-spike")]
+        if panel.scratch_open {
+            scratch::scratch_canvas_ui(ui, &mut panel.scratch);
+            return;
+        }
         code_view::code_view(ui, &mut panel.text, &marked, scroll_to, reset);
     });
 

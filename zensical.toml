@@ -146,6 +146,7 @@ nav = [
             { "#59, 2026-10-12" = "developing/agent-record/20261012-59-agents-split.md" },
             { "#60, 2026-10-20" = "developing/agent-record/20261020-60-dev-host-dropped.md" },
             { "#61, 2026-11-03" = "developing/agent-record/20261103-61-graph-core.md" },
+            { "#62, 2026-11-03" = "developing/agent-record/20261103-62-snarl-spike.md" },
         ] },
     ] },
 ]

@@ -56,3 +56,28 @@ page.
 `a_build_fault_of_the_applied_code_reaches_the_editor_from_the_build_thread`,
 `a_diagnostic_moves_the_cursor_to_its_line` and `edit_model_shows_the_code_the_rule_runs`. Keep
 them.
+
+## The egui-snarl spike
+
+`ui/editor/scratch.rs`, behind henad-app's `snarl-spike` feature (off by default, the only reason
+egui-snarl is in the graph), is the scratch canvas of milestone E0, which E1 replaces. A Scratch
+canvas checkbox in the tab's header shows it in place of the code view. `src/tests/scratch_canvas.rs`
+holds its headless tests over a plain `egui::Context`, which pin egui-snarl 0.12's behaviour: reused
+node ids, one `Move` per drag, the command-drag that drops wires with no viewer callback, and the
+rest. Record #62 holds the findings.
+
+A wire in flight is a process-killing trap. `SnarlState` keeps the dragged pins, and `show` panics
+at `src/ui.rs:1333` or `:1352` of egui-snarl with "no entry found for key" once `remove_node` has
+taken a pin's node away. The canvas reaches `remove_node` only from menu commands, and the secondary
+press that opens a menu cancels the wire. A keyboard undo needs no pointer, so E1 holds document
+edits while the primary button is down and runs them after `show`, since the release frame already
+reports the button as up. The other guard is a new canvas id for that rebuild, which drops the
+transform and the selection. Plain click can select without a fork, through a modifier write around
+`show` on a click's release frame (`draw_with_plain_click` in the tests). Only pasted nodes or Select
+all starting selected remain out of reach.
+
+Driving the canvas through the egui MCP server: widget bounds inside the canvas are in graph space,
+so a locator misses and a click takes a raw `pos` at `scale * graph + translation`. The readouts print
+the transform and each pin's screen position. `click` and `drag` modifiers never reach
+`InputState::modifiers`, which egui-snarl reads, so Hold shift and Hold command write it before the
+canvas draws. Command with `scroll` zooms, and the transform settles over a few frames.

@@ -67,6 +67,7 @@ heck = "0.5"
 naga = { version = "30.0.0", features = ["wgsl-in", "wgsl-out"] }
 naga_oil = { version = "0.23.0", default-features = false }
 egui_plot = "0.37"
+egui-snarl = "0.12"
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 # Benchmarks only. Default features off: the plotting/html/csv extras pull a large tree and the
