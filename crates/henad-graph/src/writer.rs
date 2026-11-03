@@ -204,8 +204,8 @@ fn write_body(text: &mut String, document: &GraphDocument, parent: &str, body: &
 }
 
 /// Writes a node's keys: configuration in the order of its definition, then inputs in the order of its definition, each
-/// with its default when the file leaves it unwritten. A key the definition does not name, or a kind with no definition,
-/// follows in lexical order, so a broken file still has one canonical text.
+/// with its default when the file leaves it unwritten. A key the definition does not name, or a kind with no
+/// definition, follows in lexical order, so a broken file still has one canonical text.
 fn write_node(text: &mut String, document: &GraphDocument, body: &NodeBody, node: &Node) {
     key(text, "id", &toml_string(&node.id.to_string()));
     key(text, "op", &toml_string(&node.op));

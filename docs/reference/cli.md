@@ -166,6 +166,7 @@ Each sample also pays for the preparation, and `--stats-every` spaces the sample
 ## Model files
 
 `--model-file` loads a [model file](model-files.md), a GPU grid model written as one TOML file, and adds its model to the models the build offers.
+A file of kind `graph`, a graph model, is read and checked: its warnings and errors print at their lines, and this build then refuses to run it.
 Every mode takes it but `--merge`: a benchmark, the two exports, `--list`, `--params`, and a sweep or search from flags or from `--spec`, `--dry-run` and `--resume` included.
 
 ```bash

@@ -16,7 +16,7 @@ use crate::value::{Color, Literal, PortRef};
 ///
 /// The type implements no `PartialEq`. Two documents are equal when their [canonical text](crate::GraphFile::to_toml)
 /// is equal.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct GraphDocument {
     /// Model id of the header, the default of the target's id.
@@ -51,6 +51,55 @@ pub struct GraphDocument {
     pub functions: Vec<Function>,
     /// `[[pass]]` tables in stack order: by stage, then in file order within a stage.
     pub passes: Vec<Pass>,
+}
+
+/// Prints the model id, the library and the number of each declaration and of the passes' nodes.
+impl std::fmt::Debug for GraphDocument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let nodes: usize = self.passes.iter().map(|pass| pass.body.nodes.len()).sum();
+        f.debug_struct("GraphDocument")
+            .field("id", &self.id)
+            .field("library", &self.library)
+            .field("world", &self.world)
+            .field("lanes", &self.lanes.len())
+            .field("params", &self.params.len())
+            .field("stats", &self.stats.len())
+            .field("actions", &self.actions.len())
+            .field("functions", &self.functions.len())
+            .field("passes", &self.passes.len())
+            .field("nodes", &nodes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl GraphDocument {
+    /// Returns an empty document with the model id `id` over `world`, at the newest node library this build reads.
+    ///
+    /// The name and the target take the id, and the document holds no declaration and no pass.
+    pub fn new(id: &str, world: World) -> Self {
+        Self {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            description: String::new(),
+            library: crate::file::LIBRARY,
+            target: Target {
+                id: id.to_owned(),
+                name: id.to_owned(),
+                description: String::new(),
+            },
+            world,
+            categories: Vec::new(),
+            palettes: Vec::new(),
+            lanes: Vec::new(),
+            fields: Vec::new(),
+            counters: Vec::new(),
+            params: Vec::new(),
+            stats: Vec::new(),
+            actions: Vec::new(),
+            functions: Vec::new(),
+            passes: Vec::new(),
+        }
+    }
 }
 
 /// The `[[target]]` table, always on the GPU backend.
@@ -162,6 +211,16 @@ pub struct Category {
     pub variants: Vec<Variant>,
 }
 
+impl Category {
+    /// Returns the category `id` of `variants`, numbered in order.
+    pub fn new(id: &str, variants: Vec<Variant>) -> Self {
+        Self {
+            id: id.to_owned(),
+            variants,
+        }
+    }
+}
+
 /// One variant of a [`Category`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -174,6 +233,17 @@ pub struct Variant {
     pub color: Color,
 }
 
+impl Variant {
+    /// Returns the variant `name` in `color`, labelled with its name.
+    pub fn new(name: &str, color: Color) -> Self {
+        Self {
+            name: name.to_owned(),
+            label: name.to_owned(),
+            color,
+        }
+    }
+}
+
 /// A `[[palette]]` table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -182,6 +252,16 @@ pub struct Palette {
     pub id: String,
     /// Colours in index order.
     pub colors: Vec<Color>,
+}
+
+impl Palette {
+    /// Returns the palette `id` of `colors`, in index order.
+    pub fn new(id: &str, colors: Vec<Color>) -> Self {
+        Self {
+            id: id.to_owned(),
+            colors,
+        }
+    }
 }
 
 /// Elements a lane belongs to or a pass runs over.
@@ -262,6 +342,21 @@ pub struct Lane {
     pub role: Option<LaneRole>,
 }
 
+impl Lane {
+    /// Returns the lane `id` of `value_type` over `domain`, with no storage, no role, and the type's zero as its
+    /// initial value.
+    pub fn new(id: &str, domain: Domain, value_type: ValueType) -> Self {
+        Self {
+            id: id.to_owned(),
+            domain,
+            initial: Literal::zero_of(&value_type),
+            value_type,
+            storage: None,
+            role: None,
+        }
+    }
+}
+
 /// Rule that merges deposits into a field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -320,6 +415,17 @@ pub struct Stat {
     pub color: Color,
 }
 
+impl Stat {
+    /// Returns the statistic `label` of the output `from`, drawn in `color`.
+    pub fn new(label: &str, from: PortRef, color: Color) -> Self {
+        Self {
+            label: label.to_owned(),
+            from,
+            color,
+        }
+    }
+}
+
 /// An `[[action]]` table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -330,6 +436,17 @@ pub struct Action {
     pub label: String,
     /// Ids of the init or tick passes rerun first, in list order.
     pub runs: Vec<String>,
+}
+
+impl Action {
+    /// Returns the action `id` with the button label `label`, which reruns no pass.
+    pub fn new(id: &str, label: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            runs: Vec::new(),
+        }
+    }
 }
 
 /// One input or output of a [`Function`].
@@ -415,4 +532,19 @@ pub struct Pass {
     pub draw_order: Vec<NodeId>,
     /// Nodes of the pass.
     pub body: NodeBody,
+}
+
+impl Pass {
+    /// Returns the empty pass `id` of `stage` over `domain`, always enabled, in no action.
+    pub fn new(id: &str, stage: PassStage, domain: Option<Domain>) -> Self {
+        Self {
+            id: id.to_owned(),
+            stage,
+            action: None,
+            domain,
+            enabled: PassEnabled::Literal(true),
+            draw_order: Vec::new(),
+            body: NodeBody::default(),
+        }
+    }
 }

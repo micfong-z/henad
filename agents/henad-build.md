@@ -25,8 +25,10 @@ resolved through `--git-path` and `--git-common-dir`, so packed refs and a linke
 watched. A crate in a repository that does not track its manifest yet watches those paths too,
 and its first commit reruns the stamp. A git before 2.31 echoes `--path-format=absolute` back,
 and the paths are then joined onto the crate's directory (`echoes_path_format`). In Henad's
-checkout the engine's hash covers henad-core, henad-build, henad-compute and henad-explore with
-the lockfile, and `HENAD_BUILD_CRATE_HASH` covers henad-explore alone.
+checkout the engine's hash covers henad-core, henad-build, henad-compute, henad-graph and
+henad-explore with the lockfile, and `HENAD_BUILD_CRATE_HASH` covers henad-explore alone.
+henad-graph is in the scope because henad-explore's `model_file.rs` reads parameters and line
+ends through it.
 `scripts/check_packaging.sh` refuses a `"../` path in `stamp/`. Its tests sit in `src/tests/`:
 the path checks, the reader against the layout `wgsl_bindgen` generates, whole generations
 (`a_second_build_reruns_nothing`,

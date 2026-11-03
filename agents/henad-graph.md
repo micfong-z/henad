@@ -17,11 +17,21 @@ file shares (`LineEnds`, `toml_string`, `ParamTable`, `write_param`), and henad-
 `file.rs` holds `GraphFile`, `GraphFileError`, `Places` and the constants `FORMAT`,
 `FORMAT_VERSION`, `KIND_GRAPH`, `LIBRARY` and `CODE_FORMAT`, and the crate-private `Placer`, which
 places many diagnostics with one scan of the text. `catalogue/` holds the node kinds, `draw.rs`
-the counter-based draw words, and `check/` the checker. `starters/` at the crate root holds the
-grid starters, ported to one GPU target with `node_<model>` ids.
+the counter-based draw words, `check/` the checker, `host/` the host evaluator and `edit/` the
+edit commands and `GraphBuilder`. `starters/` at the crate root holds the grid starters
+(`game_of_life`, `vote`, `sir`), ported to one GPU target with `node_<model>` ids and no `apply`
+key. `starters.rs` embeds them with `include_str!` (`scripts/check_packaging.sh` refuses a path
+out of the crate) and returns them through `starters()` in editor order and `starter(file_name)`.
+Game of Life's Randomise is the 9-node press-seed form (`ctx.press_seed`, `ctx.index`,
+`rng.hash`, `bits.xor`, `rng.hash`, `rng.threshold`, `rng.below`, `logic.select`, `lane.set`).
+The exact ports (`gpu_sir_exact.toml`) sit in henad-models' `tests/fixtures/graphs/`, and
+henad-models' `src/tests/graph_corpus.rs` holds every grid corpus file's init to its stock seed
+(`agents/models.md`).
 
 **The reader** checks the header first, as `model_file.rs` does: `format`, `format_version`,
-`kind` and `[graph] library`, ignoring other keys. It checks `MAX_FILE_BYTES` before any of that.
+`kind` and `[graph] library`, ignoring other keys. It checks `MAX_FILE_BYTES` before any of that,
+and holds the canonical text to the same size after the read, so every file that reads has a
+canonical text that reads back (`a_file_whose_canonical_text_passes_the_limit_is_refused`).
 Every semantic table is `deny_unknown_fields`, which is how an `apply` key, `[[pass.var]]`, `after`
 and `[network]` are refused. The reader checks only what the document's own types need: table
 shapes, node ids, port and config key grammars, type strings, literal forms and finite floats. It
@@ -69,13 +79,69 @@ after the pass with id `case`, other passes being there only so the file checks.
 marks an answer WGSL leaves indeterminate (NaN, infinity, `0^0`). `CaseValue::Nan` and `Near`
 compare loosely, and every other float compares by bits. `src/tests/case_files.rs` builds a file
 from each case over a fixed case world (categories `health` S, I, R and `life` Dead, Alive, the
-palette `ramp` of four colours). `known_answers.rs` holds every node case to a test-only
-reference evaluation. Pass cases wait for the host evaluator, which must run every case.
+palette `ramp` of four colours). `known_answers.rs` runs every case, node and pass, through the
+host evaluator. A node case's inputs go into the document as they are, so a NaN or an infinity
+reaches the node although a file cannot write one. G2's WGSL runner must run the same cases.
 
 **Draws** (`draw.rs`). `key_word(key, phase, seed)`, `draw_bits(k, element, tick, iteration,
 sub_draw)` and `press_word(seed, press)`, with `GRAPH_DEFAULT_SEED` and `GRAPH_SEED_SALT`. The
 core is the provisional `chainm` of the PractRand gate, which failed both candidates: the
-maintainer chooses the core, and the `rand.*` cases and their lock lines move with it.
+maintainer chooses the core, and the `rand.*` cases and their lock lines move with it. Phase
+words: `PHASE_INIT` 0, `PHASE_TICK` 1 (view and stats too, which draw nothing), and
+`action_phase(j)` = 2 + j for the action at position `j` of `[[action]]`, its reruns included.
+The tick word `t` is the tick in a tick pass, the press count in an action, 0 in init.
+`iteration_word(outer, max, k)` is `k` at the top and `outer * max + k` nested, so a draw inside
+a Repeat reads `Some(k)`, and one outside every region reads `None`. WGSL must match all of this.
+
+**The host evaluator** (`host/`). `HostEvaluator::new(&GraphFile)` checks the file (errors give
+`HostError::Checked`) and compiles every pass once (`compile.rs`). A pass the host cannot run
+compiles to an error that `run_pass` returns, and only an init pass or a rerun pass with one
+refuses the whole file. `init(world, params, seed)` runs the enabled init passes in stack order
+on the init stream (`grid_init_rng` or `agent_init_rng`, continuing across passes) and returns
+`HostLanes`. `rerun(action, press, ..., stream)` runs the init passes of the action's `runs` in
+list order on the caller's action stream (start it at `action_seed(seed)`), skips tick passes,
+which run on the device, and returns the positions of the written lanes to upload.
+`run_pass(id, lanes, params, context, stream)` runs any pass, which is how the cases run tick,
+view and stats passes, and returns `PassOutcome` (uniform values by node and port, colours,
+written lanes). `params` are the file's parameters in schema order, without the engine's grid
+or agent prefix. A missing or mistyped value takes its default. `HostWorld` is the grid size or
+the agent count, and `HostLanes` holds one `LaneColumn` per `[[lane]]` as GPU words (bool 0 or
+1, a category its variant number, two words for a vec2, u64 or f64, low first). Narrowing to a
+lane's `storage` is the upload's job. A pass reads its start and commits at its end (written
+lanes are staged copies). The top of a pass splits into prelude (uniform, run once), element
+block, and post block (reads a reducer, run once after the elements). An element value that
+reads a reducer is refused. Each scope orders its members by Kahn's algorithm with ties by node
+id, a region counting every link of its body, and consecutive `draw_order` entries add edges. A
+Repeat seeds each accumulator (`init` or the combine's identity: largest finite value for
+`min`, smallest for `max`), copies the running value to `prev.<acc>` at the start of each
+iteration, and a `region.put` folds into the running value. Nothing panics on a checked file:
+a bad value is `HostError::Fault` with the pass and node, and the mutation test runs the host
+on every edited file that checks. `run_pass` and `rerun` first check that the `HostLanes` hold
+the document's lanes (count, ids, types, one value per element) and return `Fault` otherwise.
+`HostLanes::new` refuses lanes past `MAX_HOST_LANE_BYTES` (4 GiB) before allocating, and every
+column and staged copy is reserved with `try_reserve_exact`, so a failed allocation is an error
+and no abort. Host init has no work bound yet: `cost * elements` of the init and rerun passes is
+for G2's `Demand` to count.
+
+**Edit commands** (`edit/`). `GraphBuilder` holds a `GraphDocument` and an `EditorRegion` and
+runs `EditCommand`s: `AddNode`, `RemoveNode`, `Connect`, `Disconnect`, `SetLiteral`,
+`BindParam`, `SetConfig`, `SetRegion`, `Move`, `Frame`, `Paste`, and the declaration edits
+(add a category or palette, add, rename and remove a lane, variant, parameter, statistic,
+action or pass, and `MovePass` within its stage). `apply` runs on a copy, so a refused command
+changes nothing. Commands check structure only (ids, grammars, the body a node is in, region
+cycles) and leave meaning to the checker. A new node takes `max(highest + 1, next_id)` and
+writes `next_id` (an `[editor]` region is made if absent), and a kind with a `key` config gets
+a random key distinct from the file's (`with_key_seed` fixes the stream for tests). A stream
+draw joins its pass's `draw_order`. `RemoveNode` drops wires from the node and its placement,
+moves a region's members to the region around it, and is refused while a `[[stat]]` reads it.
+A rename rewrites every reference: `config.lane`, category literals, `dead`/`alive`, rule
+`from`/`to`, `case.<v>` ports, `stat.count_by` ports and `[[stat]] from`, parameter bindings,
+`enabled`, option literals, `action`, `runs` and the canvas scope `pass.<id>`. A remove with
+references returns `EditError::Referenced` with each place. `copy(scope, nodes)` returns a whole
+graph file (declarations, one pass or function of the copied nodes, their placement, no stats,
+empty `runs`). `Paste` mints ids and keys, keeps wires inside the copy, drops the rest and drops
+a binding of a parameter the target lacks. Category rename and remove, palette edits and
+function edits are not written yet.
 
 **The checker** (`check/`). `GraphFile::check()` returns a `CheckReport`: every diagnostic in file
 order, `duplicate_ids` (the repair state), a `PassReport` per pass (cost, and the inferred
@@ -87,7 +153,14 @@ host, every other pass on the GPU), configuration (`config.rs`), inputs, rates, 
 across regions, puts, host types, and warns of unreached nodes. `bounds.rs` warns when a Repeat's
 `count` can pass `max`. `cost.rs` sums costs bottom-up with saturating `u64`, functions first in
 call order with Kahn's algorithm, so no step recurses on a hostile file. `passes.rs` holds the
-rules across a pass and across passes, and `declarations.rs` the tables. Diagnostics of a node
+rules across a pass and across passes, and `declarations.rs` the tables. Every pass needs a
+`domain`, stats passes included, since library 1 has no domain-free reducer. `schedule.rs` orders
+the top of each pass (a region stands for its body) and splits it as the host does into prelude,
+element and post: a node that runs per element and reads a reducer's result of its own pass is an
+error at the input that reads it (`ir-spec.md` section 6.1, reducers end a map pass), and tick-rate
+arithmetic after a reducer is allowed. It also reports a stream draw whose sources reach a draw
+that `draw_order` lists after it (V17). `lane.set` is allowed in init, tick and action passes
+only, never in a view or stats pass or a region body. Diagnostics of a node
 carry its pass and node id. `fn.call`, `fn.input` and `fn.output` are A2 kinds: today they report
 as unknown, while cost, call depth, call cycles and inlined size already follow `fn.call`.
 
@@ -96,20 +169,35 @@ signature's `Debug`, the semantics and the cases' `Debug`, parity, cost) and one
 `the_library_lock_matches_the_catalogue` fails on a kind without cases and on any line that
 differs. `HENAD_WRITE_LIBRARY_LOCK=1` writes it. Renaming a catalogue field moves every signature
 hash. The test prints the corpus files that use each kind (`--nocapture`), which is the "Used by"
-information.
+information, and a coverage line, the kinds the corpus uses out of every kind.
 
 **The editor region** keeps a `toml::Table`, never refuses a value and never fails a read. Its
 writer orders the keys and rounds `pos` to whole points, and `to_text` is a fixed point for any
-table, which `a_strange_editor_region_stays_readable_and_a_fixed_point` holds.
+table, which `a_strange_editor_region_stays_readable_and_a_fixed_point` holds. The writer leaves
+out a value nested deeper than `MAX_INLINE_DEPTH` (64) arrays and inline tables, since the `toml`
+reader refuses nesting past 80 and a dotted key in the source is written as nested inline tables
+(`a_deep_dotted_editor_key_still_has_a_canonical_text_that_reads`).
 
 **Code identity.** `GraphFile::code` is `ModelCode::new(CODE_FORMAT, semantic_text)`, and
 `GraphFile::source` is `ModelSource::runtime(target id, code)`, which records
 `CodeOrigin::Runtime`. `from_code` refuses another format with the message
 `Recorded under X, and this build runs henad-graph/1`.
 
+**Outside the crate.** henad-explore's `ModelFile::Graph` holds a `GraphFile`, and its `entry`
+returns the checker's errors, then `HostEvaluator::new`'s, then `ModelFileError::Unsupported`
+until G2's WGSL compiler builds an entry. henad-cli's `--model-file` prints a graph's warnings
+and errors with places through it. The facade's `henad::graph` (feature `model-files`) names the
+crate's root items and public modules. G2 must give a GPU grid entry the schema that
+henad-models' `graph_corpus.rs` builds: `grid_width` and `grid_height` (1 to 16384, defaults from
+`[grid]`), then the file's `[[param]]`s, its stats by label and its actions by id. Its
+`seed_buffers` is `init(HostWorld::Grid { width, height, boundary }, &params[2..], seed)` and
+`lanes.column(id).words()` per buffer, narrowed to the lane's storage.
+
 Tests sit in `src/tests/`: `file_format.rs` with `full_graph.toml` as a file in a hand-written
-spelling, `catalogue.rs`, `known_answers.rs`, `checker.rs`, `library_lock.rs` and `mutation.rs`.
-`corpus.rs` reads the starters and, at run time, the graphs in
+spelling, `catalogue.rs`, `known_answers.rs`, `checker.rs`, `host.rs` (corpus inits replay,
+reruns, a Repeat equals its hand-chained copies bit for bit, mixed-radix draws), `edit.rs`,
+`library_lock.rs` and `mutation.rs`.
+`corpus.rs` reads the starters through `starters()` and, at run time, the graphs in
 `crates/henad-models/tests/fixtures/graphs/`, since a packaged crate has no path out of itself.
 `two_spellings_of_one_graph_hash_alike`, `a_canonical_text_reads_back_to_itself` and
 `moving_a_node_changes_the_text_and_leaves_the_hash` are the gate of the file format, and

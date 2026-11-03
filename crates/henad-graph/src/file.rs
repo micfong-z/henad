@@ -171,9 +171,10 @@ impl GraphFile {
     /// # Errors
     ///
     /// Returns [`GraphFileError::Format`] for a file past [`MAX_FILE_BYTES`], which is checked before parsing, for a
-    /// file of another format, version, kind or newer library, which is checked next, or for a value a graph file cannot
-    /// hold, and [`GraphFileError::Toml`] for text that is not a graph file. Each diagnostic is placed in `text` when it
-    /// has a place.
+    /// file of another format, version, kind or newer library, which is checked next, for a value a graph file cannot
+    /// hold, or for a file whose canonical text passes [`MAX_FILE_BYTES`], which is checked last. Returns
+    /// [`GraphFileError::Toml`] for text that is not a graph file. Each diagnostic is placed in `text` when it has a
+    /// place.
     pub fn parse(text: &str) -> Result<Self, GraphFileError> {
         if text.len() > MAX_FILE_BYTES {
             return Err(GraphFileError::Format(Box::new(CodeDiagnostic::error(format!(
@@ -196,6 +197,13 @@ impl GraphFile {
                 GraphFileError::Format(Box::new(place(CodeDiagnostic::error(message), span)))
             }
         })?;
+        // Every file this reads has a canonical text that reads back.
+        let canonical = canonical_text(&file.document, file.editor.as_ref()).len();
+        if canonical > MAX_FILE_BYTES {
+            return Err(GraphFileError::Format(Box::new(CodeDiagnostic::error(format!(
+                "the file's canonical text holds {canonical} bytes, and a graph file holds at most {MAX_FILE_BYTES}"
+            )))));
+        }
         Ok(Self {
             document: file.document,
             editor: file.editor,
@@ -289,7 +297,8 @@ impl GraphFile {
 
     /// Returns the code that identifies the graph: [`Self::semantic_text`] in the format [`CODE_FORMAT`].
     ///
-    /// Presentation keys of the semantic tables, such as colours and labels, enter the hash. The editor region does not.
+    /// Presentation keys of the semantic tables, such as colours and labels, enter the hash.
+    /// The editor region does not.
     pub fn code(&self) -> ModelCode {
         ModelCode::new(CODE_FORMAT, self.semantic_text())
     }

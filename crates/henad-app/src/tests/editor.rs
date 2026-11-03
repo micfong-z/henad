@@ -77,8 +77,8 @@ fn new_grid_rule_starts_from_the_life_starter() {
     );
     assert_eq!(app.editor.text, life_starter());
     let read = ModelFile::parse(&app.editor.text).expect("the starter reads back");
-    assert_eq!(read.rule().id, "life_rule");
-    assert_eq!(read.rule().step, LIFE_STEP);
+    assert_eq!(read.rule().expect("a grid rule").id, "life_rule");
+    assert_eq!(read.rule().expect("a grid rule").step, LIFE_STEP);
     assert_eq!(app.editor.outcome, None);
     assert_eq!(app.editor.file_name, None);
     assert_eq!(app.focus_request, Some(Tab::Editor));

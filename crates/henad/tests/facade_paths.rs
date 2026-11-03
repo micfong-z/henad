@@ -181,10 +181,30 @@ mod named_only {
         henad::rules::RuleDeclaration,
         henad::rules::CompiledGridRule,
         henad::rules::ModelFile,
+        henad::rules::GridRuleFile,
         henad::rules::ModelFileError,
         henad::rules::WgslFile<'static>,
         henad::rules::ComposedWgsl,
     );
+
+    /// Types of the graph models that a host built with the `model-files` feature names.
+    #[cfg(feature = "model-files")]
+    type GraphTypes = (
+        henad::graph::GraphFile,
+        henad::graph::GraphFileError,
+        henad::graph::check::CheckReport,
+        henad::graph::host::HostEvaluator,
+        henad::graph::edit::GraphBuilder,
+        henad::graph::starters::Starter,
+    );
+
+    /// Returns whether every graph starter reads and checks without an error, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    fn graph_starters_check() -> bool {
+        henad::graph::starters::starters()
+            .iter()
+            .all(|starter| henad::graph::GraphFile::parse(starter.text).is_ok_and(|file| !file.check().has_errors()))
+    }
 
     /// Returns the entry of the Life starter, read back from its model file, for a host built with `model-files`.
     #[cfg(feature = "model-files")]

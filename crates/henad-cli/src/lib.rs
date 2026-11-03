@@ -27,7 +27,8 @@
 //!
 //! `--model-file` reads a model file, a grid rule as one TOML file, and adds its model to the set, in place of a model
 //! with the same id. The files and `--spec` are read before the device is acquired. The device is then sized to the
-//! files' models as well.
+//! files' models as well. A file of kind `graph` reads and checks, and its warnings and errors print at their lines,
+//! but this build cannot run a graph and refuses the file.
 //!
 //! ```text
 //! henad-cli --list
@@ -76,6 +77,7 @@ use henad_compute::gpu::GpuContext;
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
 use henad_compute::simulation::{RunSetup, Simulation};
 use henad_core::action::Schedule;
+use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::explore::value::{ValueError, parse_overrides, resolve_params};
 use henad_core::export::StatsWriter;
 use henad_core::metadata::Backend;
@@ -480,20 +482,45 @@ fn with_model_files<'a>(
 
 /// Reads the model file at `path` and returns the entry of its model.
 ///
+/// A graph's warnings go to stderr first, each as `path:line:column: warning: message`.
+///
 /// # Errors
 ///
 /// Returns an error when the file cannot be read, does not hold a model file, or holds a model that does not compile.
-/// The error lists each problem as `path:line:column: error: message`, with its notes on the lines below.
+/// The error lists each problem as `path:line:column: error: message`, with its notes on the lines below and the pass
+/// and node of a graph's problem in a last note. A graph that checks is refused, since this build cannot run one.
 fn load_model_file(path: &Path) -> Result<ModelEntry> {
     let text = fs::read_to_string(path).with_context(|| format!("cannot read model file '{}'", path.display()))?;
-    ModelFile::parse(&text).and_then(|file| file.entry()).map_err(|error| {
+    let file_name = path.display().to_string();
+    let file = ModelFile::parse(&text);
+    if let Ok(file) = &file {
+        for warning in file.warnings() {
+            eprintln!("{}", located(warning, &file_name));
+        }
+    }
+    file.and_then(|file| file.entry()).map_err(|error| {
         let problems: Vec<String> = error
             .diagnostics()
             .iter()
-            .map(|diagnostic| diagnostic.clone().with_file(path.display().to_string()).to_string())
+            .map(|diagnostic| located(diagnostic.clone(), &file_name).to_string())
             .collect();
         anyhow!(problems.join("\n")).context(format!("cannot load model file '{}'", path.display()))
     })
+}
+
+/// Returns `diagnostic` in the file `file_name`, with a note naming the pass and node of a graph's problem.
+fn located(diagnostic: CodeDiagnostic, file_name: &str) -> CodeDiagnostic {
+    let place = match (&diagnostic.pass, &diagnostic.node) {
+        (Some(pass), Some(node)) => Some(format!("in node {node} of pass '{pass}'")),
+        (Some(pass), None) => Some(format!("in pass '{pass}'")),
+        (None, Some(node)) => Some(format!("in node {node}")),
+        (None, None) => None,
+    };
+    let diagnostic = diagnostic.with_file(file_name);
+    match place {
+        Some(place) => diagnostic.with_note(place),
+        None => diagnostic,
+    }
 }
 
 /// Returns whether `models` holds a GPU model.

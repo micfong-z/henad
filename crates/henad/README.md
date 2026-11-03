@@ -11,7 +11,7 @@ It re-exports the engine, the sweeps and the model authoring API under one modul
 | `app` | The app as a library, at `henad::app` |
 | `cli` | The command line as a library, at `henad::cli`, on native targets |
 | `testing` | The checks a model's tests run against its entry, at `henad::testing` |
-| `model-files` | Grid rules, the model files that hold them, and the composer of their WGSL, at `henad::rules` |
+| `model-files` | Grid rules, the model files that hold them, and the composer of their WGSL, at `henad::rules`, and graph models at `henad::graph` |
 
 No feature is on by default, and no feature changes a result.
 

@@ -427,16 +427,13 @@ pub fn save_model(app: &mut AppState) {
     app.save_as(SaveTarget::Model, &name, bytes);
 }
 
-/// Returns the file name a save of the Editor's text suggests: the name it was opened or saved under, then the rule's
+/// Returns the file name a save of the Editor's text suggests: the name it was opened or saved under, then the model's
 /// id, then [`FALLBACK_FILE_NAME`].
 fn save_name(panel: &EditorPanel) -> String {
     if let Some(name) = &panel.file_name {
         return name.clone();
     }
-    ModelFile::parse(&panel.text).map_or_else(
-        |_| FALLBACK_FILE_NAME.to_owned(),
-        |file| format!("{}.toml", file.rule().id),
-    )
+    ModelFile::parse(&panel.text).map_or_else(|_| FALLBACK_FILE_NAME.to_owned(), |file| format!("{}.toml", file.id()))
 }
 
 /// Handles the result of an Open model dialog. The picked file replaces the Editor's text, and is applied only on

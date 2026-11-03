@@ -4,6 +4,9 @@
 //! lowering one can make an old file invalid.
 
 /// Size in bytes of the largest graph file, checked before the text is parsed.
+///
+/// The file's canonical text is held to the same size after the text is read, so a file that reads has a canonical
+/// text that reads too.
 pub const MAX_FILE_BYTES: usize = 1024 * 1024;
 
 // Nodes

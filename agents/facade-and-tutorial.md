@@ -5,8 +5,9 @@ nothing but the `params!` forward and its hidden `__macro_support`: the root ite
 `params`, `stats`, `views`, `action`, `gpu`, `runner`, `engine`, `explore`, `benchmark`
 (native), `authoring` with its `primitives` and `prelude`, the
 gated `models` (`example-models`), `app` (`app`), `cli` (`cli`), `testing` (`testing`) and
-`rules` (`model-files`: the grid rules, the model files and `compose_wgsl`), and
-`henad::prelude`. Each
+`rules` (`model-files`: the grid rules, the model files and `compose_wgsl`), `graph`
+(`model-files`, which then also turns on `dep:henad-graph`: henad-graph's root items and its
+public modules, named one by one), and `henad::prelude`. Each
 re-export fixes its item's one documented path, and the guides name items by these paths alone.
 `henad::explore` keeps henad-core's planning modules as modules (`spec`,
 `plan`, `search` and the rest), and `henad::authoring` globs henad-core's `authoring::model`
@@ -35,7 +36,7 @@ names. It defines no model, needs no build script and never builds on a device, 
 that need an entry compile in a module no test calls. That module also holds the `gpu_build`
 and `scoped_steps` regions `guide/library.md` includes, the second through a `rayon`
 dev-dependency. Its `named_only` module names items whose path is the whole check, the grid rule
-items under `model-files` among them. Keep all three.
+and graph items under `model-files` among them. Keep all three.
 
 **henad-tutorial** (`examples/tutorial`, `publish = false`): the finished code of the five pages
 under `docs/guide/first-model/`, which include each file whole. `life.rs`, `foraging/`,

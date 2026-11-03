@@ -156,6 +156,9 @@ fn the_library_lock_matches_the_catalogue() {
         );
         println!("| `{}` | {users} |", def.id);
     }
+    let kinds = definitions().count();
+    let covered = definitions().filter(|def| used.contains_key(def.id)).count();
+    println!("Coverage: {covered} of {kinds} kinds appear in the corpus");
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(LOCK_PATH);
     let generated = lock_text();

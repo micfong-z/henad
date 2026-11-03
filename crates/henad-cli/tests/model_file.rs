@@ -1,5 +1,6 @@
 //! Checks `--model-file`: a model file's model sweeps, resumes and merges only under its own code, can take the place
-//! of an example model, shows in `--list` and `--params --json`, and is refused at the line of a problem.
+//! of an example model, shows in `--list` and `--params --json`, and is refused at the line of a problem. A graph model
+//! file checks, prints its problems at their lines and is refused to run.
 //!
 //! A grid rule runs on the GPU. The tests that build one skip on a machine without a device, and fail there when
 //! `HENAD_REQUIRE_GPU` is set.
@@ -454,4 +455,71 @@ fn a_model_file_error_points_at_its_line() {
 
     let output = run(&["--merge", "a", "--out", "b", "--model-file", &first]);
     assert_eq!(output.status.code(), Some(2), "--merge takes no model file");
+}
+
+/// Returns the text of the Game of Life graph starter.
+fn life_graph() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../henad-graph/starters/game_of_life.toml");
+    std::fs::read_to_string(path).expect("the graph starter is in the repository")
+}
+
+#[test]
+fn a_graph_model_file_checks_and_is_refused_to_run() {
+    let scratch = Scratch::new("graph");
+    let text = life_graph();
+
+    // A graph that checks is refused with one placed error, and nothing runs.
+    let graph = scratch.write("life.toml", &text);
+    let id_line = text
+        .lines()
+        .position(|line| line == "id = \"node_game_of_life\"")
+        .expect("the header's id")
+        + 1;
+    let output = run(&["--model-file", &graph, "--params"]);
+    assert_eq!(output.status.code(), Some(1));
+    let message = stderr(&output);
+    assert!(
+        message.contains(&format!("cannot load model file '{graph}'")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "{graph}:{id_line}:6: error: the graph checks, but this build cannot run"
+        )),
+        "{message}"
+    );
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+
+    // A checker error is refused at its line, with its pass and node in a note.
+    let unknown_line = text
+        .lines()
+        .position(|line| line == "op = \"grid.life_like\"")
+        .expect("the step's rule")
+        + 1;
+    let broken = scratch.write(
+        "broken.toml",
+        &text.replace("op = \"grid.life_like\"", "op = \"grid.lifelike\""),
+    );
+    let message = stderr(&run(&["--list", "--model-file", &broken]));
+    assert!(
+        message.contains(&format!("{broken}:{unknown_line}:6: error:")) && message.contains("grid.lifelike"),
+        "{message}"
+    );
+    assert!(message.contains("note: in node n12 of pass 'step'"), "{message}");
+
+    // A warning prints on stderr at its line and blocks nothing the checker allows.
+    let unreached = scratch.write(
+        "unreached.toml",
+        &text.replace(
+            "[[pass]]\nid = \"counts\"",
+            "[[pass.node]]\nid = \"n14\"\nop = \"ctx.index\"\n\n[[pass]]\nid = \"counts\"",
+        ),
+    );
+    let message = stderr(&run(&["--list", "--model-file", &unreached]));
+    assert!(
+        message.contains(&format!("{unreached}:")) && message.contains(": warning: "),
+        "{message}"
+    );
+    assert!(message.contains("note: in node n14 of pass 'step'"), "{message}");
+    assert!(message.contains("cannot run graph models"), "{message}");
 }

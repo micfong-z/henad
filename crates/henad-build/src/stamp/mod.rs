@@ -21,7 +21,13 @@ pub(crate) use git::{echoes_path_format, is_date};
 use files::nearest_lockfile;
 
 /// Packages whose sources the engine stamp covers in Henad's checkout.
-const ENGINE_PACKAGES: [&str; 4] = ["henad-core", "henad-build", "henad-compute", "henad-explore"];
+const ENGINE_PACKAGES: [&str; 5] = [
+    "henad-core",
+    "henad-build",
+    "henad-compute",
+    "henad-graph",
+    "henad-explore",
+];
 /// Directory of henad-explore below the root of Henad's repository, as `git rev-parse --show-prefix` prints it.
 const ENGINE_PREFIX: &str = "crates/henad-explore/";
 

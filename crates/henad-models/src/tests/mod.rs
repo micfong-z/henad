@@ -3,6 +3,7 @@
 pub mod broken;
 mod gpu_contracts;
 mod gpu_grid_adapter;
+mod graph_corpus;
 mod registry;
 mod runtime_parity;
 mod simulation;

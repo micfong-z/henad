@@ -596,6 +596,23 @@ pos = [nan, inf, -inf]
 }
 
 #[test]
+fn a_deep_dotted_editor_key_still_has_a_canonical_text_that_reads() {
+    let deep = |name: &str, keys: usize, arrays: usize| {
+        format!(
+            "{} = {}1{}\n",
+            vec![name; keys].join("."),
+            "[".repeat(arrays),
+            "]".repeat(arrays)
+        )
+    };
+    let text = format!("{MINIMAL}\n[editor]\n{}{}", deep("a", 50, 50), deep("b", 32, 32));
+    let canonical = parse(&text).to_toml();
+    assert_eq!(parse(&canonical).to_toml(), canonical);
+    assert!(!canonical.contains("a = "), "{canonical}");
+    assert!(canonical.contains("b = "), "{canonical}");
+}
+
+#[test]
 fn passes_read_in_stack_order_and_nodes_in_natural_order() {
     let file = parse(FULL_GRAPH);
     let stages: Vec<PassStage> = file.document().passes.iter().map(|pass| pass.stage).collect();
@@ -924,6 +941,20 @@ fn a_file_past_the_limit_is_refused_before_parsing() {
     let diagnostic = refusal(&text);
     assert!(diagnostic.message.contains("at most"), "{diagnostic}");
     assert!(diagnostic.span.is_none());
+}
+
+#[test]
+fn a_file_whose_canonical_text_passes_the_limit_is_refused() {
+    let nodes: Vec<String> = (1..=30000)
+        .map(|number| format!("{{id=\"n{number}\",op=\"ctx.index\"}}"))
+        .collect();
+    let text = minimal_with(&format!(
+        "[[pass]]\nid = \"step\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"cells\"\nnode = [{}]\n",
+        nodes.join(",")
+    ));
+    assert!(text.len() < MAX_FILE_BYTES, "{} bytes", text.len());
+    let diagnostic = refusal(&text);
+    assert!(diagnostic.message.contains("canonical text"), "{diagnostic}");
 }
 
 #[test]

@@ -19,14 +19,20 @@ between Henad crates that the normal graph does not hold is named here: today th
 henad-explore to henad-models, for its tests, the one from henad-models to henad-explore with its
 `testing` feature, for the kit over the example models, and the ones from henad-cli and henad-app
 to henad-models, for their unit tests without the feature. henad-models also takes henad-compute
-again as a dev-dependency, with `runtime-wgsl`, a feature on an edge the normal graph holds.
+again as a dev-dependency, with `runtime-wgsl`, a feature on an edge the normal graph holds, and
+henad-explore with `model-files` beside `testing`. henad-models takes henad-graph as a path-only
+dev-dependency, for `src/tests/graph_corpus.rs`, which runs the host evaluator over the graph
+corpus. henad-graph sits beside henad-models in the graph and depends on neither it nor
+henad-explore, so this dev edge runs against no normal one. Path-only keeps it out of the
+package, which matters: the publish order puts henad-models before henad-graph.
 henad-app and henad-cli take henad-explore with `model-files`.
 
-henad-graph sits on henad-core and henad-compute, and outside egui. Two edges run onto it.
+henad-graph sits on henad-core and henad-compute, and outside egui. Three normal edges run onto it.
 henad-explore takes it as an optional dependency behind `model-files`, which turns on `dep:henad-graph`
 beside `henad-compute/runtime-wgsl`. With the feature off, `cargo tree -p henad-explore -e normal -i
 henad-graph` reports that no package matches `henad-graph` and exits 101. henad-app takes it directly,
-for the editor. henad-graph takes no dependency on henad-explore, henad-models or either host, and
+for the editor. The facade takes it as an optional dependency behind its own `model-files`, for
+`henad::graph`. henad-graph takes no dependency on henad-explore, henad-models or either host, and
 `cargo tree -p henad-graph -e normal` names only henad-core and henad-compute among Henad's crates.
 
 The pair between henad-models and

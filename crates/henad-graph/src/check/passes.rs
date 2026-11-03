@@ -35,7 +35,8 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, index: usize, view: &BodyVie
         .map(|places| places.table.clone());
     let topology = document.world.topology();
     match pass.domain {
-        None if pass.stage != PassStage::Stats => checker.error(
+        // Library 1 has no domain-free reducer, so every pass runs over a domain, stats passes included.
+        None => checker.error(
             format!("the {} pass '{}' needs a `domain`", pass.stage.as_str(), pass.id),
             place.clone(),
         ),

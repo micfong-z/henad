@@ -82,6 +82,14 @@ const IN_AN_ACTION: ContextSet = ContextSet {
     ..ContextSet::NONE
 };
 
+/// Passes that write lanes: init, tick and action passes, outside region bodies.
+const WRITES: ContextSet = ContextSet {
+    init: true,
+    tick: true,
+    action: true,
+    ..ContextSet::NONE
+};
+
 pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "ctx.index",
@@ -193,7 +201,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         group: "State",
         label: "Write lane",
         semantics: "Sets the element's new value of `lane`, committed at the end of the pass. A pass writes a lane at most once per element, and an unwritten lane keeps its value.",
-        contexts: ContextSet::MAP,
+        contexts: WRITES,
         config: &[config("lane", ConfigType::LaneId)],
         inputs: &[input_up_to("value", SocketType::Lane, Rate::Element)],
         effects: &[Effect::WritesLane],

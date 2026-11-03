@@ -1,7 +1,7 @@
 //! The `[editor]` region of a graph file: presentation only, outside the code identity.
 //!
-//! The region holds node placement, canvas views, frames and notes. It is read leniently. Any TOML value is kept through
-//! a round trip, unknown keys included, and a key that does not fit reads as absent through the accessors.
+//! The region holds node placement, canvas views, frames and notes. It is read leniently. Any TOML value is kept
+//! through a round trip, unknown keys included, and a key that does not fit reads as absent through the accessors.
 
 use std::cmp::Ordering;
 
@@ -12,6 +12,11 @@ use crate::model_text::toml_string;
 const LEADING_KEYS: [&str; 5] = ["version", "next_id", "node", "view", "function"];
 /// Keys of the `[editor]` table written as arrays of tables after every other key, in order.
 const TRAILING_TABLES: [&str; 2] = ["frame", "note"];
+/// Deepest nesting of arrays and inline tables in one value the region writes.
+///
+/// A value nested deeper is left out of the text. TOML readers refuse nesting past 80, and the region writes a table
+/// that a file spelt with dotted keys as one inline value.
+const MAX_INLINE_DEPTH: usize = 64;
 /// Keys of a table inside the region, in the order they are written. A key not listed follows, in lexical order.
 const INLINE_KEY_ORDER: [&str; 11] = [
     "scope",
@@ -93,6 +98,106 @@ impl EditorRegion {
         })
     }
 
+    /// Sets the next node number to `next`.
+    pub fn set_next_id(&mut self, next: u32) {
+        self.table
+            .insert("next_id".to_owned(), toml::Value::Integer(i64::from(next)));
+    }
+
+    /// Sets the position of node `id` to `pos`, keeping its other placement keys.
+    pub fn set_node_pos(&mut self, id: NodeId, pos: [f64; 2]) {
+        let nodes = table_entry(&mut self.table, "node");
+        let entry = table_entry(nodes, &id.to_string());
+        entry.insert(
+            "pos".to_owned(),
+            toml::Value::Array(vec![toml::Value::Float(pos[0]), toml::Value::Float(pos[1])]),
+        );
+    }
+
+    /// Sets the placement of node `id` to `layout`, writing `collapsed` and `label` only when they are set.
+    pub fn place_node(&mut self, id: NodeId, layout: &NodeLayout) {
+        self.set_node_pos(id, layout.pos);
+        let entry = table_entry(table_entry(&mut self.table, "node"), &id.to_string());
+        if layout.collapsed {
+            entry.insert("collapsed".to_owned(), toml::Value::Boolean(true));
+        }
+        if let Some(label) = &layout.label {
+            entry.insert("label".to_owned(), toml::Value::String(label.clone()));
+        }
+    }
+
+    /// Removes the placement of node `id`, and removes the node from every frame.
+    pub fn remove_node(&mut self, id: NodeId) {
+        let name = id.to_string();
+        if let Some(nodes) = self.table.get_mut("node").and_then(toml::Value::as_table_mut) {
+            nodes.remove(&name);
+        }
+        if let Some(frames) = self.table.get_mut("frame").and_then(toml::Value::as_array_mut) {
+            for frame in frames.iter_mut().filter_map(toml::Value::as_table_mut) {
+                if let Some(members) = frame.get_mut("members").and_then(toml::Value::as_array_mut) {
+                    members.retain(|member| member.as_str() != Some(name.as_str()));
+                }
+            }
+        }
+    }
+
+    /// Adds a frame titled `title` in `color`, an MCS hue name, around `members` of the canvas `scope`.
+    pub fn add_frame(&mut self, scope: &str, title: &str, color: &str, members: &[NodeId]) {
+        let mut frame = toml::Table::new();
+        frame.insert("scope".to_owned(), toml::Value::String(scope.to_owned()));
+        frame.insert("title".to_owned(), toml::Value::String(title.to_owned()));
+        frame.insert("color".to_owned(), toml::Value::String(color.to_owned()));
+        frame.insert(
+            "members".to_owned(),
+            toml::Value::Array(
+                members
+                    .iter()
+                    .map(|member| toml::Value::String(member.to_string()))
+                    .collect(),
+            ),
+        );
+        let frames = self
+            .table
+            .entry("frame")
+            .or_insert_with(|| toml::Value::Array(Vec::new()));
+        if !frames.is_array() {
+            *frames = toml::Value::Array(Vec::new());
+        }
+        if let Some(frames) = frames.as_array_mut() {
+            frames.push(toml::Value::Table(frame));
+        }
+    }
+
+    /// Renames the canvas scope `from`, such as `pass.seed`, to `to` in views, frames and notes.
+    pub fn rename_scope(&mut self, from: &str, to: &str) {
+        if let Some(views) = self.table.get_mut("view").and_then(toml::Value::as_table_mut)
+            && let Some(view) = views.remove(from)
+        {
+            views.insert(to.to_owned(), view);
+        }
+        for name in TRAILING_TABLES {
+            if let Some(items) = self.table.get_mut(name).and_then(toml::Value::as_array_mut) {
+                for item in items.iter_mut().filter_map(toml::Value::as_table_mut) {
+                    if item.get("scope").and_then(toml::Value::as_str) == Some(from) {
+                        item.insert("scope".to_owned(), toml::Value::String(to.to_owned()));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Removes the view, frames and notes of the canvas scope `scope`.
+    pub fn remove_scope(&mut self, scope: &str) {
+        if let Some(views) = self.table.get_mut("view").and_then(toml::Value::as_table_mut) {
+            views.remove(scope);
+        }
+        for name in TRAILING_TABLES {
+            if let Some(items) = self.table.get_mut(name).and_then(toml::Value::as_array_mut) {
+                items.retain(|item| item.get("scope").and_then(toml::Value::as_str) != Some(scope));
+            }
+        }
+    }
+
     /// Returns the region's canonical text, starting with its `[editor]` header.
     ///
     /// Keys follow a fixed order, `node.<id>` entries natural id order, and positions are rounded to whole points.
@@ -100,7 +205,7 @@ impl EditorRegion {
         let mut text = String::from("[editor]\n");
         for name in ["version", "next_id"] {
             if let Some(value) = self.table.get(name) {
-                text.push_str(&format!("{name} = {}\n", inline_value(value)));
+                push_entry(&mut text, name, value);
             }
         }
         self.write_entries(&mut text, "node");
@@ -113,7 +218,7 @@ impl EditorRegion {
             .collect();
         others.sort_by(|left, right| left.0.cmp(right.0));
         for (name, value) in others {
-            text.push_str(&format!("{} = {}\n", toml_key(name), inline_value(value)));
+            push_entry(&mut text, &toml_key(name), value);
         }
         for name in TRAILING_TABLES {
             if let Some(items) = self.table.get(name).and_then(array_of_tables) {
@@ -121,7 +226,7 @@ impl EditorRegion {
                     text.push_str(&format!("\n[[editor.{name}]]\n"));
                     for (key, value) in ordered_entries(item) {
                         let value = if key == "pos" { rounded(value) } else { value.clone() };
-                        text.push_str(&format!("{} = {}\n", toml_key(key), inline_value(&value)));
+                        push_entry(&mut text, &toml_key(key), &value);
                     }
                 }
             }
@@ -137,12 +242,12 @@ impl EditorRegion {
         let mut entries: Vec<(&String, &toml::Value)> = table.iter().collect();
         entries.sort_by(|left, right| natural_order(left.0, right.0));
         for (key, value) in entries {
-            let written = if name == "node" {
-                inline_value(&node_with_rounded_pos(value))
+            let key = format!("{name}.{}", toml_key(key));
+            if name == "node" {
+                push_entry(text, &key, &node_with_rounded_pos(value));
             } else {
-                inline_value(value)
-            };
-            text.push_str(&format!("{name}.{} = {written}\n", toml_key(key)));
+                push_entry(text, &key, value);
+            }
         }
     }
 
@@ -157,19 +262,26 @@ impl EditorRegion {
             match value.as_table().filter(|entry| !entry.is_empty()) {
                 Some(entry) => {
                     for (key, item) in ordered_entries(entry) {
-                        text.push_str(&format!(
-                            "function.{}.{} = {}\n",
-                            toml_key(id),
-                            toml_key(key),
-                            inline_value(item)
-                        ));
+                        push_entry(text, &format!("function.{}.{}", toml_key(id), toml_key(key)), item);
                     }
                 }
-                None => {
-                    text.push_str(&format!("function.{} = {}\n", toml_key(id), inline_value(value)));
-                }
+                None => push_entry(text, &format!("function.{}", toml_key(id)), value),
             }
         }
+    }
+}
+
+/// Returns the table under `key` of `table`, made a table first when it is absent or holds another value.
+fn table_entry<'a>(table: &'a mut toml::Table, key: &str) -> &'a mut toml::Table {
+    let value = table
+        .entry(key)
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if !value.is_table() {
+        *value = toml::Value::Table(toml::Table::new());
+    }
+    match value {
+        toml::Value::Table(inner) => inner,
+        _ => unreachable!("the value was made a table above"),
     }
 }
 
@@ -249,6 +361,22 @@ fn toml_key(key: &str) -> String {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
     if bare { key.to_owned() } else { toml_string(key) }
+}
+
+/// Appends the line `key = value` to `text`, or nothing for a value nested deeper than [`MAX_INLINE_DEPTH`].
+fn push_entry(text: &mut String, key: &str, value: &toml::Value) {
+    if nests_within(value, MAX_INLINE_DEPTH) {
+        text.push_str(&format!("{key} = {}\n", inline_value(value)));
+    }
+}
+
+/// Returns whether `value` nests arrays and inline tables at most `depth` deep.
+fn nests_within(value: &toml::Value, depth: usize) -> bool {
+    match value {
+        toml::Value::Array(items) => depth > 0 && items.iter().all(|item| nests_within(item, depth - 1)),
+        toml::Value::Table(table) => depth > 0 && table.values().all(|item| nests_within(item, depth - 1)),
+        _ => true,
+    }
 }
 
 /// Returns `value` on one line.

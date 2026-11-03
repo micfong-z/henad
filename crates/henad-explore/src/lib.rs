@@ -48,8 +48,8 @@ use henad_core::provenance::BuildInfo;
 
 /// Henad's own build, stamped by henad-explore's build script over the engine's crates.
 ///
-/// In Henad's checkout the source hash covers henad-core, henad-build, henad-compute and henad-explore with the
-/// workspace's lockfile. In a package it covers henad-explore alone.
+/// In Henad's checkout the source hash covers henad-core, henad-build, henad-compute, henad-graph and henad-explore
+/// with the workspace's lockfile. In a package it covers henad-explore alone.
 pub const ENGINE_BUILD: BuildInfo = henad_core::build_info!();
 
 /// Hash of henad-explore's own `src` and manifest as 16 hexadecimal digits, empty without a stamp.

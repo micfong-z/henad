@@ -339,11 +339,6 @@ impl ContextSet {
         stats: true,
         region: true,
     };
-    /// Every pass, outside region bodies.
-    pub const MAP: Self = Self {
-        region: false,
-        ..Self::ANY
-    };
     /// Every pass but view and stats, and region bodies: where a counter-based draw may appear.
     pub const DRAWS: Self = Self {
         view: false,

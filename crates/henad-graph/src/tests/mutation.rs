@@ -1,4 +1,5 @@
-//! Neither the reader nor the checker panics on a mutation corpus, and neither runs long on a hostile file.
+//! Neither the reader, the checker nor the host evaluator panics on a mutation corpus, and none runs long on a hostile
+//! file.
 //!
 //! The corpus takes the graph corpus and every case file, applies random line and token edits from a fixed seed, and
 //! adds generated files that push the region tree, the call graph and the cost arithmetic to their ends.
@@ -11,6 +12,7 @@ use super::case_files::case_file;
 use super::corpus;
 use crate::GraphFile;
 use crate::catalogue::definitions;
+use crate::host::{HostEvaluator, HostWorld, RunContext};
 
 /// Values a token edit puts in place of a value.
 const HOSTILE_VALUES: [&str; 24] = [
@@ -96,13 +98,37 @@ fn mutate(text: &str, rng: &mut u64) -> String {
     lines.join("\n")
 }
 
-/// Reads `text`, checks it, and holds the canonical text to a fixed point. A panic fails the test with the text.
+/// Number of edited files the host evaluator has run.
+static HOST_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Reads `text`, checks it, holds the canonical text to a fixed point, and runs a file that checks on the host over a
+/// small world. A panic fails the test with the text.
 fn exercise(text: &str) -> bool {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let Ok(file) = GraphFile::parse(text) else { return false };
         let report = file.check();
         for diagnostic in &report.diagnostics {
             assert!(!diagnostic.message.is_empty());
+        }
+        if !report.has_errors()
+            && let Ok(evaluator) = HostEvaluator::new(&file)
+        {
+            let world = match HostWorld::of(evaluator.document()) {
+                HostWorld::Grid { boundary, .. } => HostWorld::Grid {
+                    width: 4,
+                    height: 3,
+                    boundary,
+                },
+                _ => HostWorld::Agents { count: 12 },
+            };
+            HOST_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Ok(mut lanes) = evaluator.init(world, &[], Some(1)) {
+                for pass in &evaluator.document().passes {
+                    let context = RunContext::tick(Some(1), 2);
+                    // A fault is an outcome. A panic is the failure.
+                    let _faulted = evaluator.run_pass(&pass.id, &mut lanes, &[], &context, &mut 1).is_err();
+                }
+            }
         }
         let canonical = file.to_toml();
         if let Ok(again) = GraphFile::parse(&canonical) {
@@ -111,7 +137,7 @@ fn exercise(text: &str) -> bool {
         }
         true
     }));
-    outcome.unwrap_or_else(|_| panic!("the reader or the checker panicked on:\n{text}"))
+    outcome.unwrap_or_else(|_| panic!("the reader, the checker or the host evaluator panicked on:\n{text}"))
 }
 
 #[test]
@@ -138,6 +164,8 @@ fn the_reader_and_checker_never_panic_on_the_mutation_corpus() {
         read * 8 > cases,
         "only {read} of {cases} edits read, so the corpus tests the reader alone"
     );
+    let host_runs = HOST_RUNS.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(host_runs > 100, "only {host_runs} edits reach the host evaluator");
 }
 
 /// Returns a grid file whose tick pass holds `nodes`, and `extra` tables after it.

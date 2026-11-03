@@ -1932,6 +1932,7 @@ dependencies = [
  "henad-compute",
  "henad-core",
  "henad-explore",
+ "henad-graph",
  "henad-models",
  "rayon",
 ]
@@ -2057,6 +2058,7 @@ dependencies = [
  "henad-compute",
  "henad-core",
  "henad-explore",
+ "henad-graph",
  "log",
  "rayon",
  "wgpu",

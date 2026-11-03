@@ -10,6 +10,7 @@ mod config;
 mod cost;
 mod declarations;
 mod passes;
+mod schedule;
 mod view;
 
 use std::collections::BTreeMap;
@@ -129,7 +130,9 @@ pub fn check(file: &GraphFile) -> CheckReport {
         let ports = if total > MAX_NODES_IN_FILE || pass_view.nodes.len() > MAX_NODES_PER_BODY {
             body::BodyPorts::default()
         } else {
-            body::check(&mut checker, pass_view)
+            let ports = body::check(&mut checker, pass_view);
+            schedule::check(&mut checker, pass_view);
+            ports
         };
         passes::check_pass(&mut checker, index, pass_view);
         pass_ports.push(ports);
@@ -166,11 +169,7 @@ pub fn check(file: &GraphFile) -> CheckReport {
     report
 }
 
-/// Returns the literal a one-key configuration table holds, for the reference evaluation of the tests.
-#[cfg(test)]
-pub(crate) fn literal_for_tests(value: &crate::value::ConfigValue) -> Option<crate::value::Literal> {
-    config::literal_of(value)
-}
+pub(crate) use config::literal_of;
 
 /// State of one check.
 struct Checker<'a> {

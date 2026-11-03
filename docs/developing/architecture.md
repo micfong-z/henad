@@ -23,9 +23,9 @@ graph LR
   build -. "build" .-> app
   compute --> models["henad-models<br/><small>example models</small>"]
   compute --> explore["henad-explore<br/><small>sweeps, searches and the testing kit</small>"]
-  compute --> graph["henad-graph<br/><small>graph models</small>"]
-  graph -. "model-files" .-> explore
-  graph --> app
+  compute --> graphcrate["henad-graph<br/><small>graph models</small>"]
+  graphcrate -. "model-files" .-> explore
+  graphcrate --> app
   explore --> cli["henad-cli<br/><small>command line</small>"]
   explore --> app["henad-app<br/><small>egui UI</small>"]
   models -- "example_models()" --> cli

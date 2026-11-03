@@ -31,21 +31,25 @@ refuses an id outside the set ("this build does not include model 'x' (try --lis
 a GPU model on a machine without a device. `--list` prints only the models this machine can run.
 The CLI never publishes and never lays out a network.
 `--model-file PATH` is repeatable, sits in `Args` outside `ExploreArgs`, and selects no mode.
-`with_model_files` runs after the pool is sized and `--merge` has returned, and before `--spec`
-is read and the device acquired. It reads each file through `ModelFile::parse` and `entry` and
-`ModelSet::replace`s its entry into a clone of the options' set, and the set is cloned only when
-a file is given. A file whose id the set holds prints a note on stderr in text mode and nothing
-under `--json`, and two files of one id are refused. A file that does not load is an error whose
-cause lists each `CodeDiagnostic` with the path as its file, `path:line:column: error: message`,
-and exits 1 before any device. With one file and neither a positional id nor a spec, the file's
-id is the model, under `--info` too (`Mode::of`). Two files or more without either are a usage
-error from `parse_args`, exit 2. `--merge` conflicts with the flag. `tests/model_file.rs` runs
+`with_model_files` runs after the pool is sized and `--merge` has returned, and before `--spec` is
+read and the device acquired. It reads each file through `ModelFile::parse` and `entry` and
+`ModelSet::replace`s its entry into a clone of the options' set, and the set is cloned only when a
+file is given. A graph file's warnings print to stderr first, each through `located`, which adds the
+file and a note naming the diagnostic's pass and node. Its entry is then refused: checker or host
+errors as `ModelFileError::Graph`, and a graph that checks as `ModelFileError::Unsupported`, since
+this build has no graph compiler. A file whose id the set holds prints a note on stderr in text mode
+and nothing under `--json`, and two files of one id are refused. A file that does not load is an
+error whose cause lists each `CodeDiagnostic` with the path as its file, `path:line:column: error:
+message`, and exits 1 before any device. With one file and neither a positional id nor a spec, the
+file's id is the model, under `--info` too (`Mode::of`). Two files or more without either are a
+usage error from `parse_args`, exit 2. `--merge` conflicts with the flag. `tests/model_file.rs` runs
 the binary on copies of henad-explore's `specs/models/life_rule.toml`, and holds
 `a_model_file_sweeps_and_records_its_code`, `a_resume_with_an_edited_model_file_is_refused`,
 `a_merge_of_shards_with_different_model_files_is_refused`,
 `a_model_file_can_shadow_an_example_model`, `model_file_is_allowed_with_spec_and_resume`,
-`list_and_params_json_show_a_model_file` and `a_model_file_error_points_at_its_line`. The last
-needs no device, and the others skip without one. Keep them.
+`list_and_params_json_show_a_model_file`, `a_model_file_error_points_at_its_line` and
+`a_graph_model_file_checks_and_is_refused_to_run`, which reads henad-graph's Life starter by path.
+The last two need no device, and the others skip without one. Keep them.
 `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
 publish would.
 `explore.rs` is the sweep mode. `--out`, `--spec` or `--dry-run` selects it (`Mode::Explore`), and

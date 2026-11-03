@@ -62,7 +62,7 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-compute: engines, entries, runners, `Simulation`, runtime WGSL, grid rules | `agents/henad-compute.md` |
 | henad-models and adding a model | `agents/models.md` |
 | henad-explore: sweeps, searches, output, provenance, testing kit, model files | `agents/henad-explore.md` |
-| henad-graph: graph models, the IR, the reader, the canonical writer | `agents/henad-graph.md` |
+| henad-graph: graph models, IR, checker, host evaluator, edit commands, starters | `agents/henad-graph.md` |
 | henad-app: options, state, builds, teardown, install, export | `agents/henad-app.md` |
 | henad-app's Editor tab | `agents/henad-app-editor.md` |
 | henad-app's Sweep and Results tabs | `agents/henad-app-sweep.md` |
@@ -331,6 +331,9 @@ Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatte
 Run desktop app: `cargo run -p henad-app` (`-- --open DIR` opens a folder a sweep wrote in the
 Results tab)
 Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` + `index.html`)
+Check a graph model file: `cargo run -p henad-cli -- --model-file
+crates/henad-graph/starters/sir.toml --params` (prints its warnings and errors at their lines, then
+refuses to run a graph)
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
 one, `--export-stats` for the time series)
@@ -421,12 +424,12 @@ henad-core ─┬─ henad-build      (build dependency of every crate with WGSL
             └─ henad-compute ─┬─ henad-models
                               └─ henad-graph ── henad-explore ─┬─ henad-cli
                                                                └─ henad-app
-henad (facade): core, compute and explore, plus models, app, cli, testing and rules behind features
+henad (facade): core, compute and explore, plus models, app, cli, testing, rules, graph by feature
 henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!, grid rules
 henad-models   the ten example models, and a path dev-dependency of henad-explore
-henad-graph    graph models: the node graph a model file holds, read and written canonically
+henad-graph    graph models: IR, checker, host evaluator, edit commands and starters
 henad-explore  sweeps, searches, the testing kit and model files
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models
@@ -437,8 +440,8 @@ henad-tutorial the first-model guide's finished code, in examples/tutorial, on t
 The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
 Every other normal or build dependency runs from a crate to one drawn above it. henad-cli and
 henad-app take henad-models only behind their default `example-models` feature, and the facade
-takes henad-models, henad-app and henad-cli only behind its features. henad-explore takes
-henad-graph only behind its `model-files` feature. henad-models and
+takes henad-models, henad-app, henad-cli and henad-graph only behind its features. henad-explore
+takes henad-graph only behind its `model-files` feature. henad-models and
 henad-explore take no normal dependency on each other. `agents/dependencies.md` names every
 dev-dependency between Henad crates that the normal graph does not hold, and the `cargo tree` lines
 that check the rule. A new edge is added there, and henad-explore reaching an example model outside

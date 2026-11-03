@@ -274,7 +274,8 @@ fn check_rules(view: &BodyView<'_>, node: &Node, value: &ConfigValue) -> Result<
         if !ids.insert(id) {
             return Err(format!("names the rule '{id}' twice"));
         }
-        // A `phase` is a `u32`, compared as a number. Gaps are allowed, and a rule without one has no place in the order.
+        // A `phase` is a `u32`, compared as a number.
+        // Gaps are allowed, and a rule without one has no place in the order.
         match table.get("phase").and_then(ConfigValue::as_integer) {
             Some(phase) if u32::try_from(phase).is_ok() => {}
             _ => {
@@ -309,7 +310,7 @@ fn check_rules(view: &BodyView<'_>, node: &Node, value: &ConfigValue) -> Result<
 }
 
 /// Returns the literal a one-key configuration table holds, as an element of `config.values`.
-pub(super) fn literal_of(value: &ConfigValue) -> Option<Literal> {
+pub(crate) fn literal_of(value: &ConfigValue) -> Option<Literal> {
     let table = value.as_table()?;
     let mut entries = table.iter();
     let (tag, inner) = entries.next()?;

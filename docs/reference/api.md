@@ -39,7 +39,7 @@ A program never needs to name them, and their paths can change between releases,
 | `app` | `henad::app`, the app over a host's own model set |
 | `cli` | `henad::cli`, the command line over a host's own model set, on native targets |
 | `testing` | `henad::testing`, the [testing kit](../authoring/testing.md) |
-| `model-files` | `henad::rules`, grid rules, the model files that hold them, and `compose_wgsl` |
+| `model-files` | `henad::rules`, grid rules, the model files that hold them, and `compose_wgsl`, and `henad::graph`, graph models |
 
 No feature is on by default, and no feature changes a result.
 
@@ -65,6 +65,7 @@ No feature is on by default, and no feature changes a result.
 | `henad::app` | `AppOptions`, `AppOpening`, `OpenAt`, `run_native` and `start_web`, with `app` |
 | `henad::cli` | `CliOptions` and `run`, with `cli` |
 | `henad::testing` | `assert_set_conforms`, `check_model_set`, `CheckSettings`, `headless_test_device`, with `testing` |
-| `henad::rules` | `GridRule`, `RuleState`, `RuleDeclaration`, `CompiledGridRule`, `ModelFile`, `ModelFileError` and `compose_wgsl`, with `model-files` |
+| `henad::rules` | `GridRule`, `RuleState`, `RuleDeclaration`, `CompiledGridRule`, `ModelFile`, `GridRuleFile`, `ModelFileError` and `compose_wgsl`, with `model-files` |
+| `henad::graph` | Graph models: `GraphFile`, its checker, host evaluator, edit commands and starters, with `model-files` |
 
 [Using Henad from code](../guide/library.md) walks through a program over these paths, and [Releasing](../developing/releasing.md#stability) says what a release may change in them.

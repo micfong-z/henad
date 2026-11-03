@@ -259,9 +259,9 @@ pub mod models {
 /// Grid rules: GPU grid models declared as data, with a step written in WGSL and composed while the program runs.
 ///
 /// A [`GridRule`](rules::GridRule) compiles into a [`CompiledGridRule`](rules::CompiledGridRule), whose entry joins a
-/// model set like any other. A [`ModelFile`](rules::ModelFile) holds a rule as one TOML file, and its canonical text is
-/// the rule's code identity in a results folder. [`compose_wgsl`](rules::compose_wgsl) composes any shader against the
-/// shared modules, as henad-build does at build time.
+/// model set like any other. A [`ModelFile`](rules::ModelFile) holds a rule or a [graph] as one TOML file, and its
+/// canonical text is the model's code identity in a results folder. [`compose_wgsl`](rules::compose_wgsl) composes any
+/// shader against the shared modules, as henad-build does at build time.
 #[cfg(feature = "model-files")]
 #[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
 pub mod rules {
@@ -270,7 +270,23 @@ pub mod rules {
         CompiledGridRule, GridRule, LIFE_STEP, MAX_GRID_SIDE, MAX_PARAMS, MAX_STATES, MAX_STEP_BYTES, RuleDeclaration,
         RuleState,
     };
-    pub use henad_explore::model_file::{ModelFile, ModelFileError};
+    pub use henad_explore::model_file::{GridRuleFile, ModelFile, ModelFileError};
+}
+
+/// Graph models: the node graph a model file of kind `graph` holds, its checker, its host evaluator and its edit
+/// commands.
+///
+/// A [`GraphFile`](graph::GraphFile) reads a graph and writes its canonical text, and
+/// [`GraphFile::check`](graph::GraphFile::check) reports every problem at once. [`starters`](graph::starters::starters)
+/// returns the graph files a new graph model begins from. A [`ModelFile`](rules::ModelFile) of kind `graph` holds a
+/// [`GraphFile`](graph::GraphFile).
+#[cfg(feature = "model-files")]
+#[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
+pub mod graph {
+    pub use henad_graph::{
+        CODE_FORMAT, FORMAT, FORMAT_VERSION, GraphFile, GraphFileError, KIND_GRAPH, LIBRARY, catalogue, check,
+        document, draw, edit, editor, file, host, ids, limits, model_text, node, starters, types, value,
+    };
 }
 
 /// The app, opened over a host's own model set.

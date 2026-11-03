@@ -38,7 +38,7 @@ fn a_model_file_round_trips_through_to_toml() {
     let read = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
     assert_eq!(read.to_toml(), text);
     assert_eq!(read.code(), file.code());
-    let rule = read.rule();
+    let rule = read.rule().expect("a grid rule");
     assert_eq!(rule.step, rich_rule().step);
     assert_eq!(rule.description, rich_rule().description);
     assert_eq!(rule.states, rich_rule().states);
@@ -96,7 +96,7 @@ fn a_step_holds_what_a_literal_string_holds() {
         .unwrap_or_else(|error| panic!("{error}"))
         .to_toml();
     let read = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(read.rule().step, step);
+    assert_eq!(read.rule().expect("a grid rule").step, step);
     // WGSL ends a line at U+0085, and the compiler refuses it. Another C1 character compiles.
     assert!(matches!(read.entry(), Err(ModelFileError::Rule(_))));
     let step = format!("// note\u{90}\tend\n{LIFE_STEP}");
@@ -373,7 +373,7 @@ fn every_example_model_file_loads() {
         assert_eq!(entry.source().code_hash(), Some(file.code().hash()));
         if path.file_name().is_some_and(|name| name == "life_rule.toml") {
             assert_eq!(
-                file.rule().step,
+                file.rule().expect("a grid rule").step,
                 LIFE_STEP,
                 "the Life file's step is the Life starter's"
             );
@@ -390,4 +390,100 @@ fn life_with(step: &str) -> GridRule {
     let mut rule = GridRule::life();
     rule.step = step.to_owned();
     rule
+}
+
+/// A file of kind `graph` reads as a graph, keeps the graph's canonical text and code, and its entry is refused with
+/// one placed diagnostic, since this build compiles no graph.
+#[test]
+fn every_graph_starter_reads_and_checks_and_is_refused_to_run() {
+    for starter in henad_graph::starters::starters() {
+        let name = starter.file_name;
+        let file = ModelFile::parse(starter.text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let graph = file.graph().unwrap_or_else(|| panic!("{name} reads as a graph"));
+        assert!(file.rule().is_none());
+        assert_eq!(file.id(), graph.document().target.id);
+        assert_eq!(file.to_toml(), graph.to_toml());
+        assert_eq!(file.code(), graph.code());
+        assert_eq!(file.code().format(), henad_graph::CODE_FORMAT);
+        assert!(file.warnings().is_empty(), "{name}: {:?}", file.warnings());
+        let error = file.entry().err().unwrap_or_else(|| panic!("{name} built"));
+        let ModelFileError::Unsupported(diagnostic) = &error else {
+            panic!("{name}: {error:?}");
+        };
+        assert!(diagnostic.message.contains("cannot run graph models"), "{diagnostic}");
+        assert!(diagnostic.line.is_some(), "{diagnostic}");
+    }
+}
+
+/// A graph that does not check returns the checker's errors, placed in the file with their pass and node.
+#[test]
+fn a_graph_with_an_error_returns_the_checker_errors_with_places() {
+    let starter = henad_graph::starters::starter("game_of_life.toml").expect("the Life starter");
+    let broken = starter
+        .text
+        .replace("op = \"grid.life_like\"", "op = \"grid.lifelike\"");
+    let file = ModelFile::parse(&broken).unwrap_or_else(|error| panic!("{error}"));
+    let error = file.entry().expect_err("a broken graph built");
+    let ModelFileError::Graph(diagnostics) = &error else {
+        panic!("{error:?}");
+    };
+    let line = broken
+        .lines()
+        .position(|line| line.contains("grid.lifelike"))
+        .expect("the edit is in the file");
+    let unknown = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("grid.lifelike"))
+        .unwrap_or_else(|| panic!("{diagnostics:?}"));
+    assert_eq!(
+        unknown.line,
+        Some(u32::try_from(line + 1).expect("a short file")),
+        "{unknown}"
+    );
+    assert_eq!(unknown.pass.as_deref(), Some("step"), "{unknown:?}");
+    assert_eq!(unknown.node.as_deref(), Some("n12"), "{unknown:?}");
+}
+
+/// The header picks the kind, and a kind this build does not read names both kinds it does.
+#[test]
+fn the_header_dispatches_on_the_kind() {
+    let starter = henad_graph::starters::starter("vote.toml").expect("the Vote starter");
+    let other = starter.text.replace("kind = \"graph\"", "kind = \"gpu_agents\"");
+    let error = ModelFile::parse(&other).expect_err("an unknown kind read");
+    let ModelFileError::Format(diagnostic) = &error else {
+        panic!("{error:?}");
+    };
+    assert!(diagnostic.message.contains("'gpu_grid' and 'graph'"), "{diagnostic}");
+    assert_eq!(diagnostic.line, Some(5), "{diagnostic}");
+
+    // A graph's own reader reports a key it does not know, at its line.
+    let unknown = starter.text.replace("[graph]\n", "[graph]\napply = \"reload\"\n");
+    let error = ModelFile::parse(&unknown).expect_err("an unknown key read");
+    assert!(
+        matches!(&error, ModelFileError::Toml(diagnostic) if diagnostic.line.is_some()),
+        "{error:?}"
+    );
+
+    // A grid rule's text still reads as a rule.
+    let rule = ModelFile::from_rule(GridRule::life()).unwrap_or_else(|error| panic!("{error}"));
+    let read = ModelFile::parse(&rule.to_toml()).unwrap_or_else(|error| panic!("{error}"));
+    assert!(matches!(read, ModelFile::GpuGrid(_)));
+    assert_eq!(read.id(), "life_rule");
+}
+
+#[test]
+fn only_a_graph_is_held_to_the_graph_size_limit() {
+    let limit = henad_graph::limits::MAX_FILE_BYTES;
+    let rule = life_with(&format!("// {}\n{LIFE_STEP}", "x".repeat(limit)));
+    let text = ModelFile::from_rule(rule)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    assert!(text.len() > limit);
+    let read = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{error}"));
+    assert!(matches!(read, ModelFile::GpuGrid(_)));
+
+    let starter = henad_graph::starters::starter("vote.toml").expect("the Vote starter");
+    let padded = format!("{}\n# {}\n", starter.text, "x".repeat(limit));
+    let error = ModelFile::parse(&padded).expect_err("a graph past the limit read");
+    assert!(error.to_string().contains("a graph file holds at most"), "{error}");
 }

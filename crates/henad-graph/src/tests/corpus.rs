@@ -1,11 +1,6 @@
-//! The graph files a step of milestone G1 checks: the starters, and the exact ports beside henad-models' tests.
+//! The graph files the tests check: the starters, and the exact ports beside henad-models' tests.
 
-/// Starters and their file names.
-pub(super) const STARTERS: [(&str, &str); 3] = [
-    ("game_of_life.toml", include_str!("../../starters/game_of_life.toml")),
-    ("vote.toml", include_str!("../../starters/vote.toml")),
-    ("sir.toml", include_str!("../../starters/sir.toml")),
-];
+use crate::starters::starters;
 
 /// Returns the graph files under henad-models' fixtures, read at run time, since a packaged crate has no path out of
 /// itself. A checkout without them returns none.
@@ -28,9 +23,9 @@ pub(super) fn fixtures() -> Vec<(String, String)> {
 
 /// Returns every corpus file, starters first.
 pub(super) fn all() -> Vec<(String, String)> {
-    STARTERS
+    starters()
         .iter()
-        .map(|(name, text)| ((*name).to_owned(), (*text).to_owned()))
+        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()))
         .chain(fixtures())
         .collect()
 }

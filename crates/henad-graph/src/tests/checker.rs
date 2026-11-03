@@ -165,7 +165,7 @@ fn a_lane_read_at_neighbours_in_the_pass_that_writes_it_is_dual() {
 
 #[test]
 fn the_checker_types_each_port() {
-    let (_, text) = &corpus::STARTERS[2];
+    let text = crate::starters::starter("sir.toml").expect("the SIR starter").text;
     let report = GraphFile::parse(text).expect("the file reads").check();
     let step = report
         .passes
@@ -356,6 +356,36 @@ in.threshold = { u32 = 5 }
 }
 
 #[test]
+fn a_view_or_stats_pass_writes_no_lane() {
+    for stage in ["view", "stats"] {
+        let pass = format!(
+            r#"
+[[pass]]
+id = "late"
+stage = "{stage}"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n1"
+op = "lane.get"
+config.lane = "x"
+
+[[pass.node]]
+id = "n2"
+op = "lane.set"
+config.lane = "x"
+in.value = "n1"
+"#
+        );
+        assert_error(
+            &format!("{KEEP_X}{pass}"),
+            &format!("Write lane n2 does not belong in the {stage} pass 'late'"),
+        );
+    }
+}
+
+#[test]
 fn draws_need_unique_keys_and_streams_their_draw_order() {
     assert_error(
         &tick(
@@ -404,6 +434,134 @@ in.value = "n1"
     assert!(
         found.iter().any(|message| message.contains("lists no such node")),
         "{found:#?}"
+    );
+}
+
+#[test]
+fn a_stream_draw_reads_no_draw_listed_after_it() {
+    let seed = |order: &str| {
+        format!(
+            r#"{KEEP_X}
+[[pass]]
+id = "seed"
+stage = "init"
+kind = "map"
+domain = "cells"
+draw_order = [{order}]
+
+[[pass.node]]
+id = "n10"
+op = "stream.bits"
+in.when = "n12"
+
+[[pass.node]]
+id = "n11"
+op = "stream.bits"
+
+[[pass.node]]
+id = "n12"
+op = "cmp.gt"
+in.a = "n11"
+in.b = {{ u32 = 5 }}
+
+[[pass.node]]
+id = "n13"
+op = "lane.set"
+config.lane = "x"
+in.value = "n10"
+"#
+        )
+    };
+    let found = report(&seed("\"n10\", \"n11\""));
+    let draw = found
+        .errors()
+        .find(|diagnostic| diagnostic.message.contains("reads the draw of n11"))
+        .unwrap_or_else(|| panic!("{:#?}", found.diagnostics));
+    assert_eq!(draw.node.as_deref(), Some("n10"));
+    assert!(draw.line.is_some(), "{draw:?}");
+    assert!(errors(&seed("\"n11\", \"n10\"")).is_empty());
+}
+
+/// Returns a stats pass `counts` holding `nodes`, with the stat `Big` reading `n53`.
+fn counts(nodes: &str) -> String {
+    format!(
+        "{KEEP_X}\n[[stat]]\nlabel = \"Big\"\nfrom = \"n53\"\ncolor = [1, 2, 3]\n\n[[pass]]\nid = \"counts\"\n\
+         stage = \"stats\"\nkind = \"map\"\ndomain = \"cells\"\n\n[[pass.node]]\nid = \"n50\"\nop = \"lane.get\"\n\
+         config.lane = \"x\"\n\n[[pass.node]]\nid = \"n51\"\nop = \"cmp.gt\"\nin.a = \"n50\"\nin.b = {{ u32 = 3 }}\n\n\
+         [[pass.node]]\nid = \"n52\"\nop = \"stat.count_where\"\nin.pred = \"n51\"\n{nodes}"
+    )
+}
+
+#[test]
+fn a_reducer_ends_its_pass() {
+    let mixed = counts(
+        r#"
+[[pass.node]]
+id = "n54"
+op = "conv.to_u32"
+in.a = "n52"
+
+[[pass.node]]
+id = "n55"
+op = "cmp.gt"
+in.a = "n50"
+in.b = "n54"
+
+[[pass.node]]
+id = "n53"
+op = "stat.count_where"
+in.pred = "n55"
+"#,
+    );
+    let found = report(&mixed);
+    let messages: Vec<&CodeDiagnostic> = found
+        .errors()
+        .filter(|diagnostic| diagnostic.message.contains("the result of a reducer"))
+        .collect();
+    assert_eq!(messages.len(), 1, "{:#?}", found.diagnostics);
+    assert_eq!(messages[0].node.as_deref(), Some("n55"));
+    assert!(messages[0].message.contains("the input `b`"), "{:?}", messages[0]);
+
+    let reduced_again = counts(
+        r#"
+[[pass.node]]
+id = "n54"
+op = "conv.to_u32"
+in.a = "n52"
+
+[[pass.node]]
+id = "n56"
+op = "cmp.gt"
+in.a = "n54"
+in.b = { u32 = 3 }
+
+[[pass.node]]
+id = "n53"
+op = "stat.count_where"
+in.pred = "n56"
+"#,
+    );
+    let found = errors(&reduced_again);
+    assert!(
+        found
+            .iter()
+            .any(|message| message.starts_with("Count where n53: the input `pred` reads the result of a reducer")),
+        "{found:#?}"
+    );
+
+    let after_the_elements = counts(
+        r#"
+[[pass.node]]
+id = "n53"
+op = "math.add"
+in.a = "n52"
+in.b = { u64 = "0x1" }
+"#,
+    );
+    assert!(
+        errors(&after_the_elements).is_empty(),
+        "{:#?}",
+        errors(&after_the_elements)
     );
 }
 
@@ -521,6 +679,10 @@ in.value = "n1"
     assert!(
         !found.iter().any(|message| message.contains("'Infected'")),
         "{found:#?}"
+    );
+    assert_error(
+        &format!("{KEEP_X}{}", stats.replace("domain = \"cells\"\n", "")),
+        "the stats pass 'counts' needs a `domain`",
     );
 
     let actions = r#"

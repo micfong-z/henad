@@ -25,6 +25,18 @@ guards for the example models alone: no GPU entry builds without a device, `gpu_
 at 6000 by 6000, each GPU entry's `GpuNeeds` against its widest pass, and the set's coverage.
 `gpu_boids` declares `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly`
 reads it.
+`src/tests/graph_corpus.rs` holds the grid graph corpus to the stock models: henad-graph's
+starters and the exact ports in `tests/fixtures/graphs/` (`gpu_sir_exact.toml`), read through
+`ModelFile::parse`. `tick_0_cells_of_every_grid_corpus_file_equal_the_stock_init` runs each file's
+init on the host evaluator at two sizes, two parameter sets and four seeds, and compares every
+lane the stock seeds with `seed_buffers` (Life unpacked from its bits, `gpu_sir_exact`'s `rng`
+lane too). A grid file without an `Oracle` arm fails it. `Vote` there is a copy of the template's
+`vote.rs`, since the template sits outside the workspace.
+`every_grid_corpus_schema_hashes_like_the_stock_model_under_its_id` builds a graph's schema as a
+GPU grid entry would (`grid_width` and `grid_height` up to 16384 at the world's defaults, then the
+file's parameters, stats and actions) and compares `schema_hash` under the stock id.
+`schema_hash` reads the model id, so a `node_<model>` entry never hashes like its stock model, and
+the test asserts that too. Keep both.
 
 ## Adding a new model
 

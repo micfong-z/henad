@@ -100,7 +100,7 @@ pub fn stamp_commit() {
 /// Sets the stamp of [`stamp_commit`] for henad-explore, whose stamp represents the engine.
 ///
 /// The commit and the dirty flag come from git only inside Henad's own tree, where the dirty flag and the source hash
-/// cover henad-core, henad-build, henad-compute and henad-explore with the workspace's lockfile. Also sets
+/// cover henad-core, henad-build, henad-compute, henad-graph and henad-explore with the workspace's lockfile. Also sets
 /// `HENAD_BUILD_CRATE_HASH`, the hash of henad-explore's own `src` and manifest, and `HENAD_BUILD_STAMP_VERSION`,
 /// henad-build's own version.
 #[doc(hidden)]

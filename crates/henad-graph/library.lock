@@ -24,7 +24,7 @@ kind ctx.tick since=1 signature=2c05b11a601b21c7 semantics=e3f55a0b81181b16 case
 kind grid.count since=1 signature=d74957c9dbd19c3c semantics=f167e86cb784f1fc cases=d6b03e708e933033 parity=exact cost=Units(9)
 kind grid.life_like since=1 signature=ffd31d65e9f765b1 semantics=66d0381dc5c55b7b cases=5474bcc12983a984 parity=exact cost=Units(2)
 kind lane.get since=1 signature=369dce3ef0e92377 semantics=a9c91c82b91a6229 cases=61bb5d5f30257a78 parity=exact cost=Units(1)
-kind lane.set since=1 signature=fb61482a1a66b1a6 semantics=7da30d2110f250af cases=ebe631ef4f2cd33d parity=exact cost=Units(1)
+kind lane.set since=1 signature=dd53c3f58c8c752c semantics=7da30d2110f250af cases=ebe631ef4f2cd33d parity=exact cost=Units(1)
 kind logic.and since=1 signature=da989f9fe721f351 semantics=e3276fd7a8545ac9 cases=67fafda4ef3fa79a parity=exact cost=Units(1)
 kind logic.not since=1 signature=15dc9f482fc68da5 semantics=295dc3d0a25fb9f8 cases=db47447569f88f0c parity=exact cost=Units(1)
 kind logic.or since=1 signature=da989f9fe721f351 semantics=4441c7f518f935dd cases=2a06b8955e98f3b6 parity=exact cost=Units(1)
