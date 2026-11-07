@@ -263,9 +263,11 @@ pub mod models {
 /// Grid rules: GPU grid models declared as data, with a step written in WGSL and composed while the program runs.
 ///
 /// A [`GridRule`](rules::GridRule) compiles into a [`CompiledGridRule`](rules::CompiledGridRule), whose entry joins a
-/// model set like any other. A [`ModelFile`](rules::ModelFile) holds a rule or a [graph] as one TOML file, and its
-/// canonical text is the model's code identity in a results folder. [`compose_wgsl`](rules::compose_wgsl) composes any
-/// shader against the shared modules, as henad-build does at build time.
+/// model set like any other. A [`ModelFile`](rules::ModelFile) holds a rule, a [graph] or a
+/// [sheet](graph::sheet) as one TOML file, and its code is the model's code identity in a results folder: a rule's
+/// canonical text, or the semantic text of a graph or of the graph a sheet lowers to.
+/// [`compose_wgsl`](rules::compose_wgsl) composes any shader against the shared modules, as henad-build does at build
+/// time.
 #[cfg(feature = "model-files")]
 #[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
 pub mod rules {
@@ -288,10 +290,13 @@ pub mod rules {
 /// of kind `graph` holds a [`GraphFile`](graph::GraphFile). [`ParsedSheet`](graph::sheet::ParsedSheet) reads a model
 /// file of kind `sheet`, the author document a researcher builds without nodes, and
 /// [`SheetBuilder`](graph::sheet::edit::SheetBuilder) runs its edit commands. Both builders mint draw keys from a
-/// [`KeyStream`](graph::keys::KeyStream).
+/// [`KeyStream`](graph::keys::KeyStream). [`SheetFile`](graph::sheet::SheetFile) reads, checks and lowers a sheet to
+/// the graph it builds as. A [`ModelFile`](rules::ModelFile) of kind `sheet` holds a
+/// [`SheetFile`](graph::sheet::SheetFile).
 #[cfg(feature = "model-files")]
 #[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
 pub mod graph {
+    pub use henad_graph::sheet::KIND_SHEET;
     pub use henad_graph::{
         CODE_FORMAT, FORMAT, FORMAT_VERSION, GraphFile, GraphFileError, KIND_GRAPH, LIBRARY, catalogue, check,
         document, draw, edit, editor, file, host, ids, keys, limits, model_text, node, sheet, starters, types, value,

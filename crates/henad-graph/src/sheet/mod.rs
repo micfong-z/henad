@@ -24,7 +24,8 @@
 //! [`document::SheetDocument::to_text`] writes the canonical text of a sheet, with the sentence of each line from
 //! [`sentence`] in a comment above it, and reading that text returns the same document. [`SheetFile::parse`] reads,
 //! checks and lowers a sheet to the graph it runs as, whose code identity is the sheet's, and [`LineMap`] names the
-//! line or part of the sheet each node of that graph comes from. [`starters`] returns the sheets a new model begins
+//! line or part of the sheet each node of that graph comes from. [`SheetFile::place_graph_diagnostic`] places a finding
+//! about that graph at the table of the sheet its node comes from. [`starters`] returns the sheets a new model begins
 //! from, and [`edit`] holds the commands every edit of the sheet editor runs.
 //!
 //! ```

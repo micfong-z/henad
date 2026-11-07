@@ -339,6 +339,9 @@ Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `T
 Run a graph model file: `cargo run --release -p henad-cli -- --model-file
 crates/henad-graph/starters/sir.toml --steps 100` (prints its warnings and errors at their lines,
 runs a graph on a grid, refuses one of agents)
+Run a sheet: `cargo run --release -p henad-cli -- --model-file
+crates/henad-graph/sheets/game_of_life.toml --steps 100` (prints its warnings and errors at the
+sheet's lines, and `--print-lowered` in place of `--steps 100` prints the graph it lowers to)
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
 one, `--export-stats` for the time series)

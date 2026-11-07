@@ -1255,3 +1255,115 @@ fn a_sheet_error_list_holds_its_first_error_first() {
     assert_eq!(error.diagnostics().len(), 2);
     assert_eq!(error.to_string().lines().count(), 2);
 }
+
+/// Returns Game of Life lowered with the node `id` of the tick pass made a node of an op the catalogue does not hold,
+/// added to that pass when the lowering wrote no node `id`.
+fn life_with_unknown_node(id: crate::ids::NodeId) -> SheetFile {
+    SheetFile::parse_planted(life(), |document| {
+        let pass = document
+            .passes
+            .iter_mut()
+            .find(|pass| pass.stage == PassStage::Tick)
+            .expect("Game of Life runs a tick pass");
+        match pass.body.nodes.iter_mut().find(|node| node.id == id) {
+            Some(node) => node.op = "grid.no_such_op".to_owned(),
+            None => pass.body.nodes.push(crate::node::Node::new(id, "grid.no_such_op")),
+        }
+    })
+    .unwrap_or_else(|error| panic!("the planted sheet does not lower: {error}"))
+}
+
+/// Returns the error that the graph checker reports on node `id` of `file`'s lowered graph.
+fn graph_error_on(file: &SheetFile, id: crate::ids::NodeId) -> henad_core::diagnostic::CodeDiagnostic {
+    let report = file.lowered().check();
+    let node = id.to_string();
+    report
+        .errors()
+        .find(|error| error.node.as_deref() == Some(node.as_str()))
+        .cloned()
+        .unwrap_or_else(|| panic!("no error on {node}: {:?}", report.errors().collect::<Vec<_>>()))
+}
+
+/// Returns the line of `text` that holds the first `needle`, counted from 1.
+fn line_of(text: &str, needle: &str) -> u32 {
+    let at = text
+        .find(needle)
+        .unwrap_or_else(|| panic!("the text holds no {needle:?}"));
+    u32::try_from(text[..at].matches('\n').count() + 1).expect("a short text")
+}
+
+#[test]
+fn a_graph_diagnostic_is_placed_at_its_author_line() {
+    let id = lowered(life())
+        .line_map()
+        .nodes_of("l2")
+        .next()
+        .expect("line l2 owns a node");
+    let file = life_with_unknown_node(id);
+    let error = graph_error_on(&file, id);
+    assert!(error.message.contains("grid.no_such_op"), "{error}");
+    assert_eq!(error.pass.as_deref(), Some("tick_cell_tick"), "{error:?}");
+
+    let placed = file.place_graph_diagnostic(error.clone());
+    assert_eq!(
+        (placed.pass.as_deref(), placed.node.as_deref()),
+        (None, None),
+        "{placed:?}"
+    );
+    assert_eq!(placed.message, error.message);
+    assert!(placed_at(&placed, life()).starts_with("[card.line.l2]"), "{placed}");
+    assert_eq!(placed.line, Some(line_of(life(), "[card.line.l2]")), "{placed}");
+
+    // A node the sheet owns is placed at the part of the sheet its slot path names, here the count of each state that
+    // the measure reads.
+    let count = file
+        .line_map()
+        .iter()
+        .find(|(_, origin)| origin.path == "cells.status.count")
+        .map(|(id, _)| id)
+        .expect("the count of the states is a node");
+    let placed =
+        file.place_graph_diagnostic(henad_core::diagnostic::CodeDiagnostic::error("a").with_node(count.to_string()));
+    assert!(placed_at(&placed, life()).starts_with("[[cells.property]]"), "{placed}");
+
+    // A finding with a pass and no node is placed at the card the pass runs.
+    let placed =
+        file.place_graph_diagnostic(henad_core::diagnostic::CodeDiagnostic::error("b").with_pass("tick_cell_tick"));
+    assert_eq!(placed.pass, None);
+    assert_eq!(
+        placed.line,
+        Some(line_of(life(), "[[card]]\nid = \"cell_tick\"")),
+        "{placed}"
+    );
+    let placed =
+        file.place_graph_diagnostic(henad_core::diagnostic::CodeDiagnostic::error("c").with_pass("restart_randomise"));
+    assert_eq!(
+        placed.line,
+        Some(line_of(life(), "[[button]]\nid = \"randomise\"")),
+        "{placed}"
+    );
+}
+
+#[test]
+fn an_unknown_node_is_placed_on_the_sheet() {
+    let id = crate::ids::NodeId::new(900_000).expect("a node id");
+    let file = life_with_unknown_node(id);
+    assert!(file.line_map().origin(id).is_none());
+    let placed = file.place_graph_diagnostic(graph_error_on(&file, id));
+    assert_eq!(
+        (placed.pass.as_deref(), placed.node.as_deref()),
+        (None, None),
+        "{placed:?}"
+    );
+    assert!(placed_at(&placed, life()).starts_with("[sheet]"), "{placed}");
+    assert_eq!(placed.line, Some(line_of(life(), "[sheet]")));
+
+    // So is a finding with a pass the sheet lowers from no card or button, and one with neither pass nor node.
+    for diagnostic in [
+        henad_core::diagnostic::CodeDiagnostic::error("a").with_pass("measures"),
+        henad_core::diagnostic::CodeDiagnostic::warning("b"),
+    ] {
+        let placed = file.place_graph_diagnostic(diagnostic);
+        assert_eq!(placed.line, Some(line_of(life(), "[sheet]")), "{placed}");
+    }
+}

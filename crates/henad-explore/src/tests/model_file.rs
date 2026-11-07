@@ -481,7 +481,7 @@ fn a_graph_with_an_error_returns_the_checker_errors_with_places() {
     assert_eq!(unknown.node.as_deref(), Some("n12"), "{unknown:?}");
 }
 
-/// The header picks the kind, and a kind this build does not read names both kinds it does.
+/// The header picks the kind, and a kind this build does not read names the three kinds it does.
 #[test]
 fn the_header_dispatches_on_the_kind() {
     let starter = henad_graph::starters::starter("vote.toml").expect("the Vote starter");
@@ -490,8 +490,19 @@ fn the_header_dispatches_on_the_kind() {
     let ModelFileError::Format(diagnostic) = &error else {
         panic!("{error:?}");
     };
-    assert!(diagnostic.message.contains("'gpu_grid' or 'graph'"), "{diagnostic}");
+    assert!(
+        diagnostic.message.contains("'gpu_grid', 'graph' or 'sheet'"),
+        "{diagnostic}"
+    );
     assert_eq!(diagnostic.line, Some(5), "{diagnostic}");
+
+    // A sheet reads as a sheet, and the same text marked as a graph is read by the graph's reader.
+    let sheet = henad_graph::sheet::starters()[0].text;
+    let read = ModelFile::parse(sheet).unwrap_or_else(|error| panic!("{error}"));
+    assert!(matches!(read, ModelFile::Sheet(_)));
+    assert_eq!(read.id(), "game_of_life");
+    let marked = sheet.replace("kind = \"sheet\"", "kind = \"graph\"");
+    assert!(matches!(ModelFile::parse(&marked), Err(ModelFileError::Toml(_))));
 
     // A graph's own reader reports a key it does not know, at its line.
     let unknown = starter.text.replace("[graph]\n", "[graph]\napply = \"reload\"\n");

@@ -36,10 +36,22 @@ The CLI never publishes and never lays out a network.
 `with_model_files` runs after the pool is sized and `--merge` has returned, and before `--spec` is
 read and the device acquired. It reads each file through `ModelFile::parse` and `entry` and
 `ModelSet::replace`s its entry into a clone of the options' set, and the set is cloned only when a
-file is given. A graph file's warnings print to stderr first, each through `located`, which adds the
-file and a note naming the diagnostic's pass and node. A graph on a grid then builds through
+file is given. `read_model_file` reads one file and prints its warnings, and `load_error` lists a
+file's problems. A graph file's warnings print to stderr first, each through `located`, which adds
+the file and a note naming the diagnostic's pass and node. A graph on a grid then builds through
 henad-graph's `GridProgram`, and a graph of agents through its `AgentProgram`. Checker, host and
-compiler errors come as `ModelFileError::Graph`. A file whose id the set holds
+compiler errors come as `ModelFileError::Graph`. A sheet (`kind = "sheet"`) needs no code of its
+own here: henad-explore places each of its warnings and errors at the sheet's line table and clears
+the pass and node (decision D46), so `located` prints the author line and no note.
+`--print-lowered` (`Mode::PrintLowered`, checked first) takes exactly one `--model-file`
+(`parse_args` refuses another count with exit 2), requires it, conflicts with a model id, `--list`,
+`--params`, `--info`, `--json`, the exports, `--stats-every`, `--merge`, every sweep flag and every
+run flag (`--steps`, `--warmup`, `--global-warmup`, `--seed`, `--reps`, `--set`, `--act`,
+`--threads`), and returns before the
+model set is touched or a device acquired. It prints `ModelFile::lowered_graph`'s canonical text
+on stdout (a graph file's own, a sheet's lowered graph), the warnings on stderr, and refuses a grid
+rule with exit 1. `existing_invocations_keep_their_mode` expects `Mode::PrintLowered` of a
+documented line holding the flag. A file whose id the set holds
 prints a note on stderr in text mode and nothing under `--json`, and two files of one id are
 refused. A file that does not load is an
 error whose cause lists each `CodeDiagnostic` with the path as its file, `path:line:column: error:
@@ -52,8 +64,15 @@ the binary on copies of henad-explore's `specs/models/life_rule.toml`, and holds
 `a_model_file_can_shadow_an_example_model`, `model_file_is_allowed_with_spec_and_resume`,
 `list_and_params_json_show_a_model_file`, `a_model_file_error_points_at_its_line` and
 `a_graph_model_file_checks_runs_and_prints_its_problems`, which reads henad-graph's Life starter
-by path and sweeps it where a device is. `a_model_file_error_points_at_its_line` needs no device,
-and the others skip without one. Keep them.
+by path and sweeps it where a device is,
+`a_sheet_model_file_runs_and_prints_its_problems_at_its_lines` (henad-graph's
+`sheets/game_of_life.toml` by path: 20 steps where a device is, and a broken copy refused at
+`[card.line.l2]` with neither "node" nor "pass" in the output, and a copy with no property refused
+at `[world]` in the sheet's words, with no "lane" either) and
+`print_lowered_prints_the_graph_a_sheet_lowers_to` (the printed text reads as a graph with the
+sheet's code, a graph prints itself, a grid rule is refused, the flag's conflicts).
+`a_model_file_error_points_at_its_line` and the two sheet tests run without a device, apart from the
+sheet's run, and the others skip without one. Keep them.
 `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
 publish would.
 `explore.rs` is the sweep mode. `--out`, `--spec` or `--dry-run` selects it (`Mode::Explore`), and

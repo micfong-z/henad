@@ -219,6 +219,18 @@ placed at their tables through `check::span_of`) and reads the lowered document 
 text enters it. `Invalid` holds a `SheetErrors`, never empty, since `SheetErrors::new` takes a first
 error and the rest. `SheetFileError::diagnostics` returns every diagnostic, `diagnostic` the first,
 and `Display` writes each on its line. `SheetFile` and `LineMap` write their own `Debug`.
+`SheetFile::place_graph_diagnostic` maps a diagnostic of the lowered graph (its checker, host
+evaluator or compiler) back into the sheet (R2, D46): a node through `LineMap` to its line's table,
+found by the card whose `line_tables` hold the line, a node the sheet owns by the first two segments
+of its slot path (`cells.<property>`, `measure.<id>`, `button.<id>`, `card.<id>`, `color.<thing>`),
+a node the map does not know (a normalisation copy, a planted node) to `[sheet]`, and a diagnostic
+with a pass and no node by the pass id (`tick_<card>`, `button_<id>`, `restart_<id>`) or to
+`[sheet]`. Its old span, line and column are replaced and its `pass` and `node` cleared, so
+henad-cli's `located` prints no node id, and `--print-lowered` keeps the graph within reach.
+henad-explore's `ModelFile` calls it for a sheet's entry errors, and leaves the lowered graph's
+warnings out of a sheet's warnings.
+`SheetFile::parse_planted` (`#[cfg(test)]`, crate-private) lowers with a closure run on the lowered
+document before it is read back, which the mapping tests use to plant a node the checker refuses.
 
 **The lowering** (`sheet/lower/`, grid sheets, S7). `lower::lower(&document, &report)` builds a
 `GraphDocument` through its constructors in a fixed order (`world.rs`: the grid, a category per
@@ -316,6 +328,11 @@ Set everywhere and a property set twice, Start again on some properties (`restar
 `level` left alone, presses replay), the random start's range and its refusal on a Whole number,
 average, total and spread against a Rust reference, `view.color` and `view.ramp`, the log scale
 refused, both node limits named, and `the_sheet_lowering_never_panics_on_the_mutation_corpus`.
+`a_graph_diagnostic_is_placed_at_its_author_line` plants an unknown op on a node of line `l2` and
+places the checker's error at `[card.line.l2]` with no pass or node, then a node the sheet owns at
+`[[cells.property]]` and a pass alone at its card and button.
+`an_unknown_node_is_placed_on_the_sheet` plants node `n900000` and places it, a pass of no card and
+a bare warning at `[sheet]`.
 
 **Tests** of the wording table and the sentences sit in `src/tests/sheet_sentence.rs`:
 `every_wording_table_entry_equals_the_final_words` holds the final wording table's rows as literals

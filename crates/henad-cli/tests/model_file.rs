@@ -1,6 +1,7 @@
 //! Checks `--model-file`: a model file's model sweeps, resumes and merges only under its own code, can take the place
 //! of an example model, shows in `--list` and `--params --json`, and is refused at the line of a problem. A graph model
-//! file checks, prints its problems at their lines, and runs.
+//! file checks, prints its problems at their lines, and runs. A sheet runs, prints its problems at the lines of the
+//! sheet, and prints the graph it lowers to.
 //!
 //! A grid rule and a graph run on the GPU. The tests that build one skip on a machine without a device, and fail there
 //! when `HENAD_REQUIRE_GPU` is set.
@@ -631,4 +632,121 @@ fn a_graph_model_file_checks_runs_and_prints_its_problems() {
     );
     assert!(message.contains("note: in node n14 of pass 'step'"), "{message}");
     assert!(!message.contains("error"), "{message}");
+}
+
+/// Returns the path of the Game of Life sheet starter.
+fn life_sheet() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../henad-graph/sheets/game_of_life.toml")
+}
+
+#[test]
+fn a_sheet_model_file_runs_and_prints_its_problems_at_its_lines() {
+    let scratch = Scratch::new("sheet");
+    let sheet = argument(&life_sheet());
+    let text = std::fs::read_to_string(life_sheet()).expect("the sheet starter is in the repository");
+
+    if has_device() {
+        let output = run_ok(&["--model-file", &sheet, "--steps", "20"]);
+        assert!(
+            stderr(&output).contains("replaces the model 'game_of_life'"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    // A Become line that names a state the property does not hold is refused at the line's table, in the sheet's
+    // words, with nothing built.
+    let broken_text = text.replacen("new_state = \"alive\"", "new_state = \"zombie\"", 1);
+    assert_ne!(broken_text, text);
+    let line = broken_text
+        .lines()
+        .position(|line| line == "[card.line.l2]")
+        .expect("the sheet holds line l2")
+        + 1;
+    let broken = scratch.write("broken.toml", &broken_text);
+    let output = run(&["--model-file", &broken, "--steps", "20"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let message = stderr(&output);
+    assert!(message.contains(&format!("{broken}:{line}:1: error:")), "{message}");
+    assert!(message.contains("zombie"), "{message}");
+    let words = message.replace(&broken, "");
+    assert!(!words.contains("node") && !words.contains("pass"), "{message}");
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+
+    // A sheet with no property is refused at its world in the sheet's words, never in the lowered graph's.
+    let empty_text = &text[..text.find("[[cells.property]]").expect("the sheet holds a property")];
+    let world = empty_text
+        .lines()
+        .position(|line| line == "[world]")
+        .expect("the sheet holds a world")
+        + 1;
+    let empty = scratch.write("empty.toml", empty_text);
+    let output = run(&["--model-file", &empty, "--steps", "20"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let message = stderr(&output);
+    assert!(
+        message.contains(&format!("{empty}:{world}:1: error: Every cell")),
+        "{message}"
+    );
+    let words = message.replace(&empty, "");
+    for word in ["node", "pass", "lane"] {
+        assert!(!words.contains(word), "{message}");
+    }
+}
+
+#[test]
+fn print_lowered_prints_the_graph_a_sheet_lowers_to() {
+    let sheet = argument(&life_sheet());
+    let text = std::fs::read_to_string(life_sheet()).expect("the sheet starter is in the repository");
+    let output = run_ok(&["--model-file", &sheet, "--print-lowered"]);
+    let printed = stdout(&output);
+    assert!(printed.contains("\nkind = \"graph\"\n"), "{printed}");
+    let lowered = ModelFile::parse(&printed).unwrap_or_else(|error| panic!("{error}\n{printed}"));
+    let graph = lowered.graph().expect("the printed text is a graph");
+    assert_eq!(graph.to_toml(), printed, "the printed text is canonical");
+    let file = ModelFile::parse(&text).expect("the sheet starter reads");
+    assert_eq!(lowered.code(), file.code());
+    assert_eq!(lowered.id(), file.id());
+
+    // A graph prints its own canonical text, and a grid rule builds as no graph.
+    let graph_text = life_graph();
+    let scratch = Scratch::new("print-lowered");
+    let graph_file = scratch.write("life.toml", &graph_text);
+    let printed = stdout(&run_ok(&["--model-file", &graph_file, "--print-lowered"]));
+    assert_eq!(
+        printed,
+        ModelFile::parse(&graph_text)
+            .expect("the graph starter reads")
+            .to_toml()
+    );
+    let rule = scratch.write("life_rule.toml", &life_rule());
+    let output = run(&["--model-file", &rule, "--print-lowered"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("holds a grid rule. A grid rule builds as no graph."),
+        "{}",
+        stderr(&output)
+    );
+
+    // The flag takes exactly one model file and runs nothing else.
+    let output = run(&["--model-file", &sheet, "--model-file", &graph_file, "--print-lowered"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(stderr(&output).contains("--print-lowered takes exactly one --model-file"));
+    let run_flags: [&[&str]; 5] = [
+        &["--params"],
+        &["--set", "grid_width=64"],
+        &["--act", "clear@3"],
+        &["--steps", "5"],
+        &["--threads", "2"],
+    ];
+    for flags in run_flags {
+        let arguments: Vec<&str> = ["--model-file", sheet.as_str(), "--print-lowered"]
+            .into_iter()
+            .chain(flags.iter().copied())
+            .collect();
+        let output = run(&arguments);
+        assert_eq!(output.status.code(), Some(2), "{flags:?}: {}", stderr(&output));
+    }
+    let output = run(&["--print-lowered"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
 }

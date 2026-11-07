@@ -152,19 +152,35 @@ plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildC
 `schema_json_names_code_only_for_runtime_models` (`schema.rs`) hold it. Keep them.
 Behind the `model-files` feature, which turns on henad-compute's `runtime-wgsl` and henad-graph,
 `model_file.rs` holds `ModelFile`, an enum over the kinds of model file:
-`GpuGrid(Box<GridRuleFile>)` and `Graph(Box<GraphFile>)`, both boxed for clippy's
-`large_enum_variant`. `ModelFile::parse` reads the header through henad-graph's
-`model_text::ModelHeader`, checks `format`, `format_version` and a `kind` of `gpu_grid` or `graph`
-(a refused kind's message names them as "'gpu_grid' or 'graph'"), then hands the whole text to
-`GraphFile::parse` for `graph` and to `GridRuleFile::parse` otherwise (a missing `kind` then reports
-as a missing key). Only `GraphFile::parse` holds a file to henad-graph's `MAX_FILE_BYTES` (1 MiB),
-and a grid rule reads as it did before G1 (`only_a_graph_is_held_to_the_graph_size_limit`).
-`GraphFileError` maps onto `Toml` and `Format`. The enum forwards `to_toml`, `code` and `entry`, and
-adds `id`, `rule` and `graph` (each `Option`) and `warnings` (the graph checker's, empty for a
-rule). For a graph, `entry` returns `ModelFileError::Graph` with the checker's errors, then with
+`GpuGrid(Box<GridRuleFile>)`, `Graph(Box<GraphFile>)` and `Sheet(Box<SheetFile>)`, all boxed for
+clippy's `large_enum_variant`. `ModelFile::parse` reads the header through henad-graph's
+`model_text::ModelHeader`, checks `format`, `format_version` and a `kind` of `gpu_grid`, `graph` or
+`sheet` (a refused kind's message names them as "'gpu_grid', 'graph' or 'sheet'"), then passes the
+whole text to `GraphFile::parse` for `graph`, to henad-graph's `SheetFile::parse` for `sheet` (read,
+check, lower) and to `GridRuleFile::parse` otherwise (a missing `kind` then reports as a missing
+key). `GraphFile::parse` holds a graph to henad-graph's `MAX_FILE_BYTES` (1 MiB) and the sheet
+reader holds a sheet to `sheet::limits::MAX_SHEET_BYTES` (1 MiB,
+`a_sheet_is_held_to_its_size_limit`), and a grid rule reads as it did before G1
+(`only_a_graph_is_held_to_the_graph_size_limit`).
+`GraphFileError` maps onto `Toml` and `Format`, and `SheetFileError` onto `Toml`, `Format` and
+`ModelFileError::Sheet` (the sheet checker's or the lowering's errors, `Invalid`). The enum forwards
+`to_toml` (a sheet's own canonical text), `code` (a sheet's is the lowered graph's) and `entry`, and
+adds `id` (a sheet's `[sheet] id`, which is the lowered graph's target id), `rule`, `graph`, `sheet`
+and `lowered_graph` (each `Option`: `lowered_graph` is the graph a graph file holds or the graph a
+sheet lowers to, `None` for a rule) and `warnings` (the graph checker's, empty for a rule, and for a
+sheet the sheet checker's alone: every graph warning on a lowered sheet names a node, such as a
+result no line reads, `a_result_no_line_reads_gives_no_warning_about_the_graph`). `graph()` stays
+`None` for a sheet, so henad-models' corpus
+loaders never meet one. `entry` of a graph and of a sheet share the private `graph_entry`, which
+takes a placer: for a graph it returns `ModelFileError::Graph` with the checker's errors, then with
 `HostEvaluator::new`'s (an init pass the host cannot run), then with `GridProgram::compile`'s, and
 otherwise builds the entry through `GridProgram::entry`, or for a graph of agents
-`AgentProgram::compile`'s errors or `AgentProgram::entry`. `ModelFileError::Unsupported` stays in
+`AgentProgram::compile`'s errors or `AgentProgram::entry`. For a sheet the same errors of the
+lowered graph come as `ModelFileError::Sheet`, each placed at the sheet's line table with no pass
+and no node (decision D46). A grid sheet with no property lowers to a graph with no lane and no
+pass, whose errors are in IR words, so `entry` returns the sheet's own `SHEET_EMPTY` warning,
+raised to an error at `[world]`, before `graph_entry` runs
+(`a_sheet_with_no_property_is_refused_in_its_own_words`). `ModelFileError::Unsupported` stays in
 the enum and no kind returns it. `GridRuleFile`, a grid rule as one TOML file, behaves as
 `ModelFile` did before the enum. `GridRuleFile::parse` reads line ends as `\n` and maps every span
 back to the text as passed (`LineEnds`, which henad-graph's `model_text` holds with `ModelHeader`,
@@ -194,7 +210,15 @@ edit copies of it by its text.
 `every_example_model_file_loads`, `every_graph_starter_reads_checks_and_builds_an_entry`,
 `a_graph_of_agents_builds_an_entry`,
 `a_graph_with_an_error_returns_the_checker_errors_with_places` and
-`the_header_dispatches_on_the_kind`. Keep them.
+`the_header_dispatches_on_the_kind` (a sheet too). `src/tests/sheet_file.rs` holds
+`every_sheet_starter_reads_checks_and_builds_an_entry` (over `sheet::starters()`, the entry's code
+hash the file's), `a_sheet_error_comes_back_placed_at_its_line` (a checker error at
+`[card.line.l2]` and the interim refusal of a rate line at `[card.line.l5]`, neither naming a pass
+or a node, an unknown key, a newer sheet version), `a_sheet_warning_comes_back_placed_at_its_line`,
+`a_result_no_line_reads_gives_no_warning_about_the_graph`,
+`a_sheet_with_no_property_is_refused_in_its_own_words` and `a_sheet_is_held_to_its_size_limit`.
+The rate refusal holds until rates lower. A later milestone that lowers rates plants another
+interim refusal there. Keep them.
 `progress.rs` is the `Progress` trait the host renders. The library never prints. `device.rs`
 (`acquire_headless`) acquires a GPU device with no window or surface, at the WebGPU baseline
 raised by `gpu::limits::raise`. An adapter below the baseline, as a GL adapter can be, gets

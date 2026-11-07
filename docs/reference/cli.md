@@ -43,6 +43,7 @@ With two files or more and no spec, `MODEL` is required, and a command line with
 | `--info` | | Print host and GPU details. Without a model or a sweep, prints and exits. Otherwise, prints as a provenance header |
 | `--json` | | Emit one JSON object per line instead of the human report, for a driver to parse |
 | `--model-file <PATH>` | | Load a [model file](#model-files) and add its model to the build's models, in place of a model with the same id. Repeatable |
+| `--print-lowered` | | Print the graph that the one `--model-file` builds as, in its canonical text, and exit. For a sheet this is the graph it [lowers to](#sheets) |
 | `--threads <N>` | 0 | Worker threads for CPU models. 0 uses the rayon default, one per logical cpu |
 | `--set <ID=VALUE>` | | Override one parameter. Repeatable |
 | `--act <ID@TICK>` | | Run one of the model's actions at that tick. Repeatable. In a sweep, every run fires it |
@@ -169,6 +170,7 @@ Each sample also pays for the preparation, and `--stats-every` spaces the sample
 
 `--model-file` loads a [model file](model-files.md), a GPU model written as one TOML file, and adds its model to the models the build offers.
 A file of kind `graph`, a graph model on a grid or of agents, is read, checked and compiled to WGSL, and its warnings and errors print at their lines.
+A file of kind `sheet` is read, checked and lowered to a graph model, which then builds as a graph does, as [Sheets](#sheets) describes.
 Every mode takes it but `--merge`: a benchmark, the two exports, `--list`, `--params`, and a sweep or search from flags or from `--spec`, `--dry-run` and `--resume` included.
 
 ```bash
@@ -192,11 +194,45 @@ Caused by:
     life_rule.toml:39:5: error: loops are not allowed in a grid rule. Without them a step's work is bounded
 ```
 
-A sweep of a file's model records the file's canonical text in the manifest as `model.code`, and each session records the code's hash as the `code_hash` of its [`model_source`](#builds).
+A sweep of a grid rule records the file's canonical text in the manifest as `model.code`, and a sweep of a graph or a sheet the graph's semantic text, and each session records the code's hash as the `code_hash` of its [`model_source`](#builds).
 A [resume](#resuming), a [search resume](#resuming-a-search) and a [merge](#shards-and-merging) then accept only that code.
 A resume passes the same `--model-file`, and a resume with an edited file is rejected before any run.
 Without the flag, the build has no model of that id, or holds a compiled model under it, and the resume is rejected as well.
 An edit that changes nothing but comments outside the step, the order of keys or the form of a number keeps the code, as [Code identity](model-files.md#code-identity) describes.
+
+### Sheets
+
+A sheet runs as any model file does, under the id its `[sheet]` table gives it:
+
+```bash
+cargo run --release -p henad-cli -- game_of_life \
+  --model-file crates/henad-graph/sheets/game_of_life.toml --steps 100
+```
+
+The id of that example is `game_of_life`, so the sheet replaces the example model of that id, and a note on stderr says so.
+With one `--model-file` the id can be left out, as for any model file.
+Each warning and error of a sheet prints at the table of the sheet it is about, a line's at its `[card.line.<id>]` table.
+A copy of the example whose line `l2` becomes a state that Status does not hold stops at that line's table:
+
+```text
+Error: cannot load model file 'game_of_life.toml'
+
+Caused by:
+    game_of_life.toml:95:1: error: new_state 'zombie' is no state of 'status'
+```
+
+A sheet with no property prints a warning at its `[world]` table and stops with the same words as an error there.
+A problem that the checks find in the lowered graph prints at the line table its node was lowered from, or at `[sheet]` when no line owns the node, with no note naming a node or pass of the graph.
+
+`--print-lowered` prints that graph in its canonical text on stdout and exits, with the file's warnings on stderr.
+It takes exactly one `--model-file`, builds nothing and acquires no device.
+The text reads back as a model file of kind `graph` with the sheet's code.
+A graph file prints its own canonical text, and a grid rule is refused, since it builds as no graph.
+
+```bash
+cargo run --release -p henad-cli -- \
+  --model-file crates/henad-graph/sheets/game_of_life.toml --print-lowered
+```
 
 ## Sweeps
 

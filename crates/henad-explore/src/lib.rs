@@ -9,7 +9,7 @@
 //! writes its own tables beside them. [`merge::merge`] joins the folders of a sweep's shards, and
 //! [`result_set::ResultSet`] reads a folder back. `benchmark` times a model's step loop, and `testing` holds the
 //! checks that a model's tests run against its entry. `model_file` reads and writes the model files that hold grid
-//! rules.
+//! rules, graph models and sheets.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]

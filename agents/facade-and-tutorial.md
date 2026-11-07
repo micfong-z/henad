@@ -7,7 +7,9 @@ nothing but the `params!` forward and its hidden `__macro_support`: the root ite
 gated `models` (`example-models`), `app` (`app`), `cli` (`cli`), `testing` (`testing`) and
 `rules` (`model-files`: the grid rules, the model files and `compose_wgsl`), `graph`
 (`model-files`, which then also turns on `dep:henad-graph`: henad-graph's root items and its
-public modules, named one by one, `sheet` and `keys` among them), and `henad::prelude`. Each
+public modules, named one by one, `sheet` and `keys` among them, and `KIND_SHEET` from `sheet`
+beside `KIND_GRAPH`), and `henad::prelude`. The `rules` doc names the three kinds a `ModelFile`
+holds, and the `graph` doc names `SheetFile`. Each
 re-export fixes its item's one documented path, and the guides name items by these paths alone.
 `henad::explore` keeps henad-core's planning modules as modules (`spec`,
 `plan`, `search` and the rest), and `henad::authoring` globs henad-core's `authoring::model`
@@ -35,10 +37,11 @@ any lines.
 names. It defines no model, needs no build script and never builds on a device, and its parts
 that need an entry compile in a module no test calls. That module also holds the `gpu_build`
 and `scoped_steps` regions `guide/library.md` includes, the second through a `rayon`
-dev-dependency. Its `named_only` module names items whose path is the whole check, the grid rule
-and graph items under `model-files` among them (`SheetBuilder`, `SheetEdit` and `KeyStream`
-included), and `TimeUnit` and `TimeScale`, which the facade
-re-exports at the root with the rest of `henad_core::metadata`. Keep all three.
+dev-dependency. Its `named_only` module names items whose path is the whole check, the grid rule,
+graph and sheet items under `model-files` among them (`SheetBuilder`, `SheetEdit`, `KeyStream`,
+`SheetTypes`, `GRAPH_KINDS` and `sheet_starters_build`, which builds every sheet starter through
+`ModelFile` and compares the entry's code hash), and `TimeUnit` and `TimeScale`, which the facade
+re-exports at the root with the rest of `henad_core::metadata`. Keep them.
 
 **henad-tutorial** (`examples/tutorial`, `publish = false`): the finished code of the five pages
 under `docs/guide/first-model/`, which include each file whole. `life.rs`, `foraging/`,

@@ -226,6 +226,36 @@ mod named_only {
         henad::graph::sheet::relations::CardRelations<'static>,
     );
 
+    /// Types of the sheets that a host built with the `model-files` feature names.
+    #[cfg(feature = "model-files")]
+    type SheetTypes = (
+        henad::graph::sheet::SheetFile,
+        henad::graph::sheet::SheetErrors,
+        henad::graph::sheet::LineMap,
+        henad::graph::sheet::NodeOrigin,
+        henad::graph::sheet::NodeOwner,
+        henad::graph::sheet::SheetPlaces,
+        henad::graph::sheet::TablePlaces,
+    );
+
+    /// Values of the `kind` key of a graph and of a sheet, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    const GRAPH_KINDS: [&str; 2] = [henad::graph::KIND_GRAPH, henad::graph::KIND_SHEET];
+
+    /// Returns whether every sheet starter builds an entry through its model file, recording the sheet's code, for a
+    /// host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    fn sheet_starters_build() -> bool {
+        henad::graph::sheet::starters().iter().all(|starter| {
+            henad::rules::ModelFile::parse(starter.text).is_ok_and(|file| {
+                file.sheet().is_some()
+                    && file
+                        .entry()
+                        .is_ok_and(|entry| entry.source().code_hash() == Some(file.code().hash()))
+            })
+        })
+    }
+
     /// Returns whether every graph starter reads and checks without an error, for a host built with `model-files`.
     #[cfg(feature = "model-files")]
     fn graph_starters_check() -> bool {

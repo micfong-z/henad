@@ -25,10 +25,13 @@
 //! device `--list` leaves the GPU models out, and a GPU model id on the command line is rejected. The benchmark is
 //! [`henad_explore::benchmark::run_benchmark`], and the two exports step a [`Simulation`].
 //!
-//! `--model-file` reads a model file, a grid rule as one TOML file, and adds its model to the set, in place of a model
-//! with the same id. The files and `--spec` are read before the device is acquired. The device is then sized to the
-//! files' models as well. A file of kind `graph` reads, checks and compiles to WGSL, on a grid or of agents, and its
-//! warnings and errors print at their lines.
+//! `--model-file` reads a model file and adds its model to the set, in place of a model with the same id. A model file
+//! holds a grid rule (`kind = "gpu_grid"`), a graph model (`kind = "graph"`) or a sheet (`kind = "sheet"`). The files
+//! and `--spec` are read before the device is acquired. The device is then sized to the files' models as well. A graph
+//! reads, checks and compiles to WGSL, on a grid or of agents, and its warnings and errors print at their lines. A
+//! sheet reads, checks and lowers to a graph, which then builds as a graph does, and each of its warnings and errors
+//! prints at the line of the sheet it is about, with no pass and no node. `--print-lowered` prints the graph that one
+//! model file builds as, a sheet's lowered graph included, in its canonical text.
 //!
 //! ```text
 //! henad-cli --list
@@ -41,6 +44,8 @@
 //! henad-cli sir --vary infection_rate=0.1:0.5:0.1 --reps 5 --steps 500 --out sir-sweep
 //! henad-cli --spec crates/henad-explore/specs/sir_sweep.toml --out sir-sweep
 //! henad-cli --model-file crates/henad-explore/specs/models/life_rule.toml --vary density=0.1:0.5:0.1 --out life-sweep
+//! henad-cli game_of_life --model-file crates/henad-graph/sheets/game_of_life.toml --steps 100
+//! henad-cli --model-file crates/henad-graph/sheets/game_of_life.toml --print-lowered
 //! henad-cli --merge shard-0 shard-1 --out sir-sweep
 //! ```
 //!
@@ -85,7 +90,7 @@ use henad_core::params::{ParamFormat, ParamKind};
 use henad_core::provenance::BuildInfo;
 use henad_explore::benchmark::{BenchmarkEvent, BenchmarkSettings, run_benchmark};
 use henad_explore::device::acquire_headless;
-use henad_explore::model_file::ModelFile;
+use henad_explore::model_file::{ModelFile, ModelFileError};
 use henad_explore::spec_file::{LoadedSpec, SpecFileError};
 use henad_explore::sweep::Provenance;
 
@@ -194,8 +199,17 @@ fn parse_args(
     }
     let mut matches = command.try_get_matches_from_mut(arguments)?;
     let args = Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))?;
+    if args.print_lowered && args.model_file.len() != 1 {
+        return Err(command.error(
+            ErrorKind::WrongNumberOfValues,
+            "--print-lowered takes exactly one --model-file",
+        ));
+    }
     // Clap accepts any number of model files in place of the model id. Only one of them can stand in for it.
-    let needs_model = !matches!(Mode::of(&args), Mode::List | Mode::Merge | Mode::InfoOnly);
+    let needs_model = !matches!(
+        Mode::of(&args),
+        Mode::List | Mode::Merge | Mode::InfoOnly | Mode::PrintLowered
+    );
     if needs_model && args.model.is_none() && args.explore.spec.is_none() && args.model_file.len() > 1 {
         return Err(command.error(
             ErrorKind::MissingRequiredArgument,
@@ -224,6 +238,18 @@ struct Args {
     /// Load a model file and add its model to this build's models, in place of a model with the same id. Repeatable.
     #[arg(long = "model-file", value_name = "PATH")]
     model_file: Vec<PathBuf>,
+
+    /// Print the graph that the one `--model-file` builds as in its canonical text, a sheet's lowered graph included,
+    /// and exit.
+    #[arg(
+        long = "print-lowered",
+        requires = "model_file",
+        conflicts_with_all = [
+            "model", "list", "params", "info", "json", "export", "export_stats", "stats_every", "merge", "explore",
+            "steps", "warmup", "global_warmup", "seed", "reps", "set", "act", "threads",
+        ]
+    )]
+    print_lowered: bool,
 
     /// Steps to run (and time) per rep, or per run of a sweep.
     #[arg(long, default_value_t = 1000)]
@@ -300,6 +326,8 @@ struct Args {
 /// Work that one command line requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
+    /// `--print-lowered`. Prints the graph of one model file, with no model set and no device.
+    PrintLowered,
     List,
     /// `--merge`. Joins a sweep's shard directories, with no model and no device.
     Merge,
@@ -315,7 +343,9 @@ enum Mode {
 impl Mode {
     /// Returns the mode of `args`, using the first variant that applies in declaration order.
     fn of(args: &Args) -> Self {
-        if args.list {
+        if args.print_lowered {
+            Self::PrintLowered
+        } else if args.list {
             Self::List
         } else if !args.explore.merge.is_empty() {
             Self::Merge
@@ -355,6 +385,9 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
     }
     if mode == Mode::Merge {
         return explore::merge_shards(args);
+    }
+    if let (Mode::PrintLowered, [path]) = (mode, args.model_file.as_slice()) {
+        return print_lowered(path);
     }
 
     // The model files and the spec are read before the device is acquired, so the device is sized to every model the
@@ -482,7 +515,7 @@ fn with_model_files<'a>(
 
 /// Reads the model file at `path` and returns the entry of its model.
 ///
-/// A graph's warnings go to stderr first, each as `path:line:column: warning: message`.
+/// A graph's or a sheet's warnings go to stderr first, each as `path:line:column: warning: message`.
 ///
 /// # Errors
 ///
@@ -490,22 +523,56 @@ fn with_model_files<'a>(
 /// The error lists each problem as `path:line:column: error: message`, with its notes on the lines below and the pass
 /// and node of a graph's problem in a last note.
 fn load_model_file(path: &Path) -> Result<ModelEntry> {
+    let file = read_model_file(path)?;
+    file.entry().map_err(|error| load_error(&error, path))
+}
+
+/// Prints the canonical text of the graph that the model file at `path` builds as on stdout, and returns exit status
+/// 0.
+///
+/// The file's warnings go to stderr first, as [`load_model_file`] prints them. Nothing is built.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read or does not hold a model file, as [`load_model_file`] does, and when
+/// it holds a grid rule, which builds as no graph.
+fn print_lowered(path: &Path) -> Result<u8> {
+    let file = read_model_file(path)?;
+    let graph = file.lowered_graph().ok_or_else(|| {
+        anyhow!(
+            "model file '{}' holds a grid rule. A grid rule builds as no graph.",
+            path.display()
+        )
+    })?;
+    print!("{}", graph.to_toml());
+    Ok(0)
+}
+
+/// Reads the model file at `path`, printing its warnings to stderr, each as `path:line:column: warning: message`.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read or does not hold a model file, with each problem as
+/// [`load_model_file`] lists them.
+fn read_model_file(path: &Path) -> Result<ModelFile> {
     let text = fs::read_to_string(path).with_context(|| format!("cannot read model file '{}'", path.display()))?;
+    let file = ModelFile::parse(&text).map_err(|error| load_error(&error, path))?;
     let file_name = path.display().to_string();
-    let file = ModelFile::parse(&text);
-    if let Ok(file) = &file {
-        for warning in file.warnings() {
-            eprintln!("{}", located(warning, &file_name));
-        }
+    for warning in file.warnings() {
+        eprintln!("{}", located(warning, &file_name));
     }
-    file.and_then(|file| file.entry()).map_err(|error| {
-        let problems: Vec<String> = error
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| located(diagnostic.clone(), &file_name).to_string())
-            .collect();
-        anyhow!(problems.join("\n")).context(format!("cannot load model file '{}'", path.display()))
-    })
+    Ok(file)
+}
+
+/// Returns the error of a model file at `path` that cannot load, listing each problem of `error` at its place.
+fn load_error(error: &ModelFileError, path: &Path) -> anyhow::Error {
+    let file_name = path.display().to_string();
+    let problems: Vec<String> = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| located(diagnostic.clone(), &file_name).to_string())
+        .collect();
+    anyhow!(problems.join("\n")).context(format!("cannot load model file '{}'", path.display()))
 }
 
 /// Returns `diagnostic` in the file `file_name`, with a note naming the pass and node of a graph's problem.
@@ -1446,7 +1513,10 @@ parameters for virus_network (Virus on a Network):
         for line in &lines {
             let argv = std::iter::once("henad-cli").chain(line.iter().map(String::as_str));
             let args = Args::try_parse_from(argv).unwrap_or_else(|error| panic!("{line:?} parses: {error}"));
-            if args.explore == ExploreArgs::default() {
+            if args.print_lowered {
+                // No line written before `--print-lowered` holds the flag.
+                assert_eq!(Mode::of(&args), Mode::PrintLowered, "{line:?}");
+            } else if args.explore == ExploreArgs::default() {
                 assert_eq!(Mode::of(&args), legacy_mode(&args), "{line:?}");
             } else {
                 let mode = if args.explore.merge.is_empty() {

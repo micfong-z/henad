@@ -32,5 +32,7 @@ mod run_control;
 mod search;
 #[cfg(not(target_arch = "wasm32"))]
 mod shards;
+#[cfg(all(feature = "model-files", not(target_arch = "wasm32")))]
+mod sheet_file;
 #[cfg(not(target_arch = "wasm32"))]
 mod tracks;

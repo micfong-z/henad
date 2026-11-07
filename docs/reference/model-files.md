@@ -1,13 +1,19 @@
 ---
 title: Model files
-description: The model file format, a GPU grid model as one TOML file, and the template its WGSL step is written against.
+description: The model file format, a grid rule, a graph model or a sheet as one TOML file, and the template a grid rule's WGSL step is written against.
 icon: material/file-code
 ---
 
 # Model files
 
-A model file holds a **grid rule**, a GPU grid model written as data.
-TOML declares the model's grid, states and parameters, and a WGSL function gives the next state of one cell.
+A model file holds one model as one TOML file, and its `kind` key names the kind of model:
+
+- a **grid rule** (`gpu_grid`), a GPU grid model written as data,
+- a **graph model** (`graph`), the node graph the Editor writes, described under [Fields of a graph model](#fields-of-a-graph-model),
+- a **sheet** (`sheet`), a model built on the sheet and its cards without nodes, described under [Sheets](#sheets).
+
+Most of this page describes grid rules.
+A grid rule's TOML declares the model's grid, states and parameters, and a WGSL function gives the next state of one cell.
 Henad reads the file while the program runs, composes the step after an engine template, checks it, and runs it on the same GPU grid engine as a compiled GPU grid model.
 Nothing is built with cargo.
 
@@ -44,7 +50,7 @@ Line ends can be `\n` or `\r\n`.
 |---|---|
 | `format` | `"henad-model"` |
 | `format_version` | `1` |
-| `kind` | `"gpu_grid"`, the one kind this version reads |
+| `kind` | `"gpu_grid"` for a grid rule. `"graph"` and `"sheet"` name the other two kinds |
 | `id` | Model id, a lowercase ASCII letter, then lowercase letters, digits and underscores. The command line's `MODEL`, a spec's `model`, `--list` and results folders name the model by it |
 | `name` | Name the app and `--list` show. The id when left out |
 | `description` | One line about the model. Empty when left out |
@@ -53,6 +59,7 @@ The name and the description hold no control character, such as a tab or an esca
 
 The three header keys are read before anything else.
 A file of another format, version or kind is refused at that key, even when it holds keys this version does not know.
+A refused kind's message lists the three kinds this version reads.
 
 ### `[grid]`
 
@@ -266,3 +273,59 @@ Any other deposit is not checked against it, so a model whose cells can take tha
 
 A resolution that is not a power of two, such as 0.001, is refused at its line, with the nearest allowed value in the message.
 A power of two keeps the products of the deposit and the merge exact on every device, including one that compiles with fast math.
+
+## Sheets
+
+A file of kind `sheet` holds a sheet: the model in the order a reader meets it, with its world, its properties, its parameters, measures, colours and buttons, and a card of lines for each kind of thing.
+Henad reads the sheet, checks it, and lowers it to a graph model, which then builds and runs as a graph model does.
+This version lowers sheets on a grid.
+A world of agents and a line this version cannot lower yet are refused at their tables with a message that says so.
+
+`crates/henad-graph/sheets/game_of_life.toml` in Henad's repository is Conway's Game of Life as a sheet.
+The comment above each card is the card's heading, and the comment above each line is the sentence the line reads as.
+The canonical writer writes every comment again from the sheet, and a comment changes nothing the model computes.
+
+``` toml title="game_of_life.toml"
+--8<-- "crates/henad-graph/sheets/game_of_life.toml"
+```
+
+The command line runs a sheet with [`--model-file`](cli.md#model-files) like any other model file.
+A program reads one with `henad::rules::ModelFile::parse`, and `ModelFile::sheet` returns the sheet.
+
+### The format of a sheet
+
+After the header, the `[sheet]` table holds the sheet's `version`, `1` in this version, its `id`, its `name`, an optional `purpose`, and `next_line`, the number the next new line takes.
+A sheet of a newer version is refused at its `version`.
+The other tables follow in this order: `[world]`, `[time]`, the properties of each kind of thing (`[[cells.property]]` on a grid), `[[parameter]]`, `[[measure]]`, `[color.cells]`, `[[button]]` and `[[card]]`.
+Each line of a card is a `[card.line.<id>]` table, its id `l` and a number unique in the file.
+Every table refuses a key it does not know, at the key's line.
+
+### Problems at their lines
+
+Every problem is reported at the table of the sheet it is about, and a line's problem at its `[card.line.<id>]` table.
+A warning keeps the model running, and a line with a blank slot is left out of the model with a warning that says what to fill in.
+A sheet with no property reads with a warning at `[world]`, and is refused at the same table with the same words when it builds.
+The lowered graph is checked as well, and a problem found there is placed at the table of the line its node was lowered from, or at `[sheet]` when no line owns the node.
+Such a problem carries no node or pass of the graph.
+Its message keeps the wording of the graph's checks, since it points to a fault in the lowering more than to a mistake in the sheet.
+[`--print-lowered`](cli.md#model-files) prints the lowered graph for a reader who wants to see it.
+
+### Code identity of a sheet
+
+The code of a sheet is the code of the graph it lowers to, the graph's semantic text in the format `henad-graph/1`.
+A sweep's manifest records that text as `model.code`, so a results folder replays without reading the sheet.
+The sheet's name, its ids, the names of its states and parameters, its parameter defaults, its colours and the keys of its draws enter the code through the graph.
+A comment, a note, the `purpose` and the name of a result line stay outside it, and so does a new order of two lines that cannot change the result.
+A [resume](cli.md#resuming) of a sheet's sweep is refused when the code differs, as for any model file.
+
+### Limits of a sheet
+
+| Limit | Value |
+|---|---|
+| Text of the sheet | 1 MiB |
+| Lines of one card, the lines inside When and Repeat lines included | 256 |
+| Tables and lists nested inside one another | 24 deep |
+| Groups nested in one formula | 32 deep |
+| An id | 48 bytes |
+| Nodes the lowering writes for one line | 999 |
+| Nodes the lowering writes for the sheet outside every line | 999 |

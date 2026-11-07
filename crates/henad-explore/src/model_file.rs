@@ -2,7 +2,9 @@
 //!
 //! A model file starts with `format = "henad-model"` and `format_version = 1`, then the `kind` of model it holds.
 //! [`ModelFile::parse`] reads the header first and dispatches on the kind: `gpu_grid` for a grid rule, held by a
-//! [`GridRuleFile`], and `graph` for a graph model, held by a [`GraphFile`] of henad-graph.
+//! [`GridRuleFile`], `graph` for a graph model, held by a [`GraphFile`] of henad-graph, and `sheet` for a sheet, the
+//! author document a researcher builds without nodes, held by a [`SheetFile`] of henad-graph with the graph it lowers
+//! to.
 //!
 //! A grid rule's file continues with the rule's `id`, `name` and `description`. The `[grid]` table holds the default
 //! `width` and `height` and the `boundary`, `torus` or `bounded`. Each `[[state]]` table holds a state's `label`, its
@@ -19,6 +21,8 @@
 //! have the same canonical text, and its [`ModelCode`] is the model's code identity in a results folder.
 //!
 //! A graph model builds through henad-graph's WGSL compiler, [`GridProgram`] on a grid and [`AgentProgram`] for agents.
+//! A sheet builds as the graph it lowers to, and every finding about that graph is placed at the table of the sheet
+//! its node was lowered from, with no pass and no node.
 
 use std::fmt;
 use std::ops::Range;
@@ -30,12 +34,14 @@ use toml::Spanned;
 use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::runtime_grid::{GridRule, RuleDeclaration, RuleState};
 use henad_core::authoring::primitives::space::Boundary;
-use henad_core::diagnostic::CodeDiagnostic;
+use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
 use henad_core::params::ParamKind;
 use henad_core::provenance::ModelCode;
 use henad_graph::document::World;
 use henad_graph::host::HostEvaluator;
 use henad_graph::model_text::{LineEnds, ModelHeader, ParamTable, toml_string as string, write_param};
+use henad_graph::sheet::sentence::SHEET_EMPTY;
+use henad_graph::sheet::{KIND_SHEET, SheetFile, SheetFileError};
 use henad_graph::wgsl::{AgentProgram, GridProgram};
 use henad_graph::{GraphFile, GraphFileError, KIND_GRAPH};
 
@@ -56,6 +62,8 @@ pub enum ModelFile {
     GpuGrid(Box<GridRuleFile>),
     /// A graph model, `kind = "graph"`.
     Graph(Box<GraphFile>),
+    /// A sheet, `kind = "sheet"`, with the graph it lowers to.
+    Sheet(Box<SheetFile>),
 }
 
 /// A grid rule read from a model file, with the text it was read from.
@@ -124,6 +132,9 @@ pub enum ModelFileError {
     /// The graph's checker or its host evaluator reports errors. Each diagnostic carries its pass and node id when it
     /// has them, and a checker's diagnostic is placed in the file.
     Graph(Vec<CodeDiagnostic>),
+    /// The sheet's checker or its lowering reports errors, or the graph it lowers to does not build. Each diagnostic
+    /// is placed at the table of the sheet it is about and carries no pass and no node.
+    Sheet(Vec<CodeDiagnostic>),
     /// The file reads and checks, and this build cannot build a model of its kind.
     Unsupported(Box<CodeDiagnostic>),
 }
@@ -135,7 +146,7 @@ impl ModelFileError {
             Self::Toml(diagnostic) | Self::Format(diagnostic) | Self::Unsupported(diagnostic) => {
                 std::slice::from_ref(&**diagnostic)
             }
-            Self::Rule(diagnostics) | Self::Graph(diagnostics) => diagnostics,
+            Self::Rule(diagnostics) | Self::Graph(diagnostics) | Self::Sheet(diagnostics) => diagnostics,
         }
     }
 }
@@ -144,6 +155,16 @@ impl From<GraphFileError> for ModelFileError {
     fn from(error: GraphFileError) -> Self {
         match error {
             GraphFileError::Toml(diagnostic) => Self::Toml(diagnostic),
+            other => Self::Format(Box::new(other.diagnostic().clone())),
+        }
+    }
+}
+
+impl From<SheetFileError> for ModelFileError {
+    fn from(error: SheetFileError) -> Self {
+        match error {
+            SheetFileError::Toml(diagnostic) => Self::Toml(diagnostic),
+            SheetFileError::Invalid(errors) => Self::Sheet(errors.as_slice().to_vec()),
             other => Self::Format(Box::new(other.diagnostic().clone())),
         }
     }
@@ -181,71 +202,108 @@ impl ModelFile {
     /// # Errors
     ///
     /// Returns [`ModelFileError::Format`] for a file of another format, version or kind, and otherwise the errors of
-    /// [`GridRuleFile::parse`] or of [`GraphFile::parse`], which refuses a graph past henad-graph's
-    /// [`MAX_FILE_BYTES`](henad_graph::limits::MAX_FILE_BYTES). Each diagnostic is placed in `text` when it has a
-    /// place.
+    /// [`GridRuleFile::parse`], of [`GraphFile::parse`], which refuses a graph past henad-graph's
+    /// [`MAX_FILE_BYTES`](henad_graph::limits::MAX_FILE_BYTES), or of [`SheetFile::parse`], which refuses a sheet past
+    /// [`MAX_SHEET_BYTES`](henad_graph::sheet::limits::MAX_SHEET_BYTES) and returns the errors of the sheet's check and
+    /// lowering as [`ModelFileError::Sheet`]. Each diagnostic is placed in `text` when it has a place.
     pub fn parse(text: &str) -> Result<Self, ModelFileError> {
         let (read, line_ends) = LineEnds::normalize(text);
         let header = ModelHeader::read(&read).map_err(|error| toml_error(text, &line_ends, &error))?;
         header
-            .check(&[KIND_GPU_GRID, KIND_GRAPH])
+            .check(&[KIND_GPU_GRID, KIND_GRAPH, KIND_SHEET])
             .map_err(|problem| placed(text, &line_ends, problem.message, problem.span))?;
-        if header.kind() == Some(KIND_GRAPH) {
-            return GraphFile::parse(text)
+        match header.kind() {
+            Some(KIND_GRAPH) => GraphFile::parse(text)
                 .map(|file| Self::Graph(Box::new(file)))
-                .map_err(ModelFileError::from);
+                .map_err(ModelFileError::from),
+            Some(KIND_SHEET) => SheetFile::parse(text)
+                .map(|file| Self::Sheet(Box::new(file)))
+                .map_err(ModelFileError::from),
+            _ => GridRuleFile::parse(text).map(|file| Self::GpuGrid(Box::new(file))),
         }
-        GridRuleFile::parse(text).map(|file| Self::GpuGrid(Box::new(file)))
     }
 
-    /// Model id of the file: the rule's id, or the id of the graph's target.
+    /// Model id of the file: the rule's id, the id of the graph's target, or the sheet's id.
     pub fn id(&self) -> &str {
         match self {
             Self::GpuGrid(file) => &file.rule.id,
             Self::Graph(file) => &file.document().target.id,
+            Self::Sheet(file) => &file.document().sheet.id,
         }
     }
 
-    /// Rule the file holds, `None` for a graph.
+    /// Rule the file holds, `None` for a graph or a sheet.
     pub fn rule(&self) -> Option<&GridRule> {
         match self {
             Self::GpuGrid(file) => Some(file.rule()),
-            Self::Graph(_) => None,
+            Self::Graph(_) | Self::Sheet(_) => None,
         }
     }
 
-    /// Graph the file holds, `None` for a grid rule.
+    /// Graph the file holds, `None` for a grid rule or a sheet.
+    ///
+    /// The graph a sheet lowers to is [`Self::lowered_graph`].
     pub fn graph(&self) -> Option<&GraphFile> {
         match self {
-            Self::GpuGrid(_) => None,
+            Self::GpuGrid(_) | Self::Sheet(_) => None,
             Self::Graph(file) => Some(file.as_ref()),
         }
     }
 
+    /// Sheet the file holds, `None` for a grid rule or a graph.
+    pub fn sheet(&self) -> Option<&SheetFile> {
+        match self {
+            Self::GpuGrid(_) | Self::Graph(_) => None,
+            Self::Sheet(file) => Some(file.as_ref()),
+        }
+    }
+
+    /// Graph the model builds as: the graph a graph file holds, or the graph a sheet lowers to. `None` for a grid
+    /// rule.
+    pub fn lowered_graph(&self) -> Option<&GraphFile> {
+        match self {
+            Self::GpuGrid(_) => None,
+            Self::Graph(file) => Some(file.as_ref()),
+            Self::Sheet(file) => Some(file.lowered()),
+        }
+    }
+
     /// Returns the file's canonical text.
+    ///
+    /// For a sheet this is the sheet's own text, and the lowered graph's is [`GraphFile::to_toml`] on
+    /// [`Self::lowered_graph`].
     pub fn to_toml(&self) -> String {
         match self {
             Self::GpuGrid(file) => file.to_toml(),
             Self::Graph(file) => file.to_toml(),
+            Self::Sheet(file) => file.to_toml().to_owned(),
         }
     }
 
-    /// Returns the code that identifies the model: the rule's in the format [`GridRule::CODE_FORMAT`], or the graph's
-    /// semantic text in the format [`henad_graph::CODE_FORMAT`].
+    /// Returns the code that identifies the model: the rule's in the format [`GridRule::CODE_FORMAT`], or the
+    /// semantic text of the graph, or of the graph a sheet lowers to, in the format [`henad_graph::CODE_FORMAT`].
     pub fn code(&self) -> ModelCode {
         match self {
             Self::GpuGrid(file) => file.code(),
             Self::Graph(file) => file.code(),
+            Self::Sheet(file) => file.code(),
         }
     }
 
-    /// Returns the warnings of the graph's checker, in file order, each placed in the file. A grid rule has none.
+    /// Returns the warnings of the graph's checker, in file order, each placed in the file.
+    ///
+    /// A grid rule has none. For a sheet, returns the warnings of the sheet's checker, each placed at its table.
+    ///
+    /// Note that the graph checker's warnings on the graph a sheet lowers to are left out. Each names a node of that
+    /// graph, such as the node of a result that no line reads. The lowering writes that node and the graph build
+    /// drops it. [`Self::lowered_graph`] reaches these warnings.
     ///
     /// A warning never blocks [`Self::entry`].
     pub fn warnings(&self) -> Vec<CodeDiagnostic> {
         match self {
             Self::GpuGrid(_) => Vec::new(),
             Self::Graph(file) => file.check().warnings().cloned().collect(),
+            Self::Sheet(file) => file.warnings().to_vec(),
         }
     }
 
@@ -255,27 +313,51 @@ impl ModelFile {
     ///
     /// Returns the errors of [`GridRuleFile::entry`] for a grid rule. For a graph, returns [`ModelFileError::Graph`]
     /// with the errors of its checker, then with the error of its host evaluator, which compiles every init pass, then
-    /// with the errors of [`GridProgram::compile`] or [`AgentProgram::compile`].
+    /// with the errors of [`GridProgram::compile`] or [`AgentProgram::compile`]. For a sheet, returns the same errors
+    /// of the graph it lowers to as [`ModelFileError::Sheet`], each placed by [`SheetFile::place_graph_diagnostic`].
+    /// A grid sheet with no property returns its [`SHEET_EMPTY`] warning as the one error, in place of the errors of
+    /// a graph with no lane and no pass.
     pub fn entry(&self) -> Result<ModelEntry, ModelFileError> {
         match self {
             Self::GpuGrid(file) => file.entry(),
-            Self::Graph(file) => {
-                let report = file.check();
-                if report.has_errors() {
-                    return Err(ModelFileError::Graph(report.errors().cloned().collect()));
+            Self::Graph(file) => graph_entry(file, |diagnostic| diagnostic).map_err(ModelFileError::Graph),
+            Self::Sheet(file) => {
+                if let Some(empty) = file.warnings().iter().find(|warning| warning.message == SHEET_EMPTY) {
+                    let mut error = empty.clone();
+                    error.severity = DiagnosticSeverity::Error;
+                    return Err(ModelFileError::Sheet(vec![error]));
                 }
-                HostEvaluator::new(file).map_err(|error| ModelFileError::Graph(error.diagnostics()))?;
-                if matches!(file.document().world, World::Agents(_)) {
-                    return AgentProgram::compile(file)
-                        .map(|program| program.entry())
-                        .map_err(ModelFileError::Graph);
-                }
-                GridProgram::compile(file)
-                    .map(|program| program.entry())
-                    .map_err(ModelFileError::Graph)
+                graph_entry(file.lowered(), |diagnostic| file.place_graph_diagnostic(diagnostic))
+                    .map_err(ModelFileError::Sheet)
             }
         }
     }
+}
+
+/// Builds the entry of `graph`, passing each error through `place`.
+///
+/// # Errors
+///
+/// Returns the errors of the graph's checker, then the error of its host evaluator, which compiles every init pass,
+/// then the errors of [`GridProgram::compile`] or [`AgentProgram::compile`].
+fn graph_entry(
+    graph: &GraphFile,
+    place: impl Fn(CodeDiagnostic) -> CodeDiagnostic,
+) -> Result<ModelEntry, Vec<CodeDiagnostic>> {
+    let placed = |diagnostics: Vec<CodeDiagnostic>| diagnostics.into_iter().map(&place).collect::<Vec<_>>();
+    let report = graph.check();
+    if report.has_errors() {
+        return Err(placed(report.errors().cloned().collect()));
+    }
+    HostEvaluator::new(graph).map_err(|error| placed(error.diagnostics()))?;
+    if matches!(graph.document().world, World::Agents(_)) {
+        return AgentProgram::compile(graph)
+            .map(|program| program.entry())
+            .map_err(placed);
+    }
+    GridProgram::compile(graph)
+        .map(|program| program.entry())
+        .map_err(placed)
 }
 
 /// Returns a TOML error placed in `text`, whose line ends `line_ends` maps.
