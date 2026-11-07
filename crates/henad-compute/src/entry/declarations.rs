@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use henad_core::action::ActionDescriptor;
-use henad_core::metadata::Structure;
+use henad_core::metadata::{Structure, TimeScale};
 use henad_core::params::ParamDescriptor;
 use henad_core::topology::TopologyHint;
 use henad_core::view::StatDescriptor;
@@ -35,11 +35,15 @@ pub struct EntryDeclarations {
     pub palette: Option<Cow<'static, [[u8; 4]]>>,
     /// Whether two builds on one seed step through identical states. [`Self::new`] sets this.
     pub replays_exactly: bool,
+    /// Time scale of the model's ticks, `None` for a model that runs in ticks alone. [`Self::new`] leaves this
+    /// `None`.
+    pub time: Option<TimeScale>,
 }
 
 #[cfg(feature = "runtime-wgsl")]
 impl EntryDeclarations {
-    /// Creates the declarations of a model with no stats, no actions and no palette, which replays exactly.
+    /// Creates the declarations of a model with no stats, no actions, no palette and no time scale, which replays
+    /// exactly.
     ///
     /// Each of those is a public field, for a model that declares otherwise.
     pub fn new(
@@ -61,6 +65,7 @@ impl EntryDeclarations {
             structure,
             palette: None,
             replays_exactly: true,
+            time: None,
         }
     }
 }

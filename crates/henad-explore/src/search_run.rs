@@ -1135,7 +1135,10 @@ impl SearchPreparation {
                     &plan,
                     entry.source(),
                     &runs_csv::header_line(&columns),
-                    &series_csv::header_line(measure.columns()),
+                    &series_csv::header_line(
+                        measure.columns(),
+                        series_csv::tick_length_position(entry.metadata().time.as_ref(), params).is_some(),
+                    ),
                     &watched_reducers,
                     params.len() + base.actions().len(),
                 )
@@ -1258,7 +1261,8 @@ impl SearchPreparation {
         inputs: &SweepInputs<'_>,
     ) -> Result<(SearchWriters<Vec<u8>>, Manifest), ExploreError> {
         let params = inputs.entry.param_descriptors();
-        let writer = memory_writer(&self.plan.base, params, &self.measure)?;
+        let time = inputs.entry.metadata().time.as_ref();
+        let writer = memory_writer(&self.plan.base, params, &self.measure, time)?;
         let generations = writes_generations(&self.plan).then(Vec::new);
         let tables = SearchTablesWriter::new(
             Vec::new(),
@@ -1345,10 +1349,11 @@ impl SearchPreparation {
             }
             None => true,
         };
+        let time = inputs.entry.metadata().time.as_ref();
         let writer = if fresh_tables {
-            dir.open_writer(&self.plan.base, params, &self.measure)?
+            dir.open_writer(&self.plan.base, params, &self.measure, time)?
         } else {
-            dir.append_writer(&self.plan.base, params)?
+            dir.append_writer(&self.plan.base, params, time)?
         };
         let generations = if writes_generations(&self.plan) {
             Some(dir.create_table(GENERATIONS_FILE)?)

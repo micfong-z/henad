@@ -379,6 +379,107 @@ fn list_and_params_json_show_a_model_file() {
     }
 }
 
+/// Returns the path of the hand-lowered SIR with rates, whose tick length is a hidden parameter in days.
+fn sir_rates() -> String {
+    argument(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../henad-models/tests/fixtures/lowered/rates/sir_rates.toml"))
+}
+
+#[test]
+fn a_tick_length_is_marked_hidden_and_sweeps_like_any_parameter() {
+    if !has_device() {
+        return;
+    }
+    let model_file = sir_rates();
+    let text = stdout(&run_ok(&["--model-file", &model_file, "--params"]));
+    let hidden: Vec<&str> = text.lines().filter(|line| line.contains(" hidden ")).collect();
+    assert_eq!(hidden.len(), 1, "{text}");
+    assert!(
+        hidden[0].contains("id=tick_length kind=f32 default=1 min=0.01 max=30 apply=reload hidden label="),
+        "{text}"
+    );
+
+    let line: Value =
+        serde_json::from_str(stdout(&run_ok(&["--model-file", &model_file, "--params", "--json"])).trim())
+            .expect("one JSON line");
+    assert_eq!(
+        line["time"],
+        serde_json::json!({ "unit": "day", "tick_length": "tick_length" })
+    );
+    for param in line["params"].as_array().expect("a list of parameters") {
+        let is_tick_length = param["id"] == "tick_length";
+        assert_eq!(param.get("hidden").is_some(), is_tick_length, "{param}");
+    }
+    assert_eq!(line["params"][2]["hidden"], true);
+
+    let planned = stdout(&run_ok(&[
+        "--model-file",
+        &model_file,
+        "--vary",
+        "tick_length=0.25:1:0.25",
+        "--steps",
+        "4",
+        "--dry-run",
+    ]));
+    assert!(planned.contains("4 configs x 1 replicate = 4 runs"), "{planned}");
+}
+
+/// Returns the first column of `csv` named `name`, as numbers, with the header checked to open with `header`.
+fn column(csv: &str, header: &str, name: &str) -> Vec<f64> {
+    let mut lines = csv.lines();
+    let columns: Vec<&str> = lines.next().expect("a header").split(',').collect();
+    assert!(columns.join(",").starts_with(header), "{csv}");
+    let index = columns.iter().position(|column| *column == name).expect("the column");
+    lines
+        .map(|line| {
+            line.split(',')
+                .nth(index)
+                .and_then(|field| field.parse().ok())
+                .expect("a number")
+        })
+        .collect()
+}
+
+#[test]
+fn a_tick_length_writes_the_time_column_in_stats_and_series() {
+    if !has_device() {
+        return;
+    }
+    let model_file = sir_rates();
+    let scratch = Scratch::new("time");
+    let small = ["--set", "grid_width=16", "--set", "grid_height=16"];
+
+    let stats = argument(&scratch.path("stats.csv"));
+    let mut arguments = vec!["--model-file", &model_file, "--steps", "6", "--stats-every", "3"];
+    arguments.extend(small);
+    arguments.extend(["--set", "tick_length=0.25", "--export-stats", &stats]);
+    run_ok(&arguments);
+    let csv = std::fs::read_to_string(&stats).expect("the stats are written");
+    assert_eq!(column(&csv, "tick,time,Susceptible", "tick"), [0.0, 3.0, 6.0]);
+    assert_eq!(column(&csv, "tick,time,Susceptible", "time"), [0.0, 0.75, 1.5]);
+
+    let dir = scratch.path("sweep");
+    let out = argument(&dir);
+    let mut arguments = vec!["--model-file", &model_file, "--steps", "6", "--stats-every", "3"];
+    arguments.extend(small);
+    arguments.extend(["--vary", "tick_length=0.5,2", "--out", &out]);
+    run_ok(&arguments);
+    let series = std::fs::read_to_string(dir.join("series.csv")).expect("the series are written");
+    let ticks = column(&series, "run_id,tick,time,Susceptible", "tick");
+    let times = column(&series, "run_id,tick,time,Susceptible", "time");
+    let runs = column(&series, "run_id,tick,time,Susceptible", "run_id");
+    let lengths = [0.5, 2.0];
+    for ((run, tick), time) in runs.iter().zip(&ticks).zip(&times) {
+        assert_eq!(*time, tick * lengths[*run as usize], "{series}");
+    }
+    assert_eq!(times.last(), Some(&12.0));
+
+    let set = henad_explore::result_set::ResultSet::open_dir(&dir, usize::MAX).expect("the sweep reads back");
+    assert_eq!(set.held_series_count(), 2);
+    for run in set.runs() {
+        assert_eq!(run.outcome.series.ticks(), [0, 3, 6]);
+    }
+}
+
 #[test]
 fn a_model_file_error_points_at_its_line() {
     let scratch = Scratch::new("error");

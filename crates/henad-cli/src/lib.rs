@@ -647,7 +647,8 @@ fn print_models<'a>(entries: impl Iterator<Item = &'a ModelEntry>) {
 /// Returns the text `--params` prints, one line per parameter with the id `--set` accepts, its kind, default and
 /// bounds.
 ///
-/// Each line holds `key=value` fields. `scripts/bench_matrix.py` parses them to find a model's axes and defaults.
+/// Each line holds `key=value` fields, and a hidden parameter the bare word `hidden` after them. `scripts/bench_matrix.py`
+/// parses the fields to find a model's axes and defaults.
 fn params_text(entry: &ModelEntry) -> String {
     let mut text = format!("parameters for {} ({}):\n", entry.id(), entry.name());
     for (index, desc) in entry.param_descriptors().iter().enumerate() {
@@ -669,8 +670,10 @@ fn params_text(entry: &ModelEntry) -> String {
             ParamFormat::Plain => "",
             ParamFormat::Percent => " format=percent",
         };
+        // A hidden parameter is kept off the Parameters panel, and `--set` and a sweep reach it as any other.
+        let hidden = if desc.is_hidden() { " hidden" } else { "" };
         text.push_str(&format!(
-            "  index={index} id={id} {kind} apply={apply}{format} label=\"{label}\"\n"
+            "  index={index} id={id} {kind} apply={apply}{format}{hidden} label=\"{label}\"\n"
         ));
     }
     text
@@ -886,6 +889,8 @@ fn export_final(setup: &RunSetup, args: &Args, path: &Path) -> Result<()> {
 
 /// Runs `setup` once and writes the per-tick stat series to `path` as CSV.
 ///
+/// A model with a time scale adds a `time` column after `tick`, from the setup's tick length.
+///
 /// Unlike [`benchmark`], this path is untimed. Each sample is significant work, a full reduction over the grid for a
 /// `GridModel` and a blocking readback for a GPU model, so a run's time does not measure the cost of its steps.
 /// `--reps` is ignored. A time series is one trajectory, and N repetitions would put N trajectories in one file.
@@ -898,10 +903,18 @@ fn export_stats(setup: &RunSetup, args: &Args, path: &Path, gpu_ctx: Option<&Gpu
     }
 
     let total = args.warmup + args.steps;
-    let file = File::create(path).with_context(|| format!("cannot create '{}'", path.display()))?;
-    let writer = StatsWriter::new(BufWriter::new(file));
-
     let entry = setup.entry();
+    let file = File::create(path).with_context(|| format!("cannot create '{}'", path.display()))?;
+    let mut writer = StatsWriter::new(BufWriter::new(file));
+    if let Some(tick_length) = entry
+        .metadata()
+        .time
+        .as_ref()
+        .and_then(|time| time.tick_length_in(entry.param_descriptors(), setup.values()))
+    {
+        writer = writer.tick_length(tick_length);
+    }
+
     eprintln!(
         "exporting stats for {} ({}): {} steps, sampling every {}",
         entry.name(),

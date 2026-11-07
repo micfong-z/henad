@@ -21,7 +21,9 @@ rule per run, as the two CPU loops do. Otherwise two runs back to back both fire
 share. The benchmark is `henad_explore::benchmark::run_benchmark` (`benchmark.rs`), which holds
 the rule, `BENCH_FIRE`, and reports each repetition through a callback as it starts and as it
 finishes, so a run killed part way has printed every repetition it finished. `--export` and
-`--export-stats` step a `Simulation` (`run_to` and `write_state`, `run_sampled`). The shared
+`--export-stats` step a `Simulation` (`run_to` and `write_state`, `run_sampled`). For a model with
+a time scale `export_stats` gives the `StatsWriter` the setup's tick length (`tick_length_in`),
+which adds the `time` column. The shared
 `params_by_id_json` and `scheduled_actions_json` sit in henad-explore's `output/details.rs`, for
 the CLI's summary and the app's run details. A GPU run steps through `gpu/stepping.rs` on a device
 from henad-explore's `acquire_headless`, sized to the `gpu_needs()` of the options' set with the
@@ -77,6 +79,9 @@ batch size, the objective or the axes, the space and the search seed, and `--jso
 `explore_search_batch` line per batch.
 `--params --json` (`json_report::params`) prints `schema_json` with a `kind` of `params`.
 `scripts/bench_matrix.py` parses the text `--params` prints, and that text is unchanged.
+`params_text` writes the bare word ` hidden` after `apply` and `format` for a hidden parameter
+alone, so no golden line moves. `tests/model_file.rs` checks it, `time` and a `--vary` dry run
+over the tick length on `sir_rates.toml`, read from henad-models' fixtures.
 `tests/golden.rs` compares `--list`, `--params` and `--params --json` byte for byte with what
 0.2.0 printed, recorded in `tests/golden/` by the procedure in its `README.md`. Keep them.
 `build.rs` calls `henad_build::stamp_commit`, as henad-app's does, and the `CliOptions` host

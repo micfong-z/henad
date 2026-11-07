@@ -21,4 +21,5 @@ mod regions;
 mod sheet_document;
 mod sum_fields;
 mod support;
+mod time_scale;
 mod wgsl;

@@ -75,7 +75,14 @@ writes `runs.csv` (an `action.<name>` column per action after the params), `seri
 streams `runs.csv` one record at a time and holds one cell string per config) and
 `manifest.json` (written `running`, then replaced by a rename). `OutputDir` refuses a directory
 that holds any of the four, a search table or any `*.staged` file unless the sweep resumes, and
-`OutputWriter` writes and flushes a run's series before its row. An `OutputDir` holds the
+`OutputWriter` writes and flushes a run's series before its row. `open_writer`, `append_writer` and
+the crate's `memory_writer` take the model's `Option<&TimeScale>` (`entry.metadata().time`), and
+`SeriesWriter::new` and `appending` the tick length's position in a config's values, which adds the
+`time` column. `series_csv::tick_length_position` returns that position for every writer and for
+the header a resume and a search resume compare against, `header_line(columns, timed)`. It is
+`None` unless the time scale names an `f32` parameter, as `TimeScale::tick_length_index` requires,
+and `--export-stats` reads the tick length through the same method. `write_run` takes the run's
+parameter values and writes `TimeScale::time_at` of each tick. An `OutputDir` holds the
 operating system's advisory lock on `.lock` (`DirLock`, `File::try_lock`) while it lives, and a
 second writer gets `OutputError::Locked`. The file stays when the writer ends, and the next writer
 locks it again. The lock goes with a killed process. A resume, of a sweep or a search, opens the
@@ -132,6 +139,9 @@ counting as other code, and returns `ResumeError::CodeChanged`. Both resumes als
 `check_directory_code` before their probe build, which then never builds changed code. A merge
 compares every shard's builds with those of each lower shard, after the model id and before the
 plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildChanged`.
+`schema_json` writes `time` (`unit` and `tick_length`) only for a model with a time scale, and
+`param_json` writes `"hidden": true` only for a hidden parameter
+(`param_json_marks_only_hidden_parameters`), so the golden `--params --json` files hold.
 `schema_json` writes `origin` and `code_hash` only for a model that is not compiled, and
 `ResultSet::code_matches` and `Manifest::code_matches` answer the rule for a host.
 `a_value_built_entry_sweeps_byte_identically_to_the_registered_one`,
@@ -219,7 +229,12 @@ the tests pump it on native. `result_set.rs` (`ResultSet`) reads an output direc
 byte budget lasts. A run the budget cuts holds none of its rows. A `runs.csv` with no complete
 header, as a sweep stopped before its first run leaves it, opens with no runs and no value or
 reducer columns. `series.csv`'s header has to name `run_id`, `tick` and the manifest's stat
-columns. `summary.csv` is left unread. `ResultSet::replay` plans the recorded spec and returns a
+columns, with `SERIES_TIME_COLUMN` (`time`) after `tick` for a model with a time scale.
+`check_series_header` takes the header one column wider than the ids and stats, with `time` third,
+as timed, and `parse_series_row` then checks the time as a number and skips it. Otherwise the
+read is by position. `tests/fixtures/series-be338ec/` is a folder written before the column, with
+its procedure in `README.md` (`a_folder_written_before_the_time_column_still_reads`). Keep it.
+`summary.csv` is left unread. `ResultSet::replay` plans the recorded spec and returns a
 run's `Replay`, refusing a run whose config, replicate, seed or run key differ from its row. The
 run key hashes the model's declarations too, and is compared only while `schema_matches` holds.
 `read_directory_series` reads the series of chosen runs later, given the stat column names.

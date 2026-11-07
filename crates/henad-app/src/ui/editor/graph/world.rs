@@ -133,14 +133,17 @@ fn world_table_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequ
     }
 }
 
-/// Returns `descriptor` with `label` and `kind`, its id, apply and format kept.
-fn param_with(descriptor: &ParamDescriptor, label: &str, kind: ParamKind) -> ParamDescriptor {
+/// Returns `descriptor` with `label` and `kind`, its id, apply, format and hidden flag kept.
+pub(crate) fn param_with(descriptor: &ParamDescriptor, label: &str, kind: ParamKind) -> ParamDescriptor {
     let mut changed = ParamDescriptor::new(descriptor.id().to_owned(), label.to_owned(), kind);
     if descriptor.apply() == ParamApply::OnReload {
         changed = changed.on_reload();
     }
     if descriptor.format() == ParamFormat::Percent {
         changed = changed.percent();
+    }
+    if descriptor.is_hidden() {
+        changed = changed.hidden();
     }
     changed
 }

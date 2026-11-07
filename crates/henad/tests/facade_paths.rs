@@ -180,6 +180,11 @@ mod named_only {
         henad::TimeUnit::Month.days()
     }
 
+    /// Time at tick 4 of a model whose ticks are a quarter of a day, through the time scale a model declares.
+    fn a_day_in_quarter_days() -> f64 {
+        henad::TimeScale::time_at(4, 0.25) * henad::TimeScale::new(henad::TimeUnit::Day, "tick_length").unit.days()
+    }
+
     /// Work budgets that [`henad::gpu::Demand::shortfalls`] holds a model to.
     const WORK_BUDGETS: [u64; 2] = [henad::gpu::SUBMISSION_WORK_BUDGET, henad::gpu::HOST_WORK_BUDGET];
 

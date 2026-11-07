@@ -30,7 +30,7 @@ use crate::output::search_tables::{
     ARCHIVE_ID_COLUMNS, EVALUATION_ID_COLUMNS, GENERATION_COLUMNS, OBJECTIVE_BATCH_COLUMNS, PATTERN_BATCH_COLUMNS,
     RANKING_ID_COLUMNS, SearchHistory,
 };
-use crate::output::series_csv::SERIES_ID_COLUMNS;
+use crate::output::series_csv::{SERIES_ID_COLUMNS, SERIES_TIME_COLUMN};
 use crate::output::{
     ARCHIVE_FILE, BATCHES_FILE, BEST_FILE, EVALUATIONS_FILE, GENERATIONS_FILE, MANIFEST_FILE, RUNS_FILE, SERIES_FILE,
 };
@@ -238,7 +238,7 @@ impl ResultSet {
             self.mark_series_missing();
             return Ok(());
         }
-        check_series_header(&line, &self.stat_columns, path)?;
+        let timed = check_series_header(&line, &self.stat_columns, path)?;
         let mut budget_spent = false;
         let mut values = Vec::with_capacity(width);
         let mut record_number = 1;
@@ -246,7 +246,7 @@ impl ResultSet {
         let mut last_position = None;
         while read_line(&mut series, &mut line, path)? {
             record_number += 1;
-            let (run_id, tick) = parse_series_row(&line, width, &mut values, path, record_number)?;
+            let (run_id, tick) = parse_series_row(&line, timed, width, &mut values, path, record_number)?;
             let Some(&position) = self.positions.get(&run_id) else {
                 continue;
             };
@@ -557,10 +557,10 @@ pub fn read_directory_series(
     if !read_line(&mut lines, &mut line, &path)? {
         return Ok(read);
     }
-    check_series_header(&line, stat_columns, &path)?;
+    let timed = check_series_header(&line, stat_columns, &path)?;
     while read_line(&mut lines, &mut line, &path)? {
         record_number += 1;
-        let (run_id, tick) = parse_series_row(&line, stat_width, &mut values, &path, record_number)?;
+        let (run_id, tick) = parse_series_row(&line, timed, stat_width, &mut values, &path, record_number)?;
         if !run_ids.contains(&run_id) || read.dropped_runs.contains(&run_id) {
             continue;
         }
@@ -621,12 +621,21 @@ fn picked_table(name: &str, bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// Checks that `line`, the header line of the `series.csv` at `path`, lists the id columns and then `stat_columns`.
-fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Result<(), ResultSetError> {
+/// Checks that `line`, the header line of the `series.csv` at `path`, lists the id columns, the `time` column of a
+/// model with a time scale, and then `stat_columns`.
+///
+/// Returns whether the header holds the `time` column. A header one column wider than the ids and the stats, with
+/// `time` after the ids, holds it, so a stat labelled `time` still reads in a header without one.
+fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Result<bool, ResultSetError> {
     let table_error = ResultSetError::Table;
     let text = String::from_utf8_lossy(line);
-    let header = parse_one(&text, 0..text.len(), path, 1).map_err(table_error)?;
+    let mut header = parse_one(&text, 0..text.len(), path, 1).map_err(table_error)?;
     let expected = SERIES_ID_COLUMNS.len() + stat_columns.len();
+    let timed = header.len() == expected + 1
+        && header.get(SERIES_ID_COLUMNS.len()).map(String::as_str) == Some(SERIES_TIME_COLUMN);
+    if timed {
+        header.remove(SERIES_ID_COLUMNS.len());
+    }
     if header.len() != expected {
         return Err(table_error(ReadError::FieldCount {
             path: path.to_owned(),
@@ -654,7 +663,7 @@ fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Res
             }));
         }
     }
-    Ok(())
+    Ok(timed)
 }
 
 /// Reads the next complete line of `lines` into `line`, and returns whether there was a complete line.
@@ -674,9 +683,13 @@ fn read_line(lines: &mut impl BufRead, line: &mut Vec<u8>, path: &Path) -> Resul
 /// Reads the run id, tick and `width` values of the series row `line` into `values`, an empty cell as a value that is
 /// not finite.
 ///
+/// `timed` says the row holds a `time` field after the tick. The field is checked as a number and left out, since a
+/// run's time follows from its ticks and its tick length.
+///
 /// Returns the run id and the tick.
 fn parse_series_row(
     line: &[u8],
+    timed: bool,
     width: usize,
     values: &mut Vec<f64>,
     path: &Path,
@@ -699,6 +712,13 @@ fn parse_series_row(
     };
     let run_id = number("run_id")?;
     let tick = number("tick")?;
+    let id_fields = SERIES_ID_COLUMNS.len() + usize::from(timed);
+    if timed {
+        let field = fields.next().unwrap_or_default();
+        if !field.is_empty() && field.parse::<f64>().is_err() {
+            return Err(bad_field(SERIES_TIME_COLUMN, field));
+        }
+    }
     values.clear();
     for field in fields {
         let value = if field.is_empty() {
@@ -712,8 +732,8 @@ fn parse_series_row(
         return Err(ResultSetError::Table(ReadError::FieldCount {
             path: path.to_owned(),
             record_number,
-            found: values.len() + 2,
-            expected: width + 2,
+            found: values.len() + id_fields,
+            expected: width + id_fields,
         }));
     }
     Ok((run_id, tick))

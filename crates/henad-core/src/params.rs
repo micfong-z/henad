@@ -15,6 +15,7 @@ pub struct ParamDescriptor {
     kind: ParamKind,
     apply: ParamApply,
     format: ParamFormat,
+    hidden: bool,
 }
 
 /// Display format of a parameter value. The stored value is the same either way.
@@ -51,6 +52,7 @@ impl ParamDescriptor {
             kind,
             apply: ParamApply::Live,
             format: ParamFormat::Plain,
+            hidden: false,
         }
     }
 
@@ -91,9 +93,23 @@ impl ParamDescriptor {
         self
     }
 
+    /// Marks the parameter as hidden from the Parameters panel. A parameter is shown by default.
+    ///
+    /// A hidden parameter is still part of the model's schema, so `--set`, a sweep and a spec file reach it as they
+    /// reach any other. A sheet's tick length is one.
+    pub fn hidden(mut self) -> Self {
+        self.hidden = true;
+        self
+    }
+
     /// Returns whether an edit reaches a running state.
     pub fn is_live(&self) -> bool {
         self.apply == ParamApply::Live
+    }
+
+    /// Returns whether the parameter is hidden from the Parameters panel.
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
     }
 }
 

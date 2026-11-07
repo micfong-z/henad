@@ -84,6 +84,8 @@ Node ids and draw keys were numbered by hand, unique in each file.
 The rates files add the time scale.
 
 - The tick length is a parameter, `tick_length`, default 1, in the rates' unit, here days.
+  Its table sets `hidden = true`, which keeps it off the Parameters panel, and `tick_unit = "day"`, which names the unit.
+  The entry then carries the time scale, and `--export-stats` and a sweep's `series.csv` write a `time` column, the tick times the tick length.
 - A rate r on a line with n tries becomes the chance 1 - exp(-r × Δt × n) per tick, Δt being the tick length.
   The value exp(-r × Δt) reads only parameters, so the host computes it before the run, and `math.powi` raises it to the count.
 - `sird_competing.toml` lowers lines 3 and 4 as one group with one draw u in [0, 1).

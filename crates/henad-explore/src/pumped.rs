@@ -218,6 +218,7 @@ impl PumpedSweep {
                 preparation.plan(),
                 inputs.entry.param_descriptors(),
                 preparation.measure(),
+                inputs.entry.metadata().time.as_ref(),
             )?;
             Ok((manifest, writer))
         });

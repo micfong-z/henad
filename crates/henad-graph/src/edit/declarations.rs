@@ -28,6 +28,9 @@ fn renamed_param(descriptor: &ParamDescriptor, id: &str) -> ParamDescriptor {
     if descriptor.format() == ParamFormat::Percent {
         renamed = renamed.percent();
     }
+    if descriptor.is_hidden() {
+        renamed = renamed.hidden();
+    }
     renamed
 }
 
@@ -221,6 +224,10 @@ impl GraphBuilder {
                 let references = self.param_references(&id);
                 Self::refuse_referenced(format!("the parameter '{id}'"), references)?;
                 self.document.params.remove(position);
+                // The unit sits on the parameter's table, so the time scale goes with the tick length.
+                if self.document.time.as_ref().is_some_and(|time| time.tick_length == id) {
+                    self.document.time = None;
+                }
                 Ok(())
             }
             EditCommand::AddStat(stat) => {
@@ -616,6 +623,11 @@ impl GraphBuilder {
         let position = self.param_position(from)?;
         Self::check_new_id("parameter", to, self.value_ids().filter(|known| *known != from))?;
         self.document.params[position] = renamed_param(&self.document.params[position], to);
+        if let Some(time) = &mut self.document.time
+            && time.tick_length == from
+        {
+            time.tick_length = to.to_owned().into();
+        }
         for pass in &mut self.document.passes {
             if let PassEnabled::Param(param) = &mut pass.enabled
                 && param == from

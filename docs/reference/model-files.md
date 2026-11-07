@@ -102,6 +102,23 @@ The default has to lie within the bounds, and a choice's option names follow the
 A sweep's level text splits at a comma, reads a colon as a range and `all` as every option, and could not list such a name.
 An id cannot be `width`, `height`, `seed`, `tick`, `grid_width` or `grid_height`, start with `henad_`, or be a reserved word of WGSL.
 Every parameter of a grid rule applies when the model is built.
+A grid rule refuses the keys `hidden` and `tick_unit`, which only a graph file reads, at the table's line.
+
+#### Time scale
+
+A graph file, the other kind of model file, reads its `[[param]]` tables with the keys above and two more.
+
+| Key | Value |
+|---|---|
+| `hidden` | `true` marks the parameter hidden, as `--params` shows it. `--set`, a sweep and a spec file still reach it. Written only when `true` |
+| `tick_unit` | Unit of one tick: `"second"`, `"minute"`, `"hour"`, `"day"`, `"week"`, `"month"` or `"year"`. Set on the one parameter that holds the length of one tick |
+
+The parameter with a `tick_unit` is the model's tick length, as a sheet with rates lowers its Time line.
+It is an `f32` with a `min` above 0 and `hidden = true`, and a file sets `tick_unit` on one parameter at most.
+A month is 30.44 days and a year 365.25 days.
+`--export-stats` and a sweep's `series.csv` write a `time` column after `tick`, the tick times the run's tick length, and `--params --json` names the unit under `time`.
+A tick length is a parameter like any other in the code identity and the schema, and a sweep over it, such as `--vary tick_length=0.25:1:0.25`, compares one model at several tick lengths.
+Neither key changes the code of a file that leaves both out.
 
 ### `[step]`
 

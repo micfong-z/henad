@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use crate::authoring::model::gpu_agent_model::{BufferSpec, Domain, PassSpec};
+use crate::params::{ParamDescriptor, ParamKind, ParamValue};
 use crate::topology::NeighborhoodKind;
 
 /// Model backend.
@@ -101,6 +102,77 @@ impl TimeUnit {
             Self::Year => 365.25,
         }
     }
+}
+
+/// Time scale of a model whose ticks stand for a length of time: a unit, and the parameter holding the length of one
+/// tick in that unit.
+///
+/// The tick length is an `f32` parameter, so a sweep can vary it like any other. The time at tick `t` of a run is
+/// `t` times the run's tick length, as [`Self::time_at`] computes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TimeScale {
+    /// Unit that the tick length counts in.
+    pub unit: TimeUnit,
+    /// Id of the parameter that holds the length of one tick, in [`Self::unit`]s.
+    pub tick_length: Cow<'static, str>,
+}
+
+impl TimeScale {
+    /// Creates the time scale whose tick length, in `unit`s, is the parameter `tick_length`.
+    pub fn new(unit: TimeUnit, tick_length: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            unit,
+            tick_length: tick_length.into(),
+        }
+    }
+
+    /// Returns the position of the tick-length parameter in `params`.
+    ///
+    /// Returns `None` when no parameter has the tick length's id, or that parameter is not an `f32`. A model writes a
+    /// `time` column exactly when this returns a position.
+    pub fn tick_length_index(&self, params: &[ParamDescriptor]) -> Option<usize> {
+        params
+            .iter()
+            .position(|param| param.id() == self.tick_length)
+            .filter(|&index| matches!(params[index].kind(), ParamKind::F32 { .. }))
+    }
+
+    /// Returns the tick length among `values`, the values of `params` in descriptor order.
+    ///
+    /// Returns `None` when [`Self::tick_length_index`] finds no position, or the value there is not an `f32`.
+    pub fn tick_length_in(&self, params: &[ParamDescriptor], values: &[ParamValue]) -> Option<f32> {
+        match values.get(self.tick_length_index(params)?)? {
+            ParamValue::F32(length) => Some(*length),
+            _ => None,
+        }
+    }
+
+    /// Returns the time at `tick` of a run whose ticks are `tick_length` units long.
+    ///
+    /// The product is taken from the decimal digits `tick_length` displays with, rounded once. A tick length of 0.1
+    /// then puts tick 3 at 0.3, where a product of the binary values would give 0.30000000447034836.
+    pub fn time_at(tick: u64, tick_length: f32) -> f64 {
+        decimal_product(tick, tick_length).unwrap_or_else(|| tick as f64 * f64::from(tick_length))
+    }
+}
+
+/// Returns `tick` times the decimal number `length` displays as, rounded once to the nearest `f64`, or `None` when the
+/// digits do not fit an exact computation.
+fn decimal_product(tick: u64, length: f32) -> Option<f64> {
+    // A power of ten up to 10^22 and a whole number up to 2^53 are exact in an `f64`, so the division rounds once.
+    const MAX_EXACT: u128 = 1 << 53;
+    let text = length.to_string();
+    let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
+    if fraction.len() > 22 || !whole.bytes().chain(fraction.bytes()).all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let digits: u128 = format!("{whole}{fraction}").parse().ok()?;
+    let product = digits
+        .checked_mul(u128::from(tick))
+        .filter(|product| *product <= MAX_EXACT)?;
+    let scale = 10_f64.powi(i32::try_from(fraction.len()).ok()?);
+    Some(product as f64 / scale)
 }
 
 /// One lane of a CPU agent model's struct-of-arrays storage.
@@ -228,8 +300,8 @@ pub enum Structure {
 
 /// Model metadata that the UI displays.
 ///
-/// [`Self::new`] creates one with no palette that replays exactly. [`Self::palette()`] sets a palette, and
-/// [`Self::replays_exactly()`] sets the replay flag.
+/// [`Self::new`] creates one with no palette and no time scale that replays exactly. [`Self::palette()`] sets a
+/// palette, [`Self::replays_exactly()`] sets the replay flag, and [`Self::time()`] sets a time scale.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ModelMetadata {
@@ -242,18 +314,21 @@ pub struct ModelMetadata {
     pub structure: Structure,
     /// Whether two builds on one seed step through identical states. `true` for every CPU model.
     pub replays_exactly: bool,
+    /// Time scale of the model's ticks, `None` for a model that runs in ticks alone.
+    pub time: Option<TimeScale>,
 }
 
 impl ModelMetadata {
     /// Creates the metadata of a model that steps on `backend` with the storage layout `structure`.
     ///
-    /// The metadata has no palette and replays exactly.
+    /// The metadata has no palette and no time scale, and replays exactly.
     pub fn new(backend: Backend, structure: Structure) -> Self {
         Self {
             backend,
             palette: None,
             structure,
             replays_exactly: true,
+            time: None,
         }
     }
 
@@ -270,11 +345,19 @@ impl ModelMetadata {
         self.replays_exactly = replays_exactly;
         self
     }
+
+    /// Sets the time scale of the model's ticks.
+    pub fn time(mut self, time: TimeScale) -> Self {
+        self.time = Some(time);
+        self
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TimeUnit;
+    use super::{TimeScale, TimeUnit};
+    use crate::helpers::{f32_param, u32_param};
+    use crate::params::ParamValue;
 
     #[test]
     fn time_unit_factors_follow_their_known_answers() {
@@ -292,5 +375,36 @@ mod tests {
         assert_eq!(TimeUnit::parse("fortnight"), None);
         assert_eq!(TimeUnit::parse("days"), None);
         assert_eq!(TimeUnit::parse("Day"), None);
+    }
+
+    #[test]
+    fn the_time_at_a_tick_is_the_tick_times_its_decimal_length() {
+        assert_eq!(TimeScale::time_at(0, 0.25), 0.0);
+        assert_eq!(TimeScale::time_at(7, 1.0), 7.0);
+        assert_eq!(TimeScale::time_at(10, 0.25), 2.5);
+        assert_eq!(TimeScale::time_at(3, 0.1), 0.3);
+        assert_eq!(TimeScale::time_at(7, 0.01), 0.07);
+        assert_eq!(TimeScale::time_at(1_000_003, 12.5), 12_500_037.5);
+        assert_eq!(TimeScale::time_at(3, 1e-7), 3e-7);
+        // Past 2^53 the digits leave the exact range, and the product is the binary one.
+        assert_eq!(TimeScale::time_at(u64::MAX, 2.0), u64::MAX as f64 * 2.0);
+        assert!(TimeScale::time_at(2, f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn a_time_scale_finds_its_tick_length_by_id() {
+        let params = [
+            u32_param("grid_width", "Grid width", 64, 1, 4096),
+            f32_param("tick_length", "One tick is (days)", 1.0, 0.01, 30.0, None).hidden(),
+        ];
+        let scale = TimeScale::new(TimeUnit::Day, "tick_length");
+        assert_eq!(scale.tick_length_index(&params), Some(1));
+        let values = [ParamValue::U32(64), ParamValue::F32(0.5)];
+        assert_eq!(scale.tick_length_in(&params, &values), Some(0.5));
+        assert_eq!(scale.tick_length_in(&params, &values[..1]), None);
+        let width = TimeScale::new(TimeUnit::Day, "grid_width");
+        assert_eq!(width.tick_length_index(&params), None, "a tick length is an f32");
+        assert_eq!(width.tick_length_in(&params, &values), None);
+        assert_eq!(TimeScale::new(TimeUnit::Day, "absent").tick_length_index(&params), None);
     }
 }

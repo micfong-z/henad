@@ -46,6 +46,8 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - `henad::gpu` re-exports `PassKind`, `HostWork`, `SUBMISSION_WORK_BUDGET`, `HOST_WORK_BUDGET`.
 - `GpuBufferInfo`, `GpuPassInfo` (`henad_core::metadata`, facade root). `binding::named_buffer_target`.
 - Generalised `GpuGridSpec` (`runtime-wgsl`): `GridBufferSpec` (dual or plain set), several step passes (`GridPassSpec` with a `SideTable` and a cost), display and reduce as passes, multi-pass actions (`GridActionSpec::with_passes`) after a host rerun (`GridHooks::rerun`, `RerunUploads`, uploaded to the current side; a fault to the fault sink), `GridPassId`, `GridPassCtx`, `GridPress`, `GpuGridSpec::single_step`, `init_cost`, `rerun_cost`. `GridHooks` writes each pass's uniform block (`pass_params_bytes(pass, ctx, params)`) and reads the tick of a reduce (`stats(counts, ctx, params)`). `GridPassSpec::uniform_bytes` and `workgroup_bytes` (zero when unknown). `SideTable`, `SideRow`, `BufferSide` now in `gpu::sides`, shared by both specs (same paths).
+- Time scale: `ParamDescriptor::hidden`, `is_hidden` (display flag, left out of `schema_hash`); `TimeScale` (`henad_core::metadata`, facade root: `new`, `tick_length_index`, `tick_length_in`, `time_at`) as `ModelMetadata.time` and `EntryDeclarations.time`. Graph `[[param]]` keys `hidden = true` and `tick_unit` (written only when set, existing codes unchanged; the tick length an `f32`, hidden, `min` above 0, one per file; both refused in a grid rule), `GraphDocument.time`. `--params` marks ` hidden`; `--params --json` writes `"hidden": true` and `time`.
+- `time` column after `tick` for a model with a time scale: `--export-stats` (`StatsWriter::tick_length`) and a sweep's or search's `series.csv` (`SERIES_TIME_COLUMN`), the tick times the run's tick length; `ResultSet` and `read_directory_series` read the id columns from the header, older folders unchanged.
 
 ### Changed
 
@@ -71,6 +73,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Breaking: dropping a `SimThread` or `GpuSimThread` waits at most `DEFAULT_STOP_TIMEOUT` (2 s) for its thread, then detaches it and logs (was: joined); `stop(timeout)` returns `RunnerShutdown` (`Joined`, `Detached(DetachedRunner)`); `runner::Driver::shutdown` takes a timeout and returns it.
 - Graph editor: a move of a node, or Arrange, leaves the preview running (preview key follows the code); Arrange puts a region's input half in the column before its body.
 - Breaking: `Snapshot` gains `fire_counts` (`FireCounts`, empty on the CPU path and for a model with no probes).
+- Breaking: `OutputDir::open_writer` and `append_writer` take the model's time scale (`Option<&TimeScale>`, pass `entry.metadata().time.as_ref()`); `SeriesWriter::new` and `appending` take the tick length's position (`Option<usize>`, `None` for no `time` column), `write_run` the run's parameter values.
 
 ### Fixed
 

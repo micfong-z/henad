@@ -765,6 +765,7 @@ pub(crate) fn run_in_memory(
         &preparation.plan,
         inputs.entry.param_descriptors(),
         &preparation.measure,
+        inputs.entry.metadata().time.as_ref(),
     )?;
     let (end, writer) = preparation.run_pending(inputs, writer, progress)?;
     let counts = writer.counts();
@@ -873,7 +874,11 @@ impl SweepPreparation {
                     options.shard,
                     options.retry_failed,
                     &runs_csv::header_line(&columns),
-                    &series_csv::header_line(measure.columns()),
+                    &series_csv::header_line(
+                        measure.columns(),
+                        series_csv::tick_length_position(entry.metadata().time.as_ref(), entry.param_descriptors())
+                            .is_some(),
+                    ),
                 )
             })
             .transpose()?;
@@ -1015,10 +1020,11 @@ impl SweepPreparation {
             scan.repair(dir)?;
         }
         let params = inputs.entry.param_descriptors();
+        let time = inputs.entry.metadata().time.as_ref();
         let writer = if self.resumed.is_some() {
-            dir.append_writer(&self.plan, params)?
+            dir.append_writer(&self.plan, params, time)?
         } else {
-            dir.open_writer(&self.plan, params, &self.measure)?
+            dir.open_writer(&self.plan, params, &self.measure, time)?
         };
         let (end, writer) = self.run_pending(inputs, writer, progress)?;
         let written = writer.counts();

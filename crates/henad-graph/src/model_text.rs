@@ -12,6 +12,7 @@ use toml::Spanned;
 use crate::file::{FORMAT, FORMAT_VERSION};
 
 use henad_core::helpers::check_choice_options;
+use henad_core::metadata::TimeUnit;
 use henad_core::params::{ChoiceOptions, ParamDescriptor, ParamFormat, ParamKind};
 
 /// Header keys of a model file, and the version key of each kind's own table, read ignoring every other key.
@@ -227,6 +228,9 @@ pub fn toml_string(value: &str) -> String {
 }
 
 /// Appends the keys of `param`'s `[[param]]` table to `text`, each on a line of its own.
+///
+/// `hidden = true` is written only for a hidden parameter, and a shown one writes no `hidden` key. A graph file's tick
+/// length adds its `tick_unit` after these keys.
 pub fn write_param(text: &mut String, param: &ParamDescriptor) {
     text.push_str(&format!("id = {}\n", toml_string(param.id())));
     text.push_str(&format!("label = {}\n", toml_string(param.label())));
@@ -261,6 +265,9 @@ pub fn write_param(text: &mut String, param: &ParamDescriptor) {
     if param.format() == ParamFormat::Percent {
         text.push_str("format = \"percent\"\n");
     }
+    if param.is_hidden() {
+        text.push_str("hidden = true\n");
+    }
 }
 
 /// A `[[param]]` table, in the vocabulary of `--params --json`.
@@ -282,6 +289,10 @@ pub struct ParamTable {
     options: Option<Vec<String>>,
     #[serde(default)]
     format: Option<FormatName>,
+    #[serde(default)]
+    hidden: Option<bool>,
+    #[serde(default)]
+    tick_unit: Option<String>,
 }
 
 /// Value of a parameter's `kind` key.
@@ -303,12 +314,57 @@ enum FormatName {
 }
 
 impl ParamTable {
-    /// Returns the descriptor the table declares.
+    /// Returns the descriptor the table declares, refusing the `hidden` and `tick_unit` keys that only a graph file
+    /// reads.
     ///
     /// # Errors
     ///
-    /// Returns the message of the first key that does not fit the parameter's kind.
+    /// Returns the message of the first key that does not fit the parameter's kind, or of a `hidden` or `tick_unit`
+    /// key.
     pub fn into_descriptor(self) -> Result<ParamDescriptor, String> {
+        for (key, present) in [
+            ("hidden", self.hidden.is_some()),
+            ("tick_unit", self.tick_unit.is_some()),
+        ] {
+            if present {
+                return Err(format!(
+                    "parameter '{}' must not set `{key}`, which only a graph file reads",
+                    self.id
+                ));
+            }
+        }
+        self.into_kind_descriptor()
+    }
+
+    /// Returns the descriptor the table declares, hidden when the table sets `hidden = true`, and the unit its
+    /// `tick_unit` key names.
+    ///
+    /// A graph file reads its parameters this way. The checker holds a parameter with a unit to the rules of a tick
+    /// length.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message of the first key that does not fit the parameter's kind, or of a `tick_unit` that names no
+    /// [`TimeUnit`].
+    pub fn into_graph_param(mut self) -> Result<(ParamDescriptor, Option<TimeUnit>), String> {
+        let unit = match self.tick_unit.take() {
+            Some(name) => Some(TimeUnit::parse(&name).ok_or_else(|| {
+                let names: Vec<&str> = TimeUnit::ALL.iter().map(|unit| unit.as_str()).collect();
+                format!(
+                    "parameter '{}' sets `tick_unit` to '{name}', which is not one of {}",
+                    self.id,
+                    or_list(&names)
+                )
+            })?),
+            None => None,
+        };
+        let hidden = self.hidden.take().unwrap_or(false);
+        let descriptor = self.into_kind_descriptor()?;
+        Ok((if hidden { descriptor.hidden() } else { descriptor }, unit))
+    }
+
+    /// Returns the descriptor the table declares from every key but `hidden` and `tick_unit`.
+    fn into_kind_descriptor(self) -> Result<ParamDescriptor, String> {
         let id = self.id;
         let label = self.label.unwrap_or_else(|| id.clone());
         let unused = |key: &str, present: bool| {

@@ -28,6 +28,8 @@ whose builds and demand share it and which boxes the engine itself, as a grid ru
 same, through `register_gpu_agent_model`, `ModelEntry::from_agent_spec` and `GpuAgentState<M>`.
 Behind `runtime-wgsl`, `EntryDeclarations` (`entry/declarations.rs`, with `new`) is public, as are
 `ModelEntry::from_gpu_grid_spec` and `from_gpu_agent_spec`, which forward to those two.
+`EntryDeclarations.time` (`None` from `new` and in every `register_*`) becomes
+`ModelMetadata.time`, which `ModelEntry::metadata` exposes. A graph with a `tick_unit` sets it.
 henad-compute instantiates no model outside its own tests.
 `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for other crates' tests alone. The
 hidden `__with_code` gives a test's entry a runtime source labelled with its id.

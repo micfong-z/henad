@@ -27,6 +27,7 @@ use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::gpu_agent_model::Domain as EngineDomain;
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::helpers::{f32_param, u32_param};
+use henad_core::metadata::TimeScale;
 use henad_core::params::ParamDescriptor;
 use henad_core::provenance::ModelSource;
 use henad_core::view::StatDescriptor;
@@ -75,6 +76,7 @@ struct AgentParts {
     description: String,
     source: ModelSource,
     params: Vec<ParamDescriptor>,
+    time: Option<TimeScale>,
     stats: Vec<StatDescriptor>,
     actions: Vec<ActionDescriptor>,
     buffers: Vec<AgentBufferSpec>,
@@ -529,6 +531,7 @@ impl AgentProgram {
                 description: description.clone(),
                 source: file.source(),
                 params,
+                time: document.time.clone(),
                 stats: document
                     .stats
                     .iter()
@@ -676,6 +679,7 @@ impl AgentProgram {
         );
         declarations.stats = parts.stats.clone();
         declarations.actions = parts.actions.clone();
+        declarations.time = parts.time.clone();
         declarations.replays_exactly = parts.replays_exactly;
         ModelEntry::from_gpu_agent_spec(declarations, parts.source.clone(), spec)
     }

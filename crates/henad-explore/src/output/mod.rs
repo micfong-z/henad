@@ -24,13 +24,14 @@ use std::sync::Arc;
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::{Config, Plan};
+use henad_core::metadata::TimeScale;
 use henad_core::params::ParamDescriptor;
 
 use crate::exec::RunSink;
 use crate::output::manifest::{Manifest, ResultCounts};
 use crate::output::read::{ReadError, RunsCsv, SeriesScan, SeriesSegment, merge_series};
 use crate::output::runs_csv::RunsWriter;
-use crate::output::series_csv::SeriesWriter;
+use crate::output::series_csv::{SeriesWriter, tick_length_position};
 use crate::output::summary_csv::{SummaryError, write_summary};
 
 /// Name of the table with one row per run.
@@ -216,7 +217,8 @@ impl OutputDir {
 
     /// Creates `runs.csv` and `series.csv`, and returns a writer for the runs of `plan`.
     ///
-    /// `params` are the model's parameters, and `measure` fixes the stat and reducer columns.
+    /// `params` are the model's parameters, `measure` fixes the stat and reducer columns, and `time`, the model's time
+    /// scale, adds the `time` column to `series.csv`.
     ///
     /// # Errors
     ///
@@ -226,6 +228,7 @@ impl OutputDir {
         plan: &Arc<Plan>,
         params: &[ParamDescriptor],
         measure: &MeasurePlan,
+        time: Option<&TimeScale>,
     ) -> Result<OutputWriter<BufWriter<File>>, OutputError> {
         let runs_path = self.path.join(RUNS_FILE);
         let runs = File::create_new(&runs_path).map_err(write_error_at(&runs_path))?;
@@ -233,13 +236,16 @@ impl OutputDir {
             .map_err(write_error_at(&runs_path))?;
         let series_path = self.path.join(SERIES_FILE);
         let series = File::create_new(&series_path).map_err(write_error_at(&series_path))?;
-        let series =
-            SeriesWriter::new(BufWriter::new(series), measure.columns()).map_err(write_error_at(&series_path))?;
+        let tick_length = tick_length_position(time, params);
+        let series = SeriesWriter::new(BufWriter::new(series), measure.columns(), tick_length)
+            .map_err(write_error_at(&series_path))?;
         Ok(OutputWriter::new(Arc::clone(plan), runs, series))
     }
 
     /// Opens `runs.csv` and `series.csv`, whose headers are already written, and returns a writer that adds the runs
     /// of `plan` to them.
+    ///
+    /// `time` is the model's time scale, as for [`Self::open_writer`].
     ///
     /// # Errors
     ///
@@ -248,6 +254,7 @@ impl OutputDir {
         &self,
         plan: &Arc<Plan>,
         params: &[ParamDescriptor],
+        time: Option<&TimeScale>,
     ) -> Result<OutputWriter<BufWriter<File>>, OutputError> {
         let append = |file: &str| {
             let path = self.path.join(file);
@@ -258,7 +265,8 @@ impl OutputDir {
                 .map_err(write_error_at(&path))
         };
         let runs = RunsWriter::appending(append(RUNS_FILE)?, params);
-        let series = SeriesWriter::appending(append(SERIES_FILE)?);
+        let tick_length = tick_length_position(time, params);
+        let series = SeriesWriter::appending(append(SERIES_FILE)?, tick_length);
         Ok(OutputWriter::new(Arc::clone(plan), runs, series))
     }
 
@@ -579,7 +587,7 @@ fn write_both<W: Write>(
     outcome: &RunOutcome,
     config: &Config,
 ) -> io::Result<()> {
-    series.write_run(outcome.run.run_id, &outcome.series)?;
+    series.write_run(outcome.run.run_id, &outcome.series, &config.params)?;
     series.flush()?;
     runs.write_run(outcome, config)?;
     runs.flush()?;

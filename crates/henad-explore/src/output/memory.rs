@@ -5,11 +5,12 @@ use std::sync::Arc;
 
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::plan::Plan;
+use henad_core::metadata::TimeScale;
 use henad_core::params::ParamDescriptor;
 
 use crate::output::manifest::Manifest;
 use crate::output::runs_csv::RunsWriter;
-use crate::output::series_csv::SeriesWriter;
+use crate::output::series_csv::{SeriesWriter, tick_length_position};
 use crate::output::summary_csv::{SummaryError, write_summary};
 use crate::output::{
     MANIFEST_FILE, OutputError, OutputWriter, RUNS_FILE, SERIES_FILE, SUMMARY_FILE, manifest_text, write_error_at,
@@ -93,7 +94,8 @@ impl SweepFiles {
 
 /// Returns a writer for the runs of `plan` that holds `runs.csv` and `series.csv` in memory, their headers written.
 ///
-/// `params` are the model's parameters, and `measure` fixes the stat and reducer columns.
+/// `params` are the model's parameters, `measure` fixes the stat and reducer columns, and `time`, the model's time scale,
+/// adds the `time` column to `series.csv`.
 ///
 /// # Errors
 ///
@@ -102,9 +104,12 @@ pub(crate) fn memory_writer(
     plan: &Arc<Plan>,
     params: &[ParamDescriptor],
     measure: &MeasurePlan,
+    time: Option<&TimeScale>,
 ) -> Result<OutputWriter<Vec<u8>>, OutputError> {
     let runs = RunsWriter::new(Vec::new(), params, plan.actions(), measure.reducers().names())
         .map_err(write_error_at(Path::new(RUNS_FILE)))?;
-    let series = SeriesWriter::new(Vec::new(), measure.columns()).map_err(write_error_at(Path::new(SERIES_FILE)))?;
+    let tick_length = tick_length_position(time, params);
+    let series = SeriesWriter::new(Vec::new(), measure.columns(), tick_length)
+        .map_err(write_error_at(Path::new(SERIES_FILE)))?;
     Ok(OutputWriter::new(Arc::clone(plan), runs, series))
 }

@@ -36,8 +36,8 @@ names. It defines no model, needs no build script and never builds on a device, 
 that need an entry compile in a module no test calls. That module also holds the `gpu_build`
 and `scoped_steps` regions `guide/library.md` includes, the second through a `rayon`
 dev-dependency. Its `named_only` module names items whose path is the whole check, the grid rule
-and graph items under `model-files` among them, and `TimeUnit`, which the facade re-exports at
-the root with the rest of `henad_core::metadata`. Keep all three.
+and graph items under `model-files` among them, and `TimeUnit` and `TimeScale`, which the facade
+re-exports at the root with the rest of `henad_core::metadata`. Keep all three.
 
 **henad-tutorial** (`examples/tutorial`, `publish = false`): the finished code of the five pages
 under `docs/guide/first-model/`, which include each file whole. `life.rs`, `foraging/`,

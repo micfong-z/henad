@@ -16,8 +16,9 @@ pub const SCHEMA_VERSION: u64 = 1;
 /// Returns the parameters, stats and actions of `entry` as one JSON object.
 ///
 /// The object carries `stat_columns`, the columns a sweep writes, only when `probe` is given. A choice's default is
-/// its option name, with its index beside it as `default_index`. A model composed at run time adds its
-/// `origin` and the `code_hash` that identifies its code, and a compiled model writes neither.
+/// its option name, with its index beside it as `default_index`, and a hidden parameter carries `"hidden": true`. A
+/// model composed at run time adds its `origin` and the `code_hash` that identifies its code, and a compiled model
+/// writes neither. A model with a time scale adds `time`, the unit and the id of the tick-length parameter.
 pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
     let params: Vec<Value> = entry
         .param_descriptors()
@@ -51,6 +52,9 @@ pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
         let columns: Vec<&str> = (0..probe.columns.len()).map(|i| probe.columns.name(i)).collect();
         schema["stat_columns"] = json!(columns);
     }
+    if let Some(time) = &entry.metadata().time {
+        schema["time"] = json!({ "unit": time.unit.as_str(), "tick_length": time.tick_length });
+    }
     let source = entry.source();
     if source.origin() != CodeOrigin::Compiled {
         schema["origin"] = json!(source.origin().as_str());
@@ -82,6 +86,9 @@ fn param_json(index: usize, descriptor: &ParamDescriptor) -> Value {
         ParamFormat::Percent => "percent",
     };
     param.insert("format".to_owned(), json!(format));
+    if descriptor.is_hidden() {
+        param.insert("hidden".to_owned(), json!(true));
+    }
     let fields = match descriptor.kind() {
         ParamKind::F32 {
             min,
@@ -137,7 +144,7 @@ mod tests {
     use henad_core::explore::fingerprint::schema_hash;
     use henad_core::provenance::ModelCode;
 
-    use super::{f32_json, schema_json};
+    use super::{f32_json, param_json, schema_json};
     use crate::probe::ProbeReport;
 
     /// Each example model's `schema_hash` as Henad 0.2.0 wrote it, at commit 773a7a5.
@@ -225,6 +232,28 @@ mod tests {
             runtime["schema_hash"], compiled["schema_hash"],
             "the code is no part of the schema"
         );
+    }
+
+    #[test]
+    fn param_json_marks_only_hidden_parameters() {
+        let shown = henad_core::helpers::f32_param("tick_length", "One tick is (days)", 1.0, 0.01, 30.0, None);
+        assert!(
+            param_json(0, &shown).get("hidden").is_none(),
+            "a shown parameter writes no key"
+        );
+        let hidden = param_json(0, &shown.clone().hidden());
+        assert_eq!(hidden["hidden"], json!(true));
+        let mut without = hidden.clone();
+        without.as_object_mut().expect("an object").remove("hidden");
+        assert_eq!(without, param_json(0, &shown), "the flag is the one difference");
+
+        for entry in &example_models() {
+            let schema = schema_json(entry, None);
+            assert!(schema.get("time").is_none(), "{} has no time scale", entry.id());
+            for param in schema["params"].as_array().expect("params is a list") {
+                assert!(param.get("hidden").is_none(), "{}: {param}", entry.id());
+            }
+        }
     }
 
     #[test]

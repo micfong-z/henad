@@ -64,6 +64,11 @@ pub(crate) fn semantic_text(document: &GraphDocument) -> String {
     for param in &document.params {
         text.push_str("\n[[param]]\n");
         write_param(&mut text, param);
+        if let Some(time) = &document.time
+            && time.tick_length == param.id()
+        {
+            key(&mut text, "tick_unit", &toml_string(time.unit.as_str()));
+        }
     }
     for stat in &document.stats {
         text.push_str("\n[[stat]]\n");

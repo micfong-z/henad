@@ -10,6 +10,7 @@ use henad_graph::value::InputValue;
 use crate::state::AppState;
 use crate::tests::support::step_past;
 use crate::ui::dock::Tab;
+use crate::ui::editor::graph::world::param_with;
 use crate::ui::editor::graph::{GraphEdit, GraphEditor, GraphRequest, GraphStatus};
 use crate::ui::editor::{
     ApplyOutcome, EditorModel, apply, editor_ui, new_graph_model, new_grid_rule, receive_open, save_name,
@@ -308,6 +309,60 @@ fn a_new_parameter_binds_to_an_input() {
     assert!(!graph.report().has_errors());
     let node = graph.open_pass().expect("a pass").body.node(n(12)).expect("a node");
     assert_eq!(node.inputs.get("b"), Some(&InputValue::Param("spread_rate".to_owned())));
+}
+
+#[test]
+fn a_label_or_range_edit_keeps_the_tick_length_hidden() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../henad-models/tests/fixtures/lowered/rates/sir_rates.toml");
+    let text = std::fs::read_to_string(&path).expect("the fixture reads");
+    let mut graph = GraphEditor::new(&GraphFile::parse(&text).expect("the fixture reads as a graph"));
+    assert!(!graph.report().has_errors());
+    let tick_length = |graph: &GraphEditor| {
+        graph
+            .document()
+            .params
+            .iter()
+            .find(|param| param.id() == "tick_length")
+            .expect("the tick length")
+            .clone()
+    };
+
+    let param = tick_length(&graph);
+    let relabelled = param_with(&param, "One step is (days)", param.kind().clone());
+    assert!(
+        graph.edit(vec![EditCommand::SetParam(relabelled)], None),
+        "{:?}",
+        graph.status
+    );
+    let ParamKind::F32 { min, default, step, .. } = tick_length(&graph).kind().clone() else {
+        panic!("the tick length is an f32");
+    };
+    let widened = ParamKind::F32 {
+        min,
+        max: 60.0,
+        default,
+        step,
+    };
+    let param = tick_length(&graph);
+    assert!(
+        graph.edit(
+            vec![EditCommand::SetParam(param_with(&param, param.label(), widened))],
+            None
+        ),
+        "{:?}",
+        graph.status
+    );
+
+    let param = tick_length(&graph);
+    assert_eq!(param.label(), "One step is (days)");
+    assert!(param.is_hidden(), "the edits keep `hidden`");
+    assert!(
+        !graph.report().has_errors(),
+        "{:?}",
+        graph.report().errors().collect::<Vec<_>>()
+    );
+    assert!(graph.text().contains("tick_unit = \"day\""));
 }
 
 #[test]

@@ -511,6 +511,7 @@ sir-sweep/
 
 `series.csv`
 : The series of every run, one row per run and sampled tick.
+  A model with a tick length adds a `time` column after `tick`, the tick times that run's tick length.
 
 `summary.csv`
 : One row per config, with the mean, standard deviation, count and 95% confidence interval of every reducer over the replicates.
@@ -741,6 +742,22 @@ Start a new directory for the edited model, or undo the edit.
 Comments outside the step, the order of the keys and the form of a number are left out of the code, and changing them keeps the directory resumable.
 
 A file whose id is that of a model the CLI already offers, such as `gpu_game_of_life`, replaces that model for the one command, and a note on stderr says so.
+
+### Sweeping the tick length
+
+A graph model whose ticks stand for a length of time holds that length as a hidden [tick length](../reference/model-files.md#time-scale) parameter, `tick_length`, in the unit its `tick_unit` names.
+`--params` marks it `hidden`, and a sweep varies it like any other parameter:
+
+``` bash
+cargo run --release -p henad-cli -- \
+  --model-file crates/henad-models/tests/fixtures/lowered/rates/sir_rates.toml \
+  --vary tick_length=0.25,0.5,1 --reps 5 --steps 400 --out tick-sweep
+```
+
+The tick length changes how much time one tick covers, so the runs reach different times after the same number of steps.
+`series.csv` then holds a `time` column after `tick`, the tick times the run's tick length, and the curves of the three tick lengths compare on that column.
+Reducers such as `argmax` still report a tick, and a run meant to end at a given time takes `--steps` of that time divided by the tick length.
+`runs.csv` holds each run's `tick_length` beside its other parameters.
 
 ## Reading the results
 

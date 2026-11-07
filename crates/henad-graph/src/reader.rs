@@ -12,6 +12,7 @@ use serde::{Deserialize, Deserializer};
 use toml::Spanned;
 
 use henad_core::authoring::primitives::space::Boundary;
+use henad_core::metadata::TimeScale;
 use henad_core::params::ParamDescriptor;
 
 use crate::document::{
@@ -529,7 +530,7 @@ impl FileTable {
                 id: table.into_inner().id,
             });
         }
-        let params = read_params(self.params, &mut places)?;
+        let (params, time) = read_params(self.params, &mut places)?;
         let mut stats = Vec::with_capacity(self.stats.len());
         for table in self.stats {
             places.stats.push(table.span());
@@ -564,6 +565,7 @@ impl FileTable {
             fields,
             counters,
             params,
+            time,
             stats,
             actions,
             functions,
@@ -801,19 +803,36 @@ fn read_field(table: FieldTable, span: Range<usize>, categories: &[Category]) ->
     })
 }
 
-fn read_params(tables: Vec<Spanned<ParamTable>>, places: &mut Places) -> Result<Vec<ParamDescriptor>, Placed> {
+/// Returns the parameters `tables` declare, and the time scale of the one whose table sets `tick_unit`.
+///
+/// A second table that sets `tick_unit` is refused at its place, since a file has one tick length.
+fn read_params(
+    tables: Vec<Spanned<ParamTable>>,
+    places: &mut Places,
+) -> Result<(Vec<ParamDescriptor>, Option<TimeScale>), Placed> {
     let mut params = Vec::with_capacity(tables.len());
+    let mut time: Option<TimeScale> = None;
     for table in tables {
         let span = table.span();
         places.params.push(span.clone());
-        params.push(
-            table
-                .into_inner()
-                .into_descriptor()
-                .map_err(|message| Placed(message, span))?,
-        );
+        let (param, unit) = table
+            .into_inner()
+            .into_graph_param()
+            .map_err(|message| Placed(message, span.clone()))?;
+        if let Some(unit) = unit {
+            if let Some(first) = &time {
+                let message = format!(
+                    "the parameters '{}' and '{}' both set `tick_unit`, and a file has one tick length",
+                    first.tick_length,
+                    param.id()
+                );
+                return Err(Placed(message, span));
+            }
+            time = Some(TimeScale::new(unit, param.id().to_owned()));
+        }
+        params.push(param);
     }
-    Ok(params)
+    Ok((params, time))
 }
 
 fn read_stat(table: StatTable) -> Result<Stat, Placed> {

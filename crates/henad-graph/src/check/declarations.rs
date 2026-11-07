@@ -524,6 +524,42 @@ fn check_params(checker: &mut Checker<'_>) {
             );
         }
     }
+    check_tick_length(checker);
+}
+
+/// Checks that the parameter setting `tick_unit` is an `f32` with a `min` above 0, hidden from the Parameters panel.
+fn check_tick_length(checker: &mut Checker<'_>) {
+    let document = checker.file.document();
+    let Some(time) = &document.time else {
+        return;
+    };
+    let id = &time.tick_length;
+    let Some(index) = document.params.iter().position(|param| param.id() == id) else {
+        checker.error(
+            format!("the time scale names the parameter '{id}', and the file declares no parameter '{id}'"),
+            None,
+        );
+        return;
+    };
+    let param = &document.params[index];
+    let place = checker.file.places().params.get(index).cloned();
+    match param.kind() {
+        ParamKind::F32 { min, .. } if *min <= 0.0 => checker.error(
+            format!("the parameter '{id}' sets `tick_unit` and needs a `min` above 0"),
+            place.clone(),
+        ),
+        ParamKind::F32 { .. } => {}
+        _ => checker.error(
+            format!("the parameter '{id}' sets `tick_unit` and needs `kind = \"f32\"`"),
+            place.clone(),
+        ),
+    }
+    if !param.is_hidden() {
+        checker.error(
+            format!("the parameter '{id}' sets `tick_unit` and needs `hidden = true`"),
+            place,
+        );
+    }
 }
 
 fn check_stats(checker: &mut Checker<'_>) {

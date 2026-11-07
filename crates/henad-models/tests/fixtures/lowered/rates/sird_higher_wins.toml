@@ -44,8 +44,8 @@ type = "cat:health"
 storage = "u8"
 initial = { cat = "health.Susceptible" }
 
-# The sheet's time line, "One tick is [1] [days]". The unit is the author document's.
-# The lowering writes the number in the rates' unit, here days.
+# The sheet's time line, "One tick is [1] [days]". The lowering writes the number in the rates' unit, here days,
+# hides it from the Parameters panel and names the unit with `tick_unit`.
 [[param]]
 id = "tick_length"
 label = "One tick is (days)"
@@ -54,6 +54,8 @@ min = 0.01
 max = 30.0
 default = 1.0
 step = 0.01
+hidden = true
+tick_unit = "day"
 
 [[param]]
 id = "infection_rate"

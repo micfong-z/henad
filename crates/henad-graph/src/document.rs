@@ -5,6 +5,7 @@
 //! document, only the declared ones.
 
 use henad_core::authoring::primitives::space::Boundary;
+use henad_core::metadata::TimeScale;
 use henad_core::params::ParamDescriptor;
 
 use crate::ids::NodeId;
@@ -43,6 +44,9 @@ pub struct GraphDocument {
     pub counters: Vec<Counter>,
     /// `[[param]]` tables, in schema order.
     pub params: Vec<ParamDescriptor>,
+    /// Time scale of the ticks: the parameter whose table sets `tick_unit`, and that unit. `None` for a graph that
+    /// runs in ticks alone.
+    pub time: Option<TimeScale>,
     /// `[[stat]]` tables, in schema order.
     pub stats: Vec<Stat>,
     /// `[[action]]` tables, in file order.
@@ -63,6 +67,7 @@ impl std::fmt::Debug for GraphDocument {
             .field("world", &self.world)
             .field("lanes", &self.lanes.len())
             .field("params", &self.params.len())
+            .field("time", &self.time)
             .field("stats", &self.stats.len())
             .field("actions", &self.actions.len())
             .field("functions", &self.functions.len())
@@ -94,6 +99,7 @@ impl GraphDocument {
             fields: Vec::new(),
             counters: Vec::new(),
             params: Vec::new(),
+            time: None,
             stats: Vec::new(),
             actions: Vec::new(),
             functions: Vec::new(),

@@ -52,7 +52,7 @@ With two files or more and no spec, `MODEL` is required, and a command line with
 | `--global-warmup <N>` | 0 | Untimed steps once before the timed reps, to ramp GPU clocks and pay first-use compilation |
 | `--seed <SEED>` | model default | RNG seed. In a sweep, the root seed that every run's seed and design seed come from, 0 when left out |
 | `--export <PATH>` | | Write the final state after warmup and steps to this path, then exit |
-| `--export-stats <PATH>` | | Write the per-tick stat series to this path as CSV, then exit |
+| `--export-stats <PATH>` | | Write the per-tick stat series to this path as CSV, then exit. The columns are `tick`, a `time` column for a model with a [tick length](model-files.md#time-scale), then one per stat column |
 | `--stats-every <N>` | 1 | Sample stats every N ticks when using `--export-stats` or sweeping |
 | `-h`, `--help` | | Print help |
 | `-V`, `--version` | | Print version |
@@ -61,6 +61,7 @@ The flags that run a sweep have [their own table](#sweep-flags).
 
 `--set` accepts a number for a `u32` or `f32` parameter, `true` or `false` for a `bool`, and an option's name or index for a `choice`, as in `--set network=Geometric`.
 A parameter that `--params` marks `format=percent` still accepts a fraction, and `--set virus_spread_chance=0.1` sets it to 10%.
+A parameter that `--params` marks `hidden`, such as a model file's tick length, is reached by `--set`, `--vary` and a spec file as any other parameter is.
 
 Both export formats are shared with the app (see [:material-application-export: Export tab](../guide/app.md#export-tab) for details).
 
@@ -553,6 +554,8 @@ A failed run keeps the series rows it sampled before it ended, and the sweep car
 #### `series.csv`
 
 The columns are `run_id`, `tick`, then one per stat column, headed as `--export-stats` heads them.
+A model with a [tick length](model-files.md#time-scale) writes a `time` column after `tick`, the tick times the run's tick length, as `--export-stats` does.
+A tick length of 0.1 puts tick 3 at time 0.3, the product of the decimal digits rounded once.
 A vector stat writes `.x`, `.y` and `.magnitude` columns, and a histogram one column per bucket plus `.total`.
 A run's rows are contiguous and in tick order.
 They hold every sample on the `--series-every` cadence, counted from the end of the warm-up, and the run's last sample.
@@ -1106,8 +1109,10 @@ A sweep has its own JSON lines, listed under [its progress](#progress).
 | `actions` | Index, id and label of each action |
 | `seed` | `{"type":"u64"}` |
 | `origin`, `code_hash` | For a model composed at run time, the origin and the hash that identifies its code, as under [Builds](#builds). Left out for a compiled model |
+| `time` | For a model with a [tick length](model-files.md#time-scale), the `unit` of one tick and the id of the `tick_length` parameter, as `{"unit":"day","tick_length":"tick_length"}`. Left out for a model that runs in ticks alone |
 
 A parameter object holds its `index`, `id`, `label`, `kind` (`f32`, `u32`, `bool` or `choice`), `apply` (`live` or `reload`), `format` (`plain` or `percent`) and `default`.
+A hidden parameter adds `"hidden": true`, and a shown one writes no `hidden` field.
 A number adds `min` and `max`, and an `f32` adds `step` when it declares a step.
 A `choice` adds its `options`, writes its `default` as an option name, and adds `default_index`.
 Without `--json`, `--params` prints the text it always has.

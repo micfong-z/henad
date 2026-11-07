@@ -86,7 +86,7 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
 /// Returns the hash of a model's parameter ids, kinds, bounds, defaults and options, its stat labels and its action
 /// ids.
 ///
-/// Labels shown in the UI, colours, slider steps and display formats are left out.
+/// Labels shown in the UI, colours, slider steps, display formats and whether a parameter is hidden are left out.
 pub fn schema_hash(schema: &ModelSchema<'_>) -> u64 {
     let mut hasher = Fnv1a64::new();
     hasher.write_str("henad.schema.1");
@@ -474,6 +474,22 @@ mod tests {
             ..schema(&params)
         };
         assert_ne!(original, schema_hash(&without_actions));
+    }
+
+    /// Hiding a parameter changes only where the UI draws it. Results recorded before a parameter was hidden still
+    /// resume and merge.
+    #[test]
+    fn a_hidden_parameter_hashes_like_a_shown_one() {
+        let shown = params();
+        let mut hidden = params();
+        hidden[0] = hidden[0].clone().hidden();
+        assert!(hidden[0].is_hidden() && !shown[0].is_hidden());
+        assert_eq!(schema_hash(&schema(&hidden)), schema_hash(&schema(&shown)));
+        let (from_hidden, from_shown) = (
+            sweep().plan(&schema(&hidden)).expect("a hidden parameter plans"),
+            sweep().plan(&schema(&shown)).expect("a shown parameter plans"),
+        );
+        assert_eq!(from_hidden.plan_hash(), from_shown.plan_hash());
     }
 
     #[test]

@@ -71,7 +71,17 @@ henad-core takes a wildcard arm. The arms sit in the kit's `declared.rs` (`prepe
 `metadata::TimeUnit` (second to year) is the one unit of time in the workspace: `as_str` and
 `parse` name it in a file, `plural` is the word a sheet's Time line shows, and `days` takes a month
 as 30.44 days and a year as 365.25 (`time_unit_factors_follow_their_known_answers`). henad-graph's
-sheet reads `[time] tick_unit` and a rate's `rate_unit` through it.
+sheet reads `[time] tick_unit` and a rate's `rate_unit` through it. `metadata::TimeScale`
+(non-exhaustive, `new`) is a unit and the id of the `f32` parameter holding one tick's length,
+carried as `ModelMetadata.time` (`None` from `new`, set by `ModelMetadata::time`).
+`tick_length_index` and `tick_length_in` find the parameter and a run's value by id, and both
+return `None` for a parameter that is not an `f32`. A model writes a `time` column exactly when
+`tick_length_index` finds a position.
+`TimeScale::time_at(tick, length)` multiplies the tick by the decimal digits the `f32` displays
+with, rounded once (0.1 puts tick 3 at 0.3), falling back to the binary product past 2^53.
+`ParamDescriptor::hidden()` and `is_hidden()` are a display flag beside `on_reload()` and
+`percent()`, marking a parameter for a host to keep off its panel. `--set` and a sweep reach it.
+`schema_hash` leaves the flag out (`a_hidden_parameter_hashes_like_a_shown_one`).
 `binding::named_buffer_target` is `buffer_target` for a binding name built at run time.
 `Network` keeps its adjacency rows in compressed sparse row (CSR) form with slack, beside an edge
 list the view draws. A full row relocates to the end, the engine repacks after a tick once
@@ -134,7 +144,8 @@ simulation rebuilds it, and `Plan::replay(run_id)` builds one from a plan. `plan
 the replicate count and the timeout, and a resume can change both. Unlike `DefaultHasher`,
 FNV-1a is stable across Rust releases. `export/csv.rs` formats and escapes CSV fields and reads
 RFC 4180 records back, and `StatColumns` (`export/stats_csv.rs`) is the column layout
-`StatsWriter` fixes from the first sample. A sweep fixes its `series.csv` columns, reducer
+`StatsWriter` fixes from the first sample. `StatsWriter::tick_length` adds a `time` column after
+`tick`, `TimeScale::time_at` of each sample's tick. A sweep fixes its `series.csv` columns, reducer
 bindings and stop column with the same type.
 `explore/search/` holds the searches, pure and seeded like the designs. `mod.rs` is the ask/tell
 `Searcher` trait. `ask(max)` returns up to `max` `Candidate`s, each an id, a `Genome`, a

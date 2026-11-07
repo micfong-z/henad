@@ -173,7 +173,7 @@ fn ants_results_do_not_depend_on_lane_width() {
                 measure.reducers().names(),
             )
             .expect("a vector takes every write");
-            let series = SeriesWriter::new(Vec::new(), measure.columns()).expect("a vector takes every write");
+            let series = SeriesWriter::new(Vec::new(), measure.columns(), None).expect("a vector takes every write");
             let mut writer = OutputWriter::new(Arc::clone(&shared_plan), runs, series);
             run_plan(&ants, None, &plan, &measure, layout, &mut writer);
             assert_eq!(writer.counts().ok, 4, "{layout:?}");

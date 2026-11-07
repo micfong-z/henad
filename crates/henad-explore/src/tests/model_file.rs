@@ -119,6 +119,33 @@ fn a_step_holds_what_a_literal_string_holds() {
     assert_eq!(error.diagnostics()[0].line, Some(line), "{error:?}");
 }
 
+/// A grid rule reads its `[[param]]` tables through the graph file's reader, and refuses the two keys a graph's tick
+/// length sets.
+#[test]
+fn a_grid_rule_refuses_the_time_scale_keys() {
+    let text = ModelFile::from_rule(GridRule::life())
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    for key in ["hidden = true\n", "tick_unit = \"day\"\n"] {
+        let at = text.find("[[param]]\n").unwrap_or_default() + "[[param]]\n".len();
+        let edited = format!("{}{key}{}", &text[..at], &text[at..]);
+        let error = ModelFile::parse(&edited)
+            .err()
+            .unwrap_or_else(|| panic!("`{key}` was accepted"));
+        let name = key.split(' ').next().unwrap_or_default();
+        let message = &error.diagnostics()[0].message;
+        assert!(
+            message.contains(&format!("must not set `{name}`, which only a graph file reads")),
+            "{message}"
+        );
+        assert_eq!(
+            error.diagnostics()[0].line,
+            Some(text[..at].matches('\n').count() as u32),
+            "the problem sits at the `[[param]]` table"
+        );
+    }
+}
+
 #[test]
 fn unknown_keys_are_refused() {
     let text = ModelFile::from_rule(GridRule::life())

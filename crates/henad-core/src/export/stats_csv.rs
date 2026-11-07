@@ -8,6 +8,7 @@ use std::fmt;
 use std::io::{self, Write};
 
 use crate::export::csv::{escape_field, fmt_f64};
+use crate::metadata::TimeScale;
 use crate::view::{StatEntry, StatValue};
 
 /// A stat series could not be written.
@@ -216,11 +217,16 @@ impl StatColumns {
 /// Call [`push`](Self::push) once per sampled tick, then [`finish`](Self::finish). The first `push`
 /// writes the header, with the columns of its sample. A [`StatDescriptor`](crate::view::StatDescriptor)
 /// does not say whether its value is a scalar, a vector or a histogram.
+///
+/// The first column is `tick`. A writer given a tick length through [`Self::tick_length`] adds a `time` column after
+/// it, for a model with a [`TimeScale`].
 #[derive(Debug)]
 pub struct StatsWriter<W: Write> {
     out: W,
     /// Column layout, `None` until the first `push` fixes it.
     columns: Option<StatColumns>,
+    /// Length of one tick in the model's time unit, `None` for a writer with no `time` column.
+    tick_length: Option<f32>,
     rows: u64,
 }
 
@@ -230,8 +236,18 @@ impl<W: Write> StatsWriter<W> {
         Self {
             out,
             columns: None,
+            tick_length: None,
             rows: 0,
         }
+    }
+
+    /// Adds a `time` column after `tick`, holding each sample's tick times `tick_length`, as
+    /// [`TimeScale::time_at`] computes it.
+    ///
+    /// Call it before the first [`push`](Self::push), which writes the header.
+    pub fn tick_length(mut self, tick_length: f32) -> Self {
+        self.tick_length = Some(tick_length);
+        self
     }
 
     /// Writes the row of the sample `stats`, taken at `tick`.
@@ -246,6 +262,9 @@ impl<W: Write> StatsWriter<W> {
         if self.columns.is_none() {
             let columns = StatColumns::plan(stats);
             write!(self.out, "tick")?;
+            if self.tick_length.is_some() {
+                write!(self.out, ",time")?;
+            }
             for column in &columns.columns {
                 write!(self.out, ",{}", column.header)?;
             }
@@ -255,6 +274,9 @@ impl<W: Write> StatsWriter<W> {
         let columns = self.columns.as_ref().map_or(&[][..], |planned| &planned.columns[..]);
 
         write!(self.out, "{tick}")?;
+        if let Some(tick_length) = self.tick_length {
+            write!(self.out, ",{}", fmt_f64(TimeScale::time_at(tick, tick_length)))?;
+        }
         for column in columns {
             let value = column.value(tick, stats)?;
             write!(self.out, ",{}", fmt_f64(value))?;
@@ -342,6 +364,18 @@ mod tests {
             (1, vec![scalar("Alive", 12.0), scalar("Dead", 3.0)]),
         ]);
         assert_eq!(csv, "tick,Alive,Dead\n0,10,5\n1,12,3\n");
+    }
+
+    #[test]
+    fn a_tick_length_adds_the_time_after_the_tick() {
+        let mut buf = Vec::new();
+        let mut writer = StatsWriter::new(&mut buf).tick_length(0.1);
+        for tick in [0, 3, 10] {
+            writer.push(tick, &[scalar("Alive", 1.0)]).expect("push should succeed");
+        }
+        writer.finish().expect("finish should succeed");
+        let csv = String::from_utf8(buf).expect("output should be utf8");
+        assert_eq!(csv, "tick,time,Alive\n0,0,1\n3,0.3,1\n10,1,1\n");
     }
 
     #[test]

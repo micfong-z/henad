@@ -406,12 +406,11 @@ impl ModelEntry {
             structure,
             palette,
             replays_exactly,
+            time,
         } = declarations;
-        let metadata = ModelMetadata::new(backend, structure).replays_exactly(replays_exactly);
-        let metadata = match palette {
-            Some(palette) => metadata.palette(palette),
-            None => metadata,
-        };
+        let mut metadata = ModelMetadata::new(backend, structure).replays_exactly(replays_exactly);
+        metadata.palette = palette;
+        metadata.time = time;
         Self {
             parts: Arc::new(EntryParts {
                 id,
@@ -454,6 +453,7 @@ pub fn register_grid_model<M: GridModel>() -> ModelEntry {
         },
         palette: Some(Cow::Borrowed(M::PALETTE)),
         replays_exactly: true,
+        time: None,
     };
     let source = ModelSource::__from_type_path(type_name::<M>());
     ModelEntry::new_cpu(declarations, source, |params, seed| {
@@ -483,6 +483,7 @@ pub fn register_agent_model<A: AgentModel>() -> ModelEntry {
         },
         palette: Some(Cow::Borrowed(A::PALETTE)),
         replays_exactly: true,
+        time: None,
     };
     let source = ModelSource::__from_type_path(type_name::<A>());
     ModelEntry::new_cpu(declarations, source, |params, seed| {
@@ -507,6 +508,7 @@ pub fn register_network_model<N: NetworkModel>() -> ModelEntry {
         },
         palette: Some(Cow::Borrowed(N::PALETTE)),
         replays_exactly: true,
+        time: None,
     };
     let source = ModelSource::__from_type_path(type_name::<N>());
     ModelEntry::new_cpu(declarations, source, |params, seed| {
@@ -534,6 +536,7 @@ pub fn register_gpu_grid_model<M: GpuGridModel>() -> ModelEntry {
         structure: spec.structure(),
         palette: Some(Cow::Borrowed(M::PALETTE)),
         replays_exactly: M::REPLAYS_EXACTLY,
+        time: None,
     };
     let source = ModelSource::__from_type_path(type_name::<M>());
     ModelEntry::from_grid_spec(declarations, source, spec)
@@ -559,6 +562,7 @@ pub fn register_gpu_agent_model<M: GpuAgentModel>() -> ModelEntry {
         // No palette. A GPU agent model's shaders write RGBA themselves.
         palette: None,
         replays_exactly: M::REPLAYS_EXACTLY,
+        time: None,
     };
     let source = ModelSource::__from_type_path(type_name::<M>());
     ModelEntry::from_agent_spec(declarations, source, spec)
@@ -653,6 +657,7 @@ mod tests {
             },
             palette: Some(Cow::Owned(vec![[0, 0, 0, 255], [255, 255, 255, 255]])),
             replays_exactly: true,
+            time: None,
         };
         let source = ModelSource::__from_type_path(type_name::<Flicker>());
         let from_values = ModelEntry::new_cpu(declarations, source, |params, seed| {
