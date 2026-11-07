@@ -945,14 +945,14 @@ const HOSTILE_LINES: [&str; 7] = [
 ];
 
 /// Returns a number below `bound` from `rng`.
-fn below(rng: &mut u64, bound: usize) -> usize {
+pub(super) fn below(rng: &mut u64, bound: usize) -> usize {
     *rng = xorshift64(*rng);
     (*rng >> 33) as usize % bound.max(1)
 }
 
 /// Returns `text` with one random edit: a line removed, copied or swapped, a value replaced, a line inserted, or
 /// the text cut short.
-fn mutate(text: &str, rng: &mut u64) -> String {
+pub(super) fn mutate(text: &str, rng: &mut u64) -> String {
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
     if lines.is_empty() {
         return String::new();

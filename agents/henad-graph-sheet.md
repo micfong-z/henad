@@ -13,7 +13,9 @@ plain public data, every type `#[non_exhaustive]` with a constructor (`new`, or 
 private `stored_names!` macro, which also implements the crate-private `StoredName` trait the reader
 reads names through. `SheetDocument` writes its own `Debug` ending in `finish_non_exhaustive`.
 `sheet/reader.rs` is private, and `sheet` re-exports `ParsedSheet`, `SheetPlaces` and `TablePlaces`.
-`sheet/starters.rs` is private, and `sheet` re-exports `starters`.
+`sheet/starters.rs` is private, and `sheet` re-exports `starters`. `sheet/sentence.rs` is public
+(`sheet::sentence`), the wording table and `Sentences`. `sheet/writer.rs` is private, and `sheet`
+re-exports `format_number`.
 `sheet/limits.rs` holds the sheet's limits apart from `crate::limits`, so `library.lock` stays as it
 is: `MAX_SHEET_BYTES` (1 MiB), `MAX_NESTING` (24), `MAX_LINES_PER_CARD` (256), `MAX_NODES_PER_LINE`
 and `MAX_SHEET_NODES` (999 each, for the lowering's `n(1000k + j)` ids) and `MAX_SHEET_ID_BYTES`
@@ -64,6 +66,61 @@ exactly one thing, `part` and `property` only beside `result`. A list holds lite
 and a line table without `kind` is refused at its header. A datetime anywhere reads as "a sheet
 holds no dates or times", since the TOML crate passes it as a table under its own private key.
 
+**The writer.** `SheetDocument::to_text` returns the canonical text, `Result<String,
+SheetWriteError>` (the key and value of the first NaN or infinity). It builds a `Record` tree of
+`Entry` values (`Inline`, `Rows` for an inline array with one element per line, `Table`, `Tables`,
+`Map`) in the author format's key order, then writes it as the reference writer does
+(`src/tests/golden/README.md`): inline keys before sub-tables, one blank line before each header, no
+header for a table with no inline key that holds tables, `[card.line.<id>]` in line id order by
+number, `[color.<thing>]` in thing order (cells, agent kinds, ground, then lexical), `branches` in
+the property's state order. An absent field and a blank slot write nothing, `rate_unit_from_tick`
+only when true, a When's `lines` only when non-empty, `Some(empty)` cells or ground as a bare
+`[cells]` or `[ground]`. A phrase in a slot is a standard sub-table, in `items` an array of tables
+of chips and phrases (an inline array, phrases as inline tables, when an item is a literal), in
+`branches` an inline table. A key TOML cannot read bare is quoted, and a control character in a
+comment becomes a space. Comments: `Sentences::card_heading` above each `[[card]]` and
+`Sentences::line(id, &[])` above each line table. `format_number` is the number rule: integer within
+2^53 (`-0` as `0`), otherwise the shortest round-trip digits from `{:e}` laid out by hand, plain for
+10^-4 <= |x| < 10^16, else `1e-5` style; `None` for NaN and the infinities. Every committed sheet is
+the writer's output.
+
+**The wording table.** `sheet::sentence` holds every word the sheet editor shows, from the final
+editor's wording table: constants for fixed text and functions for templates, each named for what
+it words (`card_header`, `otherwise_words`, `not_run_choose`, `gap_note`, `for_each_words`), with
+the enums `AddButton` and `AddItem` (labels, tooltips, headings, patterns; `+ Chance` has the
+tooltip "Change a state by chance"), `ConditionItem` ("Choose when"), `Blank` (visible word,
+`want`, accessible name, picker title), `LineSelect`, `DrawKind` and `ConditionKind`. A template
+takes the line number, the line word ("line 2", "Clear line 1") or the line prefix ("Line 2",
+"Clear line 1") it needs. Beyond the card it holds the sheet (`SheetSection` with each heading,
+help text and example, the World and Time words, the property form and its checks, Starts as with
+`StartsField` and the `starts_*_place` functions, the Parameters, Measures, Colours and Buttons
+words, `SHEET_EMPTY`), the New model and New parameter dialogs, the top bar, the world tabs
+(`tick_counter`, the tried-value words, `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the
+conversion. Rows the wording table marks "Not built" are left out. The rate notes are templates
+taking numbers already formatted (`rate_note`, `rate_for_each_note`, `worked_out_rate_note`,
+`growing_rate_note`, `chance_for_each_note`, `growing_chance_note`, `competing_note`,
+`mean_stay_note`). The words the plan adds for its own decisions sit in one group
+(`RATE_IN_BUTTON_CARD`, `ONE_AGENT_KIND`, competing rates, the long tick,
+`chances_per_tick_note`). Every editor milestone and the writer's comments draw their words from
+here and from no literal of their own. `FORBIDDEN_WORDS` lists the words sheet mode never shows.
+The conversion words sit under the node-graph exemption and are outside that test.
+
+`Sentences::new(&document)` holds the sheet's names by id and writes `card_heading` ("Each tick,
+every cell", or "Lines of Clear: run once, every cell, when pressed" for a card that runs once,
+named by the button that runs it) and `line(line_id, otherwise)`, where `otherwise` holds the
+numbers of the higher lines that override the line ("otherwise (when line 2 does not apply)
+become ..."). The sentence decides no "otherwise" of its own, and the writer passes none. A
+blank reads `...`, an unknown reference reads as its id. Words follow the final editor: "Become
+X from Y" ("from any state"), ", always", "when my Cargo is Searching" (no "I am"), "is none of
+the numbers 2, 3" and "is one of the states" when the left reads a States property, "the 3 by 3
+block including me", "for each infected neighbour" through `for_each_words` (a name whose last
+word is not a plural reads "for each of B in my block"), a percent as typed ("30%"), a Compare
+line's name hidden while it equals its sentence, a Calculate formula's operators as "plus",
+"minus", "times", "divided by" and "to the power of" with a call's parentheses left out and a
+Calculate inside a slot in parentheses. Agent lines keep round 1's words in those conventions,
+"including me" for `include_me`, an all of inside a slot joined by "and" with its draws after
+commas. A state chip that another States property also names reads "Status Alive".
+
 **Places.** `SheetPlaces::root` is a `TablePlaces` tree that follows the TOML structure: `table`
 (the header, an inline table's braces, or the first key naming an implicit table such as
 `card.line`), `keys` (each value's bytes) and `tables` (one entry under a key holding a table, one
@@ -81,18 +138,31 @@ its chances lower, random walk, boids and bounded confidence until agents lower,
 SIR with rates once rates lower. `sir_chance.toml` stays test data. The graph starters stay graph
 files in `starters/`.
 
-**Tests** sit in `src/tests/sheet_document.rs`, over nine sheets: the two starters, and seven test
+**Tests** of the wording table and the sentences sit in `src/tests/sheet_sentence.rs`:
+`every_wording_table_entry_equals_the_final_words` holds the final wording table's rows as
+literals copied in and compares each entry, a template called with the table's example;
+the starters' and test sheets' sentences, Game of Life's three exactly; `for_each_words`; and no
+fixed entry holding a forbidden word. Writer tests sit in `src/tests/sheet_writer.rs`:
+`every_sheet_is_a_fixed_point`, `the_rust_writer_agrees_with_check_py_apart_from_comments`
+against `src/tests/golden/` (the reference writer's text for the four author-format examples
+with comment lines removed; `golden/README.md` holds the procedure, the script's SHA-256 and the
+rules in full), `a_hand_edited_sheet_reads_back_to_its_canonical_text`,
+`unusual_values_read_back_to_the_same_document`, `a_number_that_is_not_finite_is_refused`,
+`numbers_follow_the_sheet_number_rule`, `every_line_sentence_equals_its_comment`, the three diffs
+of the author format (a new waning line in four hunks, a Steer reorder in one, a parameter rename
+in two, through a line diff in the test) and
+`every_readable_mutation_writes_text_that_reads_back` over the reader's mutation corpus. Reader
+tests sit in `src/tests/sheet_document.rs`, over nine sheets: the two starters, and seven test
 sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are the author format's
 examples, and `forest_fire.toml`, `random_walk.toml`, `bounded_confidence.toml` and
 `sir_chance.toml` (round 1's SIR with chances per tick, sheet id `sir_chance`) were written from
 round 1's models, as `vote.toml` was. Every sheet holds `always` and `any_state` written in, Game
 of Life's Clear is a Run once card holding "Become Dead from any state, always", and both SIR
 sheets name their button `new_outbreak`, "New outbreak". The written sheets' keys were minted at
-random. Their tables follow the author format's canonical order, and their generated comments keep
-the wording before the final editor, with "from any state" for `any_state` and ", always" for
-`always`. The bounded confidence colour rule is `shaded` over `opinion` with no colours, since
-the schema holds no ramp. The test helper `sheets()` lists the starters from `starters()`, then the
-test sheets, so every starter is among the sheets the tests read.
+random. Their text is the writer's canonical text, comments included. The bounded confidence
+colour rule is `shaded` over `opinion` with no colours, since the schema holds no ramp. The test
+helper `sheets()` lists the starters from `starters()`, then the test sheets, so every starter is
+among the sheets the tests read.
 `starters_returns_game_of_life_and_vote` holds the list, the forest fire's absence and each starter
 a grid sheet, and `the_sheets_written_from_round_1_read_their_values` a value of each written
 sheet.

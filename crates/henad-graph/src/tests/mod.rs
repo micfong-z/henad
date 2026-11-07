@@ -19,6 +19,8 @@ mod mutation;
 mod probes;
 mod regions;
 mod sheet_document;
+mod sheet_sentence;
+mod sheet_writer;
 mod sum_fields;
 mod support;
 mod time_scale;

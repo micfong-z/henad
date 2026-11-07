@@ -12,8 +12,10 @@ public fields. `node.rs` holds `Node`, `NodeBody` (`node`, `region_members`, `re
 holds `NodeId` and the grammars `is_id` and `is_port_segment`. `limits.rs` holds the limits of
 `ir-spec.md` section 13 as the plan changes them. `model_text.rs` holds what every kind of model
 file shares (`ModelHeader`, `HeaderProblem`, `read_header`, `LineEnds`, `toml_string`, `ParamTable`,
-`write_param`), and henad-explore's `model_file.rs` reads them from here. `sheet/` holds the author
-document, a model file of kind `sheet`, and `agents/henad-graph-sheet.md` describes it.
+`write_param`), and henad-explore's `model_file.rs` reads them from here. It also holds the
+crate-private text helpers both writers use: `push_key`, `string_array`, `multiline_array`,
+`color_array` (a graph file's four bytes) and `color_hex` (a sheet's `"#RRGGBB"`). `sheet/` holds
+the author document, a model file of kind `sheet`, and `agents/henad-graph-sheet.md` describes it.
 `reader.rs` is private and turns text into the document and `Places`. `writer.rs` is private and
 writes the semantic text. `editor.rs` holds `EditorRegion`. `file.rs` holds `GraphFile`,
 `GraphFileError`, `Places` and the constants `FORMAT`, `FORMAT_VERSION`, `KIND_GRAPH`, `LIBRARY`

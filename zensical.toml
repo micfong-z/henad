@@ -162,6 +162,7 @@ nav = [
             { "#75, 2026-11-07" = "developing/agent-record/20261107-75-starter-sheets-and-fixtures.md" },
             { "#76, 2026-11-07" = "developing/agent-record/20261107-76-add-up-merge.md" },
             { "#77, 2026-11-07" = "developing/agent-record/20261107-77-time-scale.md" },
+            { "#78, 2026-11-07" = "developing/agent-record/20261107-78-sheet-writer.md" },
         ] },
     ] },
 ]

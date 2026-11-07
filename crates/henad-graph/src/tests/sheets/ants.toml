@@ -266,7 +266,7 @@ open_only = true
 pick = "most"
 ranked_by = "to_home"
 
-# Leave (Trail falloff × Home way's amount + my Reward held) on To home, when I am Searching
+# Leave (Trail falloff times Home way's amount plus my Reward held) on To home, when my Cargo is Searching
 [card.line.l3]
 kind = "leave"
 ground_property = "to_home"
@@ -281,7 +281,7 @@ test = "is"
 left = { my = "cargo" }
 right = { state = "searching" }
 
-# Leave (Trail falloff × Food way's amount + my Reward held) on To food, when I am Carrying food
+# Leave (Trail falloff times Food way's amount plus my Reward held) on To food, when my Cargo is Carrying food
 [card.line.l4]
 kind = "leave"
 ground_property = "to_food"
@@ -354,7 +354,7 @@ kind = "move"
 mode = "to"
 value = { result = "l7" }
 
-# When I am Searching and Next cell's Ground is Food:
+# When my Cargo is Searching and Next cell's Ground is Food:
 [card.line.l9]
 kind = "when"
 lines = ["l10", "l11"]
@@ -374,7 +374,7 @@ test = "is"
 left = { result = "l7", property = "ground" }
 right = { state = "food" }
 
-# Become Carrying food
+# Become Carrying food from any state, always
 [card.line.l10]
 kind = "become"
 property = "cargo"
@@ -384,7 +384,7 @@ start_state = "any_state"
 [card.line.l10.condition]
 kind = "always"
 
-# Set Reward held to Site reward
+# Set Reward held to Site reward, always
 [card.line.l11]
 kind = "set"
 property = "reward_held"
@@ -393,7 +393,7 @@ value = { param = "site_reward" }
 [card.line.l11.condition]
 kind = "always"
 
-# When I am Carrying food and Next cell's Ground is Nest:
+# When my Cargo is Carrying food and Next cell's Ground is Nest:
 [card.line.l12]
 kind = "when"
 lines = ["l13", "l14", "l15"]
@@ -413,7 +413,7 @@ test = "is"
 left = { result = "l7", property = "ground" }
 right = { state = "nest" }
 
-# Become Searching
+# Become Searching from any state, always
 [card.line.l13]
 kind = "become"
 property = "cargo"
@@ -423,7 +423,7 @@ start_state = "any_state"
 [card.line.l13.condition]
 kind = "always"
 
-# Set Reward held to Site reward
+# Set Reward held to Site reward, always
 [card.line.l14]
 kind = "set"
 property = "reward_held"
@@ -432,7 +432,7 @@ value = { param = "site_reward" }
 [card.line.l14.condition]
 kind = "always"
 
-# Record a Delivery
+# Record a Delivery, always
 [card.line.l15]
 kind = "record"
 event = "delivery"
@@ -440,7 +440,7 @@ event = "delivery"
 [card.line.l15.condition]
 kind = "always"
 
-# Otherwise set Reward held to 0
+# Set Reward held to 0, always
 [card.line.l16]
 kind = "set"
 property = "reward_held"

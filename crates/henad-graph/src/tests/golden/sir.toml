@@ -1,0 +1,170 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "sir"
+name = "SIR epidemic"
+purpose = "A spatial SIR epidemic. Pattern to look for: a travelling wave of infection that leaves recovered cells behind it, and an epidemic curve that rises and falls."
+next_line = 5
+
+[world]
+made_of = "cells"
+width = 1024
+height = 1024
+edges = "wrap"
+
+[time]
+tick_length = 1
+tick_unit = "day"
+
+[[cells.property]]
+id = "health"
+name = "Health"
+type = "states"
+states = [
+  { id = "susceptible", name = "Susceptible", color = "#007AF5" },
+  { id = "infected", name = "Infected", color = "#E43748" },
+  { id = "recovered", name = "Recovered", color = "#808080" },
+]
+
+[cells.property.starts_as]
+rule = "by_chance"
+key = 2610295353
+otherwise = "susceptible"
+
+[[cells.property.starts_as.row]]
+state = "infected"
+chance = { param = "initial_infected" }
+
+[[parameter]]
+id = "infection_rate"
+name = "Infection rate"
+type = "number"
+min = 0
+max = 5
+default = 0.3
+step = 0.01
+unit = "per day"
+means = "Rate at which one infected neighbour infects a susceptible cell"
+
+[[parameter]]
+id = "recovery_rate"
+name = "Recovery rate"
+type = "number"
+min = 0
+max = 5
+default = 0.1
+step = 0.01
+unit = "per day"
+means = "Rate at which an infected cell recovers"
+
+[[parameter]]
+id = "initial_infected"
+name = "Initial infected"
+type = "number"
+min = 0
+max = 1
+default = 0.01
+step = 0.001
+format = "percent"
+means = "Share of cells infected at the start"
+
+[[measure]]
+id = "susceptible"
+name = "Susceptible"
+color = "#007AF5"
+rule = "count_in_state"
+over = "cells"
+property = "health"
+state = "susceptible"
+
+[[measure]]
+id = "infected"
+name = "Infected"
+color = "#E43748"
+rule = "count_in_state"
+over = "cells"
+property = "health"
+state = "infected"
+
+[[measure]]
+id = "recovered"
+name = "Recovered"
+color = "#808080"
+rule = "count_in_state"
+over = "cells"
+property = "health"
+state = "recovered"
+
+[color.cells]
+rule = "by_state"
+property = "health"
+
+[[button]]
+id = "new_outbreak"
+name = "New outbreak"
+
+[[button.does]]
+rule = "run_once"
+card = "new_outbreak"
+
+[[card]]
+id = "cell_tick"
+every = "cells"
+runs = "each_tick"
+lines = ["l1", "l2", "l3"]
+
+[card.line.l1]
+kind = "count"
+name = "Infected neighbours"
+around = "cells_8"
+
+[card.line.l1.whose]
+kind = "compare"
+test = "is"
+left = { their = "health" }
+right = { state = "infected" }
+
+[card.line.l2]
+kind = "become"
+key = 393430179
+property = "health"
+new_state = "infected"
+start_state = "susceptible"
+
+[card.line.l2.condition]
+kind = "rate"
+rate = { param = "infection_rate" }
+rate_unit = "day"
+tries = { result = "l1" }
+
+[card.line.l3]
+kind = "become"
+key = 4017140928
+property = "health"
+new_state = "recovered"
+start_state = "infected"
+
+[card.line.l3.condition]
+kind = "rate"
+rate = { param = "recovery_rate" }
+rate_unit = "day"
+
+[[card]]
+id = "new_outbreak"
+every = "cells"
+runs = "once"
+lines = ["l4"]
+
+[card.line.l4]
+kind = "become"
+key = 2653500993
+property = "health"
+new_state = "infected"
+start_state = "susceptible"
+
+[card.line.l4.condition]
+kind = "chance"
+chance = { param = "initial_infected" }

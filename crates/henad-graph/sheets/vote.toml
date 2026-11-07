@@ -62,7 +62,7 @@ every = "cells"
 runs = "each_tick"
 lines = ["l1", "l2", "l3"]
 
-# B in my block = count of the 3 by 3 block, me included whose Opinion is B
+# B in my block = count of the 3 by 3 block including me whose Opinion is B
 [card.line.l1]
 kind = "count"
 name = "B in my block"
@@ -87,7 +87,7 @@ test = "at_least"
 left = { result = "l1" }
 right = 5
 
-# Otherwise become A from any state, always
+# Become A from any state, always
 [card.line.l3]
 kind = "become"
 property = "opinion"

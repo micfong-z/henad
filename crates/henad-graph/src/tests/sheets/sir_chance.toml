@@ -122,7 +122,7 @@ test = "is"
 left = { their = "health" }
 right = { state = "infected" }
 
-# Become Infected if Susceptible, with chance Infection chance for each of Infected neighbours
+# Become Infected from Susceptible, with chance Infection chance for each infected neighbour
 [card.line.l2]
 kind = "become"
 key = 1135614760
@@ -135,7 +135,7 @@ kind = "chance"
 chance = { param = "infection_chance" }
 tries = { result = "l1" }
 
-# Become Recovered if Infected, with chance Recovery chance
+# Become Recovered from Infected, with chance Recovery chance
 [card.line.l3]
 kind = "become"
 key = 2888050758
@@ -147,14 +147,14 @@ start_state = "infected"
 kind = "chance"
 chance = { param = "recovery_chance" }
 
-# New outbreak (button), every cell once
+# Lines of New outbreak: run once, every cell, when pressed
 [[card]]
 id = "new_outbreak"
 every = "cells"
 runs = "once"
 lines = ["l4"]
 
-# Become Infected if Susceptible, with chance Initial infected
+# Become Infected from Susceptible, with chance Initial infected
 [card.line.l4]
 kind = "become"
 key = 3427002746

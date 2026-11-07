@@ -1,4 +1,5 @@
-//! Text forms that every kind of model file shares: the header, line ends, TOML strings and the `[[param]]` table.
+//! Text forms that every kind of model file shares: the header, line ends, TOML strings, arrays and colours, and the
+//! `[[param]]` table.
 //!
 //! The *header* is the three keys every model file opens with, `format`, `format_version` and `kind`. A reader checks
 //! them before the rest of the file, with [`ModelHeader::check`], so a file of another version or kind reads as one
@@ -10,6 +11,7 @@ use serde::Deserialize;
 use toml::Spanned;
 
 use crate::file::{FORMAT, FORMAT_VERSION};
+use crate::value::Color;
 
 use henad_core::helpers::check_choice_options;
 use henad_core::metadata::TimeUnit;
@@ -225,6 +227,53 @@ pub fn toml_string(value: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// Appends the line `name = value` to `text`.
+pub(crate) fn push_key(text: &mut String, name: &str, value: &str) {
+    text.push_str(name);
+    text.push_str(" = ");
+    text.push_str(value);
+    text.push('\n');
+}
+
+/// Returns `items` as an inline array of TOML basic strings on one line.
+pub(crate) fn string_array(items: &[String]) -> String {
+    let items: Vec<String> = items.iter().map(|item| toml_string(item)).collect();
+    format!("[{}]", items.join(", "))
+}
+
+/// Returns an array with one element per line and a trailing comma, or `[]` with no element.
+///
+/// Each element of `items` is already written as TOML.
+pub(crate) fn multiline_array(items: &[String]) -> String {
+    if items.is_empty() {
+        return "[]".to_owned();
+    }
+    let mut text = String::from("[\n");
+    for item in items {
+        text.push_str("  ");
+        text.push_str(item);
+        text.push_str(",\n");
+    }
+    text.push(']');
+    text
+}
+
+/// Returns `color` as the four bytes of a graph file, such as `[255, 0, 0, 255]`.
+pub(crate) fn color_array(color: &Color) -> String {
+    let [red, green, blue, alpha] = color;
+    format!("[{red}, {green}, {blue}, {alpha}]")
+}
+
+/// Returns `color` as a sheet writes it: `"#RRGGBB"` in upper case, or `"#RRGGBBAA"` when alpha is not 255.
+pub(crate) fn color_hex(color: &Color) -> String {
+    let [red, green, blue, alpha] = color;
+    if *alpha == u8::MAX {
+        format!("\"#{red:02X}{green:02X}{blue:02X}\"")
+    } else {
+        format!("\"#{red:02X}{green:02X}{blue:02X}{alpha:02X}\"")
+    }
 }
 
 /// Appends the keys of `param`'s `[[param]]` table to `text`, each on a line of its own.

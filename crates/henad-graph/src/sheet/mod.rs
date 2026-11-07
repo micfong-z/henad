@@ -19,7 +19,9 @@
 //!
 //! [`ParsedSheet::parse`] reads a sheet into a [`document::SheetDocument`] and records the place of every table and
 //! key in [`SheetPlaces`]. The reader checks the header and the `[sheet] version` first and refuses an unknown key in
-//! every table. It does not check what the lines mean. [`starters`] returns the sheets a new model begins from.
+//! every table. It does not check what the lines mean. [`document::SheetDocument::to_text`] writes the canonical text
+//! of a sheet, with the sentence of each line from [`sentence`] in a comment above it, and reading that text returns
+//! the same document. [`starters`] returns the sheets a new model begins from.
 //!
 //! ```
 //! use henad_graph::sheet::ParsedSheet;
@@ -43,6 +45,8 @@
 //! "#;
 //! let sheet = ParsedSheet::parse(text).expect("the sheet reads");
 //! assert_eq!(sheet.document().sheet.name, "Untitled model");
+//! let written = sheet.document().to_text().expect("the sheet writes");
+//! assert_eq!(ParsedSheet::parse(&written).expect("the text reads").document(), sheet.document());
 //! ```
 
 use std::fmt;
@@ -52,10 +56,13 @@ use henad_core::diagnostic::CodeDiagnostic;
 pub mod document;
 pub mod limits;
 mod reader;
+pub mod sentence;
 mod starters;
+mod writer;
 
 pub use reader::{ParsedSheet, SheetPlaces, TablePlaces};
 pub use starters::starters;
+pub use writer::{SheetWriteError, format_number};
 
 /// Value of the `kind` key of a sheet.
 pub const KIND_SHEET: &str = "sheet";

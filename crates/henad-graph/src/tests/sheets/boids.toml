@@ -210,14 +210,14 @@ kind = "move"
 mode = "by"
 value = { my_new = "velocity" }
 
-# Randomise headings (button), every bird once
+# Lines of Randomise headings: run once, every bird, when pressed
 [[card]]
 id = "randomise_headings"
 every = "bird"
 runs = "once"
 lines = ["l8"]
 
-# Set Velocity to a random direction of length (length of my Velocity)
+# Set Velocity to a random direction of length (length of my Velocity), always
 [card.line.l8]
 kind = "set"
 key = 3207508240

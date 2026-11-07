@@ -129,7 +129,7 @@ test = "is"
 left = { their = "health" }
 right = { state = "infected" }
 
-# Become Infected if Susceptible, at rate Infection rate per day for each of Infected neighbours
+# Become Infected from Susceptible, at rate Infection rate per day for each infected neighbour
 [card.line.l2]
 kind = "become"
 key = 393430179
@@ -143,7 +143,7 @@ rate = { param = "infection_rate" }
 rate_unit = "day"
 tries = { result = "l1" }
 
-# Become Recovered if Infected, at rate Recovery rate per day
+# Become Recovered from Infected, at rate Recovery rate per day
 [card.line.l3]
 kind = "become"
 key = 4017140928
@@ -156,14 +156,14 @@ kind = "rate"
 rate = { param = "recovery_rate" }
 rate_unit = "day"
 
-# New outbreak (button), every cell once
+# Lines of New outbreak: run once, every cell, when pressed
 [[card]]
 id = "new_outbreak"
 every = "cells"
 runs = "once"
 lines = ["l4"]
 
-# Become Infected if Susceptible, with chance Initial infected
+# Become Infected from Susceptible, with chance Initial infected
 [card.line.l4]
 kind = "become"
 key = 2653500993
