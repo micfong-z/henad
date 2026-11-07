@@ -146,6 +146,21 @@ the hand-lowered file's mean, the variance of one run the larger of the variance
 eight runs and the binomial `p (1 - p) / cells`. Behind each band a planted rule error (the
 "from" state dropped from the forest fire's lightning line, which then strikes empty cells too,
 and from the SIR's recovery line) moves at least one mean outside. Keep these files.
+`src/tests/sheet_agents.rs` gates the agent sheet starters on a `TestDeviceRequest::baseline()`
+device: `every_agent_sheet_lowers_checks_and_compiles` (no warning, no graph diagnostic, 100 ticks
+and a stats read), `the_lowered_agent_sheets_bind_at_most_8_storage_buffers` (each pass's `Demand`),
+`every_agent_sheet_entry_conforms` (the testing kit, then at `max_count` either no shortfall or only
+`SheetFile::shortfalls`' words with no forbidden word), and
+`a_capped_fold_fault_names_the_author_line` (the boids with a planted move to the origin, so the
+second tick's fold meets 70000 birds within the budget: the fault starts "lines 1 and 2, Flockmates
+and Too close:" and names no node or pass, and the device runs the random walk afterwards). Three
+bands hold each sheet and its `round1/` file on seeds 1 to 3, each procedure in the test's doc and a
+planted rule error outside it: the random walk's mean squared step over a tick within five standard
+errors of `4 * 2^2` (the planted error moves once outside the Repeat), the boids' speeds within 3
+and 15 after each of 300 ticks with 20000 birds and their polarisation after the last within 0.15
+and 0.95 (the planted error steers by the average velocity, near 1), and bounded confidence's one
+opinion group (runs of 0.01 bins each holding 1% of the people) after 100 ticks (the planted error
+steers by the average, no group). Keep these files.
 
 ## Adding a new model
 

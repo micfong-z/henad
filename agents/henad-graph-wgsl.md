@@ -100,6 +100,18 @@ word the slot, and the update writes the field at the slot. Its slot check wraps
 block, as a grid step's bounds check does. A rerun that writes
 some layers of a field is refused at compile, since a field uploads whole.
 
+**Fault names** (`wgsl/fault_names.rs`, D47). `FaultNames` is a table from a node id, as the file
+writes it, to the words that name it in the document the graph was lowered from, such as "line 3,
+Flockmates" for a radius fold a sheet lowered. It writes its own `Debug` (the number of names).
+`AgentProgram::compile_with_fault_names(file, &names)` compiles as `compile` does, through the
+private `compile_named(file, probes, Option<&FaultNames>)` that `compile_with_probes` shares, and
+the fault messages of a named fold become "<words>: looked at more than 65536 agents around one
+agent, and the run stops" and "<words>: would search more than 65536 cells around one agent, and the
+run stops. A shorter distance searches fewer", naming no pass, node or line. A fold the table does
+not hold keeps the graph's message, and a graph file passes no table. The names change no shader, so
+the text and the code identity stay. henad-explore's `ModelFile` passes a sheet's
+`SheetFile::fault_names`.
+
 **Counters and deposits.** A step that adds to a counter declares `var<workgroup>
 henad_counter_tally`, one `atomic<u32>` slot per counter its passes add to, numbered in the order
 the passes first add to each (`Emitter::counter_slots`). `counter.add` skips a zero amount and

@@ -56,7 +56,7 @@ enum Token<'f> {
 ///
 /// Returns the reason the formula does not parse, such as "the formula ends where it expects a value". A formula
 /// nesting groups past [`MAX_FORMULA_NESTING`] does not parse.
-pub(super) fn references(formula: &str) -> Result<Vec<&str>, String> {
+pub(in crate::sheet) fn references(formula: &str) -> Result<Vec<&str>, String> {
     parse_with_references(formula, false).map(|(_, references)| references)
 }
 

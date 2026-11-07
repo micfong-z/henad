@@ -26,15 +26,20 @@
 //! *Probes.* [`GridProgram::compile_with_probes`] takes [`Probes`] beside the file, Boolean outputs of tick passes
 //! whose fires a step counts on the engine's counted step. The counts sit in `counters` after the reduce tallies, in
 //! [`GpuGridSpec::fire_counters`].
+//!
+//! *Fault names.* [`AgentProgram::compile_with_fault_names`] takes [`FaultNames`] beside the file, the words that name
+//! each radius fold in the document the graph was lowered from. A fold's fault names those words.
 
 pub(crate) mod agent_hooks;
 pub(crate) mod agents;
 pub(crate) mod emit;
+mod fault_names;
 mod hooks;
 pub(crate) mod probes;
 pub(crate) mod uniform;
 
 pub use agents::AgentProgram;
+pub use fault_names::FaultNames;
 pub use probes::Probes;
 
 use std::borrow::Cow;

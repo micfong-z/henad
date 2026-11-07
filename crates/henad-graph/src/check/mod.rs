@@ -251,6 +251,7 @@ pub fn check(file: &GraphFile) -> CheckReport {
 }
 
 pub(crate) use config::literal_of;
+pub(crate) use cost::is_pass_cost;
 
 /// Returns the places of the nodes of a normalised pass: a node as written keeps its own, and a node normalisation
 /// added takes the table of the node as written it comes from.

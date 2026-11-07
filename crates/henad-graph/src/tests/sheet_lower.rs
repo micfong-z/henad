@@ -80,10 +80,11 @@ fn life_with_line(table: &str) -> String {
     )
 }
 
-/// Every grid sheet: the starters, then the SIR epidemic with chances.
+/// Every grid sheet: the grid starters, then the SIR epidemic with chances.
 fn grid_sheets() -> Vec<(&'static str, &'static str)> {
     starters()
         .iter()
+        .filter(|starter| starter.text.contains("made_of = \"cells\""))
         .map(|starter| (starter.file_name, starter.text))
         .chain(sheets().into_iter().filter(|(name, _)| *name == "sir_chance.toml"))
         .collect()
@@ -213,7 +214,10 @@ const LINE_PATHS_OF_NO_SLOT: [&str; 4] = ["", "when", "change", "formula"];
 
 #[test]
 fn every_line_map_path_of_a_line_reads_as_an_edit_command_slot_path() {
-    let mut sheets = grid_sheets();
+    let mut sheets: Vec<(&str, &str)> = starters()
+        .iter()
+        .map(|starter| (starter.file_name, starter.text))
+        .collect();
     let values = values();
     sheets.push(("values.toml", &values));
     for (file_name, text) in sheets {
@@ -609,16 +613,6 @@ fn each_interim_refusal_gives_one_located_error() {
     let errors = refusals(&repeat);
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0].message, sentence::NOT_YET_REPEAT);
-
-    let boids = sheets()
-        .into_iter()
-        .find(|(name, _)| *name == "boids.toml")
-        .map(|(_, text)| text)
-        .expect("the boids sheet");
-    let errors = refusals(boids);
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!(errors[0].message, sentence::NOT_YET_AGENTS);
-    assert!(placed_at(&errors[0], boids).starts_with("[world]"));
 }
 
 #[test]

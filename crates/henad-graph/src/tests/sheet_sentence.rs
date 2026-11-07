@@ -564,8 +564,68 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("Rates are not supported yet.", fixed(sentence::NOT_YET_RATE)),
         ("Repeat is not supported yet.", fixed(sentence::NOT_YET_REPEAT)),
         (
-            "Agents in open space are not supported yet.",
-            fixed(sentence::NOT_YET_AGENTS),
+            "Become, Set, Keep between, When and Repeat inside a Repeat are not supported yet.",
+            fixed(sentence::NOT_YET_REPEAT_CHANGE),
+        ),
+        ("The ground is not supported yet.", fixed(sentence::NOT_YET_GROUND)),
+        ("Pick a cell is not supported yet.", fixed(sentence::NOT_YET_PICK_CELL)),
+        (
+            "Looking at the cell here or ahead is not supported yet.",
+            fixed(sentence::NOT_YET_LOOK_AT_CELL),
+        ),
+        ("Move to is not supported yet.", fixed(sentence::NOT_YET_MOVE_TO)),
+        ("Leave is not supported yet.", fixed(sentence::NOT_YET_LEAVE)),
+        ("Record is not supported yet.", fixed(sentence::NOT_YET_RECORD)),
+        (
+            "Walls around agents in open space are not supported yet.",
+            fixed(sentence::NOT_YET_AGENT_WALLS),
+        ),
+        (
+            "Line 3 sets Velocity. A card that sets a property cannot also steer it.",
+            sentence::set_already("Line 3", "Velocity"),
+        ),
+        (
+            "Line 3 steers Velocity. A card that steers a property cannot also set it.",
+            sentence::steered_already("Line 3", "Velocity"),
+        ),
+        (
+            "Line 2 moves by an arrow. A card that moves by an arrow cannot also move to a place.",
+            sentence::moved_by_already("Line 2"),
+        ),
+        (
+            "Line 2 moves to a place. A card that moves to a place cannot also move by an arrow.",
+            sentence::moved_to_already("Line 2"),
+        ),
+        ("line 3, Flockmates", sentence::look_name(&[(3, Some("Flockmates"))])),
+        (
+            "lines 1 and 2, Flockmates and Too close",
+            sentence::look_name(&[(1, Some("Flockmates")), (2, Some("Too close"))]),
+        ),
+        ("line 4", sentence::look_name(&[(4, None)])),
+        (
+            "Line 1, Flockmates: looks at too many birds at 1,000,000 birds. A shorter distance or fewer birds would \
+             fit.",
+            sentence::look_costs_too_much("line 1, Flockmates", "birds", 1_000_000),
+        ),
+        (
+            "Each tick, every bird: too much work at 1,000,000 birds. Fewer birds would fit.",
+            sentence::card_costs_too_much("Each tick, every bird", "birds", 1_000_000),
+        ),
+        (
+            "Line 1: too much work for one walker. A smaller maximum for Steps per tick would fit.",
+            sentence::line_costs_too_much("line 1", "walker", &sentence::smaller_maximum("Steps per tick")),
+        ),
+        (
+            "Line 2, Wander: too much work for one walker. A Repeat of fewer times would fit.",
+            sentence::line_costs_too_much("line 2, Wander", "walker", sentence::FEWER_TIMES),
+        ),
+        (
+            "Each tick, every bird: too much work for one bird. Fewer lines on this card would fit.",
+            sentence::line_costs_too_much("Each tick, every bird", "bird", sentence::FEWER_LINES),
+        ),
+        (
+            "Starting 20,000 persons takes too much work. Fewer persons would fit.",
+            sentence::start_costs_too_much("persons", 20_000),
         ),
         ("or", fixed(sentence::COMPETING_WORD)),
         (
@@ -1447,7 +1507,14 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         sentence::RATE_IN_BUTTON_CARD,
         sentence::NOT_YET_RATE,
         sentence::NOT_YET_REPEAT,
-        sentence::NOT_YET_AGENTS,
+        sentence::NOT_YET_REPEAT_CHANGE,
+        sentence::NOT_YET_GROUND,
+        sentence::NOT_YET_PICK_CELL,
+        sentence::NOT_YET_LOOK_AT_CELL,
+        sentence::NOT_YET_MOVE_TO,
+        sentence::NOT_YET_LEAVE,
+        sentence::NOT_YET_RECORD,
+        sentence::NOT_YET_AGENT_WALLS,
         sentence::LONG_TICK,
         sentence::NOT_RUN_TICK,
         sentence::RESTART_NOTICE,

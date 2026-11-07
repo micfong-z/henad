@@ -16,9 +16,15 @@
 //!   change the result leaves the document as it was.
 //! - A *skipped* line, one the checker gives a skip warning, is left out with every line that reads it.
 //!
-//! The lowering refuses, each at its table, a world of agents, the line kinds this version does not lower, and a sheet
-//! past the node limits of [`crate::sheet::limits`].
+//! A sheet of agents lowers the same way over its one kind of agent: the init pass `start_<kind>`, the tick pass of
+//! its card, a view pass for its colours, the measures and the buttons, each pass over the agents. [`agents`] holds
+//! the looks at agents within a distance, [`motion`] the changes that steer, hold and move an agent, and [`repeat`] the
+//! Repeat lines.
+//!
+//! The lowering refuses, each at its table, the line kinds this version does not lower, and a sheet past the node
+//! limits of [`crate::sheet::limits`].
 
+mod agents;
 mod buttons;
 mod calculate;
 mod card;
@@ -28,6 +34,8 @@ mod ids;
 mod keys;
 mod look;
 mod measures;
+mod motion;
+mod repeat;
 mod start;
 pub(super) mod table;
 mod value;
@@ -38,13 +46,14 @@ use std::collections::{HashMap, HashSet};
 use self::ids::{Numberer, Owner, SheetKey};
 use self::table::{LineMap, NodeOrigin};
 use self::value::Operand;
-use super::check::{Place, SheetReport};
-use super::document::{MadeOf, SheetDocument, SheetProperty};
+use super::check::{Place, SheetReport, Thing};
+use super::document::{Edges, MadeOf, MeasureRule, SheetDocument, SheetProperty};
 use super::sentence;
-use crate::document::{GraphDocument, Pass};
+use crate::document::{Domain, GraphDocument, Pass};
 use crate::ids::NodeId;
 use crate::node::Node;
 use crate::value::{ConfigValue, InputValue, PortRef};
+use crate::wgsl::FaultNames;
 
 /// A sheet lowered to a graph document, with the table of its nodes.
 #[derive(Debug)]
@@ -53,6 +62,8 @@ pub(super) struct Lowered {
     pub document: GraphDocument,
     /// Owner and slot path of every node of [`Self::document`].
     pub map: LineMap,
+    /// Name in the author's words of each look at agents, by the id of its fold.
+    pub fault_names: FaultNames,
 }
 
 /// One problem that stops a sheet from lowering, at the table it is about.
@@ -68,18 +79,16 @@ pub(super) struct Problem {
 ///
 /// # Errors
 ///
-/// Returns every problem found: a world of agents, a line kind or start this version does not lower, a key two draws
-/// take (V18), and a sheet past the node limits.
+/// Returns every problem found: a line kind, start or table this version does not lower, a key two draws take (V18),
+/// and a sheet past the node limits.
 pub(super) fn lower(document: &SheetDocument, report: &SheetReport) -> Result<Lowered, Vec<Problem>> {
-    if document.world.made_of == MadeOf::Agents {
-        return Err(vec![Problem {
-            message: sentence::NOT_YET_AGENTS.to_owned(),
-            place: Place::World,
-        }]);
-    }
     let mut builder = Builder::new(document, report);
-    let cells: &[SheetProperty] = document.cells.as_deref().unwrap_or(&[]);
-    if cells.is_empty() {
+    if document.world.made_of == MadeOf::Agents {
+        refuse_agent_tables(&mut builder);
+        if document.agents.is_empty() {
+            return builder.finish();
+        }
+    } else if builder.properties().is_empty() {
         // A grid with no property lowers to its world alone, and the checker's warning says why nothing runs.
         return builder.finish();
     }
@@ -90,6 +99,27 @@ pub(super) fn lower(document: &SheetDocument, report: &SheetReport) -> Result<Lo
     measures::lower(&mut builder);
     buttons::lower(&mut builder);
     builder.finish()
+}
+
+/// Records a problem for each table of a sheet of agents that this version does not lower: walls, the ground and
+/// events.
+fn refuse_agent_tables(builder: &mut Builder<'_>) {
+    let document = builder.document;
+    if document.world.edges == Edges::Walls {
+        builder.problem(sentence::NOT_YET_AGENT_WALLS, Place::World);
+    }
+    if let Some(ground) = &document.ground {
+        if !ground.properties.is_empty() {
+            builder.problem(sentence::NOT_YET_GROUND, Place::Property(Thing::Ground, 0));
+        } else if !ground.blocked.is_empty() {
+            builder.problem(sentence::NOT_YET_GROUND, Place::World);
+        }
+    }
+    for (index, measure) in document.measures.iter().enumerate() {
+        if measure.rule == MeasureRule::EventCount {
+            builder.problem(sentence::NOT_YET_RECORD, Place::Measure(index));
+        }
+    }
 }
 
 /// Where a node is written: its pass, owner, slot path and region.
@@ -166,12 +196,18 @@ struct Builder<'a> {
     problems: Vec<Problem>,
     /// Draws written so far, for the check of their keys.
     draws: Vec<keys::Draw>,
+    /// Kind of thing the sheet's properties belong to: the cells, or the one kind of agent.
+    thing: Thing,
+    /// Ids of the properties that have no lane, since nothing reads them.
+    dropped: HashSet<String>,
+    /// Name in the author's words of each fold whose fault a run reports, by temporary id.
+    fault_names: Vec<(NodeId, String)>,
 }
 
 impl<'a> Builder<'a> {
-    /// Returns a builder of the lowering of `document` over its grid.
+    /// Returns a builder of the lowering of `document` over its world.
     fn new(document: &'a SheetDocument, report: &'a SheetReport) -> Self {
-        let mut graph = GraphDocument::new(&document.sheet.id, world::grid(document));
+        let mut graph = GraphDocument::new(&document.sheet.id, world::world(document));
         graph.name.clone_from(&document.sheet.name);
         graph.target.name.clone_from(&document.sheet.name);
         Self {
@@ -182,17 +218,79 @@ impl<'a> Builder<'a> {
             last_temporary: 0,
             problems: Vec::new(),
             draws: Vec::new(),
+            thing: match document.world.made_of {
+                MadeOf::Cells => Thing::Cells,
+                MadeOf::Agents => Thing::Agents(0),
+            },
+            dropped: HashSet::new(),
+            fault_names: Vec::new(),
         }
     }
 
-    /// Cells properties of the sheet.
-    fn cells(&self) -> &'a [SheetProperty] {
-        self.document.cells.as_deref().unwrap_or(&[])
+    /// Returns whether the sheet is a sheet of agents.
+    fn is_agents(&self) -> bool {
+        matches!(self.thing, Thing::Agents(_))
     }
 
-    /// Returns the cells property `id` with its index.
+    /// Properties of the sheet's kind of thing: the cells' properties, or those of the one kind of agent.
+    fn properties(&self) -> &'a [SheetProperty] {
+        match self.thing {
+            Thing::Agents(index) => self
+                .document
+                .agents
+                .get(index)
+                .map_or(&[][..], |kind| kind.properties.as_slice()),
+            _ => self.document.cells.as_deref().unwrap_or(&[]),
+        }
+    }
+
+    /// Returns the property `id` of the sheet's kind of thing with its index.
     fn property(&self, id: &str) -> Option<(usize, &'a SheetProperty)> {
-        self.cells().iter().enumerate().find(|(_, property)| property.id == id)
+        self.properties()
+            .iter()
+            .enumerate()
+            .find(|(_, property)| property.id == id)
+    }
+
+    /// Id of the sheet's kind of thing as a card's `every` names it: `cells`, or the id of the kind of agent.
+    fn thing_id(&self) -> &'a str {
+        match self.thing {
+            Thing::Agents(index) => self.document.agents.get(index).map_or("", |kind| kind.id.as_str()),
+            _ => "cells",
+        }
+    }
+
+    /// First segment of the slot path of a node the sheet owns for a property: `cells` or `agents`.
+    fn property_path(&self) -> &'static str {
+        if self.is_agents() { "agents" } else { "cells" }
+    }
+
+    /// Words naming the sheet's kind of thing in a message: "the cells" or "the agents".
+    fn thing_words(&self) -> &'static str {
+        if self.is_agents() { "the agents" } else { "the cells" }
+    }
+
+    /// Domain of every pass the sheet lowers to.
+    fn domain(&self) -> Domain {
+        if self.is_agents() {
+            Domain::Agents
+        } else {
+            Domain::Cells
+        }
+    }
+
+    /// Returns the table of the property at `index`.
+    fn property_place(&self, index: usize) -> Place {
+        Place::Property(self.thing, index)
+    }
+
+    /// Returns the node `id` written in pass `pass`, to change its configuration after it was written.
+    fn node_mut(&mut self, pass: usize, id: NodeId) -> Option<&mut Node> {
+        self.passes[pass]
+            .drafts
+            .iter_mut()
+            .find(|draft| draft.node.id == id)
+            .map(|draft| &mut draft.node)
     }
 
     /// Adds `pass` after the passes written so far and returns its index.
@@ -262,7 +360,10 @@ impl<'a> Builder<'a> {
         }
         let (index, found) = self
             .property(property)
-            .ok_or_else(|| format!("'{property}' is no property of the cells"))?;
+            .ok_or_else(|| format!("'{property}' is no property of {}", self.thing_words()))?;
+        if self.dropped.contains(property) {
+            return Err(format!("'{property}' has no value to read"));
+        }
         let value_type = world::lane_type(found);
         let site = Site {
             pass,
@@ -270,7 +371,7 @@ impl<'a> Builder<'a> {
                 group: ids::GROUP_READ,
                 index: index as u32,
             }),
-            path: format!("cells.{property}"),
+            path: format!("{}.{property}", self.property_path()),
             region: None,
         };
         let node = self.emit(&site, "lane.get", vec![("lane", text(property))], Vec::new());
@@ -357,9 +458,14 @@ impl<'a> Builder<'a> {
         for stat in &mut self.graph.stats {
             stat.from.node = renumber(stat.from.node);
         }
+        let mut fault_names = FaultNames::default();
+        for (node, name) in self.fault_names {
+            fault_names.insert(renumber(node), name);
+        }
         Ok(Lowered {
             document: self.graph,
             map,
+            fault_names,
         })
     }
 

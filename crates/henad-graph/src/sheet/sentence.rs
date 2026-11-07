@@ -1455,8 +1455,139 @@ pub const NOT_YET_RATE: &str = "Rates are not supported yet.";
 /// Error on a Repeat line.
 pub const NOT_YET_REPEAT: &str = "Repeat is not supported yet.";
 
-/// Error on a world of agents.
-pub const NOT_YET_AGENTS: &str = "Agents in open space are not supported yet.";
+/// Error on a Become, Set, Keep between, When or Repeat line inside a Repeat.
+pub const NOT_YET_REPEAT_CHANGE: &str =
+    "Become, Set, Keep between, When and Repeat inside a Repeat are not supported yet.";
+
+/// Error on the ground under agents, a look at the cells around an agent and a start on the ground.
+pub const NOT_YET_GROUND: &str = "The ground is not supported yet.";
+
+/// Error on a Pick a cell line.
+pub const NOT_YET_PICK_CELL: &str = "Pick a cell is not supported yet.";
+
+/// Error on a line that looks at the cell here or ahead.
+pub const NOT_YET_LOOK_AT_CELL: &str = "Looking at the cell here or ahead is not supported yet.";
+
+/// Error on a Move to line.
+pub const NOT_YET_MOVE_TO: &str = "Move to is not supported yet.";
+
+/// Error on a Leave line.
+pub const NOT_YET_LEAVE: &str = "Leave is not supported yet.";
+
+/// Error on a Record line and a count of events over agents.
+pub const NOT_YET_RECORD: &str = "Record is not supported yet.";
+
+/// Error on a world of agents with walls at its edges.
+pub const NOT_YET_AGENT_WALLS: &str = "Walls around agents in open space are not supported yet.";
+
+// Errors on a change of a property in a second way, and the words of a look at agents that costs too much
+
+/// Returns the error on a Steer of a property that line `line` sets: "Line 3 sets Velocity. A card that sets a
+/// property cannot also steer it."
+///
+/// `line` is the line prefix, such as "Line 3".
+pub fn set_already(line: &str, property: &str) -> String {
+    format!("{line} sets {property}. A card that sets a property cannot also steer it.")
+}
+
+/// Returns the error on a Set of a property that line `line` steers: "Line 3 steers Velocity. A card that steers a
+/// property cannot also set it."
+pub fn steered_already(line: &str, property: &str) -> String {
+    format!("{line} steers {property}. A card that steers a property cannot also set it.")
+}
+
+/// Returns the error on a Move to below line `line`, a line that moves by an arrow.
+pub fn moved_by_already(line: &str) -> String {
+    format!("{line} moves by an arrow. A card that moves by an arrow cannot also move to a place.")
+}
+
+/// Returns the error on a Move by below line `line`, a line that moves to a place.
+pub fn moved_to_already(line: &str) -> String {
+    format!("{line} moves to a place. A card that moves to a place cannot also move by an arrow.")
+}
+
+/// Returns the name of the looks at agents of the lines numbered in `lines`, each with its name when it has one: "line
+/// 3, Flockmates", or "lines 1 and 2, Flockmates and Too close".
+pub fn look_name(lines: &[(usize, Option<&str>)]) -> String {
+    let numbers: Vec<usize> = lines.iter().map(|(number, _)| *number).collect();
+    let names: Vec<String> = lines.iter().filter_map(|(_, name)| name.map(str::to_owned)).collect();
+    let mut words = if numbers.len() == 1 {
+        format!("line {}", numbers[0])
+    } else {
+        format!("lines {}", number_list(&numbers))
+    };
+    if !names.is_empty() {
+        words.push_str(", ");
+        words.push_str(&word_list(&names));
+    }
+    words
+}
+
+/// Returns the error on looks at agents named `look` that cost too much at `count` agents.
+///
+/// `things` is the plural of the kind of agent. For example "Line 1, Flockmates: looks at too many birds at 1,000,000
+/// birds. A shorter distance or fewer birds would fit."
+pub fn look_costs_too_much(look: &str, things: &str, count: u64) -> String {
+    format!(
+        "{}: looks at too many {things} at {} {things}. A shorter distance or fewer {things} would fit.",
+        upper_first(look),
+        whole_number_text(count)
+    )
+}
+
+/// Returns the error on the card headed `heading` that costs too much at `count` agents.
+///
+/// `things` is the plural of the kind of agent. For example "Each tick, every bird: too much work at 1,000,000 birds.
+/// Fewer birds would fit."
+pub fn card_costs_too_much(heading: &str, things: &str, count: u64) -> String {
+    format!(
+        "{heading}: too much work at {} {things}. Fewer {things} would fit.",
+        whole_number_text(count)
+    )
+}
+
+/// Returns the error on the line named `line` whose work for one `thing` in one run of its card passes the limit,
+/// with `fix` the change that would fit.
+///
+/// `line` is a name as [`look_name`] writes it. For example "Line 1: too much work for one walker. A smaller maximum
+/// for Steps per tick would fit."
+pub fn line_costs_too_much(line: &str, thing: &str, fix: &str) -> String {
+    format!("{}: too much work for one {thing}. {fix}", upper_first(line))
+}
+
+/// Returns the change to the Repeat over the parameter named `parameter` that would fit: "A smaller maximum for Steps
+/// per tick would fit."
+pub fn smaller_maximum(parameter: &str) -> String {
+    format!("A smaller maximum for {parameter} would fit.")
+}
+
+/// Change to a Repeat of a fixed number of times that would fit.
+pub const FEWER_TIMES: &str = "A Repeat of fewer times would fit.";
+
+/// Change to a card or a line other than a Repeat that would fit.
+pub const FEWER_LINES: &str = "Fewer lines on this card would fit.";
+
+/// Returns the error on the starts of `count` agents that cost too much, `things` the plural of the kind of agent:
+/// "Starting 1,000,000 birds takes too much work. Fewer birds would fit."
+pub fn start_costs_too_much(things: &str, count: u64) -> String {
+    format!(
+        "Starting {} {things} takes too much work. Fewer {things} would fit.",
+        whole_number_text(count)
+    )
+}
+
+/// Returns `count` with a comma between each group of three digits, such as "1,000,000".
+fn whole_number_text(count: u64) -> String {
+    let digits = count.to_string();
+    let mut text = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    text
+}
 
 /// Word that starts the lower of two rate lines that compete, in place of "otherwise".
 pub const COMPETING_WORD: &str = "or";
@@ -2353,7 +2484,7 @@ fn possessive(name: &str) -> String {
 }
 
 /// Returns `name` in the plural: "birds", or `name` itself when it ends in "s".
-fn plural(name: &str) -> String {
+pub(crate) fn plural(name: &str) -> String {
     if name.ends_with('s') {
         name.to_owned()
     } else {

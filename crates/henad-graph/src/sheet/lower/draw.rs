@@ -3,8 +3,11 @@
 //! Each draw takes the key of the line that holds it composed with its slot path, as [`super::keys`] describes. A
 //! chance is one `rand.chance`. A chance once for each of a count `n` holds with `1 - (1 - p)^n`, each one counted
 //! being a separate try. When `p` is the same for every cell and `n` counts the cells around, the power is a
-//! `math.powi` whose `max_exponent` is the number of cells around (8, 4 or 9), and otherwise a `math.pow`. A random
-//! number between two values is `low + rand.float(high - low)`.
+//! `math.powi` whose `max_exponent` is the number of cells around (8, 4 or 9), and otherwise a `math.pow` behind a
+//! `logic.select` that takes 1 for a count of 0, since a power of 0 to the 0 is not 1 on every device. A count of
+//! agents is a `math.pow`, never a `math.powi`, whose exponent clamps at
+//! [`MAX_POWI_EXPONENT`](crate::limits::MAX_POWI_EXPONENT). A random number between two values is
+//! `low + rand.float(high - low)`.
 
 use super::Site;
 use super::card::CardLowering;
@@ -20,7 +23,7 @@ use crate::value::{ConfigValue, InputValue, Literal, PortRef};
 impl<'a> CardLowering<'_, 'a> {
     /// Writes the draw `op` over `inputs` at `site`, keyed by the line that owns `site` and the site's slot path, and
     /// returns its temporary id.
-    fn draw(&mut self, site: &Site, op: &str, inputs: Vec<(&str, InputValue)>) -> Result<NodeId, String> {
+    pub(super) fn draw(&mut self, site: &Site, op: &str, inputs: Vec<(&str, InputValue)>) -> Result<NodeId, String> {
         let super::ids::Owner::Line { id, .. } = &site.owner else {
             return Err("a draw stands outside a line".to_owned());
         };
@@ -76,10 +79,29 @@ impl<'a> CardLowering<'_, 'a> {
                     let power = self.builder.node_value(
                         site,
                         "math.pow",
-                        vec![("base", missed), ("exponent", exponent)],
+                        vec![("base", missed), ("exponent", exponent.clone())],
                         ValueType::F32,
                     );
-                    self.builder.input_as(site, &power, &ValueType::F32, false)?
+                    let power = self.builder.input_as(site, &power, &ValueType::F32, false)?;
+                    // No try at all misses every try, whatever the chance.
+                    let none = self.builder.node_value(
+                        site,
+                        "cmp.le",
+                        vec![("a", exponent), ("b", InputValue::Literal(Literal::F32(0.0)))],
+                        ValueType::Bool,
+                    );
+                    let none = self.builder.condition_input(site, &none)?;
+                    let guarded = self.builder.node_value(
+                        site,
+                        "logic.select",
+                        vec![
+                            ("cond", none),
+                            ("if_true", InputValue::Literal(Literal::F32(1.0))),
+                            ("if_false", power),
+                        ],
+                        ValueType::F32,
+                    );
+                    self.builder.input_as(site, &guarded, &ValueType::F32, false)?
                 }
             };
             let hit = self.builder.node_value(

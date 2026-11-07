@@ -5,19 +5,23 @@
 //! expression node ([`super::calculate`]). A Yes or no line is the comparisons and logic nodes it names, a Choose a
 //! `logic.select` chain from its last row up, and a Depending on a `cat.switch` over my state. A When line's condition
 //! is joined by `logic.and` into the condition of every change inside it. The changes of each property lower after the
-//! card's lines, as the [module](super) describes.
+//! card's lines, as the [module](super) describes. On a card of agents, a look at agents within a distance lowers as
+//! [`super::agents`] describes, the changes that steer, hold and move as [`super::motion`] does, and a Repeat as
+//! [`super::repeat`] does.
 
 use std::collections::{BTreeMap, HashMap};
 
+use super::agents::AgentLooks;
 use super::ids::{GROUP_CHANGE, Owner, SheetKey, line_number};
 use super::look::Fold;
+use super::repeat::RepeatBlock;
 use super::value::{Operand, common_type, shared_type};
 use super::{Builder, Site, text};
-use crate::document::{Domain, Pass, PassStage};
+use crate::document::{Pass, PassStage};
 use crate::limits::MAX_TRANSITION_RULES;
 use crate::sheet::check::Place;
 use crate::sheet::document::{
-    Around, CardRuns, CompareTest, LineKind, PropertyType, SheetCard, SheetChip, SheetLine, SheetLiteral,
+    Around, CardRuns, CompareTest, LineKind, LineMode, PropertyType, SheetCard, SheetChip, SheetLine, SheetLiteral,
     SheetProperty, SheetValue, Slot,
 };
 use crate::sheet::relations::CardRelations;
@@ -25,32 +29,35 @@ use crate::sheet::sentence::{self, ANY_STATE_ID};
 use crate::types::ValueType;
 use crate::value::{ConfigValue, Literal, PortRef};
 
-/// Writes the tick pass: the lines of the card that runs each tick over the cells, or no line when there is none.
+/// Writes the tick pass: the lines of the card that runs each tick over the cells or the agents, or no line when there
+/// is none.
 ///
-/// A grid runs one tick pass, so a second card that runs each tick is refused.
+/// A sheet runs one tick pass, so a second card that runs each tick is refused.
 pub(super) fn lower_tick(builder: &mut Builder<'_>) {
     let document = builder.document;
+    let thing = builder.thing_id();
     let cards: Vec<usize> = document
         .cards
         .iter()
         .enumerate()
-        .filter(|(_, card)| card.every == "cells" && card.runs == CardRuns::EachTick)
+        .filter(|(_, card)| card.every == thing && card.runs == CardRuns::EachTick)
         .map(|(index, _)| index)
         .collect();
     if let Some(&second) = cards.get(1) {
+        let words = builder.thing_words();
         builder.problem(
             format!(
-                "card '{}' is a second card that runs each tick over the cells, and the cells run one",
+                "card '{}' is a second card that runs each tick over {words}, and {words} run one",
                 document.cards[second].id
             ),
             Place::Card(second),
         );
     }
     let id = cards.first().map_or_else(
-        || "tick_cells".to_owned(),
+        || format!("tick_{thing}"),
         |&index| format!("tick_{}", document.cards[index].id),
     );
-    let pass = builder.add_pass(Pass::new(&id, PassStage::Tick, Some(Domain::Cells)));
+    let pass = builder.add_pass(Pass::new(&id, PassStage::Tick, Some(builder.domain())));
     if let Some(&index) = cards.first() {
         lower_card(builder, index, pass);
     }
@@ -72,12 +79,15 @@ pub(super) fn lower_card(builder: &mut Builder<'_>, card_index: usize, pass: usi
         changes: BTreeMap::new(),
         done: HashMap::new(),
         folds: Vec::new(),
+        empty: HashMap::new(),
+        looks: None,
+        repeats: HashMap::new(),
     };
     lowering.run();
 }
 
 /// A reason a line cannot lower in this version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Refusal {
     /// A line kind this version does not lower, with the error in the author's words.
     NotYet(&'static str),
@@ -85,35 +95,109 @@ enum Refusal {
     Record,
     /// A line kind that runs on agents alone.
     Agents(LineKind),
+    /// A change of a kind another line of the card already changes the property by, with the error in the author's
+    /// words.
+    Conflict(String),
 }
 
-/// Returns the first reason `line` cannot lower, its own kind first and then the phrases in its slots.
-fn refusal(line: &SheetLine) -> Option<Refusal> {
-    let own = match line.kind {
-        LineKind::Rate => Some(Refusal::NotYet(sentence::NOT_YET_RATE)),
-        LineKind::Repeat => Some(Refusal::NotYet(sentence::NOT_YET_REPEAT)),
-        LineKind::Record => Some(Refusal::Record),
-        kind @ (LineKind::PickCell
-        | LineKind::LookAtCell
-        | LineKind::RandomDirection
-        | LineKind::Steer
-        | LineKind::KeepBetween
-        | LineKind::Move
-        | LineKind::Leave) => Some(Refusal::Agents(kind)),
-        kind @ (LineKind::Count | LineKind::LookAround) if line.around == Some(Around::AgentsWithin) => {
-            Some(Refusal::Agents(kind))
+/// Returns the first reason `line` cannot lower on a card of cells, or of agents with `agents`, its own kind first and
+/// then the phrases in its slots.
+fn refusal(line: &SheetLine, agents: bool) -> Option<Refusal> {
+    let own = if agents {
+        match line.kind {
+            LineKind::Rate => Some(Refusal::NotYet(sentence::NOT_YET_RATE)),
+            LineKind::Record => Some(Refusal::NotYet(sentence::NOT_YET_RECORD)),
+            LineKind::Leave => Some(Refusal::NotYet(sentence::NOT_YET_LEAVE)),
+            LineKind::PickCell => Some(Refusal::NotYet(sentence::NOT_YET_PICK_CELL)),
+            LineKind::LookAtCell => Some(Refusal::NotYet(sentence::NOT_YET_LOOK_AT_CELL)),
+            LineKind::Move if line.mode == Some(LineMode::To) => Some(Refusal::NotYet(sentence::NOT_YET_MOVE_TO)),
+            LineKind::Count | LineKind::LookAround if line.around != Some(Around::AgentsWithin) => {
+                Some(Refusal::NotYet(sentence::NOT_YET_GROUND))
+            }
+            _ => None,
         }
-        _ => None,
+    } else {
+        match line.kind {
+            LineKind::Rate => Some(Refusal::NotYet(sentence::NOT_YET_RATE)),
+            LineKind::Repeat => Some(Refusal::NotYet(sentence::NOT_YET_REPEAT)),
+            LineKind::Record => Some(Refusal::Record),
+            kind @ (LineKind::PickCell
+            | LineKind::LookAtCell
+            | LineKind::RandomDirection
+            | LineKind::Steer
+            | LineKind::KeepBetween
+            | LineKind::Move
+            | LineKind::Leave) => Some(Refusal::Agents(kind)),
+            kind @ (LineKind::Count | LineKind::LookAround) if line.around == Some(Around::AgentsWithin) => {
+                Some(Refusal::Agents(kind))
+            }
+            _ => None,
+        }
     };
-    own.or_else(|| line.slot_values().find_map(value_refusal))
+    own.or_else(|| line.slot_values().find_map(|value| value_refusal(value, agents)))
 }
 
 /// Returns the first reason a value cannot lower, searching its phrases and lists.
-fn value_refusal(value: &SheetValue) -> Option<Refusal> {
+fn value_refusal(value: &SheetValue, agents: bool) -> Option<Refusal> {
     match value {
-        SheetValue::Phrase(phrase) => refusal(phrase),
-        SheetValue::List(items) => items.iter().find_map(value_refusal),
+        SheetValue::Phrase(phrase) => refusal(phrase, agents),
+        SheetValue::List(items) => items.iter().find_map(|item| value_refusal(item, agents)),
+        SheetValue::Chip(SheetChip::Result { property: Some(_), .. }) if agents => {
+            Some(Refusal::NotYet(sentence::NOT_YET_GROUND))
+        }
         SheetValue::Literal(_) | SheetValue::Chip(_) => None,
+    }
+}
+
+/// Way a line changes a property, for the rule that a card changes a property one way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Way {
+    /// Set.
+    Set,
+    /// Steer.
+    Steer,
+    /// Move by an arrow.
+    MoveBy,
+    /// Move to a place.
+    MoveTo,
+}
+
+impl Way {
+    /// Returns the way `line` changes a property, with the property's id, `None` for a line of another kind.
+    fn of(line: &SheetLine) -> Option<(Self, &str)> {
+        match line.kind {
+            LineKind::Set => Some((Self::Set, line.property.as_deref()?)),
+            LineKind::Steer => Some((Self::Steer, line.property.as_deref()?)),
+            LineKind::Move => match line.mode? {
+                LineMode::To => Some((Self::MoveTo, "")),
+                _ => Some((Self::MoveBy, "")),
+            },
+            _ => None,
+        }
+    }
+
+    /// Returns the error on a line that changes `property` another way than line `number`.
+    ///
+    /// Line `number` changes the property this way.
+    fn conflict(self, number: usize, property: &str) -> String {
+        let prefix = format!("Line {number}");
+        match self {
+            Self::Set => sentence::set_already(&prefix, property),
+            Self::Steer => sentence::steered_already(&prefix, property),
+            Self::MoveBy => sentence::moved_by_already(&prefix),
+            Self::MoveTo => sentence::moved_to_already(&prefix),
+        }
+    }
+
+    /// Returns whether a change `self` and a change `other` of one property conflict.
+    fn conflicts_with(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::Set, Self::Steer)
+                | (Self::Steer, Self::Set)
+                | (Self::MoveBy, Self::MoveTo)
+                | (Self::MoveTo, Self::MoveBy)
+        )
     }
 }
 
@@ -131,22 +215,22 @@ fn choice_type(operands: &[&Operand]) -> Result<ValueType, String> {
     Ok(shared_type(operands)?.unwrap_or(ValueType::F32))
 }
 
-/// One change of a property: a Become or a Set line that runs.
+/// One change of a property: a Become, Set, Steer, Keep between or Move line that runs.
 #[derive(Debug, Clone)]
-struct Change<'a> {
+pub(super) struct Change<'a> {
     /// Id of the line.
-    line: &'a str,
+    pub(super) line: &'a str,
     /// Number `k` of the line id `l<k>`.
-    number: u32,
+    pub(super) number: u32,
     /// What the line changes the property to.
-    kind: ChangeKind,
+    pub(super) kind: ChangeKind,
     /// Condition under which the change applies, the conditions of the When lines around it joined in.
-    condition: Operand,
+    pub(super) condition: Operand,
 }
 
 /// What a change gives its property.
 #[derive(Debug, Clone)]
-enum ChangeKind {
+pub(super) enum ChangeKind {
     /// A Become: a state, from one state or, with `None`, from any state.
     Become {
         /// State the line changes from, `None` for any state.
@@ -158,6 +242,23 @@ enum ChangeKind {
     Set {
         /// Value the line sets.
         value: Operand,
+    },
+    /// A Steer: a term added to the value at the start of the tick, 0 where the line does not apply.
+    Steer {
+        /// Term the line adds.
+        term: Operand,
+    },
+    /// A Keep between: the limits the property is held inside after the changes above it.
+    Keep {
+        /// Lower limit.
+        low: Operand,
+        /// Upper limit.
+        high: Operand,
+    },
+    /// A Move by: an arrow added to the position, 0 where the line does not apply.
+    MoveBy {
+        /// Arrow the line moves by.
+        arrow: Operand,
     },
 }
 
@@ -174,32 +275,73 @@ pub(super) struct CardLowering<'b, 'a> {
     /// Index of the pass the card writes.
     pub(super) pass: usize,
     /// Result of each line lowered so far, by line id.
-    results: HashMap<&'a str, Operand>,
+    pub(super) results: HashMap<&'a str, Operand>,
     /// Each part of the result of a Look around line lowered so far, by line id and part.
     pub(super) parts: HashMap<(&'a str, &'a str), Operand>,
     /// Condition of each When line lowered so far, the conditions of the When lines around it joined in, by line id.
-    conditions: HashMap<&'a str, Operand>,
+    pub(super) conditions: HashMap<&'a str, Operand>,
     /// Changes of each property, by the property's index among the cells properties, in display order.
-    changes: BTreeMap<usize, Vec<Change<'a>>>,
+    pub(super) changes: BTreeMap<usize, Vec<Change<'a>>>,
     /// New value of each property whose changes are written, by the property's index.
-    done: HashMap<usize, Operand>,
+    pub(super) done: HashMap<usize, Operand>,
     /// The folds over the neighbours around the value being lowered, innermost last.
     pub(super) folds: Vec<Fold>,
+    /// Count of each part of a Look around that is empty when the look finds no one, by line id and part.
+    pub(super) empty: HashMap<(&'a str, &'a str), Operand>,
+    /// The folds of the card's looks at agents, written at the first such look.
+    pub(super) looks: Option<AgentLooks<'a>>,
+    /// Each Repeat line lowered so far, by line id.
+    pub(super) repeats: HashMap<&'a str, RepeatBlock>,
 }
 
 impl<'a> CardLowering<'_, 'a> {
     /// Lowers every line of the card in display order, then the changes of each property.
     fn run(&mut self) {
         let order: Vec<&'a str> = self.relations.order().to_vec();
+        let agents = self.builder.is_agents();
         let mut refused = false;
+        let mut ways: Vec<(Way, &'a str, usize)> = Vec::new();
         for &id in &order {
             let Some(line) = self.relations.line(id) else {
                 continue;
             };
-            if let Some(reason) = refusal(line) {
+            let number = self.relations.number(id).unwrap_or(0);
+            let conflict = Way::of(line).and_then(|(way, property)| {
+                let first = ways
+                    .iter()
+                    .find(|(known, changed, _)| *changed == property && way.conflicts_with(*known))
+                    .map(|(known, _, at)| {
+                        known.conflict(
+                            *at,
+                            &self
+                                .builder
+                                .property(property)
+                                .map_or_else(|| property.to_owned(), |(_, found)| found.name.clone()),
+                        )
+                    });
+                ways.push((way, property, number));
+                first.map(Refusal::Conflict)
+            });
+            let in_repeat = agents && self.repeat_of(id).is_some();
+            let reason = conflict
+                .or_else(|| {
+                    (in_repeat
+                        && matches!(
+                            line.kind,
+                            LineKind::Become
+                                | LineKind::Set
+                                | LineKind::KeepBetween
+                                | LineKind::When
+                                | LineKind::Repeat
+                        ))
+                    .then_some(Refusal::NotYet(sentence::NOT_YET_REPEAT_CHANGE))
+                })
+                .or_else(|| refusal(line, agents));
+            if let Some(reason) = reason {
                 refused = true;
                 let message = match reason {
                     Refusal::NotYet(words) => words.to_owned(),
+                    Refusal::Conflict(words) => words,
                     Refusal::Record => format!("line {id}: Record counts an event, and a grid counts no events"),
                     Refusal::Agents(kind) => format!(
                         "line {id}: a {} line runs on agents, and this card runs on the cells",
@@ -227,6 +369,7 @@ impl<'a> CardLowering<'_, 'a> {
                 );
             }
         }
+        self.finish_looks();
         let pending: Vec<usize> = self.changes.keys().copied().collect();
         for index in pending {
             if !self.done.contains_key(&index)
@@ -237,8 +380,8 @@ impl<'a> CardLowering<'_, 'a> {
         }
     }
 
-    /// Returns the site of the nodes of line `id`.
-    fn line_site(&self, id: &str) -> Result<Site, String> {
+    /// Returns the site of the nodes of line `id`, inside the region of the Repeat that holds it.
+    pub(super) fn line_site(&self, id: &str) -> Result<Site, String> {
         let number = line_number(id).ok_or_else(|| format!("'{id}' is no line id"))?;
         Ok(Site {
             pass: self.pass,
@@ -247,8 +390,27 @@ impl<'a> CardLowering<'_, 'a> {
                 number,
             },
             path: String::new(),
-            region: None,
+            region: self
+                .repeat_of(id)
+                .and_then(|repeat| self.repeats.get(repeat))
+                .map(|block| block.node),
         })
+    }
+
+    /// Returns the id of the Repeat line that holds line `id`, at any depth.
+    pub(super) fn repeat_of(&self, id: &str) -> Option<&'a str> {
+        let mut parent = self.relations.parent(id);
+        while let Some(block) = parent {
+            if self
+                .relations
+                .line(block)
+                .is_some_and(|line| line.kind == LineKind::Repeat)
+            {
+                return Some(block);
+            }
+            parent = self.relations.parent(block);
+        }
+        None
     }
 
     /// Lowers line `id`.
@@ -264,11 +426,24 @@ impl<'a> CardLowering<'_, 'a> {
             | LineKind::RandomNumber
             | LineKind::Calculate
             | LineKind::Choose
-            | LineKind::DependingOn => {
-                let result = self.phrase(&site, line)?;
+            | LineKind::DependingOn
+            | LineKind::RandomDirection => {
+                let result = match line.kind {
+                    LineKind::Count if line.around == Some(Around::AgentsWithin) => {
+                        self.count_agents(&site, id, line)?
+                    }
+                    _ => self.phrase(&site, line)?,
+                };
                 self.results.insert(id, result);
             }
+            LineKind::LookAround if line.around == Some(Around::AgentsWithin) => {
+                self.look_around_agents(&site, id, line)?;
+            }
             LineKind::LookAround => self.look_around(&site, id, line)?,
+            LineKind::Repeat => self.repeat(&site, id, line)?,
+            LineKind::Steer => self.steer(&site, id, line)?,
+            LineKind::KeepBetween => self.keep_between(&site, id, line)?,
+            LineKind::Move => self.move_by(&site, id, line)?,
             LineKind::When => {
                 let own = self.slot(&site.at("condition"), &line.condition)?;
                 let condition = self.inherit(&site, id, own)?;
@@ -304,16 +479,22 @@ impl<'a> CardLowering<'_, 'a> {
         Ok(())
     }
 
-    /// Returns the cells property `id` with its index.
+    /// Returns the property `id` of the card's kind of thing with its index.
     pub(super) fn property(&self, id: Option<&str>) -> Result<(usize, &'a SheetProperty), String> {
         let id = id.ok_or_else(|| "the line names no property".to_owned())?;
         self.builder
             .property(id)
-            .ok_or_else(|| format!("'{id}' is no property of the cells"))
+            .ok_or_else(|| format!("'{id}' is no property of {}", self.builder.thing_words()))
     }
 
     /// Records a change of the property at `index` by line `id`.
-    fn add_change(&mut self, index: usize, id: &'a str, kind: ChangeKind, condition: Operand) -> Result<(), String> {
+    pub(super) fn add_change(
+        &mut self,
+        index: usize,
+        id: &'a str,
+        kind: ChangeKind,
+        condition: Operand,
+    ) -> Result<(), String> {
         if self.done.contains_key(&index) {
             return Err("the line changes a property that a line above reads as new".to_owned());
         }
@@ -328,7 +509,7 @@ impl<'a> CardLowering<'_, 'a> {
     }
 
     /// Returns `own`, the condition of line `id`, joined with the condition of the When line that holds it.
-    fn inherit(&mut self, site: &Site, id: &str, own: Operand) -> Result<Operand, String> {
+    pub(super) fn inherit(&mut self, site: &Site, id: &str, own: Operand) -> Result<Operand, String> {
         let mut parent = self.relations.parent(id);
         while let Some(block) = parent {
             if self
@@ -400,7 +581,7 @@ impl<'a> CardLowering<'_, 'a> {
                 }
             }
             SheetChip::Their(property) => self.their(site, property),
-            SheetChip::Relation(relation) => Err(format!("{} relates agents", relation.as_str())),
+            SheetChip::Relation(relation) => self.relation(site, *relation),
             SheetChip::State(state) => Ok(Operand::State(state.clone())),
         }
     }
@@ -424,8 +605,12 @@ impl<'a> CardLowering<'_, 'a> {
                     }
                 }
             }
+            LineKind::Count if line.around == Some(Around::AgentsWithin) => {
+                Err("a count of agents within a distance stands on a line of its own".to_owned())
+            }
             LineKind::Count => self.count(site, line),
             LineKind::Chance => self.chance(site, line),
+            LineKind::RandomDirection => self.random_direction(site, line),
             LineKind::RandomNumber => self.random_number(site, line),
             LineKind::Calculate => self.calculate(site, line),
             LineKind::Choose => self.choose(site, line),
@@ -600,8 +785,8 @@ impl<'a> CardLowering<'_, 'a> {
     }
 
     /// Writes the changes of the property at `index` and its new value, and returns that value.
-    fn write_changes(&mut self, index: usize) -> Result<Operand, String> {
-        let property = &self.builder.cells()[index];
+    pub(super) fn write_changes(&mut self, index: usize) -> Result<Operand, String> {
+        let property = &self.builder.properties()[index];
         let changes = self.ordered_changes(index);
         let current = self.builder.read(self.pass, &property.id)?;
         let site = Site {
@@ -618,70 +803,27 @@ impl<'a> CardLowering<'_, 'a> {
             return Ok(current);
         }
         let lane_type = super::world::lane_type(property);
+        if property.property_type == PropertyType::Position {
+            let new_value = self.write_position(&site, &current, &changes)?;
+            self.done.insert(index, new_value.clone());
+            return Ok(new_value);
+        }
         let new_value = if property.property_type == PropertyType::States {
-            let mut rules = Vec::new();
-            let mut inputs = vec![(
-                "state".to_owned(),
-                self.builder.input_as(&site, &current, &lane_type, false)?,
-            )];
-            for change in &changes {
-                let ChangeKind::Become { from, to } = &change.kind else {
-                    return Err(format!("line {}: a Set changes a States property", change.line));
-                };
-                let froms: Vec<&str> = match from {
-                    Some(from) => vec![from.as_str()],
-                    None => property.states.iter().map(|state| state.id.as_str()).collect(),
-                };
-                let when = self.builder.condition_input(&site, &change.condition)?;
-                for state in froms {
-                    let rule = if from.is_some() {
-                        change.line.to_owned()
-                    } else {
-                        format!("{}_{state}", change.line)
-                    };
-                    rules.push(ConfigValue::Table(BTreeMap::from([
-                        ("id".to_owned(), text(&rule)),
-                        ("from".to_owned(), text(state)),
-                        ("to".to_owned(), text(to)),
-                        ("phase".to_owned(), ConfigValue::Integer(0)),
-                    ])));
-                    inputs.push((format!("rule.{rule}.when"), when.clone()));
-                }
-            }
-            if rules.len() > MAX_TRANSITION_RULES {
-                return Err(format!(
-                    "'{}' changes by {} rows, counting a row for each state of a change from any state, and a \
-                     property changes by at most {MAX_TRANSITION_RULES}",
-                    property.id,
-                    rules.len()
-                ));
-            }
-            let node = self.builder.emit(
-                &site,
-                "cat.transition",
-                vec![("category", text(&property.id)), ("rules", ConfigValue::Array(rules))],
-                inputs,
-            );
-            Operand::Link(
-                PortRef {
-                    node,
-                    port: Some("next".to_owned()),
-                },
-                lane_type.clone(),
-            )
+            self.transition(&site, property, &current, &changes)?
         } else {
-            let mut value = current;
+            let mut value = current.clone();
             for change in changes.iter().rev() {
-                let ChangeKind::Set { value: set } = &change.kind else {
-                    return Err(format!(
-                        "line {}: a Become changes a property with no states",
-                        change.line
-                    ));
+                let set = match &change.kind {
+                    ChangeKind::Set { value: set } => set,
+                    ChangeKind::Become { .. } => {
+                        return Err(format!(
+                            "line {}: a Become changes a property with no states",
+                            change.line
+                        ));
+                    }
+                    _ => continue,
                 };
-                let line_site = Site {
-                    path: "change".to_owned(),
-                    ..self.line_site(change.line)?
-                };
+                let line_site = self.change_site(change.line)?;
                 let condition = self.builder.condition_input(&line_site, &change.condition)?;
                 let if_true = self.builder.input_as(&line_site, set, &lane_type, true)?;
                 let if_false = self.builder.input_as(&line_site, &value, &lane_type, true)?;
@@ -692,12 +834,83 @@ impl<'a> CardLowering<'_, 'a> {
                     lane_type.clone(),
                 );
             }
-            value
+            self.steered(value, &changes, &lane_type)?
         };
         let written = self.builder.input_as(&site, &new_value, &lane_type, false)?;
         self.builder.write(&site, &property.id, written)?;
         self.done.insert(index, new_value.clone());
         Ok(new_value)
+    }
+
+    /// Returns the next state of the States property `property` after its Becomes `changes`, through one
+    /// `cat.transition` written at `site` over `current`.
+    fn transition(
+        &mut self,
+        site: &Site,
+        property: &SheetProperty,
+        current: &Operand,
+        changes: &[Change<'a>],
+    ) -> Result<Operand, String> {
+        let lane_type = super::world::lane_type(property);
+        let mut rules = Vec::new();
+        let mut inputs = vec![(
+            "state".to_owned(),
+            self.builder.input_as(site, current, &lane_type, false)?,
+        )];
+        for change in changes {
+            let ChangeKind::Become { from, to } = &change.kind else {
+                return Err(format!("line {}: a Set changes a States property", change.line));
+            };
+            let froms: Vec<&str> = match from {
+                Some(from) => vec![from.as_str()],
+                None => property.states.iter().map(|state| state.id.as_str()).collect(),
+            };
+            let when = self.builder.condition_input(site, &change.condition)?;
+            for state in froms {
+                let rule = if from.is_some() {
+                    change.line.to_owned()
+                } else {
+                    format!("{}_{state}", change.line)
+                };
+                rules.push(ConfigValue::Table(BTreeMap::from([
+                    ("id".to_owned(), text(&rule)),
+                    ("from".to_owned(), text(state)),
+                    ("to".to_owned(), text(to)),
+                    ("phase".to_owned(), ConfigValue::Integer(0)),
+                ])));
+                inputs.push((format!("rule.{rule}.when"), when.clone()));
+            }
+        }
+        if rules.len() > MAX_TRANSITION_RULES {
+            return Err(format!(
+                "'{}' changes by {} rows, counting a row for each state of a change from any state, and a \
+                 property changes by at most {MAX_TRANSITION_RULES}",
+                property.id,
+                rules.len()
+            ));
+        }
+        let node = self.builder.emit(
+            site,
+            "cat.transition",
+            vec![("category", text(&property.id)), ("rules", ConfigValue::Array(rules))],
+            inputs,
+        );
+        Ok(Operand::Link(
+            PortRef {
+                node,
+                port: Some("next".to_owned()),
+            },
+            lane_type,
+        ))
+    }
+
+    /// Returns the site of the nodes line `id` writes for its share of a change, outside every region.
+    pub(super) fn change_site(&self, id: &str) -> Result<Site, String> {
+        Ok(Site {
+            path: "change".to_owned(),
+            region: None,
+            ..self.line_site(id)?
+        })
     }
 
     /// Returns the changes of the property at `index` in row order: display order where two can both apply to one

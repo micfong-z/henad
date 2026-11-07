@@ -18,6 +18,7 @@ mod library_lock;
 mod mutation;
 mod probes;
 mod regions;
+mod sheet_agents;
 mod sheet_check;
 mod sheet_document;
 mod sheet_edit;

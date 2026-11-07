@@ -20,13 +20,16 @@ use crate::sheet::document::{
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
 
-/// A `grid.fold` over the neighbours that `their` chips read inside.
+/// A `grid.fold` over the cells around, or an `agent.radius_fold` over the agents within a distance, that `their`
+/// chips read inside.
 #[derive(Debug)]
 pub(super) struct Fold {
     /// Temporary id of the fold.
-    node: NodeId,
+    pub(super) node: NodeId,
     /// Read of each property of the neighbour, by property id.
-    reads: HashMap<String, Operand>,
+    pub(super) reads: HashMap<String, Operand>,
+    /// Whether the fold walks agents, whose inner output `other` names the neighbour, and not cells, whose `cell` does.
+    pub(super) agents: bool,
 }
 
 /// Name of the accumulator of a fold that counts the neighbours.
@@ -58,7 +61,7 @@ pub(super) fn neighbour_count(around: Around) -> Option<u32> {
 }
 
 /// Returns the accumulator `name` of `value_type` that combines by `combine`, as a fold's configuration holds it.
-fn accumulator(name: &str, value_type: &str, combine: &str) -> ConfigValue {
+pub(super) fn accumulator(name: &str, value_type: &str, combine: &str) -> ConfigValue {
     ConfigValue::Table(BTreeMap::from([
         ("name".to_owned(), text(name)),
         ("type".to_owned(), text(value_type)),
@@ -67,7 +70,7 @@ fn accumulator(name: &str, value_type: &str, combine: &str) -> ConfigValue {
 }
 
 /// Returns the output `port` of the node `node`.
-fn port_of(node: NodeId, port: &str, value_type: ValueType) -> Operand {
+pub(super) fn port_of(node: NodeId, port: &str, value_type: ValueType) -> Operand {
     Operand::Link(
         PortRef {
             node,
@@ -83,11 +86,12 @@ impl<'a> CardLowering<'_, 'a> {
         let fold = self
             .folds
             .last()
-            .ok_or_else(|| "their stands outside a look at the cells around".to_owned())?;
+            .ok_or_else(|| "their stands outside a look around".to_owned())?;
         if let Some(read) = fold.reads.get(property) {
             return Ok(read.clone());
         }
         let fold_node = fold.node;
+        let neighbour = if fold.agents { "other" } else { "cell" };
         let (_, found) = self.property(Some(property))?;
         let value_type = super::world::lane_type(found);
         let node = self.builder.emit(
@@ -98,7 +102,7 @@ impl<'a> CardLowering<'_, 'a> {
                 "at".to_owned(),
                 InputValue::Link(PortRef {
                     node: fold_node,
-                    port: Some("cell".to_owned()),
+                    port: Some(neighbour.to_owned()),
                 }),
             )],
         );
@@ -132,7 +136,7 @@ impl<'a> CardLowering<'_, 'a> {
 
     /// Returns `test` joined with the test of the `only` slot `only`, lowered at `only_site` inside a fold, when it is
     /// filled.
-    fn with_only(&mut self, only_site: &Site, test: Operand, only: &'a Slot) -> Result<Operand, String> {
+    pub(super) fn with_only(&mut self, only_site: &Site, test: Operand, only: &'a Slot) -> Result<Operand, String> {
         match only.value() {
             None => Ok(test),
             Some(value) => {
@@ -189,6 +193,7 @@ impl<'a> CardLowering<'_, 'a> {
         self.folds.push(Fold {
             node: fold,
             reads: HashMap::new(),
+            agents: false,
         });
         let inside = site.inside(fold);
         let test = self.value(&inside, whose).and_then(|test| {
@@ -264,6 +269,7 @@ impl<'a> CardLowering<'_, 'a> {
         self.folds.push(Fold {
             node: fold,
             reads: HashMap::new(),
+            agents: false,
         });
         let inside = site.inside(fold);
         let body = self.look_body(&inside, line);
@@ -283,11 +289,13 @@ impl<'a> CardLowering<'_, 'a> {
                     let average =
                         self.builder
                             .node_value(site, "math.div", vec![("a", total), ("b", number)], ValueType::F32);
-                    guard_by_count(self.builder, site, &count, &average)?
+                    self.empty.insert((id, summary.id.as_str()), count.clone());
+                    guard_by_count(self.builder, site, &count, &average, &ValueType::F32)?
                 }
                 Some(SummaryKind::Largest | SummaryKind::Smallest) => {
                     let extreme = port_of(fold, &name, ValueType::F32);
-                    guard_by_count(self.builder, site, &count, &extreme)?
+                    self.empty.insert((id, summary.id.as_str()), count.clone());
+                    guard_by_count(self.builder, site, &count, &extreme, &ValueType::F32)?
                 }
                 Some(SummaryKind::Any | SummaryKind::All) => port_of(fold, &name, ValueType::Bool),
                 None => continue,
@@ -328,12 +336,18 @@ impl<'a> CardLowering<'_, 'a> {
 }
 
 /// Returns the name of the accumulator of the summary `id`, apart from the inner outputs of a fold such as `cell`.
-fn summary_accumulator(id: &str) -> String {
+pub(super) fn summary_accumulator(id: &str) -> String {
     format!("summary_{id}")
 }
 
-/// Returns `value` when `count` is above 0, and 0 otherwise, written at `site`.
-fn guard_by_count(builder: &mut Builder<'_>, site: &Site, count: &Operand, value: &Operand) -> Result<Operand, String> {
+/// Returns `value`, of `value_type`, when `count` is above 0, and its zero otherwise, written at `site`.
+pub(super) fn guard_by_count(
+    builder: &mut Builder<'_>,
+    site: &Site,
+    count: &Operand,
+    value: &Operand,
+    value_type: &ValueType,
+) -> Result<Operand, String> {
     let count = builder.input_as(site, count, &ValueType::U32, false)?;
     let some = builder.node_value(
         site,
@@ -342,15 +356,16 @@ fn guard_by_count(builder: &mut Builder<'_>, site: &Site, count: &Operand, value
         ValueType::Bool,
     );
     let condition = builder.condition_input(site, &some)?;
-    let value = builder.input_as(site, value, &ValueType::F32, false)?;
+    let value = builder.input_as(site, value, value_type, false)?;
+    let zero = Literal::zero_of(value_type).ok_or_else(|| format!("a {value_type} has no zero"))?;
     Ok(builder.node_value(
         site,
         "logic.select",
         vec![
             ("cond", condition),
             ("if_true", value),
-            ("if_false", InputValue::Literal(Literal::F32(0.0))),
+            ("if_false", InputValue::Literal(zero)),
         ],
-        ValueType::F32,
+        value_type.clone(),
     ))
 }

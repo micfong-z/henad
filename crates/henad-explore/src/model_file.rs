@@ -42,7 +42,7 @@ use henad_graph::host::HostEvaluator;
 use henad_graph::model_text::{LineEnds, ModelHeader, ParamTable, toml_string as string, write_param};
 use henad_graph::sheet::sentence::SHEET_EMPTY;
 use henad_graph::sheet::{KIND_SHEET, SheetFile, SheetFileError};
-use henad_graph::wgsl::{AgentProgram, GridProgram};
+use henad_graph::wgsl::{AgentProgram, FaultNames, GridProgram};
 use henad_graph::{GraphFile, GraphFileError, KIND_GRAPH};
 
 /// Value of a model file's `format` key.
@@ -320,21 +320,24 @@ impl ModelFile {
     pub fn entry(&self) -> Result<ModelEntry, ModelFileError> {
         match self {
             Self::GpuGrid(file) => file.entry(),
-            Self::Graph(file) => graph_entry(file, |diagnostic| diagnostic).map_err(ModelFileError::Graph),
+            Self::Graph(file) => graph_entry(file, None, |diagnostic| diagnostic).map_err(ModelFileError::Graph),
             Self::Sheet(file) => {
                 if let Some(empty) = file.warnings().iter().find(|warning| warning.message == SHEET_EMPTY) {
                     let mut error = empty.clone();
                     error.severity = DiagnosticSeverity::Error;
                     return Err(ModelFileError::Sheet(vec![error]));
                 }
-                graph_entry(file.lowered(), |diagnostic| file.place_graph_diagnostic(diagnostic))
-                    .map_err(ModelFileError::Sheet)
+                graph_entry(file.lowered(), Some(file.fault_names()), |diagnostic| {
+                    file.place_graph_diagnostic(diagnostic)
+                })
+                .map_err(ModelFileError::Sheet)
             }
         }
     }
 }
 
-/// Builds the entry of `graph`, passing each error through `place`.
+/// Builds the entry of `graph`, passing each error through `place`. A graph of agents names each fault of a radius
+/// fold `names` holds in its words.
 ///
 /// # Errors
 ///
@@ -342,6 +345,7 @@ impl ModelFile {
 /// then the errors of [`GridProgram::compile`] or [`AgentProgram::compile`].
 fn graph_entry(
     graph: &GraphFile,
+    names: Option<&FaultNames>,
     place: impl Fn(CodeDiagnostic) -> CodeDiagnostic,
 ) -> Result<ModelEntry, Vec<CodeDiagnostic>> {
     let placed = |diagnostics: Vec<CodeDiagnostic>| diagnostics.into_iter().map(&place).collect::<Vec<_>>();
@@ -351,9 +355,11 @@ fn graph_entry(
     }
     HostEvaluator::new(graph).map_err(|error| placed(error.diagnostics()))?;
     if matches!(graph.document().world, World::Agents(_)) {
-        return AgentProgram::compile(graph)
-            .map(|program| program.entry())
-            .map_err(placed);
+        let program = match names {
+            Some(names) => AgentProgram::compile_with_fault_names(graph, names),
+            None => AgentProgram::compile(graph),
+        };
+        return program.map(|program| program.entry()).map_err(placed);
     }
     GridProgram::compile(graph)
         .map(|program| program.entry())

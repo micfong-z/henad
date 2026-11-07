@@ -1,11 +1,12 @@
 //! The New model dialog: a sheet model started from one of the sheet starters, under a name.
 //!
-//! "Start from" lists the starters [`henad_graph::sheet::starters`] returns, each with its one-line description. The
-//! Name field follows the chosen starter's name until the author types in it. Create opens the sheet in the Editor,
+//! "Start from" lists the grid starters [`henad_graph::sheet::starters`] returns, each with its one-line description.
+//! The Name field follows the chosen starter's name until the author types in it. Create opens the sheet in the Editor,
 //! and so does Enter in the Name field. Cancel, Escape and a click beside the dialog close it.
 
 use egui::{Context, Id, Key, Modal, RichText, TextEdit};
 use henad_graph::sheet::ParsedSheet;
+use henad_graph::sheet::document::MadeOf;
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
 use henad_graph::sheet::sentence::{
     CANCEL, CREATE, NAME_LABEL, NEW_MODEL, START_FROM, STARTER_CHOICES, UNTITLED_MODEL,
@@ -31,11 +32,18 @@ pub struct StarterChoice {
 }
 
 /// Returns the starters the dialog offers, in the order [`henad_graph::sheet::starters`] returns them.
+///
+/// Note that only the starters of a world made of cells are offered. The Editor has no sheet pane section for agents.
 pub fn starter_choices() -> Vec<StarterChoice> {
     henad_graph::sheet::starters()
         .iter()
         .filter_map(|starter| {
-            let name = ParsedSheet::parse(starter.text).ok()?.document().sheet.name.clone();
+            let parsed = ParsedSheet::parse(starter.text).ok()?;
+            let document = parsed.document();
+            if document.world.made_of != MadeOf::Cells {
+                return None;
+            }
+            let name = document.sheet.name.clone();
             let description = STARTER_CHOICES
                 .iter()
                 .find(|(choice, _)| *choice == name)

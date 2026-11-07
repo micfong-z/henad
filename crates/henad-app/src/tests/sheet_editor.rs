@@ -3,7 +3,8 @@
 
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_graph::sheet::document::{
-    LineKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule, StartsAs,
+    LineKind, MadeOf, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule,
+    StartsAs,
 };
 use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE};
 use henad_graph::sheet::{ParsedSheet, starters};
@@ -11,10 +12,10 @@ use web_time::Instant;
 
 use crate::state::{AppState, PreviewRun};
 use crate::tests::support::step_past;
-use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_SIDE, PreviewState, poll_at};
+use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at};
 use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::card_pane::card_lines;
-use crate::ui::editor::sheet::new_model::new_model_modal;
+use crate::ui::editor::sheet::new_model::{new_model_modal, starter_choices};
 use crate::ui::editor::sheet::sheet_pane::starts_text;
 use crate::ui::editor::{ApplyOutcome, EditorModel, apply, editor_ui, open_text, preview_running_text, save_name};
 use crate::ui::menu_bar::file_menu;
@@ -89,9 +90,14 @@ fn every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies(
             .expect("the starter reads")
             .into_document();
         let side = |cells: u32| cells.min(PREVIEW_SIDE);
-        let run = PreviewRun::Grid {
-            width: side(document.world.width),
-            height: side(document.world.height),
+        let run = match document.world.made_of {
+            MadeOf::Agents => PreviewRun::Agents {
+                count: document.agents[0].count.min(PREVIEW_AGENTS),
+            },
+            _ => PreviewRun::Grid {
+                width: side(document.world.width),
+                height: side(document.world.height),
+            },
         };
         assert_eq!(app.preview(), Some(run), "{}", starter.file_name);
         assert_eq!(app.editor.preview.state, PreviewState::Running(run));
@@ -598,6 +604,21 @@ impl Harness {
             .filter(|text| !text.is_empty())
             .collect()
     }
+}
+
+#[test]
+fn the_new_model_dialog_offers_every_grid_starter_and_no_agent_starter() {
+    let offered: Vec<&str> = starter_choices().iter().map(|choice| choice.file_name).collect();
+    let mut agent_starters = 0;
+    for starter in starters() {
+        let document = ParsedSheet::parse(starter.text)
+            .expect("the starter reads")
+            .into_document();
+        let cells = document.world.made_of == MadeOf::Cells;
+        agent_starters += usize::from(!cells);
+        assert_eq!(offered.contains(&starter.file_name), cells, "{}", starter.file_name);
+    }
+    assert!(agent_starters > 0, "an agent starter is held out");
 }
 
 #[test]

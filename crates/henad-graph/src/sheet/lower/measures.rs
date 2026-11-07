@@ -1,5 +1,5 @@
-//! Measures of the cells: the stats pass `measures`, and a `[[stat]]` per measure labelled with the measure's name, its
-//! column in results.
+//! Measures of the cells or agents: the stats pass `measures`, and a `[[stat]]` per measure labelled with the
+//! measure's name, its column in results.
 //!
 //! A count in a state reads one output of the `stat.count_by` of its property. The measures of one property share that
 //! node.
@@ -9,10 +9,10 @@
 use super::ids::{GROUP_MEASURE, GROUP_PART, Owner, SheetKey};
 use super::value::Operand;
 use super::{Builder, Site, text};
-use crate::document::{Domain, Pass, PassStage, Stat};
+use crate::document::{Pass, PassStage, Stat};
 use crate::ids::NodeId;
 use crate::sheet::check::Place;
-use crate::sheet::document::{MeasureRule, SheetChip, SheetLiteral, SheetMeasure, SheetValue};
+use crate::sheet::document::{LineKind, MeasureRule, SheetChip, SheetLiteral, SheetMeasure, SheetValue};
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, PortRef};
 
@@ -25,7 +25,7 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
     if measures.is_empty() {
         return;
     }
-    let pass = builder.add_pass(Pass::new(MEASURE_PASS, PassStage::Stats, Some(Domain::Cells)));
+    let pass = builder.add_pass(Pass::new(MEASURE_PASS, PassStage::Stats, Some(builder.domain())));
     let mut counts: Vec<(String, NodeId)> = Vec::new();
     for (index, measure) in measures.iter().enumerate() {
         match measure_source(builder, pass, index, measure, &mut counts) {
@@ -45,8 +45,9 @@ fn measure_source(
     measure: &SheetMeasure,
     counts: &mut Vec<(String, NodeId)>,
 ) -> Result<PortRef, String> {
-    if measure.over.as_deref() != Some("cells") && measure.rule != MeasureRule::EventCount {
-        return Err("a measure of a grid is over the cells".to_owned());
+    let thing = builder.thing_id();
+    if measure.over.as_deref() != Some(thing) && measure.rule != MeasureRule::EventCount {
+        return Err(format!("a measure of this sheet is over {}", builder.thing_words()));
     }
     let site = Site {
         pass,
@@ -66,7 +67,7 @@ fn measure_source(
             let state = measure.state.as_deref().ok_or("a count in a state names no state")?;
             let (property_index, _) = builder
                 .property(property)
-                .ok_or_else(|| format!("'{property}' is no property of the cells"))?;
+                .ok_or_else(|| format!("'{property}' is no property of {}", builder.thing_words()))?;
             let node = if let Some((_, node)) = counts.iter().find(|(id, _)| id == property) {
                 *node
             } else {
@@ -76,7 +77,7 @@ fn measure_source(
                         group: GROUP_PART,
                         index: property_index as u32,
                     }),
-                    path: format!("cells.{property}.count"),
+                    path: format!("{}.{property}.count", builder.property_path()),
                     ..site.clone()
                 };
                 let value = builder.input_as(&count_site, &read, &ValueType::Category(property.to_owned()), false)?;
@@ -95,8 +96,13 @@ fn measure_source(
             })
         }
         MeasureRule::Average | MeasureRule::Total => {
-            let read = measure_value(builder, pass, measure)?;
-            let value = builder.input_as(&site, &read, &ValueType::F32, false)?;
+            let read = measure_value(builder, &site, pass, measure)?;
+            let value_type = if read.value_type() == Some(ValueType::Vec2F) {
+                ValueType::Vec2F
+            } else {
+                ValueType::F32
+            };
+            let value = builder.input_as(&site, &read, &value_type, false)?;
             let (op, port) = if measure.rule == MeasureRule::Average {
                 ("stat.mean", "mean")
             } else {
@@ -114,7 +120,7 @@ fn measure_source(
             })
         }
         MeasureRule::Spread => {
-            let read = measure_value(builder, pass, measure)?;
+            let read = measure_value(builder, &site, pass, measure)?;
             spread(builder, &site, &read)
         }
         MeasureRule::EventCount => Err("a grid records no events to count".to_owned()),
@@ -168,16 +174,26 @@ fn mean_of(builder: &mut Builder<'_>, site: &Site, value: InputValue) -> InputVa
     })
 }
 
-/// Returns the value measure `measure` reads for each cell: one of my properties, a parameter or a number.
-fn measure_value(builder: &mut Builder<'_>, pass: usize, measure: &SheetMeasure) -> Result<Operand, String> {
+/// Returns the value measure `measure` reads for each cell or agent, written at `site`: one of my properties, a
+/// parameter, a number, or a Calculate over these.
+fn measure_value(
+    builder: &mut Builder<'_>,
+    site: &Site,
+    pass: usize,
+    measure: &SheetMeasure,
+) -> Result<Operand, String> {
     match measure.value.value() {
         Some(SheetValue::Chip(SheetChip::My(property))) => builder.read(pass, property),
+        Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::Calculate => {
+            let mut scope = super::calculate::PassScope { builder, pass };
+            super::calculate::calculate(&mut scope, &site.at("value"), phrase)
+        }
         Some(SheetValue::Chip(SheetChip::Param(id))) => builder.param(id),
         Some(SheetValue::Literal(SheetLiteral::Bool(value))) => Ok(Operand::Constant(Literal::Bool(*value))),
         Some(SheetValue::Literal(literal)) => literal
             .number()
             .map(Operand::Number)
             .ok_or_else(|| "the measure reads no number".to_owned()),
-        _ => Err("a measure of a grid reads one of the cells' properties".to_owned()),
+        _ => Err("a measure reads a property, a parameter, a number or a Calculate of them".to_owned()),
     }
 }

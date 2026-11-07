@@ -19,5 +19,6 @@ mod graph_sum_fields;
 mod lowered_fixtures;
 mod registry;
 mod runtime_parity;
+mod sheet_agents;
 mod sheet_grid;
 mod simulation;

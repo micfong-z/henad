@@ -1,8 +1,9 @@
 //! The sheet reader over the starters and the test sheets, its refusals, its blanks and a mutation corpus.
 //!
-//! The starters in the crate's `sheets/` directory are round 1's Game of Life, Majority vote and forest fire. The test
-//! sheets under `sheets/` here are round 1's SIR with rates, boids and ants from the author format's examples, and its
-//! random walk, bounded confidence and SIR with chances written from round 1's models. Every sheet holds the stored
+//! The starters in the crate's `sheets/` directory are round 1's Game of Life, Majority vote, forest fire, random walk,
+//! boids from the author format's examples, and bounded confidence. The test sheets under `sheets/` here are round 1's
+//! SIR with rates and ants from the author format's examples, its SIR with chances written from round 1's models, and
+//! a sheet of chances once for each infected person nearby. Every sheet holds the stored
 //! forms of the final editor: every condition that always holds written `{ kind = "always" }`, every Become from any
 //! state written `start_state = "any_state"`, Game of Life's Clear a button that runs a card once, and the SIR buttons
 //! named New outbreak.
@@ -25,14 +26,9 @@ use crate::sheet::{ParsedSheet, SheetFileError, TablePlaces, starters};
 pub(super) fn sheets() -> Vec<(&'static str, &'static str)> {
     let test_sheets = [
         ("sir.toml", include_str!("sheets/sir.toml")),
-        ("boids.toml", include_str!("sheets/boids.toml")),
         ("ants.toml", include_str!("sheets/ants.toml")),
-        ("random_walk.toml", include_str!("sheets/random_walk.toml")),
-        (
-            "bounded_confidence.toml",
-            include_str!("sheets/bounded_confidence.toml"),
-        ),
         ("sir_chance.toml", include_str!("sheets/sir_chance.toml")),
+        ("mobile_sir.toml", include_str!("sheets/mobile_sir.toml")),
     ];
     starters()
         .iter()
@@ -232,12 +228,23 @@ fn every_table_reads_its_values() {
 }
 
 #[test]
-fn starters_returns_game_of_life_vote_and_the_forest_fire() {
+fn starters_returns_the_grid_sheets_then_the_agent_sheets() {
     let names: Vec<&str> = starters().iter().map(|starter| starter.file_name).collect();
-    assert_eq!(names, ["game_of_life.toml", "vote.toml", "forest_fire.toml"]);
-    for starter in starters() {
+    assert_eq!(
+        names,
+        [
+            "game_of_life.toml",
+            "vote.toml",
+            "forest_fire.toml",
+            "random_walk.toml",
+            "boids.toml",
+            "bounded_confidence.toml"
+        ]
+    );
+    for (index, starter) in starters().iter().enumerate() {
         let document = read(starter.text).into_document();
-        assert_eq!(document.world.made_of, MadeOf::Cells, "{}", starter.file_name);
+        let made_of = if index < 3 { MadeOf::Cells } else { MadeOf::Agents };
+        assert_eq!(document.world.made_of, made_of, "{}", starter.file_name);
     }
     assert_eq!(read(sheet_text("vote.toml")).document().sheet.name, "Majority vote");
 }

@@ -30,6 +30,8 @@ pub(super) const GROUP_PART: u32 = 1;
 pub(super) const GROUP_CHANGE: u32 = 2;
 /// Group of the nodes of one measure that no other measure shares.
 pub(super) const GROUP_MEASURE: u32 = 3;
+/// Group of the nodes a card's looks at agents share: the largest distance, the index's cell size and each fold.
+pub(super) const GROUP_LOOK: u32 = 4;
 
 /// Owner of a node while the lowering writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -177,9 +177,12 @@ takes a placer: for a graph it returns `ModelFileError::Graph` with the checker'
 otherwise builds the entry through `GridProgram::entry`, or for a graph of agents
 `AgentProgram::compile`'s errors or `AgentProgram::entry`. For a sheet the same errors of the
 lowered graph come as `ModelFileError::Sheet`, each placed at the sheet's line table with no pass
-and no node (decision D46). A grid sheet with no property lowers to a graph with no lane and no
-pass, whose errors are in IR words, so `entry` returns the sheet's own `SHEET_EMPTY` warning,
-raised to an error at `[world]`, before `graph_entry` runs
+and no node (decision D46). `graph_entry` also takes an optional `FaultNames`: a sheet passes its
+`SheetFile::fault_names`, and a graph of agents then compiles through
+`AgentProgram::compile_with_fault_names`, so a capped fold's fault names the sheet's lines (D47). A
+grid sheet with no property lowers to a graph with no lane and no pass, whose errors are in IR
+words, so `entry` returns the sheet's own `SHEET_EMPTY` warning, raised to an error at `[world]`,
+before `graph_entry` runs
 (`a_sheet_with_no_property_is_refused_in_its_own_words`). `ModelFileError::Unsupported` stays in
 the enum and no kind returns it. `GridRuleFile`, a grid rule as one TOML file, behaves as
 `ModelFile` did before the enum. `GridRuleFile::parse` reads line ends as `\n` and maps every span

@@ -1,17 +1,17 @@
 //! Buttons: an `[[action]]` per button, its id and label the button's.
 //!
-//! A Start again step reruns the start of its properties: the init pass `start_cells` when it names every property
+//! A Start again step reruns the start of its properties: the init pass of the starts when it names every property
 //! that has a start, and otherwise a disabled init pass `restart_<button>` of the properties it names. A rerun keys its
 //! draws on the press count, so each press draws a new layout. Set everywhere and Run once steps write the action pass
-//! `button_<button>`. That pass runs on every cell when the button is pressed. A button holds steps of one of the two
-//! forms.
+//! `button_<button>`. That pass runs on every cell or agent when the button is pressed. A button holds steps of one of
+//! the two forms.
 //! An action's reruns and its action pass have no order that a button's steps could set.
 
 use super::ids::{GROUP_PART, Owner, SheetKey};
-use super::start::{self, START_PASS};
+use super::start;
 use super::value::Operand;
 use super::{Builder, Site, card};
-use crate::document::{Action, Domain, Pass, PassStage};
+use crate::document::{Action, Pass, PassStage};
 use crate::sheet::check::Place;
 use crate::sheet::document::{ButtonStepRule, CardRuns, SheetButton, SheetChip, SheetLiteral, SheetValue};
 use crate::value::Literal;
@@ -38,7 +38,11 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
         if restarts {
             action.runs = restart(builder, button);
         } else if acts {
-            let mut pass = Pass::new(&format!("button_{}", button.id), PassStage::Action, Some(Domain::Cells));
+            let mut pass = Pass::new(
+                &format!("button_{}", button.id),
+                PassStage::Action,
+                Some(builder.domain()),
+            );
             pass.action = Some(button.id.clone());
             let pass = builder.add_pass(pass);
             for (step_index, step) in button.does.iter().enumerate() {
@@ -80,7 +84,7 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
 
 /// Returns the init passes button `button` reruns, writing a pass of its own when it starts some properties again.
 fn restart(builder: &mut Builder<'_>, button: &SheetButton) -> Vec<String> {
-    let cells = builder.cells();
+    let cells = builder.properties();
     let mut indices: Vec<usize> = Vec::new();
     for step in &button.does {
         let named: Vec<usize> = match step.thing.as_deref() {
@@ -102,7 +106,7 @@ fn restart(builder: &mut Builder<'_>, button: &SheetButton) -> Vec<String> {
     if indices.is_empty() {
         Vec::new()
     } else if indices == starting {
-        vec![START_PASS.to_owned()]
+        vec![start::start_pass(builder)]
     } else {
         let id = format!("restart_{}", button.id);
         start::lower_restart(builder, &id, &button.id, &indices);
@@ -122,7 +126,7 @@ fn set_everywhere(
     let property_id = step.property.as_deref().ok_or("a Set everywhere names no property")?;
     let (_, property) = builder
         .property(property_id)
-        .ok_or_else(|| format!("'{property_id}' is no property of the cells"))?;
+        .ok_or_else(|| format!("'{property_id}' is no property of {}", builder.thing_words()))?;
     let site = Site {
         pass,
         owner: Owner::Sheet(SheetKey {

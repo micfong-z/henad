@@ -34,6 +34,7 @@ use henad_core::view::StatDescriptor;
 
 use super::agent_hooks::{AgentGraphHooks, BufferSource, ReducePass, StatSlot, WalkCharge};
 use super::emit::{self, AGENT_COLORS, AgentPlan, EmitInput, Emitted, FIRST_COUNTER, FieldPlan, LanePlan, Role};
+use super::fault_names::FaultNames;
 use super::probes::{self, Probes};
 use super::uniform::WgslType;
 use super::{
@@ -281,8 +282,31 @@ impl AgentProgram {
     ///
     /// Returns the problems of [`Self::compile`], and a problem for each probe that names no `bool` output of a tick
     /// pass.
-    #[expect(clippy::too_many_lines, reason = "every declaration of the entry is read here once")]
     pub fn compile_with_probes(file: &GraphFile, probes: &Probes) -> Result<Self, Vec<CodeDiagnostic>> {
+        Self::compile_named(file, probes, None)
+    }
+
+    /// Checks `file` and compiles every pass the GPU runs, the fault of each radius fold `names` holds naming its words
+    /// in place of its pass, node and line.
+    ///
+    /// A sheet passes the names of its looks at agents, so a fold past its visit cap names the author line, as "line 3,
+    /// Flockmates: looked at more than 65536 agents around one agent, and the run stops". The names change no shader
+    /// and leave the file's text and its code identity alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns the problems of [`Self::compile`].
+    pub fn compile_with_fault_names(file: &GraphFile, names: &FaultNames) -> Result<Self, Vec<CodeDiagnostic>> {
+        Self::compile_named(file, &Probes::default(), Some(names))
+    }
+
+    /// Checks `file` and compiles every pass the GPU runs with `probes`, naming each fault `names` holds in its words.
+    #[expect(clippy::too_many_lines, reason = "every declaration of the entry is read here once")]
+    fn compile_named(
+        file: &GraphFile,
+        probes: &Probes,
+        names: Option<&FaultNames>,
+    ) -> Result<Self, Vec<CodeDiagnostic>> {
         let report = file.check();
         if report.has_errors() {
             return Err(report.errors().cloned().collect());
@@ -395,6 +419,19 @@ impl AgentProgram {
                 let written = evaluator
                     .origin(*node)
                     .map_or(*node, |origin| origin.calls.first().copied().unwrap_or(origin.node));
+                if let Some(name) = names.and_then(|names| names.get(written)) {
+                    return [
+                        format!(
+                            "{name}: looked at more than {} agents around one agent, and the run stops",
+                            crate::limits::MAX_FOLD_CANDIDATES
+                        ),
+                        format!(
+                            "{name}: would search more than {} cells around one agent, and the run stops. A shorter \
+                             distance searches fewer",
+                            crate::limits::MAX_WALK_CELLS
+                        ),
+                    ];
+                }
                 let located = match evaluator.origin(*node) {
                     Some(origin) if !origin.calls.is_empty() => format!(
                         "node {written} (node {} of the function '{}')",

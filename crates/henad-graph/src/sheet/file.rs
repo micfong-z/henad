@@ -2,16 +2,22 @@
 
 use std::fmt;
 
+use henad_compute::entry::ModelEntry;
+use henad_compute::gpu::{HOST_WORK_BUDGET, PassKind, SUBMISSION_WORK_BUDGET, wgpu};
 use henad_core::diagnostic::CodeDiagnostic;
+use henad_core::params::ParamValue;
 use henad_core::provenance::ModelCode;
 
 use super::check::{Place, SheetReport, Thing, span_of};
-use super::document::SheetDocument;
+use super::document::{CardRuns, LineKind, MadeOf, SheetChip, SheetDocument, SheetValue};
 use super::lower::{self, Problem};
+use super::relations::CardRelations;
+use super::sentence::{self, Sentences};
 use super::{LineMap, NodeOrigin, NodeOwner, ParsedSheet, SheetErrors, SheetFileError, SheetPlaces};
 use crate::GraphFile;
 use crate::document::GraphDocument;
 use crate::ids::NodeId;
+use crate::wgsl::FaultNames;
 
 /// A sheet file: the sheet, its text and places, its warnings, and the graph it lowers to with the table of that
 /// graph's nodes.
@@ -39,6 +45,8 @@ pub struct SheetFile {
     lowered: GraphFile,
     /// Owner and slot path of every node of [`Self::lowered`].
     line_map: LineMap,
+    /// Name in the author's words of each look at agents, by the id of its fold in [`Self::lowered`].
+    fault_names: FaultNames,
 }
 
 /// Prints the sheet's id, the number of warnings and the lowered graph's nodes.
@@ -108,6 +116,7 @@ impl SheetFile {
             canonical,
             lowered: graph,
             line_map: lowered.map,
+            fault_names: lowered.fault_names,
         })
     }
 
@@ -141,6 +150,94 @@ impl SheetFile {
         &self.line_map
     }
 
+    /// Name in the author's words of each look at agents of [`Self::lowered`], by the id of its fold, such as "line 1,
+    /// Flockmates".
+    ///
+    /// The names are for [`AgentProgram::compile_with_fault_names`].
+    ///
+    /// [`AgentProgram::compile_with_fault_names`]: crate::wgsl::AgentProgram::compile_with_fault_names
+    pub fn fault_names(&self) -> &FaultNames {
+        &self.fault_names
+    }
+
+    /// Returns the reasons a device of `limits` cannot run `entry`, the entry this sheet builds, at `params`, with the
+    /// work it costs past a budget in the model's words.
+    ///
+    /// The reasons are those of [`ModelEntry::shortfalls`]. A submission past its budget names the looks at agents of
+    /// the heaviest card, as "Line 1, Flockmates: looks at too many birds at 1,000,000 birds. A shorter distance or
+    /// fewer birds would fit.", or the card when it looks at no agents, and starts past the host's budget name the
+    /// number started. A reason of another kind, such as a buffer past the device's size, is kept as it is.
+    pub fn shortfalls(&self, entry: &ModelEntry, params: &[ParamValue], limits: &wgpu::Limits) -> Vec<String> {
+        let found = entry.shortfalls(params, limits);
+        let Some(demand) = entry.demand(params, limits) else {
+            return found;
+        };
+        let over_submission = demand.submission_work() > SUBMISSION_WORK_BUDGET;
+        let over_host = demand.host.iter().any(|run| run.work > HOST_WORK_BUDGET);
+        if !over_submission && !over_host {
+            return found;
+        }
+        let document = self.document();
+        let sentences = Sentences::new(document);
+        let (things, count) = match document.world.made_of {
+            MadeOf::Agents => {
+                let kind = document.agents.first().map_or("agents", |kind| kind.id.as_str());
+                (
+                    sentence::plural(&sentences.thing_word(kind)),
+                    param_count(entry, params, &["num_agents"]),
+                )
+            }
+            MadeOf::Cells => (
+                sentence::plural(&sentences.thing_word("cells")),
+                param_count(entry, params, &["grid_width", "grid_height"]),
+            ),
+        };
+        let mut lines: Vec<String> = found
+            .into_iter()
+            .filter(|line| !line.contains("units of work"))
+            .collect();
+        if over_submission {
+            let heaviest = demand
+                .passes
+                .iter()
+                .filter(|pass| pass.kind == PassKind::Step)
+                .max_by_key(|pass| pass.work);
+            let prefix = format!("{}_", document.sheet.id);
+            let pass = heaviest
+                .and_then(|pass| pass.label.strip_prefix(&prefix))
+                .and_then(|id| self.lowered.document().passes.iter().find(|pass| pass.id == id));
+            let looks: Vec<&str> = pass
+                .map(|pass| {
+                    pass.body
+                        .nodes
+                        .iter()
+                        .filter_map(|node| self.fault_names.get(node.id))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if looks.is_empty() {
+                let card = pass.and_then(|pass| pass.id.strip_prefix("tick_")).and_then(|id| {
+                    document
+                        .cards
+                        .iter()
+                        .find(|card| card.id == id && card.runs == CardRuns::EachTick)
+                });
+                let heading = card.map_or_else(|| sentence::each_tick(None), |card| sentences.card_heading(card));
+                lines.push(sentence::card_costs_too_much(&heading, &things, count));
+            } else {
+                lines.extend(
+                    looks
+                        .into_iter()
+                        .map(|look| sentence::look_costs_too_much(look, &things, count)),
+                );
+            }
+        }
+        if over_host {
+            lines.push(sentence::start_costs_too_much(&things, count));
+        }
+        lines
+    }
+
     /// Warnings of the sheet's check, skip warnings included, each placed at its table.
     pub fn warnings(&self) -> &[CodeDiagnostic] {
         &self.warnings
@@ -165,7 +262,8 @@ impl SheetFile {
     /// the card or button the pass was lowered from, or at `[sheet]`.
     ///
     /// The pass and node of the finding are cleared, since neither is in the sheet, and its place in the lowered
-    /// graph's text is replaced.
+    /// graph's text is replaced. A pass whose cost per element passes the limit (rule V22) is reworded in the model's
+    /// words, as [`sentence::line_costs_too_much`] writes it for the line or card at its place, and loses its notes.
     pub fn place_graph_diagnostic(&self, mut diagnostic: CodeDiagnostic) -> CodeDiagnostic {
         let node = diagnostic.node.take();
         let pass = diagnostic.pass.take();
@@ -177,6 +275,10 @@ impl SheetFile {
                 .and_then(|origin| self.place_of_origin(origin)),
             None => pass.and_then(|pass| self.place_of_pass(&pass)),
         };
+        if crate::check::is_pass_cost(&diagnostic.message) {
+            diagnostic.message = self.cost_words(place.as_ref());
+            diagnostic.notes.clear();
+        }
         diagnostic.span = None;
         diagnostic.line = None;
         diagnostic.column = None;
@@ -186,6 +288,64 @@ impl SheetFile {
         match span {
             Some(span) => self.parsed.place(diagnostic, span),
             None => diagnostic,
+        }
+    }
+
+    /// Returns the error on a pass whose cost per element passes the limit, in the model's words, naming the line or
+    /// card at `place`.
+    ///
+    /// A Repeat over a parameter suggests a smaller maximum for it, a Repeat of a fixed number of times fewer times,
+    /// and any other line or a card fewer lines.
+    fn cost_words(&self, place: Option<&Place>) -> String {
+        let document = self.document();
+        let sentences = Sentences::new(document);
+        let world_thing = match document.world.made_of {
+            MadeOf::Agents => document.agents.first().map_or("agents", |kind| kind.id.as_str()),
+            MadeOf::Cells => "cells",
+        };
+        match place {
+            Some(Place::Line(card, line_id)) => {
+                let card = &document.cards[*card];
+                let relations = CardRelations::new(document, card);
+                let line = relations.line(line_id);
+                let name = sentence::look_name(&[(
+                    relations.number(line_id).unwrap_or(0),
+                    line.and_then(|line| line.name.as_deref()),
+                )]);
+                let fix = match line
+                    .filter(|line| line.kind == LineKind::Repeat)
+                    .map(|line| line.times.value())
+                {
+                    Some(Some(SheetValue::Chip(SheetChip::Param(id)))) => sentence::smaller_maximum(
+                        document
+                            .parameters
+                            .iter()
+                            .find(|parameter| parameter.id == *id)
+                            .map_or(id.as_str(), |parameter| parameter.name.as_str()),
+                    ),
+                    Some(_) => sentence::FEWER_TIMES.to_owned(),
+                    None => sentence::FEWER_LINES.to_owned(),
+                };
+                sentence::line_costs_too_much(&name, &sentences.thing_word(&card.every), &fix)
+            }
+            Some(Place::Card(card)) => {
+                let card = &document.cards[*card];
+                sentence::line_costs_too_much(
+                    &sentences.card_heading(card),
+                    &sentences.thing_word(&card.every),
+                    sentence::FEWER_LINES,
+                )
+            }
+            Some(Place::Button(button)) => sentence::line_costs_too_much(
+                &document.buttons[*button].name,
+                &sentences.thing_word(world_thing),
+                sentence::FEWER_LINES,
+            ),
+            _ => sentence::line_costs_too_much(
+                &sentence::each_tick(None),
+                &sentences.thing_word(world_thing),
+                sentence::FEWER_LINES,
+            ),
         }
     }
 
@@ -209,6 +369,13 @@ impl SheetFile {
                         .iter()
                         .position(|property| property.id == id)
                         .map(|index| Place::Property(Thing::Cells, index)),
+                    "agents" => document
+                        .agents
+                        .first()?
+                        .properties
+                        .iter()
+                        .position(|property| property.id == id)
+                        .map(|index| Place::Property(Thing::Agents(0), index)),
                     "measure" => document
                         .measures
                         .iter()
@@ -268,4 +435,22 @@ fn placed(parsed: &ParsedSheet, problems: Vec<Problem>) -> Vec<CodeDiagnostic> {
             }
         })
         .collect()
+}
+
+/// Returns the product of the parameters of `entry` named `ids` at `params`: the number of agents, or of cells.
+fn param_count(entry: &ModelEntry, params: &[ParamValue], ids: &[&str]) -> u64 {
+    ids.iter()
+        .map(|id| {
+            entry
+                .param_descriptors()
+                .iter()
+                .position(|descriptor| descriptor.id() == *id)
+                .and_then(|index| params.get(index))
+                .and_then(|value| match value {
+                    ParamValue::U32(count) => Some(u64::from(*count)),
+                    _ => None,
+                })
+                .unwrap_or(0)
+        })
+        .product()
 }

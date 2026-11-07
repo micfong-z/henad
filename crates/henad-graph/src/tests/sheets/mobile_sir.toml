@@ -1,0 +1,106 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "mobile_sir"
+name = "Mobile contacts"
+purpose = "Test sheet: a chance once for each infected person nearby, every person within reach of every other in a world 1 cell wide."
+next_line = 3
+
+[world]
+made_of = "agents"
+width = 1
+height = 1
+edges = "wrap"
+
+[[agents]]
+id = "person"
+name = "Person"
+count = 4
+max_count = 2000
+
+[[agents.property]]
+id = "position"
+name = "Position"
+type = "position"
+
+[agents.property.starts_as]
+rule = "anywhere"
+key = 3467740913
+
+[[agents.property]]
+id = "health"
+name = "Health"
+type = "states"
+states = [
+  { id = "susceptible", name = "Susceptible", color = "#007AF5" },
+  { id = "infected", name = "Infected", color = "#E43748" },
+]
+
+[agents.property.starts_as]
+rule = "value"
+value = { state = "infected" }
+
+[[agents.property]]
+id = "hit"
+name = "Hit"
+type = "yes_no"
+
+[agents.property.starts_as]
+rule = "value"
+value = false
+
+[[parameter]]
+id = "infection_chance"
+name = "Infection chance"
+type = "number"
+min = 0
+max = 1
+default = 0.2
+step = 0.01
+
+[[parameter]]
+id = "contact_range"
+name = "Contact range"
+type = "number"
+min = 1
+max = 50
+default = 5
+
+# Each tick, every person
+[[card]]
+id = "person_tick"
+every = "person"
+runs = "each_tick"
+lines = ["l1", "l2"]
+
+# Infected nearby = count of persons within Contact range whose Health is Infected
+[card.line.l1]
+kind = "count"
+name = "Infected nearby"
+around = "agents_within"
+agent_kind = "person"
+distance = { param = "contact_range" }
+include_me = false
+
+[card.line.l1.whose]
+kind = "compare"
+test = "is"
+left = { their = "health" }
+right = { state = "infected" }
+
+# Set Hit to with chance Infection chance for each of Infected nearby, always
+[card.line.l2]
+kind = "set"
+key = 1916243617
+property = "hit"
+
+[card.line.l2.value]
+kind = "chance"
+chance = { param = "infection_chance" }
+tries = { result = "l1" }
+
+[card.line.l2.condition]
+kind = "always"

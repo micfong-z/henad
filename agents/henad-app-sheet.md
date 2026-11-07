@@ -77,8 +77,10 @@ is one step of time)", or "Tick 4 (4 days)" through `time_axis::elapsed_text` on
 time scale). No autosave and no Facilitator panel (D61).
 
 **The New model dialog** (`new_model.rs`, D57, D71). `NewModelDialog` sits in
-`EditorPanel::new_model` while open: the `StarterChoice`s (`starter_choices`: each sheet starter's
-file name, the model name read from it, and its description from `STARTER_CHOICES` by that name),
+`EditorPanel::new_model` while open: the `StarterChoice`s (`starter_choices`: each sheet starter of
+a world made of cells, with its file name, the model name read from it, and its description from
+`STARTER_CHOICES` by that name, the agent starters held out since the sheet pane has no agent
+section),
 the chosen index, the Name text and `name_typed`. `choose` sets the index and, until the author
 types in Name, the name to the starter's. "Untitled model" is the default only for Blank, which is
 not a starter yet. `open_new_model` opens it from the Editor header's New
@@ -96,7 +98,8 @@ and Blank is not offered.
 
 `src/tests/sheet_editor.rs` holds
 `every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies` (each starter waits
-at tick 0, plays past it, applies and builds),
+at tick 0 in the preview run of its world, `PreviewRun::Grid` or `PreviewRun::Agents`, plays past
+it, applies and builds), `the_new_model_dialog_offers_every_grid_starter_and_no_agent_starter`,
 `the_card_pane_reads_the_life_lines_as_their_sentences` (and the vote's "otherwise"),
 `apply_installs_and_builds_the_sheet`,
 `save_writes_the_canonical_text_and_the_saved_file_reopens_to_the_same_document` (a hand-edited

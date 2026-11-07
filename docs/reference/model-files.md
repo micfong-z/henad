@@ -278,8 +278,8 @@ A power of two keeps the products of the deposit and the merge exact on every de
 
 A file of kind `sheet` holds a sheet: the model in the order a reader meets it, with its world, its properties, its parameters, measures, colours and buttons, and a card of lines for each kind of thing.
 Henad reads the sheet, checks it, and lowers it to a graph model, which then builds and runs as a graph model does.
-This version lowers sheets on a grid.
-A world of agents and a line this version cannot lower yet are refused at their tables with a message that says so.
+This version lowers sheets on a grid, and sheets of one kind of agent in open space, described under [A sheet of agents](#a-sheet-of-agents).
+A line this version cannot lower yet is refused at its table with a message that says so.
 
 `crates/henad-graph/sheets/game_of_life.toml` in Henad's repository is Conway's Game of Life as a sheet.
 The comment above each card is the card's heading, and the comment above each line is the sentence the line reads as.
@@ -296,9 +296,31 @@ A program reads one with `henad::rules::ModelFile::parse`, and `ModelFile::sheet
 
 After the header, the `[sheet]` table holds the sheet's `version`, `1` in this version, its `id`, its `name`, an optional `purpose`, and `next_line`, the number the next new line takes.
 A sheet of a newer version is refused at its `version`.
-The other tables follow in this order: `[world]`, `[time]`, the properties of each kind of thing (`[[cells.property]]` on a grid), `[[parameter]]`, `[[measure]]`, `[color.cells]`, `[[button]]` and `[[card]]`.
+The other tables follow in this order: `[world]`, `[time]`, the properties of each kind of thing (`[[cells.property]]` on a grid, an `[[agents]]` table with its `[[agents.property]]` tables in open space), `[[parameter]]`, `[[measure]]`, a colour rule for each kind of thing (`[color.cells]`, or `[color.<kind>]`), `[[button]]` and `[[card]]`.
 Each line of a card is a `[card.line.<id>]` table, its id `l` and a number unique in the file.
 Every table refuses a key it does not know, at the key's line.
+
+### A sheet of agents
+
+A sheet whose `[world]` is `made_of = "agents"` holds one kind of agent, its `count` at the start and its `max_count`, the most a run can hold.
+Its Position starts anywhere at random, an Arrow as a random direction, and its Heading follows the direction of its last move.
+Its card can look at the agents within a distance, count them or sum up what it sees, then steer a property, keep a value between two limits, and move by an arrow, and a Repeat adds up its moves and steers.
+The world wraps at its edges.
+
+`crates/henad-graph/sheets/random_walk.toml` is a random walk as a sheet.
+`boids.toml` and `bounded_confidence.toml` beside it are flocking and opinion dynamics.
+
+``` toml title="random_walk.toml"
+--8<-- "crates/henad-graph/sheets/random_walk.toml"
+```
+
+The looks at agents of one card share one walk of the agents around each agent, at the largest of their distances, and the neighbour index takes its size from the largest distance as the parameters stand.
+A look past the most agents one agent can visit stops the run with a message that names the look's line, such as "line 1, Flockmates".
+A program asks `SheetFile::shortfalls` whether a population fits the work one run may take, and a model that does not fit is named the same way.
+
+This version refuses a second kind of agent, walls around agents, the ground, Pick a cell, Move to, Leave and Record, each at its table.
+A card changes a property by Set or by Steer, and moves by an arrow or to a place.
+A line that changes a property the other way is refused with a message naming the line that came first.
 
 ### Problems at their lines
 

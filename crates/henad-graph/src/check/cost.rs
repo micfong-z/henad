@@ -70,6 +70,16 @@ pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Costs {
     }
 }
 
+/// Returns the end of the message on a pass past [`MAX_PASS_COST`], shared with [`is_pass_cost`].
+fn pass_cost_limit_text() -> String {
+    format!(", and a pass costs at most {MAX_PASS_COST}")
+}
+
+/// Returns whether `message` is the message of rule V22 on a pass past [`MAX_PASS_COST`].
+pub(crate) fn is_pass_cost(message: &str) -> bool {
+    message.starts_with("the pass '") && message.ends_with(&pass_cost_limit_text())
+}
+
 /// Reports a pass over the limit, and names its heaviest node.
 fn report_pass_cost(
     checker: &mut Checker<'_>,
@@ -84,8 +94,9 @@ fn report_pass_cost(
         .filter(|&position| view.parents[position].is_none())
         .max_by_key(|&position| node_costs[position]);
     let mut diagnostic = henad_core::diagnostic::CodeDiagnostic::error(format!(
-        "the pass '{}' costs {cost} units per element, and a pass costs at most {MAX_PASS_COST}",
-        pass.id
+        "the pass '{}' costs {cost} units per element{}",
+        pass.id,
+        pass_cost_limit_text()
     ))
     .with_pass(pass.id.clone());
     if let Some(heaviest) = heaviest {

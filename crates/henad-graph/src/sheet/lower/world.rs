@@ -1,19 +1,35 @@
-//! The world of a lowered grid sheet: the grid, a category and a lane per cells property, and the parameters.
+//! The world of a lowered sheet: the grid or the open space of the agents, a category and a lane per property, and
+//! the parameters.
+//!
+//! An agent's Position is the `vec2f` lane the spatial index reads, and an Arrow or Heading a `vec2f` lane. The
+//! Heading has no lane when nothing reads it.
 
 use henad_core::authoring::primitives::space::Boundary;
 use henad_core::params::{ParamDescriptor, ParamKind};
 
 use super::Builder;
-use crate::document::{Category, Domain, GridWorld, Lane, LaneStorage, Variant, World};
-use crate::sheet::check::Place;
+use crate::document::{AgentsWorld, Category, GridWorld, Lane, LaneRole, LaneStorage, Variant, World};
+use crate::sheet::check::{Place, formula, formula_chip};
 use crate::sheet::document::{
-    Edges, ParameterFormat, ParameterType, PropertyType, SheetDocument, SheetParameter, SheetProperty,
+    ColorRuleKind, Edges, MadeOf, ParameterFormat, ParameterType, PropertyType, SheetChip, SheetDocument, SheetLine,
+    SheetParameter, SheetProperty, SheetValue,
 };
 use crate::types::ValueType;
 use crate::value::{Literal, MemberName};
 
-/// Returns the grid of `document`, a sheet of cells.
-pub(super) fn grid(document: &SheetDocument) -> World {
+/// Returns the world of `document`: its grid, or the open space of its one kind of agent.
+pub(super) fn world(document: &SheetDocument) -> World {
+    if document.world.made_of == MadeOf::Agents {
+        let mut world = AgentsWorld::default();
+        if let Some(kind) = document.agents.first() {
+            world.count = kind.count;
+            world.max_count = kind.max_count;
+        }
+        // A world is at most a few thousand cells wide, which `f32` holds exactly.
+        world.width = document.world.width as f32;
+        world.height = document.world.height as f32;
+        return World::Agents(world);
+    }
     World::Grid(GridWorld {
         width: document.world.width,
         height: document.world.height,
@@ -24,14 +40,64 @@ pub(super) fn grid(document: &SheetDocument) -> World {
     })
 }
 
-/// Returns the type of the lane of cells property `property`.
+/// Returns the type of the lane of property `property`.
 pub(super) fn lane_type(property: &SheetProperty) -> ValueType {
     match property.property_type {
         PropertyType::States => ValueType::Category(property.id.clone()),
         PropertyType::WholeNumber => ValueType::I32,
         PropertyType::YesNo => ValueType::Bool,
-        PropertyType::Number | PropertyType::Arrow | PropertyType::Position | PropertyType::Heading => ValueType::F32,
+        PropertyType::Number => ValueType::F32,
+        PropertyType::Arrow | PropertyType::Position | PropertyType::Heading => ValueType::Vec2F,
     }
+}
+
+/// Returns whether anything in `document` reads property `id`: a line, a formula, a measure or a colour rule.
+fn is_read(document: &SheetDocument, id: &str, kind: &str) -> bool {
+    let colored = document.colors.get(kind).is_some_and(|rule| {
+        rule.rule == ColorRuleKind::ByHeading
+            || rule.property.as_deref() == Some(id)
+            || rule.shades.iter().any(|shade| shade.property == id)
+    });
+    colored
+        || document
+            .cards
+            .iter()
+            .flat_map(|card| card.line_tables.values())
+            .any(|line| line_reads(document, line, id))
+        || document.measures.iter().any(|measure| {
+            measure.property.as_deref() == Some(id)
+                || measure
+                    .value
+                    .value()
+                    .is_some_and(|value| value_reads(document, value, id))
+        })
+}
+
+/// Returns whether `line`, a phrase in it or its formula reads property `id`.
+fn line_reads(document: &SheetDocument, line: &SheetLine, id: &str) -> bool {
+    let in_formula = line.formula.as_deref().is_some_and(|text| {
+        formula::references(text).is_ok_and(|references| {
+            references
+                .into_iter()
+                .any(|reference| chip_reads(&formula_chip(reference, document), id))
+        })
+    });
+    in_formula || line.slot_values().any(|value| value_reads(document, value, id))
+}
+
+/// Returns whether `value` reads property `id`.
+fn value_reads(document: &SheetDocument, value: &SheetValue, id: &str) -> bool {
+    match value {
+        SheetValue::Chip(chip) => chip_reads(chip, id),
+        SheetValue::Phrase(phrase) => line_reads(document, phrase, id),
+        SheetValue::List(items) => items.iter().any(|item| value_reads(document, item, id)),
+        SheetValue::Literal(_) => false,
+    }
+}
+
+/// Returns whether `chip` reads property `id` of mine or of another agent.
+fn chip_reads(chip: &SheetChip, id: &str) -> bool {
+    matches!(chip, SheetChip::My(property) | SheetChip::MyNew(property) | SheetChip::Their(property) if property == id)
 }
 
 /// Returns the type of parameter `parameter`: `u32` for a Whole number from 0, `f32` otherwise.
@@ -42,11 +108,20 @@ pub(super) fn parameter_type(parameter: &SheetParameter) -> ValueType {
     }
 }
 
-/// Declares a category per States property and a lane per property of the cells, then the parameters.
+/// Declares a category per States property and a lane per property, then the parameters.
 pub(super) fn declare(builder: &mut Builder<'_>) {
-    for (index, property) in builder.cells().iter().enumerate() {
+    let agents = builder.is_agents();
+    let kind = builder.thing_id();
+    for (index, property) in builder.properties().iter().enumerate() {
         match property.property_type {
             PropertyType::States | PropertyType::Number | PropertyType::WholeNumber | PropertyType::YesNo => {}
+            PropertyType::Arrow | PropertyType::Position if agents => {}
+            PropertyType::Heading if agents => {
+                if !is_read(builder.document, &property.id, kind) {
+                    builder.dropped.insert(property.id.clone());
+                    continue;
+                }
+            }
             other => {
                 builder.problem(
                     format!(
@@ -54,12 +129,15 @@ pub(super) fn declare(builder: &mut Builder<'_>) {
                         property.id,
                         other.as_str()
                     ),
-                    Place::Property(crate::sheet::check::Thing::Cells, index),
+                    builder.property_place(index),
                 );
                 continue;
             }
         }
-        let mut lane = Lane::new(&property.id, Domain::Cells, lane_type(property));
+        let mut lane = Lane::new(&property.id, builder.domain(), lane_type(property));
+        if property.property_type == PropertyType::Position {
+            lane.role = Some(LaneRole::Position);
+        }
         if property.property_type == PropertyType::States {
             let variants = property
                 .states
