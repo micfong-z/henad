@@ -155,6 +155,7 @@ nav = [
             { "#68, 2026-11-03" = "developing/agent-record/20261103-68-gpu-agents.md" },
             { "#69, 2026-11-03" = "developing/agent-record/20261103-69-regions-functions.md" },
             { "#70, 2026-11-03" = "developing/agent-record/20261103-70-round-3-audit.md" },
+            { "#71, 2026-11-07" = "developing/agent-record/20261107-71-editor-model-enum.md" },
         ] },
     ] },
 ]

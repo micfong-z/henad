@@ -104,7 +104,7 @@ fn preview_line(ui: &mut egui::Ui, app: &AppState) {
 
 /// Returns the hover text of the preview line. Apply runs the graph only while the Editor holds one.
 pub fn preview_hover(app: &AppState) -> &'static str {
-    if app.editor.graph.is_some() {
+    if app.editor.model.holds_preview_model() {
         PREVIEW_APPLY
     } else {
         PREVIEW_ORPHANED

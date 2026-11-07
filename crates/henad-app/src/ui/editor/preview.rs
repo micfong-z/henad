@@ -97,7 +97,7 @@ pub fn poll_at(ctx: &egui::Context, app: &mut AppState, now: Instant) {
     if matches!(preview.state, PreviewState::Running(_)) && !previewing {
         preview.state = PreviewState::Idle;
     }
-    let Some(graph) = panel.graph.as_deref() else {
+    let Some(source) = panel.model.preview_source() else {
         preview.due = None;
         preview.key = None;
         if preview.state == PreviewState::Waiting {
@@ -108,10 +108,9 @@ pub fn poll_at(ctx: &egui::Context, app: &mut AppState, now: Instant) {
     if !compute {
         return;
     }
-    let key = graph.preview_key();
-    if preview.key != Some(key) {
-        preview.key = Some(key);
-        if graph.has_errors() {
+    if preview.key != Some(source.key) {
+        preview.key = Some(source.key);
+        if source.has_errors {
             preview.due = None;
             if preview.state == PreviewState::Waiting {
                 preview.state = PreviewState::Idle;
@@ -144,12 +143,11 @@ pub fn poll_at(ctx: &egui::Context, app: &mut AppState, now: Instant) {
 
 /// Compiles the Editor's graph, and builds it as the preview from tick 0, or shows why it cannot.
 fn build_preview(app: &mut AppState) {
-    let Some(graph) = app.editor.graph.as_deref_mut() else {
+    let Some(program) = app.editor.model.preview_program() else {
         return;
     };
-    let program = graph.preview_program();
     // Dropping a viewed output that no longer shows is no edit to preview again.
-    app.editor.preview.key = Some(graph.preview_key());
+    app.editor.preview.key = app.editor.model.preview_source().map(|source| source.key);
     let entry = match program {
         Ok(program) => program.entry(),
         Err(problems) => {

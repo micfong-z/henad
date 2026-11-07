@@ -756,7 +756,7 @@ impl AppState {
     /// On native the build thread returns the fault of a build in a later frame than the press that started it, and in
     /// a browser the device reports a shader it refuses after the build that created it.
     fn show_fault(&mut self, fault: Fault, model: Option<&ModelEntry>) {
-        if self.preview.is_some() && self.editor.graph.is_some() && EditorPanel::is_code_fault(&fault) {
+        if self.preview.is_some() && self.editor.model.holds_preview_model() && EditorPanel::is_code_fault(&fault) {
             log::error!("{fault}");
             self.offload_simulation();
             self.editor.show_preview_fault(&fault);

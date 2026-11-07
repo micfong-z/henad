@@ -11,7 +11,9 @@ use crate::state::AppState;
 use crate::tests::support::step_past;
 use crate::ui::dock::Tab;
 use crate::ui::editor::graph::{GraphEdit, GraphEditor, GraphRequest, GraphStatus};
-use crate::ui::editor::{ApplyOutcome, apply, editor_ui, new_graph_model, new_grid_rule, receive_open, save_name};
+use crate::ui::editor::{
+    ApplyOutcome, EditorModel, apply, editor_ui, new_graph_model, new_grid_rule, receive_open, save_name,
+};
 use crate::ui::files::{DialogFile, OpenResult};
 
 /// Returns node `number`'s id.
@@ -49,21 +51,21 @@ fn new_graph_model_opens_a_starter_on_its_tick_pass() {
     let Some(mut app) = app(false) else {
         return;
     };
-    app.editor.text = "an earlier text".to_owned();
+    app.editor.model = EditorModel::Rule("an earlier text".to_owned());
     new_graph_model(&mut app, "sir.toml");
 
-    let graph = app.editor.graph.as_deref().expect("a graph opened");
-    assert!(app.editor.text.is_empty(), "the grid rule's text went");
+    let graph = app.editor.model.graph().expect("a graph opened");
+    assert!(app.editor.model.rule_text().is_none(), "the grid rule's text went");
     assert_eq!(graph.scope(), &Scope::pass("step"));
     assert_eq!(graph.document().id, "node_sir");
     assert!(!graph.report().has_errors(), "a starter checks");
     assert_eq!(app.focus_request, Some(Tab::Editor));
     assert_eq!(save_name(&app.editor), "node_sir.toml");
-    let saved = GraphFile::parse(&app.editor.file_text()).expect("the saved text reads");
+    let saved = GraphFile::parse(&app.editor.model.file_text()).expect("the saved text reads");
     assert_eq!(saved.to_toml(), graph.text(), "a save writes the canonical text");
 
     new_grid_rule(&mut app);
-    assert!(app.editor.graph.is_none(), "a grid rule replaces the graph");
+    assert!(app.editor.model.graph().is_none(), "a grid rule replaces the graph");
 }
 
 #[test]
@@ -73,14 +75,17 @@ fn a_file_opens_on_the_canvas_or_as_text_by_whether_it_reads_as_a_graph() {
     };
     let text = henad_graph::starters::starter("vote.toml").expect("a starter").text;
     receive_open(&mut app, opened("vote.toml", text));
-    assert!(app.editor.graph.is_some(), "a graph opens on the canvas");
+    assert!(app.editor.model.graph().is_some(), "a graph opens on the canvas");
     assert_eq!(app.editor.file_name.as_deref(), Some("vote.toml"));
     assert_eq!(app.editor.file_status.as_deref(), Some("Opened vote.toml"));
 
     let broken = text.replace("[graph]", "[graph]\nunknown_key = 1");
     receive_open(&mut app, opened("broken.toml", &broken));
-    assert!(app.editor.graph.is_none(), "a graph that does not read opens as text");
-    assert_eq!(app.editor.text, broken);
+    assert!(
+        app.editor.model.graph().is_none(),
+        "a graph that does not read opens as text"
+    );
+    assert_eq!(app.editor.model.file_text(), broken);
 }
 
 #[test]
@@ -114,7 +119,9 @@ fn apply_installs_the_graph_and_builds_it_at_its_own_size() {
     assert!(crate::ui::editor::can_edit(&installed));
     assert_eq!(
         crate::ui::editor::editable_graph(&installed).map(|file| file.code()),
-        GraphFile::parse(&app.editor.file_text()).ok().map(|file| file.code()),
+        GraphFile::parse(&app.editor.model.file_text())
+            .ok()
+            .map(|file| file.code()),
         "Edit model opens the code the graph runs"
     );
 }
@@ -128,7 +135,7 @@ fn a_graph_edit_past_tick_zero_waits_on_the_rebuild_dialog() {
     apply(&mut app);
     step_past(&mut app, 0);
     let running = app.loaded_entry().expect("the graph runs").source().clone();
-    let graph = app.editor.graph.as_deref_mut().expect("a graph");
+    let graph = app.editor.model.graph_mut().expect("a graph");
     run(
         graph,
         GraphRequest::Edit(GraphEdit::one(EditCommand::SetLiteral {
@@ -373,7 +380,7 @@ fn a_copy_confirmation_shows_in_the_text_colour() {
     };
     new_graph_model(&mut app, "sir.toml");
     let ctx = egui::Context::default();
-    let graph = app.editor.graph.as_deref_mut().expect("a graph");
+    let graph = app.editor.model.graph_mut().expect("a graph");
     graph.run(&ctx, GraphRequest::Copy(vec![n(12)]));
     assert_eq!(graph.status, Some(GraphStatus::note("Copied 1 node.")));
 

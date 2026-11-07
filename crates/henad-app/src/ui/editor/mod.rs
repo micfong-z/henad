@@ -51,13 +51,104 @@ const FALLBACK_FILE_NAME: &str = "model.toml";
 /// Default height in points of the diagnostics list.
 const DIAGNOSTICS_HEIGHT: f32 = 120.0;
 
+/// Model under edit in the Editor tab, one variant per kind of model file.
+#[derive(Debug, Default)]
+pub enum EditorModel {
+    /// No model. The code view shows an empty text.
+    #[default]
+    Empty,
+    /// Text of a grid rule's model file, as typed. It may be empty, or not read as a model file at all.
+    Rule(String),
+    /// Graph model under edit on the canvas.
+    Graph(Box<graph::GraphEditor>),
+}
+
+/// Key and error state of the model a preview runs, from [`EditorModel::preview_source`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviewSource {
+    /// Key of what the preview shows. A preview built under another key is out of date.
+    pub key: [u64; 3],
+    /// Whether the model has errors. A model with errors leaves the running preview alone.
+    pub has_errors: bool,
+}
+
+impl EditorModel {
+    /// Returns whether the Editor holds no model: nothing, or a grid rule's text that is empty.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Empty => true,
+            Self::Rule(text) => text.is_empty(),
+            Self::Graph(_) => false,
+        }
+    }
+
+    /// Returns the text Apply and Save model read: a graph model's canonical text, the grid rule's text as typed, or
+    /// an empty text.
+    pub fn file_text(&self) -> String {
+        match self {
+            Self::Empty => String::new(),
+            Self::Rule(text) => text.clone(),
+            Self::Graph(graph) => graph.text(),
+        }
+    }
+
+    /// Text of the grid rule, `None` while the Editor holds a graph model or nothing.
+    pub fn rule_text(&self) -> Option<&str> {
+        match self {
+            Self::Rule(text) => Some(text),
+            Self::Empty | Self::Graph(_) => None,
+        }
+    }
+
+    /// Graph model under edit, `None` while the Editor holds a grid rule's text or nothing.
+    pub fn graph(&self) -> Option<&graph::GraphEditor> {
+        match self {
+            Self::Graph(graph) => Some(graph),
+            Self::Empty | Self::Rule(_) => None,
+        }
+    }
+
+    /// Graph model under edit, mutable, `None` while the Editor holds a grid rule's text or nothing.
+    pub fn graph_mut(&mut self) -> Option<&mut graph::GraphEditor> {
+        match self {
+            Self::Graph(graph) => Some(graph),
+            Self::Empty | Self::Rule(_) => None,
+        }
+    }
+
+    /// Returns whether the model runs as a preview while it is edited. Only a graph model does.
+    pub fn holds_preview_model(&self) -> bool {
+        matches!(self, Self::Graph(_))
+    }
+
+    /// Returns the key and error state of the model the preview runs, or `None` for a model with no preview.
+    pub fn preview_source(&self) -> Option<PreviewSource> {
+        match self {
+            Self::Graph(graph) => Some(PreviewSource {
+                key: graph.preview_key(),
+                has_errors: graph.has_errors(),
+            }),
+            Self::Empty | Self::Rule(_) => None,
+        }
+    }
+
+    /// Compiles the program the preview runs, or returns `None` for a model with no preview.
+    ///
+    /// Note that a graph whose viewed output no longer reads stops viewing it. The key of [`Self::preview_source`]
+    /// then changes.
+    pub fn preview_program(&mut self) -> Option<graph::CompiledProgram> {
+        match self {
+            Self::Graph(graph) => Some(graph.preview_program()),
+            Self::Empty | Self::Rule(_) => None,
+        }
+    }
+}
+
 /// State of the Editor tab: the model file being edited and the outcome of the last Apply.
 #[derive(Debug, Default)]
 pub struct EditorPanel {
-    /// Text of a grid rule's model file, as typed. Empty while the Editor holds a graph model.
-    pub text: String,
-    /// Graph model under edit, `None` while the Editor holds a grid rule's text or nothing.
-    pub graph: Option<Box<graph::GraphEditor>>,
+    /// Model under edit: nothing, a grid rule's text or a graph model.
+    pub model: EditorModel,
     /// Name of the file the text was opened from or saved to, `None` for a text that has no file.
     pub file_name: Option<String>,
     /// Outcome of the last Apply, `None` once the text is replaced.
@@ -120,19 +211,6 @@ impl ApplyOutcome {
 }
 
 impl EditorPanel {
-    /// Returns whether the Editor holds no model: no text and no graph.
-    pub fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.graph.is_none()
-    }
-
-    /// Returns the text Apply and Save model read: a graph model's canonical text, or the grid rule's text as typed.
-    pub fn file_text(&self) -> String {
-        match &self.graph {
-            Some(graph) => graph.text(),
-            None => self.text.clone(),
-        }
-    }
-
     /// Returns whether `source` is the source of the entry the last Apply installed.
     pub fn is_applied(&self, source: &ModelSource) -> bool {
         self.applied.as_ref() == Some(source)
@@ -169,8 +247,7 @@ impl EditorPanel {
     /// The outcome of the last Apply and the state of the preview are cleared, and a later fault of the applied code
     /// no longer belongs to the Editor.
     fn load(&mut self, text: String, file_name: Option<String>) {
-        self.text = text;
-        self.graph = None;
+        self.model = EditorModel::Rule(text);
         self.file_name = file_name;
         self.outcome = None;
         self.applied = None;
@@ -184,8 +261,7 @@ impl EditorPanel {
     /// The outcome of the last Apply and the state of the preview are cleared, as [`Self::load`] clears them for a
     /// text.
     pub fn load_graph(&mut self, file: &GraphFile, file_name: Option<String>) {
-        self.text.clear();
-        self.graph = Some(Box::new(graph::GraphEditor::new(file)));
+        self.model = EditorModel::Graph(Box::new(graph::GraphEditor::new(file)));
         self.file_name = file_name;
         self.outcome = None;
         self.applied = None;
@@ -251,7 +327,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let rebuild_pending = app.pending_rebuild.is_some();
     let panel = &mut app.editor;
     panel.settle_outcome(loaded.as_ref(), rebuild_pending);
-    let empty = panel.is_empty();
+    let empty = panel.model.is_empty();
 
     Panel::top("henad_editor_header")
         .resizable(false)
@@ -278,7 +354,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 .id_salt("henad_editor_diagnostics_scroll")
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
-                    if panel.graph.is_some() {
+                    if panel.model.graph().is_some() {
                         graph_outcome_ui(ui, panel);
                     } else {
                         outcome_ui(ui, panel, &mut request);
@@ -302,15 +378,23 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         history: std::mem::take(&mut panel.reset_history),
         scroll: std::mem::take(&mut panel.reset_scroll),
     };
-    CentralPanel::no_frame().show(ui, |ui| match &mut panel.graph {
-        Some(graph) => graph::graph_ui(ui, graph),
-        None => {
-            code_view::code_view(ui, &mut panel.text, &marked, scroll_to, reset);
+    CentralPanel::no_frame().show(ui, |ui| match &mut panel.model {
+        EditorModel::Graph(graph) => graph::graph_ui(ui, graph),
+        EditorModel::Rule(text) => {
+            code_view::code_view(ui, text, &marked, scroll_to, reset);
+        }
+        EditorModel::Empty => {
+            // Typing into the empty code view starts a grid rule's text.
+            let mut text = String::new();
+            code_view::code_view(ui, &mut text, &marked, scroll_to, reset);
+            if !text.is_empty() {
+                panel.model = EditorModel::Rule(text);
+            }
         }
     });
     if panel
-        .graph
-        .as_deref_mut()
+        .model
+        .graph_mut()
         .is_some_and(graph::GraphEditor::take_pick_import)
     {
         request = Some(EditorRequest::PickImport);
@@ -405,7 +489,7 @@ fn starter_name(starter: &Starter) -> String {
 /// Draws the outcome of the last Apply of a graph model, the message of the last refused edit, and every problem the
 /// checker finds now. A press on a problem at a node opens its pass and brings the node into view.
 fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
-    let Some(graph) = panel.graph.as_deref_mut() else {
+    let Some(graph) = panel.model.graph_mut() else {
         return;
     };
     let live: Vec<CodeDiagnostic> = graph.diagnostics().cloned().collect();
@@ -508,7 +592,7 @@ fn preview_ui(ui: &mut egui::Ui, state: &PreviewState) {
 /// `request` to move the cursor there.
 fn outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel, request: &mut Option<EditorRequest>) {
     let Some(outcome) = &panel.outcome else {
-        if panel.text.is_empty() {
+        if panel.model.is_empty() {
             ui.weak(EMPTY_EDITOR);
         } else {
             ui.weak("Press Apply to check and install the model.");
@@ -573,7 +657,7 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: EditorRequest
 /// A place past the end of the text, which an edit since the last Apply can leave, moves the cursor to the nearest
 /// character.
 pub fn move_cursor_to(ctx: &egui::Context, panel: &mut EditorPanel, line: u32, column: u32) {
-    let index = code_view::char_index_at(&panel.text, line, column);
+    let index = code_view::char_index_at(panel.model.rule_text().unwrap_or_default(), line, column);
     code_view::move_cursor(ctx, index);
     panel.scroll_to = Some(index);
 }
@@ -659,11 +743,11 @@ pub fn open_model(app: &AppState) {
 /// Opens a dialog that saves the Editor's model: a grid rule's text as written, comments included, or a graph model's
 /// canonical text.
 pub fn save_model(app: &mut AppState) {
-    if app.editor.is_empty() {
+    if app.editor.model.is_empty() {
         return;
     }
     let name = save_name(&app.editor);
-    let bytes = app.editor.file_text().into_bytes();
+    let bytes = app.editor.model.file_text().into_bytes();
     app.save_as(SaveTarget::Model, &name, bytes);
 }
 
@@ -673,7 +757,7 @@ pub fn save_name(panel: &EditorPanel) -> String {
     if let Some(name) = &panel.file_name {
         return name.clone();
     }
-    ModelFile::parse(&panel.file_text())
+    ModelFile::parse(&panel.model.file_text())
         .map_or_else(|_| FALLBACK_FILE_NAME.to_owned(), |file| format!("{}.toml", file.id()))
 }
 
@@ -717,7 +801,7 @@ pub fn receive_import(app: &mut AppState, result: OpenResult) {
         }
         OpenResult::Folder(_) | OpenResult::Canceled => return,
     };
-    let (Some(DialogFile { name, bytes, .. }), Some(graph)) = (file, app.editor.graph.as_deref_mut()) else {
+    let (Some(DialogFile { name, bytes, .. }), Some(graph)) = (file, app.editor.model.graph_mut()) else {
         return;
     };
     match String::from_utf8(bytes) {
@@ -747,7 +831,7 @@ pub fn apply(app: &mut AppState) {
         app.editor.outcome = Some(ApplyOutcome::Refused(vec![CodeDiagnostic::error(NO_COMPUTE)]));
         return;
     }
-    let entry = match ModelFile::parse(&app.editor.file_text()).and_then(|file| file.entry()) {
+    let entry = match ModelFile::parse(&app.editor.model.file_text()).and_then(|file| file.entry()) {
         Ok(entry) => entry,
         Err(error) => {
             app.editor.outcome = Some(ApplyOutcome::Refused(error.diagnostics().to_vec()));
@@ -813,7 +897,9 @@ pub fn apply(app: &mut AppState) {
 mod tests {
     use henad_core::diagnostic::CodeDiagnostic;
 
-    use super::{ApplyOutcome, diagnostic_text};
+    use henad_graph::GraphFile;
+
+    use super::{ApplyOutcome, EditorModel, diagnostic_text, graph};
 
     #[test]
     fn a_diagnostic_reads_line_column_and_message() {
@@ -836,5 +922,36 @@ mod tests {
         }
         assert!(ApplyOutcome::Refused(Vec::new()).summary().1);
         assert!(ApplyOutcome::Faulted(Vec::new()).summary().1);
+    }
+
+    #[test]
+    fn each_editor_model_answers_by_its_kind() {
+        let empty = EditorModel::default();
+        assert!(empty.is_empty() && empty.file_text().is_empty());
+        assert!(!empty.holds_preview_model() && empty.preview_source().is_none());
+        assert!(empty.rule_text().is_none() && empty.graph().is_none());
+
+        assert!(
+            EditorModel::Rule(String::new()).is_empty(),
+            "an empty text holds no model"
+        );
+        let rule = EditorModel::Rule("format = \"henad-model\"\n".to_owned());
+        assert!(!rule.is_empty());
+        assert_eq!(rule.file_text(), "format = \"henad-model\"\n");
+        assert_eq!(rule.rule_text(), Some("format = \"henad-model\"\n"));
+        assert!(!rule.holds_preview_model() && rule.preview_source().is_none());
+
+        let starter = henad_graph::starters::starters().first().expect("a grid starter");
+        let file = GraphFile::parse(starter.text).expect("the starter reads");
+        let mut model = EditorModel::Graph(Box::new(graph::GraphEditor::new(&file)));
+        assert!(!model.is_empty() && model.holds_preview_model());
+        assert!(model.rule_text().is_none());
+        assert_eq!(
+            GraphFile::parse(&model.file_text()).map(|read| read.code()).ok(),
+            Some(file.code())
+        );
+        let source = model.preview_source().expect("a graph previews");
+        assert!(!source.has_errors);
+        assert!(model.preview_program().is_some_and(|program| program.is_ok()));
     }
 }

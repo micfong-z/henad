@@ -2,14 +2,23 @@
 
 `ui/editor/` is the Editor tab, the in-app editor of one model file: a grid rule as text in the code
 view, or a graph model on the canvas of `ui/editor/graph/` (below). `mod.rs` holds `EditorPanel`
-(`AppState::editor`: a grid rule's text as typed, the graph under edit as `graph:
-Option<Box<GraphEditor>>`, the file name, the `ApplyOutcome` of the last Apply, the open and save
-status, and the `ModelSource` applied last) and `editor_ui`, which dispatches on `graph`: a header
-of New grid rule, New graph model (a menu of henad-graph's `starters()` then `agent_starters()`,
-labelled by each starter's model name), Open model, Save model and Apply, then the code view or the
-graph editor. For a grid rule the list under the code holds the outcome and each `CodeDiagnostic` as
-a selectable `Label` reading `<line>:<column> <message>`, whose press moves the cursor there
-(`move_cursor_to`). `code_view.rs` draws one `TextEdit::multiline(..).code_editor()` with a layouter
+(`AppState::editor`: the model under edit as `model: EditorModel`, the file name, the `ApplyOutcome`
+of the last Apply, the open and save status, and the `ModelSource` applied last) and `editor_ui`,
+which matches on the model: a header of New grid rule, New graph model (a menu of henad-graph's
+`starters()` then `agent_starters()`, labelled by each starter's model name), Open model, Save model
+and Apply, then the code view or the graph editor. `EditorModel` is `Empty` (the default),
+`Rule(String)` (a grid rule's text as typed, which may be empty or not read) or
+`Graph(Box<GraphEditor>)`, so a text and a graph are never held at once. Every site that differs by
+kind calls a method of the enum: `is_empty` (`Empty`, or a `Rule` whose text is empty, on which
+Save model and Apply are disabled), `file_text` (what Apply, Save model and `save_name` read),
+`holds_preview_model` (only `Graph`, read by `AppState::show_fault` and `preview_hover`),
+`preview_source` (a `PreviewSource` of the preview key and the error flag, `None` with no preview)
+and `preview_program`, plus `rule_text`, `graph` and `graph_mut` for the sites of one kind. `load`
+sets `Rule` and `load_graph` sets `Graph`. The `Empty` arm draws the code view over a fresh `String`
+each frame and becomes a `Rule` once typing leaves it non-empty. For a grid rule the list under the
+code holds the outcome and each `CodeDiagnostic` as a selectable `Label` reading `<line>:<column>
+<message>`, whose press moves the cursor there (`move_cursor_to`).
+`code_view.rs` draws one `TextEdit::multiline(..).code_editor()` with a layouter
 that never wraps, in one `ScrollArea::both`, beside a gutter outside it. The gutter's numbers come
 from the galley's rows (`gutter_numbers`) and follow them up and down, and stay in place while a
 long line scrolls sideways. A text replaced from outside the field clears its undo history on the
@@ -59,7 +68,7 @@ them.
 ## The graph editor
 
 `ui/editor/graph/` edits a graph model through henad-graph's `GraphBuilder` and `EditCommand`s,
-never by writing the document. `EditorPanel::file_text` is the graph's canonical text, which Apply,
+never by writing the document. `EditorModel::file_text` is the graph's canonical text, which Apply,
 Save model and `save_name` read, so Apply runs the same path as a grid rule (`ModelFile::parse`,
 `entry`, `install_models`, the Rebuild model modal past tick 0, fault claiming). A grid graph
 installs as a GPU grid entry, and a graph of agents as a GPU agents entry, at its own size, and a
@@ -219,7 +228,8 @@ compiles the view file while `viewing` holds, and drops a view the document no l
 ## The live preview
 
 `ui/editor/preview.rs`: `EditorPanel::preview` (`Preview`), and `poll`/`poll_at`, which
-`HenadApp::logic` calls every frame after `report_fault`. A new `preview_key` with no errors sets
+`HenadApp::logic` calls every frame after `report_fault`. They read the model only through
+`EditorModel::preview_source` and `preview_program`. A new preview key with no errors sets
 `due` to now plus `DEBOUNCE` (250 ms) and records `AppState::builds`; one with errors drops `due`
 and leaves the running preview alone. Once due, a build counted since the edit (Build, Apply)
 drops the preview to `Idle`, `preview_can_load` false leaves it `Waiting` (`PREVIEW_WAITS`, "Preview
@@ -237,7 +247,7 @@ run at tick 0 and no Rebuild model modal. A preview is never the selection: `sel
 and `code_pending` are false, `select_model` does not restore its values, the next build's fields
 stay, and `settle_outcome` sees no loaded source, so "Model applied." becomes "Press Build to run
 it." behind a preview. A code fault of a preview (any tick) goes to `Preview::show_fault`
-(`Faulted`) through `show_fault` while the Editor holds a graph, and the modal keeps the rest,
+(`Faulted`) through `show_fault` while `holds_preview_model` holds, and the modal keeps the rest,
 the fault of a preview that outlived its graph included. Playback's `preview_line` names the
 preview and its size, with the hover `preview_hover`: `PREVIEW_APPLY`, or `PREVIEW_ORPHANED` once
 the Editor holds no graph.

@@ -50,7 +50,7 @@ fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
         }
         let save = ui
             .add_enabled(
-                !app.editor.is_empty(),
+                !app.editor.model.is_empty(),
                 egui::Button::new(format!("{MDI_TRAY_ARROW_DOWN}  Save model")),
             )
             .on_hover_text("Save Editor model to TOML model file")

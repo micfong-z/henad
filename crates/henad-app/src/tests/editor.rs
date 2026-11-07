@@ -14,10 +14,10 @@ use henad_explore::model_file::ModelFile;
 use crate::state::AppState;
 use crate::tests::support::{set_of, step_past};
 use crate::ui::dock::Tab;
-use crate::ui::editor::code_view::cursor_index;
+use crate::ui::editor::code_view::{cursor_index, move_cursor};
 use crate::ui::editor::{
-    ApplyOutcome, NO_COMPUTE, apply, edit_model, editable_text, life_starter, move_cursor_to, new_grid_rule,
-    receive_open,
+    ApplyOutcome, EditorModel, NO_COMPUTE, apply, edit_model, editable_text, editor_ui, life_starter, move_cursor_to,
+    new_grid_rule, receive_open,
 };
 use crate::ui::files::{DialogFile, OpenResult};
 
@@ -66,17 +66,17 @@ fn new_grid_rule_starts_from_the_life_starter() {
     let Some(mut app) = AppState::headless(henad_models::example_models(), false) else {
         return;
     };
-    app.editor.text = "an earlier text".to_owned();
+    app.editor.model = EditorModel::Rule("an earlier text".to_owned());
     new_grid_rule(&mut app);
 
     let starter = ModelFile::from_rule(GridRule::life()).expect("the starter is a model file");
     assert_eq!(
-        app.editor.text,
+        app.editor.model.file_text(),
         starter.to_toml(),
         "the starter is the rule's canonical text"
     );
-    assert_eq!(app.editor.text, life_starter());
-    let read = ModelFile::parse(&app.editor.text).expect("the starter reads back");
+    assert_eq!(app.editor.model.file_text(), life_starter());
+    let read = ModelFile::parse(&app.editor.model.file_text()).expect("the starter reads back");
     assert_eq!(read.rule().expect("a grid rule").id, "life_rule");
     assert_eq!(read.rule().expect("a grid rule").step, LIFE_STEP);
     assert_eq!(app.editor.outcome, None);
@@ -115,19 +115,19 @@ fn applying_an_edit_installs_and_rebuilds_from_tick_zero() {
     let life = app.loaded_entry().expect("the rule runs").source().clone();
     assert_eq!(
         life.code().map(henad_core::provenance::ModelCode::text),
-        Some(app.editor.text.as_str()),
+        Some(app.editor.model.file_text().as_str()),
         "the starter is canonical, and the code is its text"
     );
     step_past(&mut app, 0);
     let life_stats = stats(&app);
 
     // Birth on 3 or 6, as in HighLife.
-    let edited = app.editor.text.replace(
+    let edited = app.editor.model.file_text().replace(
         BIRTH_LINE,
         "    if (alive == 3u || (cell == DEAD && alive == 6u) || (cell == ALIVE && alive == 2u)) {",
     );
-    assert_ne!(edited, app.editor.text);
-    app.editor.text = edited;
+    assert_ne!(edited, app.editor.model.file_text());
+    app.editor.model = EditorModel::Rule(edited);
     apply(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::AwaitingRebuild));
     assert!(
@@ -210,10 +210,10 @@ fn applying_again_after_cancel_asks_to_rebuild_again() {
     apply(&mut app);
     step_past(&mut app, 0);
     let life = app.loaded_entry().expect("the rule runs").source().clone();
-    app.editor.text = app.editor.text.replace(
+    app.editor.model = EditorModel::Rule(app.editor.model.file_text().replace(
         BIRTH_LINE,
         "    if (alive == 3u || (cell == DEAD && alive == 6u) || (cell == ALIVE && alive == 2u)) {",
-    );
+    ));
     apply(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::AwaitingRebuild));
 
@@ -260,10 +260,10 @@ fn applying_during_another_build_replaces_it_and_cancel_waits_for_build() {
     assert_eq!(app.loaded_id(), Some("life_rule"));
 
     // An edit at tick 0 builds at once, and Cancel stops that build.
-    app.editor.text = app.editor.text.replace(
+    app.editor.model = EditorModel::Rule(app.editor.model.file_text().replace(
         BIRTH_LINE,
         "    if (alive == 3u || (cell == DEAD && alive == 6u) || (cell == ALIVE && alive == 2u)) {",
-    );
+    ));
     apply(&mut app);
     assert!(app.is_building(), "an edit at tick 0 builds at once");
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
@@ -296,7 +296,7 @@ fn a_code_edit_that_fails_validation_keeps_the_running_model() {
     apply(&mut app);
     step_past(&mut app, 0);
     let running = app.loaded_entry().expect("the rule runs").source().clone();
-    let starter = app.editor.text.clone();
+    let starter = app.editor.model.file_text();
     let keeps_running = |app: &AppState| {
         assert_eq!(app.loaded_entry().map(|entry| entry.source()), Some(&running));
         assert_eq!(app.models.get("life_rule").map(|entry| entry.source()), Some(&running));
@@ -307,7 +307,7 @@ fn a_code_edit_that_fails_validation_keeps_the_running_model() {
     };
 
     let (looped, loop_line) = insert_line(&starter, "    let alive = moore_count(ALIVE);", "    loop {}");
-    app.editor.text = looped;
+    app.editor.model = EditorModel::Rule(looped);
     apply(&mut app);
     let problem = refused(&app).first().expect("a problem");
     assert_eq!(problem.line, Some(loop_line), "{problem}");
@@ -315,7 +315,7 @@ fn a_code_edit_that_fails_validation_keeps_the_running_model() {
     keeps_running(&app);
 
     let (unclosed, _) = insert_line(&starter, "    return DEAD;", "    let x = (1u;");
-    app.editor.text = unclosed;
+    app.editor.model = EditorModel::Rule(unclosed);
     apply(&mut app);
     assert!(
         refused(&app).iter().all(|problem| problem.line.is_some()),
@@ -324,7 +324,7 @@ fn a_code_edit_that_fails_validation_keeps_the_running_model() {
     );
     keeps_running(&app);
 
-    app.editor.text = starter.replace("width = 256", "width = ");
+    app.editor.model = EditorModel::Rule(starter.replace("width = 256", "width = "));
     apply(&mut app);
     let width_line = starter
         .lines()
@@ -497,8 +497,12 @@ fn a_diagnostic_moves_the_cursor_to_its_line() {
     let Some(mut app) = app_with_starter() else {
         return;
     };
-    let (looped, loop_line) = insert_line(&app.editor.text, "    let alive = moore_count(ALIVE);", "    loop {}");
-    app.editor.text = looped;
+    let (looped, loop_line) = insert_line(
+        &app.editor.model.file_text(),
+        "    let alive = moore_count(ALIVE);",
+        "    loop {}",
+    );
+    app.editor.model = EditorModel::Rule(looped);
     apply(&mut app);
     let problem = refused(&app).first().expect("a problem").clone();
     assert_eq!(problem.line, Some(loop_line));
@@ -510,10 +514,15 @@ fn a_diagnostic_moves_the_cursor_to_its_line() {
         problem.line.expect("a line"),
         problem.column.expect("a column"),
     );
-    let byte = app.editor.text.find("loop {}").expect("the text holds the loop");
+    let byte = app
+        .editor
+        .model
+        .file_text()
+        .find("loop {}")
+        .expect("the text holds the loop");
     assert_eq!(
         cursor_index(&ctx),
-        Some(app.editor.text[..byte].chars().count()),
+        Some(app.editor.model.file_text()[..byte].chars().count()),
         "the cursor is not at the loop"
     );
     assert!(
@@ -529,7 +538,7 @@ fn edit_model_shows_the_code_the_rule_runs() {
     };
     apply(&mut app);
     app.wait_for_build();
-    let applied = app.editor.text.clone();
+    let applied = app.editor.model.file_text();
     assert_eq!(app.selected_entry().and_then(editable_text), Some(applied.as_str()));
     assert_eq!(
         app.models.get("sir").and_then(editable_text),
@@ -537,10 +546,10 @@ fn edit_model_shows_the_code_the_rule_runs() {
         "a compiled model has no model file"
     );
 
-    app.editor.text.push_str("# an edit since Apply\n");
+    app.editor.model = EditorModel::Rule(format!("{applied}# an edit since Apply\n"));
     edit_model(&mut app);
     assert!(
-        app.editor.text.ends_with("# an edit since Apply\n"),
+        app.editor.model.file_text().ends_with("# an edit since Apply\n"),
         "an edit of the applied code was lost"
     );
 
@@ -552,14 +561,15 @@ fn edit_model_shows_the_code_the_rule_runs() {
             path: None,
         }]),
     );
-    assert_eq!(app.editor.text, "format = \"henad-model\"\n");
+    assert_eq!(app.editor.model.file_text(), "format = \"henad-model\"\n");
     assert_eq!(app.editor.file_name.as_deref(), Some("other.toml"));
     assert_eq!(app.editor.file_status.as_deref(), Some("Opened other.toml"));
     assert_eq!(app.editor.outcome, None);
 
     edit_model(&mut app);
     assert_eq!(
-        app.editor.text, applied,
+        app.editor.model.file_text(),
+        applied,
         "Edit model loads the code the selected rule runs"
     );
 
@@ -572,7 +582,8 @@ fn edit_model_shows_the_code_the_rule_runs() {
         }]),
     );
     assert_eq!(
-        app.editor.text, applied,
+        app.editor.model.file_text(),
+        applied,
         "a file that is not text replaced the Editor's"
     );
     assert_eq!(
@@ -606,4 +617,43 @@ fn an_apply_the_device_cannot_hold_builds_nothing() {
 
     app.reset_simulation();
     assert!(!app.has_simulation(), "Build built a model the device cannot hold");
+}
+
+/// Runs one frame of the Editor tab over `app` with `events`.
+fn editor_frame(ctx: &egui::Context, app: &mut AppState, events: Vec<egui::Event>) {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+        events,
+        ..egui::RawInput::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| editor_ui(ui, app));
+    output.textures_delta.clear();
+}
+
+#[test]
+fn typing_into_an_empty_editor_starts_a_grid_rule() {
+    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+        return;
+    };
+    assert!(matches!(app.editor.model, EditorModel::Empty));
+    let ctx = egui::Context::default();
+    editor_frame(&ctx, &mut app, Vec::new());
+    assert!(
+        matches!(app.editor.model, EditorModel::Empty),
+        "a frame with no input left {:?}",
+        app.editor.model
+    );
+
+    move_cursor(&ctx, 0);
+    editor_frame(&ctx, &mut app, Vec::new());
+    editor_frame(&ctx, &mut app, vec![egui::Event::Text("# typed".to_owned())]);
+    assert_eq!(
+        app.editor.model.rule_text(),
+        Some("# typed"),
+        "the typed text was dropped"
+    );
+    assert!(!app.editor.model.is_empty());
+
+    editor_frame(&ctx, &mut app, vec![egui::Event::Text(" more".to_owned())]);
+    assert_eq!(app.editor.model.rule_text(), Some("# typed more"));
 }

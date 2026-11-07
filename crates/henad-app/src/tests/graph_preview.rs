@@ -39,7 +39,7 @@ fn app_with_sir() -> Option<AppState> {
 
 /// Graph in the Editor.
 fn graph(app: &mut AppState) -> &mut GraphEditor {
-    app.editor.graph.as_deref_mut().expect("a graph")
+    app.editor.model.graph_mut().expect("a graph")
 }
 
 /// Polls the preview once now and once after the debounce, as two frames that far apart would.
